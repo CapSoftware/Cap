@@ -1015,10 +1015,9 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 ///
 /// The defaults are `createDefaultGeneralSettings()` plus the per-row `??`
 /// fallbacks in `general.tsx` -- i.e. what the shipping page *shows* for a key
-/// that is not in the file. Two of them disagree with the Rust struct's own
-/// `#[serde(default)]`: `autoZoomOnClicks` (Rust `default_true`, the page
-/// false) and `enableNativeCameraPreview`. The page is the authority here
-/// because this is a page.
+/// that is not in the file. `enableNativeCameraPreview` disagrees with the
+/// Rust struct's own `#[serde(default)]`; the page is the authority here
+/// because this is a page. `autoZoomOnClicks` is on unless turned off.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
     pub theme: AppTheme,
@@ -1518,7 +1517,7 @@ impl GeneralSettings {
             // is how the setting was re-defaulted without inheriting the old
             // key's values.
             custom_cursor_capture: bool_at(general, "custom_cursor_capture2", true),
-            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", false),
+            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", true),
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
@@ -3315,6 +3314,7 @@ mod tests {
         assert_eq!(settings.instant_mode_max_resolution, 1920);
         assert_eq!(GeneralSettings::default().new_zoom_amount(), 2.0);
         assert_eq!(GeneralSettings::default().zoom_amount_for(0), 1.5);
+        assert!(GeneralSettings::default().auto_zoom_on_clicks);
         assert_eq!(settings.zoom_amount_for(0), 2.5);
     }
 

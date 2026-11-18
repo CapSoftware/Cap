@@ -3174,6 +3174,10 @@ pub struct ProjectConfiguration {
     /// [`crate::auto_zoom::AUTO_ZOOM_VERSION`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub auto_zoom_version: u32,
+    /// Set on a new project until the editor first opens it, which is when
+    /// its zooms are generated if the user wants them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_zoom_pending: bool,
     #[serde(
         default,
         deserialize_with = "markers::deserialize_markers",
@@ -3239,6 +3243,7 @@ impl Default for ProjectConfiguration {
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             auto_zoom_version: 0,
+            auto_zoom_pending: false,
             markers: Vec::new(),
         }
     }
@@ -3328,6 +3333,7 @@ impl ProjectConfiguration {
         });
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
         config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
+        config.auto_zoom_pending = true;
         config
     }
 
@@ -3356,6 +3362,7 @@ impl ProjectConfiguration {
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.auto_zoom_version = self.auto_zoom_version;
+        preset.auto_zoom_pending = self.auto_zoom_pending;
         preset.overlay_order = self.overlay_order.clone();
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
@@ -3837,6 +3844,26 @@ mod tests {
     }
 
     #[test]
+    fn only_new_projects_wait_for_their_first_auto_zoom() {
+        assert!(ProjectConfiguration::for_new_project().auto_zoom_pending);
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert!(!saved.auto_zoom_pending);
+        assert!(
+            serde_json::to_value(&saved)
+                .unwrap()
+                .get("autoZoomPending")
+                .is_none()
+        );
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["autoZoomPending"], true);
+        assert!(
+            !saved
+                .with_preset(ProjectConfiguration::for_new_project())
+                .auto_zoom_pending
+        );
+    }
+
+    #[test]
     fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
         assert!(ProjectConfiguration::default().cursor.interaction_anchors);
         assert!(ProjectConfiguration::default().cursor.hover_anchors);
@@ -3931,6 +3958,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("autoZoomVersion");
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("autoZoomPending");
         assert_eq!(framing_reset, default);
     }
 

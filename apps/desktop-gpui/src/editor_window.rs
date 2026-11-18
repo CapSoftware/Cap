@@ -6773,6 +6773,77 @@ impl EditorWindow {
         }
     }
 
+    /// A new recording gets its zooms once, the first time it opens, when
+    /// Auto zoom on clicks is on. They become the project's starting point
+    /// rather than an undo step, and never replace zooms already there.
+    pub(crate) fn apply_pending_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project.auto_zoom_pending {
+            return;
+        }
+        let path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let clicks = cx
+                .background_executor()
+                .spawn(async move { load_recording_clicks(&path) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.land_pending_auto_zoom(&clicks, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn land_pending_auto_zoom(
+        &mut self,
+        clicks: &[Vec<cap_project::CursorClickEvent>],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project.auto_zoom_pending || !self.project_ready() {
+            return;
+        }
+        self.project.auto_zoom_pending = false;
+        let untouched = !self.history.can_undo() && !self.history.can_redo();
+        let settings = crate::store::GeneralSettings::load();
+        let version = self.project.auto_zoom_version;
+        let segments = self
+            .project
+            .timeline
+            .as_ref()
+            .filter(|_| untouched && settings.auto_zoom_on_clicks)
+            .map(|timeline| {
+                edits::first_open_zoom_segments(
+                    clicks,
+                    timeline,
+                    f64::from(settings.zoom_amount_for(version)),
+                    version,
+                )
+            })
+            .unwrap_or_default();
+        let generated = !segments.is_empty();
+        if let Some(timeline) = self.project.timeline.as_mut()
+            && generated
+        {
+            timeline.zoom_segments = segments;
+        }
+        if untouched {
+            self.history = ProjectHistory::new(self.project.clone());
+        } else {
+            self.history
+                .amend_all(|entry| entry.auto_zoom_pending = false);
+        }
+        if generated {
+            self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
+            self.rebuild_timeline();
+            self.publish_project();
+            self.note_edit("auto-zoom-on-open", Some(TrackKind::Zoom));
+        }
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
     /// `handleGenerateZoomSegments` (`TL/ZoomTrack.tsx:84-93`): read the
     /// recorded clicks off the bundle, run the auto-zoom pass, and land the
     /// result as the zoom track.

@@ -2502,6 +2502,20 @@ pub fn clip_trim_end(
 // Auto zoom
 // ---------------------------------------------------------------------------
 
+/// The zooms a new recording opens with: generated from its clicks, unless
+/// the timeline already has zooms of its own.
+pub fn first_open_zoom_segments(
+    clicks_by_clip: &[Vec<CursorClickEvent>],
+    timeline: &TimelineConfiguration,
+    zoom_amount: f64,
+    auto_zoom_version: u32,
+) -> Vec<ZoomSegment> {
+    if !timeline.zoom_segments.is_empty() {
+        return Vec::new();
+    }
+    generate_zoom_segments_for_timeline(clicks_by_clip, timeline, zoom_amount, auto_zoom_version)
+}
+
 pub fn generate_zoom_segments_for_timeline(
     clicks_by_clip: &[Vec<CursorClickEvent>],
     timeline: &TimelineConfiguration,
@@ -4215,6 +4229,31 @@ mod tests {
             ))
         );
         assert_eq!(generated, vec![(1.7, 4.5, 2.0), (9.1, 16.5, 2.0)]);
+    }
+
+    #[test]
+    fn a_new_recording_opens_with_zooms_unless_it_already_has_some() {
+        let mut project = two_clip_config();
+        let timeline = project.timeline.as_mut().unwrap();
+        let clicks = [vec![click(2000.0)], vec![]];
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let opened = first_open_zoom_segments(&clicks, timeline, 2.0, version);
+        assert_eq!(
+            opened,
+            generate_zoom_segments_for_timeline(&clicks, timeline, 2.0, version)
+        );
+        assert_eq!(opened.len(), 1);
+        timeline.zoom_segments = opened;
+        assert!(first_open_zoom_segments(&clicks, timeline, 2.0, version).is_empty());
+        assert!(
+            first_open_zoom_segments(
+                &[vec![], vec![]],
+                &two_clip_config().timeline.unwrap(),
+                2.0,
+                version
+            )
+            .is_empty()
+        );
     }
 
     // -- Split --------------------------------------------------------------
