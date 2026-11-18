@@ -12,6 +12,7 @@ name: A/V Sync Tests
 # Findings are published as a job-summary table and a JSON artifact per OS.
 
 on:
+  merge_group:
   workflow_dispatch:
   schedule:
     - cron: "0 5 * * *"
@@ -45,6 +46,31 @@ permissions:
   contents: read
 
 jobs:
+  # GitHub ignores paths filters in the merge queue, so the queue run applies
+  # this workflow's pull_request paths to the queued change itself.
+  scope:
+    name: Scope
+    if: github.event_name == 'merge_group'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.queue.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/sync-tests.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+
   # Each runner's steps are split into parts that run side by side, so every
   # step keeps its environment. One job per runner took about 25 minutes, most
   # of it these steps one after another: the timestamp tests (5 to 12 min), the
@@ -56,6 +82,8 @@ jobs:
   # 44154886695). Blacksmith Macs have no hardware video encoder, so the
   # encoder crates also run on one hosted Mac, which has VideoToolbox's.
   sync-tests:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
     name: sync-tests (${{ matrix.runner }}, ${{ matrix.parts }})
     strategy:
       fail-fast: false
