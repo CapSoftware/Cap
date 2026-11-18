@@ -227,7 +227,13 @@ jobs:
       - name: VideoToolbox FFmpeg encoder tests (macOS)
         if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
         shell: bash
-        run: cargo test --locked -p cap-enc-ffmpeg
+        # One test at a time: tests opening VideoToolbox sessions in
+        # parallel exhaust the runner's sessions (-12903). The variable turns
+        # a missing zero-copy VideoToolbox encoder into a failure instead of
+        # a skip.
+        env:
+          CAP_REQUIRE_VIDEOTOOLBOX: "1"
+        run: cargo test --locked -p cap-enc-ffmpeg -- --test-threads=1
 
       - name: AVFoundation encoder tests (macOS)
         if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
