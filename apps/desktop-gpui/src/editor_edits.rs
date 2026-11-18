@@ -27,11 +27,13 @@
 
 use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
-    ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
-    MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment,
-    TextSegment, TimelineConfiguration, TimelineSegment, VoiceEq, XY, ZoomMode, ZoomSegment,
-    mask_effect_contract,
+    ClipSpeedAudioMode, CursorClickEvent, KeyboardTrackSegment, MaskKind, MaskSegment,
+    OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment, TextSegment,
+    TimelineConfiguration, TimelineSegment, VoiceEq, XY, ZoomSegment, mask_effect_contract,
 };
+
+use cap_project::auto_zoom::auto_zoom_segments;
+pub use cap_project::auto_zoom::generate_zoom_segments_from_clicks;
 
 use crate::editor_timeline::{self, Segment, TrackKind};
 
@@ -2504,6 +2506,7 @@ pub fn generate_zoom_segments_for_timeline(
     clicks_by_clip: &[Vec<CursorClickEvent>],
     timeline: &TimelineConfiguration,
     zoom_amount: f64,
+    auto_zoom_version: u32,
 ) -> Vec<ZoomSegment> {
     let ordered_clicks: Vec<_> = clicks_by_clip
         .iter()
@@ -2541,91 +2544,7 @@ pub fn generate_zoom_segments_for_timeline(
             mapped.push(click);
         }
     }
-    generate_zoom_segments_from_clicks(mapped, timeline.duration(), zoom_amount)
-}
-
-/// `generate_zoom_segments_from_clicks_impl`
-/// (`src-tauri/src/recording.rs:3706-3782`), the algorithm behind the Tauri
-/// command the empty zoom track's generate button invokes: every click grows
-/// into a padded interval (300ms before, 2.5s after), clicks in the last
-/// second are ignored, intervals closer than 2.5s merge, and the result is
-/// clamped inside the recording. The Tauri signature also takes the cursor
-/// *moves* and ignores them; this one does not pretend to want them.
-pub fn generate_zoom_segments_from_clicks(
-    mut clicks: Vec<CursorClickEvent>,
-    max_duration: f64,
-    zoom_amount: f64,
-) -> Vec<ZoomSegment> {
-    const MS_PER_SECOND: f64 = 1000.0;
-    const START_MIN_MS: f64 = 1.0;
-    const CLICK_PRE_PADDING_MS: f64 = 300.0;
-    const CLICK_POST_PADDING_MS: f64 = 2500.0;
-    const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
-    const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
-    const MERGE_GAP_MS: f64 = 2500.0;
-
-    if max_duration <= 0.0 {
-        return Vec::new();
-    }
-
-    let duration_ms = max_duration * MS_PER_SECOND;
-    let click_cutoff_ms = duration_ms - TRAILING_CLICK_IGNORE_MS;
-    let end_limit_ms = duration_ms - CLICK_END_CLAMP_PADDING_MS;
-    if click_cutoff_ms <= 0.0 || end_limit_ms <= START_MIN_MS {
-        return Vec::new();
-    }
-
-    clicks.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut intervals: Vec<(f64, f64)> = Vec::new();
-    for click in clicks {
-        let time_ms = click.time_ms.floor();
-        if time_ms >= click_cutoff_ms {
-            continue;
-        }
-
-        let start = (time_ms - CLICK_PRE_PADDING_MS).max(START_MIN_MS);
-        let end = (time_ms + CLICK_POST_PADDING_MS).min(end_limit_ms);
-
-        if end > start {
-            intervals.push((start, end));
-        }
-    }
-
-    if intervals.is_empty() {
-        return Vec::new();
-    }
-
-    intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    for interval in intervals {
-        if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + MERGE_GAP_MS
-        {
-            last.1 = last.1.max(interval.1);
-            continue;
-        }
-        merged.push(interval);
-    }
-
-    merged
-        .into_iter()
-        .map(|(start, end)| ZoomSegment {
-            start: start.round() / MS_PER_SECOND,
-            end: end.round() / MS_PER_SECOND,
-            amount: zoom_amount,
-            mode: ZoomMode::Auto,
-            glide_direction: GlideDirection::None,
-            glide_speed: 0.5,
-            instant_animation: false,
-            edge_snap_ratio: 0.25,
-        })
-        .collect()
+    auto_zoom_segments(auto_zoom_version, mapped, timeline.duration(), zoom_amount)
 }
 
 /// `splitClipSegment(time, index)` (`ED/context.ts:512-580`).
@@ -4157,6 +4076,7 @@ mod tests {
             ],
             timeline,
             2.0,
+            0,
         );
         let bounds: Vec<_> = zooms.iter().map(|zoom| (zoom.start, zoom.end)).collect();
         assert_eq!(bounds, vec![(1.7, 4.5), (13.7, 16.5), (23.7, 26.5)]);
@@ -4169,6 +4089,7 @@ mod tests {
             &[vec![click(2000.0)], vec![click(4000.0)]],
             project.timeline.as_ref().unwrap(),
             2.0,
+            0,
         );
         assert_eq!(zooms.len(), 2);
         assert_eq!((zooms[1].start, zooms[1].end), (13.7, 16.5));
@@ -4195,6 +4116,7 @@ mod tests {
             &[vec![click(3000.0)], vec![click(4000.0)]],
             timeline,
             2.0,
+            0,
         );
         let bounds: Vec<_> = zooms.iter().map(|zoom| (zoom.start, zoom.end)).collect();
         assert_eq!(bounds, vec![(5.7, 8.5), (16.7, 19.5)]);
@@ -4219,6 +4141,7 @@ mod tests {
             ]],
             project.timeline.as_ref().unwrap(),
             2.0,
+            0,
         );
         assert_eq!(zooms.len(), 1);
         assert_eq!((zooms[0].start, zooms[0].end), (7.7, 9.2));
@@ -4241,7 +4164,8 @@ mod tests {
             bounds(generate_zoom_segments_for_timeline(
                 std::slice::from_ref(&clicks),
                 timeline,
-                2.5
+                2.5,
+                0
             )),
             bounds(expected.clone())
         );
@@ -4250,10 +4174,47 @@ mod tests {
             bounds(generate_zoom_segments_for_timeline(
                 &[clicks],
                 timeline,
-                2.5
+                2.5,
+                0
             )),
             bounds(expected)
         );
+    }
+
+    #[test]
+    fn new_projects_generate_through_the_timeline_with_the_newer_rules() {
+        let project = two_clip_config();
+        let timeline = project.timeline.as_ref().unwrap();
+        let clicks = [
+            vec![click(2000.0), click(9400.0)],
+            vec![click(1000.0), click(4000.0)],
+        ];
+        let offset = timeline.segments[0].duration() * 1000.0;
+        let flattened: Vec<_> = [2000.0, 9400.0, offset + 1000.0, offset + 4000.0]
+            .into_iter()
+            .map(click)
+            .collect();
+        let bounds = |zooms: Vec<ZoomSegment>| {
+            zooms
+                .into_iter()
+                .map(|zoom| (zoom.start, zoom.end, zoom.amount))
+                .collect::<Vec<_>>()
+        };
+        let generated = bounds(generate_zoom_segments_for_timeline(
+            &clicks,
+            timeline,
+            2.0,
+            cap_project::auto_zoom::AUTO_ZOOM_VERSION,
+        ));
+        assert_eq!(
+            generated,
+            bounds(cap_project::auto_zoom::generate_auto_zoom_segments(
+                &flattened,
+                timeline.duration(),
+                2.0
+            ))
+        );
+        assert_eq!(generated, vec![(1.7, 4.5, 2.0), (9.1, 16.5, 2.0)]);
     }
 
     // -- Split --------------------------------------------------------------

@@ -554,6 +554,18 @@ fn new_zoom_amount() -> f64 {
     f64::from(crate::store::GeneralSettings::load().new_zoom_amount())
 }
 
+/// The amount generated zooms start at. Projects on the newer auto zoom
+/// rules fall back to their own default when the setting was never chosen.
+fn auto_zoom_amount(auto_zoom_version: u32) -> f64 {
+    let settings = crate::store::GeneralSettings::load();
+    match settings.default_zoom_amount {
+        None if auto_zoom_version >= cap_project::auto_zoom::AUTO_ZOOM_VERSION => {
+            cap_project::auto_zoom::DEFAULT_AUTO_ZOOM_AMOUNT
+        }
+        _ => f64::from(settings.new_zoom_amount()),
+    }
+}
+
 fn load_recording_clicks(
     project_path: &std::path::Path,
 ) -> Vec<Vec<cap_project::CursorClickEvent>> {
@@ -6554,7 +6566,8 @@ impl EditorWindow {
         self.auto_zoom_message = None;
         cx.notify();
         let path = self.project_path.clone();
-        let amount = new_zoom_amount();
+        let version = self.project.auto_zoom_version;
+        let amount = auto_zoom_amount(version);
         cx.spawn_in(window, async move |this, cx| {
             let clicks = cx
                 .background_executor()
@@ -6569,7 +6582,9 @@ impl EditorWindow {
                     .timeline
                     .as_ref()
                     .map_or_else(Vec::new, |timeline| {
-                        edits::generate_zoom_segments_for_timeline(&clicks, timeline, amount)
+                        edits::generate_zoom_segments_for_timeline(
+                            &clicks, timeline, amount, version,
+                        )
                     });
                 if segments.is_empty() {
                     tracing::info!("auto zoom produced no segments");
