@@ -1031,6 +1031,18 @@ pub(crate) fn roll_back(project: &Path) -> io::Result<bool> {
             )));
         }
     }
+    let mut parents: Vec<PathBuf> = journal
+        .folders
+        .iter()
+        .filter_map(|folder| project.join(folder).parent().map(Path::to_path_buf))
+        .collect();
+    parents.dedup();
+    for parent in &parents {
+        sync_dir(parent)?;
+    }
+    if is_plain_dir(&staging)? {
+        sync_dir(&staging)?;
+    }
     replace_file(&project.join(CONFIG), &std::fs::read(backup.join(CONFIG))?)?;
     replace_file(&project.join(META), &std::fs::read(backup.join(META))?)?;
     std::fs::remove_dir(&staging).ok();
