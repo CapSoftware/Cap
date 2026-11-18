@@ -7370,11 +7370,14 @@ mod next_index_tests {
     #[tokio::test(start_paused = true)]
     async fn playback_shows_the_grid_sample_when_the_next_index_misses_its_deadline() {
         let decoders = decoder(&[11]);
+        let started = tokio::time::Instant::now();
         let frames = decoders
             .get_frames(OFF_GRID, false, true, Default::default())
             .await
             .unwrap();
         assert_eq!(shown(&frames), 10);
+        // The lookahead waits a quarter second, not the frame deadline.
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 }
 
