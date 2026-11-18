@@ -33,10 +33,11 @@ pub fn auto_zoom_segments(
 
 /// Version 1, for clicks in timeline order. Every press and release, of any
 /// button, opens a range from 300 ms before it to 2.5 s after it. Clicks in
-/// the final second are ignored and ranges stop 800 ms before the end. Ranges whose gap is 2.5 s
-/// or less join, the later range's end winning, until nothing joins. Each
-/// range is then placed on the track the way a new zoom is: at least 100 ms
-/// long and only in free space. Times are whole milliseconds, floored.
+/// the final second are ignored and ranges stop 800 ms before the end.
+/// Ranges whose gap is 2.5 s or less join, the later range's end winning,
+/// until nothing joins. Each range is then placed on the track the way a new
+/// zoom is: at least 100 ms long and only in free space. Times are whole
+/// milliseconds, floored.
 pub fn generate_auto_zoom_segments(
     clicks: &[CursorClickEvent],
     max_duration: f64,
