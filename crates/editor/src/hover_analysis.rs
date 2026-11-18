@@ -248,7 +248,7 @@ struct Frame {
 
 /// Thresholds are tuned at a 395 px wide analysis frame and scaled with the
 /// analysis width, so a probe covers the same share of the screen at any size.
-const REFERENCE_WIDTH: f32 = 395.0;
+const TUNED_WIDTH: f32 = 395.0;
 const PROBE_RADIUS: f32 = 26.0;
 const MAX_SHIFT: f32 = 60.0;
 const STILL_POINTER: f32 = 3.0;
@@ -280,7 +280,7 @@ struct HoverDetector {
 
 impl HoverDetector {
     fn new(width: usize, height: usize) -> Self {
-        let scale = width as f32 / REFERENCE_WIDTH;
+        let scale = width as f32 / TUNED_WIDTH;
         Self {
             width,
             height,
