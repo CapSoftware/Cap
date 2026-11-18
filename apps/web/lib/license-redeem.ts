@@ -254,7 +254,6 @@ export function retryAfterText(seconds: number): string {
 const csvCell = (value: string) =>
 	/[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 
-// One row per license in the order, for buyers who hand out many at once.
 // Claimed gifts belong to their recipient, so their key and link stay blank.
 export function licensesCsv({
 	origin,
