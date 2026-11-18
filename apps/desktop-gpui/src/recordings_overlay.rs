@@ -288,7 +288,8 @@ pub fn show_studio_recording(project_dir: PathBuf, cx: &mut App) {
 /// actions on the newest card in order, each after the previous one settles,
 /// so the real-app tests can drive the overlay without synthetic clicks
 /// (which unprivileged CI sessions drop). Export writes to
-/// `CAP_GPUI_AUTO_EXPORT`.
+/// `CAP_GPUI_AUTO_EXPORT`. `after:<path>` holds the next step until that file
+/// exists, so a test can start an action at a moment it chooses.
 #[cfg(debug_assertions)]
 fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
     let Ok(spec) = std::env::var("CAP_GPUI_AUTO_RECORDINGS_OVERLAY") else {
@@ -313,6 +314,12 @@ fn run_auto_actions(model: Entity<Overlay>, cx: &mut App) {
                     Some(true) => cx.background_executor().timer(PROGRESS_POLL).await,
                     None => return,
                 }
+            }
+            if let Some(path) = step.strip_prefix("after:") {
+                while !Path::new(path).exists() {
+                    cx.background_executor().timer(PROGRESS_POLL).await;
+                }
+                continue;
             }
             tracing::info!(step = %step, "recordings overlay auto action");
             cx.update(|cx| {
