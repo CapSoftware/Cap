@@ -563,3 +563,11 @@ mod dedicated_thread_tests {
         assert!(result.is_ok());
     }
 }
+
+#[cfg(test)]
+mod queue_canary {
+    #[test]
+    fn adds() {
+        assert_eq!(1 + 1, 2);
+    }
+}
