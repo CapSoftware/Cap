@@ -229,7 +229,7 @@ export const seoMetadata = {
 	"open-source-screen-recorder": {
 		title: "Open Source Screen Recorder — Free, Private, Self-Hostable | Cap",
 		description:
-			"Cap is the leading open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and own your data. AGPLv3 and MIT crates, 4K quality, no watermarks.",
+			"Cap is an open-source screen recorder for Mac and Windows. Audit the code, self-host your recordings, and own your data. AGPLv3 and MIT crates, 4K quality.",
 		keywords: [
 			"open source screen recorder",
 			"open source screen recording",
