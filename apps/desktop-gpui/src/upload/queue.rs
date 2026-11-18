@@ -16,6 +16,8 @@ const CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(45);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 const FAST_PENDING_RECHECKS: u32 = 12;
+const STEADY_PENDING_RECHECKS: u32 = 30;
+const MAX_PENDING_RECHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const MAX_AUTOMATIC_ATTEMPTS: u32 = 5;
 pub(crate) const RECORDING_DELETED_ON_WEB: &str =
     "This recording was deleted on the web; the local recording is preserved";
@@ -604,8 +606,12 @@ impl<B: UploadBackend> Manager<B> {
         *count = count.saturating_add(1);
         if *count <= FAST_PENDING_RECHECKS {
             PENDING_RECHECK_INTERVAL
+        } else if *count <= STEADY_PENDING_RECHECKS {
+            RECONCILE_INTERVAL
         } else {
             RECONCILE_INTERVAL
+                .saturating_mul(1 << (*count - STEADY_PENDING_RECHECKS).min(5))
+                .min(MAX_PENDING_RECHECK_INTERVAL)
         }
     }
 
