@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -138,17 +139,18 @@ def triggers(workflow):
     raise SystemExit(f"{workflow}: no on: block")
 
 
-def run_git(*args):
-    return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+def run_git(*args, cwd=ROOT):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-def changed_files(base, head):
-    partial = subprocess.run(["git", "config", "remote.origin.promisor"], cwd=ROOT, capture_output=True, text=True)
+def changed_files(base, head, cwd=ROOT):
+    partial = subprocess.run(["git", "config", "remote.origin.promisor"], cwd=cwd, capture_output=True, text=True)
     fetch = ["fetch", "--no-tags", "--depth=1"] + (["--filter=blob:none"] if partial.stdout.strip() == "true" else [])
     for sha in (base, head):
-        if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=ROOT, capture_output=True).returncode:
-            run_git(*fetch, "origin", sha)
-    return [line for line in run_git("diff", "--no-renames", "--name-only", base, head).splitlines() if line]
+        if subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=cwd, capture_output=True).returncode:
+            run_git(*fetch, "origin", sha, cwd=cwd)
+    # -z: without it git quotes non-ASCII paths, which then match no filter.
+    return [path for path in run_git("diff", "--no-renames", "--name-only", "-z", base, head, cwd=cwd).split("\0") if path]
 
 
 def cmd_files(args):
@@ -202,32 +204,68 @@ def cmd_expected(_args):
         print(path)
 
 
-def api(url, token):
-    request = urllib.request.Request(
-        url,
-        headers={
+class Api:
+    """GitHub REST reads with ETags: a 304 does not count against the token's
+    hourly limit, and most polls of a long queue run change nothing."""
+
+    def __init__(self, token):
+        self.token = token
+        self.cache = {}
+
+    def get(self, url):
+        headers = {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {self.token}",
             "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+        }
+        if url in self.cache:
+            headers["If-None-Match"] = self.cache[url][0]
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
+                body = (json.load(response), response.headers.get("Link", ""))
+                if response.headers.get("ETag"):
+                    self.cache[url] = (response.headers["ETag"], body)
+                return body
+        except urllib.error.HTTPError as error:
+            if error.code == 304 and url in self.cache:
+                return self.cache[url][1]
+            raise
+
+    def pages(self, url, key):
+        items = []
+        while url:
+            body, link = self.get(url)
+            items.extend(body.get(key, []))
+            url = next((part.split(";")[0].strip(" <>") for part in link.split(",") if 'rel="next"' in part), None)
+        return items
 
 
-def gate_verdict(expected, runs):
-    """(state, lines): state is pass, fail or wait."""
+FAILED_JOBS = {"failure", "cancelled", "timed_out", "action_required", "startup_failure"}
+
+
+def gate_verdict(expected, runs, checks=()):
+    """(state, lines): state is pass, fail or wait. A failed job fails the gate
+    at once, before the rest of its workflow finishes."""
     latest = {}
     for run in runs:
         path = run.get("path", "").split("@", 1)[0]
         if path in expected and (path not in latest or run["id"] > latest[path]["id"]):
             latest[path] = run
+    suites = {run.get("check_suite_id"): path for path, run in latest.items()}
+    failed_jobs = {}
+    for check in checks:
+        path = suites.get((check.get("check_suite") or {}).get("id"))
+        if path and check.get("conclusion") in FAILED_JOBS:
+            failed_jobs.setdefault(path, []).append(f"{check['name']} {check['conclusion']}")
     lines, failed, waiting = [], [], []
     for path in expected:
         run = latest.get(path)
         if run is None:
             waiting.append(path)
             lines.append(f"{path}: not started")
+        elif path in failed_jobs:
+            failed.append(path)
+            lines.append(f"{path}: {', '.join(failed_jobs[path])} {run['html_url']}")
         elif run["status"] != "completed":
             waiting.append(path)
             lines.append(f"{path}: {run['status']} {run['html_url']}")
@@ -241,12 +279,13 @@ def gate_verdict(expected, runs):
 
 
 def cmd_gate(args):
-    token = os.environ["GITHUB_TOKEN"]
+    api = Api(os.environ["GITHUB_TOKEN"])
     repo = os.environ["GITHUB_REPOSITORY"]
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
     expected = queue_workflows()
     print("Waiting for:\n  " + "\n  ".join(expected), flush=True)
-    url = f"{api_url}/repos/{repo}/actions/runs?head_sha={args.head}&event=merge_group&per_page=100"
+    runs_url = f"{api_url}/repos/{repo}/actions/runs?head_sha={args.head}&event=merge_group&per_page=100"
+    checks_url = f"{api_url}/repos/{repo}/commits/{args.head}/check-runs?filter=latest&per_page=100"
     started = time.monotonic()
     delay = args.first_poll
     lines = []
@@ -254,13 +293,20 @@ def cmd_gate(args):
         time.sleep(delay)
         delay = args.poll
         try:
-            runs = api(url, token).get("workflow_runs", [])
+            runs = api.pages(runs_url, "workflow_runs")
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
             print(f"::warning::listing runs failed ({error}); retrying", flush=True)
             continue
-        state, lines = gate_verdict(expected, runs)
+        try:
+            checks = api.pages(checks_url, "check_runs")
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            # Without job results the gate still fails, once the failing workflow finishes.
+            print(f"::warning::reading check runs failed ({error}); judging by workflow conclusions", flush=True)
+            checks = []
+        state, lines = gate_verdict(expected, runs, checks)
         elapsed = time.monotonic() - started
-        print(f"[{int(elapsed // 60)}m] {state}: " + "; ".join(lines), flush=True)
+        pending = [line for line in lines if not line.split(": ", 1)[1].startswith(("success", "skipped"))]
+        print(f"[{int(elapsed // 60)}m] {state}: " + ("; ".join(pending) or "all green"), flush=True)
         if state == "pass":
             break
         if state == "fail":
@@ -340,6 +386,22 @@ def cmd_test(_args):
                     assert mine[event].get(key) == theirs, f"{workflow.name} {event}.{key}: {mine[event].get(key)} != {theirs}"
         checked += 1
 
+    with tempfile.TemporaryDirectory() as repo:
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, env={**os.environ, **env})
+        git("init", "-q")
+        Path(repo, "a.txt").write_text("a")
+        git("add", "-A"); git("commit", "-q", "-m", "base")
+        base = run_git("rev-parse", "HEAD", cwd=repo).strip()
+        Path(repo, "apps/status/public").mkdir(parents=True)
+        Path(repo, "apps/status/public/caf\u00e9 x.svg").write_text("b")
+        Path(repo, "a.txt").rename(Path(repo, "b.txt"))
+        git("add", "-A"); git("commit", "-q", "-m", "head")
+        head = run_git("rev-parse", "HEAD", cwd=repo).strip()
+        got = sorted(changed_files(base, head, cwd=repo))
+        assert got == ["a.txt", "apps/status/public/caf\u00e9 x.svg", "b.txt"], got
+        assert matches(got[1], ["apps/status/**"])
+
     runs = [
         {"id": 1, "path": ".github/workflows/a.yml", "status": "completed", "conclusion": "failure", "html_url": "u1"},
         {"id": 2, "path": ".github/workflows/a.yml", "status": "completed", "conclusion": "success", "html_url": "u2"},
@@ -352,6 +414,14 @@ def cmd_test(_args):
     assert gate_verdict([".github/workflows/a.yml", ".github/workflows/b.yml"], runs)[0] == "fail"
     runs[2]["conclusion"] = "skipped"
     assert gate_verdict([".github/workflows/b.yml"], runs)[0] == "pass"
+    runs[1].update(status="in_progress", conclusion=None, check_suite_id=20)
+    checks = [
+        {"name": "Clippy", "conclusion": "failure", "check_suite": {"id": 20}},
+        {"name": "Merge queue", "conclusion": "failure", "check_suite": {"id": 99}},
+    ]
+    state, lines = gate_verdict([".github/workflows/a.yml"], runs, checks)
+    assert state == "fail" and "Clippy failure" in lines[0], lines
+    assert gate_verdict([".github/workflows/a.yml"], runs, checks[1:])[0] == "wait"
     print(f"ok ({len(cases)} patterns, {checked} workflows cross-checked, {len(queue_workflows())} run in the queue)")
 
 
