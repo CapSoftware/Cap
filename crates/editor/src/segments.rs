@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use cap_audio::AudioData;
 use cap_project::ProjectConfiguration;
@@ -121,6 +125,41 @@ pub fn load_music_tracks(
     }
 
     result
+}
+
+/// Whether `music` already holds every source range the project's timeline
+/// audio plays, so a mix of `project` needs no further decode.
+pub fn music_tracks_cover(music: &MusicTracks, project: &ProjectConfiguration) -> bool {
+    music_track_ranges(project)
+        .into_iter()
+        .all(|(path, (start, end))| {
+            music
+                .get(path)
+                .is_some_and(|data| data.covers_source_range(start, end))
+        })
+}
+
+/// An editor's music decode cache, shared by playback start, live edits during
+/// playback and the timeline waveforms so each file range decodes once.
+#[derive(Clone, Default)]
+pub struct MusicLoader {
+    project_path: PathBuf,
+    cache: Arc<Mutex<MusicTracks>>,
+}
+
+impl MusicLoader {
+    pub fn new(project_path: PathBuf) -> Self {
+        Self {
+            project_path,
+            cache: Arc::default(),
+        }
+    }
+
+    /// Blocks on ffmpeg for any range the cache lacks.
+    pub fn load(&self, project: &ProjectConfiguration) -> MusicTracks {
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        load_music_tracks(project, &self.project_path, &mut cache)
+    }
 }
 
 /// Convenience wrapper for one-shot consumers (e.g. export) that don't keep a

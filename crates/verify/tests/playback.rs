@@ -481,6 +481,7 @@ fn preview_speed_av_sync() {
             project: project_rx,
             segment_medias: segments,
             music: cap_editor::MusicTracks::new(),
+            music_loader: cap_editor::MusicLoader::default(),
             audio_output: Arc::new(cap_editor::AudioOutput::new_headless(tap)),
             telemetry: None,
             preview_speed: cap_editor::PreviewSpeedHandle::new(speed),
