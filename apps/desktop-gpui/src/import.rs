@@ -1233,9 +1233,6 @@ fn sync_imported_media(
     Ok(())
 }
 
-/// The imported file's audio on its way to `audio.ogg`: the best audio
-/// stream's decoder (`import.rs:1122-1131`, empty-layout fixup included) and
-/// the Opus output it feeds.
 struct ImportAudio {
     strict: bool,
     stream_index: Option<usize>,
@@ -1401,10 +1398,6 @@ impl ImportAudio {
 // Keeping the source video
 // ---------------------------------------------------------------------------
 
-/// Imports a video for the editor: the source's compressed video goes into
-/// `display.mp4` unchanged when every decoder Cap uses can read and seek it,
-/// and is re-encoded by [`transcode_video`] otherwise. Audio always takes the
-/// Opus path.
 fn import_video(
     source_path: &Path,
     output_path: &Path,
@@ -1445,10 +1438,7 @@ fn import_video(
 
 #[derive(Debug)]
 enum KeepError {
-    /// The source needs a conversion the editor relies on, or a decoder Cap
-    /// uses could not read it as it is.
     Ineligible(&'static str),
-    /// Reading or writing failed part way; the re-encode starts over.
     Failed(String),
     Cancelled(String),
 }
@@ -1477,8 +1467,6 @@ const KEEP_MAX_FPS: f64 = 120.0;
 /// time.
 const KEEP_MAX_PIXEL_RATE: f64 = 1920.0 * 1080.0 * 60.0;
 
-/// What the scan of the source found: everything the copy needs to write
-/// `display.mp4` with the source's timing.
 #[derive(Debug)]
 struct KeepPlan {
     stream_index: usize,
@@ -1487,9 +1475,6 @@ struct KeepPlan {
     packets: u64,
 }
 
-/// The stream-level half of the decision: codec, pixel layout, colour and
-/// geometry every decoder Cap uses reads exactly as written, without a
-/// rotation, aspect fix or range conversion the editor needs baked in.
 fn keep_stream_ineligibility(
     input: &avformat::context::Input,
     stream: &ffmpeg::format::stream::Stream,
@@ -1589,8 +1574,6 @@ fn keep_stream_ineligibility(
     None
 }
 
-/// Any display matrix that is not the identity: a turn, a flip or a scale
-/// the decoders would not apply.
 fn source_has_display_matrix(parameters: &ffmpeg::ffi::AVCodecParameters) -> bool {
     const IDENTITY: [i32; 9] = [1 << 16, 0, 0, 0, 1 << 16, 0, 0, 0, 1 << 30];
     unsafe {
@@ -1609,10 +1592,6 @@ fn source_has_display_matrix(parameters: &ffmpeg::ffi::AVCodecParameters) -> boo
     }
 }
 
-/// Reads every video packet once, without decoding, and decides whether the
-/// stream can be kept: timestamps every decoder orders the same way, a
-/// keyframe first, and keyframes close enough together that seeking stays as
-/// quick as in a re-encoded import.
 fn plan_keep(
     source_path: &Path,
     project_path: &Path,
@@ -1717,11 +1696,6 @@ fn open_import_input(
     .map_err(|error| format!("Failed to open video file: {error}"))
 }
 
-/// Copies the source's video packets and colour tags into `display.mp4`,
-/// shifted so the first frame shows at zero like a re-encoded import. Every
-/// packet is also decoded: a decode error, a frame count that does not match
-/// or colour tags that read back differently hands the import to the
-/// re-encode.
 fn keep_source_video(
     source_path: &Path,
     output_path: &Path,
@@ -4087,8 +4061,7 @@ mod tests {
             }
         }
 
-        /// Moving coloured bars, so chroma detail and motion both reach the
-        /// encoder. Returns false when this FFmpeg build has no libx264.
+        /// Returns false when this FFmpeg build has no libx264.
         fn write(self, path: &Path) -> bool {
             let Some(codec) = ffmpeg::codec::encoder::find_by_name("libx264") else {
                 return false;
@@ -4255,8 +4228,6 @@ mod tests {
         )
     }
 
-    /// Imports `source` through [`import_video`]; `None` when the test's
-    /// FFmpeg build cannot write the source.
     fn import_x264_source(tag: &str, source: X264Source) -> Option<(PathBuf, PathBuf, PathBuf)> {
         ffmpeg::init().unwrap();
         let root = temp_dir(tag);
@@ -4460,7 +4431,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// Copies every stream of `video` and the audio of `audio` into one file.
     fn mux_with_audio(video: &Path, audio: &Path, output_path: &Path) {
         let mut output = avformat::output(output_path).unwrap();
         let mut inputs = [

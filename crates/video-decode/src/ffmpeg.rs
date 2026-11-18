@@ -197,7 +197,6 @@ fn avc_record_chroma_is_420(record: &[u8]) -> Option<bool> {
     Some(bits.exp_golomb()? == 1)
 }
 
-/// Bits of a NAL unit payload with emulation prevention bytes removed.
 struct RbspBits<'a> {
     data: &'a [u8],
     byte: usize,
