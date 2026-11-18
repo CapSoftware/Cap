@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bump when detection changes so cached results from older detectors are
 /// analysed again.
-pub const DETECTOR_VERSION: u32 = 1;
+pub const DETECTOR_VERSION: u32 = 2;
 
 const CACHE_FILE: &str = "cursor-hover.json";
 
