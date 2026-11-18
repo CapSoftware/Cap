@@ -3059,11 +3059,7 @@ impl EditorWindow {
             return;
         };
         let mut config = self.project.clone();
-        config.screen_enhancement = if self.preview_enhance && !self.preview_comparing {
-            cap_project::ScreenEnhancement::on()
-        } else {
-            cap_project::ScreenEnhancement::default()
-        };
+        config.screen_enhancement = self.preview_screen_enhancement();
         instance.project_config.0.send(config).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
@@ -3489,7 +3485,23 @@ impl EditorWindow {
             self.ordinary_handoff_frame = None;
         }
         instance.set_preview_speed(self.preview_speed);
+        // A restored Enhance toggle reaches the renderer before its first
+        // frame, not only once something publishes the project.
+        let enhancement = self.preview_screen_enhancement();
+        instance
+            .project_config
+            .0
+            .send_modify(|config| config.screen_enhancement = enhancement);
         self.instance = Some(instance);
+    }
+
+    /// What the renderer gets for the preview's Enhance toggle and Compare.
+    fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
+        if self.preview_enhance && !self.preview_comparing {
+            cap_project::ScreenEnhancement::on()
+        } else {
+            cap_project::ScreenEnhancement::default()
+        }
     }
 
     pub(crate) fn hold_project(&mut self, project: crate::library::ProjectOpenInEditor) {
