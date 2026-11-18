@@ -55,5 +55,6 @@ runs:
           rpm \
           cpio \
           libarchive-tools \
+          unzip \
           zstd \
           patchelf
