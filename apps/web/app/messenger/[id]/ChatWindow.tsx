@@ -180,7 +180,8 @@ export function ChatWindow({
 	}, []);
 
 	const resetPollBackoff = useMessengerPoll({
-		conversationId: initialConversation.id,
+		conversation,
+		messages,
 		hiddenPollMs: null,
 		isSendingRef,
 		messageVersionRef,

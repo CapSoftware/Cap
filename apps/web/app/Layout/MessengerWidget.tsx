@@ -418,7 +418,8 @@ function ChatView({
 	}, []);
 
 	const resetPollBackoff = useMessengerPoll({
-		conversationId: initialConversation.id,
+		conversation,
+		messages,
 		hiddenPollMs: MESSENGER_HIDDEN_POLL_MS,
 		isSendingRef,
 		messageVersionRef,

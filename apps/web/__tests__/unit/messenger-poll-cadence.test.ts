@@ -92,6 +92,16 @@ beforeEach(() => {
 		configurable: true,
 		value: vi.fn(),
 	});
+	vi.stubGlobal("fetch", async (input: string) => {
+		const conversationId = decodeURIComponent(
+			new URL(input, "https://cap.so").pathname.split("/")[4] ?? "",
+		);
+		const data = await actions.fetchMessengerConversation(conversationId);
+		return Response.json({
+			mode: data.conversation.mode,
+			messages: data.messages,
+		});
+	});
 	actions.fetchMessengerConversations.mockResolvedValue([]);
 	actions.createMessengerConversation.mockResolvedValue(conversation.id);
 	actions.fetchMessengerConversation.mockReset().mockResolvedValue(snapshot());
@@ -198,4 +208,66 @@ it("does not poll once the widget panel is closed", async () => {
 	const before = polls();
 	await countPollsOver(10 * 60_000);
 	expect(polls()).toBe(before);
+});
+
+describe("updates route contract", () => {
+	const initialMessages = [
+		{ id: "m1", role: "user" as const, content: "First question" },
+		{ id: "m2", role: "agent" as const, content: "First answer" },
+	];
+
+	async function mountPage(respond: (url: URL) => Response) {
+		const requests: URL[] = [];
+		vi.stubGlobal("fetch", async (input: string) => {
+			const url = new URL(input, "https://cap.so");
+			requests.push(url);
+			return respond(url);
+		});
+		await act(async () =>
+			root.render(createElement(ChatWindow, { conversation, initialMessages })),
+		);
+		return requests;
+	}
+
+	it("asks for messages after the last one it has and appends them", async () => {
+		const requests = await mountPage(() =>
+			Response.json({
+				mode: "human",
+				messages: [
+					{
+						id: "m3",
+						role: "admin",
+						content: "A person replies",
+						createdAt: "",
+					},
+				],
+			}),
+		);
+		await advance(3000);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.pathname).toBe(
+			"/api/messenger/conversations/chat/updates",
+		);
+		expect(requests[0]?.searchParams.get("after")).toBe("m2");
+		expect(requests[0]?.searchParams.get("mode")).toBe("agent");
+		expect(container.textContent).toContain("First question");
+		expect(container.textContent).toContain("First answer");
+		expect(container.textContent).toContain("A person replies");
+		expect(container.textContent).toContain("Live support");
+		await advance(3000);
+		expect(requests[1]?.searchParams.get("after")).toBe("m3");
+		expect(requests[1]?.searchParams.get("mode")).toBe("human");
+	});
+
+	it("leaves the conversation alone and slows down on 204", async () => {
+		const requests = await mountPage(() => new Response(null, { status: 204 }));
+		const before = container.innerHTML;
+		await advance(3000);
+		expect(requests).toHaveLength(1);
+		expect(container.innerHTML).toBe(before);
+		await advance(5000);
+		expect(requests).toHaveLength(1);
+		await advance(1000);
+		expect(requests).toHaveLength(2);
+	});
 });

@@ -1,36 +1,68 @@
 import { type RefObject, useCallback, useEffect, useRef } from "react";
-import { fetchMessengerConversation } from "@/actions/messenger";
-
-type MessengerConversationSnapshot = Awaited<
-	ReturnType<typeof fetchMessengerConversation>
->;
 
 export const MESSENGER_POLL_BACKOFF_MS = [3000, 6000, 12000, 30000, 60000];
 export const MESSENGER_HIDDEN_POLL_MS = 60000;
 
-const activityKey = ({
+interface MessengerPollMessage {
+	id: string;
+	role: "user" | "agent" | "admin";
+	content: string;
+}
+
+interface MessengerPollConversation {
+	id: string;
+	agent: string;
+	mode: "agent" | "human";
+}
+
+interface MessengerPollSnapshot {
+	conversation: MessengerPollConversation;
+	messages: MessengerPollMessage[];
+}
+
+interface MessengerUpdates {
+	mode: MessengerPollConversation["mode"];
+	messages: MessengerPollMessage[];
+}
+
+const fetchMessengerUpdates = async ({
 	conversation,
 	messages,
-}: MessengerConversationSnapshot) =>
-	`${conversation.mode}:${messages.length}:${messages.at(-1)?.id ?? ""}`;
+}: MessengerPollSnapshot): Promise<MessengerUpdates | null> => {
+	const params = new URLSearchParams({ mode: conversation.mode });
+	const after = messages
+		.filter((message) => !message.id.startsWith("optimistic-"))
+		.at(-1)?.id;
+	if (after) params.set("after", after);
+	const response = await fetch(
+		`/api/messenger/conversations/${encodeURIComponent(conversation.id)}/updates?${params}`,
+		{ cache: "no-store" },
+	);
+	if (response.status === 204) return null;
+	if (!response.ok)
+		throw new Error(`Messenger updates failed with ${response.status}`);
+	return (await response.json()) as MessengerUpdates;
+};
 
 export function useMessengerPoll({
-	conversationId,
+	conversation,
+	messages,
 	hiddenPollMs,
 	isSendingRef,
 	messageVersionRef,
 	onSnapshot,
-}: {
-	conversationId: string;
+}: MessengerPollSnapshot & {
 	hiddenPollMs: number | null;
 	isSendingRef: RefObject<boolean>;
 	messageVersionRef: RefObject<number>;
-	onSnapshot: (snapshot: MessengerConversationSnapshot) => void;
+	onSnapshot: (snapshot: MessengerPollSnapshot) => void;
 }) {
+	const latestRef = useRef<MessengerPollSnapshot>({ conversation, messages });
 	const onSnapshotRef = useRef(onSnapshot);
 	const resetBackoffRef = useRef(() => {});
 
 	useEffect(() => {
+		latestRef.current = { conversation, messages };
 		onSnapshotRef.current = onSnapshot;
 	});
 
@@ -39,7 +71,6 @@ export function useMessengerPoll({
 		let pollVersion = 0;
 		let appliedPollVersion = 0;
 		let idlePolls = 0;
-		let lastActivity: string | null = null;
 		let interval: ReturnType<typeof setInterval> | undefined;
 		let intervalMs: number | null = null;
 
@@ -60,24 +91,38 @@ export function useMessengerPoll({
 			if (isSendingRef.current) return;
 			const requestVersion = ++pollVersion;
 			const messageVersion = messageVersionRef.current;
-			const data = await fetchMessengerConversation(conversationId).catch(
+			const result = await fetchMessengerUpdates(latestRef.current).then(
+				(updates) => ({ updates }),
 				() => null,
 			);
 			if (!active) return;
 			if (
-				data &&
-				!isSendingRef.current &&
-				requestVersion > appliedPollVersion &&
-				messageVersion === messageVersionRef.current
+				!result ||
+				isSendingRef.current ||
+				requestVersion <= appliedPollVersion ||
+				messageVersion !== messageVersionRef.current
 			) {
-				appliedPollVersion = requestVersion;
-				const activity = activityKey(data);
-				const changed = lastActivity !== null && activity !== lastActivity;
-				lastActivity = activity;
-				idlePolls = changed ? 0 : idlePolls + 1;
-				onSnapshotRef.current(data);
-			} else {
 				idlePolls++;
+				schedule();
+				return;
+			}
+			appliedPollVersion = requestVersion;
+
+			const latest = latestRef.current;
+			const known = new Set(latest.messages.map((message) => message.id));
+			const added =
+				result.updates?.messages.filter((message) => !known.has(message.id)) ??
+				[];
+			const mode = result.updates?.mode ?? latest.conversation.mode;
+			const changed = added.length > 0 || mode !== latest.conversation.mode;
+			idlePolls = changed ? 0 : idlePolls + 1;
+			if (changed) {
+				const snapshot = {
+					conversation: { ...latest.conversation, mode },
+					messages: [...latest.messages, ...added],
+				};
+				latestRef.current = snapshot;
+				onSnapshotRef.current(snapshot);
 			}
 			schedule();
 		};
@@ -100,7 +145,7 @@ export function useMessengerPoll({
 			document.removeEventListener("visibilitychange", handleVisibility);
 			resetBackoffRef.current = () => {};
 		};
-	}, [conversationId, hiddenPollMs, isSendingRef, messageVersionRef]);
+	}, [hiddenPollMs, isSendingRef, messageVersionRef]);
 
 	return useCallback(() => resetBackoffRef.current(), []);
 }
