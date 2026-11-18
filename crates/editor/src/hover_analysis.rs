@@ -34,8 +34,6 @@ fn display_bytes(display: &Path) -> Option<u64> {
     metadata.is_file().then_some(metadata.len())
 }
 
-/// Hover change times saved for this display video by the current detector,
-/// or `None` when there are none yet or the video changed since.
 pub fn cached_changes(display: &Path) -> Option<Vec<f64>> {
     let file = std::fs::read(cache_path(display)?).ok()?;
     let cache: HoverCache = serde_json::from_slice(&file).ok()?;
@@ -63,11 +61,8 @@ fn write_cache(display: &Path, changes_ms: &[f64]) -> Result<(), String> {
     std::fs::rename(&partial, &path).map_err(|e| e.to_string())
 }
 
-/// Finds the moments where the UI under the pointer visibly changes (a button
-/// lighting up, a link underlining, a tooltip appearing) in a segment's
-/// display video, saves them next to it and returns them in recording time.
 /// `cursor_offset_ms` is added to video timestamps to reach cursor time.
-/// Returns `Ok(None)` when cancelled.
+/// Returns `Ok(None)` when cancelled, without saving anything.
 pub fn analyze(
     display: &Path,
     cursor: &CursorEvents,
@@ -256,14 +251,18 @@ const PIXEL_THRESHOLD: u8 = 12;
 const ACTIVE_FRACTION: f32 = 0.004;
 const NET_CHANGE_FRACTION: f32 = 0.02;
 const MAX_BURST_MS: f64 = 250.0;
+/// Quiet is measured in time, not frames: an animation recorded at a higher
+/// frame rate than it runs repeats frames, so a single unchanged frame does
+/// not mean the picture has settled.
+const QUIET_MS: f64 = 100.0;
 const GLOBAL_LIMIT: f32 = 0.2;
 const SCROLL_RATIO: f32 = 0.5;
 const MERGE_MS: f64 = 120.0;
 const RING_FRAMES: usize = 48;
 
 /// Streams frames and reports short, isolated bursts of change around the
-/// pointer: quiet before and after, settled into a different picture, not
-/// most of the screen, not while a button is held, and not content sliding
+/// pointer: quiet before and after, a visibly different picture at some point,
+/// not most of the screen, not while a button is held, and not content sliding
 /// past a still pointer (scrolling). Continuous change (video, animation)
 /// never goes quiet and is ignored.
 struct HoverDetector {
@@ -274,8 +273,17 @@ struct HoverDetector {
     still_pointer: f32,
     frames: VecDeque<Frame>,
     first_index: usize,
-    burst_start: Option<usize>,
+    burst: Option<Burst>,
+    last_active_ms: Option<f64>,
     changes: Vec<f64>,
+}
+
+#[derive(Clone, Copy)]
+struct Burst {
+    start: usize,
+    end: usize,
+    end_ms: f64,
+    quiet_before: bool,
 }
 
 impl HoverDetector {
@@ -289,7 +297,8 @@ impl HoverDetector {
             still_pointer: STILL_POINTER * scale,
             frames: VecDeque::with_capacity(RING_FRAMES),
             first_index: 0,
-            burst_start: None,
+            burst: None,
+            last_active_ms: None,
             changes: Vec::new(),
         }
     }
@@ -321,36 +330,60 @@ impl HoverDetector {
         if self.frames.len() == RING_FRAMES {
             self.frames.pop_front();
             self.first_index += 1;
-            if self
-                .burst_start
-                .is_some_and(|start| start <= self.first_index)
-            {
-                self.burst_start = None;
-            }
         }
         let active = frame.active;
         self.frames.push_back(frame);
 
-        match self.burst_start {
-            None if active && index > self.first_index => self.burst_start = Some(index),
-            Some(start) if !active => {
-                self.burst_start = None;
-                self.evaluate(start, index - 1, index);
+        if active {
+            match self.burst {
+                Some(burst) if time_ms - burst.end_ms < QUIET_MS => {
+                    self.burst = Some(Burst {
+                        end: index,
+                        end_ms: time_ms,
+                        ..burst
+                    });
+                }
+                previous => {
+                    if let Some(burst) = previous {
+                        self.evaluate(burst, index - 1);
+                    }
+                    let quiet_before = index > self.first_index
+                        && self
+                            .last_active_ms
+                            .is_none_or(|last| time_ms - last >= QUIET_MS);
+                    self.burst = Some(Burst {
+                        start: index,
+                        end: index,
+                        end_ms: time_ms,
+                        quiet_before,
+                    });
+                }
             }
-            _ => {}
+            self.last_active_ms = Some(time_ms);
+        } else if let Some(burst) = self.burst
+            && time_ms - burst.end_ms >= QUIET_MS
+        {
+            self.burst = None;
+            self.evaluate(burst, index);
         }
     }
 
-    fn evaluate(&mut self, start: usize, end: usize, after: usize) {
-        let (Some(first), Some(last), Some(before), Some(after_frame)) = (
-            self.frame(start),
-            self.frame(end),
-            self.frame(start - 1),
-            self.frame(after),
-        ) else {
+    fn evaluate(&mut self, burst: Burst, after: usize) {
+        let Burst {
+            start,
+            end,
+            quiet_before,
+            ..
+        } = burst;
+        if !quiet_before {
+            return;
+        }
+        let (Some(first), Some(last), Some(before)) =
+            (self.frame(start), self.frame(end), self.frame(start - 1))
+        else {
             return;
         };
-        if last.time_ms - first.time_ms > MAX_BURST_MS || before.active {
+        if last.time_ms - first.time_ms > MAX_BURST_MS {
             return;
         }
         let probes: Vec<(usize, usize)> = [first.pointer, before.pointer]
@@ -360,22 +393,26 @@ impl HoverDetector {
         let Some(&(cx, cy)) = probes.first() else {
             return;
         };
-        let net = probes
-            .iter()
-            .map(|&(x, y)| self.changed_fraction(&before.luma, &after_frame.luma, x, y))
+        let net = (start..=after)
+            .filter_map(|i| self.frame(i))
+            .flat_map(|frame| {
+                probes
+                    .iter()
+                    .map(|&(x, y)| self.changed_fraction(&before.luma, &frame.luma, x, y))
+            })
             .fold(0.0, f32::max);
         if net < NET_CHANGE_FRACTION {
             return;
         }
-        let burst = start..=end;
-        if burst.clone().any(|i| {
+        let in_burst = start..=end;
+        if in_burst.clone().any(|i| {
             self.frame(i)
                 .is_none_or(|f| f.busy || f.global > GLOBAL_LIMIT)
         }) {
             return;
         }
         let scrolled = self.content_moved_past_pointer(start - 1, after, cx, cy)
-            || burst
+            || in_burst
                 .clone()
                 .any(|i| self.content_moved_past_pointer(i - 1, i, cx, cy));
         if scrolled {
@@ -391,7 +428,11 @@ impl HoverDetector {
         }
     }
 
-    fn finish(self) -> Vec<f64> {
+    fn finish(mut self) -> Vec<f64> {
+        if let Some(burst) = self.burst.take() {
+            let last = self.first_index + self.frames.len() - 1;
+            self.evaluate(burst, last);
+        }
         self.changes
     }
 
@@ -563,6 +604,32 @@ mod tests {
             )
         });
         assert!(run(frames).is_empty());
+    }
+
+    #[test]
+    fn an_animation_with_repeated_frames_is_ignored() {
+        let frames = (0..40).map(|i| {
+            let value = if (i / 2) % 2 == 0 { 40 } else { 200 };
+            (
+                with_rect(blank(), 40, 30, 40, 16, value),
+                Some((60, 38)),
+                false,
+            )
+        });
+        assert!(run(frames).is_empty());
+    }
+
+    #[test]
+    fn a_control_that_flashes_for_one_frame_is_found() {
+        let lit = with_rect(blank(), 40, 30, 40, 16, 60);
+        let frames = (0..12).map(|i| {
+            (
+                if i == 5 { lit.clone() } else { blank() },
+                Some((60, 38)),
+                false,
+            )
+        });
+        assert_eq!(run(frames), vec![5.0 * 33.0]);
     }
 
     #[test]
