@@ -1158,7 +1158,8 @@ impl EditorInstance {
                             break;
                         }
                         let playing = *playback_rx.borrow_and_update();
-                        if !playing && let Some((_, fps, resolution_base)) = *preview_rx.borrow() {
+                        let request = *preview_rx.borrow();
+                        if !playing && let Some((_, fps, resolution_base)) = request {
                             let frame = self.state.lock().await.playhead_position;
                             self.preview_tx
                                 .send_replace(Some((frame, fps, resolution_base)));
