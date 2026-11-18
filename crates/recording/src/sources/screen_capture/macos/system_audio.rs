@@ -4,18 +4,29 @@ use cap_media_info::AudioInfo;
 use cap_timestamp::{MachAbsoluteTimestamp, Timestamp};
 use cidre::{cat, cf, core_audio as ca, ns, os};
 use futures::channel::mpsc;
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+
+const FRAME_QUEUE_CAPACITY: usize = 128;
+const DEVICE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct OutputAudioSource {
     commands: flume::Sender<Command>,
+    exited: CancellationToken,
     info: AudioInfo,
     capturer: super::Capturer,
 }
 
 enum Command {
     Start(oneshot::Sender<Result<(), String>>),
-    Stop(oneshot::Sender<()>),
+    Stop,
 }
 
 impl AudioSource for OutputAudioSource {
@@ -30,8 +41,14 @@ impl AudioSource for OutputAudioSource {
         let (ready_tx, ready_rx) = oneshot::channel();
         let health = ctx.health_tx().clone();
         let cancel = ctx.stop_token();
+        let exited = CancellationToken::new();
+        let exit_guard = exited.clone().drop_guard();
         ctx.tasks().spawn_thread("output-device-audio", move || {
-            let mut capture = match OutputCapture::new(tx.clone(), health.clone()) {
+            let _exit_guard = exit_guard;
+            let mut tx = tx;
+            let (frames_tx, frames) = flume::bounded(FRAME_QUEUE_CAPACITY);
+            let dropped = Arc::new(AtomicU64::new(0));
+            let mut capture = match OutputCapture::new(frames_tx.clone(), dropped.clone()) {
                 Ok(capture) => capture,
                 Err(error) => {
                     let _ = ready_tx.send(Err(error.to_string()));
@@ -42,34 +59,56 @@ impl AudioSource for OutputAudioSource {
             if ready_tx.send(Ok(info)).is_err() {
                 return Ok(());
             }
+            let mut converter = FormatConverter::new(info);
+            let mut forward = |frame: SourceFrame| {
+                if let Some(frame) = converter.convert(frame) {
+                    output_pipeline::send_with_stall_budget_futures(
+                        &mut tx,
+                        frame,
+                        "output-device-audio",
+                        &health,
+                    );
+                }
+            };
             let mut started = false;
+            let mut last_device_check = Instant::now();
             loop {
                 if cancel.is_cancelled() {
                     return Ok(());
                 }
-                match receiver.recv_timeout(Duration::from_millis(100)) {
-                    Ok(Command::Start(reply)) => {
+                let event = flume::Selector::new()
+                    .recv(&receiver, Event::Command)
+                    .recv(&frames, Event::Frame)
+                    .wait_timeout(DEVICE_CHECK_INTERVAL);
+                match event {
+                    Ok(Event::Command(Ok(Command::Start(reply)))) => {
                         let result = capture.start();
                         started = result.is_ok();
                         let _ = reply.send(result.map_err(|error| error.to_string()));
                     }
-                    Ok(Command::Stop(reply)) => {
+                    Ok(Event::Command(Ok(Command::Stop))) => {
                         drop(capture);
-                        let _ = reply.send(());
+                        frames.try_iter().for_each(&mut forward);
                         return Ok(());
                     }
-                    Err(flume::RecvTimeoutError::Disconnected) => return Ok(()),
-                    Err(flume::RecvTimeoutError::Timeout) if started => {
-                        let device = ca::System::default_output_device()
-                            .context("Read the system audio output device")?;
-                        let format = capture.tap.asbd().context("Read system audio format")?;
-                        if device.0 != capture.output_device.0 || format != capture.format {
-                            drop(capture);
-                            capture = OutputCapture::new(tx.clone(), health.clone())?;
-                            capture.start()?;
-                        }
+                    Ok(Event::Command(Err(_))) => return Ok(()),
+                    Ok(Event::Frame(Ok(frame))) => forward(frame),
+                    Ok(Event::Frame(Err(_))) | Err(_) => {}
+                }
+                let dropped_frames = dropped.swap(0, Ordering::Relaxed);
+                if dropped_frames > 0 {
+                    tracing::warn!(dropped_frames, "System audio queue full, dropped buffers");
+                }
+                if started && last_device_check.elapsed() >= DEVICE_CHECK_INTERVAL {
+                    last_device_check = Instant::now();
+                    let device = ca::System::default_output_device()
+                        .context("Read the system audio output device")?;
+                    let format = capture.tap.asbd().context("Read system audio format")?;
+                    if device.0 != capture.output_device.0 || format != capture.format {
+                        drop(capture);
+                        capture = OutputCapture::new(frames_tx.clone(), dropped.clone())?;
+                        capture.start()?;
                     }
-                    Err(flume::RecvTimeoutError::Timeout) => {}
                 }
             }
         });
@@ -82,6 +121,7 @@ impl AudioSource for OutputAudioSource {
             config.capturer.start().await?;
             Ok(Self {
                 commands,
+                exited,
                 info,
                 capturer: config.capturer,
             })
@@ -96,22 +136,103 @@ impl AudioSource for OutputAudioSource {
         self.capturer.start().await?;
         let (reply, result) = oneshot::channel();
         self.commands.send(Command::Start(reply))?;
-        result.await?.map_err(anyhow::Error::msg)
+        // flume keeps queued commands alive while this sender exists, so a reply can be lost
+        // when the worker exits on pipeline cancellation; wait for the exit as well.
+        tokio::select! {
+            biased;
+            result = result => result?.map_err(anyhow::Error::msg),
+            _ = self.exited.cancelled() => Err(anyhow::anyhow!("System audio capture stopped")),
+        }
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        let (reply, result) = oneshot::channel();
-        if self.commands.send(Command::Stop(reply)).is_ok() {
-            let _ = result.await;
-        }
+        let _ = self.commands.send(Command::Stop);
+        self.exited.cancelled().await;
         self.capturer.stop().await
+    }
+}
+
+enum Event {
+    Command(Result<Command, flume::RecvError>),
+    Frame(Result<SourceFrame, flume::RecvError>),
+}
+
+struct SourceFrame {
+    info: AudioInfo,
+    frame: AudioFrame,
+}
+
+struct FormatConverter {
+    target: AudioInfo,
+    resampler: Option<(AudioInfo, ffmpeg::software::resampling::Context)>,
+}
+
+impl FormatConverter {
+    fn new(target: AudioInfo) -> Self {
+        Self {
+            target,
+            resampler: None,
+        }
+    }
+
+    // The pipeline times audio by counting samples at the setup-time rate, so frames from a
+    // capture rebuilt for a new output device must be converted back to that format.
+    fn convert(&mut self, source: SourceFrame) -> Option<AudioFrame> {
+        if source.info == self.target {
+            return Some(source.frame);
+        }
+        let input = &source.frame.inner;
+        if self
+            .resampler
+            .as_ref()
+            .is_none_or(|(info, _)| *info != source.info)
+        {
+            tracing::info!(
+                source_rate = source.info.sample_rate,
+                source_channels = source.info.channels,
+                target_rate = self.target.sample_rate,
+                target_channels = self.target.channels,
+                "Converting system audio to the recording format"
+            );
+            self.resampler = ffmpeg::software::resampler(
+                (input.format(), input.channel_layout(), input.rate()),
+                (
+                    self.target.sample_format,
+                    self.target.channel_layout(),
+                    self.target.sample_rate,
+                ),
+            )
+            .inspect_err(|error| tracing::warn!(%error, "Create system audio resampler"))
+            .ok()
+            .map(|context| (source.info, context));
+        }
+        let (_, context) = self.resampler.as_mut()?;
+        let output_info = *context.output();
+        let pending = context
+            .delay()
+            .map(|delay| delay.output.max(0) as u64)
+            .unwrap_or(0);
+        let capacity = (input.samples() as u64)
+            .saturating_mul(u64::from(output_info.rate.max(1)))
+            .div_ceil(u64::from(input.rate().max(1)))
+            .saturating_add(pending)
+            .saturating_add(16)
+            .min(i32::MAX as u64) as usize;
+        let mut output =
+            ffmpeg::frame::Audio::new(output_info.format, capacity, output_info.channel_layout);
+        context.run(input, &mut output).ok()?;
+        if output.samples() == 0 {
+            return None;
+        }
+        output.set_rate(self.target.sample_rate);
+        Some(AudioFrame::new(output, source.frame.timestamp))
     }
 }
 
 struct CallbackContext {
     info: AudioInfo,
-    tx: mpsc::Sender<AudioFrame>,
-    health: output_pipeline::HealthSender,
+    tx: flume::Sender<SourceFrame>,
+    dropped: Arc<AtomicU64>,
 }
 
 struct OutputCapture {
@@ -125,10 +246,7 @@ struct OutputCapture {
 }
 
 impl OutputCapture {
-    fn new(
-        tx: mpsc::Sender<AudioFrame>,
-        health: output_pipeline::HealthSender,
-    ) -> anyhow::Result<Self> {
+    fn new(tx: flume::Sender<SourceFrame>, dropped: Arc<AtomicU64>) -> anyhow::Result<Self> {
         let output_device = ca::System::default_output_device()
             .context("No system audio output device is available")?;
         let output_uid = output_device
@@ -192,7 +310,7 @@ impl OutputCapture {
         );
         let device = ca::AggregateDevice::with_desc(&properties)
             .context("Create system audio tap device")?;
-        let mut context = Box::new(CallbackContext { info, tx, health });
+        let mut context = Box::new(CallbackContext { info, tx, dropped });
         let proc_id = device
             .create_io_proc_id(capture_audio, Some(context.as_mut()))
             .context("Create system audio callback")?;
@@ -329,12 +447,13 @@ extern "C" fn capture_audio(
         };
         let timestamp =
             Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(input_time.host_time));
-        output_pipeline::send_with_stall_budget_futures(
-            &mut context.tx,
-            AudioFrame::new(frame, timestamp),
-            "output-device-audio",
-            &context.health,
-        );
+        let frame = SourceFrame {
+            info: context.info,
+            frame: AudioFrame::new(frame, timestamp),
+        };
+        if let Err(flume::TrySendError::Full(_)) = context.tx.try_send(frame) {
+            context.dropped.fetch_add(1, Ordering::Relaxed);
+        }
     }));
     os::Status::NO_ERR
 }
@@ -342,4 +461,35 @@ extern "C" fn capture_audio(
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioDeviceDestroyIOProcID(device: ca::Obj, proc_id: ca::DeviceIoProcId) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_device_rate_change_keeps_setup_rate() {
+        ffmpeg::init().unwrap();
+        let packed = ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed);
+        let target = AudioInfo::new_raw(packed, 48_000, 2);
+        let source = AudioInfo::new_raw(packed, 44_100, 2);
+        let mut converter = FormatConverter::new(target);
+        let timestamp = Timestamp::MachAbsoluteTime(MachAbsoluteTimestamp::new(1));
+
+        let mut samples = 0;
+        for _ in 0..10 {
+            let frame = SourceFrame {
+                info: source,
+                frame: AudioFrame::new(source.empty_frame(4_410), timestamp),
+            };
+            if let Some(frame) = converter.convert(frame) {
+                assert_eq!(frame.inner.rate(), 48_000);
+                assert_eq!(frame.inner.format(), target.sample_format);
+                assert_eq!(usize::from(frame.inner.channels()), target.channels);
+                samples += frame.inner.samples();
+            }
+        }
+
+        assert!((47_000..=48_000).contains(&samples), "{samples}");
+    }
 }
