@@ -1841,6 +1841,7 @@ fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
                 end: segment.end as f32,
                 text: segment.text.clone(),
                 words: Vec::new(),
+                recording_clip: None,
             })
             .collect(),
         settings: cap_project::CaptionSettings {
