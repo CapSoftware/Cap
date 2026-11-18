@@ -6800,13 +6800,10 @@ fn clean_unused_media(key: PathBuf, request: Option<crate::unused_media::Request
             let elapsed_ms = started.elapsed().as_millis() as u64;
             match &outcome {
                 Ok(outcome) => {
-                    let trashed = matches!(outcome, crate::unused_media::Outcome::Cleaned { .. })
-                        .then(|| {
-                            crate::unused_media::trash_staged(
-                                &project,
-                                &crate::unused_media::move_to_trash,
-                            )
-                        });
+                    let trashed = crate::unused_media::trash_staged(
+                        &project,
+                        &crate::unused_media::move_to_trash,
+                    );
                     tracing::info!(path = %project.display(), ?outcome, ?trashed, elapsed_ms, "Unused clip media cleanup finished");
                 }
                 Err(error) => {
