@@ -1063,20 +1063,35 @@ fn media_the_trash_refused_is_trashed_on_a_later_close() {
 
 #[test]
 fn settle_waits_for_a_cleanup_in_this_process() {
+    use std::sync::atomic::{AtomicBool, Ordering};
     let fixture = Fixture::new();
     let key = fixture.project().canonicalize().unwrap();
     let claim = Claim::take(&key).unwrap();
     assert!(Claim::take(&key).is_none());
-    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let released = std::sync::Arc::new(AtomicBool::new(false));
     let flag = released.clone();
-    let releaser = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(100));
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        drop(claim);
+    let project = fixture.project();
+    let settling = std::thread::spawn(move || {
+        let result = settle(&project);
+        (result, flag.load(Ordering::SeqCst))
     });
-    settle(&fixture.project()).unwrap();
-    assert!(released.load(std::sync::atomic::Ordering::SeqCst));
-    releaser.join().unwrap();
+    let mut waiting = SETTLE_WAITING
+        .projects
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    while !waiting.contains(&key) {
+        waiting = SETTLE_WAITING
+            .released
+            .wait(waiting)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+    waiting.retain(|held| held != &key);
+    drop(waiting);
+    released.store(true, Ordering::SeqCst);
+    drop(claim);
+    let (result, released_first) = settling.join().unwrap();
+    result.unwrap();
+    assert!(released_first);
 }
 
 #[test]
@@ -1129,11 +1144,25 @@ fn media_still_open_when_the_editor_closes_is_cleaned_once_released() {
                 .join("content/segments/segment-1/display.mp4"),
         )
         .unwrap();
+    let (busy_tx, busy_rx) = std::sync::mpsc::channel();
     let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(800));
+        busy_rx.recv().unwrap();
         drop(held);
     });
-    let outcome = run(&fixture.project(), &Request::from_probes(probes())).unwrap();
+    let in_use = |folder: &Path| {
+        let busy = folder_in_use(folder)?;
+        if busy {
+            busy_tx.send(()).ok();
+        }
+        Ok(busy)
+    };
+    let outcome = run_waiting(
+        &fixture.project(),
+        &Request::from_probes(probes()),
+        COMMIT_RELEASE_WAIT,
+        &in_use,
+    )
+    .unwrap();
     release.join().unwrap();
     assert!(matches!(outcome, Outcome::Cleaned { .. }), "{outcome:?}");
     assert!(

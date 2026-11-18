@@ -1070,6 +1070,13 @@ fn active() -> MutexGuard<'static, Vec<PathBuf>> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Lets a test release a claim only once [`settle`] is waiting on it.
+#[cfg(test)]
+static SETTLE_WAITING: Active = Active {
+    projects: Mutex::new(Vec::new()),
+    released: Condvar::new(),
+};
+
 pub(crate) struct Claim(PathBuf);
 
 impl Claim {
@@ -1105,6 +1112,15 @@ pub(crate) fn settle(project: &Path) -> Result<(), String> {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
             return Err("the unused clip media cleanup is still running".into());
+        }
+        #[cfg(test)]
+        {
+            let mut waiting = SETTLE_WAITING
+                .projects
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            waiting.push(key.clone());
+            SETTLE_WAITING.released.notify_all();
         }
         projects = ACTIVE
             .released
