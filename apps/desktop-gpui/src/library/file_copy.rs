@@ -1,19 +1,30 @@
 use std::{
+    ffi::OsString,
     fs::{File, OpenOptions},
     io::{self, ErrorKind},
     path::{Path, PathBuf},
 };
 
+const MAX_FILE_NAME_BYTES: usize = 255;
+
 fn copy_path(source: &Path, number: u64) -> PathBuf {
-    let mut name = source.file_stem().unwrap_or_default().to_os_string();
-    name.push(" copy");
+    let mut suffix = OsString::from(" copy");
     if number > 1 {
-        name.push(format!(" {number}"));
+        suffix.push(format!(" {number}"));
     }
     if let Some(extension) = source.extension() {
-        name.push(".");
-        name.push(extension);
+        suffix.push(".");
+        suffix.push(extension);
     }
+    let stem = source.file_stem().unwrap_or_default();
+    let mut name = if stem.len() + suffix.len() > MAX_FILE_NAME_BYTES {
+        let mut stem = stem.to_string_lossy().into_owned();
+        while stem.len() + suffix.len() > MAX_FILE_NAME_BYTES && stem.pop().is_some() {}
+        OsString::from(stem)
+    } else {
+        stem.to_os_string()
+    };
+    name.push(suffix);
     source.with_file_name(name)
 }
 
@@ -77,6 +88,23 @@ mod tests {
             copy_path(Path::new("/output/video.mp4"), 2),
             Path::new("/output/video copy 2.mp4")
         );
+    }
+
+    #[test]
+    fn copies_of_the_longest_names_still_fit() {
+        let dir = tempfile::tempdir().unwrap();
+        for stem in ["a".repeat(251), "日".repeat(83)] {
+            let source = dir.path().join(format!("{stem}.mp4"));
+            std::fs::write(&source, b"frames").unwrap();
+            let first = duplicate_file(&source).unwrap();
+            let second = duplicate_file(&source).unwrap();
+            for (copy, suffix) in [(first, " copy.mp4"), (second, " copy 2.mp4")] {
+                let name = copy.file_name().unwrap().to_str().unwrap();
+                assert!(name.len() <= 255, "{name}");
+                assert!(name.ends_with(suffix), "{name}");
+                assert_eq!(std::fs::read(copy).unwrap(), b"frames");
+            }
+        }
     }
 
     #[test]
