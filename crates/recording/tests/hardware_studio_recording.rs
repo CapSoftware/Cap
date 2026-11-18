@@ -272,3 +272,135 @@ async fn studio_nonfragmented_record_pause_resume_with_real_screen() {
 
     eprintln!("\n=== ALL CHECKS PASSED ===");
 }
+
+#[tokio::test]
+#[ignore = "Requires CAP_TEST_VIRTUAL_MIC_SINK_UID, a distinct default output, and Screen Recording permission"]
+async fn system_audio_excludes_virtual_microphone_sink_across_resume() {
+    use cidre::{cf, core_audio as ca};
+
+    init();
+    assert!(cidre::api::macos_available("14.2"));
+    let sink_uid = std::env::var("CAP_TEST_VIRTUAL_MIC_SINK_UID").unwrap();
+    let sink = ca::Device::with_uid(cf::String::from_str(&sink_uid)).unwrap();
+    let output = ca::System::default_output_device().unwrap();
+    assert_ne!(sink.0, output.0);
+    let _microphone_tone = output_test_tone(sink.0.0, 1000.0);
+    let _playback_tone = output_test_tone(output.0.0, 440.0);
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("virtual-microphone.cap");
+    let content = cidre::sc::ShareableContent::current().await.unwrap();
+    let handle = studio_recording::Actor::builder(
+        path.clone(),
+        ScreenCaptureTarget::Display {
+            id: scap_targets::Display::primary().id(),
+        },
+    )
+    .with_system_audio(true)
+    .with_fragmented(false)
+    .with_keyboard_capture(false)
+    .with_max_fps(10)
+    .build(Some(content.into()))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle.pause().await.unwrap();
+    handle.resume().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle.stop().await.unwrap();
+
+    for index in 0..2 {
+        let segment = path.join(format!("content/segments/segment-{index}"));
+        let mut input = ffmpeg::format::input(&segment.join("system_audio.ogg")).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
+        let stream_index = stream.index();
+        let mut decoder = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .unwrap()
+            .decoder()
+            .audio()
+            .unwrap();
+        let rate = f64::from(decoder.rate());
+        let mut samples = Vec::new();
+        let mut frame = ffmpeg::frame::Audio::empty();
+        for (stream, packet) in input.packets() {
+            if stream.index() == stream_index {
+                decoder.send_packet(&packet).unwrap();
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    assert_eq!(
+                        frame.format(),
+                        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar)
+                    );
+                    samples.extend_from_slice(frame.plane::<f32>(0));
+                }
+            }
+        }
+        assert!(samples.len() as f64 > rate);
+        let amplitude = |frequency: f64| {
+            let (real, imaginary) =
+                samples
+                    .iter()
+                    .enumerate()
+                    .fold((0.0, 0.0), |(real, imaginary), (i, sample)| {
+                        let phase = std::f64::consts::TAU * frequency * i as f64 / rate;
+                        (
+                            real + f64::from(*sample) * phase.cos(),
+                            imaginary + f64::from(*sample) * phase.sin(),
+                        )
+                    });
+            2.0 * real.hypot(imaginary) / samples.len() as f64
+        };
+        let playback = amplitude(440.0);
+        let microphone = amplitude(1000.0);
+        eprintln!(
+            "segment {index}: playback amplitude={playback}, virtual microphone amplitude={microphone}"
+        );
+        assert!(playback > 0.1, "normal system playback must be recorded");
+        assert!(
+            microphone < 0.001,
+            "virtual microphone leaked into system audio: {microphone}"
+        );
+        assert!(!segment.join("audio-input.ogg").exists());
+    }
+}
+
+fn output_test_tone(device: u32, frequency: f64) -> coreaudio::audio_unit::AudioUnit {
+    use coreaudio::audio_unit::{
+        SampleFormat, Scope, StreamFormat,
+        audio_format::LinearPcmFlags,
+        macos_helpers::audio_unit_from_device_id,
+        render_callback::{self, data},
+    };
+
+    let mut unit = audio_unit_from_device_id(device, false).unwrap();
+    unit.set_stream_format(
+        StreamFormat {
+            sample_rate: 48_000.0,
+            sample_format: SampleFormat::F32,
+            flags: LinearPcmFlags::IS_FLOAT
+                | LinearPcmFlags::IS_PACKED
+                | LinearPcmFlags::IS_NON_INTERLEAVED,
+            channels: 1,
+        },
+        Scope::Input,
+    )
+    .unwrap();
+    let mut sample_index = 0u64;
+    unit.set_render_callback(
+        move |args: render_callback::Args<data::NonInterleaved<f32>>| {
+            let mut data = args.data;
+            for index in 0..args.num_frames {
+                let value = (std::f64::consts::TAU * frequency * sample_index as f64 / 48_000.0)
+                    .sin() as f32
+                    * 0.2;
+                for channel in data.channels_mut() {
+                    channel[index] = value;
+                }
+                sample_index += 1;
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    unit.start().unwrap();
+    unit
+}
