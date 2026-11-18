@@ -45,6 +45,10 @@ pub fn hover_fade(
         from: 0.,
         since: None,
     });
+    if cx.reduce_motion() {
+        let level = if state.read(cx).hovered { 1. } else { 0. };
+        return (state, level);
+    }
     let (level, animating) = state.read(cx).level_at(Instant::now());
     if animating {
         window.request_animation_frame();

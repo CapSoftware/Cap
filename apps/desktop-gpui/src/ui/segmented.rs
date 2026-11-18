@@ -382,7 +382,8 @@ impl RenderOnce for SegmentedControl {
                     .when(!selected_shadow.is_empty(), |pill| {
                         pill.shadow(selected_shadow.clone())
                     });
-                let animation = Animation::new(Duration::from_millis(GLIDE_MS))
+                let glide_ms = if cx.reduce_motion() { 1 } else { GLIDE_MS };
+                let animation = Animation::new(Duration::from_millis(glide_ms))
                     .with_easing(gpui::ease_out_quint());
                 let id = SharedString::from(format!("{prefix}-glide-{generation}"));
                 match place {

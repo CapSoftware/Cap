@@ -596,6 +596,7 @@ impl EditorPalette {
         )
     }
 
+    #[cfg(test)]
     pub fn seg_text_band(&self, color: Rgba) -> [Rgba; 2] {
         let (top, bottom) = self.seg_gradient(color);
         [mix(top, bottom, 1. / 3.), mix(top, bottom, 2. / 3.)]
@@ -732,11 +733,6 @@ impl EditorPalette {
             self.card.into()
         }
     }
-
-    pub fn sheen(&self, color: Rgba) -> (Rgba, Rgba) {
-        let lift = if self.is_dark() { 0.10 } else { 0.07 };
-        (mix(color, rgb(0xffffff), lift), color)
-    }
 }
 
 /// The drop shadow under the stage's letterboxed preview. The stage is nearly
@@ -804,6 +800,7 @@ pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
     }
 }
 
+#[cfg(test)]
 pub fn relative_luminance(color: Rgba) -> f32 {
     let channel = |value: f32| {
         if value <= 0.040_45 {

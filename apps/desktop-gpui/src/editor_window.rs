@@ -12261,10 +12261,31 @@ impl EditorWindow {
                 self.view,
                 viewport_width,
             ))
-            // `TrackManager`'s trigger (`TL/TrackManager.tsx`): a solid pill
-            // in the gutter (`bg-ed-text-1 text-ed-card`, so black on the
-            // light theme and white on the dark one). Its plus turns into an
-            // x while the tray is open.
+            // `absolute inset-y-0 right-0 z-40` at
+            // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's scrub
+            // surface, which reaches into the snap-to-zero zone so hitting
+            // 0:00 is not a battle (`TL/index.tsx:1237-1244`).
+            .when(live, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(TRACK_GUTTER - START_SNAP_PX as f32))
+                        .right_0()
+                        .cursor(gpui::CursorStyle::ResizeLeftRight)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.timeline_mouse_down(event, true, window, cx);
+                            }),
+                        ),
+                )
+            })
+            // `TrackManager`'s trigger. Drawn after the scrub surface so a
+            // press anywhere on it opens the tray, even where a long label
+            // reaches past `TRACK_GUTTER - START_SNAP_PX`.
             .child(
                 div()
                     .id("add-track")
@@ -12324,28 +12345,6 @@ impl EditorWindow {
                         this.open_add_track(window, cx);
                     })),
             )
-            // `absolute inset-y-0 right-0 z-40` at
-            // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's scrub
-            // surface, which reaches into the snap-to-zero zone so hitting
-            // 0:00 is not a battle (`TL/index.tsx:1237-1244`).
-            .when(live, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left(px(TRACK_GUTTER - START_SNAP_PX as f32))
-                        .right_0()
-                        .cursor(gpui::CursorStyle::ResizeLeftRight)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.timeline_mouse_down(event, true, window, cx);
-                            }),
-                        ),
-                )
-            })
             .children(self.render_marker_flags(viewport_width, cx))
     }
 
