@@ -65,6 +65,14 @@ async fn preview_changed(mut probe: watch::Receiver<PreviewRequest>) {
     }
 }
 
+async fn playback_started(mut playing: watch::Receiver<bool>) {
+    while !*playing.borrow_and_update() {
+        if playing.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 8] {
     let click_spring = cursor.click_spring_config();
     [
@@ -1158,6 +1166,9 @@ impl EditorInstance {
                             break;
                         }
                         let playing = *playback_rx.borrow_and_update();
+                        if playing {
+                            still_due = None;
+                        }
                         let request = *preview_rx.borrow();
                         if !playing && let Some((_, fps, resolution_base)) = request {
                             let frame = self.state.lock().await.playhead_position;
@@ -1259,7 +1270,10 @@ impl EditorInstance {
 
                         _ = async {
                             if still_now {
-                                preview_changed(preview_rx.clone()).await;
+                                tokio::select! {
+                                    _ = preview_changed(preview_rx.clone()) => {}
+                                    _ = playback_started(self.playback_active_rx.clone()) => {}
+                                }
                             } else {
                                 preview_superseded_while_fresh(preview_rx.clone(), last_presented)
                                     .await;
@@ -1289,6 +1303,9 @@ impl EditorInstance {
                                 || (still_now && preview_rx.has_changed().unwrap_or(false))
                             {
                                 continue;
+                            }
+                            if still_now && *self.playback_active_rx.borrow() {
+                                break;
                             }
 
                             if segment_frames_opt.is_none() {
