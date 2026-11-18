@@ -8,8 +8,8 @@ use cap_project::{
 };
 use cap_rendering::{
     CursorEventOrder, PrecomputedCursorTimeline, ProjectRecordingsMeta, ProjectUniforms,
-    RecordingSegmentDecoders, RenderQuality, RenderVideoConstants, RendererLayers, SegmentVideoPaths,
-    SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
+    RecordingSegmentDecoders, RenderQuality, RenderVideoConstants, RendererLayers,
+    SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
 use std::{

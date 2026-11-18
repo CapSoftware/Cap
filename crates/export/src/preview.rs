@@ -4,8 +4,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use cap_editor::EditorInstance;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, TimelineFrameMapping, XY};
 use cap_rendering::{
-    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders, RenderQuality,
-    RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
+    FrameRenderer, PrecomputedCursorTimeline, ProjectUniforms, RecordingSegmentDecoders,
+    RenderQuality, RenderVideoConstants, RenderedFrame, RendererLayers, TransitionRenderInput,
     ZoomTransformTimeline,
 };
 use image::{

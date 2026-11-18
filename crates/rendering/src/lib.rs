@@ -56,9 +56,9 @@ mod readiness;
 mod recorded_cursor_assets;
 mod scene;
 pub mod screen_enhance;
-mod screen_upscale_net;
 #[cfg(test)]
 mod screen_enhance_render_tests;
+mod screen_upscale_net;
 mod segment_timing;
 mod shape;
 pub mod spring_mass_damper;
@@ -81,7 +81,6 @@ pub use frame_pipeline::{GpuOutputFormat, Nv12RenderedFrame, RenderedFrame, Shar
 #[cfg(target_os = "macos")]
 pub use frame_pipeline::{PendingSurface, RgbaToBgraSurfaceConverter};
 pub use frame_windows::FrameWindows;
-pub use screen_enhance::{RenderQuality, ScreenEnhanceFrame};
 pub use layers::{
     BackgroundTextureCache, CaptionFrameBox, clean_background_path, last_caption_center,
     new_font_system,
@@ -94,6 +93,7 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use screen_enhance::{RenderQuality, ScreenEnhanceFrame};
 pub use transition::{
     TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
 };
