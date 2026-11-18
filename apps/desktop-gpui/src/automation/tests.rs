@@ -675,8 +675,18 @@ async fn delete_outside_the_recordings_library_is_refused() {
     assert!(project.join("recording-meta.json").is_file());
 }
 
-#[tokio::test]
-async fn a_failed_export_keeps_the_recording() {
+/// Automations run on the app runtime, whose 16 MiB workers hold the
+/// export's debug-build future; libtest's 2 MiB thread does not.
+#[test]
+fn a_failed_export_keeps_the_recording() {
+    let runtime = crate::app_runtime();
+    runtime
+        .block_on(runtime.spawn(failed_export_keeps_the_recording()))
+        .unwrap();
+    runtime.shutdown_background();
+}
+
+async fn failed_export_keeps_the_recording() {
     let root = tempfile::tempdir().unwrap();
     let project = recording_project(root.path());
     let rules = store(vec![rule(
