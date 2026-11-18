@@ -77,6 +77,7 @@ async fn render_sampled_sequence_frames(
         .iter()
         .map(|segment| RenderSegment {
             cursor: segment.cursor.clone(),
+            hover_changes: segment.hover_changes.clone(),
             keyboard: segment.keyboard.clone(),
             decoders: segment.decoders.clone(),
             render_display: true,
@@ -182,6 +183,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
             .iter()
             .map(|segment| RenderSegment {
                 cursor: segment.cursor.clone(),
+                hover_changes: segment.hover_changes.clone(),
                 keyboard: segment.keyboard.clone(),
                 decoders: segment.decoders.clone(),
                 render_display: true,
@@ -197,6 +199,7 @@ async fn export_sequence_render_matches_editor_reference_for_real_recording()
                         cursor_smoothing,
                         Some(click_spring),
                         project_config.cursor.interaction_anchors,
+                        &segment.hover_changes.times_ms(),
                     ))
                 })
                 .collect();

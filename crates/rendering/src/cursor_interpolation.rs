@@ -394,7 +394,40 @@ pub struct PrecomputedCursorTimeline {
     raw_cursor: CursorEvents,
     event_order: CursorEventOrder,
     has_smoothing: bool,
+    hover_changes_ms: Arc<[f64]>,
     variants: Mutex<Vec<CursorTimelineVariant>>,
+}
+
+/// Times (recording ms) where the UI under the pointer visibly changed, found
+/// by analysing the screen video. Shared by a segment's editor, playback and
+/// export; replacing them bumps the generation so cached timelines rebuild.
+#[derive(Default)]
+pub struct HoverChanges {
+    times_ms: Mutex<Arc<[f64]>>,
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl HoverChanges {
+    pub fn new(times_ms: Vec<f64>) -> Self {
+        Self {
+            times_ms: Mutex::new(times_ms.into()),
+            generation: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn times_ms(&self) -> Arc<[f64]> {
+        Arc::clone(&self.times_ms.lock().unwrap())
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn replace(&self, times_ms: Vec<f64>) {
+        *self.times_ms.lock().unwrap() = times_ms.into();
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 impl PrecomputedCursorTimeline {
@@ -403,7 +436,7 @@ impl PrecomputedCursorTimeline {
         smoothing: Option<SpringMassDamperSimulationConfig>,
         click_spring: Option<ClickSpringConfig>,
     ) -> Self {
-        Self::new_with_anchors(cursor, smoothing, click_spring, false)
+        Self::new_with_anchors(cursor, smoothing, click_spring, false, &[])
     }
 
     pub fn new_with_anchors(
@@ -411,6 +444,7 @@ impl PrecomputedCursorTimeline {
         smoothing: Option<SpringMassDamperSimulationConfig>,
         click_spring: Option<ClickSpringConfig>,
         interaction_anchors: bool,
+        hover_changes_ms: &[f64],
     ) -> Self {
         let event_order = CursorEventOrder::new(cursor);
         if cursor.moves.is_empty() || smoothing.is_none() {
@@ -420,6 +454,7 @@ impl PrecomputedCursorTimeline {
                 raw_cursor: cursor.clone(),
                 event_order,
                 has_smoothing: false,
+                hover_changes_ms: hover_changes_ms.into(),
                 variants: Mutex::new(Vec::new()),
             };
         }
@@ -436,6 +471,7 @@ impl PrecomputedCursorTimeline {
                     .unwrap_or(prepared_moves.as_ref()),
                 smoothing_config,
                 click_spring,
+                hover_changes_ms,
             )
         } else {
             build_smoothed_timeline(
@@ -452,13 +488,18 @@ impl PrecomputedCursorTimeline {
             raw_cursor: CursorEvents::default(),
             event_order,
             has_smoothing: true,
+            hover_changes_ms: hover_changes_ms.into(),
             variants: Mutex::new(Vec::new()),
         }
     }
 
     /// Spring settings match playback and export: the base cursor, with style
     /// overrides applied later by `ProjectUniforms::new_with_precomputed_cursor`.
-    pub fn from_project(cursor: &CursorEvents, project: &ProjectConfiguration) -> Self {
+    pub fn from_project(
+        cursor: &CursorEvents,
+        hover_changes_ms: &[f64],
+        project: &ProjectConfiguration,
+    ) -> Self {
         let smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
             tension: project.cursor.tension,
             mass: project.cursor.mass,
@@ -469,6 +510,7 @@ impl PrecomputedCursorTimeline {
             smoothing,
             Some(project.cursor.click_spring_config()),
             project.cursor.interaction_anchors,
+            hover_changes_ms,
         )
     }
 
@@ -501,6 +543,7 @@ impl PrecomputedCursorTimeline {
             Some(smoothing),
             Some(click_spring),
             interaction_anchors,
+            &self.hover_changes_ms,
         ));
         if variants.len() == CURSOR_VARIANT_CACHE_CAPACITY {
             variants.remove(0);
@@ -675,10 +718,13 @@ fn build_smoothed_timeline(
 /// display-relative positions; smaller captures make them stricter. Presses
 /// and drags mark an exact spot (a button edge, the end of a drawn line), so
 /// the tip must land within 2 pt, under the width of the arrow's point. A
-/// shape change is tied to an element, not a pixel, so 6 pt is enough.
+/// hover change lights up a whole control, so 4 pt keeps the tip inside the
+/// edge that lit up. A shape change is tied to an element, not a pixel, so
+/// 6 pt is enough.
 const ANCHOR_NOMINAL_DISPLAY: (f64, f64) = (1920.0, 1080.0);
 const ANCHOR_CLICK_TOLERANCE: f64 = 2.0;
 const ANCHOR_DRAG_TOLERANCE: f64 = 2.0;
+const ANCHOR_HOVER_TOLERANCE: f64 = 4.0;
 const ANCHOR_CURSOR_IMAGE_TOLERANCE: f64 = 6.0;
 /// Anchors closer than this share one tightening: a drag samples every
 /// ~16 ms and a click's press and release are ~80 ms apart, so each stays one
@@ -716,6 +762,7 @@ struct InteractionAnchor {
 enum AnchorKind {
     Click,
     Drag,
+    Hover,
     CursorImage,
 }
 
@@ -724,6 +771,7 @@ impl AnchorKind {
         match self {
             Self::Click => ANCHOR_CLICK_TOLERANCE,
             Self::Drag => ANCHOR_DRAG_TOLERANCE,
+            Self::Hover => ANCHOR_HOVER_TOLERANCE,
             Self::CursorImage => ANCHOR_CURSOR_IMAGE_TOLERANCE,
         }
     }
@@ -1036,7 +1084,7 @@ impl<'a> AnchoredPlanner<'a> {
     /// spring runs `1 / scale` times faster with its lead scaled to match, the
     /// target moves continuously through the step instead of jumping at step
     /// boundaries, and an upcoming press is only aimed at early when no other
-    /// anchor (a shape change) comes first: aiming early pulls the cursor off
+    /// anchor (a shape or hover change) comes first: aiming early pulls the cursor off
     /// the pointer it still has to meet on the way.
     fn advance(&self, state: &mut AnchoredSimulation<'a>, scale: f64) {
         state.step += 1;
@@ -1194,6 +1242,7 @@ fn build_anchored_timeline(
     moves: &[CursorMoveEvent],
     smoothing_config: SpringMassDamperSimulationConfig,
     click_spring: Option<ClickSpringConfig>,
+    hover_changes_ms: &[f64],
 ) -> SmoothedTimeline {
     if moves.is_empty() {
         return SmoothedTimeline {
@@ -1205,7 +1254,18 @@ fn build_anchored_timeline(
     let filled = fill_drag_gaps(moves, &cursor.clicks);
     let moves = filled.as_ref();
     let end_time_ms = moves.last().unwrap().time_ms;
-    let anchors = interaction_anchors(cursor, moves[0].time_ms, end_time_ms);
+    let mut anchors = interaction_anchors(cursor, moves[0].time_ms, end_time_ms);
+    anchors.extend(
+        hover_changes_ms
+            .iter()
+            .filter(|&&time_ms| time_ms >= moves[0].time_ms && time_ms <= end_time_ms)
+            .map(|&time_ms| InteractionAnchor {
+                time_ms,
+                tolerance: AnchorKind::Hover.tolerance(),
+                kind: AnchorKind::Hover,
+            }),
+    );
+    anchors.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     let planner = AnchoredPlanner {
         moves,
         presets: CursorSpringPresets::new(smoothing_config, click_spring),
@@ -1214,7 +1274,7 @@ fn build_anchored_timeline(
         end_time_ms,
         waypoints: anchors
             .iter()
-            .filter(|anchor| anchor.kind == AnchorKind::CursorImage)
+            .filter(|anchor| matches!(anchor.kind, AnchorKind::CursorImage | AnchorKind::Hover))
             .map(|anchor| anchor.time_ms)
             .collect(),
     };
@@ -2981,7 +3041,7 @@ mod tests {
         }
 
         fn timeline(cursor: &CursorEvents, anchors: bool) -> PrecomputedCursorTimeline {
-            PrecomputedCursorTimeline::new_with_anchors(cursor, Some(spring()), None, anchors)
+            PrecomputedCursorTimeline::new_with_anchors(cursor, Some(spring()), None, anchors, &[])
         }
 
         fn rendered(timeline: &PrecomputedCursorTimeline, t: f64) -> (f64, f64) {

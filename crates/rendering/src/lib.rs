@@ -222,7 +222,7 @@ mod font_family_tests {
 }
 
 use camera3d::{Camera3DFrame, interpolate_camera3d};
-pub use cursor_interpolation::{CursorEventOrder, PrecomputedCursorTimeline};
+pub use cursor_interpolation::{CursorEventOrder, HoverChanges, PrecomputedCursorTimeline};
 use mask::interpolate_masks;
 use scene::*;
 pub use shape::PreparedShape;
@@ -983,6 +983,7 @@ pub enum RenderingError {
 
 pub struct RenderSegment {
     pub cursor: Arc<CursorEvents>,
+    pub hover_changes: Arc<HoverChanges>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
     pub decoders: RecordingSegmentDecoders,
     pub render_display: bool,
@@ -1066,6 +1067,7 @@ pub async fn render_video_to_channel(
                 cursor_smoothing,
                 Some(click_spring),
                 project.cursor.interaction_anchors,
+                &segment.hover_changes.times_ms(),
             ))
         })
         .collect();
@@ -1640,6 +1642,7 @@ pub async fn render_video_to_channel_nv12(
                 cursor_smoothing,
                 Some(click_spring),
                 project.cursor.interaction_anchors,
+                &segment.hover_changes.times_ms(),
             ))
         })
         .collect();
@@ -7002,6 +7005,7 @@ mod export_order_tests {
                 clicks: vec![],
                 moves: vec![],
             }),
+            hover_changes: Arc::default(),
             keyboard: Arc::new(Default::default()),
             decoders: RecordingSegmentDecoders {
                 screen,

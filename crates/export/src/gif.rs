@@ -179,6 +179,7 @@ impl GifExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    hover_changes: s.hover_changes.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
                     render_display: true,
