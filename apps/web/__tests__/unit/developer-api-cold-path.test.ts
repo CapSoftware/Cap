@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { build, type Metafile } from "esbuild";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 // A cold start of a developer API function evaluates every module the route
 // imports statically. Sign-in (next-auth, SSO) and email rendering are only
@@ -24,12 +24,13 @@ const NOT_AT_STARTUP = [
 	"node_modules/resend/",
 ];
 
-async function staticGraph(route: string) {
+async function staticGraphs(routes: string[]) {
 	const result = await build({
-		entryPoints: [route],
+		entryPoints: routes,
 		absWorkingDir: webRoot,
 		bundle: true,
 		write: false,
+		outdir: "cold-path-out",
 		metafile: true,
 		platform: "node",
 		format: "esm",
@@ -46,6 +47,10 @@ async function staticGraph(route: string) {
 		},
 	});
 	const inputs: Metafile["inputs"] = result.metafile.inputs;
+	return new Map(routes.map((route) => [route, staticGraph(inputs, route)]));
+}
+
+function staticGraph(inputs: Metafile["inputs"], route: string) {
 	const entry = Object.keys(inputs).find((path) => path.endsWith(route));
 	if (!entry) throw new Error(`entry not found for ${route}`);
 	const parent = new Map<string, string | null>([[entry, null]]);
@@ -71,15 +76,20 @@ function chainTo(parent: Map<string, string | null>, path: string) {
 }
 
 describe("developer API cold path", () => {
+	let graphs: Map<string, Map<string, string | null>>;
+	beforeAll(async () => {
+		graphs = await staticGraphs(ROUTES);
+	});
+
 	it.each(ROUTES)(
 		"%s does not load sign-in or email code at startup",
-		async (route) => {
-			const parent = await staticGraph(route);
+		(route) => {
+			const parent = graphs.get(route);
+			if (!parent) throw new Error(`no graph for ${route}`);
 			const offenders = [...parent.keys()]
 				.filter((path) => NOT_AT_STARTUP.some((part) => path.includes(part)))
 				.map((path) => chainTo(parent, path));
 			expect(offenders.slice(0, 3)).toEqual([]);
 		},
-		60_000,
 	);
 });

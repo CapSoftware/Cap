@@ -375,15 +375,19 @@ describe("POST /api/analytics/track", () => {
 			firstViewEmailSentAt: null,
 		};
 
-		await track({ videoId: VIDEO_ID, sessionId: "fresh-session" });
+		const notified = Promise.withResolvers<void>();
+		vi.mocked(createAnonymousViewNotification).mockImplementationOnce(
+			async () => notified.resolve(),
+		);
 
-		await vi.waitFor(() =>
-			expect(createAnonymousViewNotification).toHaveBeenCalledWith(
-				expect.objectContaining({
-					videoId: VIDEO_ID,
-					sessionId: "fresh-session",
-				}),
-			),
+		await track({ videoId: VIDEO_ID, sessionId: "fresh-session" });
+		await notified.promise;
+
+		expect(createAnonymousViewNotification).toHaveBeenCalledWith(
+			expect.objectContaining({
+				videoId: VIDEO_ID,
+				sessionId: "fresh-session",
+			}),
 		);
 	});
 });

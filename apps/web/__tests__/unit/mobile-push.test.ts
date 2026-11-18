@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	results: new Map<string, string>(),
 	sent: [] as { targets: unknown; message: unknown }[],
 	deleted: [] as { table: unknown; condition: unknown }[],
+	onSend: null as (() => void) | null,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -21,6 +22,7 @@ vi.mock("@/lib/apns", () => ({
 	apnsConfig: () => mocks.config,
 	sendPushes: async (_config: unknown, targets: unknown, message: unknown) => {
 		mocks.sent.push({ targets, message });
+		mocks.onSend?.();
 		return mocks.results;
 	},
 }));
@@ -92,6 +94,7 @@ beforeEach(() => {
 	mocks.results = new Map([["aa11", "sent"]]);
 	mocks.sent = [];
 	mocks.deleted = [];
+	mocks.onSend = null;
 });
 
 const deletedTokens = () =>
@@ -240,7 +243,11 @@ describe("notification push delivery", () => {
 	});
 
 	it("starts delivery outside a request scope without throwing", async () => {
+		const delivered = Promise.withResolvers<void>();
+		mocks.onSend = delivered.resolve;
+
 		expect(() => queueNotificationPush(comment)).not.toThrow();
-		await vi.waitFor(() => expect(mocks.sent).toHaveLength(1));
+		await delivered.promise;
+		expect(mocks.sent).toHaveLength(1);
 	});
 });
