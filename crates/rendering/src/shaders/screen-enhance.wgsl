@@ -28,62 +28,73 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<
     return vec4<f32>(positions[vertex_index], 0.0, 1.0);
 }
 
-// Sin-free hash so the deband pattern is identical on every GPU driver.
-fn hash01(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+// Deband runs in integers so every GPU makes the same choices: a float hash or
+// cos/sin differs between drivers, moves a tap by a texel beside text and
+// flips whether the pixel is averaged, which the upscale then amplifies.
+fn hash_u32(value: u32) -> u32 {
+    var h = value;
+    h ^= h >> 16u;
+    h *= 0x7feb352du;
+    h ^= h >> 15u;
+    h *= 0x846ca68bu;
+    h ^= h >> 16u;
+    return h;
 }
 
-fn bayer8(p: vec2<f32>) -> f32 {
-    let x = u32(p.x) & 7u;
-    let y = u32(p.y) & 7u;
+// Ordered dither in 1/256 of an 8-bit level, within +-0.5 level.
+fn bayer8(p: vec2<u32>) -> i32 {
+    let x = p.x & 7u;
+    let y = p.y & 7u;
     let xy = x ^ y;
     let v = ((xy & 1u) << 5u) | ((x & 1u) << 4u) | ((xy & 2u) << 2u) | ((x & 2u) << 1u)
         | ((xy & 4u) >> 1u) | ((x & 4u) >> 2u);
-    return (f32(v) + 0.5) / 64.0;
+    return i32(v) * 4 + 2 - 128;
 }
 
-// Whole-texel reads: a filtered tap beside a hard edge picks up a sliver of
-// the far side, lands within the threshold of the pixel and shifts it.
-fn load_clamped(px: vec2<f32>) -> vec4<f32> {
+// Whole-texel reads in 8-bit levels: a filtered tap beside a hard edge picks
+// up a sliver of the far side, lands within the threshold of the pixel and
+// shifts it.
+fn load_levels(p: vec2<i32>) -> vec4<i32> {
     let last = vec2<i32>(uniforms.frame_size) - vec2<i32>(1);
-    return textureLoad(source_texture, clamp(vec2<i32>(floor(px)), vec2<i32>(0), last), 0);
+    let texel = textureLoad(source_texture, clamp(p, vec2<i32>(0), last), 0);
+    return vec4<i32>(round(texel * 255.0));
 }
 
 // Replaces a pixel with the average of four random neighbours whenever every
 // channel is within the threshold of that average: smooth gradients that the
 // encoder quantised into steps blend back, while edges and text, which differ
-// by far more than a couple of 8-bit levels, are left alone.
+// by far more than a couple of 8-bit levels, are left alone. Colours are kept
+// in 1/256 of a level so four rounds of averaging stay exact.
 @fragment
 fn fs_deband(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
-    let pixel = frag_coord.xy;
-    let threshold = uniforms.deband.x;
-    let iterations = uniforms.deband.y;
+    let pixel = vec2<u32>(frag_coord.xy);
+    let p = vec2<i32>(pixel);
+    let threshold = i32(round(uniforms.deband.x * 255.0 * 256.0));
+    let iterations = i32(uniforms.deband.y);
     let radius = uniforms.deband.z;
+    let seed = hash_u32(pixel.x * 0x9e3779b9u ^ hash_u32(pixel.y));
 
-    var color = load_clamped(pixel);
+    var color = load_levels(p) * 256;
     for (var i = 1; i <= 4; i = i + 1) {
-        let iteration = f32(i);
-        if iteration <= iterations {
-            let angle = hash01(pixel + vec2<f32>(iteration * 17.0, 0.5)) * 6.283185307;
-            let reach = hash01(pixel + vec2<f32>(0.5, iteration * 29.0)) * radius * iteration;
-            let offset = vec2<f32>(cos(angle), sin(angle)) * reach;
-            let perpendicular = vec2<f32>(-offset.y, offset.x);
-            let average = (
-                load_clamped(pixel + offset) +
-                load_clamped(pixel - offset) +
-                load_clamped(pixel + perpendicular) +
-                load_clamped(pixel - perpendicular)
-            ) * 0.25;
+        if i <= iterations {
+            let reach = i32(floor(radius * f32(i)));
+            let span = u32(2 * reach + 1);
+            let h = hash_u32(seed + u32(i) * 0x632be5abu);
+            let offset = vec2<i32>(i32(h % span), i32((h >> 16u) % span)) - vec2<i32>(reach);
+            let perpendicular = vec2<i32>(-offset.y, offset.x);
+            let sum = load_levels(p + offset) + load_levels(p - offset)
+                + load_levels(p + perpendicular) + load_levels(p - perpendicular);
+            let average = sum * 64;
             let difference = abs(color - average);
             let largest = max(max(difference.x, difference.y), max(difference.z, difference.w));
             color = select(average, color, largest > threshold);
         }
     }
 
-    let dither = (bayer8(pixel) - 0.5) / 255.0 * color.a;
-    return vec4<f32>(color.rgb + vec3<f32>(dither), color.a);
+    let dither = bayer8(pixel) * color.w / (255 * 256);
+    let rgb = clamp((color.xyz + vec3<i32>(dither) + vec3<i32>(128)) >> vec3<u32>(8u), vec3<i32>(0), vec3<i32>(255));
+    let alpha = clamp((color.w + 128) >> 8u, 0, 255);
+    return vec4<f32>(vec3<f32>(rgb), f32(alpha)) / 255.0;
 }
 
 fn lanczos3(x: f32) -> f32 {
