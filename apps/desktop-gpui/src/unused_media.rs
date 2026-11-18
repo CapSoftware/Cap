@@ -1147,9 +1147,46 @@ fn trash_context() -> trash::TrashContext {
     trash::TrashContext::default()
 }
 
+/// Windows keeps a Recycle Bin only on fixed local drives. Asked to trash
+/// anything on a network share or a removable drive, it deletes it for good,
+/// so media there stays staged in the project instead.
+#[cfg(windows)]
+pub(crate) fn has_recycle_bin(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::{Component, Prefix};
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetVolumePathNameW};
+    const DRIVE_FIXED: u32 = 3;
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return false;
+    };
+    let drive = match prefix.kind() {
+        Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
+        _ => return false,
+    };
+    let rest: PathBuf = path
+        .components()
+        .skip_while(|part| matches!(part, Component::Prefix(_) | Component::RootDir))
+        .collect();
+    let plain = PathBuf::from(format!("{}:\\", drive as char)).join(rest);
+    let wide: Vec<u16> = plain.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut root = vec![0u16; 32_768];
+    let found = unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
+    if found == 0 {
+        root = format!("{}:\\", drive as char)
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+    }
+    unsafe { GetDriveTypeW(root.as_ptr()) == DRIVE_FIXED }
+}
+
 /// Runs on a thread of its own: on Windows trash initializes COM
 /// single-threaded and panics on a thread already set up otherwise.
 pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    if !has_recycle_bin(path) {
+        return Err("this drive has no Recycle Bin, so the media stays in the project".into());
+    }
     trash_context()
         .delete(path)
         .map_err(|error| error.to_string())
@@ -1278,9 +1315,6 @@ fn debug_hooks(project: &Path, snapshot: &Snapshot, plan: &Plan, stamp: &str, la
     std::process::abort();
 }
 
-/// Removes the unused segments of a closed project and stages their media.
-/// The caller then sends it to the trash with [`trash_staged`], after
-/// releasing its [`Claim`] so opening the project does not wait on the trash.
 /// Windows refuses to move a folder while a file inside it is open without
 /// `FILE_SHARE_DELETE`, which is how FFmpeg opens media, and the closing
 /// editor's decoders let go of theirs a few seconds after the window closes.
@@ -1357,6 +1391,9 @@ pub(crate) fn wait_until_free(project: &Path, request: &Request) -> bool {
     wait_for_media(project, &plan.folders, MEDIA_RELEASE_WAIT, &folder_in_use).unwrap_or(true)
 }
 
+/// Removes the unused segments of a closed project and stages their media.
+/// The caller then sends it to the trash with [`trash_staged`], after
+/// releasing its [`Claim`] so opening the project does not wait on the trash.
 pub(crate) fn run(project: &Path, request: &Request) -> Result<Outcome, String> {
     run_waiting(project, request, COMMIT_RELEASE_WAIT, &folder_in_use)
 }

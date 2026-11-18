@@ -1225,6 +1225,24 @@ fn media_held_open_for_good_leaves_the_project_untouched() {
     assert!(!fixture.project().join(BACKUPS).exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn only_fixed_local_drives_have_a_recycle_bin() {
+    let temp = std::env::temp_dir();
+    assert!(has_recycle_bin(&temp), "{}", temp.display());
+    let verbatim = temp.canonicalize().unwrap();
+    assert!(has_recycle_bin(&verbatim), "{}", verbatim.display());
+    for remote in [
+        r"\\server\share\Project.cap\content\removed-media",
+        r"\\?\UNC\server\share\Project.cap",
+        r"\\.\pipe\Project.cap",
+        r"relative\Project.cap",
+    ] {
+        assert!(!has_recycle_bin(Path::new(remote)), "{remote}");
+        assert!(move_to_trash(Path::new(remote)).is_err(), "{remote}");
+    }
+}
+
 /// Windows has no Recycle Bin for a network path, so a trash there deletes
 /// for good. Reached through the administrative share when the test machine
 /// has one.
