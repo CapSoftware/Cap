@@ -1088,6 +1088,13 @@ impl EditorWindow {
         // `KSelect` menu, and a field's history bracket.
         self.sidebar.menu = None;
         self.end_field_edit(cx);
+        if self.sidebar.tab != tab {
+            self.panel.fade = Some((
+                std::time::Instant::now(),
+                crate::editor_side_panel::SWITCHER_HEIGHT
+                    + crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT,
+            ));
+        }
         self.sidebar.tab = tab;
         self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
         cx.notify();
@@ -2725,19 +2732,15 @@ const GRADIENT_PREVIEW_HEIGHT: f32 = 112.;
 impl EditorWindow {
     pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let summary = self.summary();
         let selection = self.sidebar_selection().cloned();
         let selected_tab = self.sidebar.tab;
 
-        // The two data-driven disabled states (`:602-604`, `:610`).
         let items = SidebarTab::ALL
             .into_iter()
             .map(|tab| {
-                let disabled = match tab {
-                    SidebarTab::Camera => !summary.is_some_and(|summary| summary.has_camera),
-                    SidebarTab::Cursor => !summary.is_some_and(|summary| summary.has_cursor_data),
-                    _ => false,
-                };
+                // Camera and Cursor stay reachable without their data; the tab
+                // explains what is missing instead of refusing the click.
+                let disabled = false;
                 // While a selection panel is up the rail shows no selected
                 // item at all: `KTabs`'s value is forced to `undefined` and
                 // the indicator is hidden (`:586-592, 667-677`).

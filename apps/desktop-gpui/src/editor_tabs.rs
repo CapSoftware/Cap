@@ -1519,6 +1519,16 @@ impl EditorWindow {
     /// `CameraConfig` (`ConfigSidebar.tsx:2978-3330`).
     pub(crate) fn render_camera_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if !self.summary().is_some_and(|summary| summary.has_camera) {
+            return crate::editor_side_panel::panel_empty_state(
+                &theme,
+                "icons/camera.svg",
+                tr::editor::tabs::camera::empty_title(),
+                tr::editor::tabs::camera::empty_description(),
+            )
+            .pt(px(40.))
+            .into_any_element();
+        }
         let camera = &self.project.camera;
         let manual = camera.manual_position;
 
@@ -2148,6 +2158,19 @@ impl EditorWindow {
     /// The cursor tab (`:820-1000`).
     pub(crate) fn render_cursor_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if !self
+            .summary()
+            .is_some_and(|summary| summary.has_cursor_data)
+        {
+            return crate::editor_side_panel::panel_empty_state(
+                &theme,
+                "icons/cursor.svg",
+                tr::editor::tabs::cursor::empty_title(),
+                tr::editor::tabs::cursor::empty_description(),
+            )
+            .pt(px(40.))
+            .into_any_element();
+        }
         let cursor = &self.project.cursor;
         let hidden = cursor.hide;
 

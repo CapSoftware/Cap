@@ -224,6 +224,22 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::done::link_copied(), "Link copied"),
         (tr::editor::export::done::open_file(), "Open File"),
         (tr::editor::export::done::copy_file(), "Copy to Clipboard"),
+        (
+            tr::editor::tabs::camera::empty_title(),
+            "No camera in this recording",
+        ),
+        (
+            tr::editor::tabs::camera::empty_description(),
+            "Choose a camera before you record and you can shape and place it here.",
+        ),
+        (
+            tr::editor::tabs::cursor::empty_title(),
+            "No cursor in this recording",
+        ),
+        (
+            tr::editor::tabs::cursor::empty_description(),
+            "This recording didn't capture the cursor, so there's nothing to style yet.",
+        ),
         (tr::editor::export::done::file_copied(), "Copied"),
         (tr::editor::export::more_formats(), "More"),
         (tr::editor::export::tracks::separate(), "Separate tracks"),
