@@ -158,6 +158,7 @@ pub struct DecodedFrame {
     d3d11_texture_backing: Option<Arc<SendableD3D11Texture>>,
     #[cfg(target_os = "linux")]
     cuda_nv12: Option<Arc<crate::linux_gpu::CudaNv12Frame>>,
+    presentation_secs: Option<f64>,
 }
 
 #[cfg(target_os = "macos")]
@@ -297,6 +298,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -316,6 +318,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -337,6 +340,7 @@ impl DecodedFrame {
             uv_stride: frame.uv_pitch as u32,
             ffmpeg_backing: None,
             cuda_nv12: Some(frame),
+            presentation_secs: None,
         }
     }
 
@@ -361,6 +365,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -386,6 +391,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -412,6 +418,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -460,6 +467,7 @@ impl DecodedFrame {
             uv_stride,
             ffmpeg_backing: None,
             image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
+            presentation_secs: None,
         }
     }
 
@@ -485,6 +493,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -510,6 +519,7 @@ impl DecodedFrame {
             d3d11_texture_backing: None,
             #[cfg(target_os = "linux")]
             cuda_nv12: None,
+            presentation_secs: None,
         }
     }
 
@@ -527,6 +537,7 @@ impl DecodedFrame {
             #[cfg(target_os = "macos")]
             image_buf_backing: None,
             d3d11_texture_backing: Some(Arc::new(SendableD3D11Texture::new(texture))),
+            presentation_secs: None,
         }
     }
 
@@ -552,6 +563,7 @@ impl DecodedFrame {
                 texture,
                 shared_handle,
             ))),
+            presentation_secs: None,
         }
     }
 
@@ -624,6 +636,17 @@ impl DecodedFrame {
 
     pub fn with_matrix(mut self, matrix: YuvMatrix) -> Self {
         self.matrix = matrix;
+        self
+    }
+
+    /// When the sample this frame was decoded from is presented, in seconds
+    /// on the decoder's timeline (the one [`request_frame`] times use).
+    pub fn presentation_secs(&self) -> Option<f64> {
+        self.presentation_secs
+    }
+
+    pub(crate) fn with_presentation_secs(mut self, secs: f64) -> Self {
+        self.presentation_secs = Some(secs);
         self
     }
 
@@ -801,11 +824,41 @@ const REQUEST_SLACK_MAX_FRAMES: f64 = 0.25;
 /// at `time`, `floor(time * fps)` once `time` is lifted by
 /// [`REQUEST_SLACK_STEPS`] f32 steps, at most [`REQUEST_SLACK_MAX_FRAMES`].
 pub fn request_frame(time: f32, fps: u32) -> u32 {
+    (f64::from(time) * f64::from(fps) + request_slack_frames(time, fps)).floor() as u32
+}
+
+fn request_slack_frames(time: f32, fps: u32) -> f64 {
     let magnitude = time.abs();
     let step = f32::from_bits(magnitude.to_bits() + 1) - magnitude;
-    let fps = f64::from(fps);
-    let slack = (f64::from(step * REQUEST_SLACK_STEPS) * fps).min(REQUEST_SLACK_MAX_FRAMES);
-    (f64::from(time) * fps + slack).floor() as u32
+    (f64::from(step * REQUEST_SLACK_STEPS) * f64::from(fps)).min(REQUEST_SLACK_MAX_FRAMES)
+}
+
+/// The grid index past [`request_frame`] whose sample may already be on
+/// screen at `time`. Samples are filed under the nearest grid index
+/// ([`pts_to_frame`]), so one captured in the second half of the cell
+/// before index `n + 1` is filed under `n + 1` even though it is on screen
+/// at a request time between its capture and `n + 1`. That only happens
+/// when the request itself lands past the middle of its cell, which grid
+/// aligned requests never do: their answers depend on [`request_frame`]
+/// alone.
+pub fn request_next_frame(time: f32, fps: u32) -> Option<u32> {
+    let frame = request_frame(time, fps);
+    let into_cell = f64::from(time) * f64::from(fps) - f64::from(frame);
+    // A time past the grid's range saturates `frame`, which leaves the cell
+    // (or is not a number) and has no next index.
+    if !(into_cell > 0.5 + request_slack_frames(time, fps) && into_cell < 1.0) {
+        return None;
+    }
+    frame.checked_add(1)
+}
+
+/// Whether a sample presented at `secs` is on screen at request `time`.
+pub fn presented_by(secs: f64, time: f32, fps: u32) -> bool {
+    secs <= f64::from(time) + request_slack_frames(time, fps) / f64::from(fps)
+}
+
+pub(crate) fn pts_secs(pts: i64, time_base: Rational) -> f64 {
+    pts as f64 * f64::from(time_base.numerator()) / f64::from(time_base.denominator())
 }
 
 pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
@@ -871,6 +924,9 @@ pub struct AsyncVideoDecoderHandle {
     offset: f64,
     status: DecoderStatus,
     max_fallback_distance: u32,
+    /// The decoder's grid rate; 0 when unknown, which turns off the
+    /// [`request_next_frame`] check.
+    fps: u32,
     #[cfg(target_os = "macos")]
     fallback: Option<Arc<MacOsDecoderFallback>>,
     #[cfg(target_os = "macos")]
@@ -1000,7 +1056,66 @@ impl AsyncVideoDecoderHandle {
             .await
     }
 
+    /// The newest sample on screen at `time`. A request past the middle of
+    /// its grid cell also asks for the next grid index: a sample filed there
+    /// can have been captured before `time` (see [`request_next_frame`]),
+    /// and answering with the one before it would show the screen a frame
+    /// behind the cursor, which is drawn at `time` exactly.
     async fn get_frame_with_timeout(
+        &self,
+        time: f32,
+        timeout_ms: u64,
+        max_fallback_distance: u32,
+        deadline: FrameDeadline,
+    ) -> Result<Option<DecodedFrame>, DecodeStalled> {
+        let decoder_time = self.get_time(time);
+        let Some(next_frame) = (self.fps > 0)
+            .then(|| request_next_frame(decoder_time, self.fps))
+            .flatten()
+        else {
+            return self
+                .fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline)
+                .await;
+        };
+        // A quarter into the next cell, so the f32 offset round trip in
+        // `get_time` cannot land the request back on this cell.
+        let next_cell_time = (f64::from(next_frame) + 0.25) / f64::from(self.fps);
+        let next_time = time + (next_cell_time - f64::from(decoder_time)) as f32;
+        // One after the other: sent together, the two requests reach the
+        // AVAssetReader decoder in one batch or two depending on timing, and
+        // the two take different reader paths.
+        let frame = self
+            .fetch_frame_with_timeout(time, timeout_ms, max_fallback_distance, deadline)
+            .await;
+        // A hold of two cells or more (past the stream's end, or a long gap)
+        // has nothing filed under the next index, and the AVAssetReader
+        // decoder counts each empty read past the end towards recreating its
+        // reader.
+        let holding = match &frame {
+            Ok(Some(frame)) => frame.presentation_secs().is_none_or(|secs| {
+                (secs * f64::from(self.fps)).round() + 1.0 < f64::from(next_frame - 1)
+            }),
+            _ => true,
+        };
+        if holding {
+            return frame;
+        }
+        let next = self
+            .fetch_frame_with_timeout(next_time, timeout_ms, max_fallback_distance, deadline)
+            .await;
+        match next {
+            Ok(Some(next))
+                if next
+                    .presentation_secs()
+                    .is_some_and(|secs| presented_by(secs, decoder_time, self.fps)) =>
+            {
+                Ok(Some(next))
+            }
+            _ => frame,
+        }
+    }
+
+    async fn fetch_frame_with_timeout(
         &self,
         time: f32,
         timeout_ms: u64,
@@ -1169,6 +1284,7 @@ impl AsyncVideoDecoderHandle {
                 fallback_reason: None,
             },
             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+            fps: 0,
             #[cfg(target_os = "macos")]
             fallback: None,
             #[cfg(target_os = "macos")]
@@ -1405,6 +1521,7 @@ pub struct ManagedVideoDecoder {
     ready: Option<oneshot::Receiver<Result<DecoderInitResult, String>>>,
     decoder: Option<AsyncVideoDecoderHandle>,
     offset: f64,
+    fps: u32,
     max_fallback_distance: u32,
 }
 
@@ -1467,6 +1584,7 @@ impl ManagedVideoDecoder {
             offset: self.offset,
             status: status.clone(),
             max_fallback_distance: self.max_fallback_distance,
+            fps: self.fps,
             #[cfg(target_os = "macos")]
             fallback: None,
             #[cfg(target_os = "macos")]
@@ -1619,6 +1737,7 @@ pub fn spawn_managed_decoder<'a>(
         decoder: None,
         offset,
         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+        fps,
     })
 }
 
@@ -1655,6 +1774,7 @@ async fn spawn_ffmpeg_decoder(
                 offset,
                 status,
                 max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                fps,
                 #[cfg(target_os = "macos")]
                 fallback: None,
                 #[cfg(target_os = "macos")]
@@ -1724,6 +1844,7 @@ pub async fn spawn_decoder(
                         offset,
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                        fps,
                         #[cfg(target_os = "macos")]
                         fallback: Some(Arc::new(MacOsDecoderFallback::new(
                             name,
@@ -1777,6 +1898,7 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            fps,
                             #[cfg(target_os = "macos")]
                             fallback: None,
                             #[cfg(target_os = "macos")]
@@ -1824,6 +1946,7 @@ pub async fn spawn_decoder(
                         offset,
                         status,
                         max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                        fps,
                         #[cfg(target_os = "macos")]
                         fallback: None,
                         #[cfg(target_os = "macos")]
@@ -1862,6 +1985,7 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            fps,
                             #[cfg(target_os = "macos")]
                             fallback: None,
                             #[cfg(target_os = "macos")]
@@ -1919,6 +2043,7 @@ pub async fn spawn_decoder(
                             offset,
                             status,
                             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                            fps,
                             #[cfg(target_os = "macos")]
                             fallback: None,
                             #[cfg(target_os = "macos")]
@@ -1965,6 +2090,7 @@ pub async fn spawn_decoder(
                     offset,
                     status,
                     max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                    fps,
                     #[cfg(target_os = "macos")]
                     fallback: None,
                     #[cfg(target_os = "macos")]
@@ -2175,6 +2301,30 @@ mod tests {
             assert_eq!(request_frame(time, fps), frame, "{time} at {fps} fps");
         }
         assert_eq!(request_frame(-0.5, 30), 0);
+    }
+
+    #[test]
+    fn request_next_frame_only_past_the_middle_of_a_cell() {
+        assert_eq!(request_next_frame(0.0, 60), None);
+        assert_eq!(request_next_frame(10.25 / 60.0, 60), None);
+        assert_eq!(request_next_frame(10.98 / 60.0, 60), Some(11));
+        // 60 fps output over a 30 fps grid lands exactly on the middle.
+        for n in 0..3 * 3600 * 60 {
+            let time = (f64::from(n) / 60.0) as f32;
+            assert_eq!(request_next_frame(time, 30), None, "{n}");
+        }
+        for time in [f32::INFINITY, f32::NAN, -1.0, f32::MAX] {
+            assert_eq!(request_next_frame(time, 60), None, "{time}");
+        }
+        assert_eq!(request_next_frame(1.0, u32::MAX), None);
+    }
+
+    #[test]
+    fn presented_by_allows_the_request_slack() {
+        let time = (10.98 / 60.0) as f32;
+        assert!(presented_by(10.75 / 60.0, time, 60));
+        assert!(presented_by(f64::from(time), time, 60));
+        assert!(!presented_by(10.99 / 60.0, time, 60));
     }
 
     #[test]
@@ -2533,6 +2683,7 @@ mod managed_worker_tests {
             ready: None,
             decoder: None,
             offset: 0.0,
+            fps: 30,
             max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
         }
     }
@@ -2712,6 +2863,7 @@ mod managed_worker_tests {
                 fallback_reason: None,
             },
             max_fallback_distance: 2,
+            fps: 30,
             fallback: Some(Arc::new(MacOsDecoderFallback::new(
                 "screen",
                 directory.path().to_path_buf(),
@@ -2798,6 +2950,7 @@ mod managed_worker_tests {
                     fallback_reason: None,
                 },
                 max_fallback_distance: DEFAULT_MAX_FALLBACK_DISTANCE,
+                fps,
                 #[cfg(target_os = "macos")]
                 fallback: None,
                 #[cfg(target_os = "macos")]

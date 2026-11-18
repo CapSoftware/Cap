@@ -181,28 +181,30 @@ impl MFDecoder {
                 30
             };
             let mut requests = FrameRequests::new(readahead_frames);
-            let answer = |sender: oneshot::Sender<DecodedFrame>,
-                          frame: Option<cap_video_decode::NV12Data>| {
-                let _ = sender.send(frame.map_or_else(
-                    || {
-                        DecodedFrame::new(
-                            vec![0u8; (video_width * video_height * 4) as usize],
-                            video_width,
-                            video_height,
-                        )
-                    },
-                    |data| {
-                        DecodedFrame::new_nv12_with_arc(
-                            data.data,
-                            video_width,
-                            video_height,
-                            data.y_stride,
-                            data.uv_stride,
-                        )
-                        .with_matrix(matrix)
-                    },
-                ));
-            };
+            let answer =
+                |sender: oneshot::Sender<DecodedFrame>,
+                 frame: Option<(cap_video_decode::NV12Data, f64)>| {
+                    let _ = sender.send(frame.map_or_else(
+                        || {
+                            DecodedFrame::new(
+                                vec![0u8; (video_width * video_height * 4) as usize],
+                                video_width,
+                                video_height,
+                            )
+                        },
+                        |(data, presentation_secs)| {
+                            DecodedFrame::new_nv12_with_arc(
+                                data.data,
+                                video_width,
+                                video_height,
+                                data.y_stride,
+                                data.uv_stride,
+                            )
+                            .with_matrix(matrix)
+                            .with_presentation_secs(presentation_secs)
+                        },
+                    ));
+                };
 
             loop {
                 loop {
@@ -246,7 +248,7 @@ impl MFDecoder {
                     Step::Seek(frame) => match decoder.seek(frame_to_100ns(frame, fps)) {
                         Ok(()) => {
                             requests.seeked(frame);
-                            for retired in requests.take_retired() {
+                            for (retired, _) in requests.take_retired() {
                                 decoder.recycle_nv12_buffer(retired.data);
                             }
                             Vec::new()
@@ -264,10 +266,10 @@ impl MFDecoder {
                                 let bytes = sample.data.data.len();
                                 let answers = requests.decoded(
                                     pts_100ns_to_frame(sample.pts, fps),
-                                    sample.data,
+                                    (sample.data, sample.pts as f64 / 10_000_000.0),
                                     bytes,
                                 );
-                                for retired in requests.take_retired() {
+                                for (retired, _) in requests.take_retired() {
                                     decoder.recycle_nv12_buffer(retired.data);
                                 }
                                 answers
