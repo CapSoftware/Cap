@@ -135,14 +135,16 @@ impl Muxer for AudioOnlyStandinMuxer {
         })
     }
 
-    fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        let Some(first) = self.first else {
+    /// The span comes from the ticks alone: the pipeline stamps a last tick at
+    /// the stop, while `timestamp` counts from before the start cue and would
+    /// add the priming time to the segment.
+    fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+        let (Some(first), Some(last)) = (self.first, self.last) else {
             return Ok(Ok(()));
         };
-        let end = self.last.map_or(timestamp, |last| last.max(timestamp));
         Ok(standin_for_span(
             &self.output_path,
-            end.saturating_sub(first),
+            last.saturating_sub(first),
         ))
     }
 }
@@ -193,7 +195,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("display.mp4");
         let mut muxer = muxer(path.clone());
-        for ms in [200u64, 300, 400] {
+        for ms in (200u64..=3_200).step_by(100) {
             let tick = ClockTick {
                 timestamp: Timestamp::Instant(std::time::Instant::now()),
             };
@@ -202,7 +204,9 @@ mod tests {
                 .unwrap();
         }
         assert!(!path.exists(), "nothing is written while recording");
-        muxer.finish(Duration::from_millis(3_200)).unwrap().unwrap();
+        // The finish time counts from before the start cue, so it must not
+        // stretch the segment past its last tick.
+        muxer.finish(Duration::from_millis(4_100)).unwrap().unwrap();
         let input = ffmpeg::format::input(&path).unwrap();
         let seconds = input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE);
         assert!((seconds - 3.0).abs() < 0.05, "{seconds}");
