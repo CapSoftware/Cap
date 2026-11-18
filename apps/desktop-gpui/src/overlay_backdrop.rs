@@ -21,8 +21,11 @@ use std::{
 use gpui::{AsyncApp, RenderImage, Window};
 use scap_targets::DisplayId;
 
-/// A capture older than this is retaken the next time the overlay draws.
-pub const STALE_AFTER: Duration = Duration::from_secs(3);
+/// A capture older than this is retaken the next time the overlay draws, or
+/// older than `STALE_AFTER_MIN` once the area or display size it was taken for
+/// has changed.
+pub const STALE_AFTER: Duration = Duration::from_secs(8);
+pub const STALE_AFTER_MIN: Duration = Duration::from_secs(2);
 
 /// How long the panels must hold still before a stale capture is retaken.
 pub const SETTLE: Duration = Duration::from_millis(400);
