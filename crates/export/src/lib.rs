@@ -199,6 +199,23 @@ impl ExporterBuilder {
             .await
             .map_err(Error::RendererSetup)?,
         );
+        if studio_meta.is_audio_only()
+            && project_config
+                .audio_visuals
+                .as_ref()
+                .is_some_and(|visuals| visuals.enabled)
+        {
+            let recording = recording_meta.clone();
+            let studio = studio_meta.clone();
+            let cancel = cancellation.clone().unwrap_or_default();
+            let levels = tokio::task::spawn_blocking(move || {
+                cap_editor::compute_audio_levels(&recording, &studio, &cancel)
+            })
+            .await
+            .map_err(|error| Error::MediaLoad(error.to_string()))?
+            .map_err(Error::MediaLoad)?;
+            render_constants.set_audio_levels(Some(Arc::new(levels)));
+        }
 
         let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
