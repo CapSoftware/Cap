@@ -3,14 +3,11 @@ use std::{
     time::Duration,
 };
 
-use cap_enc_ffmpeg::h264::H264Encoder;
-use cap_media_info::{Pixel, VideoInfo};
 use cap_project::{
     AUDIO_ONLY_CANVAS_ENCODERS, AUDIO_ONLY_CANVAS_FPS, AUDIO_ONLY_CANVAS_HEIGHT,
     AUDIO_ONLY_CANVAS_WIDTH, AudioMeta, Cursors, MultipleSegment, MultipleSegments, Platform,
     RecordingMeta, RecordingMetaInner, StudioRecordingMeta, StudioRecordingStatus, VideoMeta,
 };
-use ffmpeg::util::rational::Rational as FFRational;
 
 const SEGMENT_DIR: &str = "content/segments/segment-0";
 
@@ -173,78 +170,21 @@ fn link_or_copy(source: &Path, destination: &Path) -> Result<(), AudioProjectErr
         .map_err(|error| io(source, error))
 }
 
-/// One black frame a second, then one on the last frame time, so the
-/// placeholder runs exactly as long as the audio while a two-hour project
-/// encodes in seconds. The editor previews at its own rate and only asks the
-/// decoder for the frame at each time, which every frame here answers.
 fn write_placeholder(path: &Path, duration: Duration) -> Result<(), AudioProjectError> {
-    let failed = |error: String| AudioProjectError::Placeholder(error);
-    let info = VideoInfo {
-        pixel_format: Pixel::YUV420P,
-        width: AUDIO_ONLY_CANVAS_WIDTH,
-        height: AUDIO_ONLY_CANVAS_HEIGHT,
-        time_base: FFRational(1, 1_000_000),
-        frame_rate: FFRational(AUDIO_ONLY_CANVAS_FPS as i32, 1),
-    };
-    let mut output = ffmpeg::format::output(&path).map_err(|error| failed(error.to_string()))?;
-    let mut encoder = H264Encoder::builder(info)
-        .with_encoder_priority_override(AUDIO_ONLY_CANVAS_ENCODERS)
-        .build(&mut output)
-        .map_err(|error| failed(error.to_string()))?;
-    output
-        .write_header()
-        .map_err(|error| failed(error.to_string()))?;
-
-    let mut black = ffmpeg::frame::Video::new(info.pixel_format, info.width, info.height);
-    for (plane, value) in [(0, 16u8), (1, 128u8), (2, 128u8)] {
-        black.data_mut(plane).fill(value);
-    }
-    for time in placeholder_frame_times(duration) {
-        encoder
-            .queue_frame(black.clone(), time, &mut output)
-            .map_err(|error| failed(format!("{error:?}")))?;
-    }
-    encoder
-        .flush(&mut output)
-        .map_err(|error| failed(error.to_string()))?;
-    output
-        .write_trailer()
-        .map_err(|error| failed(error.to_string()))
-}
-
-fn placeholder_frame_times(duration: Duration) -> Vec<Duration> {
-    let frame = Duration::from_secs(1) / AUDIO_ONLY_CANVAS_FPS;
-    let last = duration.saturating_sub(frame);
-    let mut times = (0..=last.as_secs())
-        .map(Duration::from_secs)
-        .collect::<Vec<_>>();
-    if times.last().is_some_and(|time| *time < last) {
-        times.push(last);
-    }
-    times
+    cap_enc_ffmpeg::video::standin::write_black_standin(
+        path,
+        AUDIO_ONLY_CANVAS_WIDTH,
+        AUDIO_ONLY_CANVAS_HEIGHT,
+        AUDIO_ONLY_CANVAS_FPS,
+        duration,
+        AUDIO_ONLY_CANVAS_ENCODERS,
+    )
+    .map_err(AudioProjectError::Placeholder)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn frame_times_end_one_frame_before_the_audio_does() {
-        let times = placeholder_frame_times(Duration::from_millis(2_500));
-        assert_eq!(
-            times,
-            vec![
-                Duration::ZERO,
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                Duration::from_millis(2_500).saturating_sub(Duration::from_secs(1) / 30),
-            ]
-        );
-        assert_eq!(
-            placeholder_frame_times(Duration::from_millis(10)),
-            vec![Duration::ZERO]
-        );
-    }
 
     #[test]
     fn a_project_needs_audio() {
