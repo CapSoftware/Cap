@@ -141,6 +141,20 @@ pub fn default_preview_resolution() -> XY<u32> {
     preview_resolution(crate::store::EditorPreviewQuality::Half)
 }
 
+/// The last frame a paused request renders; later requests are clamped to it
+/// (`EditorInstance::spawn_preview_renderer`).
+fn last_preview_frame(duration: f64) -> Option<u32> {
+    if duration <= 0.0 {
+        return None;
+    }
+    let fps = f64::from(EDITOR_PREVIEW_FPS);
+    let mut last = ((duration * fps).ceil() as u32).saturating_sub(1);
+    if f64::from(last) / fps >= duration {
+        last = last.saturating_sub(1);
+    }
+    Some(last)
+}
+
 /// Whether a frame of `shown` output pixels is magnified on a canvas of
 /// `canvas` device pixels. The output keeps the canvas's aspect, so one side
 /// reaching the canvas (within the renderer's rounding) means it is drawn 1:1.
@@ -668,6 +682,8 @@ const SHARP_PREVIEW_IDLE: Duration = Duration::from_millis(150);
 /// ignores paused requests until it has.
 const SHARP_PREVIEW_ENGINE_WAIT: Duration = Duration::from_millis(500);
 const SHARP_PREVIEW_ENGINE_POLL: Duration = Duration::from_millis(10);
+
+type PreviewRequests = tokio::sync::watch::Receiver<Option<(u32, u32, XY<u32>)>>;
 
 /// The fitted preview's size in device pixels, written on every paint.
 pub(crate) type PreviewCanvasPx = Rc<std::cell::Cell<Option<[u32; 2]>>>;
@@ -1492,6 +1508,10 @@ pub struct EditorWindow {
     /// The pending device-pixel redraw of the paused frame, see
     /// [`EditorWindow::schedule_sharp_preview`].
     sharp_preview: Option<gpui::Task<()>>,
+    /// Subscribed when playback stops: changed once a paused request has been
+    /// sent since, which is when the latest request names the frame the
+    /// preview is heading to.
+    paused_requests: Option<PreviewRequests>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
@@ -2297,6 +2317,7 @@ impl EditorWindow {
             preview,
             preview_canvas_px,
             sharp_preview: None,
+            paused_requests: None,
             header,
             toolbar,
             transport_controls,
@@ -3677,6 +3698,10 @@ impl EditorWindow {
             self.view.playing = false;
             self.report_playback();
         }
+        self.paused_requests = self
+            .instance
+            .as_ref()
+            .map(|instance| instance.preview_tx.subscribe());
         self.schedule_sharp_preview(Duration::ZERO, cx);
         cx.notify();
     }
@@ -4792,6 +4817,29 @@ impl EditorWindow {
                 // stale hover time or a seconds round trip would redraw a
                 // different moment.
                 let frame = view.preview.read(cx).frame_number;
+                // A paused request sent before this was scheduled but not yet
+                // answered: redrawing the old frame would replace it.
+                let requested_since_pause = view
+                    .paused_requests
+                    .as_ref()
+                    .is_none_or(|requests| requests.has_changed().unwrap_or(true));
+                let duration = instance
+                    .project_config
+                    .1
+                    .borrow()
+                    .timeline
+                    .as_ref()
+                    .map_or(0.0, |timeline| timeline.duration());
+                let pending = instance
+                    .preview_tx
+                    .borrow()
+                    .is_some_and(|(requested, _, _)| {
+                        last_preview_frame(duration).map_or(requested, |last| requested.min(last))
+                            != frame
+                    });
+                if requested_since_pause && pending {
+                    return;
+                }
                 instance.preview_tx.send_modify(|value| {
                     *value = Some((frame, EDITOR_PREVIEW_FPS, XY::new(canvas[0], canvas[1])))
                 });
@@ -17069,6 +17117,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_request_past_the_end_counts_as_answered_by_the_last_frame() {
+        assert_eq!(last_preview_frame(0.0), None);
+        assert_eq!(last_preview_frame(1.0), Some(59));
+        assert_eq!(last_preview_frame(1.01), Some(60));
     }
 
     #[test]
