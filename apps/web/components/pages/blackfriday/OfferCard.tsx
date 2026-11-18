@@ -99,7 +99,7 @@ export function OfferCard() {
 					<div className="mt-3 flex items-baseline justify-between px-1 text-[15px]">
 						<span className="text-[rgba(245,241,234,0.64)]">Total today</span>
 						<span className="tabular-nums">
-							<s className="mr-2 text-[rgba(245,241,234,0.45)]">
+							<s className="mr-2 text-[rgba(245,241,234,0.62)]">
 								{symbol}
 								{money(PRICE.full * seats)}
 							</s>

@@ -18,7 +18,7 @@ export function TeamPicks() {
 					<div>
 						<p className="text-[17px] font-medium">{seats} people</p>
 						<p className={`mt-1 text-[15px] tabular-nums ${DIM}`}>
-							<s className="mr-1.5 text-[rgba(245,241,234,0.45)]">
+							<s className="mr-1.5 text-[rgba(245,241,234,0.62)]">
 								{symbol}
 								{PRICE.full * seats}
 							</s>
