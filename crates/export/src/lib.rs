@@ -206,15 +206,12 @@ impl ExporterBuilder {
                 .as_ref()
                 .is_some_and(|visuals| visuals.enabled)
         {
-            let recording = recording_meta.clone();
-            let studio = studio_meta.clone();
-            let cancel = cancellation.clone().unwrap_or_default();
-            let levels = tokio::task::spawn_blocking(move || {
-                cap_editor::compute_audio_levels(&recording, &studio, &cancel)
-            })
-            .await
-            .map_err(|error| Error::MediaLoad(error.to_string()))?
-            .map_err(Error::MediaLoad)?;
+            let levels = Box::pin(load_audio_levels(
+                recording_meta.clone(),
+                studio_meta.clone(),
+                cancellation.clone().unwrap_or_default(),
+            ))
+            .await?;
             render_constants.set_audio_levels(Some(Arc::new(levels)));
         }
 
@@ -292,6 +289,22 @@ impl ExporterBuilder {
             turbo_chunk_failure: None,
         })
     }
+}
+
+// Boxed at the call site: this runs only for audio-only exports with visuals,
+// and keeping its state off `build_inner`'s future keeps every other export's
+// future as small as it was.
+async fn load_audio_levels(
+    recording: RecordingMeta,
+    studio: StudioRecordingMeta,
+    cancel: Arc<AtomicBool>,
+) -> Result<cap_rendering::AudioLevels, ExporterBuildError> {
+    tokio::task::spawn_blocking(move || {
+        cap_editor::compute_audio_levels(&recording, &studio, &cancel)
+    })
+    .await
+    .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?
+    .map_err(ExporterBuildError::MediaLoad)
 }
 
 async fn finish_audio_preparation(
