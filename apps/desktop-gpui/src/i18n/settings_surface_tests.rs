@@ -115,6 +115,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::recordings::failed(), "Recording failed"),
         (tr::settings::recordings::open_link(), "Open link"),
+        (tr::settings::recordings::save_audio(), "Save Audio"),
         (tr::settings::recordings::edit(), "Edit"),
         (tr::settings::recordings::retry_upload(), "Retry upload"),
         (

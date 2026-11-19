@@ -1159,7 +1159,13 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
         .read(cx)
         .ok()
         .and_then(|view| view.armed_target())
-        .filter(|target| !(screenshot && matches!(target, ScreenCaptureTarget::CameraOnly)));
+        .filter(|target| {
+            !(screenshot
+                && matches!(
+                    target,
+                    ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+                ))
+        });
     let stored = stored_target();
 
     // `is_recording_active_or_pending` (`hotkeys.rs:162-170` over there): an
@@ -1246,13 +1252,20 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
 /// unplugged display used to fail the start with "target_display_crop:
 /// Display not found". A stored camera-only target is skipped: without a
 /// camera selected it cannot start, so only an explicit choice records it.
+/// A stored audio-only target is skipped too: a shortcut that records the
+/// screen should not quietly record sound alone because the last one did.
 fn pick_hotkey_target(
     armed: Option<ScreenCaptureTarget>,
     stored: Option<ScreenCaptureTarget>,
     is_live: impl Fn(&ScreenCaptureTarget) -> bool,
     fallback_display: impl FnOnce() -> scap_targets::DisplayId,
 ) -> ScreenCaptureTarget {
-    let stored = stored.filter(|target| !matches!(target, ScreenCaptureTarget::CameraOnly));
+    let stored = stored.filter(|target| {
+        !matches!(
+            target,
+            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+        )
+    });
     [armed, stored]
         .into_iter()
         .flatten()
@@ -1271,7 +1284,7 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
         ScreenCaptureTarget::Area { screen, .. } => {
             scap_targets::Display::from_id(screen).is_some()
         }
-        ScreenCaptureTarget::CameraOnly => true,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => true,
     }
 }
 
@@ -1656,6 +1669,24 @@ mod tests {
             || display_id("3"),
         );
         assert!(matches!(picked, ScreenCaptureTarget::CameraOnly));
+    }
+
+    #[test]
+    fn a_stored_audio_only_target_never_starts_a_shortcut_recording() {
+        let picked = pick_hotkey_target(
+            None,
+            Some(ScreenCaptureTarget::AudioOnly),
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(same(&picked, &display("3")));
+        let picked = pick_hotkey_target(
+            Some(ScreenCaptureTarget::AudioOnly),
+            None,
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(matches!(picked, ScreenCaptureTarget::AudioOnly));
     }
 
     /// What the main window writes on every start is what the shortcut reads

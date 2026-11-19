@@ -2727,7 +2727,16 @@ impl EditorWindow {
     /// own `flex flex-col gap-6 p-4` inside it.
     fn render_tab_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let content: AnyElement = match self.sidebar.tab {
-            SidebarTab::Background => self.render_background_tab(cx).into_any_element(),
+            SidebarTab::Background => match self.render_audio_visuals_card(cx) {
+                Some(visuals) => div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(visuals)
+                    .child(self.render_background_tab(cx))
+                    .into_any_element(),
+                None => self.render_background_tab(cx).into_any_element(),
+            },
             SidebarTab::Camera => self.render_camera_tab(cx),
             SidebarTab::Audio => self.render_audio_tab(cx),
             SidebarTab::Cursor => self.render_cursor_tab(cx),
