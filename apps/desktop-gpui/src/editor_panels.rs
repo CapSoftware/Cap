@@ -6022,6 +6022,27 @@ impl EditorWindow {
                     &theme,
                     SharedString::from(tr::editor::panel::keyboard::title(index + 1)),
                 )
+                // How every key looks lives in the Keyboard tab, one click
+                // away from any key.
+                .value(
+                    ui::Button::plain(
+                        &theme,
+                        SharedString::from(format!("keyboard-style-{index}")),
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .icon("icons/keyboard.svg")
+                    .label(tr::editor::tabs::keyboard::key_style())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(index) = crate::editor_sidebar::SidebarTab::ALL
+                            .iter()
+                            .position(|tab| *tab == crate::editor_sidebar::SidebarTab::Keyboard)
+                        {
+                            this.select_sidebar_tab(index, window, cx);
+                        }
+                    }))
+                    .into_any_element(),
+                )
                 .child(self.render_field_input(FieldKey::KeyboardText(index), None)),
             )
             .child(self.timing_field(
