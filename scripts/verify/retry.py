@@ -35,6 +35,7 @@ Prints one "binary<TAB>test<TAB>evidence" line per test to retry, then
 "blocking<TAB><n>" with the number of failed tests that cannot be retried.
 """
 
+import datetime
 import glob
 import json
 import os
@@ -67,9 +68,11 @@ def crash_report_dirs():
     return [os.path.expanduser("~/Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"]
 
 
-def listener_key_collision(report, pid, exe):
+def listener_key_collision(report, pid, exe, started):
     """The CoreMedia listener key CoreFoundation trapped on, if `report` (a
-    macOS .ips crash report) is that crash of process `pid` running `exe`.
+    macOS .ips crash report) is that crash of process `pid` running `exe`,
+    written after the test started at `started` (an aware datetime): an older
+    report of a reused pid is no evidence.
 
     CoreMedia registers each weak notification listener with
     CFNotificationCenterAddObserver, passing as the observer not a pointer
@@ -84,9 +87,13 @@ def listener_key_collision(report, pid, exe):
     observer register holding a key of this very process."""
     try:
         with open(report, encoding="utf-8") as f:
-            _, _, body = f.read().partition("\n")
+            header, _, body = f.read().partition("\n")
+        crashed = datetime.datetime.strptime(json.loads(header)["timestamp"], "%Y-%m-%d %H:%M:%S.%f %z")
         body = json.loads(body)
-    except (OSError, ValueError):
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    # The header time has centisecond resolution.
+    if crashed < started - datetime.timedelta(seconds=1):
         return None
     if body.get("pid") != pid or body.get("procName") != exe:
         return None
@@ -112,9 +119,10 @@ def listener_key_collision(report, pid, exe):
     return None
 
 
-def find_listener_key_collision(procs):
+def find_listener_key_collision(procs, started):
     """(pid, key) from a crash report showing the collision for one of
-    `procs` [(exe, pid)], looking once a second for CRASH_REPORT_WAIT_SECS."""
+    `procs` [(exe, pid)] since `started`, looking once a second for
+    CRASH_REPORT_WAIT_SECS."""
     directories = crash_report_dirs()
     if not directories:
         return None
@@ -124,10 +132,19 @@ def find_listener_key_collision(procs):
         for directory in directories:
             for report in glob.glob(os.path.join(directory, "*.ips")):
                 for exe, pid in procs:
-                    key = listener_key_collision(report, pid, exe)
+                    key = listener_key_collision(report, pid, exe, started)
                     if key is not None:
                         return pid, key
     return None
+
+
+def test_started(case):
+    """When nextest started the junit `case`, or None."""
+    try:
+        started = datetime.datetime.fromisoformat(case.get("timestamp", "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return started if started.tzinfo else None
 
 
 def records(report_dir):
@@ -242,7 +259,7 @@ def self_test():
             with open(os.path.join(d, path), "w", encoding="utf-8") as f:
                 f.write(text)
 
-        def report(pid, observer):
+        def report(pid, observer, crashed="2026-11-19 02:43:54.00 +0000"):
             frames = ["_CFXNotificationRegisterObserver", "CFNotificationCenterAddObserver", "FigNotificationCenterAddWeakListener", None]
             x = [{"value": 0} for _ in range(29)]
             x[4] = x[23] = {"value": observer}
@@ -253,21 +270,25 @@ def self_test():
                 "faultingThread": 1,
                 "threads": [{"frames": []}, {"frames": [{"symbol": s} for s in frames], "threadState": {"x": x}}],
             }
-            return json.dumps({"bug_type": "309", "name": "seek-abc"}) + "\n" + json.dumps(body, indent=2)
+            header = {"bug_type": "309", "name": "seek-abc", "timestamp": crashed}
+            return json.dumps(header) + "\n" + json.dumps(body, indent=2)
 
         cases = [
             # (test, pid, crash report observer or None, expected retried)
             ("collision", 8465, 8465 * LISTENER_KEYS_PER_PID + 169584, True),
             ("other-trap", 8466, 0x1F8903CB0, False),
             ("no-report", 8467, None, False),
+            # A collision report from before this test started (a reused pid).
+            ("stale-report", 8468, 8468 * LISTENER_KEYS_PER_PID + 42, False),
         ]
         tests = []
         for name, pid, observer, _ in cases:
             write(f"sentinel-{pid}.log", json.dumps({"pid": pid, "exe": "seek-abc", "args": ["--exact", name]}) + "\n")
             if observer is not None:
-                write(f"seek-abc-{pid}.ips", report(pid, observer))
+                crashed = "2026-11-18 21:00:00.00 +0000" if name == "stale-report" else "2026-11-19 02:43:54.00 +0000"
+                write(f"seek-abc-{pid}.ips", report(pid, observer, crashed))
             tests.append(
-                f'<testcase classname="cap-verify::seek" name="{name}">'
+                f'<testcase classname="cap-verify::seek" name="{name}" timestamp="2026-11-19T02:42:45.189+00:00">'
                 f'<failure type="test abort">process aborted with {SIGTRAP}</failure></testcase>'
             )
         # A report of another process with a key of its own is no evidence.
@@ -345,7 +366,8 @@ def main():
             reason = f"inconclusive under starvation: {cases}"
         elif SIGTRAP in text:
             procs = [(exe, pid) for exe, _, _, pid in mine_procs if isinstance(pid, int)]
-            found = find_listener_key_collision(procs) if procs else None
+            started = test_started(case)
+            found = find_listener_key_collision(procs, started) if procs and started else None
             if found:
                 pid, key = found
                 reason = (
