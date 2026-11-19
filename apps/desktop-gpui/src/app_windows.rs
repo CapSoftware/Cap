@@ -5531,12 +5531,14 @@ pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevi
                 software = shared.is_software_adapter,
                 "shared wgpu device ready"
             );
+            crate::store::EditorPreviewQuality::note_rendering_adapter(shared.is_software_adapter);
             let cloned = clone_shared_wgpu_device(&shared);
             *guard = Some(CachedWgpuDevice { shared, lost });
             Some(cloned)
         }
         Err(error) => {
             tracing::warn!(%error, "could not precreate shared wgpu device");
+            crate::store::EditorPreviewQuality::note_rendering_adapter(true);
             None
         }
     }
