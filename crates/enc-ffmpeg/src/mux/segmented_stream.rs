@@ -184,6 +184,7 @@ pub struct SegmentedVideoEncoder {
     segment_tx: SegmentSender,
 
     segment_duration: Duration,
+    segment_keyframes: Option<SegmentKeyframes>,
 
     disk_space_callback: Option<DiskSpaceCallback>,
 
@@ -192,6 +193,39 @@ pub struct SegmentedVideoEncoder {
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
     flush_failure: Option<EncoderFlushFailure>,
+}
+
+struct SegmentKeyframes {
+    segment_duration: Duration,
+    encoder_interval: u32,
+    last: Option<Duration>,
+    frames_since: u32,
+}
+
+impl SegmentKeyframes {
+    fn new(segment_duration: Duration, video_config: &VideoInfo) -> Self {
+        Self {
+            segment_duration,
+            encoder_interval: crate::video::h264::keyframe_interval_frames(video_config) as u32,
+            last: None,
+            frames_since: 0,
+        }
+    }
+
+    fn must_force(&mut self, timestamp: Duration) -> bool {
+        let Some(last) = self.last else {
+            self.last = Some(timestamp);
+            return false;
+        };
+        self.frames_since += 1;
+        let encoder_due = self.frames_since >= self.encoder_interval;
+        let overdue = timestamp.saturating_sub(last) >= self.segment_duration;
+        if encoder_due || overdue {
+            self.last = Some(timestamp);
+            self.frames_since = 0;
+        }
+        overdue && !encoder_due
+    }
 }
 
 struct SegmentMux {
@@ -521,6 +555,8 @@ impl SegmentedVideoEncoder {
             mux: MuxSink::Direct(mux),
             segment_tx,
             segment_duration: config.segment_duration,
+            segment_keyframes: (!timed_fragments)
+                .then(|| SegmentKeyframes::new(config.segment_duration, &video_config)),
             disk_space_callback: None,
             runtime_fallback: RUNTIME_SOFTWARE_FALLBACK,
             codec_failures: CodecFailureHistory::default(),
@@ -585,9 +621,18 @@ impl SegmentedVideoEncoder {
 
     pub fn queue_frame(
         &mut self,
-        frame: frame::Video,
+        mut frame: frame::Video,
         timestamp: Duration,
     ) -> Result<(), QueueFrameError> {
+        // Keyframes cut the segments, and the encoder places them by frame
+        // count. A source that only delivers on change falls behind that
+        // count, so a keyframe is forced once a segment's worth of time has
+        // passed since the last one.
+        if let Some(keyframes) = &mut self.segment_keyframes
+            && keyframes.must_force(timestamp)
+        {
+            frame.set_kind(ffmpeg::picture::Type::I);
+        }
         // Encode with the frame's real capture-derived timestamp. The encoder
         // anchors pts at the first frame, so capture gaps (static content,
         // stream restarts, dropped frames) stay in the timeline instead of
@@ -1999,6 +2044,65 @@ mod tests {
             "assembled output must carry the full 6.6s of content, got {duration:.2}s"
         );
         assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
+    }
+
+    fn sparse_segment_durations(timestamps: &[Duration]) -> Vec<f64> {
+        ffmpeg::init().ok();
+        let temp = tempfile::tempdir().unwrap();
+        let base_path = temp.path().to_path_buf();
+        let mut video_info = test_video_info();
+        video_info.pixel_format = cap_media_info::Pixel::BGRA;
+        let mut encoder = SegmentedVideoEncoder::init(
+            base_path.clone(),
+            video_info,
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        for &timestamp in timestamps {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, 320, 240);
+            frame.data_mut(0).fill(128);
+            encoder.queue_frame(frame, timestamp).unwrap();
+        }
+        encoder.finish().unwrap();
+        std::fs::read_to_string(base_path.join("media_0.m3u8"))
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.strip_prefix("#EXTINF:"))
+            .map(|line| line.trim_end_matches(',').parse().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_static_source_refreshed_once_per_segment_still_cuts_every_segment() {
+        let refresh = Duration::from_secs(2) + Duration::from_secs(1) / 30;
+        let timestamps: Vec<Duration> = (0..6).map(|index| refresh * index).collect();
+        let durations = sparse_segment_durations(&timestamps);
+        assert!(durations.len() >= 5, "segments: {durations:?}");
+        for duration in &durations[..durations.len() - 1] {
+            assert!((2.0..2.1).contains(duration), "segments: {durations:?}");
+        }
+    }
+
+    #[test]
+    fn a_sparse_source_cuts_segments_by_time_instead_of_frame_count() {
+        let timestamps: Vec<Duration> = (0..80)
+            .map(|index| Duration::from_millis(125) * index)
+            .collect();
+        let durations = sparse_segment_durations(&timestamps);
+        assert!(durations.len() >= 4, "segments: {durations:?}");
+        for duration in &durations[..durations.len() - 1] {
+            assert!((2.0..2.2).contains(duration), "segments: {durations:?}");
+        }
+    }
+
+    #[test]
+    fn a_full_rate_source_leaves_keyframes_to_the_encoder() {
+        let mut keyframes = SegmentKeyframes::new(Duration::from_secs(2), &test_video_info());
+        for index in 0..600u32 {
+            let jitter = Duration::from_millis(u64::from(index % 3));
+            let timestamp = Duration::from_secs(1) * index / 30 + jitter;
+            assert!(!keyframes.must_force(timestamp), "forced frame {index}");
+        }
     }
 
     fn recorded_track(base_path: &Path) -> PathBuf {

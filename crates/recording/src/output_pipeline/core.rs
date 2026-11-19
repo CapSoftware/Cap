@@ -2317,6 +2317,7 @@ pub struct SetupCtx {
     stop_signal: PipelineStopSignal,
     digital_silence_ms: Arc<AtomicU64>,
     capture_exit: Arc<CaptureExit>,
+    pause_flag: Arc<AtomicBool>,
 }
 
 impl SetupCtx {
@@ -2334,6 +2335,7 @@ impl SetupCtx {
             stop_signal,
             digital_silence_ms: Arc::new(AtomicU64::new(0)),
             capture_exit: Arc::default(),
+            pause_flag: Arc::default(),
         }
     }
 
@@ -2359,6 +2361,10 @@ impl SetupCtx {
 
     pub fn stop_signal(&self) -> PipelineStopSignal {
         self.stop_signal.clone()
+    }
+
+    pub fn pause_flag(&self) -> Arc<AtomicBool> {
+        self.pause_flag.clone()
     }
 }
 
@@ -3003,6 +3009,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.stop_token.clone(),
             build_ctx.stop_signal.clone(),
         );
+        setup_ctx.pause_flag = build_ctx.pause_flag.clone();
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
@@ -3133,6 +3140,7 @@ impl OutputPipelineBuilder<NoVideo> {
             build_ctx.stop_token.clone(),
             build_ctx.stop_signal.clone(),
         );
+        setup_ctx.pause_flag = build_ctx.pause_flag.clone();
 
         let (first_tx, first_rx) = oneshot::channel();
         let (first_rx, first_seen) = observe_first_timestamp(first_rx);

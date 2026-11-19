@@ -42,6 +42,9 @@ mod frame_scaler;
 mod x11_tests;
 
 #[cfg(test)]
+mod x11_delivery_tests;
+
+#[cfg(test)]
 mod system_audio_channel_tests;
 
 #[cfg(test)]
@@ -73,6 +76,7 @@ pub struct VideoSourceConfig {
     video_info: VideoInfo,
     input: LinuxInputConfig,
     every_frame: bool,
+    refresh_interval: Option<Duration>,
 }
 
 impl VideoSourceConfig {
@@ -83,6 +87,13 @@ impl VideoSourceConfig {
     pub(crate) fn with_every_frame(self) -> Self {
         Self {
             every_frame: true,
+            ..self
+        }
+    }
+
+    pub(crate) fn with_refresh_interval(self, interval: Duration) -> Self {
+        Self {
+            refresh_interval: Some(interval),
             ..self
         }
     }
@@ -174,6 +185,7 @@ impl ScreenCaptureConfig<X11Capture> {
                 video_info,
                 input: LinuxInputConfig::Wayland(input),
                 every_frame: false,
+                refresh_interval: None,
             }
         } else {
             let display = Display::from_id(&self.config.display)
@@ -234,6 +246,7 @@ impl ScreenCaptureConfig<X11Capture> {
                     show_cursor: self.config.show_cursor,
                 }),
                 every_frame: false,
+                refresh_interval: None,
             }
         };
         let system_audio = if self.system_audio {
@@ -349,12 +362,16 @@ impl OutputVideoSource for VideoSource {
         let stop_token = ctx.stop_token();
         let health_tx = ctx.health_tx().clone();
         let info = config.video_info;
-        let every_frame = config.every_frame;
+        let delivery = X11Delivery {
+            every_frame: config.every_frame,
+            refresh_interval: config.refresh_interval,
+            paused: ctx.pause_flag(),
+        };
         match config.input {
             LinuxInputConfig::X11(input) => {
                 ctx.tasks().spawn_thread("x11-capture-thread", {
                     let stop_token = stop_token.clone();
-                    move || capture_x11(info, input, every_frame, video_tx, stop_token, health_tx)
+                    move || capture_x11(info, input, delivery, video_tx, stop_token, health_tx)
                 });
             }
             LinuxInputConfig::Wayland(input) => {
@@ -2436,17 +2453,25 @@ fn pactl_default_device(command: &str) -> Option<String> {
         .filter(|sink| !sink.is_empty())
 }
 
+struct X11Delivery {
+    every_frame: bool,
+    refresh_interval: Option<Duration>,
+    paused: Arc<AtomicBool>,
+}
+
 fn capture_x11(
     video_info: VideoInfo,
     input_config: X11InputConfig,
-    every_frame: bool,
+    delivery: X11Delivery,
     mut video_tx: mpsc::Sender<FFmpegVideoFrame>,
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
 ) -> anyhow::Result<()> {
     let mut grabber = X11Grabber::new(&input_config)?;
     grabber.output = video_info;
-    if !every_frame && let Err(error) = grabber.track_changes() {
+    if !delivery.every_frame
+        && let Err(error) = grabber.track_changes()
+    {
         tracing::info!(
             error = %format!("{error:#}"),
             "X11 DAMAGE unavailable, capturing every frame"
@@ -2458,8 +2483,19 @@ fn capture_x11(
     let mut sent = 0u64;
     let mut dropped = 0u64;
     let mut unchanged = 0u64;
+    let mut was_paused = false;
+    let mut last_sent = Instant::now();
 
     while !stop_token.is_cancelled() {
+        let paused = delivery.paused.load(Ordering::Acquire);
+        if (was_paused && !paused)
+            || delivery
+                .refresh_interval
+                .is_some_and(|interval| last_sent.elapsed() >= interval)
+        {
+            grabber.mark_changed();
+        }
+        was_paused = paused;
         match grabber.grab_if_changed() {
             Ok(Some(mut frame)) => {
                 frame.set_pts(Some(started.elapsed().as_micros() as i64));
@@ -2474,8 +2510,14 @@ fn capture_x11(
                     "linux-screen-video",
                     &health_tx,
                 ) {
-                    StallSendOutcome::Sent => sent += 1,
-                    StallSendOutcome::StalledAndDropped { .. } => dropped += 1,
+                    StallSendOutcome::Sent => {
+                        sent += 1;
+                        last_sent = Instant::now();
+                    }
+                    StallSendOutcome::StalledAndDropped { .. } => {
+                        dropped += 1;
+                        grabber.mark_changed();
+                    }
                     StallSendOutcome::Disconnected => return Ok(()),
                 }
             }
@@ -2977,6 +3019,13 @@ impl X11Grabber {
             pointer: None,
         });
         Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn mark_changed(&mut self) {
+        if let Some(changes) = self.changes.as_mut() {
+            changes.pending = true;
+        }
     }
 
     #[doc(hidden)]

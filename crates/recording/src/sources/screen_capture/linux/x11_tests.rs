@@ -39,8 +39,14 @@ async fn capture_frame(
     let (health_tx, _health_rx) = tokio::sync::mpsc::channel(4);
     let stop = CancellationToken::new();
     let thread_stop = stop.clone();
-    let thread =
-        std::thread::spawn(move || capture_x11(info, input, false, tx, thread_stop, health_tx));
+    let thread = std::thread::spawn(move || {
+        let delivery = X11Delivery {
+            every_frame: false,
+            refresh_interval: None,
+            paused: Arc::default(),
+        };
+        capture_x11(info, input, delivery, tx, thread_stop, health_tx)
+    });
     let frame = tokio::time::timeout(Duration::from_secs(5), rx.next()).await;
     stop.cancel();
     drop(rx);
