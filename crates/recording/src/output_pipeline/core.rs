@@ -2114,6 +2114,7 @@ struct SharedWallClockPauseInner {
 #[derive(Clone)]
 pub struct SharedWallClockPause {
     flag: Arc<AtomicBool>,
+    resumes: Arc<AtomicU64>,
     inner: Arc<std::sync::Mutex<SharedWallClockPauseInner>>,
 }
 
@@ -2121,6 +2122,7 @@ impl SharedWallClockPause {
     pub fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
             flag,
+            resumes: Arc::default(),
             inner: Arc::new(std::sync::Mutex::new(SharedWallClockPauseInner {
                 capture_pauses: Vec::new(),
                 pause_started_at: None,
@@ -2155,6 +2157,9 @@ impl SharedWallClockPause {
                 .saturating_add(instant.saturating_duration_since(started));
         }
         self.flag.store(paused, Ordering::Release);
+        if !paused {
+            self.resumes.fetch_add(1, Ordering::Release);
+        }
     }
 
     fn captured_pause_duration(&self, instant: Instant) -> Duration {
@@ -2317,7 +2322,7 @@ pub struct SetupCtx {
     stop_signal: PipelineStopSignal,
     digital_silence_ms: Arc<AtomicU64>,
     capture_exit: Arc<CaptureExit>,
-    pause_flag: Arc<AtomicBool>,
+    resumes: Arc<AtomicU64>,
 }
 
 impl SetupCtx {
@@ -2335,7 +2340,7 @@ impl SetupCtx {
             stop_signal,
             digital_silence_ms: Arc::new(AtomicU64::new(0)),
             capture_exit: Arc::default(),
-            pause_flag: Arc::default(),
+            resumes: Arc::default(),
         }
     }
 
@@ -2363,8 +2368,8 @@ impl SetupCtx {
         self.stop_signal.clone()
     }
 
-    pub fn pause_flag(&self) -> Arc<AtomicBool> {
-        self.pause_flag.clone()
+    pub fn resumes(&self) -> Arc<AtomicU64> {
+        self.resumes.clone()
     }
 }
 
@@ -3009,7 +3014,6 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             build_ctx.stop_token.clone(),
             build_ctx.stop_signal.clone(),
         );
-        setup_ctx.pause_flag = build_ctx.pause_flag.clone();
 
         let (video_source, video_rx) =
             setup_video_source::<TVideo>(video.config, &mut setup_ctx).await?;
@@ -3038,7 +3042,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         )
         .await?;
 
-        let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+        let mut shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+        shared_pause.resumes = setup_ctx.resumes();
         let video_frame_count = Arc::new(AtomicU64::new(0));
         let video_timestamp_span = Arc::new(VideoTimestampSpan::default());
 
@@ -3140,7 +3145,6 @@ impl OutputPipelineBuilder<NoVideo> {
             build_ctx.stop_token.clone(),
             build_ctx.stop_signal.clone(),
         );
-        setup_ctx.pause_flag = build_ctx.pause_flag.clone();
 
         let (first_tx, first_rx) = oneshot::channel();
         let (first_rx, first_seen) = observe_first_timestamp(first_rx);
@@ -3164,7 +3168,8 @@ impl OutputPipelineBuilder<NoVideo> {
         )
         .await?;
 
-        let shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+        let mut shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
+        shared_pause.resumes = setup_ctx.resumes();
         let audio_gap_summary = Arc::new(OnceLock::new());
         let digital_silence_ms = setup_ctx.digital_silence_ms();
         let capture_exit = setup_ctx.capture_exit.clone();
@@ -6683,6 +6688,18 @@ mod tests {
 
     mod shared_pause_state {
         use super::*;
+
+        #[test]
+        fn every_resume_is_counted_for_sources_that_deliver_on_change() {
+            let pause = SharedWallClockPause::new(Arc::new(AtomicBool::new(false)));
+            let start = Instant::now();
+            pause.set_paused_at(true, start);
+            assert_eq!(pause.resumes.load(Ordering::Acquire), 0);
+            pause.set_paused_at(false, start);
+            pause.set_paused_at(true, start);
+            pause.set_paused_at(false, start);
+            assert_eq!(pause.resumes.load(Ordering::Acquire), 2);
+        }
 
         #[test]
         fn wall_clock_pause_counts_pauses_no_frame_observed() {

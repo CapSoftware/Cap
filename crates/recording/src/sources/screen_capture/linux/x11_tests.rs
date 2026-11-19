@@ -43,7 +43,7 @@ async fn capture_frame(
         let delivery = X11Delivery {
             every_frame: false,
             refresh_interval: None,
-            paused: Arc::default(),
+            resumes: Arc::default(),
         };
         capture_x11(info, input, delivery, tx, thread_stop, health_tx)
     });

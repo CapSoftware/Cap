@@ -365,7 +365,7 @@ impl OutputVideoSource for VideoSource {
         let delivery = X11Delivery {
             every_frame: config.every_frame,
             refresh_interval: config.refresh_interval,
-            paused: ctx.pause_flag(),
+            resumes: ctx.resumes(),
         };
         match config.input {
             LinuxInputConfig::X11(input) => {
@@ -2456,7 +2456,7 @@ fn pactl_default_device(command: &str) -> Option<String> {
 struct X11Delivery {
     every_frame: bool,
     refresh_interval: Option<Duration>,
-    paused: Arc<AtomicBool>,
+    resumes: Arc<AtomicU64>,
 }
 
 fn capture_x11(
@@ -2483,19 +2483,19 @@ fn capture_x11(
     let mut sent = 0u64;
     let mut dropped = 0u64;
     let mut unchanged = 0u64;
-    let mut was_paused = false;
+    let mut resumes = delivery.resumes.load(Ordering::Acquire);
     let mut last_sent = Instant::now();
 
     while !stop_token.is_cancelled() {
-        let paused = delivery.paused.load(Ordering::Acquire);
-        if (was_paused && !paused)
+        let resumed = delivery.resumes.load(Ordering::Acquire);
+        if resumed != resumes
             || delivery
                 .refresh_interval
                 .is_some_and(|interval| last_sent.elapsed() >= interval)
         {
             grabber.mark_changed();
         }
-        was_paused = paused;
+        resumes = resumed;
         match grabber.grab_if_changed() {
             Ok(Some(mut frame)) => {
                 frame.set_pts(Some(started.elapsed().as_micros() as i64));
