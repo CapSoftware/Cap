@@ -140,7 +140,7 @@ description = "Show notifications for clipboard copies, saved files, and more. Y
 label = "System notifications"
 
 [settings.general.recording]
-description = "Behaviour while you record and after you stop."
+description = "Behavior while you record and after you stop."
 title = "Recording"
 
 [settings.general.recording.countdown]
@@ -779,7 +779,7 @@ match_all = "Match all"
 match_any = "Match any"
 name = "Name"
 new = "New automation"
-no_presets = "No presets yet — create one in the editor first."
+no_presets = "No presets yet. Create one in the editor first."
 only_if = { text = "ONLY RUN IF", context = "A small all-caps group label above the conditions." }
 open_in_browser = "Open in browser"
 retry_save = "Retry save"
@@ -1095,7 +1095,7 @@ studio = "Studio Mode"
 
 [main.mode.hover]
 instant = "Instant mode"
-instant_description = "No rendering required — uploads on the fly so you can share the link the moment you stop."
+instant_description = "No rendering required. It uploads on the fly so you can share the link the moment you stop."
 quality_settings = "Quality settings"
 screenshot = "Screenshot mode"
 screenshot_description = "Capture and annotate stills."
@@ -1342,7 +1342,7 @@ answer = "Cap is free for personal use. For teams and commercial use, check out 
 question = "Is Cap free to use?"
 
 [onboarding.faq.instant_vs_studio]
-answer = "Instant mode uploads as you record — stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing."
+answer = "Instant mode uploads as you record. Stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing."
 question = "What's the difference between Instant and Studio?"
 
 [onboarding.faq.sharing]
@@ -1358,7 +1358,7 @@ answer = "All recordings are stored locally on your computer. In Instant mode, t
 question = "Where are my recordings stored?"
 
 [onboarding.modes.instant]
-description = "Your recording uploads as you capture. Stop recording and instantly get a shareable link — no waiting."
+description = "Your recording uploads as you capture. Stop recording and instantly get a shareable link, no waiting."
 feature_1 = "Instant shareable link"
 feature_2 = "Background uploading"
 feature_3 = "AI transcription & summary"
@@ -1395,7 +1395,7 @@ skip = "Skip the tour"
 start = "Start Using Cap"
 
 [onboarding.overview]
-subtitle = "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it."
+subtitle = "Whether you need speed, studio quality, or a quick screenshot, Cap has a mode for it."
 title = "One app, every workflow"
 
 [onboarding.toggle]
@@ -1613,11 +1613,11 @@ microphone_allow = "Allow microphone access…"
 microphone_turn_on = "Turn on microphone access in Settings…"
 
 [overlay.start]
-instant = { text = "Instant Mode — Record shareable link", context = "Second line of the start button, 11px, truncates." }
-instant_sign_in = { text = "Instant Mode — Sign in to record instantly", context = "Second line of the start button, 11px, truncates." }
+instant = { text = "Instant Mode · Record shareable link", context = "Second line of the start button, 11px, truncates." }
+instant_sign_in = { text = "Instant Mode · Sign in to record instantly", context = "Second line of the start button, 11px, truncates." }
 sign_in = "Sign In To Use"
 start_recording = "Start Recording"
-studio = { text = "Studio Mode — Record and edit locally", context = "Second line of the start button, 11px, truncates." }
+studio = { text = "Studio Mode · Record and edit locally", context = "Second line of the start button, 11px, truncates." }
 take_screenshot = "Take Screenshot"
 
 [overlay.window]
@@ -2299,8 +2299,8 @@ desktop_import_failed = { text = "Couldn't import your desktop wallpaper", conte
 importing_image = "Importing image…"
 
 [editor.sidebar.animated_gradient]
-add_colour = "Add a colour"
-colours = "Colours"
+add_colour = "Add a color"
+colours = "Colors"
 delete = "Delete"
 delete_failed = "Could not delete this gradient. Try again."
 fine_tune = "Fine-tune"
@@ -2311,7 +2311,7 @@ name_required = "Enter a name for this gradient."
 presets = "Presets"
 randomize = "Randomize"
 remember_failed = "Could not remember your animated gradient settings."
-remove_colour = "Remove colour"
+remove_colour = "Remove color"
 reset_tooltip = "Reset fine-tune settings"
 save_failed = "Could not save this gradient. Try again."
 save_tooltip = "Save the current gradient"
@@ -2341,7 +2341,7 @@ vibrance = "Vibrance"
 
 [editor.sidebar.animated_gradient.group]
 animation = "Animation"
-colour = "Colour"
+colour = "Color"
 flow = "Flow"
 lighting = "Lighting"
 texture = "Texture"
@@ -2466,7 +2466,7 @@ purple = "Purple"
 
 [editor.canvas]
 camera = "Camera"
-camera_follows_zoom = "Camera size follows the zoom — drag to move"
+camera_follows_zoom = "Camera size follows the zoom. Drag to move."
 captions = "Captions"
 edit_zoom = "Edit zoom"
 image = "Image"

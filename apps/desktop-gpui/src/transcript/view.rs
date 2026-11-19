@@ -2501,6 +2501,12 @@ impl EditorWindow {
             )
         } else if snapshot.no_speech {
             (tr::editor::transcript::no_speech(), "")
+        } else if !has_audio {
+            // Nothing to transcribe: say so once, with nothing to press.
+            (
+                tr::editor::transcript::empty_title(),
+                tr::editor::transcript::no_audio(),
+            )
         } else {
             (
                 tr::editor::transcript::empty_title(),
@@ -2509,11 +2515,7 @@ impl EditorWindow {
         };
 
         let action: AnyElement = if !has_audio {
-            div()
-                .text_size(px(12.))
-                .text_color(Hsla::from(theme.editor.text_3))
-                .child(tr::editor::transcript::no_audio())
-                .into_any_element()
+            div().into_any_element()
         } else if downloaded {
             ui::Button::plain(
                 &theme,

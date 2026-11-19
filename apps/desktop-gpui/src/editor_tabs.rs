@@ -2496,7 +2496,7 @@ impl EditorWindow {
             .child(self.slider_field(
                 tr::editor::tabs::cursor::size_label(),
                 SliderKey::Cursor(CursorSlider::Size),
-                "",
+                "int",
                 cx,
             ))
             .child(self.slider_field(
@@ -2524,30 +2524,12 @@ impl EditorWindow {
             // `<Subfield name=tr::editor::tabs::cursor::inactivity_delay() class="gap-4 items-center">`
             // with a `w-12 text-right` readout beside the slider (`:945-967`).
             let readout = format!("{:.1}s", cursor.hide_when_idle_delay);
-            body = body.child(
-                ui::Subfield::plain(&theme, tr::editor::tabs::cursor::inactivity_delay())
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(12.))
-                            .items_center()
-                            .child(self.slider_flex(
-                                SliderKey::Cursor(CursorSlider::IdleDelay),
-                                "s",
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .w(px(48.))
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child(readout),
-                            ),
-                    ),
-            );
+            body = body.child(self.slider_field_readout(
+                tr::editor::tabs::cursor::inactivity_delay(),
+                SliderKey::Cursor(CursorSlider::IdleDelay),
+                readout,
+                cx,
+            ));
         }
 
         let smooth = !cursor.raw;
@@ -2628,7 +2610,7 @@ impl EditorWindow {
                             .child(self.slider_field(
                                 tr::editor::tabs::cursor::tension(),
                                 SliderKey::Cursor(CursorSlider::Tension),
-                                "",
+                                "int",
                                 cx,
                             ))
                             .child(self.slider_field(
@@ -2994,7 +2976,7 @@ impl EditorWindow {
                             self.slider_field(
                                 tr::editor::tabs::keyboard::size_label(),
                                 SliderKey::Keyboard(KeyboardSlider::Size),
-                                "",
+                                "int",
                                 cx,
                             )
                             .into_any_element(),
@@ -3274,15 +3256,35 @@ impl EditorWindow {
                     .into_any_element(),
             )
             // Typing keys onto the video opens its own panel.
-            .child(
-                ui::EditorButton::plain(&theme, "keyboard-type-keys")
-                    .left_icon("icons/keyboard.svg")
-                    .label(tr::editor::tabs::keyboard::type_keys_button())
+            .child({
+                let editor = theme.editor;
+                div()
+                    .id("keyboard-type-keys")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .h(px(34.))
+                    .rounded(px(10.))
+                    .bg(Hsla::from(editor.ctl))
+                    .shadow(editor.trough_ring())
+                    .text_size(px(13.))
+                    .text_color(Hsla::from(editor.text_1))
+                    .cursor_pointer()
+                    .hover(|this| this.bg(Hsla::from(editor.ctl_hover)))
+                    .child(
+                        svg()
+                            .path("icons/keyboard.svg")
+                            .size(px(15.))
+                            .text_color(Hsla::from(editor.text_2)),
+                    )
+                    .child(tr::editor::tabs::keyboard::type_keys_button())
                     .on_click(cx.listener(|this, _, window, cx| {
                         let at = this.playhead;
                         this.open_key_prompt(at, window, cx);
-                    })),
-            )
+                    }))
+            })
             .child(body)
             .into_any_element()
     }
@@ -3491,7 +3493,7 @@ impl EditorWindow {
                     div()
                         .text_size(px(12.))
                         .text_color(Hsla::from(theme.gray_10))
-                        .child(tr::editor::tabs::keyboard::type_keys_summary(&format!(
+                        .child(tr::editor::tabs::keyboard::type_keys_summary(format!(
                             "{seconds:.1}"
                         ))),
                 )
@@ -3551,9 +3553,7 @@ impl EditorWindow {
         readout: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        ui::Field::inline(&self.theme, label)
-            .value_text(readout)
-            .child(self.slider_flex(slider, "", cx))
+        self.slider_field_readout(label, slider, readout, cx)
             .into_any_element()
     }
 
@@ -3899,9 +3899,11 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(16.))
+            // The model's name, what it is for and its size, across the
+            // panel rather than cut short beside its label.
             .child(
-                ui::Subfield::plain(&theme, tr::editor::tabs::captions::model_label())
-                    .child(div().w(px(220.)).child(model_trigger)),
+                ui::Field::stacked(&theme, tr::editor::tabs::captions::model_label())
+                    .child(model_trigger),
             )
             .children((!transcription::supports_parakeet()).then(|| {
                 div()
@@ -4232,55 +4234,66 @@ impl EditorWindow {
         let theme = self.theme;
         let active = settings.preset.clone();
 
+        let tile = |index: usize, preset: &CaptionPreset, cx: &mut Context<Self>| {
+            let selected = active == preset.id;
+            div()
+                .id(SharedString::from(format!("caption-preset-{}", preset.id)))
+                // Two across the column, however wide it is.
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p(px(6.))
+                .rounded(px(8.))
+                .bg(self.panel_bg())
+                .border_1()
+                .border_color(if selected {
+                    Hsla::from(theme.blue_9)
+                } else {
+                    Hsla::from(theme.gray_3)
+                })
+                // `ring-1 ring-blue-9`, painted behind an opaque card.
+                .when(selected, |this| {
+                    this.shadow(vec![gpui::BoxShadow {
+                        color: Hsla::from(theme.blue_9),
+                        offset: gpui::point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(1.),
+                        inset: false,
+                    }])
+                })
+                .child(self.caption_preset_preview(preset))
+                .child(
+                    div()
+                        .px(px(2.))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_12))
+                        .child((preset.label)()),
+                )
+                .tooltip({
+                    let description = SharedString::from((preset.description)());
+                    move |_window, cx| ui::Tooltip::new(&theme, description.clone()).view(cx)
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.apply_caption_preset(index, window, cx);
+                }))
+                .into_any_element()
+        };
+        let presets: Vec<(usize, &CaptionPreset)> = CAPTION_PRESETS.iter().enumerate().collect();
         div()
             .flex()
-            .flex_row()
-            .flex_wrap()
+            .flex_col()
             .gap(px(8.))
-            .children(CAPTION_PRESETS.iter().enumerate().map(|(index, preset)| {
-                let selected = active == preset.id;
+            .children(presets.chunks(2).map(|row| {
                 div()
-                    .id(SharedString::from(format!("caption-preset-{}", preset.id)))
-                    // Two across the 382px column with `gap-2`.
-                    .w(px(187.))
                     .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .p(px(6.))
-                    .rounded(px(8.))
-                    .bg(self.panel_bg())
-                    .border_1()
-                    .border_color(if selected {
-                        Hsla::from(theme.blue_9)
-                    } else {
-                        Hsla::from(theme.gray_3)
-                    })
-                    // `ring-1 ring-blue-9`, painted behind an opaque card.
-                    .when(selected, |this| {
-                        this.shadow(vec![gpui::BoxShadow {
-                            color: Hsla::from(theme.blue_9),
-                            offset: gpui::point(px(0.), px(0.)),
-                            blur_radius: px(0.),
-                            spread_radius: px(1.),
-                            inset: false,
-                        }])
-                    })
-                    .child(self.caption_preset_preview(preset))
-                    .child(
-                        div()
-                            .px(px(2.))
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child((preset.label)()),
-                    )
-                    .tooltip({
-                        let description = SharedString::from((preset.description)());
-                        move |_window, cx| ui::Tooltip::new(&theme, description.clone()).view(cx)
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.apply_caption_preset(index, window, cx);
-                    }))
+                    .flex_row()
+                    .gap(px(8.))
+                    .children(row.iter().map(|(index, preset)| tile(*index, preset, cx)))
+                    // A lone last tile keeps its half of the row.
+                    .when(row.len() == 1, |this| this.child(div().flex_1()))
             }))
             .into_any_element()
     }

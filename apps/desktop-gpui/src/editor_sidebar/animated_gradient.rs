@@ -1284,17 +1284,15 @@ impl EditorWindow {
         config: &AnimatedGradientConfig,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
         let control = AnimatedGradientParameter::MotionSpeed.control();
         let value = AnimatedGradientParameter::MotionSpeed.get(config);
-        ui::Field::inline(&theme, tr::editor::sidebar::animated_gradient::motion())
-            .value_text(format_control_value(&control, value))
-            .child(self.slider_flex(
-                SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
-                slider_unit(AnimatedGradientParameter::MotionSpeed),
-                cx,
-            ))
-            .into_any_element()
+        self.slider_field_readout(
+            tr::editor::sidebar::animated_gradient::motion(),
+            SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
+            format_control_value(&control, value),
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_animated_gradient_fine_tune(

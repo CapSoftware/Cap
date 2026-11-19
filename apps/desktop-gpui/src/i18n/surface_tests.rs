@@ -50,7 +50,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::mode::name::screenshot(), "Screenshot"),
         (
             tr::main::mode::hover::instant_description(),
-            "No rendering required — uploads on the fly so you can share the link the moment you stop.",
+            "No rendering required. It uploads on the fly so you can share the link the moment you stop.",
         ),
         (
             tr::main::mode::hover::studio_description(),
@@ -412,7 +412,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::onboarding::modes::instant::description(),
-            "Your recording uploads as you capture. Stop recording and instantly get a shareable link — no waiting.",
+            "Your recording uploads as you capture. Stop recording and instantly get a shareable link, no waiting.",
         ),
         (
             tr::onboarding::modes::instant::feature_1(),
@@ -494,7 +494,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::onboarding::faq::instant_vs_studio::answer(),
-            "Instant mode uploads as you record — stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing.",
+            "Instant mode uploads as you record. Stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing.",
         ),
         (
             tr::onboarding::faq::storage::question(),
@@ -541,7 +541,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::onboarding::overview::title(), "One app, every workflow"),
         (
             tr::onboarding::overview::subtitle(),
-            "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it.",
+            "Whether you need speed, studio quality, or a quick screenshot, Cap has a mode for it.",
         ),
         (tr::onboarding::customize::title(), "Make Cap yours"),
         (

@@ -6115,12 +6115,12 @@ impl EditorWindow {
                 end,
                 cx,
             ))
-            .child(self.slider_field(
-                tr::editor::panel::fade_duration(),
-                SliderKey::Panel(PanelSlider::KeyboardFade, index),
-                "",
-                cx,
-            ))
+            .child({
+                // Stored as hundredths of a second; read as milliseconds.
+                let slider = SliderKey::Panel(PanelSlider::KeyboardFade, index);
+                let readout = format!("{}ms", (self.slider_value(slider) * 10.).round() as i32);
+                self.slider_field_readout(tr::editor::panel::fade_duration(), slider, readout, cx)
+            })
             .into_any_element()
     }
 

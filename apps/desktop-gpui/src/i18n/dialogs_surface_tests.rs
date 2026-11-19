@@ -483,17 +483,17 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::overlay::start::instant(),
-            "Instant Mode — Record shareable link",
+            "Instant Mode · Record shareable link",
         ),
         (
             tr::overlay::start::instant_sign_in(),
-            "Instant Mode — Sign in to record instantly",
+            "Instant Mode · Sign in to record instantly",
         ),
         (tr::overlay::start::sign_in(), "Sign In To Use"),
         (tr::overlay::start::start_recording(), "Start Recording"),
         (
             tr::overlay::start::studio(),
-            "Studio Mode — Record and edit locally",
+            "Studio Mode · Record and edit locally",
         ),
         (tr::overlay::start::take_screenshot(), "Take Screenshot"),
         (

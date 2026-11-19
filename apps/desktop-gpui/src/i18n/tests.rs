@@ -166,7 +166,7 @@ fn english_matches_the_literals_it_replaced() {
         ),
         (
             tr::settings::general::recording::description(),
-            "Behaviour while you record and after you stop.".into(),
+            "Behavior while you record and after you stop.".into(),
         ),
         (
             tr::settings::general::recording::title(),

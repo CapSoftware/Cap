@@ -3982,23 +3982,34 @@ impl EditorWindow {
                     this.child(
                         div()
                             .flex()
-                            .flex_row()
-                            .items_center()
-                            .h(px(34.))
-                            .gap(px(10.))
+                            .flex_col()
+                            .gap(px(2.))
                             .child(
                                 div()
-                                    .flex_none()
-                                    .min_w(px(96.))
-                                    .text_size(px(13.))
-                                    .text_color(Hsla::from(editor.text_1))
-                                    .child(tr::editor::export::advanced::bits_per_pixel()),
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .text_color(Hsla::from(editor.text_1))
+                                            .child(tr::editor::export::advanced::bits_per_pixel()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_features(
+                                                crate::editor_timeline::tabular_numerals(),
+                                            )
+                                            .text_color(Hsla::from(editor.text_2))
+                                            .child(format!("{:.2}", ui.bpp())),
+                                    ),
                             )
                             .child(
                                 div()
                                     .id("export-bpp-row")
-                                    .flex_1()
-                                    .min_w_0()
+                                    .w_full()
                                     .px(px(4.))
                                     .h(px(32.))
                                     .flex()
@@ -4021,15 +4032,6 @@ impl EditorWindow {
                                             ),
                                         ),
                                     ),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .min_w(px(36.))
-                                    .text_right()
-                                    .text_size(px(11.))
-                                    .text_color(Hsla::from(editor.text_3))
-                                    .child(format!("{:.2}", ui.bpp())),
                             ),
                     )
                     .when(ui.is_custom_bpp(), |this| {

@@ -3410,15 +3410,17 @@ impl OverlayWindow {
         } else {
             tr::overlay::audio_only::choose_source()
         };
-        // The stage is dark in both themes, over a dimmed screen, so its ink
-        // is light in both.
+        // The title sits on the dimmed screen, light in both themes; the
+        // card follows the theme, like the controls under it.
         let ink = |alpha: f32| gpui::hsla(0., 0., 1., alpha);
+        let dark = self.theme.is_dark();
+        let card_ink = |alpha: f32| gpui::hsla(0., 0., if dark { 1. } else { 0. }, alpha);
         let status_dot = if has_microphone {
             gpui::hsla(0.39, 0.62, 0.52, 1.)
         } else if system_audio {
             Hsla::from(self.theme.blue_9)
         } else {
-            ink(0.3)
+            card_ink(0.3)
         };
         div()
             .size_full()
@@ -3463,9 +3465,13 @@ impl OverlayWindow {
                     .pt(px(26.))
                     .pb(px(18.))
                     .rounded(px(20.))
-                    .bg(gpui::hsla(0.63, 0.08, 0.09, 0.82))
+                    .bg(if dark {
+                        gpui::hsla(0.63, 0.08, 0.09, 0.97)
+                    } else {
+                        gpui::hsla(0.63, 0.1, 0.985, 0.97)
+                    })
                     .border_1()
-                    .border_color(ink(0.08))
+                    .border_color(card_ink(0.08))
                     .shadow(vec![
                         gpui::BoxShadow {
                             color: gpui::hsla(0., 0., 0., 0.45),
@@ -3475,7 +3481,7 @@ impl OverlayWindow {
                             inset: false,
                         },
                         gpui::BoxShadow {
-                            color: ink(0.06),
+                            color: ink(if dark { 0.06 } else { 0.7 }),
                             offset: gpui::point(px(0.), px(1.)),
                             blur_radius: px(0.),
                             spread_radius: px(0.),
@@ -3493,7 +3499,7 @@ impl OverlayWindow {
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(ink(0.72))
+                                    .text_color(card_ink(0.72))
                                     .child(caption),
                             ),
                     ),
@@ -3506,6 +3512,8 @@ impl OverlayWindow {
     /// microphone is live, so the stage breathes with the voice rather than
     /// jumping as one block. Silent, it rests as a faint outline.
     fn render_level_bars(&self, fill: f32, live: bool) -> impl IntoElement {
+        // Light ink on the dark card, dark ink on the light one.
+        let lightness = if self.theme.is_dark() { 1. } else { 0. };
         const BARS: usize = 41;
         const MAX_HEIGHT: f32 = 72.;
         const MIN_HEIGHT: f32 = 3.;
@@ -3547,10 +3555,10 @@ impl OverlayWindow {
                 let height = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) * level;
                 // Louder bars warm from white toward the accent.
                 let color = if live {
-                    let white = gpui::hsla(0., 0., 1., 0.55 + 0.4 * level);
-                    if level > 0.55 { accent } else { white }
+                    let ink = gpui::hsla(0., 0., lightness, 0.55 + 0.4 * level);
+                    if level > 0.55 { accent } else { ink }
                 } else {
-                    gpui::hsla(0., 0., 1., 0.22)
+                    gpui::hsla(0., 0., lightness, 0.22)
                 };
                 div()
                     .w(px(3.))

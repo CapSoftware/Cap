@@ -675,12 +675,12 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::sidebar::animated_gradient::delete(), "Delete"),
         (
             tr::editor::sidebar::animated_gradient::remove_colour(),
-            "Remove colour",
+            "Remove color",
         ),
-        (tr::editor::sidebar::animated_gradient::colours(), "Colours"),
+        (tr::editor::sidebar::animated_gradient::colours(), "Colors"),
         (
             tr::editor::sidebar::animated_gradient::add_colour(),
-            "Add a colour",
+            "Add a color",
         ),
         (tr::editor::sidebar::animated_gradient::motion(), "Motion"),
         (tr::editor::sidebar::animated_gradient::style(), "Style"),
@@ -778,7 +778,7 @@ fn editor_panels_match_the_literals_they_replaced() {
         ),
         (
             tr::editor::sidebar::animated_gradient::group::colour(),
-            "Colour",
+            "Color",
         ),
         (
             tr::editor::sidebar::animated_gradient::group::animation(),

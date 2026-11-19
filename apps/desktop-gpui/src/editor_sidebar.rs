@@ -817,13 +817,6 @@ pub struct SidebarState {
     /// The scroll body's offset, so a tab switch can put it back to the top
     /// (`:647-649`).
     pub scroll: gpui::ScrollHandle,
-    pub source_scroll: gpui::ScrollHandle,
-    /// The source whose pill the row last scrolled into view, so the
-    /// selection is revealed once and the user's own scroll is kept after.
-    pub source_revealed: std::rc::Rc<std::cell::Cell<Option<SourceTab>>>,
-    /// Which surface the current wheel or trackpad gesture over the source
-    /// row moves, and when it last moved, so one gesture never moves both.
-    pub source_wheel: std::rc::Rc<std::cell::Cell<Option<(WheelAxis, Instant)>>>,
 
     /// `KCollapsible open={...}` for Border and MacBook notch (both driven by
     /// their own toggle) and `ShadowSettings`' own `isOpen` signal.
@@ -938,9 +931,6 @@ impl SidebarState {
             source_tab: initial_source_tab(config),
             wallpaper_theme: 0,
             scroll: gpui::ScrollHandle::new(),
-            source_scroll: gpui::ScrollHandle::new(),
-            source_revealed: Default::default(),
-            source_wheel: Default::default(),
             border_open: CollapsibleState::new(
                 config.background.border.as_ref().is_some_and(|b| b.enabled),
             ),
@@ -2672,65 +2662,9 @@ impl EditorWindow {
 /// panel's `p-4`. Fixed, because the column is `w-104 min-w-104 flex-none`.
 const SIDEBAR_INSET: f32 = 20.;
 const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
-/// Six 34px-tall tiles across the pane.
-const SOURCE_FADE_WIDTH: f32 = 28.;
-
-/// The row offset that centres a pill, so the selection sits with its
-/// neighbours on both sides. Item edges are unscrolled positions.
-fn source_reveal_offset(view: (f32, f32), item: (f32, f32), max: f32) -> f32 {
-    let centre = (view.0 + view.1) / 2.;
-    (centre - (item.0 + item.1) / 2.).clamp(-max.max(0.), 0.)
-}
-
-/// A gap this long between wheel events starts a new gesture.
-const WHEEL_GESTURE_GAP: Duration = Duration::from_millis(220);
-
-/// The surface a gesture over the source row scrolls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WheelAxis {
-    Row,
-    Panel,
-}
-
-/// Picks the surface for a new gesture over the source row. A trackpad
-/// (or any smooth input) goes the way it mostly moves; a notched wheel, a
-/// tilt or Shift moves the row while the row can still move that way, and
-/// the panel otherwise. `row_can_move` takes a horizontal delta.
-fn latch_wheel_axis(
-    delta: (f32, f32),
-    smooth: bool,
-    shift: bool,
-    row_can_move: impl Fn(f32) -> bool,
-) -> Option<WheelAxis> {
-    let (dx, dy) = delta;
-    if dx == 0. && dy == 0. {
-        return None;
-    }
-    if smooth && !shift {
-        return Some(if dx.abs() > dy.abs() {
-            WheelAxis::Row
-        } else {
-            WheelAxis::Panel
-        });
-    }
-    let horizontal = if dx != 0. { dx } else { dy };
-    Some(if row_can_move(horizontal) {
-        WheelAxis::Row
-    } else {
-        WheelAxis::Panel
-    })
-}
-
-/// How far a wheel event moves a surface on `axis`: the row takes the
-/// horizontal part (or the vertical one from a plain wheel or Shift), the
-/// panel only the vertical part.
-fn wheel_step(axis: WheelAxis, delta: (f32, f32)) -> f32 {
-    match axis {
-        WheelAxis::Row if delta.0 != 0. => delta.0,
-        WheelAxis::Row => delta.1,
-        WheelAxis::Panel => delta.1,
-    }
-}
+/// The background sources sit three to a row.
+const SOURCE_COLUMNS: usize = 3;
+const SOURCE_GAP: f32 = 6.;
 
 const WALLPAPER_COLUMNS: f32 = 4.;
 const WALLPAPER_GAP: f32 = 8.;
@@ -2901,7 +2835,8 @@ impl EditorWindow {
                             "%",
                             cx,
                         ))
-                        .child(self.render_padding_mode(cx))
+                        // A select row keeps the same space below it as a slider.
+                        .child(div().mb(px(10.)).child(self.render_padding_mode(cx)))
                         // The custom screen position row, shown only once the
                         // display has been dragged on the canvas (`:2656-2667`).
                         .children(background.display_position.map(|_| {
@@ -2945,7 +2880,7 @@ impl EditorWindow {
                             "%",
                             cx,
                         ))
-                        .child(self.render_corner_style(cx))
+                        .child(div().mb(px(10.)).child(self.render_corner_style(cx)))
                         .children(self.sidebar.style_target.is_none().then(|| {
                             self.slider_field(
                                 tr::editor::sidebar::layout::motion_blur(),
@@ -3003,218 +2938,81 @@ impl EditorWindow {
             })
     }
 
+    /// The background sources, three to a row so every one shows in full.
     fn render_source_tiles(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let scroll = self.sidebar.source_scroll.clone();
-        let revealed = self.sidebar.source_revealed.clone();
-        let offset = f32::from(scroll.offset().x);
-        let max = f32::from(scroll.max_offset().x);
-        let fade_left = offset < -1.;
-        let fade_right = max > 1. && offset > -(max - 1.);
-        let panel = self.panel_bg();
-        let fade = |angle: f32| {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .w(px(SOURCE_FADE_WIDTH))
-                .bg(gpui::linear_gradient(
-                    angle,
-                    gpui::linear_color_stop(panel, 0.),
-                    gpui::linear_color_stop(panel.opacity(0.), 1.),
-                ))
-        };
-
-        div()
-            .relative()
-            .child(
-                div()
-                    .when(revealed.get() != Some(tab), |this| {
-                        let scroll = scroll.clone();
-                        let revealed = revealed.clone();
-                        let index = SourceTab::PICKER.iter().position(|item| *item == tab);
-                        let editor = cx.entity().downgrade();
-                        this.on_children_prepainted(move |_, _, cx| {
-                            revealed.set(Some(tab));
-                            // A scrolling row keeps its children's bounds on the handle;
-                            // the listener's own list is empty.
-                            let Some(item) = index.and_then(|index| scroll.bounds_for_item(index))
-                            else {
-                                return;
-                            };
-                            let view = scroll.bounds();
-                            let offset = scroll.offset();
-                            let next = source_reveal_offset(
-                                (f32::from(view.left()), f32::from(view.right())),
-                                (f32::from(item.left()), f32::from(item.right())),
-                                f32::from(scroll.max_offset().x),
-                            );
-                            if (next - f32::from(offset.x)).abs() > 0.5 {
-                                scroll.set_offset(gpui::point(px(next), offset.y));
-                                // The sidebar view is cached, so it repaints
-                                // the new offset and edge fades only when told.
-                                editor
-                                    .update(cx, |this, cx| this.invalidate_sidebar(cx))
-                                    .ok();
-                            }
-                        })
+        let chip = |item: SourceTab, cx: &mut Context<Self>| {
+            let selected = tab == item;
+            let ink = Hsla::from(if selected {
+                editor.text_1
+            } else {
+                editor.text_2
+            });
+            let glyph = match item {
+                SourceTab::Gradient => div()
+                    .size(px(13.))
+                    .rounded(px(3.))
+                    .bg(gpui::linear_gradient(
+                        135.,
+                        gpui::linear_color_stop(ink, 0.),
+                        gpui::linear_color_stop(ink.opacity(0.15), 1.),
+                    ))
+                    .into_any_element(),
+                _ => svg()
+                    .path(match item {
+                        SourceTab::Desktop => "icons/monitor-outline.svg",
+                        SourceTab::Wallpaper => "icons/image.svg",
+                        SourceTab::Image => "icons/folder-open.svg",
+                        SourceTab::Color => "icons/palette.svg",
+                        _ => "icons/square-play.svg",
                     })
-                    .id("background-sources")
+                    .size(px(14.))
+                    .text_color(ink)
+                    .into_any_element(),
+            };
+            div()
+                .id(SharedString::from(format!("background-source-{item:?}")))
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .gap(px(7.))
+                .h(px(32.))
+                .px(px(8.))
+                .rounded(px(10.))
+                .text_size(px(13.))
+                .text_color(ink)
+                .map(|this| {
+                    if selected {
+                        this.bg(editor.pill_fill()).shadow(editor.pill_shadow())
+                    } else {
+                        this.bg(Hsla::from(editor.ctl))
+                            .shadow(editor.trough_ring())
+                            .cursor_pointer()
+                            .hover(|this| this.bg(Hsla::from(editor.ctl_hover)))
+                    }
+                })
+                .child(div().flex_none().child(glyph))
+                .child(div().min_w_0().truncate().child(item.label()))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select_source_tab(item, window, cx);
+                }))
+        };
+        div()
+            .id("background-sources")
+            .flex()
+            .flex_col()
+            .gap(px(SOURCE_GAP))
+            .children(SourceTab::PICKER.chunks(SOURCE_COLUMNS).map(|row| {
+                div()
                     .flex()
                     .flex_row()
-                    .gap(px(6.))
-                    .overflow_x_scroll()
-                    .track_scroll(&scroll)
-                    .children(SourceTab::PICKER.into_iter().map(|item| {
-                        let selected = tab == item;
-                        let ink = Hsla::from(if selected {
-                            editor.text_1
-                        } else {
-                            editor.text_2
-                        });
-                        let glyph = match item {
-                            SourceTab::Gradient => div()
-                                .size(px(13.))
-                                .rounded(px(3.))
-                                .bg(gpui::linear_gradient(
-                                    135.,
-                                    gpui::linear_color_stop(ink, 0.),
-                                    gpui::linear_color_stop(ink.opacity(0.15), 1.),
-                                ))
-                                .into_any_element(),
-                            _ => svg()
-                                .path(match item {
-                                    SourceTab::Desktop => "icons/monitor-outline.svg",
-                                    SourceTab::Wallpaper => "icons/image.svg",
-                                    SourceTab::Image => "icons/folder-open.svg",
-                                    SourceTab::Color => "icons/palette.svg",
-                                    _ => "icons/square-play.svg",
-                                })
-                                .size(px(14.))
-                                .text_color(ink)
-                                .into_any_element(),
-                        };
-                        div()
-                            .id(SharedString::from(format!("background-source-{item:?}")))
-                            .flex()
-                            .flex_none()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(7.))
-                            .h(px(32.))
-                            .px(px(13.))
-                            .rounded(px(10.))
-                            .text_size(px(13.))
-                            .text_color(ink)
-                            .map(|this| {
-                                if selected {
-                                    this.bg(editor.pill_fill()).shadow(editor.pill_shadow())
-                                } else {
-                                    this.bg(Hsla::from(editor.ctl))
-                                        .shadow(editor.trough_ring())
-                                        .cursor_pointer()
-                                        .hover(|this| this.bg(Hsla::from(editor.ctl_hover)))
-                                }
-                            })
-                            .child(glyph)
-                            .child(item.label())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_source_tab(item, window, cx);
-                            }))
-                    })),
-            )
-            .when(fade_left, |this| this.child(fade(90.).left_0()))
-            .when(fade_right, |this| this.child(fade(270.).right_0()))
-            .child(self.source_wheel_owner(cx))
-    }
-
-    /// Owns wheel and trackpad input over the source row before either
-    /// scroll area sees it, so a gesture moves the row or the panel and
-    /// never both. Its hitbox is transparent to clicks and hovers.
-    fn source_wheel_owner(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let row = self.sidebar.source_scroll.clone();
-        let panel = self.sidebar.scroll.clone();
-        let latch = self.sidebar.source_wheel.clone();
-        let editor = cx.entity().downgrade();
-        gpui::canvas(
-            |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
-            move |_, hitbox, window, _| {
-                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Capture || !hitbox.is_hovered(window) {
-                        return;
-                    }
-                    let (delta, smooth) = match event.delta {
-                        gpui::ScrollDelta::Pixels(delta) => {
-                            ((f32::from(delta.x), f32::from(delta.y)), true)
-                        }
-                        gpui::ScrollDelta::Lines(lines) => {
-                            let line = f32::from(window.line_height());
-                            // Precision touchpads on Windows report fractions
-                            // of a line; a notched wheel reports whole lines.
-                            let smooth = lines.x.fract() != 0. || lines.y.fract() != 0.;
-                            ((lines.x * line, lines.y * line), smooth)
-                        }
-                    };
-                    let now = Instant::now();
-                    let row_offset = row.offset();
-                    let row_max = f32::from(row.max_offset().x);
-                    let held = latch.get().filter(|(_, at)| {
-                        event.touch_phase != gpui::TouchPhase::Started
-                            && now.duration_since(*at) < WHEEL_GESTURE_GAP
-                    });
-                    // A notched wheel that ran the row to its end hands the
-                    // rest of its spin to the panel, rather than stalling
-                    // there until the wheel pauses.
-                    let x = f32::from(row_offset.x);
-                    let row_can_move = |dx: f32| (dx > 0. && x < 0.) || (dx < 0. && x > -row_max);
-                    let held = held.filter(|(axis, _)| {
-                        smooth
-                            || *axis != WheelAxis::Row
-                            || row_can_move(wheel_step(WheelAxis::Row, delta))
-                    });
-                    let axis = match held {
-                        Some((axis, _)) => axis,
-                        None => {
-                            let Some(axis) = latch_wheel_axis(
-                                delta,
-                                smooth,
-                                event.modifiers.shift,
-                                row_can_move,
-                            ) else {
-                                return;
-                            };
-                            axis
-                        }
-                    };
-                    latch.set(Some((axis, now)));
-                    let step = px(wheel_step(axis, delta));
-                    let handle = match axis {
-                        WheelAxis::Row => &row,
-                        WheelAxis::Panel => &panel,
-                    };
-                    let offset = handle.offset();
-                    let max = handle.max_offset();
-                    let next = match axis {
-                        WheelAxis::Row => {
-                            gpui::point((offset.x + step).clamp(-max.x, px(0.)), offset.y)
-                        }
-                        WheelAxis::Panel => {
-                            gpui::point(offset.x, (offset.y + step).clamp(-max.y, px(0.)))
-                        }
-                    };
-                    cx.stop_propagation();
-                    if next != offset {
-                        handle.set_offset(next);
-                        editor
-                            .update(cx, |this, cx| this.invalidate_sidebar(cx))
-                            .ok();
-                    }
-                });
-            },
-        )
-        .absolute()
-        .inset_0()
+                    .gap(px(SOURCE_GAP))
+                    .children(row.iter().map(|item| chip(*item, cx)))
+            }))
     }
 
     /// The decoded preview for a path, if it is the one already decoded.
@@ -3596,7 +3394,13 @@ impl EditorWindow {
                                         // (`:6500`): an 8px `#a0a0a0` checker.
                                         this.bg(gpui::checkerboard(gpui::rgb(0xa0a0a0), 8.))
                                     })
-                                    .when(!transparent, |this| this.bg(color_to_hsla(color))),
+                                    .when(!transparent, |this| {
+                                        // A hairline of its own, darker shade so
+                                        // white still reads on a white panel.
+                                        this.bg(color_to_hsla(color))
+                                            .border_1()
+                                            .border_color(preview_border_color(color).opacity(0.5))
+                                    }),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.edit_background(
@@ -4241,6 +4045,28 @@ impl EditorWindow {
         self.slider_field_disabled(name, slider, unit, false, cx)
     }
 
+    /// [`Self::slider_field`] with a readout the caller formats, for values
+    /// whose unit is not a plain suffix (`150ms`, `1.5s`).
+    pub(crate) fn slider_field_readout(
+        &self,
+        name: impl Into<SharedString>,
+        slider: SliderKey,
+        readout: String,
+        cx: &mut Context<Self>,
+    ) -> ui::Field {
+        let theme = self.theme;
+        ui::Field::stacked(&theme, name)
+            .value(
+                div()
+                    .text_size(px(12.))
+                    .font_features(crate::editor_timeline::tabular_numerals())
+                    .text_color(Hsla::from(theme.editor.text_2))
+                    .child(readout)
+                    .into_any_element(),
+            )
+            .child(self.slider_sized_state(slider, "", false, false, cx))
+    }
+
     pub(crate) fn slider_field_disabled(
         &self,
         name: impl Into<SharedString>,
@@ -4329,18 +4155,24 @@ impl EditorWindow {
 /// the two formatter call sites are motion blur (`${round(v * 100)}%`) and the
 /// notch's three (`${(v * 100).toFixed(1)}%`).
 pub(crate) fn format_slider_value(value: f32, unit: &str) -> String {
+    // One decimal where it says something: `5.5%`, but `10%`, not `10.0%`.
+    let tenths = |value: f32| {
+        // `+ 0.` folds a rounded `-0.0` into `0.0`.
+        let text = format!("{:.1}", (value * 10.).round() / 10. + 0.);
+        text.strip_suffix(".0").map_or(text.clone(), str::to_string)
+    };
     match unit {
-        "" => format!("{value:.1}"),
+        "" => tenths(value),
         "deg" => format!("{}\u{b0}", value.round() as i32),
         "int" => format!("{}", value.round() as i32),
         "x100%" => format!("{}%", (value * 100.).round() as i32),
-        "pct" => format!("{:.1}%", value * 100.),
+        "pct" => format!("{}%", tenths(value * 100.)),
         // The ripple duration's `${v.toFixed(2)}s`.
         "secs" => format!("{value:.2}s"),
         "log2hz" => crate::editor_voice_eq::format_hz(value.exp2()),
         "sdb" => crate::editor_voice_eq::format_gain(value),
         "q" => crate::i18n::decimal(format!("{value:.2}")),
-        unit => format!("{value:.1}{unit}"),
+        unit => format!("{}{unit}", tenths(value)),
     }
 }
 
@@ -4660,55 +4492,6 @@ mod tests {
     }
 
     #[test]
-    fn revealing_a_source_pill_centres_it_within_the_row() {
-        let view = (0., 300.);
-        // A pill in the middle of the content scrolls to the row's centre.
-        assert_eq!(source_reveal_offset(view, (250., 330.), 200.), -140.);
-        // The first pill rests against the start.
-        assert_eq!(source_reveal_offset(view, (0., 80.), 200.), 0.);
-        // The last pill can only go as far as the row scrolls.
-        assert_eq!(source_reveal_offset(view, (420., 500.), 200.), -200.);
-    }
-
-    #[test]
-    fn a_trackpad_gesture_moves_the_way_it_mostly_goes() {
-        let free = |_: f32| true;
-        assert_eq!(
-            latch_wheel_axis((-8., 2.), true, false, free),
-            Some(WheelAxis::Row)
-        );
-        assert_eq!(
-            latch_wheel_axis((2., -8.), true, false, free),
-            Some(WheelAxis::Panel)
-        );
-        assert_eq!(latch_wheel_axis((0., 0.), true, false, free), None);
-    }
-
-    #[test]
-    fn a_notched_wheel_moves_the_row_until_it_runs_out() {
-        assert_eq!(
-            latch_wheel_axis((0., -40.), false, false, |_| true),
-            Some(WheelAxis::Row)
-        );
-        assert_eq!(
-            latch_wheel_axis((0., -40.), false, false, |_| false),
-            Some(WheelAxis::Panel)
-        );
-        // Shift turns a smooth vertical scroll sideways too.
-        assert_eq!(
-            latch_wheel_axis((0., -6.), true, true, |_| true),
-            Some(WheelAxis::Row)
-        );
-    }
-
-    #[test]
-    fn each_surface_takes_only_its_own_part_of_a_step() {
-        assert_eq!(wheel_step(WheelAxis::Row, (-12., 3.)), -12.);
-        assert_eq!(wheel_step(WheelAxis::Row, (0., -40.)), -40.);
-        assert_eq!(wheel_step(WheelAxis::Panel, (-12., 3.)), 3.);
-    }
-
-    #[test]
     fn built_in_wallpapers_remain_available_from_the_development_checkout() {
         assert!(wallpaper_path("macOS/sequoia-dark").is_some());
     }
@@ -4917,11 +4700,14 @@ mod tests {
     #[test]
     fn slider_tooltips_print_what_the_source_formats() {
         assert_eq!(format_slider_value(12.34, "%"), "12.3%");
-        assert_eq!(format_slider_value(5., "px"), "5.0px");
+        assert_eq!(format_slider_value(5., "px"), "5px");
+        assert_eq!(format_slider_value(10., "%"), "10%");
+        assert_eq!(format_slider_value(5.5, "%"), "5.5%");
         assert_eq!(format_slider_value(0.55, "x100%"), "55%");
         assert_eq!(format_slider_value(0.1224, "pct"), "12.2%");
         assert_eq!(format_slider_value(90., "deg"), "90\u{b0}");
-        assert_eq!(format_slider_value(50., ""), "50.0");
+        assert_eq!(format_slider_value(50., ""), "50");
+        assert_eq!(format_slider_value(-0.04, ""), "0");
     }
 
     #[test]

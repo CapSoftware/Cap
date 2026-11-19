@@ -1063,7 +1063,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::settings::automations::no_presets(),
-            "No presets yet — create one in the editor first.",
+            "No presets yet. Create one in the editor first.",
         ),
         (tr::settings::automations::field::source(), "Source"),
         (tr::settings::automations::field::folder(), "Folder"),
