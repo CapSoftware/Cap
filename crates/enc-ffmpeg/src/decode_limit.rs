@@ -30,7 +30,9 @@ pub fn apply_decode_pixel_limit(context: &mut ffmpeg::codec::context::Context) {
     }
 }
 
-/// `avformat_find_stream_info`, whose probe decodes run under the limit.
+/// Probing decodes a few frames at the stream's real size, which can be far
+/// larger than the size the container declares, before any decoder of ours
+/// exists to hold the limit.
 ///
 /// # Safety
 /// `context` must point to a valid, opened input format context.
@@ -56,7 +58,6 @@ pub unsafe fn find_stream_info(context: *mut ffmpeg::ffi::AVFormatContext) -> c_
     found
 }
 
-/// `ffmpeg::format::input` with the limit applied to stream probing.
 pub fn open_input(path: &Path) -> Result<ffmpeg::format::context::Input, ffmpeg::Error> {
     if decode_pixel_limit().is_none() {
         return ffmpeg::format::input(path);
