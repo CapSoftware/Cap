@@ -164,11 +164,25 @@ When camera footage exists, you can drag it to a custom canvas position or use a
 
 - Hide or mirror the camera.
 - Apply light or heavy camera-background blur.
+- Remove a green or blue screen from behind you.
 - Choose a square or source-shaped camera frame.
 - Change camera size, rounded corners, corner style, and shadow.
 - Control camera size during screen zooms or keep its original size.
 
 For composition changes that should only apply to part of the video, use the Scene track instead of changing the project-wide camera settings.
+
+### Use a green screen
+
+If you record in front of a green or blue screen, turn on **Green Screen** in the Camera tab. Cap removes the backdrop by its color, so it works the same on macOS, Windows, and Linux.
+
+1. Choose **Green** or **Blue**, set any color with the swatch, or click **Pick from Camera** to take the backdrop color from the edges of the camera frame at the playhead.
+2. Raise **Tolerance** until the whole backdrop is gone, including darker corners and creases.
+3. Raise **Softness** for smoother edges around hair and shoulders.
+4. Raise **Spill Removal** if the screen tints the edges of your face or clothes.
+
+With Green Screen on, the camera is drawn as a cutout, as with **Remove Background**: rounded corners, shadow, and edge padding no longer apply. Camera-only scenes still show the whole camera. The editor preview and the export use the same renderer, so what you see is what exports.
+
+The key works best when the screen is lit evenly and separately from you, you stand a step or two in front of it, and you don't wear its color.
 
 ## Reuse a look with presets
 

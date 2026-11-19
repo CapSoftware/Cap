@@ -225,6 +225,10 @@ fn camera_hidden(config: &mut ProjectConfiguration) {
     config.camera.hide = true;
 }
 
+fn camera_green_screen(config: &mut ProjectConfiguration) {
+    config.camera.chroma_key = Some(cap_project::ChromaKey::default());
+}
+
 #[test]
 fn edits_sequential() {
     let mut failures = Vec::new();
@@ -232,6 +236,7 @@ fn edits_sequential() {
         ("transition", transition as fn(&mut ProjectConfiguration)),
         ("hide-camera-scene", hide_camera_scene),
         ("camera-hidden", camera_hidden),
+        ("camera-green-screen", camera_green_screen),
     ] {
         failures.extend(sequential(catalog::basic(report::tier()), edit, 30, 0.0));
         failures.extend(sequential(catalog::basic(report::tier()), edit, 60, 0.0));
