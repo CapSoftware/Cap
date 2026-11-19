@@ -59,7 +59,7 @@ zoom = "ज़ूम करें"
 
 [menu.help]
 title = "सहायता"
-feedback = "फ़ीडबैक दें…"
+feedback = "Cap को फ़ीडबैक भेजें…"
 changelog = "चेंजलॉग"
 dashboard = "डैशबोर्ड"
 documentation = "दस्तावेज़ीकरण"

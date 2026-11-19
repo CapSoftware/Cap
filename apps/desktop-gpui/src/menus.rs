@@ -1415,7 +1415,7 @@ mod tests {
                 (
                     "Help".into(),
                     vec![
-                        "Give Feedback…".into(),
+                        "Send Feedback to Cap…".into(),
                         "-".into(),
                         "Changelog".into(),
                         "-".into(),

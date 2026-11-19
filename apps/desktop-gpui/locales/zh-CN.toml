@@ -59,7 +59,7 @@ zoom = "缩放"
 
 [menu.help]
 title = "帮助"
-feedback = "提供反馈…"
+feedback = "向 Cap 发送反馈…"
 changelog = "更新日志"
 dashboard = "仪表盘"
 documentation = "文档"

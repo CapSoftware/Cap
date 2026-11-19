@@ -59,7 +59,7 @@ zoom = "Réduire/agrandir"
 
 [menu.help]
 title = "Aide"
-feedback = "Donner son avis…"
+feedback = "Envoyer un avis à Cap…"
 changelog = "Nouveautés"
 dashboard = "Tableau de bord"
 documentation = "Documentation"

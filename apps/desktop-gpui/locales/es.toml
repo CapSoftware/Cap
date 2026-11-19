@@ -59,7 +59,7 @@ zoom = "Zoom"
 
 [menu.help]
 title = "Ayuda"
-feedback = "Enviar comentarios…"
+feedback = "Enviar comentarios a Cap…"
 changelog = "Registro de cambios"
 dashboard = "Panel"
 documentation = "Documentación"

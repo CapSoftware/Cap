@@ -59,7 +59,7 @@ zoom = "拡大/縮小"
 
 [menu.help]
 title = "ヘルプ"
-feedback = "フィードバックを送る…"
+feedback = "Capにフィードバックを送る…"
 changelog = "変更履歴"
 dashboard = "ダッシュボード"
 documentation = "ドキュメント"
