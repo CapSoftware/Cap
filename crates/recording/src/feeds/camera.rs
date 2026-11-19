@@ -2775,6 +2775,37 @@ mod tests {
         feed.wait_for_stop().await;
     }
 
+    #[tokio::test]
+    async fn camera_selection_after_the_recording_drops_its_lock_is_accepted() {
+        let (connection, done_rx) = test_camera_connection(1);
+        let token = Arc::new(());
+        let camera = CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            lock_generation: 7,
+            setup_generation: 1,
+            state: State::Locked {
+                inner: AttachedState::new(connection.id.clone(), connection),
+                token: Arc::downgrade(&token),
+            },
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        drop(token);
+        for id in ["different-camera", "another-camera"] {
+            let result = feed
+                .ask(SetInput {
+                    id: DeviceOrModelID::DeviceID(id.into()),
+                    settings: None,
+                })
+                .await;
+            assert!(result.is_ok());
+            feed.tell(Unlock { generation: 7 }).await.unwrap();
+        }
+        assert!(done_rx.try_recv().is_ok());
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn camera_removal_does_not_block_on_an_already_queued_stop() {
         let (connection, done_rx) = test_camera_connection(1);
