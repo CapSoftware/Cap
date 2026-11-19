@@ -1840,3 +1840,76 @@ async fn hover_analysis_never_starts_until_hover_anchors_are_turned_on() {
     assert!(opened());
     editor.dispose().await;
 }
+
+/// A paused frame is drawn again from the kept source video once it settles,
+/// including a seek past the last playable frame, which the preview clamps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_settled_frame_reads_the_kept_source_after_a_seek_to_the_end() {
+    let fixture = fixture(false);
+    let root = fixture.directory.path().join("kept.cap");
+    std::fs::create_dir(&root).unwrap();
+    let display = root.join("display.mp4");
+    finalize_track(&fixture.metadata.project_path, &fixture.display, &display);
+    let source = fixture.directory.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let source_track = encode_track(&source, "display", 160, 120, 30, 42);
+    finalize_track(
+        &source,
+        &source_track,
+        &cap_rendering::source_video_path(&display),
+    );
+    let mut metadata = fixture.metadata.clone();
+    metadata.project_path = root.clone();
+    let cap_project::RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+        panic!("Studio metadata expected");
+    };
+    let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+        panic!("Indexed metadata expected");
+    };
+    inner.segments[0].display.path = "display.mp4".into();
+    inner.segments[0].camera = None;
+    inner.segments[0].mic = None;
+    inner.status = Some(cap_project::StudioRecordingStatus::Complete);
+    metadata.save_for_project().unwrap();
+    let mut project = fixture.project.clone();
+    project.camera.hide = true;
+    project.write(&root).unwrap();
+
+    let frames = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let sink = frames.clone();
+    let editor = crate::EditorInstance::new_with_audio_output(
+        root.clone(),
+        |_| {},
+        Box::new(move |output, _| {
+            if let crate::editor::EditorFrameOutput::Rgba(frame) = output {
+                sink.lock().unwrap().push(visible_rgba(&frame));
+            }
+        }),
+        None,
+        Arc::new(crate::AudioOutput::new_headless(Box::new(|_, _| {}))),
+    )
+    .await
+    .unwrap();
+
+    let end = editor.get_total_frames(30);
+    for frame in [15, end] {
+        frames.lock().unwrap().clear();
+        editor
+            .preview_tx
+            .send(Some((frame, 30, XY::new(160, 120))))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while frames.lock().unwrap().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("frame {frame} was never drawn again from the kept source"));
+        let frames = frames.lock().unwrap();
+        assert_ne!(
+            frames[0], frames[1],
+            "frame {frame}: the settled frame should come from the kept source"
+        );
+    }
+    editor.dispose().await;
+}

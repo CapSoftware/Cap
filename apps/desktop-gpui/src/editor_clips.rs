@@ -1850,7 +1850,7 @@ impl Drop for PendingImportDirectory {
         if entries.iter().any(|entry| {
             !matches!(
                 entry.file_name().to_str(),
-                Some("display.mp4" | "audio.ogg")
+                Some("display.mp4" | "display-source.mp4" | "audio.ogg")
             ) || !entry.file_type().is_ok_and(|kind| kind.is_file())
         }) {
             tracing::warn!(path = %self.path.display(), "retaining unexpected import staging contents");
