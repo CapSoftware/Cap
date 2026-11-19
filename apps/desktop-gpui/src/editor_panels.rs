@@ -3035,12 +3035,16 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         if key == FieldKey::SensitivePhrase {
-            if matches!(event, ui::TextInputEvent::Confirmed)
-                && let Some(input) = self.field(key).cloned()
-            {
-                let phrase = input.read(cx).text().to_string();
-                self.add_sensitive_phrase(&phrase, cx);
-                input.update(cx, |input, cx| input.set_text("", cx));
+            match event {
+                ui::TextInputEvent::Confirmed => {
+                    if let Some(input) = self.field(key).cloned() {
+                        let phrase = input.read(cx).text().to_string();
+                        self.add_sensitive_phrase(&phrase, window, cx);
+                        input.update(cx, |input, cx| input.set_text("", cx));
+                    }
+                }
+                ui::TextInputEvent::Changed => self.invalidate_sidebar(cx),
+                ui::TextInputEvent::Cancelled | ui::TextInputEvent::Blurred => {}
             }
             return;
         }
@@ -8467,6 +8471,9 @@ impl EditorWindow {
                 }
             }
             None => match self.sidebar.tab {
+                crate::editor_sidebar::SidebarTab::Privacy => {
+                    fields.push(FieldKey::SensitivePhrase)
+                }
                 crate::editor_sidebar::SidebarTab::Captions => {
                     colors.extend([
                         ColorTarget::CaptionColor,

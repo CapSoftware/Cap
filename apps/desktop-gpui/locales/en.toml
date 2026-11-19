@@ -2441,6 +2441,7 @@ camera = "Camera"
 captions = "Captions"
 cursor = "Cursor"
 keyboard = "Keyboard"
+privacy = "Privacy"
 
 [editor.sidebar.wallpaper_theme]
 blue = "Blue"

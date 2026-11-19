@@ -497,6 +497,7 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::sidebar::tab::cursor(), "Cursor"),
         (tr::editor::sidebar::tab::keyboard(), "Keyboard"),
         (tr::editor::sidebar::tab::captions(), "Captions"),
+        (tr::editor::sidebar::tab::privacy(), "Privacy"),
         (tr::editor::sidebar::source::desktop(), "Desktop"),
         (tr::editor::sidebar::source::wallpaper(), "Wallpaper"),
         (tr::editor::sidebar::source::image(), "Image"),

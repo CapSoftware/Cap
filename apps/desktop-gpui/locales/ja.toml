@@ -2439,6 +2439,7 @@ camera = "カメラ"
 captions = "字幕"
 cursor = "カーソル"
 keyboard = "キーボード"
+privacy = "プライバシー"
 
 [editor.sidebar.wallpaper_theme]
 blue = "ブルー"

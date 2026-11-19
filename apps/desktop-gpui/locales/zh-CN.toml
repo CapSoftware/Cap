@@ -2439,6 +2439,7 @@ camera = "摄像头"
 captions = "字幕"
 cursor = "光标"
 keyboard = "键盘"
+privacy = "隐私"
 
 [editor.sidebar.wallpaper_theme]
 blue = "蓝色"

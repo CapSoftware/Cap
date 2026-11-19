@@ -8,7 +8,8 @@ use cap_editor::EditorInstance;
 use cap_export::preview::{ExportPreviewSettings, render_frame_with_editor};
 use cap_project::{ProjectConfiguration, XY};
 use cap_sensitive_scan::{
-    LumaFrame, MODELS, ModelFile, ScanSettings, Scanner, SensitiveTrack, TextReader, mask_segments,
+    LumaFrame, MODELS, ModelFile, ScanSettings, Scanner, SensitiveTrack, TextReader, in_motion,
+    mask_segments,
 };
 use futures_util::StreamExt as _;
 use gpui::{
@@ -183,29 +184,29 @@ async fn scan(
         })
         .map_err(|e| e.to_string())?;
 
-    let mut first = Some(first);
+    let mut first = Some(luma(&first));
+    let mut previous: Option<(f64, LumaFrame)> = None;
     for (index, time) in times.into_iter().enumerate() {
         if cancel.load(Ordering::Acquire) {
             break;
         }
         let frame = match first.take() {
             Some(frame) => frame,
-            None => {
-                render_frame_with_editor(&instance, project.clone(), time, render)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .0
-            }
+            None => render_luma(&instance, &project, time, render).await?,
         };
-        let luma = LumaFrame::from_rgba(
-            frame.width,
-            frame.height,
-            frame.padded_bytes_per_row as usize,
-            &frame.data,
-        );
-        if frames.send_async((time, luma)).await.is_err() {
+        if let Some((before, earlier)) = &previous
+            && in_motion(earlier, &frame)
+        {
+            let middle = (before + time) / 2.0;
+            let between = render_luma(&instance, &project, middle, render).await?;
+            if frames.send_async((middle, between)).await.is_err() {
+                break;
+            }
+        }
+        if frames.send_async((time, frame.clone())).await.is_err() {
             break;
         }
+        previous = Some((time, frame));
         let _ = events.send(ScanEvent::Stage(ScanStage::Scanning(
             index as f32 / count as f32,
         )));
@@ -222,12 +223,55 @@ async fn scan(
     Ok(Some(tracks))
 }
 
-fn without_masks(project: &ProjectConfiguration) -> ProjectConfiguration {
+fn luma(frame: &cap_rendering::RenderedFrame) -> LumaFrame {
+    LumaFrame::from_rgba(
+        frame.width,
+        frame.height,
+        frame.padded_bytes_per_row as usize,
+        &frame.data,
+    )
+}
+
+async fn render_luma(
+    instance: &EditorInstance,
+    project: &ProjectConfiguration,
+    time: f64,
+    render: ExportPreviewSettings,
+) -> Result<LumaFrame, String> {
+    let (frame, _) = render_frame_with_editor(instance, project.clone(), time, render)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(luma(&frame))
+}
+
+fn scan_input(project: &ProjectConfiguration) -> ProjectConfiguration {
     let mut project = project.clone();
+    project.sensitive_phrases.clear();
+    project.captions = None;
+    project.keyboard = None;
+    project.annotations.clear();
     if let Some(timeline) = project.timeline.as_mut() {
         timeline.mask_segments.clear();
+        timeline.text_segments.clear();
+        timeline.caption_segments.clear();
+        timeline.keyboard_segments.clear();
+        timeline.image_segments.clear();
+        timeline.shape_segments.clear();
     }
     project
+}
+
+fn add_phrase(phrases: &mut Vec<String>, phrase: &str) -> bool {
+    let phrase = phrase.trim();
+    if phrase.is_empty()
+        || phrases
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(phrase))
+    {
+        return false;
+    }
+    phrases.push(phrase.to_string());
+    true
 }
 
 impl EditorWindow {
@@ -238,11 +282,11 @@ impl EditorWindow {
         let Some(instance) = self.instance.clone() else {
             return;
         };
-        let project = without_masks(&self.project);
+        let project = scan_input(&self.project);
         let Ok(snapshot) = serde_json::to_value(&project) else {
             return;
         };
-        let phrases = self.sensitive_phrases.clone();
+        let phrases = self.project.sensitive_phrases.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let (events, received) = flume::unbounded();
         let job_cancel = cancel.clone();
@@ -273,8 +317,14 @@ impl EditorWindow {
                 }
             }
         });
+        let models = models_dir();
+        let stage = if MODELS.iter().all(|model| model_installed(&models, model)) {
+            ScanStage::Scanning(0.0)
+        } else {
+            ScanStage::Downloading(0.0)
+        };
         self.sensitive_scan = Some(SensitiveScanJob {
-            stage: ScanStage::Scanning(0.0),
+            stage,
             cancel,
             _task: task,
         });
@@ -302,7 +352,7 @@ impl EditorWindow {
                 return;
             }
         };
-        if serde_json::to_value(without_masks(&self.project))
+        if serde_json::to_value(scan_input(&self.project))
             .ok()
             .as_ref()
             != Some(snapshot)
@@ -316,7 +366,7 @@ impl EditorWindow {
             .as_ref()
             .map(|timeline| timeline.mask_segments.clone())
             .unwrap_or_default();
-        let segments = mask_segments(&tracks, &existing);
+        let segments = mask_segments(&tracks, &existing, self.total_duration());
         tracing::info!(
             tracks = tracks.len(),
             masks = segments.len(),
@@ -352,6 +402,9 @@ impl EditorWindow {
         if !inserted {
             return;
         }
+        if self.timeline_height_override.is_none() {
+            self.timeline_height_override = Some(self.preferred_timeline_height());
+        }
         self.tracks.mask = self.tracks.mask.max(lanes);
         let indices: Vec<usize> = self
             .project
@@ -378,18 +431,31 @@ impl EditorWindow {
         self.show_notice(tr::editor::panel::mask::scan_found(count), window, cx);
     }
 
-    pub(crate) fn add_sensitive_phrase(&mut self, phrase: &str, cx: &mut Context<Self>) {
-        let phrase = phrase.trim();
-        if phrase.is_empty()
-            || self
-                .sensitive_phrases
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(phrase))
-        {
-            return;
-        }
-        self.sensitive_phrases.push(phrase.to_string());
-        cx.notify();
+    pub(crate) fn add_sensitive_phrase(
+        &mut self,
+        phrase: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let phrase = phrase.to_string();
+        self.edit_project_without_timeline("sensitive-phrase", window, cx, move |project| {
+            add_phrase(&mut project.sensitive_phrases, &phrase)
+        });
+    }
+
+    fn remove_sensitive_phrase(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_project_without_timeline("sensitive-phrase", window, cx, move |project| {
+            if index >= project.sensitive_phrases.len() {
+                return false;
+            }
+            project.sensitive_phrases.remove(index);
+            true
+        });
     }
 
     pub(crate) fn render_sensitive_scan(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -397,7 +463,8 @@ impl EditorWindow {
         let muted = Hsla::from(theme.gray_11);
         let stage = self.sensitive_scan.as_ref().map(|job| job.stage);
         let phrases = div().flex().flex_wrap().gap(px(6.)).children(
-            self.sensitive_phrases
+            self.project
+                .sensitive_phrases
                 .iter()
                 .enumerate()
                 .map(|(index, phrase)| {
@@ -422,11 +489,8 @@ impl EditorWindow {
                             .icon_size(px(10.))
                             .disabled(stage.is_some())
                             .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    if index < this.sensitive_phrases.len() {
-                                        this.sensitive_phrases.remove(index);
-                                        cx.notify();
-                                    }
+                                move |this, _, window, cx| {
+                                    this.remove_sensitive_phrase(index, window, cx)
                                 },
                             )),
                         )
@@ -529,12 +593,49 @@ impl EditorWindow {
                         .flex_col()
                         .gap(px(8.))
                         .children(input)
-                        .when(!self.sensitive_phrases.is_empty(), |column| {
+                        .when(!self.project.sensitive_phrases.is_empty(), |column| {
                             column.child(phrases)
                         }),
                 ),
             )
             .child(action)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn phrases_are_trimmed_and_kept_once_ignoring_case() {
+        let mut phrases = Vec::new();
+        assert!(add_phrase(&mut phrases, " Acme Robotics "));
+        assert!(!add_phrase(&mut phrases, "acme robotics"));
+        assert!(!add_phrase(&mut phrases, "   "));
+        assert!(add_phrase(&mut phrases, "Project Falcon"));
+        assert_eq!(phrases, ["Acme Robotics", "Project Falcon"]);
+    }
+
+    #[test]
+    fn the_scan_reads_the_screen_without_layers_drawn_above_masks() {
+        let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [],
+                "zoomSegments": [],
+                "textSegments": [{ "start": 0.0, "end": 1.0, "content": "jane@acme.io" }],
+                "keyboardSegments": [{ "id": "keys", "start": 0.0, "end": 1.0, "displayText": "Cmd K" }],
+                "captionSegments": [{ "id": "caption", "start": 0.0, "end": 1.0, "text": "jane@acme.io" }],
+            },
+        }))
+        .unwrap();
+        project.sensitive_phrases = vec!["Acme".into()];
+        let input = scan_input(&project);
+        let timeline = input.timeline.as_ref().unwrap();
+        assert!(timeline.text_segments.is_empty());
+        assert!(timeline.caption_segments.is_empty());
+        assert!(timeline.keyboard_segments.is_empty());
+        assert!(input.sensitive_phrases.is_empty());
+        assert!(input.captions.is_none() && input.keyboard.is_none());
     }
 }
