@@ -493,6 +493,23 @@ fn canvas_hit_layout(layout: FrameLayout, overlay_live: bool) -> FrameLayout {
     }
 }
 
+/// Where each of a run of keys added by hand lands in `start..end`: back to
+/// back as laid out, squeezed in proportion when less room than they asked
+/// for was free, so every one lands inside it.
+fn manual_run_spans(runs: &[cap_project::ManualKeyRun], start: f64, end: f64) -> Vec<(f64, f64)> {
+    let requested = runs
+        .last()
+        .map_or(0.0, |run| run.offset + run.length)
+        .max(1e-9);
+    let scale = ((end - start) / requested).min(1.0);
+    runs.iter()
+        .map(|run| {
+            let run_start = start + run.offset * scale;
+            (run_start, (run_start + run.length * scale).min(end))
+        })
+        .collect()
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -7404,13 +7421,13 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(f64, f64)> {
-        let length = runs.last().map(|run| run.offset + run.length)?;
+        let requested = runs.last().map(|run| run.offset + run.length)?;
         let durations = self.clip_display_durations.clone();
         if !edits::ensure_timeline(&mut self.project, &durations) {
             return None;
         }
         let total = self.total_duration();
-        let length = length.min(total);
+        let length = requested.min(total);
         let placement = self.project.timeline.as_ref().and_then(|timeline| {
             edits::find_placement(&timeline.keyboard_segments, time, length, total)
         });
@@ -7433,8 +7450,7 @@ impl EditorWindow {
                 .map_or(0, |last| last + 1)
         });
         let id = format!("{}{next}", cap_project::MANUAL_KEYBOARD_PREFIX);
-        // Squeezed in proportion when only less room than asked was free.
-        let scale = (end - start) / length.max(1e-9);
+        let spans = manual_run_spans(runs, start, end);
         let showed_track = self.tracks.keyboard;
         self.tracks.keyboard = true;
         let added = self.edit_timeline_project(
@@ -7446,8 +7462,7 @@ impl EditorWindow {
                 let Some(timeline) = project.timeline.as_mut() else {
                     return false;
                 };
-                for (index, run) in runs.iter().enumerate() {
-                    let run_start = start + run.offset * scale;
+                for (index, (run, &(run_start, run_end))) in runs.iter().zip(&spans).enumerate() {
                     let segment = cap_project::KeyboardTrackSegment {
                         id: if index == 0 {
                             id.clone()
@@ -7459,7 +7474,7 @@ impl EditorWindow {
                             )
                         },
                         start: run_start,
-                        end: (run_start + run.length * scale).min(end),
+                        end: run_end,
                         display_text: run.text.clone(),
                         keys: cap_project::manual_key_presses(&run.text),
                         fade_duration_override: None,
@@ -18092,6 +18107,27 @@ mod tests {
     /// Every caption's box is a canvas hit target, so a change to it rebuilds
     /// the editor while the overlay is live, and not while the pointer is
     /// elsewhere.
+    /// A sentence longer than the room for it is squeezed to fit, every key
+    /// landing inside the clip with its start before its end.
+    #[test]
+    fn typed_keys_longer_than_the_room_are_squeezed_in() {
+        let runs = cap_project::manual_key_runs("hello world", "keys");
+        let requested = runs.last().map(|run| run.offset + run.length).unwrap();
+        assert!(requested > 2.0);
+        let spans = manual_run_spans(&runs, 0.0, 2.0);
+        assert_eq!(spans.len(), runs.len());
+        for (start, end) in &spans {
+            assert!(
+                *start >= 0.0 && start < end && *end <= 2.0 + 1e-9,
+                "{start} {end}"
+            );
+        }
+        assert!((spans.last().unwrap().1 - 2.0).abs() < 1e-9);
+        // With room to spare, nothing is stretched.
+        let roomy = manual_run_spans(&runs, 1.0, 100.0);
+        assert!((roomy[0].1 - roomy[0].0 - runs[0].length).abs() < 1e-9);
+    }
+
     #[test]
     fn a_caption_box_changes_the_canvas_layout_only_while_the_overlay_is_live() {
         let base = FrameLayout {
