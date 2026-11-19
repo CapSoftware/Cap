@@ -3812,7 +3812,9 @@ mod tests {
                 .editor_preview_quality
         };
         let machine = EditorPreviewQuality::for_this_machine();
-        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+            && !cap_rendering::force_software_wgpu_adapter()
+        {
             assert_eq!(machine, EditorPreviewQuality::Full);
         }
         if cfg!(target_os = "linux") {
