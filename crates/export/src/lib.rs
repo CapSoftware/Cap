@@ -1,3 +1,5 @@
+pub mod audio;
+pub mod audio_project;
 pub mod estimates;
 pub mod gif;
 pub mod mov;
@@ -214,6 +216,20 @@ impl ExporterBuilder {
             .await
             .map_err(Error::RendererSetup)?,
         );
+        if studio_meta.is_audio_only()
+            && project_config
+                .audio_visuals
+                .as_ref()
+                .is_some_and(|visuals| visuals.enabled)
+        {
+            let levels = Box::pin(load_audio_levels(
+                recording_meta.clone(),
+                studio_meta.clone(),
+                cancellation.clone().unwrap_or_default(),
+            ))
+            .await?;
+            render_constants.set_audio_levels(Some(Arc::new(levels)));
+        }
 
         let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
@@ -289,6 +305,22 @@ impl ExporterBuilder {
             turbo_chunk_failure: None,
         })
     }
+}
+
+// Boxed at the call site: this runs only for audio-only exports with visuals,
+// and keeping its state off `build_inner`'s future keeps every other export's
+// future as small as it was.
+async fn load_audio_levels(
+    recording: RecordingMeta,
+    studio: StudioRecordingMeta,
+    cancel: Arc<AtomicBool>,
+) -> Result<cap_rendering::AudioLevels, ExporterBuildError> {
+    tokio::task::spawn_blocking(move || {
+        cap_editor::compute_audio_levels(&recording, &studio, &cancel)
+    })
+    .await
+    .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?
+    .map_err(ExporterBuildError::MediaLoad)
 }
 
 async fn finish_audio_preparation(
@@ -917,6 +949,7 @@ mod clip_offset_tests {
                 cursors: Cursors::default(),
                 status: None,
                 cursor_shape_version: 0,
+                audio_only: false,
             },
         }
     }

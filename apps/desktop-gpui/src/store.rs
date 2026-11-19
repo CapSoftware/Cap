@@ -160,6 +160,8 @@ pub struct ExportPrefs {
     pub resolution_from_source: bool,
     #[serde(default)]
     pub fps_from_source: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_format: Option<String>,
     #[serde(default)]
     pub enhance_quality: bool,
 }

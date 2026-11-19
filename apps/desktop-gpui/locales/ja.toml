@@ -304,6 +304,7 @@ open_link = "リンクを開く"
 retry_upload = "アップロードを再試行"
 show_all = "すべて表示"
 title = "録画"
+save_audio = "音声を保存"
 
 [settings.recordings.empty]
 all = "録画はありません"
@@ -1044,6 +1045,7 @@ off = "オフ"
 on = "オン"
 
 [main.error]
+audio_only_needs_audio = "音声のみの録音には、マイクを選択するかシステム音声をオンにする必要があります。"
 camera_only_needs_camera = "カメラのみの録画にはカメラを選択する必要があります。"
 copy = "エラーをコピー"
 devices_not_ready = "録画デバイスの準備ができていません。レコーダーを開いてもう一度お試しください。"
@@ -1153,6 +1155,7 @@ title = "空き容量が不足しています"
 
 [main.target]
 area = "範囲"
+audio_only = "音声のみ"
 camera_only = "カメラのみ"
 choose_display = "ディスプレイを選択"
 choose_window = "ウィンドウを選択"
@@ -1535,12 +1538,14 @@ placeholder = "台本を貼り付けるか入力してください…"
 words_per_minute = "{wpm}語/分"
 
 [import]
+audio_failed = "音声を読み込めませんでした: {error}"
 error_title = "読み込みエラー"
 image_failed = "画像を読み込めませんでした：{error}"
 unsupported = "サポートされていないメディアファイルです。"
 video_failed = "動画を読み込めませんでした：{error}"
 
 [import.filter]
+audio = "音声ファイル"
 image = "画像ファイル"
 media = "メディアファイル"
 video = "動画ファイル"
@@ -1582,6 +1587,13 @@ unlock_title = "範囲のロックを解除"
 unlock_body = "範囲を再び移動、サイズ変更、描き直しできるようにします。"
 locked_title = "範囲はロックされています"
 locked_body = "クリックしてロックを解除すると、移動、サイズ変更、描き直しができます。"
+
+[overlay.audio_only]
+choose_source = "マイクを選択するか、システム音声をオンにしてください"
+description = "画面やカメラは使わず、マイクとコンピュータの音を録音します"
+meter_hint = "何か話してレベルを確認してください"
+system_audio = "システム音声"
+system_audio_only = "システム音声のみを録音します"
 
 [overlay.camera_only]
 description = "カメラとマイクだけで録画します"
@@ -1840,6 +1852,20 @@ change_hint = "このセグメントに別のトラックを選ぶ"
 change_title = "音声を変更"
 done = "完了"
 import = "ファイルを読み込む"
+
+[editor.audio_only]
+add_visuals = "ビジュアルを追加"
+body = "この録音には映像がありません。音声をMP3またはWAVで書き出すか、ビジュアルを追加して動画にできます。"
+export_audio = "音声を書き出す"
+show_visuals = "ビジュアルを表示"
+size_large = "大"
+size_medium = "中"
+size_small = "小"
+style_bars = "バー"
+style_circle = "円"
+style_wave = "波形"
+title = "音声のみ"
+visuals = "ビジュアル"
 
 [editor.color]
 apply_to_cursor = "カーソルにも適用"
@@ -2445,6 +2471,7 @@ split = "分割{number}"
 title = "クリップ"
 
 [editor.clips.error]
+audio_only_mix = "音声のみの録音と動画クリップは1つのプロジェクトにまとめられません"
 cancelled = "読み込みをキャンセルしました"
 cannot_decode = "動画{path}をデコードできません：{error}"
 in_use = "この録画の使用中は読み込めません：{error}"
@@ -2484,6 +2511,15 @@ title = "書き出し"
 upgrade_message = "この機能を使うにはプランのアップグレードが必要です"
 upgrade_title = "アップグレードが必要です"
 upload_failed = "録画をアップロードできませんでした"
+
+[editor.export.audio]
+cta = "音声を書き出す"
+exported = "音声を書き出しました"
+exporting = "音声を書き出しています"
+file_type = "ファイル形式"
+format = "音声"
+mp3_description = "軽量で、どこでも再生できます。192 kb/s ステレオ。"
+wav_description = "ロスレス 16ビット、48 kHz。さらに編集する場合に最適です。"
 
 [editor.export.advanced]
 bits_per_pixel = "ピクセルあたりのビット数"

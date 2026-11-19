@@ -1,4 +1,5 @@
 mod audio;
+mod audio_levels;
 mod audio_output;
 mod completed_audio;
 mod editor;
@@ -23,6 +24,7 @@ pub use audio::set_progressive_audio_allocation_limit;
 pub use audio::{
     AudioRenderer, AudioSegment, MusicTracks, release_playback_audio_caches, voice_eq_filters,
 };
+pub use audio_levels::compute_audio_levels;
 #[cfg(feature = "test-hooks")]
 pub use audio_output::OfflineAudioSink;
 pub use audio_output::{
