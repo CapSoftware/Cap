@@ -1894,7 +1894,7 @@ mod timing_tests {
     }
 
     use super::*;
-    use crate::{KeyboardSettings, TimelineConfiguration};
+    use crate::TimelineConfiguration;
 
     fn timeline(segments: serde_json::Value) -> TimelineConfiguration {
         serde_json::from_value(serde_json::json!({"segments": segments, "zoomSegments": []}))

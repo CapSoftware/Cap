@@ -3,14 +3,20 @@
 //! [`super::keyboard`] and `shaders/keycap.wgsl`; everything here is plain
 //! data so it can be tested without a device.
 
-/// The typefaces the keycaps are set in, embedded so every platform draws
-/// them alike. See `assets/fonts/keycaps/README.md` for their licences.
-pub const KEYCAP_FONTS: [&[u8]; 4] = [
-    include_bytes!("../../assets/fonts/keycaps/Inter-Medium-Keycaps.ttf"),
-    include_bytes!("../../assets/fonts/keycaps/Selawik-Regular.ttf"),
-    include_bytes!("../../assets/fonts/keycaps/Ubuntu-Medium.ttf"),
-    include_bytes!("../../assets/fonts/keycaps/IBMPlexSans-Medium.ttf"),
+/// The typefaces the keycaps and captions are set in, embedded so every
+/// platform draws them alike. See `assets/fonts/overlay/README.md` for their
+/// licences.
+pub const OVERLAY_FONTS: [&[u8]; 5] = [
+    include_bytes!("../../assets/fonts/overlay/Inter-Medium-Keycaps.ttf"),
+    include_bytes!("../../assets/fonts/overlay/Selawik-Regular.ttf"),
+    include_bytes!("../../assets/fonts/overlay/Ubuntu-Medium.ttf"),
+    include_bytes!("../../assets/fonts/overlay/IBMPlexSans-Medium.ttf"),
+    include_bytes!("../../assets/fonts/overlay/Inter-SemiBold-Captions.ttf"),
 ];
+
+/// The caption and label face that ships with the renderer, as the font
+/// setting names it.
+pub const OVERLAY_TEXT_FONT: &str = "Inter";
 
 /// The face a key is printed in: an SF-like grotesk on Apple's keys,
 /// Segoe's open twin on Windows', Ubuntu's own on Linux', and IBM's Plex on
@@ -20,7 +26,7 @@ pub fn keycap_font(style: KeycapStyle, theme: KeycapTheme) -> (&'static str, u16
         (KeycapTheme::Retro, _) => ("IBM Plex Sans", 500),
         (_, KeycapStyle::Windows) => ("Selawik", 400),
         (_, KeycapStyle::Linux) => ("Ubuntu", 500),
-        _ => ("Inter", 500),
+        _ => ("Inter Keycaps", 500),
     }
 }
 

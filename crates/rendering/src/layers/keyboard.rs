@@ -91,6 +91,15 @@ impl KeyboardPosition {
 const BOUNCE_OFFSET_PIXELS: f32 = 6.0;
 const MIN_OVERLAY_GAP: f32 = 15.0;
 
+/// A keycap is this many times the size setting tall.
+const KEYCAP_HEIGHT_PER_SIZE: f32 = 2.0;
+
+/// The keycaps stand a little apart from the captions, more on a taller frame,
+/// so their shadows never touch the caption card.
+fn keycap_caption_gap(frame_height: f32) -> f32 {
+    (frame_height * 0.035).max(MIN_OVERLAY_GAP)
+}
+
 /// Manual captions can sit anywhere, so they share the keyboard's lane
 /// wherever the two boxes would meet side by side.
 fn shares_caption_lane(
@@ -144,12 +153,14 @@ fn resolve_keyboard_position(
     }
 }
 
-/// `keyboard` is the box at its own position, `[left, top, width, height]`.
+/// `keyboard` is the box at its own position, `[left, top, width, height]`,
+/// kept `gap` pixels clear of the captions.
 fn resolve_background_top(
     keyboard: [f32; 4],
     frame_height: f32,
     keyboard_position: KeyboardPosition,
     caption_layout: Option<CaptionOverlayLayout>,
+    gap: f32,
 ) -> f32 {
     let [left, current_top, width, box_height] = keyboard;
     let Some(caption_layout) = caption_layout else {
@@ -165,14 +176,12 @@ fn resolve_background_top(
     let caption_bottom = caption_layout.rect[1] + caption_layout.rect[3];
     let current_bottom = current_top + box_height;
 
-    if current_bottom + MIN_OVERLAY_GAP <= caption_top
-        || current_top >= caption_bottom + MIN_OVERLAY_GAP
-    {
+    if current_bottom + gap <= caption_top || current_top >= caption_bottom + gap {
         return current_top.clamp(0.0, max_top);
     }
 
-    let above_candidate = caption_top - MIN_OVERLAY_GAP - box_height;
-    let below_candidate = caption_bottom + MIN_OVERLAY_GAP;
+    let above_candidate = caption_top - gap - box_height;
+    let below_candidate = caption_bottom + gap;
     let above_valid = above_candidate >= 0.0;
     let below_valid = below_candidate <= max_top;
 
@@ -478,19 +487,8 @@ impl KeyboardLayer {
         };
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
 
-        let font_family = match settings.font.as_str() {
-            "System Serif" => Family::Serif,
-            "System Monospace" => Family::Monospace,
-            _ => Family::SansSerif,
-        };
-
-        let weight = if settings.font_weight >= 700 {
-            Weight::BOLD
-        } else if settings.font_weight >= 500 {
-            Weight::MEDIUM
-        } else {
-            Weight::NORMAL
-        };
+        let (font_family, weight) =
+            super::captions::overlay_face(&settings.font, settings.font_weight);
 
         let style = KeycapStyle::from_setting(settings.effective_style());
         if style != KeycapStyle::Classic {
@@ -596,6 +594,7 @@ impl KeyboardLayer {
             height as f32,
             position,
             caption_layout,
+            MIN_OVERLAY_GAP,
         );
 
         let text_left = background_left + padding;
@@ -838,7 +837,7 @@ impl KeyboardLayer {
 
         // Lay the keys out at the set size; a row too wide for the frame is
         // set again, smaller, so every key stays on screen.
-        let mut cap_height = frame.font_size * 1.6;
+        let mut cap_height = frame.font_size * KEYCAP_HEIGHT_PER_SIZE;
         let mut sizes: Vec<(LabelMetrics, LabelMetrics, f32)> = Vec::new();
         let mut total = 0.;
         for _ in 0..2 {
@@ -901,6 +900,7 @@ impl KeyboardLayer {
             height as f32,
             frame.position,
             caption_layout,
+            keycap_caption_gap(height as f32),
         );
 
         let press = keycaps::press_depth(frame.since_struck);
@@ -1301,8 +1301,8 @@ fn calculate_keyboard_bounce(current_time: f64, start: f64, end: f64, fade_durat
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardPosition, build_visible_text, find_active_keyboard_segment, resolve_background_top,
-        resolve_keyboard_position,
+        KeyboardPosition, MIN_OVERLAY_GAP, build_visible_text, find_active_keyboard_segment,
+        resolve_background_top, resolve_keyboard_position,
     };
     use crate::layers::{CaptionOverlayLayout, CaptionPosition};
 
@@ -1398,6 +1398,7 @@ mod tests {
             1080.0,
             KeyboardPosition::AboveCaptions,
             Some(caption_layout),
+            MIN_OVERLAY_GAP,
         );
 
         assert_eq!(resolved_top, 625.0);
@@ -1415,6 +1416,7 @@ mod tests {
             1080.0,
             KeyboardPosition::TopCenter,
             Some(caption_layout),
+            MIN_OVERLAY_GAP,
         );
 
         assert_eq!(resolved_top, 175.0);
@@ -1432,6 +1434,7 @@ mod tests {
             1080.0,
             KeyboardPosition::BottomRight,
             Some(caption_layout),
+            MIN_OVERLAY_GAP,
         );
 
         assert_eq!(resolved_top, 720.0);
@@ -1446,8 +1449,9 @@ mod tests {
                 position: CaptionPosition::Manual,
             })
         };
-        let resolve =
-            |position, caption| resolve_background_top(keyboard, 1080.0, position, caption);
+        let resolve = |position, caption| {
+            resolve_background_top(keyboard, 1080.0, position, caption, MIN_OVERLAY_GAP)
+        };
 
         let overlapping = manual([700.0, 780.0, 520.0, 60.0]);
         assert_eq!(resolve(KeyboardPosition::AboveCaptions, overlapping), 665.0);
@@ -1588,6 +1592,14 @@ mod gpu_tests {
         layer: &KeyboardLayer,
         size: XY<u32>,
     ) -> Vec<u8> {
+        render_with(constants, size, |pass| layer.render(pass))
+    }
+
+    fn render_with(
+        constants: &RenderVideoConstants,
+        size: XY<u32>,
+        draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+    ) -> Vec<u8> {
         let device = &constants.device;
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Keyboard Test Target"),
@@ -1626,7 +1638,7 @@ mod gpu_tests {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            layer.render(&mut pass);
+            draw(&mut pass);
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -1881,6 +1893,112 @@ mod gpu_tests {
                         )
                         .unwrap();
                 }
+            }
+        }
+    }
+
+    /// Keys and captions together over a recording, written to
+    /// `CAP_OVERLAY_GALLERY` to judge how the two sit with each other.
+    #[test]
+    #[ignore = "writes images; requires a working wgpu adapter"]
+    fn keys_and_captions_gallery() {
+        let Some(dir) = std::env::var_os("CAP_OVERLAY_GALLERY") else {
+            return;
+        };
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let frames = frames(size);
+        let backdrop = std::env::var_os("CAP_OVERLAY_BACKDROP")
+            .and_then(|path| image::open(path).ok())
+            .map(|image| {
+                image
+                    .resize_to_fill(size.x, size.y, image::imageops::FilterType::Triangle)
+                    .to_rgba8()
+            })
+            .unwrap_or_else(|| {
+                image::RgbaImage::from_pixel(size.x, size.y, image::Rgba([126, 132, 148, 255]))
+            });
+        let words = ["Now", "open", "the", "command", "palette", "and", "search"];
+        let caption = cap_project::CaptionSegment {
+            id: "c".to_string(),
+            start: 0.0,
+            end: 3.0,
+            text: words.join(" "),
+            words: words
+                .iter()
+                .enumerate()
+                .map(|(index, word)| cap_project::CaptionWord {
+                    text: word.to_string(),
+                    start: index as f32 * 0.3,
+                    end: index as f32 * 0.3 + 0.28,
+                })
+                .collect(),
+            recording_clip: None,
+        };
+        for (name, text) in [("shortcut", "⇧⌘P"), ("single", "⌘K"), ("long", "⌃⌥⌘⏎")]
+        {
+            for (style, theme) in [
+                ("macos", "dark"),
+                ("macos", "light"),
+                ("windows", "dark"),
+                ("classic", "dark"),
+            ] {
+                let segment = KeyboardTrackSegment {
+                    end: 3.0,
+                    ..shortcut_segment("s", 0.0, text)
+                };
+                let mut uniforms = uniforms(&constants, std::slice::from_ref(&segment), size);
+                with_keycaps(&mut uniforms, style, theme);
+                let project = std::sync::Arc::make_mut(&mut uniforms.project);
+                project.captions = Some(cap_project::CaptionsData {
+                    segments: vec![caption.clone()],
+                    settings: cap_project::CaptionSettings {
+                        enabled: true,
+                        ..Default::default()
+                    },
+                    source_timed: false,
+                });
+                if let Some(timeline) = project.timeline.as_mut() {
+                    timeline.caption_segments = vec![cap_project::CaptionTrackSegment {
+                        id: caption.id.clone(),
+                        start: 0.0,
+                        end: 3.0,
+                        text: caption.text.clone(),
+                        words: caption.words.clone(),
+                        fade_duration_override: None,
+                        linger_duration_override: None,
+                        position_override: None,
+                        color_override: None,
+                        background_color_override: None,
+                        font_size_override: None,
+                    }];
+                }
+                uniforms.frame_number = 66;
+                let mut captions =
+                    super::super::captions::CaptionsLayer::new(&constants.device, &constants.queue);
+                captions.prepare(&uniforms, &frames, size, &constants);
+                let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+                layer.prepare(
+                    &uniforms,
+                    &frames,
+                    size,
+                    &constants,
+                    captions.active_layout(),
+                );
+                let pixels = render_with(&constants, size, |pass| {
+                    captions.render(pass);
+                    layer.render(pass);
+                });
+                let mut image = backdrop.clone();
+                for (pixel, src) in image.pixels_mut().zip(pixels.chunks_exact(4)) {
+                    let a = src[3] as f32 / 255.0;
+                    for c in 0..3 {
+                        pixel[c] = (src[c] as f32 * a + pixel[c] as f32 * (1.0 - a)) as u8;
+                    }
+                }
+                image
+                    .save(std::path::Path::new(&dir).join(format!("{name}-{style}-{theme}.png")))
+                    .unwrap();
             }
         }
     }

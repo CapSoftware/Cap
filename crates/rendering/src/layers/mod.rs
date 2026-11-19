@@ -65,9 +65,9 @@ pub fn new_font_system() -> glyphon::FontSystem {
             db.set_serif_family("DejaVu Serif");
             db.set_monospace_family("DejaVu Sans Mono");
         }
-        // The key-press overlay's typefaces ship with the renderer, so a
-        // keycap reads the same in an export from any platform.
-        for font in keycaps::KEYCAP_FONTS {
+        // The key-press and caption typefaces ship with the renderer, so
+        // they read the same in an export from any platform.
+        for font in keycaps::OVERLAY_FONTS {
             db.load_font_data(font.to_vec());
         }
         let template = (font_system.locale().to_string(), db);
