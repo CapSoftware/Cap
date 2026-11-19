@@ -21,7 +21,7 @@ fn total_memory_bytes() -> Option<u64> {
 }
 
 #[cfg(windows)]
-pub(crate) fn total_memory_bytes() -> Option<u64> {
+fn total_memory_bytes() -> Option<u64> {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };

@@ -1564,7 +1564,6 @@ dependencies = [
  "cap-camera-effects",
  "cap-cli-install",
  "cap-cursor-info",
- "cap-d3d-adapter",
  "cap-editor",
  "cap-enc-ffmpeg",
  "cap-export",

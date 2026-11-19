@@ -919,15 +919,14 @@ impl EditorPreviewQuality {
         }
     }
 
-    /// Full where the GPU draws it at no measurable cost, Half where Full
-    /// drops playback frames (software and integrated GPUs). A renderer that
-    /// fell back to (or was forced onto) a software adapter reads back every
-    /// frame on the CPU, whatever GPU is installed.
+    /// Full on Apple Silicon, where the GPU draws it at no measurable cost,
+    /// and Half elsewhere until Full is measured there. A renderer that fell
+    /// back to (or was forced onto) a software adapter reads back every frame
+    /// on the CPU, so it stays on Half too.
     pub fn for_this_machine() -> Self {
-        static FULL_IS_CHEAP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let software = SOFTWARE_RENDERING.load(std::sync::atomic::Ordering::Acquire)
             || cap_rendering::force_software_wgpu_adapter();
-        if !software && *FULL_IS_CHEAP.get_or_init(full_preview_is_cheap) {
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) && !software {
             Self::Full
         } else {
             Self::Half
@@ -943,39 +942,6 @@ impl EditorPreviewQuality {
 
 static SOFTWARE_RENDERING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn full_preview_is_cheap() -> bool {
-    true
-}
-
-/// A dedicated GPU (the editor renders on the high-performance adapter) and
-/// 16 GB of memory. Integrated GPUs report a few hundred MB of dedicated
-/// memory at most. A 16 GB machine reports slightly under 16 GiB.
-#[cfg(target_os = "windows")]
-fn full_preview_is_cheap() -> bool {
-    const MIN_DEDICATED_VIDEO_MEMORY: u64 = 2 << 30;
-    const MIN_MEMORY: u64 = 15 << 30;
-    let video_memory = cap_d3d_adapter::select_capture_adapter(None)
-        .map_or(0, |adapter| adapter.dedicated_vram_bytes);
-    let memory = crate::camera_blur_portable::total_memory_bytes().unwrap_or(0);
-    let cheap = video_memory >= MIN_DEDICATED_VIDEO_MEMORY && memory >= MIN_MEMORY;
-    tracing::info!(
-        video_memory_mb = video_memory >> 20,
-        memory_mb = memory >> 20,
-        cheap,
-        "editor preview quality default"
-    );
-    cheap
-}
-
-#[cfg(not(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    target_os = "windows"
-)))]
-fn full_preview_is_cheap() -> bool {
-    false
-}
 
 /// One entry of `general_settings.excludedWindows` (`WindowExclusion`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
