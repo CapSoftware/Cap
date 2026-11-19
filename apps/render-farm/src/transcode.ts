@@ -80,7 +80,6 @@ export function probeArgs(input: string) {
 	];
 }
 
-/** Why a probed source is too large to export, or null. */
 export function sourceSizeError(probe: string) {
 	const width = Number(probe.match(/(?:^|\|)width=(\d+)/m)?.[1]);
 	const height = Number(probe.match(/(?:^|\|)height=(\d+)/m)?.[1]);
