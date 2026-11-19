@@ -64,6 +64,7 @@ fn spec(tone: &Arc<AudioData>) -> PlaySpec {
             SegmentAudioTimingRepair::default(),
         )],
         music: MusicTracks::new(),
+        input_sounds: None,
         project,
         duration_secs: CLIP_SECS,
         start_playhead_secs: 0.0,

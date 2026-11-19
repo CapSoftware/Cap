@@ -59,6 +59,7 @@ const IDLE_PAUSE_AFTER: Duration = Duration::from_secs(15);
 pub struct PlaySpec {
     pub segments: Vec<AudioSegment>,
     pub music: MusicTracks,
+    pub input_sounds: Option<Arc<crate::InputSounds>>,
     pub project: ProjectConfiguration,
     pub duration_secs: f64,
     pub start_playhead_secs: f64,
@@ -1108,6 +1109,7 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
     let PlaySpec {
         segments,
         music,
+        input_sounds,
         project,
         duration_secs,
         start_playhead_secs,
@@ -1155,11 +1157,19 @@ fn install_source<T: FromSampleBytes + cpal::FromSample<f32>>(
 
     let start_playhead = start_playhead_secs + initial_latency_secs;
     let mut buffer = if matches!(ack, SourceAcknowledgement::Refresh(..)) {
-        PrerenderedAudioBuffer::<T>::bounded(segments, music, &project, output_info, start_playhead)
+        PrerenderedAudioBuffer::<T>::bounded(
+            segments,
+            music,
+            input_sounds,
+            &project,
+            output_info,
+            start_playhead,
+        )
     } else {
         PrerenderedAudioBuffer::<T>::new_cached(
             segments,
             music,
+            input_sounds,
             &project,
             output_info,
             duration_secs,
@@ -1796,6 +1806,7 @@ mod tests {
             Box::new(PlaySpec {
                 segments: Vec::new(),
                 music: MusicTracks::new(),
+                input_sounds: None,
                 project: ProjectConfiguration::default(),
                 duration_secs: 2.0,
                 start_playhead_secs: 0.0,
@@ -1841,6 +1852,7 @@ mod tests {
             Box::new(PlaySpec {
                 segments: Vec::new(),
                 music: MusicTracks::new(),
+                input_sounds: None,
                 project: ProjectConfiguration::default(),
                 duration_secs: 60.0,
                 start_playhead_secs: latency,
@@ -2073,6 +2085,7 @@ mod tests {
             replacement.buffer = ActiveSourceBuffer::Ordinary(PrerenderedAudioBuffer::bounded(
                 Vec::new(),
                 MusicTracks::new(),
+                None,
                 &ProjectConfiguration::default(),
                 AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 2),
                 3.0,

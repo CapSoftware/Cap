@@ -23,7 +23,7 @@ use tokio::sync::{Notify, watch};
 use tracing::{info, warn};
 
 use crate::{
-    PreviewSpeed, PreviewSpeedHandle,
+    InputSounds, PreviewSpeed, PreviewSpeedHandle,
     audio_output::{AudioOutput, PlaySpec},
     editor,
     editor_instance::{SegmentMedia, cursor_timeline_settings},
@@ -1014,14 +1014,25 @@ impl Playback {
         diagnostic.stage("waiting_for_audio_decode");
         let audio_wait_start = Instant::now();
         let audio_segments = get_audio_segments(&self.segment_medias).await;
+        let input_sounds = {
+            let project = self.project.borrow().clone();
+            let segment_medias = self.segment_medias.clone();
+            tokio::task::spawn_blocking(move || {
+                InputSounds::for_segments(&project, &segment_medias)
+            })
+            .await
+            .ok()
+            .flatten()
+        };
         if let Some(telemetry) = &self.telemetry {
             telemetry.emit(PlaybackTelemetryEvent::AudioSegmentsResolved {
                 elapsed: audio_wait_start.elapsed(),
             });
         }
+        let has_extra_audio = !self.music.is_empty() || input_sounds.is_some();
         // Restarts an idle-paused output stream while the video warms up, so
         // the play request after warmup finds it already running.
-        if adopted.is_none() && has_playback_audio(&audio_segments, !self.music.is_empty()) {
+        if adopted.is_none() && has_playback_audio(&audio_segments, has_extra_audio) {
             self.audio_output.prewarm();
         }
 
@@ -1437,13 +1448,14 @@ impl Playback {
             let _ = audio_playhead_tx.send(playback_start_frame as f64 / fps_f64);
             let mut audio_generation = if adopted.is_some() {
                 None
-            } else if !has_playback_audio(&audio_segments, !self.music.is_empty()) {
+            } else if !has_playback_audio(&audio_segments, has_extra_audio) {
                 info!("No audio segments found, skipping audio playback.");
                 None
             } else {
                 self.audio_output.play(PlaySpec {
                     segments: audio_segments.clone(),
                     music: self.music.clone(),
+                    input_sounds: input_sounds.clone(),
                     project: self.project.borrow().clone(),
                     duration_secs: duration,
                     start_playhead_secs: playback_start_frame as f64 / fps_f64,
@@ -1508,6 +1520,7 @@ impl Playback {
                     let ticket = self.audio_output.prepare_playback(PlaySpec {
                         segments: audio_segments.clone(),
                         music: self.music.clone(),
+                        input_sounds: InputSounds::for_segments(&project, &self.segment_medias),
                         project,
                         duration_secs: duration,
                         start_playhead_secs: frame_number as f64 / fps_f64,
@@ -1575,7 +1588,11 @@ impl Playback {
                 if self.project.has_changed().unwrap_or(false) {
                     let next_project = self.project.borrow_and_update().clone();
                     let audio_changed = cached_project.audio != next_project.audio
-                        || clip_audio_changed(&cached_project, &next_project);
+                        || clip_audio_changed(&cached_project, &next_project)
+                        || crate::input_sounds::input_sounds_changed(
+                            &cached_project,
+                            &next_project,
+                        );
                     let cursor_changed = cursor_timeline_settings(&cached_project.cursor)
                         != cursor_timeline_settings(&next_project.cursor);
                     let zoom_changed = !ZoomTransformTimeline::project_inputs_match(
@@ -1592,6 +1609,10 @@ impl Playback {
                             PlaySpec {
                                 segments: audio_segments.clone(),
                                 music: self.music.clone(),
+                                input_sounds: InputSounds::for_segments(
+                                    &cached_project,
+                                    &self.segment_medias,
+                                ),
                                 project: (*cached_project).clone(),
                                 duration_secs: duration,
                                 start_playhead_secs: frame_number as f64 / fps_f64,

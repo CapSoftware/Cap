@@ -1,4 +1,5 @@
 use crate::export_audio::{EXPORT_AUDIO_BLOCK_SAMPLES, ExportAudioError, ExportAudioSources};
+use crate::input_sounds::InputSounds;
 use cap_audio::{
     AudioData, AudioRendererTrack, DeclickStrength, DecodedAudio, FromSampleBytes, StereoMode,
     ToneFilter, VoiceAudio, VoiceEnhancer, VoiceSource, VoiceTone, VoiceToneSettings,
@@ -32,6 +33,8 @@ use tracing::{info, warn};
 /// of the recording audio in output/timeline time.
 pub type MusicTracks = HashMap<String, Arc<AudioData>>;
 
+type PlaybackInputs = (Vec<AudioSegment>, MusicTracks, Option<Arc<InputSounds>>);
+
 pub struct AudioRenderer {
     data: Vec<AudioSegment>,
     cursor: AudioRendererCursor,
@@ -44,6 +47,7 @@ pub struct AudioRenderer {
     speed_audio_processors: [Option<SpeedAudioProcessorSlot>; 2],
     speed_audio_use_counter: u64,
     voice_enhancement: VoiceEnhancementCache,
+    input_sounds: Option<Arc<InputSounds>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -217,11 +221,17 @@ impl AudioRenderer {
             speed_audio_processors: [None, None],
             speed_audio_use_counter: 0,
             voice_enhancement: VoiceEnhancementCache::default(),
+            input_sounds: None,
         }
     }
 
     pub fn with_music(mut self, music: MusicTracks) -> Self {
         self.music = music;
+        self
+    }
+
+    pub fn with_input_sounds(mut self, input_sounds: Option<Arc<InputSounds>>) -> Self {
+        self.input_sounds = input_sounds;
         self
     }
 
@@ -284,6 +294,9 @@ impl AudioRenderer {
 
             if !self.music.is_empty() && !timeline.audio_segments.is_empty() {
                 mix_music(&self.music, timeline, frame_start, written, &mut buf);
+            }
+            if let Some(input_sounds) = &self.input_sounds {
+                input_sounds.mix(&mut buf, frame_start);
             }
 
             return Some((written, buf));
@@ -437,6 +450,9 @@ impl AudioRenderer {
                     self.elapsed_samples + span_offset,
                     &joins,
                 );
+                if let Some(input_sounds) = &self.input_sounds {
+                    input_sounds.mix(output, self.elapsed_samples + span_offset);
+                }
                 emit(written + span_offset, output)?;
                 span_offset += count;
             }
@@ -2033,6 +2049,7 @@ struct CachedProgressiveRender {
 struct ProgressiveRenderKey {
     segments: Vec<AudioSegment>,
     music: Vec<(String, Arc<AudioData>)>,
+    input_sounds: Option<u64>,
     project: Vec<u8>,
     duration_bits: u64,
     sample_rate: u32,
@@ -2043,6 +2060,7 @@ impl ProgressiveRenderKey {
     fn new(
         segments: Vec<AudioSegment>,
         music: &MusicTracks,
+        input_sounds: Option<&InputSounds>,
         project: &ProjectConfiguration,
         duration_secs: f64,
         output_info: AudioInfo,
@@ -2055,6 +2073,7 @@ impl ProgressiveRenderKey {
         Some(Self {
             segments,
             music,
+            input_sounds: input_sounds.map(InputSounds::fingerprint),
             project: audio_project_key(project)?,
             duration_bits: duration_secs.to_bits(),
             sample_rate: output_info.sample_rate,
@@ -2066,6 +2085,7 @@ impl ProgressiveRenderKey {
 impl PartialEq for ProgressiveRenderKey {
     fn eq(&self, other: &Self) -> bool {
         self.project == other.project
+            && self.input_sounds == other.input_sounds
             && self.duration_bits == other.duration_bits
             && self.sample_rate == other.sample_rate
             && self.channels == other.channels
@@ -2275,6 +2295,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
     fn new(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
@@ -2283,6 +2304,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         Self::create(
             segments,
             music,
+            input_sounds,
             project,
             output_info,
             duration_secs,
@@ -2298,6 +2320,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
     pub fn new_cached(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
@@ -2307,6 +2330,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         Self::create(
             segments,
             music,
+            input_sounds,
             project,
             output_info,
             duration_secs,
@@ -2318,6 +2342,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
     fn create(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
@@ -2332,11 +2357,14 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         );
         let estimated_memory_bytes = progressive_buffer_bytes(estimated_output_samples);
 
-        let (segments, music) = if estimated_memory_bytes <= MAX_PROGRESSIVE_BUFFER_BYTES {
+        let (segments, music, input_sounds) = if estimated_memory_bytes
+            <= MAX_PROGRESSIVE_BUFFER_BYTES
+        {
             let plan = cache.and_then(|_| {
                 ProgressiveAudioBuffer::<T>::cache_plan(
                     segments.clone(),
                     &music,
+                    input_sounds.as_deref(),
                     project,
                     output_info,
                     duration_secs,
@@ -2355,6 +2383,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             match ProgressiveAudioBuffer::new(
                 segments,
                 music,
+                input_sounds,
                 project,
                 output_info,
                 duration_secs,
@@ -2385,7 +2414,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
                 max_memory_mb = MAX_PROGRESSIVE_BUFFER_BYTES / (1024 * 1024),
                 "Using bounded streaming audio renderer for long playback"
             );
-            (segments, music)
+            (segments, music, input_sounds)
         };
 
         if let Some(cache) = cache {
@@ -2395,6 +2424,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             mode: PrerenderedAudioBufferMode::Streaming(Box::new(StreamingAudioBuffer::new(
                 segments,
                 music,
+                input_sounds,
                 project.clone(),
                 output_info,
                 start_playhead_secs,
@@ -2405,6 +2435,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
     pub(crate) fn bounded(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         start_playhead_secs: f64,
@@ -2413,6 +2444,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
             mode: PrerenderedAudioBufferMode::Streaming(Box::new(StreamingAudioBuffer::new(
                 segments,
                 music,
+                input_sounds,
                 project.clone(),
                 output_info,
                 start_playhead_secs,
@@ -2550,12 +2582,13 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     fn new(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
         start_playhead_secs: f64,
         cache: Option<&PlaybackAudioCache>,
-    ) -> Result<Self, (Vec<AudioSegment>, MusicTracks)> {
+    ) -> Result<Self, PlaybackInputs> {
         // Clamp output info for FFmpeg compatibility (max 8 channels)
         let output_info = output_info.for_ffmpeg_output();
         let estimated_output_samples = progressive_buffer_samples(
@@ -2591,7 +2624,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
 
         let Some(timeline) = ProgressiveTimeline::new(estimated_output_samples, primary_start)
         else {
-            return Err((segments, music));
+            return Err((segments, music, input_sounds));
         };
         let timeline = Arc::new(timeline);
 
@@ -2617,6 +2650,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
             timeline.clone(),
             segments,
             music,
+            input_sounds,
             project.clone(),
             render_info,
             duration_secs,
@@ -2668,6 +2702,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     fn cache_plan(
         segments: Vec<AudioSegment>,
         music: &MusicTracks,
+        input_sounds: Option<&InputSounds>,
         project: &ProjectConfiguration,
         output_info: AudioInfo,
         duration_secs: f64,
@@ -2678,7 +2713,14 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
         let shift = origin_shift(pass1_start_secs)?;
         let key = render_is_origin_independent(project, output_info, duration_secs)
             .then(|| {
-                ProgressiveRenderKey::new(segments, music, project, duration_secs, output_info)
+                ProgressiveRenderKey::new(
+                    segments,
+                    music,
+                    input_sounds,
+                    project,
+                    duration_secs,
+                    output_info,
+                )
             })
             .flatten()?;
         let (rate, channels) = (output_info.sample_rate, output_info.channels);
@@ -2887,6 +2929,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
     fn new(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: ProjectConfiguration,
         output_info: AudioInfo,
         start_playhead_secs: f64,
@@ -2922,6 +2965,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> StreamingAudioBuffer<T> {
                     let mut producer = StreamingAudioProducer::<f32>::new(
                         segments,
                         music,
+                        input_sounds,
                         project,
                         render_info,
                         start_playhead_secs,
@@ -3124,6 +3168,7 @@ impl<T: FromSampleBytes> StreamingAudioProducer<T> {
     fn new(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
+        input_sounds: Option<Arc<InputSounds>>,
         project: ProjectConfiguration,
         output_info: AudioInfo,
         start_playhead_secs: f64,
@@ -3135,7 +3180,9 @@ impl<T: FromSampleBytes> StreamingAudioProducer<T> {
             .max(Self::PROCESSING_SAMPLES_COUNT * output_info.channels * 4);
 
         let mut buffer = Self {
-            renderer: AudioRenderer::new(segments).with_music(music),
+            renderer: AudioRenderer::new(segments)
+                .with_music(music)
+                .with_input_sounds(input_sounds),
             resampler: AudioResampler::new(output_info).unwrap(),
             resampled_buffer: HeapRb::new(capacity),
             project,
@@ -3272,6 +3319,7 @@ fn spawn_progressive_render(
     timeline: Arc<ProgressiveTimeline>,
     segments: Vec<AudioSegment>,
     music: MusicTracks,
+    input_sounds: Option<Arc<InputSounds>>,
     project: ProjectConfiguration,
     render_info: AudioInfo,
     duration_secs: f64,
@@ -3288,7 +3336,9 @@ fn spawn_progressive_render(
                 release: None,
                 adopted: false,
             };
-            let mut renderer = AudioRenderer::new(segments).with_music(music);
+            let mut renderer = AudioRenderer::new(segments)
+                .with_music(music)
+                .with_input_sounds(input_sounds);
 
             let chunk_size = 1024usize;
 
@@ -3763,6 +3813,7 @@ mod tests {
         let mut buffer = PrerenderedAudioBuffer::<f32>::new(
             Vec::new(),
             MusicTracks::new(),
+            None,
             &ProjectConfiguration::default(),
             AudioRenderer::info(),
             1.0,
@@ -3789,6 +3840,7 @@ mod tests {
         let buffer = PrerenderedAudioBuffer::<f32>::new(
             Vec::new(),
             MusicTracks::new(),
+            None,
             &ProjectConfiguration::default(),
             output_info,
             duration_secs,
@@ -3846,6 +3898,7 @@ mod tests {
         let mut buffer = PrerenderedAudioBuffer::<f32>::new_cached(
             fixture.segments.clone(),
             fixture.music.clone(),
+            None,
             &fixture.project,
             output_info,
             duration,
@@ -4034,6 +4087,7 @@ mod tests {
             let mut playback = PrerenderedAudioBuffer::<f32>::new(
                 renderer.data.clone(),
                 MusicTracks::new(),
+                None,
                 &project,
                 AudioRenderer::info(),
                 duration_secs,
@@ -4099,6 +4153,7 @@ mod tests {
                 let mut playback = PrerenderedAudioBuffer::<f32>::new(
                     renderer.data.clone(),
                     MusicTracks::new(),
+                    None,
                     &project,
                     AudioRenderer::info(),
                     duration,
@@ -4454,6 +4509,7 @@ mod tests {
             let mut reference = StreamingAudioProducer::<f32>::new(
                 renderer.data.clone(),
                 MusicTracks::new(),
+                None,
                 project.clone(),
                 info,
                 0.0,
@@ -4461,6 +4517,7 @@ mod tests {
             let mut candidate = StreamingAudioBuffer::<f32>::new(
                 renderer.data.clone(),
                 MusicTracks::new(),
+                None,
                 project.clone(),
                 info,
                 0.0,
@@ -4497,6 +4554,7 @@ mod tests {
                 StreamingAudioProducer::<f32>::new(
                     renderer.data.clone(),
                     MusicTracks::new(),
+                    None,
                     project.clone(),
                     info,
                     0.0,
@@ -4643,6 +4701,7 @@ mod tests {
         let mut playback_buffer = PrerenderedAudioBuffer::<f32>::new(
             segments,
             MusicTracks::new(),
+            None,
             &project,
             AudioRenderer::info(),
             3.0,
@@ -5211,6 +5270,7 @@ mod tests {
             PrerenderedAudioBuffer::new(
                 self.segments.clone(),
                 self.music.clone(),
+                None,
                 &self.project,
                 output_info,
                 self.duration(),
@@ -5227,6 +5287,7 @@ mod tests {
             PrerenderedAudioBuffer::new_cached(
                 self.segments.clone(),
                 self.music.clone(),
+                None,
                 &self.project,
                 output_info,
                 self.duration(),
@@ -5607,6 +5668,7 @@ mod tests {
             let mut streaming = PrerenderedAudioBuffer::<f32>::new(
                 fixture.segments.clone(),
                 fixture.music.clone(),
+                None,
                 &fixture.project,
                 output_info,
                 duration,
@@ -5981,6 +6043,7 @@ mod tests {
         let plan = ProgressiveAudioBuffer::<f32>::cache_plan(
             fixture.segments.clone(),
             &fixture.music,
+            None,
             &fixture.project,
             output_info,
             fixture.duration(),
@@ -5996,6 +6059,7 @@ mod tests {
         let fresh = ProgressiveAudioBuffer::<f32>::new(
             fixture.segments.clone(),
             fixture.music.clone(),
+            None,
             &fixture.project,
             output_info,
             fixture.duration(),

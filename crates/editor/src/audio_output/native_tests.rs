@@ -113,6 +113,7 @@ fn audible_spec_with_duration(duration_secs: usize) -> PlaySpec {
             crate::SegmentAudioTimingRepair::default(),
         )],
         music: MusicTracks::new(),
+        input_sounds: None,
         project: ProjectConfiguration::default(),
         duration_secs: duration_secs as f64,
         start_playhead_secs: 0.0,

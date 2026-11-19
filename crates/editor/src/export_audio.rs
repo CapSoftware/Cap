@@ -1,4 +1,4 @@
-use crate::{AudioRenderer, SegmentMedia};
+use crate::{AudioRenderer, InputSounds, SegmentMedia};
 use cap_audio::{
     AudioData, AudioRendererTrack, AudioSampleSource, AudioStream, AudioStreamError, ChunkRead,
     StereoMode, VOICE_PREROLL_SAMPLES, VOICE_PROFILE_SAMPLES, VOICE_TONE_LOOKAHEAD_SAMPLES,
@@ -397,6 +397,11 @@ impl ExportAudioRenderer {
                 abort: self.sources.abort.clone(),
             },
         })
+    }
+
+    pub fn with_input_sounds(mut self, input_sounds: Option<Arc<InputSounds>>) -> Self {
+        self.renderer = self.renderer.with_input_sounds(input_sounds);
+        self
     }
 
     pub fn render_chunks(
