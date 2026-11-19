@@ -192,13 +192,14 @@ impl MFDecoder {
                         )
                     },
                     |data| {
-                        DecodedFrame::new_nv12_with_arc(
+                        DecodedFrame::new_nv12_with_mapped(
                             data.data,
                             video_width,
                             video_height,
                             data.y_stride,
                             data.uv_stride,
                         )
+                        .with_storage_epoch(data.storage_epoch)
                         .with_matrix(matrix)
                     },
                 ));
@@ -246,9 +247,6 @@ impl MFDecoder {
                     Step::Seek(frame) => match decoder.seek(frame_to_100ns(frame, fps)) {
                         Ok(()) => {
                             requests.seeked(frame);
-                            for retired in requests.take_retired() {
-                                decoder.recycle_nv12_buffer(retired.data);
-                            }
                             Vec::new()
                         }
                         Err(e) => {
@@ -262,15 +260,11 @@ impl MFDecoder {
                             Ok(Some(sample)) => {
                                 health.record_success(decode_start.elapsed());
                                 let bytes = sample.data.data.len();
-                                let answers = requests.decoded(
+                                requests.decoded(
                                     pts_100ns_to_frame(sample.pts, fps),
                                     sample.data,
                                     bytes,
-                                );
-                                for retired in requests.take_retired() {
-                                    decoder.recycle_nv12_buffer(retired.data);
-                                }
-                                answers
+                                )
                             }
                             Ok(None) => requests.stopped(),
                             Err(e) => {
@@ -324,7 +318,6 @@ struct FrameRequests<T, R> {
     // below a frame is the stream's newest sample there.
     cache: BTreeMap<u32, (T, usize)>,
     cache_bytes: usize,
-    retired: Vec<T>,
     waiting: Vec<(u32, R)>,
     seeked_to: Option<u32>,
     readahead_frames: u32,
@@ -336,7 +329,6 @@ impl<T: Clone, R> FrameRequests<T, R> {
         Self {
             cache: BTreeMap::new(),
             cache_bytes: 0,
-            retired: Vec::new(),
             waiting: Vec::new(),
             seeked_to: None,
             readahead_frames,
@@ -411,17 +403,9 @@ impl<T: Clone, R> FrameRequests<T, R> {
     }
 
     fn seeked(&mut self, frame: u32) {
-        self.retired.extend(
-            std::mem::take(&mut self.cache)
-                .into_values()
-                .map(|(sample, _)| sample),
-        );
+        self.cache.clear();
         self.cache_bytes = 0;
         self.seeked_to = Some(frame);
-    }
-
-    fn take_retired(&mut self) -> Vec<T> {
-        std::mem::take(&mut self.retired)
     }
 
     // A waiting frame the decoder jumped past has no sample at or below it since the seek, so
@@ -439,17 +423,15 @@ impl<T: Clone, R> FrameRequests<T, R> {
             })
             .collect();
 
-        if let Some((replaced, bytes)) = self.cache.remove(&frame) {
-            self.retired.push(replaced);
-            self.cache_bytes -= bytes;
+        if let Some((_, replaced)) = self.cache.remove(&frame) {
+            self.cache_bytes -= replaced;
         }
         while !self.cache.is_empty()
             && (self.cache.len() >= FRAME_CACHE_SIZE
                 || self.cache_bytes + bytes > MAX_FRAME_CACHE_BYTES)
         {
-            if let Some((_, (evicted, bytes))) = self.cache.pop_first() {
-                self.retired.push(evicted);
-                self.cache_bytes -= bytes;
+            if let Some((_, (_, evicted))) = self.cache.pop_first() {
+                self.cache_bytes -= evicted;
             }
         }
         self.cache.insert(frame, (sample, bytes));
@@ -486,20 +468,6 @@ mod tests {
         assert_eq!(pts_100ns_to_frame(333_333, 30), 1);
         assert_eq!(pts_100ns_to_frame(666_666, 30), 2);
         assert_eq!(pts_100ns_to_frame(10_000_000, 30), 30);
-    }
-
-    #[test]
-    fn cache_replacements_evictions_and_seeks_retire_samples() {
-        let mut requests = FrameRequests::<usize, ()>::new(0);
-        requests.decoded(0, 1, 1);
-        requests.decoded(0, 2, 1);
-        assert_eq!(requests.take_retired(), [1]);
-
-        requests.decoded(1, 3, MAX_FRAME_CACHE_BYTES);
-        assert_eq!(requests.take_retired(), [2]);
-
-        requests.seeked(10);
-        assert_eq!(requests.take_retired(), [3]);
     }
 
     // Samples are their index in `frames`, which holds the frame each one rounds to.
