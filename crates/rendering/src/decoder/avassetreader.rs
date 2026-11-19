@@ -240,7 +240,12 @@ impl ImageBufProcessor {
 }
 
 impl CachedFrame {
-    fn new(processor: &ImageBufProcessor, image_buf: R<cv::ImageBuf>, number: u32) -> Self {
+    fn new(
+        processor: &ImageBufProcessor,
+        image_buf: R<cv::ImageBuf>,
+        number: u32,
+        presentation_secs: f64,
+    ) -> Self {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
 
@@ -275,14 +280,17 @@ impl CachedFrame {
                 };
                 Self(ProcessedFrame {
                     number,
-                    frame: frame.with_matrix(processor.matrix),
+                    frame: frame
+                        .with_matrix(processor.matrix)
+                        .with_presentation_secs(presentation_secs),
                 })
             }
             _ => {
                 let black_frame = vec![0u8; (width * height * 4) as usize];
                 Self(ProcessedFrame {
                     number,
-                    frame: DecodedFrame::new(black_frame, width, height),
+                    frame: DecodedFrame::new(black_frame, width, height)
+                        .with_presentation_secs(presentation_secs),
                 })
             }
         }
@@ -673,8 +681,14 @@ impl AVAssetReaderDecoder {
             if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
                 return Ok((width, height, YuvMatrix::default()));
             }
-            if let Some(dimensions) = crate::project_recordings::header_video_metadata(&path) {
-                return Ok(dimensions);
+            // The reader hands back 4:2:0, so a source with fuller chroma (an
+            // import that kept a 4:4:4 stream) goes to the FFmpeg decoder.
+            let full_chroma = || "Source chroma is not 4:2:0".to_string();
+            if let Some(video) = crate::project_recordings::header_video_metadata(&path) {
+                if video.chroma_is_420 == Some(false) {
+                    return Err(full_chroma());
+                }
+                return Ok((video.width, video.height, video.matrix));
             }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
@@ -686,6 +700,12 @@ impl AVAssetReaderDecoder {
                 .map_err(|error| error.to_string())?;
             if video.width() == 0 || video.height() == 0 {
                 return Err("Invalid video dimensions".to_string());
+            }
+            if cap_video_decode::ffmpeg::chroma_is_420(video.format(), unsafe {
+                &*stream.parameters().as_ptr()
+            }) == Some(false)
+            {
+                return Err(full_chroma());
             }
             Ok((
                 video.width(),
@@ -1028,7 +1048,7 @@ impl AVAssetReaderDecoder {
             // Newest vended frame below the fallback floor: after a seek the
             // reader re-vends from the keyframe at-or-before the request, and
             // that frame is the true VFR hold for requests inside a pts hole.
-            let mut hold_candidate: Option<(u32, R<cv::ImageBuf>)> = None;
+            let mut hold_candidate: Option<(u32, f64, R<cv::ImageBuf>)> = None;
             let mut retry_requests = Vec::new();
 
             {
@@ -1056,6 +1076,7 @@ impl AVAssetReaderDecoder {
 
                     let current_frame =
                         pts_to_frame(frame.pts().value, Rational::new(1, frame.pts().scale), fps);
+                    let current_secs = frame.pts().value as f64 / f64::from(frame.pts().scale);
 
                     let vended_before = decoder.prev_vended;
                     if let Some(prev) = vended_before
@@ -1077,7 +1098,7 @@ impl AVAssetReaderDecoder {
                         // requests land inside a pts hole this is the only
                         // at-or-before content the reader will ever vend.
                         if let Some(buf) = frame.image_buf() {
-                            hold_candidate = Some((current_frame, buf.retained()));
+                            hold_candidate = Some((current_frame, current_secs, buf.retained()));
                             // A seek decodes from the keyframe before the
                             // request, and scrubbing backwards asks for the
                             // frames just below it next; caching them makes
@@ -1093,7 +1114,12 @@ impl AVAssetReaderDecoder {
                                     &mut cache,
                                     &mut cache_bytes,
                                     current_frame,
-                                    CachedFrame::new(&processor, buf.retained(), current_frame),
+                                    CachedFrame::new(
+                                        &processor,
+                                        buf.retained(),
+                                        current_frame,
+                                        current_secs,
+                                    ),
                                     frame_limit,
                                     requested_frame,
                                     last_active_frame,
@@ -1123,7 +1149,8 @@ impl AVAssetReaderDecoder {
                         continue;
                     };
 
-                    let cache_frame = CachedFrame::new(&processor, frame.retained(), current_frame);
+                    let cache_frame =
+                        CachedFrame::new(&processor, frame.retained(), current_frame, current_secs);
 
                     if first_ever_frame.borrow().is_none() {
                         *first_ever_frame.borrow_mut() = Some(cache_frame.data().clone());
@@ -1174,9 +1201,9 @@ impl AVAssetReaderDecoder {
                                     });
                                     let candidate_before = hold_candidate
                                         .as_ref()
-                                        .filter(|(n, _)| *n <= req.frame)
-                                        .map(|(n, buf)| {
-                                            CachedFrame::new(&processor, buf.retained(), *n)
+                                        .filter(|(n, _, _)| *n <= req.frame)
+                                        .map(|(n, secs, buf)| {
+                                            CachedFrame::new(&processor, buf.retained(), *n, *secs)
                                                 .data()
                                                 .clone()
                                         });
@@ -1407,9 +1434,9 @@ impl AVAssetReaderDecoder {
                     });
                     let candidate_before = hold_candidate
                         .as_ref()
-                        .filter(|(n, _)| *n <= req.frame)
-                        .map(|(n, buf)| {
-                            CachedFrame::new(&processor, buf.retained(), *n)
+                        .filter(|(n, _, _)| *n <= req.frame)
+                        .map(|(n, secs, buf)| {
+                            CachedFrame::new(&processor, buf.retained(), *n, *secs)
                                 .data()
                                 .clone()
                         });
