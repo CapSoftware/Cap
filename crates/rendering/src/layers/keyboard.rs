@@ -493,26 +493,55 @@ impl KeyboardLayer {
 
         let style = KeycapStyle::from_setting(settings.effective_style());
         if style != KeycapStyle::Classic {
+            // Keys that take over from keys still on screen swap in place:
+            // only keys appearing from nothing fade and pop in.
+            let takes_over =
+                takes_over_visible_keys(active.segment, &timeline.keyboard_segments, settings);
+            let intro_start = if takes_over {
+                active.segment.start - KEYCAP_SETTLED_SECONDS
+            } else {
+                active.segment.start
+            };
+            // Keys that hand straight over to the next keys stay up through
+            // the gap rather than dipping out first.
+            let outro_end =
+                if handed_over(active.segment, &timeline.keyboard_segments, segment_fade) {
+                    active.segment.end + KEYCAP_SETTLED_SECONDS
+                } else {
+                    active.segment.end
+                };
+            let opacity = calculate_fade(current_time, intro_start, outro_end, segment_fade)
+                * uniforms.takeover_overlay_fade();
             // The first key lands as the overlay finishes fading in, so the
             // press is seen rather than lost in the fade.
             let mut struck = last_struck_at(active.segment, current_time);
-            if struck <= active.segment.start {
+            if struck <= active.segment.start && !takes_over {
                 struck += (segment_fade * 0.7).min(0.12);
             }
+            // A shortcut or a lone key goes down when struck; typed text
+            // shows each key by its letter appearing, not by the row
+            // sinking under every one.
+            let presses = is_shortcut(active.segment)
+                || (active.segment.keys.len() <= 1
+                    && !(settings.show_typing
+                        && active
+                            .segment
+                            .display_text
+                            .chars()
+                            .all(char::is_alphanumeric)));
             self.prepare_keycaps(
                 KeycapFrame {
                     text: &visible_text,
                     style,
                     theme: KeycapTheme::from_setting(&settings.theme),
                     font_size,
-                    opacity: fade_opacity,
-                    scale: keycap_pop(
-                        current_time,
-                        active.segment.start,
-                        active.segment.end,
-                        segment_fade,
-                    ),
-                    since_struck: current_time - struck,
+                    opacity,
+                    scale: keycap_pop(current_time, intro_start, outro_end, segment_fade),
+                    since_struck: if presses {
+                        current_time - struck
+                    } else {
+                        f64::INFINITY
+                    },
                     position,
                     margin,
                 },
@@ -1183,6 +1212,36 @@ fn create_keycap_pipeline(
 
 struct ActiveKeyboardSegment<'a> {
     segment: &'a cap_project::KeyboardTrackSegment,
+}
+
+/// Long enough before a segment's start that its fade and pop are over.
+const KEYCAP_SETTLED_SECONDS: f64 = 10.0;
+
+/// Whether other keys are still on screen when `segment` starts, so it
+/// replaces them rather than appearing.
+fn takes_over_visible_keys(
+    segment: &cap_project::KeyboardTrackSegment,
+    segments: &[cap_project::KeyboardTrackSegment],
+    settings: &cap_project::KeyboardSettings,
+) -> bool {
+    segments.iter().any(|other| {
+        let fade = other
+            .fade_duration_override
+            .unwrap_or(settings.fade_duration) as f64;
+        other.start < segment.start && other.end + fade > segment.start
+    })
+}
+
+/// Whether other keys start before `segment` has faded out, taking over
+/// from it.
+fn handed_over(
+    segment: &cap_project::KeyboardTrackSegment,
+    segments: &[cap_project::KeyboardTrackSegment],
+    fade: f64,
+) -> bool {
+    segments.iter().any(|next| {
+        next.start > segment.start && next.start >= segment.end && next.start < segment.end + fade
+    })
 }
 
 fn find_active_keyboard_segment<'a>(
@@ -1932,6 +1991,71 @@ mod gpu_tests {
                         .unwrap();
                 }
             }
+        }
+    }
+
+    /// Every frame of a saved project's key track, written to
+    /// `CAP_KEY_FRAMES` as crops around the keys, with each frame's key row
+    /// logged, to judge motion frame by frame.
+    #[test]
+    #[ignore = "writes images; requires a working wgpu adapter"]
+    fn key_track_frames() {
+        let (Some(dir), Some(config)) = (
+            std::env::var_os("CAP_KEY_FRAMES"),
+            std::env::var_os("CAP_KEY_PROJECT"),
+        ) else {
+            return;
+        };
+        let range: Vec<f64> = std::env::var("CAP_KEY_RANGE")
+            .unwrap_or_else(|_| "11.5,20".into())
+            .split(',')
+            .map(|value| value.parse().unwrap())
+            .collect();
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let frames = frames(size);
+        let saved: ProjectConfiguration =
+            serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+        let segments = saved.timeline.as_ref().unwrap().keyboard_segments.clone();
+        let mut uniforms = uniforms(&constants, &segments, size);
+        std::sync::Arc::make_mut(&mut uniforms.project).keyboard = saved.keyboard.clone();
+        let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+        for frame in (range[0] * FPS as f64) as u32..(range[1] * FPS as f64) as u32 {
+            uniforms.frame_number = frame;
+            layer.prepare(&uniforms, &frames, size, &constants, None);
+            let pixels = render_pixels(&constants, &layer, size);
+            let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+            for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+                if pixel[3] > 200 {
+                    let (x, y) = (index as u32 % size.x, index as u32 / size.x);
+                    x0 = x0.min(x);
+                    x1 = x1.max(x);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y);
+                }
+            }
+            println!(
+                "frame {frame} t={:.3} keys x {x0}..{x1} y {y0}..{y1}",
+                frame as f64 / FPS as f64
+            );
+            let mut image =
+                image::RgbaImage::from_pixel(size.x, 360, image::Rgba([126, 132, 148, 255]));
+            for (y, row) in pixels
+                .chunks_exact(size.x as usize * 4)
+                .skip(720)
+                .enumerate()
+            {
+                for (x, src) in row.chunks_exact(4).enumerate() {
+                    let pixel = image.get_pixel_mut(x as u32, y as u32);
+                    let a = src[3] as f32 / 255.0;
+                    for c in 0..3 {
+                        pixel[c] = (src[c] as f32 * a + pixel[c] as f32 * (1.0 - a)) as u8;
+                    }
+                }
+            }
+            image
+                .save(std::path::Path::new(&dir).join(format!("{frame:05}.png")))
+                .unwrap();
         }
     }
 

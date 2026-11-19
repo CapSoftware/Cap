@@ -256,6 +256,11 @@ pub fn keycaps_for(text: &str, style: KeycapStyle) -> Vec<Keycap> {
     let mut chars = rest.chars();
     match (chars.next(), chars.next()) {
         (None, _) => {}
+        // Shift and one letter typed a capital.
+        (Some(single), None) if !shortcut && !caps.is_empty() && single.is_alphabetic() => {
+            caps.clear();
+            caps.push(single_cap(single, style));
+        }
         (Some(single), None) => caps.push(single_cap(single, style)),
         (Some(_), Some(_)) if shortcut => caps.push(Keycap {
             label: rest.to_uppercase(),
@@ -264,15 +269,77 @@ pub fn keycaps_for(text: &str, style: KeycapStyle) -> Vec<Keycap> {
             kind: KeycapKind::Named,
             align: LegendAlign::Left,
         }),
-        (Some(_), Some(_)) => caps.push(Keycap {
-            label: rest.replace('␣', " "),
-            legend: None,
-            modifier: false,
-            kind: KeycapKind::Wide,
-            align: LegendAlign::Left,
-        }),
+        (Some(_), Some(_)) => {
+            // Shift before a letter typed a capital: show the capital.
+            let mut typed = String::with_capacity(rest.len());
+            if caps.len() == 1
+                && let Some(first) = rest.chars().next().filter(|c| c.is_alphabetic())
+            {
+                caps.clear();
+                typed.extend(first.to_uppercase());
+                typed.push_str(&rest[first.len_utf8()..]);
+            } else {
+                typed.push_str(rest);
+            }
+            push_typed(&mut caps, &typed, style);
+        }
     }
     caps
+}
+
+/// Typed text as long keys, with each special key (delete, return, tab,
+/// escape, arrows) struck in it as a key of its own between them.
+fn push_typed(caps: &mut Vec<Keycap>, typed: &str, style: KeycapStyle) {
+    let mut run = String::new();
+    let flush = |caps: &mut Vec<Keycap>, run: &mut String| {
+        // A comma or full stop that ends a typed word reads as clutter on a
+        // key; the words carry the typing.
+        let word = run.trim_end_matches([',', '.']).to_string();
+        run.clear();
+        if !word.trim().is_empty() {
+            caps.push(Keycap {
+                label: word,
+                legend: None,
+                modifier: false,
+                kind: KeycapKind::Wide,
+                align: LegendAlign::Left,
+            });
+        }
+    };
+    let mut chars = typed.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '␣' => run.push(' '),
+            '⇧' => match chars.peek().copied().filter(|next| next.is_alphabetic()) {
+                Some(letter) => {
+                    chars.next();
+                    run.extend(letter.to_uppercase());
+                }
+                None => {
+                    flush(caps, &mut run);
+                    caps.push(modifier_cap(c, style));
+                }
+            },
+            _ if MODIFIERS.contains(&c) || is_special_key(c) => {
+                flush(caps, &mut run);
+                caps.push(if MODIFIERS.contains(&c) {
+                    modifier_cap(c, style)
+                } else {
+                    single_cap(c, style)
+                });
+            }
+            _ => run.push(c),
+        }
+    }
+    flush(caps, &mut run);
+}
+
+/// A key that prints a symbol for its name rather than a character.
+fn is_special_key(c: char) -> bool {
+    matches!(
+        c,
+        '⏎' | '⇥' | '⌫' | '⌦' | '⎋' | '⇱' | '⇲' | '⇞' | '⇟' | '↑' | '↓' | '←' | '→'
+    )
 }
 
 fn modifier_cap(symbol: char, style: KeycapStyle) -> Keycap {
@@ -504,10 +571,34 @@ mod tests {
         );
         assert_eq!(labels("a", KeycapStyle::MacOs)[0].0, "A");
         assert!(keycaps_for("", KeycapStyle::MacOs).is_empty());
-        // Shift then text is typing: the text keeps its case.
+        // Shift then a letter is typing a capital.
         assert_eq!(
-            labels("⇧i'll", KeycapStyle::MacOs)[1],
-            ("i'll".into(), None, KeycapKind::Wide)
+            labels("⇧i'll", KeycapStyle::MacOs),
+            vec![("I'll".into(), None, KeycapKind::Wide)]
+        );
+        // Shift then a symbol keeps its Shift key.
+        assert_eq!(labels("⇧;0", KeycapStyle::MacOs)[0].0, "⇧");
+        assert_eq!(labels("⇧;0", KeycapStyle::MacOs)[1].0, ";0");
+        // Special keys struck while typing are keys of their own.
+        assert_eq!(
+            labels("⌫e,", KeycapStyle::MacOs),
+            vec![
+                ("⌫".into(), Some("delete".into()), KeycapKind::Named),
+                ("e".into(), None, KeycapKind::Wide),
+            ]
+        );
+        assert_eq!(
+            labels("hi⏎there", KeycapStyle::Windows),
+            vec![
+                ("hi".into(), None, KeycapKind::Wide),
+                ("Enter".into(), None, KeycapKind::Named),
+                ("there".into(), None, KeycapKind::Wide),
+            ]
+        );
+        assert_eq!(labels("my⇧name", KeycapStyle::MacOs)[0].0, "myName");
+        assert_eq!(
+            labels("⇧a", KeycapStyle::MacOs),
+            vec![("A".into(), None, KeycapKind::Square)]
         );
         // A function key after a modifier stays one key.
         assert_eq!(
