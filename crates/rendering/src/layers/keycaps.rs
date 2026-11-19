@@ -24,20 +24,57 @@ pub const OVERLAY_TEXT_FONT: &str = "Inter";
 pub fn keycap_font(style: KeycapStyle, theme: KeycapTheme) -> (&'static str, u16) {
     match (theme, style) {
         (KeycapTheme::Retro, _) => ("IBM Plex Sans", 500),
+        (_, KeycapStyle::Mechanical) => ("Inter Keycaps", 500),
         (_, KeycapStyle::Windows) => ("Selawik", 400),
         (_, KeycapStyle::Linux) => ("Ubuntu", 500),
         _ => ("Inter Keycaps", 500),
     }
 }
 
+/// The face every key symbol is printed in, whatever the key's own face, so
+/// a modifier's mark looks the same on every keyboard and every platform
+/// rather than falling back to whichever system font has it.
+pub const KEY_SYMBOL_FONT: &str = "Inter Keycaps";
+
+/// A mark printed on a key in place of a letter: modifiers, named keys and
+/// arrows.
+pub fn is_key_symbol(c: char) -> bool {
+    matches!(
+        c,
+        '⌘' | '⌥' | '⇧' | '⌃' | '⇪' | '↵' | '␣' | '▲' | '▼' | '◀' | '▶'
+    ) || is_special_key(c)
+}
+
+/// `text` split into runs of key symbols and runs of everything else, each
+/// with whether it is symbols.
+pub fn symbol_runs(text: &str) -> Vec<(&str, bool)> {
+    let mut runs: Vec<(&str, bool)> = Vec::new();
+    let mut start = 0;
+    let mut current = None;
+    for (at, c) in text.char_indices() {
+        let symbol = is_key_symbol(c);
+        if current.is_some_and(|held| held != symbol) {
+            runs.push((&text[start..at], current.unwrap_or(false)));
+            start = at;
+        }
+        current = Some(symbol);
+    }
+    if let Some(symbol) = current {
+        runs.push((&text[start..], symbol));
+    }
+    runs
+}
+
 /// Which keyboard the keys are drawn from. `Classic` is the single rounded
-/// label the overlay has always drawn.
+/// label the overlay has always drawn; `Mechanical` is a desk keyboard's
+/// tall, sculpted caps, printed for the platform it runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeycapStyle {
     Classic,
     MacOs,
     Windows,
     Linux,
+    Mechanical,
 }
 
 impl KeycapStyle {
@@ -46,7 +83,28 @@ impl KeycapStyle {
             "macos" => Self::MacOs,
             "windows" => Self::Windows,
             "linux" => Self::Linux,
+            "mechanical" => Self::Mechanical,
             _ => Self::Classic,
+        }
+    }
+
+    /// Whether keys print Apple's legends: a symbol over its word in the
+    /// corner. A mechanical keyboard prints the legends of the platform it
+    /// is plugged into, as Mac and PC keycap sets do.
+    pub fn mac_legends(self) -> bool {
+        match self {
+            Self::MacOs | Self::Classic => true,
+            Self::Windows | Self::Linux => false,
+            Self::Mechanical => cfg!(target_os = "macos"),
+        }
+    }
+
+    /// The word a PC prints on the key Apple calls command.
+    fn meta_word(self) -> &'static str {
+        match self {
+            Self::Linux => "Super",
+            Self::Mechanical if cfg!(target_os = "linux") => "Super",
+            _ => "Win",
         }
     }
 
@@ -62,18 +120,31 @@ impl KeycapStyle {
                 depth: 0.035,
                 inset: 0.01,
                 dish: 0.0,
+                sculpt: 0.0,
             },
             Self::Windows => KeycapGeometry {
                 radius: 0.08,
                 depth: 0.07,
                 inset: 0.016,
                 dish: 0.0,
+                sculpt: 0.0,
             },
             Self::Linux => KeycapGeometry {
                 radius: 0.12,
                 depth: 0.13,
                 inset: 0.085,
                 dish: 1.0,
+                sculpt: 0.0,
+            },
+            // A tall, cylinder-dished cap seen from the front: a deep front
+            // wall, narrow tapered sides and a sliver of back wall, each lit
+            // as it faces the light.
+            Self::Mechanical => KeycapGeometry {
+                radius: 0.11,
+                depth: 0.21,
+                inset: 0.1,
+                dish: 1.0,
+                sculpt: 1.0,
             },
         }
     }
@@ -86,6 +157,9 @@ pub struct KeycapGeometry {
     pub inset: f32,
     /// How deeply the top is dished, 0 for a flat laptop key.
     pub dish: f32,
+    /// 1 for a cap whose walls are lit as solid plastic sloping away from
+    /// its top, 0 for a laptop key's skirt.
+    pub sculpt: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +175,92 @@ impl KeycapTheme {
             "light" => Self::Light,
             "retro" => Self::Retro,
             _ => Self::Dark,
+        }
+    }
+
+    /// The paint for `cap` on a `style` keyboard. A mechanical set paints
+    /// its modifiers and named keys apart from its letters, as two-tone
+    /// sets do.
+    pub fn palette_for(self, style: KeycapStyle, cap: &Keycap) -> KeycapPalette {
+        if style == KeycapStyle::Mechanical {
+            self.mechanical_palette(cap.modifier || cap.kind == KeycapKind::Named)
+        } else {
+            self.palette(cap.modifier)
+        }
+    }
+
+    /// A mechanical set in PBT: the walls are the same plastic as the top,
+    /// so their colours sit close to it and the light does the shaping.
+    pub fn mechanical_palette(self, modifier: bool) -> KeycapPalette {
+        match (self, modifier) {
+            // White letters and light grey modifiers.
+            (Self::Light, false) => KeycapPalette {
+                top: [hex(0xf7f6f3), hex(0xeeece7)],
+                side: [hex(0xe3e1db), hex(0xc4c1b9)],
+                border: rgba(0x2a2824, 0.18),
+                highlight: rgba(0xffffff, 0.9),
+                label: hex(0x2b2b2d),
+                legend: hex(0x4a4a4d),
+                shadow: 0.4,
+                grain: 0.014,
+                gloss: 0.03,
+            },
+            (Self::Light, true) => KeycapPalette {
+                top: [hex(0xd9d9d6), hex(0xcfcfcb)],
+                side: [hex(0xc3c3bf), hex(0xa4a4a0)],
+                border: rgba(0x2a2824, 0.2),
+                highlight: rgba(0xffffff, 0.75),
+                label: hex(0x262628),
+                legend: hex(0x3c3c3f),
+                shadow: 0.42,
+                grain: 0.014,
+                gloss: 0.025,
+            },
+            // Charcoal letters and near-black modifiers, pale print.
+            (Self::Dark, false) => KeycapPalette {
+                top: [hex(0x45464b), hex(0x3c3d42)],
+                side: [hex(0x38393e), hex(0x232427)],
+                border: rgba(0x000000, 0.45),
+                highlight: rgba(0xffffff, 0.16),
+                label: hex(0xeeeef0),
+                legend: hex(0xd8d8dc),
+                shadow: 0.5,
+                grain: 0.01,
+                gloss: 0.03,
+            },
+            (Self::Dark, true) => KeycapPalette {
+                top: [hex(0x2e2f33), hex(0x27282b)],
+                side: [hex(0x242528), hex(0x161618)],
+                border: rgba(0x000000, 0.5),
+                highlight: rgba(0xffffff, 0.12),
+                label: hex(0xe6e6e9),
+                legend: hex(0xcfcfd3),
+                shadow: 0.5,
+                grain: 0.01,
+                gloss: 0.025,
+            },
+            (Self::Retro, false) => KeycapPalette {
+                top: [hex(0xf0e9d6), hex(0xe4dbc3)],
+                side: [hex(0xd9cfb4), hex(0xb3a685)],
+                border: rgba(0x3a3328, 0.24),
+                highlight: rgba(0xfffdf5, 0.85),
+                label: hex(0x2b2721),
+                legend: hex(0x4f493f),
+                shadow: 0.42,
+                grain: 0.018,
+                gloss: 0.02,
+            },
+            (Self::Retro, true) => KeycapPalette {
+                top: [hex(0xaeaba2), hex(0xa29f96)],
+                side: [hex(0x97948b), hex(0x76736b)],
+                border: rgba(0x2c2a25, 0.28),
+                highlight: rgba(0xf4f1e8, 0.6),
+                label: hex(0x1f1d1a),
+                legend: hex(0x2f2c28),
+                shadow: 0.44,
+                grain: 0.018,
+                gloss: 0.02,
+            },
         }
     }
 
@@ -360,25 +520,18 @@ fn modifier_cap(symbol: char, style: KeycapStyle) -> Keycap {
         '⌃' => ("control", "Ctrl"),
         '⌥' => ("option", "Alt"),
         '⇧' => ("shift", "Shift"),
-        _ => (
-            "command",
-            if style == KeycapStyle::Linux {
-                "Super"
-            } else {
-                "Win"
-            },
-        ),
+        _ => ("command", style.meta_word()),
     };
-    match style {
+    match style.mac_legends() {
         // The symbol over its word, both on the key's left.
-        KeycapStyle::MacOs | KeycapStyle::Classic => Keycap {
+        true => Keycap {
             label: symbol.to_string(),
             legend: Some(mac.to_string()),
             modifier: true,
             kind: KeycapKind::Named,
             align: LegendAlign::Left,
         },
-        KeycapStyle::Windows | KeycapStyle::Linux => Keycap {
+        false => Keycap {
             label: pc.to_string(),
             legend: None,
             modifier: true,
@@ -389,7 +542,7 @@ fn modifier_cap(symbol: char, style: KeycapStyle) -> Keycap {
 }
 
 fn single_cap(key: char, style: KeycapStyle) -> Keycap {
-    let mac = matches!(style, KeycapStyle::MacOs | KeycapStyle::Classic);
+    let mac = style.mac_legends();
     // Apple prints a named key's word small in a bottom corner, with its
     // symbol above it where the key has one; a PC prints the word in the
     // middle.
@@ -457,7 +610,7 @@ fn single_cap(key: char, style: KeycapStyle) -> Keycap {
 /// corner word.
 pub fn label_size(cap: &Keycap, height: f32, style: KeycapStyle) -> f32 {
     let single = cap.label.chars().count() <= 1;
-    let mac = matches!(style, KeycapStyle::MacOs | KeycapStyle::Classic);
+    let mac = style.mac_legends();
     // Every key's main print is one size, letters and typed words alike, so
     // a row reads as one set; only the corner symbols, Apple's arrows and a
     // PC key's printed name are set smaller, as on the real keys.
@@ -673,8 +826,12 @@ mod tests {
             0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
         }
         for theme in [KeycapTheme::Light, KeycapTheme::Dark, KeycapTheme::Retro] {
-            for modifier in [false, true] {
-                let palette = theme.palette(modifier);
+            for (modifier, palette) in [false, true].into_iter().flat_map(|modifier| {
+                [
+                    (modifier, theme.palette(modifier)),
+                    (modifier, theme.mechanical_palette(modifier)),
+                ]
+            }) {
                 for face in palette.top {
                     let (a, b) = (luminance(face), luminance(palette.label));
                     let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
@@ -682,5 +839,68 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn key_symbols_print_in_one_face_and_words_in_the_keys_own() {
+        assert_eq!(symbol_runs("⇧"), vec![("⇧", true)]);
+        assert_eq!(symbol_runs("Shift"), vec![("Shift", false)]);
+        assert_eq!(
+            symbol_runs("a⌘⇧b"),
+            vec![("a", false), ("⌘⇧", true), ("b", false)]
+        );
+        assert!(symbol_runs("").is_empty());
+        for symbol in "⌘⌥⇧⌃⇪↵⏎⇥⌫⌦⎋▲▼◀▶↑↓←→".chars() {
+            assert!(is_key_symbol(symbol), "{symbol}");
+        }
+        assert!(!is_key_symbol('A') && !is_key_symbol(';'));
+    }
+
+    #[test]
+    fn a_mechanical_keyboard_is_a_tall_sculpted_two_tone_set() {
+        let mechanical = KeycapStyle::from_setting("mechanical");
+        assert_eq!(mechanical, KeycapStyle::Mechanical);
+        let geometry = mechanical.geometry();
+        assert_eq!(geometry.sculpt, 1.0);
+        assert!(geometry.depth > KeycapStyle::Linux.geometry().depth);
+        for style in [KeycapStyle::MacOs, KeycapStyle::Windows, KeycapStyle::Linux] {
+            assert_eq!(style.geometry().sculpt, 0.0, "{style:?}");
+        }
+        // Modifiers and named keys take the darker plastic; letters and the
+        // space bar the lighter.
+        let letter = &keycaps_for("a", mechanical)[0];
+        let named = &keycaps_for("⏎", mechanical)[0];
+        let shift = &keycaps_for("⇧⌘a", mechanical)
+            .into_iter()
+            .find(|cap| cap.label == "⇧" || cap.label == "Shift")
+            .unwrap();
+        for theme in [KeycapTheme::Light, KeycapTheme::Dark, KeycapTheme::Retro] {
+            let letters = theme.palette_for(mechanical, letter);
+            assert_ne!(letters, theme.palette_for(mechanical, named), "{theme:?}");
+            assert_eq!(
+                theme.palette_for(mechanical, named),
+                theme.palette_for(mechanical, shift),
+                "{theme:?}"
+            );
+            // Other keyboards keep their own paint.
+            assert_eq!(
+                theme.palette_for(KeycapStyle::MacOs, letter),
+                theme.palette(false)
+            );
+        }
+        // It prints the legends of the platform it is plugged into.
+        assert_eq!(mechanical.mac_legends(), cfg!(target_os = "macos"));
+        let command = &keycaps_for("⌘c", mechanical)[0];
+        if cfg!(target_os = "macos") {
+            assert_eq!(command.label, "⌘");
+        } else if cfg!(target_os = "linux") {
+            assert_eq!(command.label, "Super");
+        } else {
+            assert_eq!(command.label, "Win");
+        }
+        assert_eq!(
+            keycap_font(mechanical, KeycapTheme::Dark).0,
+            KEY_SYMBOL_FONT
+        );
     }
 }

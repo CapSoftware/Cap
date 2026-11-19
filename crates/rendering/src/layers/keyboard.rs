@@ -751,6 +751,7 @@ impl KeyboardLayer {
         self.has_content
     }
 
+
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_content {
             return;
@@ -1043,11 +1044,27 @@ impl KeyboardLayer {
             let metrics = Metrics::new(size, size * 1.2);
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
             buffer.set_size(&mut self.font_system, None, None);
-            buffer.set_text(
+            // Key symbols are printed in the one face that draws them all
+            // alike; letters and words in the key's own face.
+            let attrs = Attrs::new().family(family).weight(weight);
+            let symbol_attrs = Attrs::new()
+                .family(Family::Name(keycaps::KEY_SYMBOL_FONT))
+                .weight(Weight(500));
+            buffer.set_rich_text(
                 &mut self.font_system,
-                text,
-                &Attrs::new().family(family).weight(weight),
+                keycaps::symbol_runs(text).into_iter().map(|(run, symbol)| {
+                    (
+                        run,
+                        if symbol {
+                            symbol_attrs.clone()
+                        } else {
+                            attrs.clone()
+                        },
+                    )
+                }),
+                &attrs,
                 Shaping::Advanced,
+                None,
             );
             buffer.shape_until_scroll(&mut self.font_system, false);
             self.keycap_buffers[slot] = Some((shaped, buffer));
@@ -1288,7 +1305,7 @@ impl KeyboardLayer {
             reach_left = reach_left.min(x);
             reach_right = reach_right.max(x + cap_width);
             reach_bottom = reach_bottom.max(cap_top + cap_height);
-            let palette = frame.theme.palette(cap.modifier);
+            let palette = frame.theme.palette_for(frame.style, cap);
             uniforms.info[2] = uniforms.info[2].max(palette.shadow);
             uniforms.caps[index] = KeycapUniform {
                 rect: [x, cap_top, cap_width, cap_height],
@@ -1300,7 +1317,7 @@ impl KeyboardLayer {
                 highlight: palette.highlight,
                 shape: [radius, depth, inset, press],
                 finish: [geometry.dish, palette.grain, palette.gloss, opacity],
-                motion: [travel[0], travel[1], 0.0, 0.0],
+                motion: [travel[0], travel[1], geometry.sculpt, 0.0],
             };
             let sink = depth * press;
             let face_x = x + inset;
@@ -2330,7 +2347,7 @@ mod gpu_tests {
             typed_segment("typed", 1.4, "git push", 90.0),
         ];
         let frames = frames(size);
-        for style in ["macos", "windows", "linux"] {
+        for style in ["macos", "windows", "linux", "mechanical"] {
             let mut uniforms = uniforms(&constants, &segments, size);
             with_keycaps(&mut uniforms, style, "dark");
             let mut reused = KeyboardLayer::new(&constants.device, &constants.queue);
@@ -2353,6 +2370,78 @@ mod gpu_tests {
         }
     }
 
+    /// How long the GPU takes to draw the keys at 4K, per style, at rest and
+    /// mid-glide (when every key is sampled along its path), printed for a
+    /// comparison by eye.
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn keycap_gpu_cost() {
+        let size = XY::new(3840, 2160);
+        let constants = constants(size);
+        let frames = frames(size);
+        let device = &constants.device;
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Keycap Bench Target"),
+            size: wgpu::Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let segments = [
+            shortcut_segment("a", 0.0, "⌘C"),
+            shortcut_segment("b", 0.6, "⌃⌥⇧⌘P"),
+        ];
+        for style in ["macos", "windows", "linux", "mechanical"] {
+            let mut uniforms = uniforms(&constants, &segments, size);
+            with_keycaps(&mut uniforms, style, "dark");
+            for (moment, frame) in [("rest", 30), ("glide", 39)] {
+                uniforms.frame_number = frame;
+                let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+                layer.prepare(&uniforms, &frames, size, &constants, None);
+                assert!(layer.has_content());
+                let run = |count: usize| {
+                    let started = std::time::Instant::now();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    for _ in 0..count {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: None,
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        layer.render(&mut pass);
+                    }
+                    constants.queue.submit([encoder.finish()]);
+                    device.poll(wgpu::PollType::Wait).unwrap();
+                    started.elapsed().as_secs_f64() * 1e6 / count as f64
+                };
+                run(20);
+                let mut samples: Vec<f64> = (0..7).map(|_| run(100)).collect();
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "keycap gpu {style:<10} {moment:<5} {:>7.1} us/frame",
+                    samples[3]
+                );
+            }
+        }
+    }
+
     /// Writes every keycap style and theme, over a mid-grey frame, to
     /// `CAP_KEYCAP_GALLERY` for a look by eye.
     #[test]
@@ -2369,8 +2458,12 @@ mod gpu_tests {
             ("pressed", shortcut_segment("s", 0.0, "⇧⌘P"), 4),
             ("named", shortcut_segment("s", 0.0, "⏎"), 30),
             ("typed", typed_segment("t", 0.0, "hello world", 30.0), 50),
+            ("arrow", shortcut_segment("s", 0.0, "⇧⌘←"), 30),
+            ("delete", shortcut_segment("s", 0.0, "⌥⌫"), 30),
+            ("escape", shortcut_segment("s", 0.0, "⌃⎋"), 30),
+            ("tab", shortcut_segment("s", 0.0, "⇧⇥"), 30),
         ] {
-            for style in ["macos", "windows", "linux"] {
+            for style in ["macos", "windows", "linux", "mechanical"] {
                 for theme in ["light", "dark", "retro"] {
                     let mut uniforms = uniforms(&constants, std::slice::from_ref(&segment), size);
                     with_keycaps(&mut uniforms, style, theme);
@@ -2642,7 +2735,7 @@ mod gpu_tests {
         }
         let frames = frames(size);
         let total_frames = (start * FPS as f64) as u32;
-        for style in ["classic", "macos", "linux"] {
+        for style in ["classic", "macos", "linux", "mechanical"] {
             let mut uniforms = uniforms(&constants, &segments, size);
             with_keycaps(&mut uniforms, style, "dark");
             let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);

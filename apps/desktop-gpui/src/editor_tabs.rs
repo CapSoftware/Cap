@@ -313,7 +313,7 @@ pub(crate) fn apply_caption_preset_settings(
 }
 
 /// The key styles, each with the keys its tile shows.
-static KEY_STYLES: [(&str, fn() -> &'static str, &[&str]); 4] = [
+static KEY_STYLES: [(&str, fn() -> &'static str, &[&str]); 5] = [
     (
         "classic",
         tr::editor::tabs::keyboard::style_classic,
@@ -334,7 +334,16 @@ static KEY_STYLES: [(&str, fn() -> &'static str, &[&str]); 4] = [
         tr::editor::tabs::keyboard::style_linux,
         &["Super", "K"],
     ),
+    (
+        "mechanical",
+        tr::editor::tabs::keyboard::style_mechanical,
+        &["⌘", "K"],
+    ),
 ];
+
+/// How the style tiles are set out: the three platform keyboards side by
+/// side, then the desk keyboard and the plain label.
+const KEY_STYLE_ROWS: [&[&str]; 2] = [&["macos", "windows", "linux"], &["mechanical", "classic"]];
 
 static KEY_THEMES: [(&str, fn() -> &'static str); 3] = [
     ("light", tr::editor::tabs::keyboard::theme_light),
@@ -372,9 +381,12 @@ pub(crate) fn key_chip_sized(
 ) -> gpui::Div {
     #[allow(non_snake_case)]
     let HEIGHT = height;
-    let palette = theme.palette(modifier);
     let geometry = style.geometry();
     let depth = (geometry.depth * HEIGHT).max(2.);
+    if style == cap_rendering::keycaps::KeycapStyle::Mechanical {
+        return mechanical_chip(theme.mechanical_palette(modifier), label, HEIGHT, depth);
+    }
+    let palette = theme.palette(modifier);
     div()
         .h(px(HEIGHT - depth))
         .min_w(px(HEIGHT - depth))
@@ -412,6 +424,65 @@ pub(crate) fn key_chip_sized(
         ))
         .text_color(rgba(palette.label))
         .child(label.to_string())
+}
+
+/// A mechanical key in small: the walls as the body, lit lighter at the back
+/// than the deep front, and the top face set in from them.
+fn mechanical_chip(
+    palette: cap_rendering::keycaps::KeycapPalette,
+    label: &str,
+    height: f32,
+    depth: f32,
+) -> gpui::Div {
+    let inset = (height * 0.1).max(2.);
+    div()
+        .h(px(height))
+        .min_w(px(height))
+        .pt(px((inset * 0.4).max(1.)))
+        .px(px(inset))
+        .pb(px(depth + inset * 0.45))
+        .flex()
+        .rounded(px(height * 0.11))
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(rgba(palette.side[0]), 0.),
+            gpui::linear_color_stop(rgba(palette.side[1]), 1.),
+        ))
+        .border_1()
+        .border_color(rgba(palette.border))
+        .shadow(vec![gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 0., palette.shadow * 0.7),
+            offset: gpui::point(px(0.), px(1.5)),
+            blur_radius: px(3.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .child(
+            div()
+                .flex_1()
+                .px(px(height * 0.16))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(height * 0.08))
+                .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(rgba(palette.top[0]), 0.),
+                    gpui::linear_color_stop(rgba(palette.top[1]), 1.),
+                ))
+                .shadow(vec![gpui::BoxShadow {
+                    color: rgba(palette.highlight),
+                    offset: gpui::point(px(0.), px(0.5)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                }])
+                .text_size(px(
+                    height * if label.chars().count() > 1 { 0.34 } else { 0.4 }
+                ))
+                .text_color(rgba(palette.label))
+                .child(label.to_string()),
+        )
 }
 
 /// A tile's preview: its keys as keycaps, or the classic label.
@@ -2713,8 +2784,7 @@ impl EditorWindow {
         let effective = settings.effective_style().to_string();
         let style = KeycapStyle::from_setting(&effective);
         let key_theme = KeycapTheme::from_setting(&settings.theme);
-        let tiles = KEY_STYLES.iter().map(|(value, label, keys)| {
-            let value = *value;
+        let tile_for = |&(value, label, keys): &(&'static str, fn() -> &'static str, &[&str])| {
             let tile_style = KeycapStyle::from_setting(value);
             self.key_choice_tile(
                 SharedString::from(format!("keyboard-style-{value}")),
@@ -2728,7 +2798,15 @@ impl EditorWindow {
                     });
                 }),
             )
-        });
+        };
+        let row = |values: &[&str]| {
+            div().flex().flex_row().gap(px(8.)).children(
+                values
+                    .iter()
+                    .filter_map(|value| KEY_STYLES.iter().find(|(v, ..)| v == value))
+                    .map(&tile_for),
+            )
+        };
         let keys = KEY_STYLES
             .iter()
             .find(|(value, ..)| *value == effective)
@@ -2756,8 +2834,13 @@ impl EditorWindow {
             .flex_col()
             .gap(px(16.))
             .child(
-                ui::Field::section(&theme, tr::editor::tabs::keyboard::key_style())
-                    .child(div().flex().flex_row().gap(px(8.)).children(tiles)),
+                ui::Field::section(&theme, tr::editor::tabs::keyboard::key_style()).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .children(KEY_STYLE_ROWS.iter().map(|values| row(values))),
+                ),
             )
             .when(style != KeycapStyle::Classic, |this| {
                 this.child(
@@ -4565,6 +4648,27 @@ mod tests {
     /// A left-aligned caption sits a margin in from the edge, its centre a
     /// half box width further in. Manual starts at that drawn centre, so
     /// switching does not move it.
+    #[test]
+    fn every_key_style_has_one_tile() {
+        let mut laid_out: Vec<&str> = KEY_STYLE_ROWS
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+        laid_out.sort_unstable();
+        let mut styles: Vec<&str> = KEY_STYLES.iter().map(|(value, ..)| *value).collect();
+        styles.sort_unstable();
+        assert_eq!(laid_out, styles);
+        // Every tile names a style the renderer draws as keys or the label.
+        for value in styles {
+            let style = cap_rendering::keycaps::KeycapStyle::from_setting(value);
+            assert_eq!(
+                style == cap_rendering::keycaps::KeycapStyle::Classic,
+                value == "classic",
+                "{value}"
+            );
+        }
+    }
+
     #[test]
     fn manual_caption_position_starts_at_the_drawn_caption() {
         let mut settings = CaptionSettings {

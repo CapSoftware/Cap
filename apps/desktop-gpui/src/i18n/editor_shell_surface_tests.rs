@@ -278,6 +278,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::keyboard::style_macos(), "macOS"),
         (tr::editor::tabs::keyboard::style_windows(), "Windows"),
         (tr::editor::tabs::keyboard::style_linux(), "Linux"),
+        (tr::editor::tabs::keyboard::style_mechanical(), "Mechanical"),
         (tr::editor::tabs::keyboard::theme_light(), "Light"),
         (tr::editor::tabs::keyboard::theme_dark(), "Dark"),
         (tr::editor::tabs::keyboard::theme_retro(), "Retro"),

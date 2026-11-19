@@ -21,7 +21,8 @@ struct Cap {
     // Dish depth (0..1), grain, gloss, and the key's own opacity.
     finish: vec4<f32>,
     // How far the key travels while the shutter is open, x and y in pixels,
-    // centred on where it is drawn; then unused.
+    // centred on where it is drawn; then 1 for a sculpted cap whose walls
+    // are lit as solid plastic, 0 for a laptop key; then unused.
     motion: vec4<f32>,
 };
 
@@ -87,8 +88,131 @@ fn grain(p: vec2<f32>) -> f32 {
     return fract(sin(dot(q, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
 }
 
+// The shadows a key casts on the desk: a wide, faint ambient shadow, then a
+// tight contact shadow that closes in as the key is pressed.
+fn desk_shadow(
+    p: vec2<f32>,
+    body_origin: vec2<f32>,
+    body_size: vec2<f32>,
+    height: f32,
+    depth: f32,
+    radius: f32,
+    press: f32,
+    shadow_strength: f32,
+) -> vec4<f32> {
+    var out = vec4<f32>(0.0);
+    let ambient_blur = max(height * 0.3, 2.0);
+    let ambient_d = box_sdf(
+        p,
+        body_origin + vec2<f32>(0.0, depth * 1.6 + height * 0.04),
+        body_size,
+        radius,
+    );
+    let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
+    out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), ambient * shadow_strength));
+    let contact_blur = max(depth * (1.3 - press * 0.6), 1.2);
+    let contact_d = box_sdf(p, body_origin + vec2<f32>(0.0, depth * 0.45), body_size, radius);
+    let contact = 1.0 - smoothstep(-contact_blur, contact_blur, contact_d);
+    return over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), contact * shadow_strength));
+}
+
+// A mechanical keycap seen from in front and above, lit from above and a
+// little to the left. Its top is a cylinder-dished face; around it the walls
+// slope out to the plate: a deep front wall, narrow sides and a sliver of
+// back wall. Each wall is shaded by the way it faces, falls into shade
+// towards the plate, and meets the top in a rounded edge that catches the
+// light along the back and left and turns from it along the front and right.
+fn draw_sculpted(cap: Cap, p: vec2<f32>, shadow_strength: f32) -> vec4<f32> {
+    let height = cap.rect.w;
+    let radius = cap.shape.x;
+    let depth = cap.shape.y;
+    let inset = cap.shape.z;
+    let press = cap.shape.w;
+    let sink = depth * press;
+
+    // The cap moves down into the switch: the walls shorten from the top
+    // while their foot stays on the plate.
+    let body_origin = vec2<f32>(cap.rect.x, cap.rect.y + sink);
+    let body_size = vec2<f32>(cap.rect.z, cap.rect.w - sink);
+    var out = desk_shadow(p, body_origin, body_size, height, depth, radius, press, shadow_strength);
+
+    let face_origin = vec2<f32>(cap.rect.x + inset, cap.rect.y + sink + inset * 0.4);
+    let face_size = vec2<f32>(cap.rect.z - inset * 2.0, cap.rect.w - depth - inset * 0.85);
+    let face_radius = max(radius * 0.8, 1.0);
+    let body_d = box_sdf(p, body_origin, body_size, radius);
+    // Seen from in front, the top narrows towards the back, so the side
+    // walls widen as they come forward.
+    let centre = face_origin + face_size * 0.5;
+    let towards_back = 1.0 - clamp((p.y - face_origin.y) / max(face_size.y, 1.0), 0.0, 1.0);
+    // The same slope on every key, so a long key tapers like a short one.
+    let half_width = max(face_size.x * 0.5, 1.0);
+    let narrowing = 1.0 - min(height * 0.035 * towards_back / half_width, 0.2);
+    let tapered = vec2<f32>(centre.x + (p.x - centre.x) / narrowing, p.y);
+    let face_d = box_sdf(tapered, face_origin, face_size, face_radius);
+
+    // Which way the surface under `p` faces, in the plane of the screen:
+    // out from the nearest point of the face's straight edges.
+    let core = max(face_size * 0.5 - vec2<f32>(face_radius), vec2<f32>(0.0));
+    let q = tapered - centre;
+    let outward = q - clamp(q, -core, core);
+    let reach = length(outward);
+    var facing = vec2<f32>(0.0, 1.0);
+    if reach > 0.001 {
+        facing = outward / reach;
+    }
+    // Light falls from above and the left: the back and left walls catch
+    // it, the right turns from it, and the front faces the viewer, lit
+    // only by what spills down over the top.
+    let lit = 0.86 - 0.14 * facing.y - 0.07 * facing.x;
+
+    // The walls: from the face's edge (0) to the plate (1).
+    let across = clamp(face_d / max(face_d - body_d, 0.001), 0.0, 1.0);
+    var wall = cap.side_a.rgb * lit;
+    // The rounded top edge rolls into the wall: it holds the light just
+    // below the face and the wall darkens on its way to the plate.
+    wall = wall * mix(1.06, 0.84, smoothstep(0.0, 1.0, across));
+    wall = mix(wall, cap.side_b.rgb * lit, smoothstep(0.55, 1.0, across) * 0.6);
+    let roll = (1.0 - smoothstep(0.0, 0.22, across)) * max(-facing.y * 0.5 + 0.5, 0.25);
+    wall = mix(wall, cap.top_a.rgb, roll * 0.28);
+    wall = wall + vec3<f32>(grain(p) * cap.finish.y);
+    out = over(out, paint(vec4<f32>(wall, 1.0), coverage(body_d)));
+
+    // The face: its gradient, the dish, a soft sheen and the rounded rim.
+    let fy = clamp((p.y - face_origin.y) / max(face_size.y, 1.0), 0.0, 1.0);
+    let fx = clamp((p.x - face_origin.x) / max(face_size.x, 1.0), 0.0, 1.0) * 2.0 - 1.0;
+    var face = mix(cap.top_a, cap.top_b, fy).rgb;
+    // A cylinder dish curves across the key: its left side turns towards
+    // the right, away from the light, and its right side towards it; the
+    // middle sits a touch lower.
+    let dish = cap.finish.x;
+    face = face * (1.0 + dish * (0.05 * fx - 0.035 * (1.0 - fx * fx)));
+    // A broad, soft sheen high on the face.
+    let sheen_at = (p - (face_origin + face_size * vec2<f32>(0.35, 0.2))) / max(face_size, vec2<f32>(1.0));
+    let sheen = exp(-dot(sheen_at, sheen_at) * 6.0) * cap.finish.z * 4.0;
+    face = mix(face, vec3<f32>(1.0), clamp(sheen, 0.0, 0.3));
+    // The rim rounds over into the walls, bright where it faces the light.
+    let rim_width = max(height * 0.045, 1.5);
+    let rim = 1.0 - smoothstep(0.0, rim_width, -face_d);
+    let rim_light = -0.6 * facing.y - 0.3 * facing.x;
+    face = face * (1.0 + rim * rim * rim_light * 0.16);
+    face = face + vec3<f32>(grain(p) * cap.finish.y);
+    out = over(out, paint(vec4<f32>(face, 1.0), coverage(face_d)));
+
+    // A thin line of light where the back of the rim meets the top.
+    let upper = 1.0 - smoothstep(0.0, face_size.y * 0.35, p.y - face_origin.y);
+    let line = 1.0 - smoothstep(0.0, 1.2, -face_d);
+    out = over(out, paint(cap.highlight, coverage(face_d) * line * upper * 0.7));
+
+    // A fine edge around the foot of the cap.
+    let border = coverage(body_d) * (1.0 - smoothstep(0.0, 1.1, -body_d));
+    return over(out, paint(cap.border, border));
+}
+
 // One key at `p`, premultiplied, before its own opacity.
 fn draw_cap(cap: Cap, p: vec2<f32>, shadow_strength: f32) -> vec4<f32> {
+    if cap.motion.z > 0.5 {
+        return draw_sculpted(cap, p, shadow_strength);
+    }
     var out = vec4<f32>(0.0);
     let height = cap.rect.w;
     let radius = cap.shape.x;
