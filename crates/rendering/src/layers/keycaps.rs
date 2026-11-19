@@ -287,6 +287,14 @@ pub fn keycaps_for(text: &str, style: KeycapStyle) -> Vec<Keycap> {
     caps
 }
 
+/// The keys typed text stands for: the text as long keys from its first
+/// letter, with Shift folded into capitals and special keys between.
+pub fn typed_keycaps(text: &str, style: KeycapStyle) -> Vec<Keycap> {
+    let mut caps = Vec::new();
+    push_typed(&mut caps, text, style);
+    caps
+}
+
 /// Typed text as long keys, with each special key (delete, return, tab,
 /// escape, arrows) struck in it as a key of its own between them.
 fn push_typed(caps: &mut Vec<Keycap>, typed: &str, style: KeycapStyle) {
@@ -450,16 +458,17 @@ fn single_cap(key: char, style: KeycapStyle) -> Keycap {
 pub fn label_size(cap: &Keycap, height: f32, style: KeycapStyle) -> f32 {
     let single = cap.label.chars().count() <= 1;
     let mac = matches!(style, KeycapStyle::MacOs | KeycapStyle::Classic);
+    // Every key's main print is one size, letters and typed words alike, so
+    // a row reads as one set; only the corner symbols, Apple's arrows and a
+    // PC key's printed name are set smaller, as on the real keys.
+    let text = if mac { 0.33 } else { 0.34 };
     match (cap.kind, single, cap.legend.is_some()) {
         (_, _, true) => height * 0.25,
-        // Apple's letters are small on a large key; the triangles smaller.
         (KeycapKind::Square, _, _) if mac && "▲▼◀▶".contains(cap.label.as_str()) => {
             height * 0.2
         }
-        (KeycapKind::Square, _, _) if mac => height * 0.33,
-        (KeycapKind::Square, _, _) | (KeycapKind::Wide, _, _) => height * 0.4,
-        (KeycapKind::Named, true, _) => height * 0.4,
-        (KeycapKind::Named, false, _) => height * 0.25,
+        (KeycapKind::Named, false, _) if !mac => height * 0.27,
+        _ => height * text,
     }
 }
 
@@ -501,17 +510,18 @@ pub fn cap_gap(height: f32) -> f32 {
 /// How far a key is pushed in, `since` seconds after it was struck: down in
 /// 60 ms, back up over the next 140 ms, as a key springs back.
 pub fn press_depth(since: f64) -> f32 {
-    const DOWN: f64 = 0.06;
-    const UP: f64 = 0.14;
+    // A soft dip: halfway down, eased in and out, then a slower rise.
+    const DOWN: f64 = 0.08;
+    const UP: f64 = 0.22;
+    const DEPTH: f64 = 0.55;
     if !(0.0..DOWN + UP).contains(&since) {
         return 0.;
     }
+    let smooth = |t: f64| t * t * (3. - 2. * t);
     if since < DOWN {
-        let t = since / DOWN;
-        (1. - (1. - t) * (1. - t)) as f32
+        (DEPTH * smooth(since / DOWN)) as f32
     } else {
-        let t = (since - DOWN) / UP;
-        (1. - t * t * (3. - 2. * t)) as f32
+        (DEPTH * (1. - smooth((since - DOWN) / UP))) as f32
     }
 }
 
@@ -601,6 +611,13 @@ mod tests {
             ]
         );
         assert_eq!(labels("my⇧name", KeycapStyle::MacOs)[0].0, "myName");
+        // A word's first letter is already typed text, in its own case.
+        let first = typed_keycaps("l", KeycapStyle::MacOs);
+        assert_eq!(
+            (first[0].label.as_str(), first[0].kind),
+            ("l", KeycapKind::Wide)
+        );
+        assert_eq!(typed_keycaps("⇧i", KeycapStyle::MacOs)[0].label, "I");
         // Held or repeated special keys are one key, so what is typed after
         // them always fits.
         let arrows = format!("{}x", "←".repeat(17));
@@ -636,9 +653,10 @@ mod tests {
     fn a_struck_key_dips_and_springs_back() {
         assert_eq!(press_depth(-0.01), 0.);
         assert_eq!(press_depth(0.), 0.);
-        assert!((press_depth(0.06) - 1.).abs() < 1e-6);
-        assert!(press_depth(0.1) > 0. && press_depth(0.1) < 1.);
-        assert_eq!(press_depth(0.2), 0.);
+        assert!((press_depth(0.08) - 0.55).abs() < 1e-6);
+        assert!(press_depth(0.04) > 0. && press_depth(0.04) < 0.55);
+        assert!(press_depth(0.2) > 0. && press_depth(0.2) < 0.55);
+        assert_eq!(press_depth(0.3), 0.);
         assert_eq!(press_depth(1.), 0.);
     }
 

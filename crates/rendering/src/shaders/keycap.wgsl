@@ -2,7 +2,9 @@
 // pass over the scissored overlay box, built up the way light falls on a real
 // key: a wide ambient shadow and a tight contact shadow on the desk, the skirt
 // darkening towards the desk, the top face with its gradient, dish, bevel and
-// matte grain, and the press, which sinks the face into the skirt.
+// matte grain, and the press, which sinks the face into the skirt. A key in
+// motion is drawn as a camera would catch it: averaged along its path over
+// the shutter, so it smears the way it moves.
 
 struct Cap {
     // The key at rest, skirt included: x, y, width, height in pixels.
@@ -16,8 +18,11 @@ struct Cap {
     // Corner radius, skirt depth, face inset (all pixels), and how far the key
     // is pressed in (0..1).
     shape: vec4<f32>,
-    // Dish depth (0..1), grain, gloss, unused.
+    // Dish depth (0..1), grain, gloss, and the key's own opacity.
     finish: vec4<f32>,
+    // How far the key travels while the shutter is open, x and y in pixels,
+    // centred on where it is drawn; then unused.
+    motion: vec4<f32>,
 };
 
 struct Uniforms {
@@ -82,6 +87,92 @@ fn grain(p: vec2<f32>) -> f32 {
     return fract(sin(dot(q, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
 }
 
+// One key at `p`, premultiplied, before its own opacity.
+fn draw_cap(cap: Cap, p: vec2<f32>, shadow_strength: f32) -> vec4<f32> {
+    var out = vec4<f32>(0.0);
+    let height = cap.rect.w;
+    let radius = cap.shape.x;
+    let depth = cap.shape.y;
+    let inset = cap.shape.z;
+    let press = cap.shape.w;
+    let sink = depth * press;
+
+    // The skirt shortens from the top as the key goes down.
+    let body_origin = vec2<f32>(cap.rect.x, cap.rect.y + sink);
+    let body_size = vec2<f32>(cap.rect.z, cap.rect.w - sink);
+
+    // A wide, faint ambient shadow, then a tight contact shadow that
+    // closes in as the key is pressed.
+    let ambient_blur = max(height * 0.3, 2.0);
+    let ambient_d = box_sdf(
+        p,
+        body_origin + vec2<f32>(0.0, depth * 1.6 + height * 0.04),
+        body_size,
+        radius,
+    );
+    let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
+    out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), ambient * shadow_strength));
+    let contact_blur = max(depth * (1.3 - press * 0.6), 1.2);
+    let contact_d = box_sdf(p, body_origin + vec2<f32>(0.0, depth * 0.45), body_size, radius);
+    let contact = 1.0 - smoothstep(-contact_blur, contact_blur, contact_d);
+    out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), contact * shadow_strength));
+
+    // The face, inset from the skirt and above it.
+    let face_origin = vec2<f32>(cap.rect.x + inset, cap.rect.y + sink + inset * 0.4);
+    let face_size = vec2<f32>(cap.rect.z - inset * 2.0, cap.rect.w - depth - inset * 0.85);
+    let face_bottom = face_origin.y + face_size.y;
+
+    // The skirt: lit where it meets the face, falling into shade towards
+    // the desk.
+    let body_d = box_sdf(p, body_origin, body_size, radius);
+    let skirt_t = smoothstep(face_bottom - depth * 0.4, body_origin.y + body_size.y, p.y);
+    var skirt = mix(cap.side_a, cap.side_b, skirt_t);
+    // A sculpted key's sides catch light from above.
+    let side_lit = 1.0 - smoothstep(0.0, max(inset, 1.0), p.y - body_origin.y);
+    skirt = vec4<f32>(mix(skirt.rgb, cap.top_b.rgb, side_lit * 0.35), skirt.a);
+    out = over(out, paint(skirt, coverage(body_d)));
+
+    let face_radius = max(radius - inset * 0.55, radius * 0.6);
+    let face_d = box_sdf(p, face_origin, face_size, face_radius);
+    let fy = clamp((p.y - face_origin.y) / max(face_size.y, 1.0), 0.0, 1.0);
+    let fx = clamp((p.x - face_origin.x) / max(face_size.x, 1.0), 0.0, 1.0) * 2.0 - 1.0;
+    var face = mix(cap.top_a, cap.top_b, fy).rgb;
+
+    // A dished top is darker in its middle and lit along its rims.
+    let dish = cap.finish.x;
+    face = face * (1.0 - dish * 0.07 * (1.0 - fx * fx) * (1.0 - (fy * 2.0 - 1.0) * (fy * 2.0 - 1.0) * 0.5));
+
+    // Satin sheen across the top of the face.
+    let gloss = cap.finish.z * (1.0 - smoothstep(0.0, 0.5, fy));
+    face = mix(face, vec3<f32>(1.0), gloss);
+
+    // The bevel: the face's lower rim turns away from the light, its
+    // side rims a touch less so.
+    let rim_depth = -face_d;
+    let lower_rim = smoothstep(face_bottom - height * 0.1, face_bottom, p.y)
+        * (1.0 - smoothstep(0.0, height * 0.08, rim_depth));
+    face = mix(face, cap.side_a.rgb, lower_rim * 0.45);
+    let side_rim = 1.0 - smoothstep(0.0, height * 0.05, rim_depth);
+    face = face * (1.0 - side_rim * 0.05);
+
+    // Matte grain in the plastic.
+    face = face + vec3<f32>(grain(p) * cap.finish.y);
+
+    out = over(out, paint(vec4<f32>(face, 1.0), coverage(face_d)));
+
+    // The lit top edge: a bright line just inside the face's upper rim,
+    // fading into a soft glow.
+    let upper = 1.0 - smoothstep(0.0, face_size.y * 0.5, p.y - face_origin.y);
+    let line = 1.0 - smoothstep(0.0, 1.4, rim_depth);
+    let glow = (1.0 - smoothstep(0.0, height * 0.08, rim_depth)) * 0.35;
+    out = over(out, paint(cap.highlight, coverage(face_d) * max(line, glow) * upper));
+
+    // A fine border around the whole key.
+    let border = coverage(body_d) * (1.0 - smoothstep(0.0, 1.1, -body_d));
+    out = over(out, paint(cap.border, border));
+    return out;
+}
+
 @fragment
 fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let p = position.xy;
@@ -94,86 +185,28 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
             break;
         }
         let cap = uniforms.caps[i];
-        let height = cap.rect.w;
-        let radius = cap.shape.x;
-        let depth = cap.shape.y;
-        let inset = cap.shape.z;
-        let press = cap.shape.w;
-        let sink = depth * press;
-
-        // The skirt shortens from the top as the key goes down.
-        let body_origin = vec2<f32>(cap.rect.x, cap.rect.y + sink);
-        let body_size = vec2<f32>(cap.rect.z, cap.rect.w - sink);
-
-        // A wide, faint ambient shadow, then a tight contact shadow that
-        // closes in as the key is pressed.
-        let ambient_blur = max(height * 0.3, 2.0);
-        let ambient_d = box_sdf(
-            p,
-            body_origin + vec2<f32>(0.0, depth * 1.6 + height * 0.04),
-            body_size,
-            radius,
-        );
-        let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
-        out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), ambient * shadow_strength));
-        let contact_blur = max(depth * (1.3 - press * 0.6), 1.2);
-        let contact_d = box_sdf(p, body_origin + vec2<f32>(0.0, depth * 0.45), body_size, radius);
-        let contact = 1.0 - smoothstep(-contact_blur, contact_blur, contact_d);
-        out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), contact * shadow_strength));
-
-        // The face, inset from the skirt and above it.
-        let face_origin = vec2<f32>(cap.rect.x + inset, cap.rect.y + sink + inset * 0.4);
-        let face_size = vec2<f32>(cap.rect.z - inset * 2.0, cap.rect.w - depth - inset * 0.85);
-        let face_bottom = face_origin.y + face_size.y;
-
-        // The skirt: lit where it meets the face, falling into shade towards
-        // the desk.
-        let body_d = box_sdf(p, body_origin, body_size, radius);
-        let skirt_t = smoothstep(face_bottom - depth * 0.4, body_origin.y + body_size.y, p.y);
-        var skirt = mix(cap.side_a, cap.side_b, skirt_t);
-        // A sculpted key's sides catch light from above.
-        let side_lit = 1.0 - smoothstep(0.0, max(inset, 1.0), p.y - body_origin.y);
-        skirt = vec4<f32>(mix(skirt.rgb, cap.top_b.rgb, side_lit * 0.35), skirt.a);
-        out = over(out, paint(skirt, coverage(body_d)));
-
-        let face_radius = max(radius - inset * 0.55, radius * 0.6);
-        let face_d = box_sdf(p, face_origin, face_size, face_radius);
-        let fy = clamp((p.y - face_origin.y) / max(face_size.y, 1.0), 0.0, 1.0);
-        let fx = clamp((p.x - face_origin.x) / max(face_size.x, 1.0), 0.0, 1.0) * 2.0 - 1.0;
-        var face = mix(cap.top_a, cap.top_b, fy).rgb;
-
-        // A dished top is darker in its middle and lit along its rims.
-        let dish = cap.finish.x;
-        face = face * (1.0 - dish * 0.07 * (1.0 - fx * fx) * (1.0 - (fy * 2.0 - 1.0) * (fy * 2.0 - 1.0) * 0.5));
-
-        // Satin sheen across the top of the face.
-        let gloss = cap.finish.z * (1.0 - smoothstep(0.0, 0.5, fy));
-        face = mix(face, vec3<f32>(1.0), gloss);
-
-        // The bevel: the face's lower rim turns away from the light, its
-        // side rims a touch less so.
-        let rim_depth = -face_d;
-        let lower_rim = smoothstep(face_bottom - height * 0.1, face_bottom, p.y)
-            * (1.0 - smoothstep(0.0, height * 0.08, rim_depth));
-        face = mix(face, cap.side_a.rgb, lower_rim * 0.45);
-        let side_rim = 1.0 - smoothstep(0.0, height * 0.05, rim_depth);
-        face = face * (1.0 - side_rim * 0.05);
-
-        // Matte grain in the plastic.
-        face = face + vec3<f32>(grain(p) * cap.finish.y);
-
-        out = over(out, paint(vec4<f32>(face, 1.0), coverage(face_d)));
-
-        // The lit top edge: a bright line just inside the face's upper rim,
-        // fading into a soft glow.
-        let upper = 1.0 - smoothstep(0.0, face_size.y * 0.5, p.y - face_origin.y);
-        let line = 1.0 - smoothstep(0.0, 1.4, rim_depth);
-        let glow = (1.0 - smoothstep(0.0, height * 0.08, rim_depth)) * 0.35;
-        out = over(out, paint(cap.highlight, coverage(face_d) * max(line, glow) * upper));
-
-        // A fine border around the whole key.
-        let border = coverage(body_d) * (1.0 - smoothstep(0.0, 1.1, -body_d));
-        out = over(out, paint(cap.border, border));
+        let travel = cap.motion.xy;
+        // Skip pixels this key and its shadow cannot reach.
+        let reach = cap.rect.w * 0.65 + cap.shape.y * 2.0 + abs(travel) * 0.5;
+        if p.x < cap.rect.x - reach.x || p.x > cap.rect.x + cap.rect.z + reach.x
+            || p.y < cap.rect.y - reach.y || p.y > cap.rect.y + cap.rect.w + reach.y {
+            continue;
+        }
+        // Each key is built up on its own, then laid over the keys before it
+        // at its own opacity, so keys fade in and out independently.
+        var key = vec4<f32>(0.0);
+        let distance = length(travel);
+        if distance < 0.75 {
+            key = draw_cap(cap, p, shadow_strength);
+        } else {
+            let samples = u32(clamp(ceil(distance / 1.5), 2.0, 16.0));
+            for (var k = 0u; k < samples; k = k + 1u) {
+                let along = f32(k) / f32(samples - 1u) - 0.5;
+                key = key + draw_cap(cap, p - travel * along, shadow_strength);
+            }
+            key = key / f32(samples);
+        }
+        out = over(out, key * clamp(cap.finish.w, 0.0, 1.0));
     }
 
     let opacity = clamp(uniforms.info.y, 0.0, 1.0);

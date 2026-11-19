@@ -8,7 +8,7 @@ use log::warn;
 use wgpu::{Device, Queue, include_wgsl, util::DeviceExt};
 
 use super::captions::{CaptionOverlayLayout, CaptionPosition};
-use super::keycaps::{self, Keycap, KeycapStyle, KeycapTheme};
+use super::keycaps::{self, Keycap, KeycapKind, KeycapStyle, KeycapTheme};
 use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 #[repr(C)]
@@ -34,6 +34,7 @@ struct KeycapUniform {
     highlight: [f32; 4],
     shape: [f32; 4],
     finish: [f32; 4],
+    motion: [f32; 4],
 }
 
 const MAX_KEYCAPS: usize = 16;
@@ -53,6 +54,8 @@ struct PlacedLabel {
     width: f32,
     height: f32,
     color: Color,
+    /// How far the label travels while the shutter is open.
+    travel: [f32; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -493,51 +496,80 @@ impl KeyboardLayer {
 
         let style = KeycapStyle::from_setting(settings.effective_style());
         if style != KeycapStyle::Classic {
-            // Keys that take over from keys still on screen swap in place:
-            // only keys appearing from nothing fade and pop in.
-            let takes_over =
-                takes_over_visible_keys(active.segment, &timeline.keyboard_segments, settings);
-            let intro_start = if takes_over {
-                active.segment.start - KEYCAP_SETTLED_SECONDS
-            } else {
-                active.segment.start
+            let case = |text: String| {
+                if should_uppercase {
+                    text.to_uppercase()
+                } else {
+                    text
+                }
+            };
+            let pace = keycap_pace(segment_fade);
+            let struck = last_struck_at(active.segment, current_time);
+            // The keys animate from the first key press, not from the
+            // segment's lead-in.
+            let first_key = active
+                .segment
+                .keys
+                .iter()
+                .map(|key| key.time_offset)
+                .reduce(f64::min)
+                .map_or(active.segment.start, |offset| {
+                    active.segment.start + offset / 1000.0
+                });
+            let since_press = current_time - first_key;
+            // What the keys showed just before the latest key went down, when
+            // that key changed them (a typed letter, a key added).
+            let before_strike = (struck > first_key + 1e-6)
+                .then(|| case(build_visible_text(active.segment, struck - 1e-4)))
+                .filter(|before| *before != visible_text);
+            // The same shortcut struck again changes nothing on screen: the
+            // keys dip once for it instead.
+            let repeat =
+                before_strike.is_none() && is_shortcut(active.segment) && struck > first_key + 1e-6;
+            // With typing shown, what is not a shortcut is typed text, from
+            // its first letter on.
+            let typed = |segment: &cap_project::KeyboardTrackSegment| {
+                settings.show_typing && !is_shortcut(segment)
+            };
+            let change = match before_strike {
+                Some(before) if since_press >= (KEYCAP_MOVE + KEYCAP_ENTER) * pace => KeyChange {
+                    from: Some((before, typed(active.segment))),
+                    by_identity: false,
+                    since: current_time - struck,
+                },
+                // Keys appearing, or taking over from the keys before them as
+                // those last stood.
+                _ => KeyChange {
+                    from: handed_from(active.segment, &timeline.keyboard_segments, settings)
+                        .map(|previous| {
+                            (
+                                case(build_visible_text(previous, active.segment.start - 1e-4)),
+                                typed(previous),
+                            )
+                        })
+                        .filter(|(text, _)| !text.is_empty()),
+                    by_identity: true,
+                    since: since_press,
+                },
             };
             // Keys that hand straight over to the next keys stay up through
-            // the gap rather than dipping out first.
-            let outro_end =
-                if handed_over(active.segment, &timeline.keyboard_segments, segment_fade) {
-                    active.segment.end + KEYCAP_SETTLED_SECONDS
-                } else {
-                    active.segment.end
-                };
-            let opacity = calculate_fade(current_time, intro_start, outro_end, segment_fade)
-                * uniforms.takeover_overlay_fade();
-            // The first key lands as the overlay finishes fading in, so the
-            // press is seen rather than lost in the fade.
-            let mut struck = last_struck_at(active.segment, current_time);
-            if struck <= active.segment.start && !takes_over {
-                struck += (segment_fade * 0.7).min(0.12);
-            }
-            // A shortcut or a lone key goes down when struck; typed text
-            // shows each key by its letter appearing, not by the row
-            // sinking under every one.
-            let presses = is_shortcut(active.segment)
-                || (active.segment.keys.len() <= 1
-                    && !(settings.show_typing
-                        && active
-                            .segment
-                            .display_text
-                            .chars()
-                            .all(char::is_alphanumeric)));
+            // the gap; the rest leave once their segment ends.
+            let leaving = (current_time >= active.segment.end
+                && !handed_over(active.segment, &timeline.keyboard_segments, segment_fade))
+            .then_some(current_time - active.segment.end);
             self.prepare_keycaps(
                 KeycapFrame {
                     text: &visible_text,
+                    typed: typed(active.segment),
                     style,
                     theme: KeycapTheme::from_setting(&settings.theme),
                     font_size,
-                    opacity,
-                    scale: keycap_pop(current_time, intro_start, outro_end, segment_fade),
-                    since_struck: if presses {
+                    opacity: uniforms.takeover_overlay_fade(),
+                    change,
+                    leaving,
+                    pace,
+                    fade: segment_fade,
+                    since_struck: if repeat {
                         current_time - struck
                     } else {
                         f64::INFINITY
@@ -780,15 +812,209 @@ struct LabelMetrics {
 /// What one frame of keycaps needs from the segment and settings.
 struct KeycapFrame<'a> {
     text: &'a str,
+    /// Whether `text` was typed rather than a shortcut struck.
+    typed: bool,
     style: KeycapStyle,
     theme: KeycapTheme,
     font_size: f32,
     opacity: f32,
-    /// The row's size as it pops in and out, 1 at rest.
-    scale: f32,
+    /// How the keys came to be what they are, which the frame animates out
+    /// of.
+    change: KeyChange,
+    /// Seconds since the keys started leaving, while they leave.
+    leaving: Option<f64>,
+    /// How long the animations run, 1 at the default fade.
+    pace: f64,
+    fade: f64,
+    /// Seconds since a repeat of the same shortcut went down.
     since_struck: f64,
     position: KeyboardPosition,
     margin: f32,
+}
+
+/// A key drawn this frame: the key, its shaped label, corner word and width,
+/// its first label slot, where it is, and how far it travels while the
+/// shutter is open.
+type DrawnKey<'a> = (
+    &'a Keycap,
+    &'a (LabelMetrics, LabelMetrics, f32),
+    usize,
+    KeyMotion,
+    [f32; 2],
+);
+
+/// The keys before the latest change and how long ago it was.
+struct KeyChange {
+    /// The keys' text before, or none when they appeared from nothing, and
+    /// whether it was typed.
+    from: Option<(String, bool)>,
+    /// Keys carry over when they are the same key (a shortcut handing over
+    /// to the next); otherwise by their place in the row (typed text
+    /// growing).
+    by_identity: bool,
+    since: f64,
+}
+
+/// Where one key is drawn this frame: its place, width, how far below its
+/// rest it sits, and how opaque it is.
+#[derive(Clone, Copy)]
+struct KeyMotion {
+    x: f32,
+    width: f32,
+    drop: f32,
+    opacity: f32,
+}
+
+// The keys' motion at the default fade, in seconds, timed from the key
+// press. Keys that appear fade in where they rest, a beat after the key
+// before them; keys that carry over glide to their new places first, and
+// the new keys follow as they settle; keys that go fade out where they are.
+const KEYCAP_ENTER: f64 = 0.18;
+const KEYCAP_STAGGER: f64 = 0.065;
+const KEYCAP_RISE: f64 = 0.2;
+const KEYCAP_MOVE: f64 = 0.09;
+const KEYCAP_AFTER_MOVE: f64 = 0.07;
+const KEYCAP_GROW: f64 = 0.08;
+const KEYCAP_EXIT: f64 = 0.12;
+/// How long the virtual shutter is open: a moving key smears over the
+/// distance it covers in this time, as a camera would catch it.
+const KEYCAP_SHUTTER: f64 = 0.022;
+
+fn ease_out_cubic(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+fn ease_out_quint(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(5)
+}
+
+fn ease_in_out_cubic(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+/// How far along a motion `duration` long is after `elapsed`, with no
+/// motion at all when there is no time for one.
+fn progress(elapsed: f64, duration: f64) -> f64 {
+    if duration <= 0.0 {
+        1.0
+    } else {
+        (elapsed / duration).clamp(0.0, 1.0)
+    }
+}
+
+/// The animations scale with the fade setting, so a shorter fade makes for
+/// snappier keys and none for none.
+fn keycap_pace(fade: f64) -> f64 {
+    (fade / 0.15).clamp(0.0, 4.0)
+}
+
+/// Pairs each key in `to` with the key it was in `from`, if any.
+fn match_keys(from: &[Keycap], to: &[Keycap], by_identity: bool) -> Vec<Option<usize>> {
+    let mut used = vec![false; from.len()];
+    to.iter()
+        .enumerate()
+        .map(|(index, cap)| {
+            let found = if by_identity {
+                // Typed text is one key whatever it says, so a new word
+                // reuses the key the last one was on.
+                from.iter().enumerate().position(|(at, old)| {
+                    !used[at]
+                        && (old == cap
+                            || (old.kind == KeycapKind::Wide && cap.kind == KeycapKind::Wide))
+                })
+            } else {
+                from.get(index)
+                    .filter(|old| old.kind == cap.kind && !used[index])
+                    .map(|_| index)
+            };
+            if let Some(at) = found {
+                used[at] = true;
+            }
+            found
+        })
+        .collect()
+}
+
+/// Where every key is drawn `change.since` after a change: those in `to`
+/// (at rest at `to_x`), then the ones from `from` that have gone (at rest at
+/// `from_x`).
+fn key_motions(
+    to: (&[Keycap], &[(f32, f32)]),
+    from: (&[Keycap], &[(f32, f32)]),
+    change: &KeyChange,
+    pace: f64,
+    cap_height: f32,
+) -> (Vec<KeyMotion>, Vec<(usize, KeyMotion)>) {
+    let matches = match_keys(from.0, to.0, change.by_identity);
+    let carry = if change.by_identity {
+        ease_in_out_cubic(progress(change.since, KEYCAP_MOVE * pace))
+    } else {
+        ease_out_cubic(progress(change.since, KEYCAP_GROW * pace))
+    } as f32;
+    // New keys wait for the keys carrying over to make room, or for the
+    // keys they replace to have mostly gone, so no two keys share a place.
+    let delay = if matches.iter().any(Option::is_some) {
+        KEYCAP_AFTER_MOVE * pace
+    } else if !from.0.is_empty() {
+        KEYCAP_EXIT * 0.7 * pace
+    } else {
+        0.0
+    };
+    let mut entering = 0;
+    let current =
+        to.1.iter()
+            .zip(&matches)
+            .map(|(&(x, width), found)| match found {
+                Some(at) => {
+                    let (old_x, old_width) = from.1[*at];
+                    KeyMotion {
+                        x: old_x + (x - old_x) * carry,
+                        width: old_width + (width - old_width) * carry,
+                        drop: 0.0,
+                        opacity: 1.0,
+                    }
+                }
+                None => {
+                    let local = change.since - delay - entering as f64 * KEYCAP_STAGGER * pace;
+                    entering += 1;
+                    KeyMotion {
+                        x,
+                        width,
+                        drop: (1.0 - ease_out_quint(progress(local, KEYCAP_RISE * pace))) as f32
+                            * cap_height
+                            * 0.1,
+                        opacity: ease_out_cubic(progress(local, KEYCAP_ENTER * pace)) as f32,
+                    }
+                }
+            })
+            .collect();
+    let gone = ease_out_cubic(progress(change.since, KEYCAP_EXIT * pace)) as f32;
+    let leaving = from
+        .1
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !matches.contains(&Some(*at)))
+        .filter(|_| gone < 1.0)
+        .map(|(at, &(x, width))| {
+            (
+                at,
+                KeyMotion {
+                    x,
+                    width,
+                    drop: gone * cap_height * 0.06,
+                    opacity: 1.0 - gone,
+                },
+            )
+        })
+        .collect();
+    (current, leaving)
 }
 
 impl KeyboardLayer {
@@ -847,45 +1073,29 @@ impl KeyboardLayer {
         metrics
     }
 
-    fn prepare_keycaps(
+    /// Shapes a row of keys at `cap_height` into the label slots from
+    /// `slot_base`, and returns each key's label, corner word and width.
+    fn layout_keycap_row(
         &mut self,
-        frame: KeycapFrame<'_>,
-        (width, height): (u32, u32),
-        caption_layout: Option<CaptionOverlayLayout>,
-        constants: &RenderVideoConstants,
-    ) {
-        let mut caps: Vec<Keycap> = keycaps::keycaps_for(frame.text, frame.style);
-        // The newest keys are the ones being struck: keep those.
-        if caps.len() > MAX_KEYCAPS {
-            caps.drain(..caps.len() - MAX_KEYCAPS);
-        }
-        if caps.is_empty() {
-            return;
-        }
-        let available = (width as f32 - frame.margin * 2.0).max(1.0);
-        let geometry = frame.style.geometry();
-        let (face, face_weight) = keycaps::keycap_font(frame.style, frame.theme);
-        let family = Family::Name(face);
-        let weight = Weight(face_weight);
-
-        // Lay the keys out at the set size; a row too wide for the frame is
-        // set again, smaller, so every key stays on screen.
-        let mut cap_height = frame.font_size * KEYCAP_HEIGHT_PER_SIZE;
-        let mut sizes: Vec<(LabelMetrics, LabelMetrics, f32)> = Vec::new();
-        let mut total = 0.;
-        for _ in 0..2 {
-            sizes.clear();
-            for (index, cap) in caps.iter().enumerate() {
+        caps: &[Keycap],
+        cap_height: f32,
+        style: KeycapStyle,
+        (family, weight): (Family<'static>, Weight),
+        slot_base: usize,
+    ) -> Vec<(LabelMetrics, LabelMetrics, f32)> {
+        caps.iter()
+            .enumerate()
+            .map(|(index, cap)| {
                 let label = self.shape_keycap_label(
-                    index * 2,
+                    slot_base + index * 2,
                     &cap.label,
-                    keycaps::label_size(cap, cap_height, frame.style),
+                    keycaps::label_size(cap, cap_height, style),
                     family,
                     weight,
                 );
                 let legend = match &cap.legend {
                     Some(legend) => self.shape_keycap_label(
-                        index * 2 + 1,
+                        slot_base + index * 2 + 1,
                         legend,
                         keycaps::legend_size(cap_height),
                         family,
@@ -894,37 +1104,99 @@ impl KeyboardLayer {
                     None => LabelMetrics::default(),
                 };
                 let cap_width = keycaps::cap_width(cap, cap_height, label.width, legend.width);
-                sizes.push((label, legend, cap_width));
+                (label, legend, cap_width)
+            })
+            .collect()
+    }
+
+    fn prepare_keycaps(
+        &mut self,
+        frame: KeycapFrame<'_>,
+        (width, height): (u32, u32),
+        caption_layout: Option<CaptionOverlayLayout>,
+        constants: &RenderVideoConstants,
+    ) {
+        // The newest keys are the ones being struck: keep those.
+        let newest = |mut caps: Vec<Keycap>| {
+            if caps.len() > MAX_KEYCAPS {
+                caps.drain(..caps.len() - MAX_KEYCAPS);
             }
-            total = sizes.iter().map(|size| size.2).sum::<f32>()
-                + keycaps::cap_gap(cap_height) * (caps.len() - 1) as f32;
+            caps
+        };
+        let keys_for = |text: &str, typed: bool| {
+            newest(if typed {
+                keycaps::typed_keycaps(text, frame.style)
+            } else {
+                keycaps::keycaps_for(text, frame.style)
+            })
+        };
+        let caps = keys_for(frame.text, frame.typed);
+        if caps.is_empty() {
+            return;
+        }
+        let from_caps = frame
+            .change
+            .from
+            .as_ref()
+            .map(|(text, typed)| keys_for(text, *typed))
+            .unwrap_or_default();
+        let available = (width as f32 - frame.margin * 2.0).max(1.0);
+        let geometry = frame.style.geometry();
+        let (face, face_weight) = keycaps::keycap_font(frame.style, frame.theme);
+        let face = (Family::Name(face), Weight(face_weight));
+
+        // Lay the keys out at the set size; a row too wide for the frame is
+        // set again, smaller, so every key stays on screen.
+        let row_width = |sizes: &[(LabelMetrics, LabelMetrics, f32)], cap_height: f32| {
+            sizes.iter().map(|size| size.2).sum::<f32>()
+                + keycaps::cap_gap(cap_height) * sizes.len().saturating_sub(1) as f32
+        };
+        let mut cap_height = frame.font_size * KEYCAP_HEIGHT_PER_SIZE;
+        let mut sizes = Vec::new();
+        for _ in 0..2 {
+            sizes = self.layout_keycap_row(&caps, cap_height, frame.style, face, 0);
+            let total = row_width(&sizes, cap_height);
             if total <= available {
                 break;
             }
             cap_height *= available / total;
         }
-        if total > available {
-            let scale = available / total;
-            for size in &mut sizes {
-                size.2 *= scale;
-            }
-            total = available;
-        }
+        let from_sizes = if from_caps.is_empty() {
+            Vec::new()
+        } else {
+            self.layout_keycap_row(&from_caps, cap_height, frame.style, face, MAX_KEYCAPS * 2)
+        };
 
         let radius = geometry.radius * cap_height;
         let depth = (geometry.depth * cap_height).max(2.0);
         let inset = geometry.inset * cap_height;
-        let gap = keycaps::cap_gap(cap_height)
-            .min((available - total).max(0.) + keycaps::cap_gap(cap_height));
-
+        let gap = keycaps::cap_gap(cap_height);
         let resolved_position = resolve_keyboard_position(frame.position, caption_layout);
-        let left = match resolved_position {
-            KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => frame.margin,
-            KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
-                (width as f32 - frame.margin - total).max(0.0)
-            }
-            _ => ((width as f32 - total) / 2.0).max(0.0),
+        // Each row at rest: every key's left edge and width, squeezed to fit.
+        let place_row = |sizes: &[(LabelMetrics, LabelMetrics, f32)]| {
+            let total = row_width(sizes, cap_height);
+            let squeeze = (available / total.max(1.0)).min(1.0);
+            let total = total * squeeze;
+            let left = match resolved_position {
+                KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => frame.margin,
+                KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
+                    (width as f32 - frame.margin - total).max(0.0)
+                }
+                _ => ((width as f32 - total) / 2.0).max(0.0),
+            };
+            let mut x = left;
+            let placed: Vec<(f32, f32)> = sizes
+                .iter()
+                .map(|size| {
+                    let at = (x, size.2 * squeeze);
+                    x += (size.2 + gap) * squeeze;
+                    at
+                })
+                .collect();
+            (left, total, placed)
         };
+        let (left, total, rest) = place_row(&sizes);
+        let (_, _, from_rest) = place_row(&from_sizes);
         let center_y = height as f32 * resolved_position.y_factor();
         let max_top = (height as f32 - cap_height).max(0.0);
         let base_top = (center_y - cap_height / 2.0).clamp(0.0, max_top);
@@ -936,20 +1208,90 @@ impl KeyboardLayer {
             keycap_caption_gap(height as f32),
         );
 
+        // Where every key is `before` seconds ago, so how far it travels
+        // while the shutter is open.
+        let motions_at = |before: f64| {
+            let (mut current, leaving_from) = key_motions(
+                (&caps, &rest),
+                (&from_caps, &from_rest),
+                &KeyChange {
+                    from: None,
+                    by_identity: frame.change.by_identity,
+                    since: frame.change.since - before,
+                },
+                frame.pace,
+                cap_height,
+            );
+            // Leaving for good: every key fades as it settles a little
+            // lower.
+            if let Some(elapsed) = frame.leaving {
+                let out = ease_in_out_cubic(progress(elapsed - before, frame.fade)) as f32;
+                for motion in &mut current {
+                    motion.opacity *= 1.0 - out;
+                    motion.drop += out * cap_height * 0.08;
+                }
+            }
+            (current, leaving_from)
+        };
+        let (current, leaving_from) = motions_at(0.0);
+        let (earlier, earlier_leaving) = motions_at(KEYCAP_SHUTTER * frame.pace.min(1.0));
+        let travel = |now: &KeyMotion, then: Option<&KeyMotion>| {
+            then.map_or([0.0, 0.0], |then| [now.x - then.x, now.drop - then.drop])
+        };
+        let current: Vec<(KeyMotion, [f32; 2])> = current
+            .iter()
+            .zip(&earlier)
+            .map(|(now, then)| (*now, travel(now, Some(then))))
+            .collect();
+        let leaving_from: Vec<(usize, KeyMotion, [f32; 2])> = leaving_from
+            .iter()
+            .map(|(at, now)| {
+                let then = earlier_leaving
+                    .iter()
+                    .find(|(earlier_at, _)| earlier_at == at)
+                    .map(|(_, motion)| motion);
+                (*at, *now, travel(now, then))
+            })
+            .collect();
+        // Keys going are drawn first, under the keys arriving.
+        let mut drawn: Vec<DrawnKey> = leaving_from
+            .iter()
+            .map(|&(at, motion, travel)| {
+                (
+                    &from_caps[at],
+                    &from_sizes[at],
+                    MAX_KEYCAPS * 2 + at * 2,
+                    motion,
+                    travel,
+                )
+            })
+            .collect();
+        drawn.truncate(MAX_KEYCAPS - caps.len());
+        drawn.extend(caps.iter().zip(&sizes).zip(&current).enumerate().map(
+            |(index, ((cap, size), (motion, travel)))| (cap, size, index * 2, *motion, *travel),
+        ));
+
         let press = keycaps::press_depth(frame.since_struck);
-        let opacity = frame.opacity.clamp(0.0, 1.0);
         let mut uniforms = KeycapUniforms {
             caps: [KeycapUniform::default(); MAX_KEYCAPS],
-            info: [caps.len() as f32, opacity, 0.0, 0.0],
+            info: [drawn.len() as f32, 1.0, 0.0, 0.0],
         };
         self.keycap_labels.clear();
         let pad = cap_height * 0.13;
-        let mut x = left;
-        for (index, (cap, (label, legend, cap_width))) in caps.iter().zip(&sizes).enumerate() {
+        let (mut reach_left, mut reach_right) = (f32::INFINITY, f32::NEG_INFINITY);
+        let mut reach_bottom = top + cap_height;
+        for (index, (cap, (label, legend, _), slot, motion, travel)) in drawn.iter().enumerate() {
+            let opacity = (motion.opacity * frame.opacity).clamp(0.0, 1.0);
+            let x = motion.x;
+            let cap_top = top + motion.drop;
+            let cap_width = motion.width;
+            reach_left = reach_left.min(x);
+            reach_right = reach_right.max(x + cap_width);
+            reach_bottom = reach_bottom.max(cap_top + cap_height);
             let palette = frame.theme.palette(cap.modifier);
             uniforms.info[2] = uniforms.info[2].max(palette.shadow);
             uniforms.caps[index] = KeycapUniform {
-                rect: [x, top, *cap_width, cap_height],
+                rect: [x, cap_top, cap_width, cap_height],
                 top_a: palette.top[0],
                 top_b: palette.top[1],
                 side_a: palette.side[0],
@@ -957,11 +1299,12 @@ impl KeyboardLayer {
                 border: palette.border,
                 highlight: palette.highlight,
                 shape: [radius, depth, inset, press],
-                finish: [geometry.dish, palette.grain, palette.gloss, 0.0],
+                finish: [geometry.dish, palette.grain, palette.gloss, opacity],
+                motion: [travel[0], travel[1], 0.0, 0.0],
             };
             let sink = depth * press;
             let face_x = x + inset;
-            let face_y = top + sink + inset * 0.4;
+            let face_y = cap_top + sink + inset * 0.4;
             let face_w = cap_width - inset * 2.0;
             let face_h = cap_height - depth - inset * 0.85;
             let color = |c: [f32; 4]| {
@@ -992,12 +1335,13 @@ impl KeyboardLayer {
                 if !cap.label.is_empty() {
                     let (left, top) = place(label, along(label.width), face_y + pad * 0.75, 0.71);
                     self.keycap_labels.push(PlacedLabel {
-                        slot: index * 2,
+                        slot: *slot,
                         left,
                         top,
                         width: label.width,
                         height: label.height,
                         color: color(palette.label),
+                        travel: *travel,
                     });
                 }
                 let legend_ink = legend.size * 0.71;
@@ -1008,12 +1352,13 @@ impl KeyboardLayer {
                     0.71,
                 );
                 self.keycap_labels.push(PlacedLabel {
-                    slot: index * 2 + 1,
+                    slot: *slot + 1,
                     left,
                     top,
                     width: legend.width,
                     height: legend.height,
                     color: color(palette.legend),
+                    travel: *travel,
                 });
             } else if !cap.label.is_empty() {
                 let ink = keycaps::ink_height(cap);
@@ -1024,36 +1369,15 @@ impl KeyboardLayer {
                     ink,
                 );
                 self.keycap_labels.push(PlacedLabel {
-                    slot: index * 2,
+                    slot: *slot,
                     left,
                     top,
                     width: label.width,
                     height: label.height,
                     color: color(palette.label),
+                    travel: *travel,
                 });
             }
-            x += cap_width + gap;
-        }
-
-        // Keys pop in: they grow from a little under full size with a slight
-        // overshoot as they fade in, and settle back a touch as they leave.
-        // Everything scales about the row's centre, so the row stays put.
-        let scale = frame.scale;
-        let (cx, cy) = (left + total / 2.0, top + cap_height / 2.0);
-        let at = |x: f32, y: f32| (cx + (x - cx) * scale, cy + (y - cy) * scale);
-        for cap in uniforms.caps.iter_mut().take(caps.len()) {
-            let (x, y) = at(cap.rect[0], cap.rect[1]);
-            cap.rect = [x, y, cap.rect[2] * scale, cap.rect[3] * scale];
-            cap.shape[0] *= scale;
-            cap.shape[1] *= scale;
-            cap.shape[2] *= scale;
-        }
-        for label in &mut self.keycap_labels {
-            let (x, y) = at(label.left, label.top);
-            label.left = x;
-            label.top = y;
-            label.width *= scale;
-            label.height *= scale;
         }
 
         let device = &constants.device;
@@ -1065,26 +1389,49 @@ impl KeyboardLayer {
         );
         self.viewport.update(queue, Resolution { width, height });
 
+        // A moving label is printed along its path at a share of its
+        // opacity each time, smearing it like the key under it.
         let text_areas: Vec<TextArea> = self
             .keycap_labels
             .iter()
             .filter_map(|placed| {
                 let (_, buffer) = self.keycap_buffers.get(placed.slot)?.as_ref()?;
-                Some(TextArea {
-                    buffer,
-                    left: placed.left,
-                    top: placed.top,
-                    scale,
-                    bounds: TextBounds {
-                        left: (placed.left - 2.0).floor() as i32,
-                        top: (placed.top - 2.0).floor() as i32,
-                        right: (placed.left + placed.width + 2.0).ceil() as i32,
-                        bottom: (placed.top + placed.height + 2.0).ceil() as i32,
-                    },
-                    default_color: placed.color,
-                    custom_glyphs: &[],
-                })
+                let distance = placed.travel[0].hypot(placed.travel[1]);
+                let copies = distance.ceil().clamp(1.0, 24.0) as usize;
+                let mut color = placed.color;
+                if copies > 1 {
+                    // Each print carries a share of the ink, a little over
+                    // an even split since prints laid over each other add up
+                    // to less than their sum.
+                    let alpha = color.a() as f32 / 255.0;
+                    let share = (alpha * 1.6 / copies as f32).min(alpha);
+                    color = Color::rgba(color.r(), color.g(), color.b(), (share * 255.0) as u8);
+                }
+                Some((0..copies).map(move |copy| {
+                    let along = if copies > 1 {
+                        copy as f32 / (copies - 1) as f32 - 0.5
+                    } else {
+                        0.0
+                    };
+                    let left = placed.left + placed.travel[0] * along;
+                    let top = placed.top + placed.travel[1] * along;
+                    TextArea {
+                        buffer,
+                        left,
+                        top,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: (left - 2.0).floor() as i32,
+                            top: (top - 2.0).floor() as i32,
+                            right: (left + placed.width + 2.0).ceil() as i32,
+                            bottom: (top + placed.height + 2.0).ceil() as i32,
+                        },
+                        default_color: color,
+                        custom_glyphs: &[],
+                    }
+                }))
             })
+            .flatten()
             .collect();
         if let Err(e) = self.text_renderer.prepare(
             device,
@@ -1100,11 +1447,12 @@ impl KeyboardLayer {
 
         // The shadow reaches below and around the keys.
         let reach = cap_height * 0.5 + depth * 2.0 + 4.0;
-        let scissor_x = (left - reach).max(0.0).floor() as u32;
+        let scissor_x = (reach_left - reach).max(0.0).floor() as u32;
         let scissor_y = (top - reach).max(0.0).floor() as u32;
-        let scissor_w = ((total + reach * 2.0).ceil() as u32).min(width.saturating_sub(scissor_x));
-        let scissor_h =
-            ((cap_height + reach * 2.0).ceil() as u32).min(height.saturating_sub(scissor_y));
+        let scissor_w = ((reach_right - reach_left + reach * 2.0).ceil() as u32)
+            .min(width.saturating_sub(scissor_x));
+        let scissor_h = ((reach_bottom - top + reach * 2.0).ceil() as u32)
+            .min(height.saturating_sub(scissor_y));
         if scissor_w == 0 || scissor_h == 0 {
             return;
         }
@@ -1112,21 +1460,6 @@ impl KeyboardLayer {
         self.keycap_mode = true;
         self.has_content = true;
     }
-}
-
-/// How large the keys are drawn as they appear and leave: from 86% up past
-/// full size and back as they fade in, easing to 94% as they fade out.
-pub(crate) fn keycap_pop(current_time: f64, start: f64, end: f64, fade: f64) -> f32 {
-    let fade = fade.max(0.05);
-    if current_time >= end {
-        let t = ((current_time - end) / fade).clamp(0.0, 1.0) as f32;
-        return 1.0 - 0.06 * t * t;
-    }
-    let t = ((current_time - start) / (fade * 1.6)).clamp(0.0, 1.0) as f32;
-    let back = 1.2_f32;
-    let u = t - 1.0;
-    let eased = 1.0 + (back + 1.0) * u * u * u + back * u * u;
-    0.86 + 0.14 * eased
 }
 
 /// When the segment's latest key went down, in timeline seconds: the start,
@@ -1217,22 +1550,22 @@ struct ActiveKeyboardSegment<'a> {
     segment: &'a cap_project::KeyboardTrackSegment,
 }
 
-/// Long enough before a segment's start that its fade and pop are over.
-const KEYCAP_SETTLED_SECONDS: f64 = 10.0;
-
-/// Whether other keys are still on screen when `segment` starts, so it
-/// replaces them rather than appearing.
-fn takes_over_visible_keys(
+/// The segment whose keys are still on screen when `segment` starts, which
+/// it takes over from.
+fn handed_from<'a>(
     segment: &cap_project::KeyboardTrackSegment,
-    segments: &[cap_project::KeyboardTrackSegment],
+    segments: &'a [cap_project::KeyboardTrackSegment],
     settings: &cap_project::KeyboardSettings,
-) -> bool {
-    segments.iter().any(|other| {
-        let fade = other
-            .fade_duration_override
-            .unwrap_or(settings.fade_duration) as f64;
-        other.start < segment.start && other.end + fade > segment.start
-    })
+) -> Option<&'a cap_project::KeyboardTrackSegment> {
+    segments
+        .iter()
+        .filter(|other| {
+            let fade = other
+                .fade_duration_override
+                .unwrap_or(settings.fade_duration) as f64;
+            other.start < segment.start && other.end + fade > segment.start
+        })
+        .max_by(|a, b| a.start.total_cmp(&b.start))
 }
 
 /// Whether other keys start before `segment` has faded out, taking over
@@ -1382,15 +1715,90 @@ mod tests {
     use crate::layers::{CaptionOverlayLayout, CaptionPosition};
 
     #[test]
-    fn keys_pop_in_past_full_size_and_settle_then_shrink_away() {
-        use super::keycap_pop;
-        assert!((keycap_pop(0.0, 0.0, 2.0, 0.15) - 0.86).abs() < 1e-6);
-        let peak = (1..24)
-            .map(|step| keycap_pop(step as f64 * 0.01, 0.0, 2.0, 0.15))
-            .fold(0.0_f32, f32::max);
-        assert!(peak > 1.0 && peak < 1.05, "{peak}");
-        assert!((keycap_pop(1.0, 0.0, 2.0, 0.15) - 1.0).abs() < 1e-6);
-        assert!((keycap_pop(2.15, 0.0, 2.0, 0.15) - 0.94).abs() < 1e-6);
+    fn a_shortcut_handing_over_keeps_its_shared_keys_and_brings_new_ones_in_turn() {
+        use super::{KeyChange, key_motions};
+        use crate::layers::keycaps::{KeycapStyle, keycaps_for};
+        let from = keycaps_for("⌘C", KeycapStyle::MacOs);
+        let to = keycaps_for("⇧⌘P", KeycapStyle::MacOs);
+        let from_rest = [(100.0, 140.0), (250.0, 100.0)];
+        let to_rest = [(60.0, 140.0), (210.0, 140.0), (360.0, 100.0)];
+        let at = |since: f64| {
+            key_motions(
+                (&to, &to_rest),
+                (&from, &from_rest),
+                &KeyChange {
+                    from: Some(("⌘C".into(), false)),
+                    by_identity: true,
+                    since,
+                },
+                1.0,
+                100.0,
+            )
+        };
+        // At the change: command is where it was, fully shown; shift and P
+        // have not appeared; C is still there.
+        let (keys, leaving) = at(0.0);
+        assert_eq!(keys[0].x, 100.0);
+        assert_eq!(keys[0].opacity, 1.0);
+        assert_eq!(keys[1].opacity, 0.0);
+        assert!(keys[1].drop > 5.0);
+        assert_eq!(leaving.len(), 1);
+        assert_eq!(leaving[0].1.opacity, 1.0);
+        // Partway: command glides while C fades, and the new keys wait.
+        let (keys, leaving) = at(0.05);
+        assert!(keys[0].x < 100.0 && keys[0].x > 60.0);
+        assert!(leaving[0].1.opacity < 1.0);
+        assert_eq!(keys[1].opacity, 0.0);
+        // Then shift arrives ahead of P.
+        let (keys, _) = at(0.15);
+        assert!(keys[1].opacity > keys[2].opacity && keys[2].opacity > 0.0);
+        // Settled: everything at rest, C gone.
+        let (keys, leaving) = at(1.0);
+        for (key, rest) in keys.iter().zip(to_rest) {
+            assert_eq!(
+                (key.x, key.width, key.drop, key.opacity),
+                (rest.0, rest.1, 0.0, 1.0)
+            );
+        }
+        assert!(leaving.is_empty());
+        // No fade setting: no motion at all.
+        let (keys, leaving) = key_motions(
+            (&to, &to_rest),
+            (&from, &from_rest),
+            &KeyChange {
+                from: Some(("⌘C".into(), false)),
+                by_identity: true,
+                since: 0.0,
+            },
+            0.0,
+            100.0,
+        );
+        assert!(keys.iter().all(|key| key.opacity == 1.0 && key.drop == 0.0));
+        assert!(leaving.is_empty());
+    }
+
+    #[test]
+    fn typed_text_grows_in_place_rather_than_appearing_again() {
+        use super::{KeyChange, key_motions};
+        use crate::layers::keycaps::{KeycapStyle, keycaps_for};
+        let from = keycaps_for("he", KeycapStyle::MacOs);
+        let to = keycaps_for("hey", KeycapStyle::MacOs);
+        let (keys, leaving) = key_motions(
+            (&to, &[(90.0, 120.0)]),
+            (&from, &[(100.0, 100.0)]),
+            &KeyChange {
+                from: Some(("he".into(), true)),
+                by_identity: false,
+                since: 0.0,
+            },
+            1.0,
+            100.0,
+        );
+        assert_eq!(
+            (keys[0].x, keys[0].width, keys[0].opacity),
+            (100.0, 100.0, 1.0)
+        );
+        assert!(leaving.is_empty());
     }
 
     #[test]
@@ -2003,10 +2411,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "writes images; requires a working wgpu adapter"]
     fn key_track_frames() {
-        let (Some(dir), Some(config)) = (
-            std::env::var_os("CAP_KEY_FRAMES"),
-            std::env::var_os("CAP_KEY_PROJECT"),
-        ) else {
+        let Some(dir) = std::env::var_os("CAP_KEY_FRAMES") else {
             return;
         };
         let range: Vec<f64> = std::env::var("CAP_KEY_RANGE")
@@ -2017,11 +2422,53 @@ mod gpu_tests {
         let size = XY::new(1920, 1080);
         let constants = constants(size);
         let frames = frames(size);
-        let saved: ProjectConfiguration =
-            serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
-        let segments = saved.timeline.as_ref().unwrap().keyboard_segments.clone();
+        // A saved project's track, or the shortcut fixture the reference
+        // capture uses, grouped with default settings.
+        let (segments, keyboard) = match std::env::var_os("CAP_KEY_PROJECT") {
+            Some(config) => {
+                let saved: ProjectConfiguration =
+                    serde_json::from_str(&std::fs::read_to_string(config).unwrap()).unwrap();
+                (
+                    saved.timeline.as_ref().unwrap().keyboard_segments.clone(),
+                    saved.keyboard.clone(),
+                )
+            }
+            None => {
+                let event = |key: &str, time_ms: f64, down: bool| cap_project::KeyPressEvent {
+                    key: key.to_string(),
+                    key_code: key.to_string(),
+                    time_ms,
+                    down,
+                };
+                let mut presses = Vec::new();
+                for (modifiers, key, at) in [
+                    (&["LMeta"][..], "c", 200.0),
+                    (&["LShift", "LMeta"][..], "p", 1100.0),
+                    (&["LMeta"][..], "z", 2000.0),
+                    (&["LMeta"][..], "z", 2300.0),
+                    (&["LControl", "LAlt", "LMeta"][..], "Enter", 3000.0),
+                ] {
+                    presses.extend(modifiers.iter().map(|m| event(m, at - 20.0, true)));
+                    presses.push(event(key, at, true));
+                    presses.push(event(key, at + 90.0, false));
+                    presses.extend(modifiers.iter().map(|m| event(m, at + 100.0, false)));
+                }
+                let settings = KeyboardSettings {
+                    enabled: true,
+                    ..Default::default()
+                };
+                (
+                    cap_project::group_shortcuts(
+                        &cap_project::KeyboardEvents { presses },
+                        settings.linger_duration as f64 * 1000.0,
+                        settings.show_special_keys,
+                    ),
+                    Some(KeyboardData { settings }),
+                )
+            }
+        };
         let mut uniforms = uniforms(&constants, &segments, size);
-        std::sync::Arc::make_mut(&mut uniforms.project).keyboard = saved.keyboard.clone();
+        std::sync::Arc::make_mut(&mut uniforms.project).keyboard = keyboard;
         let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
         for frame in (range[0] * FPS as f64) as u32..(range[1] * FPS as f64) as u32 {
             uniforms.frame_number = frame;
@@ -2043,9 +2490,14 @@ mod gpu_tests {
             );
             let mut image =
                 image::RgbaImage::from_pixel(size.x, 360, image::Rgba([126, 132, 148, 255]));
+            let band: usize = std::env::var("CAP_KEY_BAND")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(720);
             for (y, row) in pixels
                 .chunks_exact(size.x as usize * 4)
-                .skip(720)
+                .skip(band)
+                .take(360)
                 .enumerate()
             {
                 for (x, src) in row.chunks_exact(4).enumerate() {
