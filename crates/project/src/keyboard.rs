@@ -713,13 +713,19 @@ fn project_keyboard_events(
                 projected.time_ms = output_time(time, false) * 1000.0;
                 presses.push(projected);
             }
-            let mut grouped = group_key_events(
-                &KeyboardEvents { presses },
-                settings.grouping_threshold_ms,
-                f64::from(settings.linger_duration) * 1000.0,
-                settings.show_modifiers,
-                settings.show_special_keys,
-            );
+            let events = KeyboardEvents { presses };
+            let linger_ms = f64::from(settings.linger_duration) * 1000.0;
+            let mut grouped = if settings.show_typing {
+                group_key_events(
+                    &events,
+                    settings.grouping_threshold_ms,
+                    linger_ms,
+                    settings.show_modifiers,
+                    settings.show_special_keys,
+                )
+            } else {
+                group_shortcuts(&events, linger_ms, settings.show_special_keys)
+            };
             for segment in &mut grouped {
                 segment.id = format!("kb-edit-{index}-{}", segment.id);
                 segment.end = segment.end.min(output_time(edited_end, true));
@@ -1002,6 +1008,145 @@ pub fn group_key_events(
     segments
 }
 
+/// How close together two shortcuts must be to count as one, repeated.
+const SHORTCUT_REPEAT_MS: f64 = 2000.0;
+/// A label shows a moment before its first press, so it is there as the key
+/// goes down, and stops a moment before the next one shows.
+const SHORTCUT_LEAD_MS: f64 = 100.0;
+const SHORTCUT_GAP_MS: f64 = 120.0;
+/// Plain keys this close together are someone typing, not single-key
+/// shortcuts.
+const TYPING_GAP_MS: f64 = 1000.0;
+
+fn is_single_character(key: &str) -> bool {
+    key.chars().count() == 1
+}
+
+/// Key presses as shortcuts only, the way a demo shows them: every press
+/// with a modifier (other than Shift on a character, which is typing in
+/// capitals), and, with `show_single_keys`, named keys such as Return or
+/// Escape and lone characters that are not part of typing. Pressing the same
+/// shortcut again within two seconds extends its label rather than starting
+/// a new one; each press is kept so the overlay can strike the key again.
+pub fn group_shortcuts(
+    events: &KeyboardEvents,
+    linger_duration_ms: f64,
+    show_single_keys: bool,
+) -> Vec<KeyboardTrackSegment> {
+    struct Press {
+        time_ms: f64,
+        key: String,
+        display: String,
+    }
+
+    let mut ordered: Vec<&KeyPressEvent> = events
+        .presses
+        .iter()
+        .filter(|event| event.time_ms.is_finite())
+        .collect();
+    ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+
+    let mut active: Vec<String> = Vec::new();
+    let mut presses: Vec<Press> = Vec::new();
+    let mut plain: Vec<(usize, f64)> = Vec::new();
+    for event in ordered {
+        if is_modifier_key(&event.key) {
+            if event.down {
+                if !active.contains(&event.key) {
+                    active.push(event.key.clone());
+                }
+            } else {
+                active.retain(|key| key != &event.key);
+            }
+            continue;
+        }
+        if !event.down {
+            continue;
+        }
+        let shift_only = !active.is_empty()
+            && active
+                .iter()
+                .all(|key| matches!(key.as_str(), "LShift" | "RShift"));
+        let character = is_single_character(&event.key);
+        let display_key = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
+        // Shift on a character is typing a capital, not a shortcut.
+        let typing_capital = shift_only && character;
+        if !(active.is_empty() || typing_capital) {
+            presses.push(Press {
+                time_ms: event.time_ms,
+                key: event.key.clone(),
+                display: format!("{}{}", modifier_prefix(&active), display_key.to_uppercase()),
+            });
+        } else if active.is_empty() && show_single_keys {
+            if character {
+                plain.push((presses.len(), event.time_ms));
+            }
+            presses.push(Press {
+                time_ms: event.time_ms,
+                key: event.key.clone(),
+                display: if character {
+                    display_key.to_uppercase()
+                } else {
+                    display_key
+                },
+            });
+        }
+    }
+
+    // Lone characters next to other characters within a second are typing.
+    let typing: std::collections::HashSet<usize> = plain
+        .windows(2)
+        .filter(|pair| pair[1].1 - pair[0].1 <= TYPING_GAP_MS)
+        .flat_map(|pair| [pair[0].0, pair[1].0])
+        .collect();
+
+    let mut segments: Vec<KeyboardTrackSegment> = Vec::new();
+    let mut last_press_ms = f64::NEG_INFINITY;
+    for (index, press) in presses.into_iter().enumerate() {
+        if typing.contains(&index) {
+            continue;
+        }
+        if let Some(previous) = segments.last_mut()
+            && previous.display_text == press.display
+            && press.time_ms - last_press_ms <= SHORTCUT_REPEAT_MS
+        {
+            previous.keys.push(KeyPressDisplay {
+                key: press.key,
+                time_offset: press.time_ms - previous.start * 1000.0,
+            });
+            previous.end = (press.time_ms + linger_duration_ms) / 1000.0;
+            last_press_ms = press.time_ms;
+            continue;
+        }
+        let start = ((press.time_ms - SHORTCUT_LEAD_MS) / 1000.0).max(0.0);
+        if let Some(previous) = segments.last_mut() {
+            previous.end = previous
+                .end
+                .min(start - SHORTCUT_GAP_MS / 1000.0)
+                .max(previous.start);
+        }
+        segments.push(KeyboardTrackSegment {
+            id: format!("kb-{}", segments.len() + 1),
+            start,
+            end: (press.time_ms + linger_duration_ms) / 1000.0,
+            display_text: press.display,
+            keys: vec![KeyPressDisplay {
+                key: press.key,
+                time_offset: press.time_ms - start * 1000.0,
+            }],
+            fade_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+            uppercase_override: None,
+        });
+        last_press_ms = press.time_ms;
+    }
+    segments.retain(|segment| segment.end > segment.start);
+    segments
+}
+
 fn take_group_keys(keys: &mut Vec<KeyPressDisplay>) -> Vec<KeyPressDisplay> {
     let mut completed = Vec::with_capacity(keys.len());
     completed.append(keys);
@@ -1028,6 +1173,78 @@ mod tests {
             time_ms,
             down: false,
         }
+    }
+
+    fn shortcut(modifiers: &[&str], key: &str, time_ms: f64) -> Vec<KeyPressEvent> {
+        let mut events: Vec<KeyPressEvent> = modifiers
+            .iter()
+            .map(|m| key_down(m, time_ms - 20.0))
+            .collect();
+        events.push(key_down(key, time_ms));
+        events.push(key_up(key, time_ms + 80.0));
+        events.extend(modifiers.iter().map(|m| key_up(m, time_ms + 100.0)));
+        events
+    }
+
+    #[test]
+    fn shortcuts_only_shows_modified_presses_and_not_typing() {
+        let mut presses = Vec::new();
+        presses.extend(shortcut(&["LMeta"], "c", 1000.0));
+        // Typing, with Shift for a capital: not shortcuts.
+        presses.extend(shortcut(&["LShift"], "h", 2000.0));
+        presses.extend([key_down("e", 2100.0), key_down("y", 2200.0)]);
+        presses.extend(shortcut(&["LShift", "LMeta"], "p", 4000.0));
+        // Shift with a named key is a shortcut.
+        presses.extend(shortcut(&["LShift"], "Tab", 6000.0));
+        let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
+        let texts: Vec<&str> = segments.iter().map(|s| s.display_text.as_str()).collect();
+        assert_eq!(texts, ["⌘C", "⇧⌘P", "⇧⇥"]);
+        // Shown from just before the press until the linger ends.
+        assert!((segments[0].start - 0.9).abs() < 1e-9);
+        assert!((segments[0].end - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_repeated_shortcut_is_one_label_struck_each_time() {
+        let mut presses = Vec::new();
+        for time in [1000.0, 1400.0, 1800.0] {
+            presses.extend(shortcut(&["LMeta"], "z", time));
+        }
+        // Too long after: a new label.
+        presses.extend(shortcut(&["LMeta"], "z", 5000.0));
+        let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].keys.len(), 3);
+        assert!((segments[0].end - 3.3).abs() < 1e-9);
+        let offsets: Vec<f64> = segments[0].keys.iter().map(|k| k.time_offset).collect();
+        assert_eq!(offsets, [100.0, 500.0, 900.0]);
+    }
+
+    #[test]
+    fn a_label_stops_just_before_the_next_one() {
+        let mut presses = Vec::new();
+        presses.extend(shortcut(&["LMeta"], "c", 1000.0));
+        presses.extend(shortcut(&["LMeta"], "v", 1600.0));
+        let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
+        assert_eq!(segments.len(), 2);
+        assert!((segments[0].end - (1.5 - 0.12)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn single_keys_show_only_when_asked_and_never_while_typing() {
+        let presses = vec![
+            key_down("Escape", 1000.0),
+            key_down("a", 3000.0),
+            key_down("b", 3200.0),
+            key_down("x", 6000.0),
+        ];
+        let events = KeyboardEvents { presses };
+        assert!(group_shortcuts(&events, 1500.0, false).is_empty());
+        let texts: Vec<String> = group_shortcuts(&events, 1500.0, true)
+            .into_iter()
+            .map(|s| s.display_text)
+            .collect();
+        assert_eq!(texts, ["⎋", "X"]);
     }
 
     #[test]
@@ -1649,6 +1866,17 @@ mod tests {
 
 #[cfg(test)]
 mod timing_tests {
+    /// The typing display these regeneration tests exercise; new projects
+    /// default to shortcuts only.
+    fn typing_settings() -> crate::KeyboardSettings {
+        crate::KeyboardSettings {
+            show_typing: true,
+            show_special_keys: true,
+            linger_duration: 0.8,
+            ..Default::default()
+        }
+    }
+
     use super::*;
     use crate::{KeyboardSettings, TimelineConfiguration};
 
@@ -1683,7 +1911,9 @@ mod timing_tests {
         })).unwrap();
         meta.project_path = directory.path().to_path_buf();
         let mut project = crate::ProjectConfiguration {
-            keyboard: Some(crate::KeyboardData::default()),
+            keyboard: Some(crate::KeyboardData {
+                settings: typing_settings(),
+            }),
             timeline: Some(timeline(serde_json::json!([
                 {"start":0.0,"end":5.0,"timescale":1.0},
                 {"start":6.0,"end":10.0,"timescale":1.0}
@@ -1733,7 +1963,9 @@ mod timing_tests {
         })).unwrap();
         meta.project_path = directory.path().to_path_buf();
         let mut project = crate::ProjectConfiguration {
-            keyboard: Some(crate::KeyboardData::default()),
+            keyboard: Some(crate::KeyboardData {
+                settings: typing_settings(),
+            }),
             timeline: Some(timeline(serde_json::json!([
                 {"start":0.0,"end":5.0,"timescale":1.0},
                 {"start":6.0,"end":10.0,"timescale":1.0}
@@ -1798,7 +2030,9 @@ mod timing_tests {
         }))
         .unwrap();
         let mut project = crate::ProjectConfiguration {
-            keyboard: Some(crate::KeyboardData::default()),
+            keyboard: Some(crate::KeyboardData {
+                settings: typing_settings(),
+            }),
             timeline: Some(timeline),
             ..Default::default()
         };
@@ -1933,10 +2167,7 @@ mod timing_tests {
         let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({"pretty_name":"corrupt", "segments":[{"display":{"path":"display.mp4","fps":30,"start_time":0.0},"keyboard":"keyboard.bin"}],"cursors":{}})).unwrap();
         meta.project_path = directory.path().to_path_buf();
         let timeline = timeline(serde_json::json!([{ "start":0.0,"end":10.0,"timescale":1.0 }]));
-        assert!(
-            generate_project_keyboard_segments(&meta, &timeline, &KeyboardSettings::default())
-                .is_err()
-        );
+        assert!(generate_project_keyboard_segments(&meta, &timeline, &typing_settings()).is_err());
     }
 
     #[test]
@@ -1946,7 +2177,7 @@ mod timing_tests {
             {"start":6.0,"end":10.0,"timescale":1.0}
         ]));
         let takes = [(events(&[("x", 5.7), ("a", 8.2)]), 0.2)];
-        let result = project_keyboard_events(&takes, &timeline, &KeyboardSettings::default());
+        let result = project_keyboard_events(&takes, &timeline, &typing_settings());
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].display_text, "a");
         assert!((result[0].start - 7.0).abs() < 1e-9);
@@ -1964,7 +2195,7 @@ mod timing_tests {
         let result = project_keyboard_events(
             &[(events(&[("a", 1.0)]), 0.0), (events(&[("b", 1.0)]), 0.0)],
             &timeline,
-            &KeyboardSettings::default(),
+            &typing_settings(),
         );
         assert_eq!(
             result
@@ -1992,7 +2223,7 @@ mod timing_tests {
                 (events(&[("b", 1.0)]), 0.0),
             ],
             &timeline,
-            &KeyboardSettings::default(),
+            &typing_settings(),
         );
         assert_eq!(result[0].start, 5.0);
         let (source, clip) = timeline.get_segment_time(result[0].start).unwrap();
@@ -2006,7 +2237,7 @@ mod timing_tests {
         let result = project_keyboard_events(
             &[(events(&[("a", 8.0), ("b", 8.4)]), 0.0)],
             &timeline,
-            &KeyboardSettings::default(),
+            &typing_settings(),
         );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].start, 0.5);
@@ -2026,7 +2257,7 @@ mod timing_tests {
         let result = project_keyboard_events(
             &[(events(&[("a", 2.0), ("b", 3.0)]), 0.0)],
             &timeline,
-            &KeyboardSettings::default(),
+            &typing_settings(),
         );
         assert_eq!(result[0].start, 4.0);
         assert_eq!(result[1].start, 5.0);
@@ -2038,7 +2269,7 @@ mod timing_tests {
         let result = project_keyboard_events(
             &[(events(&[("LMeta", 1.0), ("w", 2.2)]), 0.0)],
             &timeline,
-            &KeyboardSettings::default(),
+            &typing_settings(),
         );
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].display_text, "⌘W");

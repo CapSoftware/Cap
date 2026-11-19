@@ -1631,7 +1631,7 @@ impl TimelineModel {
         let key_style = config
             .keyboard
             .as_ref()
-            .map(|keyboard| KeycapStyle::from_setting(&keyboard.settings.style))
+            .map(|keyboard| KeycapStyle::from_setting(keyboard.settings.effective_style()))
             .filter(|style| *style != KeycapStyle::Classic)
             .unwrap_or(KeycapStyle::MacOs);
         let keyboard = timeline

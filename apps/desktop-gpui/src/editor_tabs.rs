@@ -902,12 +902,15 @@ pub fn keyboard_settings(project: &ProjectConfiguration) -> KeyboardSettings {
         .unwrap_or_default()
 }
 
-fn keyboard_generation_settings_fingerprint(settings: &KeyboardSettings) -> (u64, u32, bool, bool) {
+fn keyboard_generation_settings_fingerprint(
+    settings: &KeyboardSettings,
+) -> (u64, u32, bool, bool, bool) {
     (
         settings.grouping_threshold_ms.to_bits(),
         settings.linger_duration.to_bits(),
         settings.show_modifiers,
         settings.show_special_keys,
+        settings.show_typing,
     )
 }
 
@@ -2675,7 +2678,8 @@ impl EditorWindow {
     ) -> impl IntoElement {
         use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
         let theme = self.theme;
-        let style = KeycapStyle::from_setting(&settings.style);
+        let effective = settings.effective_style().to_string();
+        let style = KeycapStyle::from_setting(&effective);
         let key_theme = KeycapTheme::from_setting(&settings.theme);
         let tiles = KEY_STYLES.iter().map(|(value, label, keys)| {
             let value = *value;
@@ -2683,7 +2687,7 @@ impl EditorWindow {
             self.key_choice_tile(
                 SharedString::from(format!("keyboard-style-{value}")),
                 label(),
-                settings.style == value,
+                effective == value,
                 key_preview(tile_style, key_theme, keys),
                 // The timeline's key labels follow the style, so it rebuilds.
                 cx.listener(move |this, _, window, cx| {
@@ -2695,7 +2699,7 @@ impl EditorWindow {
         });
         let keys = KEY_STYLES
             .iter()
-            .find(|(value, ..)| *value == settings.style)
+            .find(|(value, ..)| *value == effective)
             .map_or(&["⌘", "K"][..], |(_, _, keys)| keys);
         let themes = KEY_THEMES.iter().map(|(value, label)| {
             let value = *value;
@@ -2797,7 +2801,7 @@ impl EditorWindow {
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or(tr::editor::tabs::weight::normal(), |(_, label)| label());
 
-        let classic = settings.style == "classic";
+        let classic = settings.effective_style() == "classic";
 
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
@@ -2916,12 +2920,15 @@ impl EditorWindow {
                             format!("{:.1}s", settings.linger_duration),
                             cx,
                         ))
-                        .child(self.labelled_readout(
-                            tr::editor::tabs::keyboard::grouping_threshold(),
-                            SliderKey::Keyboard(KeyboardSlider::GroupingThreshold),
-                            format!("{:.0}ms", settings.grouping_threshold_ms),
-                            cx,
-                        )),
+                        // Grouping only joins typed letters into words.
+                        .when(settings.show_typing, |this| {
+                            this.child(self.labelled_readout(
+                                tr::editor::tabs::keyboard::grouping_threshold(),
+                                SliderKey::Keyboard(KeyboardSlider::GroupingThreshold),
+                                format!("{:.0}ms", settings.grouping_threshold_ms),
+                                cx,
+                            ))
+                        }),
                 ),
             )
             .child(
@@ -2931,29 +2938,54 @@ impl EditorWindow {
                         .flex_col()
                         .gap(px(12.))
                         .child(
-                            ui::Subfield::plain(
-                                &theme,
-                                tr::editor::tabs::keyboard::show_modifiers(),
-                            )
-                            .child(
-                                ui::Toggle::plain(
-                                    &theme,
-                                    "keyboard-modifiers",
-                                    settings.show_modifiers,
-                                )
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        let next = !keyboard_settings(&this.project).show_modifiers;
-                                        this.set_keyboard_setting(
-                                            "keyboard-modifiers",
-                                            window,
-                                            cx,
-                                            move |settings| settings.show_modifiers = next,
-                                        );
-                                    },
-                                )),
-                            ),
+                            ui::Subfield::plain(&theme, tr::editor::tabs::keyboard::show_typing())
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        "keyboard-typing",
+                                        settings.show_typing,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !keyboard_settings(&this.project).show_typing;
+                                            this.set_keyboard_setting(
+                                                "keyboard-typing",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_typing = next,
+                                            );
+                                        },
+                                    )),
+                                ),
                         )
+                        .when(settings.show_typing, |this| {
+                            this.child(
+                                ui::Subfield::plain(
+                                    &theme,
+                                    tr::editor::tabs::keyboard::show_modifiers(),
+                                )
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        "keyboard-modifiers",
+                                        settings.show_modifiers,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !keyboard_settings(&this.project).show_modifiers;
+                                            this.set_keyboard_setting(
+                                                "keyboard-modifiers",
+                                                window,
+                                                cx,
+                                                move |settings| settings.show_modifiers = next,
+                                            );
+                                        },
+                                    )),
+                                ),
+                            )
+                        })
                         .child(
                             ui::Subfield::plain(
                                 &theme,

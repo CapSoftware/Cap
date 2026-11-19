@@ -2915,19 +2915,50 @@ pub struct KeyboardSettings {
     pub show_modifiers: bool,
     pub show_special_keys: bool,
     pub uppercase: bool,
-    /// How key presses are drawn: `classic` (one rounded label), or keycaps
-    /// shaped like a `macos`, `windows` or `linux` keyboard. A project saved
-    /// before keycaps existed keeps the classic label.
+    /// How key presses are drawn: `classic` (one rounded label), keycaps
+    /// shaped like a `macos`, `windows` or `linux` keyboard, or `auto`, which
+    /// a project saved before keycaps existed reads as: see
+    /// [`KeyboardSettings::effective_style`].
     #[serde(default = "KeyboardSettings::legacy_style")]
     pub style: String,
     /// The keycaps' colours: `light`, `dark` or `retro`.
     #[serde(default = "KeyboardSettings::default_theme")]
     pub theme: String,
+    /// Whether typed text shows, or only shortcuts. New projects show
+    /// shortcuts only; a project saved before the choice existed keeps its
+    /// typing.
+    #[serde(default = "KeyboardSettings::legacy_show_typing")]
+    pub show_typing: bool,
 }
 
 impl KeyboardSettings {
+    fn legacy_show_typing() -> bool {
+        true
+    }
+
     fn legacy_style() -> String {
-        "classic".to_string()
+        "auto".to_string()
+    }
+
+    /// The style to draw. `auto` gives an older project the platform's keys
+    /// when its label was never styled, and keeps the classic label for one
+    /// whose colours or font were chosen. Read every frame, so it allocates
+    /// nothing.
+    pub fn effective_style(&self) -> &str {
+        if self.style != "auto" {
+            return &self.style;
+        }
+        let untouched = self.color.eq_ignore_ascii_case(DEFAULT_KEYBOARD_COLOR)
+            && self
+                .background_color
+                .eq_ignore_ascii_case(DEFAULT_KEYBOARD_BACKGROUND)
+            && self.background_opacity == DEFAULT_KEYBOARD_BACKGROUND_OPACITY
+            && self.font == DEFAULT_KEYBOARD_FONT;
+        if untouched {
+            Self::platform_style_name()
+        } else {
+            "classic"
+        }
     }
 
     fn default_theme() -> String {
@@ -2937,6 +2968,10 @@ impl KeyboardSettings {
     /// The keycap style a new project starts with: the keyboard of the
     /// platform it was made on.
     pub fn platform_style() -> String {
+        Self::platform_style_name().to_string()
+    }
+
+    fn platform_style_name() -> &'static str {
         if cfg!(target_os = "macos") {
             "macos"
         } else if cfg!(target_os = "windows") {
@@ -2944,29 +2979,35 @@ impl KeyboardSettings {
         } else {
             "linux"
         }
-        .to_string()
     }
 }
+
+const DEFAULT_KEYBOARD_FONT: &str = "System Sans-Serif";
+const DEFAULT_KEYBOARD_COLOR: &str = "#FFFFFF";
+const DEFAULT_KEYBOARD_BACKGROUND: &str = "#000000";
+const DEFAULT_KEYBOARD_BACKGROUND_OPACITY: u32 = 95;
 
 impl Default for KeyboardSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            font: "System Sans-Serif".to_string(),
-            size: 50,
-            color: "#FFFFFF".to_string(),
-            background_color: "#000000".to_string(),
-            background_opacity: 95,
+            font: DEFAULT_KEYBOARD_FONT.to_string(),
+            // Keys a tenth of the frame tall.
+            size: 68,
+            color: DEFAULT_KEYBOARD_COLOR.to_string(),
+            background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
+            background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,
             position: "bottom-center".to_string(),
             font_weight: 400,
             fade_duration: 0.15,
-            linger_duration: 0.8,
+            linger_duration: 1.5,
             grouping_threshold_ms: 500.0,
             show_modifiers: true,
-            show_special_keys: true,
+            show_special_keys: false,
             uppercase: false,
             style: Self::platform_style(),
             theme: Self::default_theme(),
+            show_typing: false,
         }
     }
 }
@@ -5577,6 +5618,31 @@ mod tests {
 
         assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    #[test]
+    fn an_older_keyboard_overlay_gets_keys_unless_its_label_was_styled() {
+        let old: KeyboardSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true, "font": "System Sans-Serif", "size": 50,
+            "color": "#ffffff", "backgroundColor": "#000000", "backgroundOpacity": 95,
+            "position": "bottom-center", "fontWeight": 400, "fadeDuration": 0.15,
+            "lingerDuration": 0.8, "groupingThresholdMs": 500.0, "showModifiers": true,
+            "showSpecialKeys": true, "uppercase": false
+        }))
+        .unwrap();
+        assert_eq!(old.style, "auto");
+        assert!(old.show_typing);
+        assert_eq!(old.effective_style(), KeyboardSettings::platform_style());
+        let styled = KeyboardSettings {
+            background_color: "#2255FF".into(),
+            ..old.clone()
+        };
+        assert_eq!(styled.effective_style(), "classic");
+        let chosen = KeyboardSettings {
+            style: "windows".into(),
+            ..styled
+        };
+        assert_eq!(chosen.effective_style(), "windows");
     }
 
     #[test]

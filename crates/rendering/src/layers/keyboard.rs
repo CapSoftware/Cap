@@ -43,12 +43,6 @@ const MAX_KEYCAPS: usize = 16;
 struct KeycapUniforms {
     caps: [KeycapUniform; MAX_KEYCAPS],
     info: [f32; 4],
-    /// The keyboard deck behind the keys: its rect, top and bottom colours,
-    /// and its corner radius, whether it is drawn, and its reach.
-    plate: [f32; 4],
-    plate_top: [f32; 4],
-    plate_bottom: [f32; 4],
-    plate_shape: [f32; 4],
 }
 
 /// A key label placed for glyphon: which shaped buffer, where, in what colour.
@@ -498,7 +492,7 @@ impl KeyboardLayer {
             Weight::NORMAL
         };
 
-        let style = KeycapStyle::from_setting(&settings.style);
+        let style = KeycapStyle::from_setting(settings.effective_style());
         if style != KeycapStyle::Classic {
             // The first key lands as the overlay finishes fading in, so the
             // press is seen rather than lost in the fade.
@@ -513,7 +507,12 @@ impl KeyboardLayer {
                     theme: KeycapTheme::from_setting(&settings.theme),
                     font_size,
                     opacity: fade_opacity,
-                    bounce: bounce_offset as f32,
+                    scale: keycap_pop(
+                        current_time,
+                        active.segment.start,
+                        active.segment.end,
+                        segment_fade,
+                    ),
                     since_struck: current_time - struck,
                     position,
                     margin,
@@ -756,7 +755,8 @@ struct KeycapFrame<'a> {
     theme: KeycapTheme,
     font_size: f32,
     opacity: f32,
-    bounce: f32,
+    /// The row's size as it pops in and out, 1 at rest.
+    scale: f32,
     since_struck: f64,
     position: KeyboardPosition,
     margin: f32,
@@ -893,39 +893,21 @@ impl KeyboardLayer {
             }
             _ => ((width as f32 - total) / 2.0).max(0.0),
         };
-        // Apple's keys sit sunk in the keyboard's deck, which reaches past
-        // them; the deck, not just the keys, keeps clear of the captions and
-        // the frame's edges.
-        let plate_pad = if frame.style == KeycapStyle::MacOs {
-            cap_height * 0.17
-        } else {
-            0.0
-        };
-        let outer_height = cap_height + plate_pad * 2.0;
         let center_y = height as f32 * resolved_position.y_factor();
-        let max_top = (height as f32 - outer_height).max(0.0);
-        let base_top = (center_y - outer_height / 2.0).clamp(0.0, max_top);
+        let max_top = (height as f32 - cap_height).max(0.0);
+        let base_top = (center_y - cap_height / 2.0).clamp(0.0, max_top);
         let top = resolve_background_top(
-            [
-                left - plate_pad,
-                (base_top + frame.bounce).clamp(0.0, max_top),
-                total + plate_pad * 2.0,
-                outer_height,
-            ],
+            [left, base_top, total, cap_height],
             height as f32,
             frame.position,
             caption_layout,
-        ) + plate_pad;
+        );
 
         let press = keycaps::press_depth(frame.since_struck);
         let opacity = frame.opacity.clamp(0.0, 1.0);
         let mut uniforms = KeycapUniforms {
             caps: [KeycapUniform::default(); MAX_KEYCAPS],
             info: [caps.len() as f32, opacity, 0.0, 0.0],
-            plate: [0.0; 4],
-            plate_top: [0.0; 4],
-            plate_bottom: [0.0; 4],
-            plate_shape: [0.0; 4],
         };
         self.keycap_labels.clear();
         let pad = cap_height * 0.13;
@@ -1020,19 +1002,25 @@ impl KeyboardLayer {
             x += cap_width + gap;
         }
 
-        // The deck: a black well on a MacBook Pro, silver aluminium on a
-        // Magic Keyboard.
-        if plate_pad > 0.0 {
-            let deck = frame.theme.palette(false).plate;
-            uniforms.plate = [
-                left - plate_pad,
-                top - plate_pad,
-                total + plate_pad * 2.0,
-                cap_height + plate_pad * 2.0,
-            ];
-            uniforms.plate_top = deck[0];
-            uniforms.plate_bottom = deck[1];
-            uniforms.plate_shape = [radius + plate_pad * 0.9, 1.0, plate_pad, 0.0];
+        // Keys pop in: they grow from a little under full size with a slight
+        // overshoot as they fade in, and settle back a touch as they leave.
+        // Everything scales about the row's centre, so the row stays put.
+        let scale = frame.scale;
+        let (cx, cy) = (left + total / 2.0, top + cap_height / 2.0);
+        let at = |x: f32, y: f32| (cx + (x - cx) * scale, cy + (y - cy) * scale);
+        for cap in uniforms.caps.iter_mut().take(caps.len()) {
+            let (x, y) = at(cap.rect[0], cap.rect[1]);
+            cap.rect = [x, y, cap.rect[2] * scale, cap.rect[3] * scale];
+            cap.shape[0] *= scale;
+            cap.shape[1] *= scale;
+            cap.shape[2] *= scale;
+        }
+        for label in &mut self.keycap_labels {
+            let (x, y) = at(label.left, label.top);
+            label.left = x;
+            label.top = y;
+            label.width *= scale;
+            label.height *= scale;
         }
 
         let device = &constants.device;
@@ -1053,7 +1041,7 @@ impl KeyboardLayer {
                     buffer,
                     left: placed.left,
                     top: placed.top,
-                    scale: 1.0,
+                    scale,
                     bounds: TextBounds {
                         left: (placed.left - 2.0).floor() as i32,
                         top: (placed.top - 2.0).floor() as i32,
@@ -1078,7 +1066,7 @@ impl KeyboardLayer {
         }
 
         // The shadow reaches below and around the keys.
-        let reach = cap_height * 0.42 + depth * 2.0 + plate_pad + 4.0;
+        let reach = cap_height * 0.5 + depth * 2.0 + 4.0;
         let scissor_x = (left - reach).max(0.0).floor() as u32;
         let scissor_y = (top - reach).max(0.0).floor() as u32;
         let scissor_w = ((total + reach * 2.0).ceil() as u32).min(width.saturating_sub(scissor_x));
@@ -1091,6 +1079,21 @@ impl KeyboardLayer {
         self.keycap_mode = true;
         self.has_content = true;
     }
+}
+
+/// How large the keys are drawn as they appear and leave: from 86% up past
+/// full size and back as they fade in, easing to 94% as they fade out.
+pub(crate) fn keycap_pop(current_time: f64, start: f64, end: f64, fade: f64) -> f32 {
+    let fade = fade.max(0.05);
+    if current_time >= end {
+        let t = ((current_time - end) / fade).clamp(0.0, 1.0) as f32;
+        return 1.0 - 0.06 * t * t;
+    }
+    let t = ((current_time - start) / (fade * 1.6)).clamp(0.0, 1.0) as f32;
+    let back = 1.2_f32;
+    let u = t - 1.0;
+    let eased = 1.0 + (back + 1.0) * u * u * u + back * u * u;
+    0.86 + 0.14 * eased
 }
 
 /// When the segment's latest key went down, in timeline seconds: the start,
@@ -1113,10 +1116,6 @@ fn create_keycap_pipeline(
     let uniforms = KeycapUniforms {
         caps: [KeycapUniform::default(); MAX_KEYCAPS],
         info: [0.0; 4],
-        plate: [0.0; 4],
-        plate_top: [0.0; 4],
-        plate_bottom: [0.0; 4],
-        plate_shape: [0.0; 4],
     };
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Keycap Uniform Buffer"),
@@ -1295,6 +1294,18 @@ mod tests {
         resolve_keyboard_position,
     };
     use crate::layers::{CaptionOverlayLayout, CaptionPosition};
+
+    #[test]
+    fn keys_pop_in_past_full_size_and_settle_then_shrink_away() {
+        use super::keycap_pop;
+        assert!((keycap_pop(0.0, 0.0, 2.0, 0.15) - 0.86).abs() < 1e-6);
+        let peak = (1..24)
+            .map(|step| keycap_pop(step as f64 * 0.01, 0.0, 2.0, 0.15))
+            .fold(0.0_f32, f32::max);
+        assert!(peak > 1.0 && peak < 1.05, "{peak}");
+        assert!((keycap_pop(1.0, 0.0, 2.0, 0.15) - 1.0).abs() < 1e-6);
+        assert!((keycap_pop(2.15, 0.0, 2.0, 0.15) - 0.94).abs() < 1e-6);
+    }
 
     #[test]
     fn new_typing_is_not_hidden_by_the_previous_words_linger() {
@@ -1860,31 +1871,38 @@ mod gpu_tests {
             start = segment.end + 0.5;
             segments.push(segment);
         }
-        let mut uniforms = uniforms(&constants, &segments, size);
+        for (index, text) in ["⇧⌘P", "⌘C", "⌃⌥⌘⏎"].iter().enumerate() {
+            let segment = shortcut_segment(&format!("shortcut-{index}"), start, text);
+            start = segment.end + 0.5;
+            segments.push(segment);
+        }
         let frames = frames(size);
         let total_frames = (start * FPS as f64) as u32;
-        let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
-
-        let mut samples = Vec::new();
-        for pass in 0..4 {
-            for frame in 0..total_frames {
-                uniforms.frame_number = frame;
-                let started = std::time::Instant::now();
-                layer.prepare(&uniforms, &frames, size, &constants, None);
-                let elapsed = started.elapsed().as_secs_f64() * 1e6;
-                if pass > 0 && layer.has_content() {
-                    samples.push(elapsed);
+        for style in ["classic", "macos", "linux"] {
+            let mut uniforms = uniforms(&constants, &segments, size);
+            with_keycaps(&mut uniforms, style, "dark");
+            let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+            let mut samples = Vec::new();
+            for pass in 0..4 {
+                for frame in 0..total_frames {
+                    uniforms.frame_number = frame;
+                    let started = std::time::Instant::now();
+                    layer.prepare(&uniforms, &frames, size, &constants, None);
+                    let elapsed = started.elapsed().as_secs_f64() * 1e6;
+                    if pass > 0 && layer.has_content() {
+                        samples.push(elapsed);
+                    }
                 }
             }
+            constants.device.poll(wgpu::PollType::Wait).unwrap();
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "keyboard layer prepare, {style} ({} visible frames): p50 {:.1} us, p95 {:.1} us, mean {:.1} us",
+                samples.len(),
+                samples[samples.len() / 2],
+                samples[samples.len() * 95 / 100],
+                samples.iter().sum::<f64>() / samples.len() as f64,
+            );
         }
-        constants.device.poll(wgpu::PollType::Wait).unwrap();
-        samples.sort_by(f64::total_cmp);
-        println!(
-            "keyboard layer prepare ({} visible frames): p50 {:.1} us, p95 {:.1} us, mean {:.1} us",
-            samples.len(),
-            samples[samples.len() / 2],
-            samples[samples.len() * 95 / 100],
-            samples.iter().sum::<f64>() / samples.len() as f64,
-        );
     }
 }

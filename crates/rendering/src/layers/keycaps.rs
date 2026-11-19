@@ -53,8 +53,8 @@ impl KeycapStyle {
         match self {
             Self::MacOs | Self::Classic => KeycapGeometry {
                 radius: 0.13,
-                depth: 0.05,
-                inset: 0.012,
+                depth: 0.035,
+                inset: 0.01,
                 dish: 0.0,
             },
             Self::Windows => KeycapGeometry {
@@ -114,24 +114,21 @@ impl KeycapTheme {
                 shadow: 0.34,
                 grain: 0.012,
                 gloss: 0.0,
-                // Silver aluminium.
-                plate: [hex(0xe4e5e9), hex(0xcbccd1)],
             },
             // A space black MacBook: deep charcoal caps, a near-black skirt,
             // pale print and a faint satin sheen.
             // A MacBook Pro: flat, matte near-black caps whose rims catch a
             // little light, light grey print, sunk in a black well.
             (Self::Dark, _) => KeycapPalette {
-                top: [hex(0x2e2e31), hex(0x232326)],
-                side: [hex(0x141416), hex(0x060607)],
-                border: rgba(0x000000, 0.7),
-                highlight: rgba(0xffffff, 0.2),
-                label: hex(0xededf2),
-                legend: hex(0xd6d6dc),
-                shadow: 0.5,
-                grain: 0.006,
-                gloss: 0.025,
-                plate: [hex(0x0e0e10), hex(0x080809)],
+                top: [hex(0x2c2c2f), hex(0x202023)],
+                side: [hex(0x161618), hex(0x0b0b0c)],
+                border: rgba(0x000000, 0.35),
+                highlight: rgba(0xffffff, 0.1),
+                label: hex(0xf5f5f7),
+                legend: hex(0xe5e5ea),
+                shadow: 0.42,
+                grain: 0.004,
+                gloss: 0.02,
             },
             // An old desk keyboard: cream letter keys and grey modifiers in
             // thick, slightly yellowed plastic.
@@ -145,7 +142,6 @@ impl KeycapTheme {
                 shadow: 0.36,
                 grain: 0.016,
                 gloss: 0.0,
-                plate: [hex(0xd9d0b9), hex(0xc3b89c)],
             },
             (Self::Retro, true) => KeycapPalette {
                 top: [hex(0xa8a59c), hex(0x939087)],
@@ -157,7 +153,6 @@ impl KeycapTheme {
                 shadow: 0.38,
                 grain: 0.016,
                 gloss: 0.0,
-                plate: [hex(0xd9d0b9), hex(0xc3b89c)],
             },
         }
     }
@@ -181,8 +176,6 @@ pub struct KeycapPalette {
     pub grain: f32,
     /// A soft sheen across the top of the face, for satin caps.
     pub gloss: f32,
-    /// The keyboard the keys sit in: its deck from top to bottom.
-    pub plate: [[f32; 4]; 2],
 }
 
 fn hex(value: u32) -> [f32; 4] {
@@ -228,6 +221,7 @@ pub struct Keycap {
 }
 
 const MODIFIERS: [char; 4] = ['⌃', '⌥', '⇧', '⌘'];
+const DISPLAY_ORDER: [char; 4] = ['⌘', '⌥', '⇧', '⌃'];
 
 /// The keys a key-press overlay's text stands for. A shortcut is its
 /// modifiers, one key each, then the key they modify; typed text is one long
@@ -236,10 +230,19 @@ const MODIFIERS: [char; 4] = ['⌃', '⌥', '⇧', '⌘'];
 pub fn keycaps_for(text: &str, style: KeycapStyle) -> Vec<Keycap> {
     let mut caps = Vec::new();
     let mut rest = text;
+    let mut modifiers = Vec::new();
     while let Some(symbol) = rest.chars().next().filter(|c| MODIFIERS.contains(c)) {
-        caps.push(modifier_cap(symbol, style));
+        modifiers.push(symbol);
         rest = &rest[symbol.len_utf8()..];
     }
+    // Command leads, then option, shift and control, the way demo overlays
+    // read a shortcut out.
+    modifiers.sort_by_key(|symbol| DISPLAY_ORDER.iter().position(|c| c == symbol));
+    caps.extend(
+        modifiers
+            .into_iter()
+            .map(|symbol| modifier_cap(symbol, style)),
+    );
     // Shift alone before text is typing in capitals, not a shortcut.
     let shortcut = caps
         .iter()
@@ -281,19 +284,13 @@ fn modifier_cap(symbol: char, style: KeycapStyle) -> Keycap {
         ),
     };
     match style {
-        // Shift sits at the far left and prints on its left; control,
-        // option and command sit against the space bar and print on their
-        // right.
+        // The symbol over its word, both on the key's left.
         KeycapStyle::MacOs | KeycapStyle::Classic => Keycap {
             label: symbol.to_string(),
             legend: Some(mac.to_string()),
             modifier: true,
             kind: KeycapKind::Named,
-            align: if symbol == '⇧' {
-                LegendAlign::Left
-            } else {
-                LegendAlign::Right
-            },
+            align: LegendAlign::Left,
         },
         KeycapStyle::Windows | KeycapStyle::Linux => Keycap {
             label: pc.to_string(),
@@ -337,11 +334,19 @@ fn single_cap(key: char, style: KeycapStyle) -> Keycap {
         align: LegendAlign::Left,
     };
     match key {
-        '⏎' => named("", "return", "Enter", LegendAlign::Right),
+        // Return reads best as its arrow alone.
+        '⏎' if mac => Keycap {
+            label: "↵".into(),
+            legend: None,
+            modifier: false,
+            kind: KeycapKind::Named,
+            align: LegendAlign::Left,
+        },
+        '⏎' => named("", "return", "Enter", LegendAlign::Left),
         '⇥' => named("⇥", "tab", "Tab", LegendAlign::Left),
-        '⌫' => named("", "delete", "Backspace", LegendAlign::Right),
-        '⌦' => named("", "delete", "Del", LegendAlign::Right),
-        '⎋' => named("", "esc", "Esc", LegendAlign::Left),
+        '⌫' => named("⌫", "delete", "Backspace", LegendAlign::Left),
+        '⌦' => named("⌦", "delete", "Del", LegendAlign::Left),
+        '⎋' => named("⎋", "esc", "Esc", LegendAlign::Left),
         '⇱' => named("", "home", "Home", LegendAlign::Left),
         '⇲' => named("", "end", "End", LegendAlign::Right),
         '⇞' => named("", "page up", "PgUp", LegendAlign::Left),
@@ -448,17 +453,17 @@ mod tests {
         assert_eq!(
             labels("⇧⌘P", KeycapStyle::MacOs),
             vec![
-                ("⇧".into(), Some("shift".into()), KeycapKind::Named),
                 ("⌘".into(), Some("command".into()), KeycapKind::Named),
+                ("⇧".into(), Some("shift".into()), KeycapKind::Named),
                 ("P".into(), None, KeycapKind::Square),
             ]
         );
         assert_eq!(
             labels("⌃⇧⌘P", KeycapStyle::Windows),
             vec![
-                ("Ctrl".into(), None, KeycapKind::Named),
-                ("Shift".into(), None, KeycapKind::Named),
                 ("Win".into(), None, KeycapKind::Named),
+                ("Shift".into(), None, KeycapKind::Named),
+                ("Ctrl".into(), None, KeycapKind::Named),
                 ("P".into(), None, KeycapKind::Square),
             ]
         );
@@ -468,18 +473,15 @@ mod tests {
 
     #[test]
     fn named_keys_print_the_way_each_keyboard_does() {
+        assert_eq!(labels("⏎", KeycapStyle::MacOs)[0].0, "↵");
         assert_eq!(
-            labels("⏎", KeycapStyle::MacOs)[0],
-            (String::new(), Some("return".into()), KeycapKind::Named)
+            labels("⎋", KeycapStyle::MacOs)[0],
+            ("⎋".into(), Some("esc".into()), KeycapKind::Named)
         );
         assert_eq!(labels("←", KeycapStyle::MacOs)[0].0, "◀");
         assert_eq!(
-            keycaps_for("⇧", KeycapStyle::MacOs)[0].align,
-            LegendAlign::Left
-        );
-        assert_eq!(
             keycaps_for("⌘", KeycapStyle::MacOs)[0].align,
-            LegendAlign::Right
+            LegendAlign::Left
         );
         assert_eq!(labels("⏎", KeycapStyle::Windows)[0].0, "Enter");
         assert_eq!(labels("⌫", KeycapStyle::Linux)[0].0, "Backspace");

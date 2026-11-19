@@ -24,13 +24,6 @@ struct Uniforms {
     caps: array<Cap, 16>,
     // Key count, overall opacity, shadow strength, unused.
     info: vec4<f32>,
-    // The keyboard deck the keys sit in: rect, top and bottom colours, and
-    // corner radius, whether it is drawn, and how far it reaches past the
-    // keys.
-    plate: vec4<f32>,
-    plate_top: vec4<f32>,
-    plate_bottom: vec4<f32>,
-    plate_shape: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -95,30 +88,6 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let count = u32(uniforms.info.x);
     let shadow_strength = uniforms.info.z;
     var out = vec4<f32>(0.0);
-
-    if uniforms.plate_shape.y > 0.5 {
-        let origin = uniforms.plate.xy;
-        let size = uniforms.plate.zw;
-        let radius = uniforms.plate_shape.x;
-        let reach = uniforms.plate_shape.z;
-        // The deck lifts off the frame on a soft shadow.
-        let blur = max(reach * 1.4, 2.0);
-        let shadow_d = box_sdf(p, origin + vec2<f32>(0.0, reach * 0.5), size, radius);
-        let shadow = (1.0 - smoothstep(-blur, blur, shadow_d)) * shadow_strength * 0.8;
-        out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), shadow));
-        let d = box_sdf(p, origin, size, radius);
-        let t = clamp((p.y - origin.y) / max(size.y, 1.0), 0.0, 1.0);
-        var deck = mix(uniforms.plate_top.rgb, uniforms.plate_bottom.rgb, t);
-        // The well is shaded under its top lip and lit along its lower rim.
-        let inside = -d;
-        let lip = (1.0 - smoothstep(0.0, reach * 0.9, p.y - origin.y)) * 0.35;
-        deck = deck * (1.0 - lip);
-        let rim = (1.0 - smoothstep(0.0, 1.5, inside))
-            * smoothstep(origin.y + size.y * 0.5, origin.y + size.y, p.y);
-        deck = mix(deck, vec3<f32>(1.0), rim * 0.12);
-        deck = deck + vec3<f32>(grain(p) * 0.006);
-        out = over(out, paint(vec4<f32>(deck, 1.0), coverage(d)));
-    }
 
     for (var i = 0u; i < 16u; i = i + 1u) {
         if i >= count {

@@ -224,6 +224,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::done::link_copied(), "Link copied"),
         (tr::editor::export::done::open_file(), "Open File"),
         (tr::editor::export::done::copy_file(), "Copy to Clipboard"),
+        (tr::editor::tabs::keyboard::show_typing(), "Show Typing"),
         (tr::editor::window::looks::launch_day(), "Launch Day"),
         (
             tr::editor::window::looks::launch_day_description(),

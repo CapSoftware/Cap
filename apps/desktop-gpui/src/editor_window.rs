@@ -1888,6 +1888,9 @@ struct PresetsMenu {
     scroll: gpui::ScrollHandle,
     /// Each look's wallpaper thumbnail, decoded when the menu opens.
     look_images: Vec<Option<Arc<gpui::RenderImage>>>,
+    /// The look the project wears, found once when the menu opens: finding
+    /// it compares the project against every look, too much for each frame.
+    current_look: Option<&'static str>,
 }
 
 /// A row of the presets menu: the built-in Default, or a saved preset.
@@ -8466,6 +8469,7 @@ impl EditorWindow {
             submenu: None,
             scroll: gpui::ScrollHandle::new(),
             look_images,
+            current_look: crate::looks::current_look(&self.project),
         });
         cx.notify();
     }
@@ -8485,7 +8489,7 @@ impl EditorWindow {
     fn render_looks_gallery(&self, menu: &PresetsMenu, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let current = crate::looks::current_look(&self.project);
+        let current = menu.current_look;
         let cards: Vec<gpui::AnyElement> = crate::looks::LOOKS
             .iter()
             .enumerate()
@@ -15204,6 +15208,7 @@ mod tests {
                     submenu: None,
                     scroll: gpui::ScrollHandle::new(),
                     look_images: Vec::new(),
+                    current_look: None,
                 });
             });
             let mut samples = Vec::new();
