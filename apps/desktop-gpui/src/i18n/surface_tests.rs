@@ -75,6 +75,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::target::area(), "Area"),
         (tr::main::target::camera_only(), "Camera Only"),
         (tr::main::target::audio_only(), "Audio Only"),
+        (tr::main::target::solo_title(), "Camera or audio only"),
         (tr::main::target::choose_display(), "Choose a display"),
         (tr::main::target::choose_window(), "Choose a window"),
         (tr::main::target::no_displays(), "No displays found"),

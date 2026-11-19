@@ -1165,6 +1165,7 @@ no_displays = "ディスプレイが見つかりません"
 no_matching_displays = "一致するディスプレイはありません"
 no_matching_windows = "一致するウィンドウはありません"
 no_windows = "ウィンドウが見つかりません"
+solo_title = "カメラまたは音声のみ"
 window = "ウィンドウ"
 
 [recordings_overlay]

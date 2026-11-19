@@ -834,6 +834,8 @@ pub enum Panel {
     Device(DeviceMenu),
     /// Pick which display or which window to capture.
     Target(TargetType),
+    /// Record only the camera, or only audio.
+    Solo,
     /// What the three recording modes do.
     ModeInfo,
     /// The header recordings / screenshots library.
@@ -980,6 +982,9 @@ pub struct MainWindow {
     mode_hover_task: Option<Task<()>>,
     mode_hover_bounds: [Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>; 3],
     target: Option<TargetType>,
+    /// Which of Camera Only and Audio Only the shared tile offers: the last
+    /// one picked from its chevron.
+    solo_target: TargetType,
     devices: DeviceSnapshot,
     camera: Option<CameraOption>,
     camera_id: Option<recording::DeviceOrModelID>,
@@ -1298,6 +1303,7 @@ impl MainWindow {
             mode_hover_task: None,
             mode_hover_bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
             target: None,
+            solo_target: TargetType::CameraOnly,
             devices: DeviceSnapshot::default(),
             camera: None,
             camera_id: None,
@@ -4376,6 +4382,14 @@ impl MainWindow {
                 .child(tr::main::mode::info::title())
                 .into_any_element(),
             Panel::Library(kind) => self.render_library_header(kind, cx).into_any_element(),
+            Panel::Solo => div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(12.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.gray_11)
+                .child(tr::main::target::solo_title())
+                .into_any_element(),
             Panel::Device(_) if self.device_format_target.is_some() => div()
                 .flex_1()
                 .min_w_0()
@@ -4465,6 +4479,7 @@ impl MainWindow {
                                     self.render_target_grid(target, cx).into_any_element()
                                 }
                                 Panel::ModeInfo => self.render_mode_info(cx).into_any_element(),
+                                Panel::Solo => self.render_solo_choices(cx).into_any_element(),
                                 Panel::Library(kind) => {
                                     self.render_library_grid(kind, cx).into_any_element()
                                 }
@@ -7025,8 +7040,7 @@ impl MainWindow {
                     .items_stretch()
                     .w_full()
                     .child(self.render_target_tile(TargetType::Area, cx))
-                    .child(self.render_target_tile(TargetType::CameraOnly, cx))
-                    .child(self.render_target_tile(TargetType::AudioOnly, cx)),
+                    .child(self.render_split_target(self.shown_solo_target(), cx)),
             )
     }
 
@@ -7051,7 +7065,8 @@ impl MainWindow {
                     .role(gpui::Role::Button)
                     .aria_label(match target {
                         TargetType::Display => "Choose a display",
-                        _ => "Choose a window",
+                        TargetType::Window => "Choose a window",
+                        _ => "Camera or audio only",
                     })
                     .flex()
                     .w(px(28.))
@@ -7091,19 +7106,93 @@ impl MainWindow {
                             match target {
                                 TargetType::Display => tr::main::target::choose_display(),
                                 TargetType::Window => tr::main::target::choose_window(),
-                                _ => unreachable!(),
+                                _ => tr::main::target::solo_title(),
                             },
                         )
                         .view(cx)
                     })
                     .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_panel(Panel::Target(target), window, cx);
+                        let panel = match target {
+                            TargetType::Display | TargetType::Window => Panel::Target(target),
+                            _ => Panel::Solo,
+                        };
+                        this.open_panel(panel, window, cx);
                     })),
             )
     }
 
-    /// Area, Camera Only and Audio Only are plain tiles with their own border.
+    /// Camera Only or Audio Only, whichever the shared tile shows: the one
+    /// armed, else the last one picked.
+    fn shown_solo_target(&self) -> TargetType {
+        match self.target {
+            Some(target @ (TargetType::CameraOnly | TargetType::AudioOnly)) => target,
+            _ => self.solo_target,
+        }
+    }
+
+    /// The chevron's choices: the camera alone, or audio alone, as the same
+    /// tiles the capture sources use.
+    fn render_solo_choices(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        div().flex().flex_row().gap(px(8.)).w_full().children(
+            [TargetType::CameraOnly, TargetType::AudioOnly]
+                .into_iter()
+                .map(|kind| {
+                    let selected = self.target == Some(kind);
+                    div()
+                        .id(SharedString::from(format!("solo-{}", kind.label())))
+                        .when(self.keyboard_nav, ui::keyboard_nav::stop)
+                        .role(gpui::Role::Button)
+                        .aria_label(kind.label())
+                        .aria_selected(selected)
+                        .flex()
+                        .flex_1()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(6.))
+                        .h(px(96.))
+                        .rounded(px(10.))
+                        .map(|this| glass_button(this, theme, selected))
+                        .hover(move |style| style.bg(capture_hover_fill(theme, selected)))
+                        .active(move |style| style.bg(capture_press_fill(theme, selected)))
+                        .child(
+                            svg()
+                                .path(kind.icon())
+                                .size(px(22.))
+                                .text_color(if selected {
+                                    theme.blue_10
+                                } else {
+                                    theme.gray_10
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .text_color(if selected {
+                                    theme.blue_11
+                                } else {
+                                    theme.gray_12
+                                })
+                                .child(kind.display_label()),
+                        )
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            // Picking one arms it, the way clicking its tile
+                            // does.
+                            this.solo_target = kind;
+                            this.target = Some(kind);
+                            this.close_panel(cx);
+                            this.end_capture_mode(cx);
+                            this.sync_overlays(cx);
+                            cx.notify();
+                        }))
+                }),
+        )
+    }
+
+    /// Area is a plain tile with its own border.
     fn render_target_tile(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
@@ -7163,6 +7252,9 @@ impl MainWindow {
                 } else {
                     Some(target)
                 };
+                if matches!(target, TargetType::CameraOnly | TargetType::AudioOnly) {
+                    this.solo_target = target;
+                }
                 // The tile picks by hovering: a window chosen from its
                 // dropdown earlier would otherwise stay locked in, and the
                 // highlight would ignore the window under the pointer.

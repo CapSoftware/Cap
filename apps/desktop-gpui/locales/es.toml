@@ -1165,6 +1165,7 @@ no_displays = "No se encontraron pantallas"
 no_matching_displays = "No hay pantallas que coincidan"
 no_matching_windows = "No hay ventanas que coincidan"
 no_windows = "No se encontraron ventanas"
+solo_title = "Solo cámara o audio"
 window = "Ventana"
 
 [recordings_overlay]

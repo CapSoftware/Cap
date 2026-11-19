@@ -1165,6 +1165,7 @@ no_displays = "कोई डिस्प्ले नहीं मिला"
 no_matching_displays = "कोई मिलता-जुलता डिस्प्ले नहीं"
 no_matching_windows = "कोई मिलती-जुलती विंडो नहीं"
 no_windows = "कोई विंडो नहीं मिली"
+solo_title = "सिर्फ़ कैमरा या ऑडियो"
 window = "विंडो"
 
 [recordings_overlay]

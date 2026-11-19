@@ -3423,10 +3423,10 @@ impl OverlayWindow {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .mb(px(16.))
+                    .mb(px(36.))
                     .child(
                         div()
-                            .mb(px(8.))
+                            .mb(px(10.))
                             .text_size(px(30.))
                             .font_weight(FontWeight::BOLD)
                             .child(tr::main::target::audio_only()),
@@ -3438,20 +3438,26 @@ impl OverlayWindow {
                             .child(tr::overlay::audio_only::description()),
                     ),
             )
+            // The meter stands on the dimmed screen, not in a card of its
+            // own, so the controls are the only panel.
             .child(
-                self.glass_surface()
+                div()
                     .id("overlay-audio-meter")
                     .w(px(CLUSTER_WIDTH))
-                    .mb(px(6.))
-                    .px(px(20.))
-                    .py(px(18.))
+                    .mb(px(36.))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(12.))
+                    .gap(px(16.))
                     .child(self.render_level_bars(fill, has_microphone))
+                    // A capsule keeps the hint legible over whatever is on
+                    // screen behind the dimming.
                     .child(
                         div()
+                            .px(px(12.))
+                            .py(px(5.))
+                            .rounded_full()
+                            .bg(gpui::hsla(0., 0., 0., 0.55))
                             .text_size(px(12.))
                             .text_color(self.theme.gray_11)
                             .child(caption),

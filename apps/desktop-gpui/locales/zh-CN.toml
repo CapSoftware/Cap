@@ -1165,6 +1165,7 @@ no_displays = "未找到屏幕"
 no_matching_displays = "没有匹配的屏幕"
 no_matching_windows = "没有匹配的窗口"
 no_windows = "未找到窗口"
+solo_title = "仅摄像头或音频"
 window = "窗口"
 
 [recordings_overlay]

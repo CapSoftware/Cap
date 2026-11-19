@@ -1167,6 +1167,7 @@ no_displays = "No displays found"
 no_matching_displays = "No matching displays"
 no_matching_windows = "No matching windows"
 no_windows = "No windows found"
+solo_title = { text = "Camera or audio only", context = "Title of the panel choosing between camera-only and audio-only recording, and the tooltip on its chevron." }
 window = { text = "Window", max_px = 100, size = 12 }
 
 [recordings_overlay]
