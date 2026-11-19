@@ -617,6 +617,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                     system_audio_frame_counter,
                     system_audio_drop_counter,
                     rebuild_params,
+                    false,
                 )
             }),
         ))
@@ -1380,7 +1381,18 @@ pub struct SystemAudioSourceConfig(
     Arc<AtomicU64>,
     Arc<AtomicU64>,
     Arc<CapturerRebuildParams>,
+    bool,
 );
+
+impl SystemAudioSourceConfig {
+    /// The stream exists only for its audio, so no video source is there to
+    /// rebuild it after a system stop: the track ends instead of waiting for a
+    /// restart that never comes.
+    pub fn standalone(mut self) -> Self {
+        self.6 = true;
+        self
+    }
+}
 
 pub struct SystemAudioSource {
     inner: ChannelAudioSource,
@@ -1406,6 +1418,7 @@ impl output_pipeline::AudioSource for SystemAudioSource {
             frame_counter,
             drop_counter,
             _rebuild_params,
+            standalone,
         ) = config;
 
         let cancel_token = CancellationToken::new();
@@ -1437,6 +1450,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
                                                 "Screen capture audio stream ended because its capture source disappeared"
                                             );
                                         }
+                                        stop_signal.mark_user_stopped();
+                                        pipeline_cancel.cancel();
+                                        break;
+                                    }
+                                    if is_system_stop_error(err.as_ref()) && standalone {
+                                        capturer_for_monitor.mark_stopped();
+                                        warn!("System audio stream stopped by the system; ending the audio-only recording");
                                         stop_signal.mark_user_stopped();
                                         pipeline_cancel.cancel();
                                         break;

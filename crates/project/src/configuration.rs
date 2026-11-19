@@ -12,7 +12,7 @@ use cap_cursor_info::CursorFamily;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::DisplayNotch;
+use crate::{AudioVisualsConfiguration, DisplayNotch};
 
 #[cfg(test)]
 mod clip_transition_tests;
@@ -3224,6 +3224,8 @@ pub struct ProjectConfiguration {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub markers: Vec<TimelineMarker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -3286,6 +3288,7 @@ impl Default for ProjectConfiguration {
             auto_zoom_version: 0,
             auto_zoom_pending: false,
             markers: Vec::new(),
+            audio_visuals: None,
         }
     }
 }

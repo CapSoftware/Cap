@@ -1779,6 +1779,16 @@ pub(crate) fn studio_thumbnails_pending() -> bool {
 /// recorded here would show the icon fallback forever, including in the
 /// shipping app.
 fn write_bundle_thumbnail(project_dir: &std::path::Path, source_video: &std::path::Path) {
+    let audio_only = cap_project::RecordingMeta::load_for_project(project_dir)
+        .ok()
+        .and_then(|meta| {
+            meta.studio_meta()
+                .map(cap_project::StudioRecordingMeta::is_audio_only)
+        })
+        .unwrap_or(false);
+    if audio_only {
+        return;
+    }
     let output = crate::library::bundle_thumbnail_path(project_dir);
     match crate::library::create_screenshot(source_video, &output, None) {
         Ok(()) => tracing::info!(path = %output.display(), "wrote recording thumbnail"),
@@ -2496,6 +2506,11 @@ async fn start_internal(
     if matches!(config.target, ScreenCaptureTarget::CameraOnly) && config.camera.is_none() {
         return Err(anyhow!("Camera-only recording requires a selected camera."));
     }
+    if config.target.is_audio_only() && config.microphone.is_none() && !config.system_audio {
+        return Err(anyhow!(
+            cap_recording::studio_recording::AUDIO_ONLY_NEEDS_A_SOURCE
+        ));
+    }
     if config.mode == RecordingMode::Instant && !crate::store::auth_snapshot().signed_in() {
         return Err(anyhow!("Please sign in to use instant recording"));
     }
@@ -2579,11 +2594,16 @@ async fn start_internal(
 }
 
 async fn start_attempt_with_upload(
-    config: StartConfig,
+    mut config: StartConfig,
     project_dir: PathBuf,
     pre_created_video: Option<cap_project::VideoUploadInfo>,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
+    // The selected camera stays selected for the next video recording, but an
+    // audio-only start never waits on it, locks it or fails because of it.
+    if config.target.is_audio_only() {
+        config.camera = None;
+    }
     #[cfg(target_os = "linux")]
     validate_linux_camera_request(
         config.mode,
@@ -2714,6 +2734,7 @@ async fn start_attempt_with_upload(
     #[cfg(target_os = "macos")]
     let shareable_content = match config.target {
         ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::AudioOnly if !config.system_audio => None,
         _ => Some(read_shareable_content().await?),
     };
 

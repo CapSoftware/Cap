@@ -737,9 +737,12 @@ pub fn mode(cx: &mut App) -> Entity<DrawMode> {
 /// Whether the recording bar shows the draw button at all.
 pub fn offered(session: &RecordingSession) -> bool {
     SUPPORTED
-        && session
-            .capture_target()
-            .is_some_and(|target| !matches!(target, ScreenCaptureTarget::CameraOnly))
+        && session.capture_target().is_some_and(|target| {
+            !matches!(
+                target,
+                ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+            )
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -755,7 +758,9 @@ pub fn availability(session: &RecordingSession) -> Result<(), Unavailable> {
     match session.capture_target() {
         Some(ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::Area { .. }) => Ok(()),
         Some(ScreenCaptureTarget::Window { .. }) => Err(Unavailable::WindowRecording),
-        Some(ScreenCaptureTarget::CameraOnly) | None => Err(Unavailable::NotRecording),
+        Some(ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly) | None => {
+            Err(Unavailable::NotRecording)
+        }
     }
 }
 
