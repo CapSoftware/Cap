@@ -306,6 +306,7 @@ open_link = "Open link"
 retry_upload = "Retry upload"
 show_all = "Show all"
 title = "Recordings"
+save_audio = "Save Audio"
 
 [settings.recordings.empty]
 all = "No recordings"
@@ -1046,6 +1047,7 @@ off = { text = "Off", max_px = 130, size = 11 }
 on = { text = "On", max_px = 130, size = 11 }
 
 [main.error]
+audio_only_needs_audio = "Audio only recording needs a microphone or system audio."
 camera_only_needs_camera = "Camera-only recording requires a selected camera."
 copy = "Copy error"
 devices_not_ready = "Recording devices are not ready. Open the recorder and try again."
@@ -1154,8 +1156,9 @@ record_anyway = "Record anyway"
 title = "Low storage"
 
 [main.target]
-area = { text = "Area", max_px = 140, size = 12 }
-camera_only = { text = "Camera Only", max_px = 140, size = 12 }
+area = { text = "Area", max_px = 84, size = 12 }
+audio_only = { text = "Audio Only", max_px = 84, size = 12 }
+camera_only = { text = "Camera Only", max_px = 84, size = 12 }
 choose_display = "Choose a display"
 choose_window = "Choose a window"
 display = { text = "Display", max_px = 100, size = 12 }
@@ -1537,12 +1540,14 @@ placeholder = "Paste or type your script…"
 words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in words per minute; {wpm} is a number such as 150." }
 
 [import]
+audio_failed = { text = "Failed to import audio: {error}", context = "{error} is a technical error message, usually in English." }
 error_title = "Import Error"
 image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
 unsupported = "Unsupported media file."
 video_failed = { text = "Failed to import video: {error}", context = "{error} is a technical error message, usually in English." }
 
 [import.filter]
+audio = { text = "Audio Files", context = "File type name in the file picker's filter list." }
 image = { text = "Image Files", context = "File type name in the file picker's filter list." }
 media = { text = "Media Files", context = "File type name in the file picker's filter list." }
 video = { text = "Video Files", context = "File type name in the file picker's filter list." }
@@ -1584,6 +1589,13 @@ unlock_title = "Unlock area"
 unlock_body = "Let the area be moved, resized or drawn again."
 locked_title = "Area locked"
 locked_body = "Click to unlock it, so it can be moved, resized or drawn again."
+
+[overlay.audio_only]
+choose_source = "Choose a microphone or turn on system audio"
+description = "Record your microphone and your computer's sound, without the screen or camera"
+meter_hint = "Say something to check your level"
+system_audio = "System audio"
+system_audio_only = "Recording system audio only"
 
 [overlay.camera_only]
 description = "Record using only your camera and microphone"
@@ -1842,6 +1854,20 @@ change_hint = "Pick a different track for this segment"
 change_title = "Change audio"
 done = "Done"
 import = "Import file"
+
+[editor.audio_only]
+add_visuals = "Add Visuals"
+body = "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video."
+export_audio = "Export Audio"
+show_visuals = "Show visuals"
+size_large = "Large"
+size_medium = "Medium"
+size_small = "Small"
+style_bars = "Bars"
+style_circle = "Circle"
+style_wave = "Wave"
+title = "Audio only"
+visuals = "Visuals"
 
 [editor.color]
 apply_to_cursor = "Apply to cursor"
@@ -2441,11 +2467,13 @@ mp4_filter = { text = "MP4 Video", context = "File type filter name in the file 
 prepare_controls_failed = "Could not prepare the recording controls: {error}"
 record = { text = "Record", context = "Button that records a new clip into this project." }
 record_new = "Record a new clip"
+removed_media = { text = "{name} (removed clips)", context = "Name of the folder moved to the system Trash that holds the media of clips deleted from a recording; {name} is the recording name." }
 save_before_recording_failed = "Could not save the current project before recording: {error}"
 split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Audio only recordings and video clips cannot be combined in one project"
 cancelled = "Import cancelled"
 cannot_decode = "Cannot decode video {path}: {error}"
 in_use = "Cannot import while this recording is in use: {error}"
@@ -2487,6 +2515,15 @@ upgrade_message = "This feature requires an upgraded plan"
 upgrade_title = "Upgrade required"
 upload_failed = "Failed to upload recording"
 
+[editor.export.audio]
+cta = "Export Audio"
+exported = "Audio exported"
+exporting = "Exporting audio"
+file_type = "File type"
+format = { text = "Audio", context = "Export format: the sound alone as one MP3 or WAV file." }
+mp3_description = "Small and plays everywhere. 192 kb/s stereo."
+wav_description = "Lossless 16-bit, 48 kHz. Best for further editing."
+
 [editor.export.advanced]
 bits_per_pixel = "Bits per pixel"
 cursor_only = "Export cursor only"
@@ -2521,6 +2558,10 @@ open_link = "Open link"
 retry_copy = "Retry Copy"
 reuploaded = "Your latest edit is ready at the same link"
 uploaded = "Your Cap has been uploaded successfully"
+
+[editor.export.enhance]
+description = "Sharpens zoomed-in and low-contrast screen content. Exports can take longer."
+title = "Enhance quality"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -3296,7 +3337,11 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
+compare = "Compare"
+compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
+enhance = "Enhance"
+enhance_tooltip = "Show the paused frame enhanced"
 play_pause = "Play/Pause video"
 speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"

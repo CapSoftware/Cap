@@ -6,6 +6,7 @@ pub struct CompositeVideoFramePipeline {
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub render_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    no_enhancement: wgpu::TextureView,
 }
 
 static PIPELINE_CACHE_DATA: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
@@ -101,6 +102,10 @@ pub struct CompositeVideoFrameUniforms {
     /// flag). The active flag gates the shader's whole color pass in one
     /// uniform branch, keeping ungraded layers bit-identical to before.
     pub grain_params: [f32; 4],
+    /// Output-pixel rect (x, y, width, height) of the enhanced screen texture.
+    pub enhance_region: [f32; 4],
+    /// (upscale mix, unused, unused, unused); zero samples the frame as is.
+    pub enhance_params: [f32; 4],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -131,6 +136,8 @@ impl Default for CompositeVideoFrameUniforms {
             color_adjust_a: [0.0; 4],
             color_adjust_b: [0.0; 4],
             grain_params: [0.0; 4],
+            enhance_region: [0.0; 4],
+            enhance_params: [0.0; 4],
         }
     }
 }
@@ -354,10 +361,28 @@ impl CompositeVideoFramePipeline {
             ..Default::default()
         });
 
+        let no_enhancement = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("Composite no-enhancement texture"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+
         Self {
             bind_group_layout,
             render_pipeline,
             sampler,
+            no_enhancement,
         }
     }
 
@@ -391,6 +416,16 @@ impl CompositeVideoFramePipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -400,6 +435,16 @@ impl CompositeVideoFramePipeline {
         device: &wgpu::Device,
         uniforms: &wgpu::Buffer,
         frame: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        self.bind_group_with_enhancement(device, uniforms, frame, None)
+    }
+
+    pub fn bind_group_with_enhancement(
+        &self,
+        device: &wgpu::Device,
+        uniforms: &wgpu::Buffer,
+        frame: &wgpu::TextureView,
+        enhanced: Option<&wgpu::TextureView>,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.bind_group_layout,
@@ -415,6 +460,12 @@ impl CompositeVideoFramePipeline {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(
+                        enhanced.unwrap_or(&self.no_enhancement),
+                    ),
                 },
             ],
             label: Some("bind_group"),

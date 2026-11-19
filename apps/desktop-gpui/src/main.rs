@@ -6,6 +6,7 @@
 mod app_sounds;
 mod app_windows;
 mod assets;
+mod audio_project;
 mod auth;
 mod automation;
 mod blur_recovery;
@@ -27,6 +28,7 @@ mod diagnostics;
 mod doodle;
 mod draw_bench;
 mod editor_audio;
+mod editor_audio_only;
 mod editor_bench;
 mod editor_canvas;
 mod editor_clips;
@@ -118,6 +120,7 @@ mod transcript;
 mod transcription;
 mod tray;
 mod ui;
+mod unused_media;
 mod updates;
 mod upload;
 mod window_arrange;
@@ -789,6 +792,16 @@ fn main() {
             }
         }
 
+        // `CAP_GPUI_AUTO_OVERLAY_CARD=<path-to-.cap>`: show that recording's
+        // card in the recordings overlay, as the end of a Studio recording
+        // does, so a test can start an overlay action on a project that is
+        // also open in the editor.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("CAP_GPUI_AUTO_OVERLAY_CARD")
+        {
+            crate::recordings_overlay::show_studio_recording(path.into(), cx);
+        }
+
         // `CAP_GPUI_AUTO_HOTKEY=<store key>[,<store key>...]`: run hotkey
         // actions' dispatch arms (e.g. `screenshotDisplay`) as if the OS
         // shortcuts fired, two seconds apart.
@@ -821,6 +834,12 @@ fn main() {
                     "CAP_GPUI_AUTO_SCREENSHOT_EDITOR: no screenshot .cap to open"
                 ),
             }
+        }
+
+        // `CAP_GPUI_AUTO_IMPORT_AUDIO=<file>`: import a sound file as an
+        // audio-only project and open it, as the Import picker does.
+        if let Some(path) = std::env::var_os("CAP_GPUI_AUTO_IMPORT_AUDIO") {
+            import::import_audio_from_path(std::path::PathBuf::from(path), cx);
         }
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4` / `screenshot`: arm
