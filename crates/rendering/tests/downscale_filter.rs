@@ -416,3 +416,35 @@ fn detail_filter_fades_in_from_full_size() {
         "a near-1:1 shrink should barely change: {steps:?}"
     );
 }
+
+#[test]
+fn detail_filter_keeps_sharpness_when_motion_stops() {
+    let Some(gpu) = gpu() else { return };
+    // 2.5x is inside the 2.2x to 2.8x handover, where the still sample is a
+    // partial blend of the 8-tap filter. A smear far under half a pixel has to
+    // look like that still frame, not like a softer one.
+    let source = text_like(500, 250);
+    let output = [200, 100];
+    let worst = |detail| {
+        let draw = |blur| Draw {
+            motion_blur: [blur, 0.0],
+            detail,
+            ..full_frame_draw(&source, output)
+        };
+        let still = render(&gpu, &source, &draw(0.0));
+        let settling = render(&gpu, &source, &draw(0.0001));
+        still
+            .iter()
+            .zip(&settling)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0)
+    };
+    // Without the option a near-zero smear already rounds a level or two away
+    // from the still sample; with it, it may not drift further than that.
+    let (plain, detail) = (worst(false), worst(true));
+    assert!(
+        detail <= plain + 1,
+        "largest difference {detail} levels with the filter, {plain} without"
+    );
+}

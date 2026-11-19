@@ -385,7 +385,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
         var smeared = vec4(accum / alpha_sum, out_alpha);
         if detail > 0.0 {
-            smeared = settle_into_detail(smeared, base_color, velocity_uv, detail);
+            smeared = settle_into_detail(
+                smeared,
+                base_color.rgb - sample_layer(sample_target_uv, crop_bounds_uv, shrink).rgb,
+                velocity_uv,
+            );
         }
         return composite_source_over(
             apply_color_grade(smeared, target_uv, p),
@@ -433,7 +437,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
     var smeared = vec4(accum / alpha_sum, out_alpha);
     if detail > 0.0 {
-        smeared = settle_into_detail(smeared, base_color, scaled_dir, detail);
+        smeared = settle_into_detail(
+            smeared,
+            base_color.rgb - sample_layer(sample_target_uv, crop_bounds_uv, shrink).rgb,
+            scaled_dir,
+        );
     }
     return composite_source_over(
         apply_color_grade(smeared, target_uv, p),
@@ -722,16 +730,14 @@ fn sample_detail(
 
 // Blur taps keep sample_layer(): the smear hides the finer filter and there
 // are 13 to 21 of them. A smear under two output pixels still looks sharp, so
-// as far as the still sample uses the 8-tap filter (`amount`), it hands over
-// to that sample there and the end of a zoom doesn't snap into focus.
-fn settle_into_detail(
-    smeared: vec4<f32>,
-    still: vec4<f32>,
-    smear_uv: vec2<f32>,
-    amount: f32,
-) -> vec4<f32> {
+// it gets the detail the still sample adds over sample_layer() (`detail`,
+// already weighted by detail_amount()), fading out as the smear grows. A
+// near-zero smear then matches the still sample and the end of a zoom
+// doesn't snap into focus.
+fn settle_into_detail(smeared: vec4<f32>, detail: vec3<f32>, smear_uv: vec2<f32>) -> vec4<f32> {
     let smear_px = length(smear_uv * uniforms.target_size);
-    return mix(smeared, still, (1.0 - smoothstep(0.5, 2.0, smear_px)) * amount);
+    let settled = smeared.rgb + detail * (1.0 - smoothstep(0.5, 2.0, smear_px));
+    return vec4(clamp(settled, vec3<f32>(0.0), vec3<f32>(1.0)), smeared.a);
 }
 
 fn sample_clamped(uv: vec2<f32>, safe_min: vec2<f32>, safe_max: vec2<f32>) -> vec3<f32> {
