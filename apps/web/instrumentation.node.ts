@@ -5,8 +5,9 @@
 import {
 	BucketAlreadyOwnedByYou,
 	CreateBucketCommand,
-	PutBucketPolicyCommand,
+	HeadBucketCommand,
 	S3Client,
+	S3ServiceException,
 } from "@aws-sdk/client-s3";
 import { migrateDb } from "@cap/database/migrate";
 import { buildEnv, serverEnv } from "@cap/env";
@@ -45,7 +46,12 @@ export async function register() {
 	};
 	// Add a timeout to trigger migrations after 5 seconds on server start
 	setTimeout(() => triggerMigrations(), 5000);
-	setTimeout(() => createS3Bucket(), 5000);
+	setTimeout(() => {
+		createS3Bucket().catch((error) => {
+			console.error("🚨 S3 bucket initialization failed:", error);
+			process.exit(1);
+		});
+	}, 5000);
 }
 
 async function createS3Bucket() {
@@ -59,36 +65,25 @@ async function createS3Bucket() {
 		forcePathStyle: serverEnv().S3_PATH_STYLE,
 	});
 
+	// Recreating an owned bucket can succeed in us-east-1 and reset its ACL.
+	// Bucket availability must not grant anonymous access to private videos.
 	await s3Client
-		.send(new CreateBucketCommand({ Bucket: serverEnv().CAP_AWS_BUCKET }))
-		.then(() => {
-			console.log("Created S3 bucket");
-			return s3Client.send(
-				new PutBucketPolicyCommand({
-					Bucket: serverEnv().CAP_AWS_BUCKET,
-					Policy: JSON.stringify({
-						Version: "2012-10-17",
-						Statement: [
-							{
-								Effect: "Allow",
-								Principal: "*",
-								Action: ["s3:GetObject"],
-								Resource: [`arn:aws:s3:::${serverEnv().CAP_AWS_BUCKET}/*`],
-							},
-						],
-					}),
-				}),
-			);
-		})
-		.then(() => {
-			console.log("Configured S3 buckeet");
-		})
-		.catch((e) => {
-			if (e instanceof BucketAlreadyOwnedByYou) {
-				console.log("Found existing S3 bucket");
-				return;
+		.send(new HeadBucketCommand({ Bucket: serverEnv().CAP_AWS_BUCKET }))
+		.catch(async (error) => {
+			if (
+				!(error instanceof S3ServiceException) ||
+				error.$metadata.httpStatusCode !== 404
+			) {
+				throw error;
 			}
-		});
+			await s3Client
+				.send(new CreateBucketCommand({ Bucket: serverEnv().CAP_AWS_BUCKET }))
+				.catch((error) => {
+					if (!(error instanceof BucketAlreadyOwnedByYou)) throw error;
+				});
+		})
+		.finally(() => s3Client.destroy());
+	console.log("S3 bucket ready");
 }
 
 async function runMigrations() {
