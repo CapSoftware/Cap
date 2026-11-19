@@ -240,7 +240,7 @@ pub fn input_sound_events(
     let mut held: Vec<&str> = Vec::new();
     // Where the last clip's keys left off, so a key held across a split is
     // still released on the far side of it.
-    let mut held_until: Option<(u32, f64)> = None;
+    let mut held_until: Option<(u32, f64, f64)> = None;
 
     for window in clip_windows(timeline) {
         let clip = window.clip;
@@ -274,16 +274,20 @@ pub fn input_sound_events(
             let source_end = clip.end + take.keyboard_offset_secs;
             let first = presses.partition_point(|press| press.time_ms / 1000.0 < source_start);
             let last = presses.partition_point(|press| press.time_ms / 1000.0 < source_end);
-            // Only a clip that carries straight on from the last one keeps
-            // its held keys; after a cut, a release whose press was cut away
-            // stays silent.
-            let continues = held_until.is_some_and(|(recording_clip, end)| {
-                recording_clip == clip.recording_clip && (end - clip.start).abs() < 1e-6
+            // Only a clip that carries straight on from the last one, in the
+            // recording and on the timeline, keeps its held keys. After a cut
+            // a release whose press was cut away stays silent, and across a
+            // transition the clips overlap, so a release could land before
+            // its press.
+            let continues = held_until.is_some_and(|(recording_clip, end, edited_end)| {
+                recording_clip == clip.recording_clip
+                    && (end - clip.start).abs() < 1e-6
+                    && (edited_end - window.edited_start).abs() < 1e-6
             });
             if !continues {
                 held.clear();
             }
-            held_until = Some((clip.recording_clip, clip.end));
+            held_until = Some((clip.recording_clip, clip.end, window.edited_end));
             for &press in &presses[first..last.max(first)] {
                 let time = to_output(press.time_ms / 1000.0 - take.keyboard_offset_secs);
                 if press.down {

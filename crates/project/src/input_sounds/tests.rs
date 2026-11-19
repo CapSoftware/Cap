@@ -453,3 +453,39 @@ fn a_clip_that_hides_the_cursor_hides_its_clicks() {
     assert_eq!(events.len(), 2);
     assert!(events.iter().all(|event| event.time < 1.0));
 }
+
+#[test]
+fn a_transition_never_sounds_a_release_before_its_press() {
+    let keyboard = KeyboardEvents {
+        presses: vec![press("a", 1900.0, true), press("a", 2100.0, false)],
+    };
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    let mut project = project(
+        serde_json::json!({
+            "segments": [
+                { "start": 0.0, "end": 2.0, "timescale": 1.0, "recordingSegment": 0 },
+                { "start": 2.0, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 }
+            ],
+            "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 }],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![shown(0.0, 4.0)];
+    let events = input_sound_events(&project, &takes);
+    let downs = key_times(&events, true);
+    let ups = key_times(&events, false);
+    assert_eq!(downs.len(), 1);
+    for up in ups {
+        assert!(
+            up >= downs[0],
+            "release at {up} before press at {}",
+            downs[0]
+        );
+    }
+}

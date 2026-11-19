@@ -1622,9 +1622,13 @@ impl Playback {
                         ) {
                             // Playback that started silent gains a source the
                             // moment an edit gives it something to play, such
-                            // as turning key or click sounds on.
-                            audio_generation = self.audio_output.play(spec);
-                            has_audio = audio_generation.is_some();
+                            // as turning key or click sounds on. The source is
+                            // installed without waiting on the device, so the
+                            // video never stalls; it joins at the playhead.
+                            let ticket = self.audio_output.prepare_playback(spec);
+                            audio_generation = Some(ticket.generation());
+                            transitioned_audio = Some(ticket);
+                            has_audio = true;
                         }
                     }
                     if cursor_changed {
