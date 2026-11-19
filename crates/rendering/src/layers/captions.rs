@@ -129,6 +129,18 @@ impl CaptionFrameBox {
     pub fn is_at(&self, position: &str) -> bool {
         self.position == CaptionPosition::from_str(position)
     }
+
+    /// Whether the box is held to the left or right margin, so it widens
+    /// from that edge rather than about its centre.
+    pub fn is_side_pinned(&self) -> bool {
+        matches!(
+            self.position,
+            CaptionPosition::TopLeft
+                | CaptionPosition::BottomLeft
+                | CaptionPosition::TopRight
+                | CaptionPosition::BottomRight
+        )
+    }
 }
 
 /// Top-left corner of a caption box of `box_size` at rest in a frame of
@@ -1613,6 +1625,18 @@ mod tests {
 
     #[test]
     fn the_frame_box_knows_its_placement() {
+        for (position, pinned) in [
+            ("bottom-left", true),
+            ("top-right", true),
+            ("bottom-center", false),
+            ("manual", false),
+        ] {
+            assert_eq!(
+                CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], position).is_side_pinned(),
+                pinned,
+                "{position}"
+            );
+        }
         let manual = CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], "manual");
         assert!(manual.is_manual());
         assert!(manual.is_at("manual"));

@@ -1151,12 +1151,13 @@ impl EditorWindow {
                     self.write_overlay_rect(element, rect, cx);
                 }
                 CanvasSelection::Captions => {
-                    let edge_pinned = self.project.captions.as_ref().is_some_and(|captions| {
-                        matches!(
-                            captions.settings.position.as_str(),
-                            "top-left" | "bottom-left" | "top-right" | "bottom-right"
-                        )
-                    });
+                    // Where the renderer drew this caption, its own
+                    // position override included.
+                    let edge_pinned = self
+                        .frame_layout
+                        .as_ref()
+                        .and_then(|layout| layout.caption)
+                        .is_some_and(|caption| caption.is_side_pinned());
                     let next = caption_resize_size(
                         caption_size,
                         (start.w * size.0, start.h * size.1),

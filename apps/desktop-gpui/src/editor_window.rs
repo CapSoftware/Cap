@@ -679,7 +679,12 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         });
     }
 
-    let timeline = TimelineModel::build(&config, has_camera, multiple_recording_segments);
+    let timeline = TimelineModel::build_for(
+        &config,
+        has_camera,
+        multiple_recording_segments,
+        meta.platform.as_ref(),
+    );
     let duration = timeline.total_duration;
 
     Ok(ProjectSummary {
@@ -2797,11 +2802,13 @@ impl EditorWindow {
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         let imported = std::mem::take(&mut self.timeline.imported_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
-        self.timeline = TimelineModel::build_with_lanes(
+        let platform = self.summary().and_then(|summary| summary.platform.clone());
+        self.timeline = TimelineModel::build_with_lanes_for(
             &self.project,
             self.has_camera,
             self.multiple_clips,
             &self.tracks,
+            platform.as_ref(),
         );
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;

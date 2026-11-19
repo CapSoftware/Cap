@@ -1502,6 +1502,17 @@ impl TimelineModel {
     /// whether more than one recording clip exists (which decides `"Clip"` vs
     /// `"Clip N"`, `TL/ClipTrack.tsx:617-620`).
     pub fn build(config: &ProjectConfiguration, has_camera: bool, multiple_clips: bool) -> Self {
+        Self::build_for(config, has_camera, multiple_clips, None)
+    }
+
+    /// [`TimelineModel::build`] for a recording made on `platform`, whose
+    /// keyboard the keys print as the renderer draws them.
+    pub fn build_for(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        platform: Option<&cap_project::Platform>,
+    ) -> Self {
         let Some(timeline) = config.timeline.as_ref() else {
             return Self::default();
         };
@@ -1652,10 +1663,18 @@ impl TimelineModel {
 
         // The keys print the way the chosen keyboard prints them; the classic
         // label reads like a Mac's.
+        let styled_keys = timeline.keyboard_segments.iter().any(|segment| {
+            segment.color_override.is_some() || segment.background_color_override.is_some()
+        });
         let key_style = config
             .keyboard
             .as_ref()
-            .map(|keyboard| KeycapStyle::from_setting(keyboard.settings.effective_style()))
+            .map(|keyboard| {
+                KeycapStyle::from_setting_for(
+                    keyboard.settings.effective_style_for(platform, styled_keys),
+                    platform,
+                )
+            })
             .filter(|style| *style != KeycapStyle::Classic)
             .unwrap_or(KeycapStyle::MacOs);
         // As the overlay decides: with typing hidden, a lone key is a key.
@@ -1759,7 +1778,17 @@ impl TimelineModel {
         multiple_clips: bool,
         lanes: &TrackLanes,
     ) -> Self {
-        let mut model = Self::build(config, has_camera, multiple_clips);
+        Self::build_with_lanes_for(config, has_camera, multiple_clips, lanes, None)
+    }
+
+    pub fn build_with_lanes_for(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        lanes: &TrackLanes,
+        platform: Option<&cap_project::Platform>,
+    ) -> Self {
+        let mut model = Self::build_for(config, has_camera, multiple_clips, platform);
         model.rows = build_rows(config, &model, has_camera, lanes);
         model
     }
@@ -5241,6 +5270,33 @@ mod tests {
     /// arrives: the row order is the source's mount order, multi-lane tracks
     /// contribute one row per used lane with the highest-priority lane first,
     /// and the two locked tracks are always there.
+    /// The timeline's keys print for the platform the recording was made
+    /// on, as the preview and every export draw them.
+    #[test]
+    fn timeline_keys_print_for_the_recording_platform() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 }],
+                "zoomSegments": [],
+                "keyboardSegments": [
+                    { "id": "k", "start": 0.5, "end": 1.5, "displayText": "⌘C" }
+                ]
+            },
+            "keyboard": { "settings": { "enabled": true, "style": "auto" } }
+        }))
+        .unwrap();
+        let first_key = |platform: cap_project::Platform| {
+            let model = TimelineModel::build_for(&config, false, false, Some(&platform));
+            match &model.keyboard[0].detail {
+                SegmentDetail::Keyboard { keys, .. } => keys[0].label.to_string(),
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(first_key(cap_project::Platform::MacOS), "⌘");
+        assert_eq!(first_key(cap_project::Platform::Windows), "Win");
+        assert_eq!(first_key(cap_project::Platform::Linux), "Super");
+    }
+
     #[test]
     fn the_row_order_is_the_sources_mount_order() {
         let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
