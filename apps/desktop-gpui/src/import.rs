@@ -1582,6 +1582,9 @@ fn keep_stream_ineligibility(
     if width as u32 > MAX_IMAGE_DIMENSION || height as u32 > MAX_IMAGE_DIMENSION {
         return Some("dimensions");
     }
+    if width as usize * height as usize > cap_rendering::decoder::FULL_CHROMA_MAX_PIXELS {
+        return Some("frame size");
+    }
     let stream_aspect = unsafe { (*stream.as_ptr()).sample_aspect_ratio };
     for ratio in [parameters.sample_aspect_ratio, stream_aspect] {
         if ratio.num > 0 && ratio.den > 0 && ratio.num != ratio.den {
