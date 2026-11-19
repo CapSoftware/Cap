@@ -2555,7 +2555,7 @@ reuploaded = "最新の編集内容が同じリンクで利用できます"
 uploaded = "録画のアップロードが完了しました"
 
 [editor.export.enhance]
-description = "拡大した画面や低コントラストの画面内容を鮮明にします。書き出しに時間がかかる場合があります。"
+description = "録画を拡大または縮小したとき、文字や細部を鮮明にします。書き出しに時間がかかる場合があります。"
 title = "画質を向上"
 
 [editor.export.estimate]
