@@ -4825,7 +4825,7 @@ mod tests {
         }));
         assert_eq!(keyboard_settings(&project).size, 72);
         // The rest of the defaults come along, not just the written key.
-        assert_eq!(keyboard_settings(&project).position, "bottom-center");
+        assert_eq!(keyboard_settings(&project).position, "top-center");
     }
 
     fn slider_model_project(timeline_segments: usize) -> ProjectConfiguration {

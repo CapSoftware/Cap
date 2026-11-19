@@ -2935,6 +2935,9 @@ pub struct KeyboardSettings {
     pub color: String,
     pub background_color: String,
     pub background_opacity: u32,
+    /// New overlays sit at the top; one saved without a position keeps
+    /// the bottom it was drawn at.
+    #[serde(default = "KeyboardSettings::legacy_position")]
     pub position: String,
     pub font_weight: u32,
     pub fade_duration: f32,
@@ -2960,6 +2963,10 @@ pub struct KeyboardSettings {
 }
 
 impl KeyboardSettings {
+    fn legacy_position() -> String {
+        "bottom-center".to_string()
+    }
+
     fn legacy_show_typing() -> bool {
         true
     }
@@ -3027,7 +3034,7 @@ impl Default for KeyboardSettings {
             color: DEFAULT_KEYBOARD_COLOR.to_string(),
             background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
             background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,
-            position: "bottom-center".to_string(),
+            position: "top-center".to_string(),
             font_weight: DEFAULT_KEYBOARD_FONT_WEIGHT,
             fade_duration: 0.15,
             linger_duration: 1.5,
