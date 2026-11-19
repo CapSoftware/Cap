@@ -2025,6 +2025,13 @@ impl SharedPauseState {
         self.flag.clone()
     }
 
+    pub(crate) fn offset(&self) -> Duration {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .offset
+    }
+
     pub fn new(flag: Arc<AtomicBool>) -> Self {
         Self {
             flag,
@@ -2255,6 +2262,15 @@ impl SharedWallClockPause {
             Err(poisoned) => poisoned.into_inner().total_pause_duration,
         }
     }
+
+    fn unfinished_pause_duration(&self) -> Duration {
+        self.inner
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pause_started_at
+            .map(|started| started.elapsed())
+            .unwrap_or_default()
+    }
 }
 
 pub struct OnceSender<T>(Option<oneshot::Sender<T>>);
@@ -2322,7 +2338,7 @@ pub struct SetupCtx {
     stop_signal: PipelineStopSignal,
     digital_silence_ms: Arc<AtomicU64>,
     capture_exit: Arc<CaptureExit>,
-    resumes: Arc<AtomicU64>,
+    video_refresh_requests: Arc<AtomicU64>,
 }
 
 impl SetupCtx {
@@ -2340,7 +2356,7 @@ impl SetupCtx {
             stop_signal,
             digital_silence_ms: Arc::new(AtomicU64::new(0)),
             capture_exit: Arc::default(),
-            resumes: Arc::default(),
+            video_refresh_requests: Arc::default(),
         }
     }
 
@@ -2368,8 +2384,8 @@ impl SetupCtx {
         self.stop_signal.clone()
     }
 
-    pub fn resumes(&self) -> Arc<AtomicU64> {
-        self.resumes.clone()
+    pub fn video_refresh_requests(&self) -> Arc<AtomicU64> {
+        self.video_refresh_requests.clone()
     }
 }
 
@@ -3043,7 +3059,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
         .await?;
 
         let mut shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
-        shared_pause.resumes = setup_ctx.resumes();
+        shared_pause.resumes = setup_ctx.video_refresh_requests();
         let video_frame_count = Arc::new(AtomicU64::new(0));
         let video_timestamp_span = Arc::new(VideoTimestampSpan::default());
 
@@ -3169,7 +3185,7 @@ impl OutputPipelineBuilder<NoVideo> {
         .await?;
 
         let mut shared_pause = SharedWallClockPause::new(build_ctx.pause_flag.clone());
-        shared_pause.resumes = setup_ctx.resumes();
+        shared_pause.resumes = setup_ctx.video_refresh_requests();
         let audio_gap_summary = Arc::new(OnceLock::new());
         let digital_silence_ms = setup_ctx.digital_silence_ms();
         let capture_exit = setup_ctx.capture_exit.clone();
@@ -3502,6 +3518,7 @@ async fn setup_muxer<TMuxer: Muxer>(
     .await?;
 
     muxer.set_health_sender(setup_ctx.health_tx().clone());
+    muxer.set_video_refresh_requests(setup_ctx.video_refresh_requests());
 
     Ok(Arc::new(Mutex::new(muxer)))
 }
@@ -3888,7 +3905,8 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let stopped_at = timestamps
             .instant()
             .elapsed()
-            .saturating_sub(shared_pause.total_pause_duration());
+            .saturating_sub(shared_pause.total_pause_duration())
+            .saturating_sub(shared_pause.unfinished_pause_duration());
 
         if was_cancelled {
             info!("mux-video cancelled, draining remaining frames from channel");
@@ -4038,7 +4056,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let video_stopped_at = stopped_at.saturating_sub(first_frame_offset.unwrap_or(stopped_at));
 
         if was_cancelled
-            && !shared_pause.check().0
             && let Some(mut frame) = last_frame
             && let Some((_, last_timestamp)) = timestamp_span.get()
             && let Some(final_timestamp) = static_video_tail_timestamp(
@@ -4055,7 +4072,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
                 muxer
                     .lock()
                     .await
-                    .send_video_frame(frame, penultimate_timestamp)
+                    .send_video_tail_frame(frame, penultimate_timestamp)
                     .map_err(|error| video_mux_send_error(frame_count + 1, error))?;
                 timestamp_span.record(penultimate_timestamp);
                 frame_count += 1;
@@ -4064,7 +4081,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
             muxer
                 .lock()
                 .await
-                .send_video_frame(frame, final_timestamp)
+                .send_video_tail_frame(frame, final_timestamp)
                 .map_err(|error| video_mux_send_error(frame_count + 1, error))?;
             timestamp_span.record(final_timestamp);
             frame_count += 1;
@@ -5565,6 +5582,8 @@ pub trait Muxer: Send + 'static {
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>>;
 
     fn set_health_sender(&mut self, _tx: HealthSender) {}
+
+    fn set_video_refresh_requests(&mut self, _requests: Arc<AtomicU64>) {}
 }
 
 pub trait AudioMuxer: Muxer {
@@ -5579,6 +5598,14 @@ pub trait VideoMuxer: Muxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()>;
+
+    fn send_video_tail_frame(
+        &mut self,
+        frame: Self::VideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.send_video_frame(frame, timestamp)
+    }
 }
 
 #[cfg(test)]
@@ -9179,6 +9206,45 @@ mod tests {
 
             let timestamps = sent.lock().unwrap().clone();
             (timestamps, capture_duration)
+        }
+
+        #[tokio::test]
+        async fn a_still_screen_stopped_while_paused_runs_to_the_pause_point() {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let (sender, receiver) = flume::bounded(4);
+            let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let pipeline = OutputPipeline::builder(temp_dir.path().join("paused.mp4"))
+                .with_video::<ChannelVideoSource<StaticFrame>>(ChannelVideoSourceConfig::new(
+                    VideoInfo::from_raw(cap_media_info::RawVideoFormat::Bgra, 16, 16, 30),
+                    receiver,
+                ))
+                .with_timestamps(Timestamps::now())
+                .build::<ObservedMuxer>(sent.clone())
+                .await
+                .unwrap();
+
+            let first_frame_at = Instant::now();
+            sender
+                .send_async(StaticFrame {
+                    timestamp: Timestamp::Instant(first_frame_at),
+                })
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            pipeline.pause();
+            let recorded = first_frame_at.elapsed();
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            pipeline.stop().await.unwrap();
+
+            let timestamps = sent.lock().unwrap().clone();
+            let last = timestamps.last().copied().unwrap();
+            assert!(timestamps.len() >= 2, "{timestamps:?}");
+            assert!(
+                last + Duration::from_millis(34)
+                    >= recorded.saturating_sub(Duration::from_millis(60))
+                    && last <= recorded + Duration::from_millis(60),
+                "paused after {recorded:?}, video ends at {timestamps:?}"
+            );
         }
 
         #[tokio::test]

@@ -88,7 +88,7 @@ impl Screen {
 
 struct Capture {
     frames: mpsc::Receiver<FFmpegVideoFrame>,
-    resumes: Arc<AtomicU64>,
+    refresh_requests: Arc<AtomicU64>,
     stop: CancellationToken,
     thread: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
     _health: tokio::sync::mpsc::Receiver<output_pipeline::PipelineHealthEvent>,
@@ -112,11 +112,11 @@ impl Capture {
             u32::from(HEIGHT),
             60,
         );
-        let resumes = Arc::new(AtomicU64::new(0));
+        let refresh_requests = Arc::new(AtomicU64::new(0));
         let delivery = X11Delivery {
             every_frame: false,
             refresh_interval,
-            resumes: resumes.clone(),
+            refresh_requests: refresh_requests.clone(),
         };
         let (tx, frames) = mpsc::channel(channel_buffer);
         let (health_tx, health) = tokio::sync::mpsc::channel(64);
@@ -127,7 +127,7 @@ impl Capture {
         });
         Self {
             frames,
-            resumes,
+            refresh_requests,
             stop,
             thread: Some(thread),
             _health: health,
@@ -165,7 +165,7 @@ impl Drop for Capture {
 }
 
 #[tokio::test]
-async fn a_change_discarded_by_a_pause_is_delivered_after_resume() {
+async fn a_change_discarded_downstream_is_delivered_again_on_request() {
     let Some(server) = Xvfb::start() else {
         return;
     };
@@ -178,13 +178,13 @@ async fn a_change_discarded_by_a_pause_is_delivered_after_resume() {
     capture.count_for(Duration::from_millis(300)).await;
     assert_eq!(capture.count_for(Duration::from_millis(200)).await, 0);
 
-    capture.resumes.fetch_add(1, Ordering::Release);
+    capture.refresh_requests.fetch_add(1, Ordering::Release);
     assert_eq!(capture.next_color().await, Some(GREEN));
     assert_eq!(capture.count_for(Duration::from_millis(200)).await, 0);
 }
 
 #[tokio::test]
-async fn a_pause_shorter_than_a_frame_still_delivers_the_change_it_discarded() {
+async fn a_request_right_after_a_delivery_still_sends_the_frame_again() {
     let Some(server) = Xvfb::start() else {
         return;
     };
@@ -195,7 +195,7 @@ async fn a_pause_shorter_than_a_frame_still_delivers_the_change_it_discarded() {
 
     screen.fill(GREEN);
     assert_eq!(capture.next_color().await, Some(GREEN));
-    capture.resumes.fetch_add(1, Ordering::Release);
+    capture.refresh_requests.fetch_add(1, Ordering::Release);
     assert_eq!(capture.next_color().await, Some(GREEN));
     assert_eq!(capture.count_for(Duration::from_millis(200)).await, 0);
 }

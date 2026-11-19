@@ -195,6 +195,8 @@ pub struct SegmentedVideoEncoder {
     flush_failure: Option<EncoderFlushFailure>,
 }
 
+const SPARSE_SEGMENT_SCAN_INTERVAL: Duration = Duration::from_secs(1);
+
 struct SegmentKeyframes {
     segment_duration: Duration,
     encoder_interval: u32,
@@ -237,6 +239,7 @@ struct SegmentMux {
     completed_segments: Vec<VideoSegmentInfo>,
 
     frames_since_segment_scan: u32,
+    last_segment_scan: std::time::Instant,
 
     codec_info: CodecInfo,
 
@@ -266,8 +269,11 @@ impl MuxTarget for SegmentMux {
         self.try_notify_init_segment();
 
         self.frames_since_segment_scan += 1;
-        if self.frames_since_segment_scan >= 10 {
+        if self.frames_since_segment_scan >= 10
+            || self.last_segment_scan.elapsed() >= SPARSE_SEGMENT_SCAN_INTERVAL
+        {
             self.frames_since_segment_scan = 0;
+            self.last_segment_scan = std::time::Instant::now();
             self.flush_pending_segments();
         }
     }
@@ -541,6 +547,7 @@ impl SegmentedVideoEncoder {
             current_index: 1,
             completed_segments: Vec::new(),
             frames_since_segment_scan: 0,
+            last_segment_scan: std::time::Instant::now(),
             codec_info,
             segment_tx: SegmentSender::default(),
             init_notified: false,
@@ -2081,6 +2088,32 @@ mod tests {
         for duration in &durations[..durations.len() - 1] {
             assert!((2.0..2.1).contains(duration), "segments: {durations:?}");
         }
+    }
+
+    #[test]
+    fn a_static_source_publishes_each_segment_without_waiting_for_ten_frames() {
+        ffmpeg::init().ok();
+        let temp = tempfile::tempdir().unwrap();
+        let mut encoder = SegmentedVideoEncoder::init(
+            temp.path().to_path_buf(),
+            test_video_info(),
+            SegmentedVideoEncoderConfig::default(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        encoder.set_segment_callback(tx);
+        let refresh = Duration::from_secs(2) + Duration::from_secs(1) / 30;
+        for index in 0..4 {
+            if index == 3 {
+                std::thread::sleep(SPARSE_SEGMENT_SCAN_INTERVAL);
+            }
+            encoder
+                .queue_frame(create_test_frame(320, 240), refresh * index)
+                .unwrap();
+        }
+        let published = rx.try_iter().filter(|event| !event.is_init).count();
+        assert!(published >= 1, "no segment published after four frames");
+        encoder.finish().unwrap();
     }
 
     #[test]
