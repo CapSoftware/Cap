@@ -8,6 +8,7 @@ mod config_write_tests;
 mod configuration;
 pub mod cursor;
 pub mod disfluency;
+pub mod input_sounds;
 pub mod keyboard;
 mod late_audio;
 mod meta;

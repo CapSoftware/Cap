@@ -1174,7 +1174,30 @@ pub struct CursorConfiguration {
     /// keep it off.
     #[serde(default)]
     pub hover_anchors: bool,
+    pub click_sounds: bool,
+    pub click_sound_type: ClickSoundType,
+    pub click_sound_volume: f32,
 }
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum ClickSoundType {
+    #[default]
+    Mouse,
+    Trackpad,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum KeySoundType {
+    #[default]
+    Mechanical,
+    Deep,
+    Laptop,
+    Typewriter,
+}
+
+pub const DEFAULT_INPUT_SOUND_VOLUME: f32 = 0.6;
 
 impl Default for CursorConfiguration {
     fn default() -> Self {
@@ -1201,6 +1224,9 @@ impl Default for CursorConfiguration {
             ripple: CursorRippleConfig::default(),
             interaction_anchors: true,
             hover_anchors: true,
+            click_sounds: false,
+            click_sound_type: ClickSoundType::default(),
+            click_sound_volume: DEFAULT_INPUT_SOUND_VOLUME,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -2996,6 +3022,9 @@ pub struct KeyboardSettings {
     /// typing.
     #[serde(default = "KeyboardSettings::legacy_show_typing")]
     pub show_typing: bool,
+    pub key_sounds: bool,
+    pub key_sound_type: KeySoundType,
+    pub key_sound_volume: f32,
 }
 
 impl KeyboardSettings {
@@ -3081,6 +3110,9 @@ impl Default for KeyboardSettings {
             style: Self::platform_style(),
             theme: Self::default_theme(),
             show_typing: false,
+            key_sounds: false,
+            key_sound_type: KeySoundType::default(),
+            key_sound_volume: DEFAULT_INPUT_SOUND_VOLUME,
         }
     }
 }

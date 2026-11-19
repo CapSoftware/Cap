@@ -95,7 +95,7 @@ const SPECIAL_KEY_SYMBOLS: &[(&str, &str)] = &[
     ("PageDown", "⇟"),
 ];
 
-fn is_modifier_key(key: &str) -> bool {
+pub(crate) fn is_modifier_key(key: &str) -> bool {
     MODIFIER_KEYS.contains(&key)
 }
 
@@ -661,27 +661,19 @@ impl<'a> PreparedKeyboardEvents<'a> {
     }
 }
 
-fn project_keyboard_events(
-    takes: &[(KeyboardEvents, f64)],
-    timeline: &crate::TimelineConfiguration,
-    settings: &crate::KeyboardSettings,
-) -> Vec<KeyboardTrackSegment> {
-    let holds = timeline.hold_windows();
-    let output_time = |time: f64, end: bool| {
-        let mut output = time;
-        for (start, finish) in &holds {
-            if output > *start || (!end && output == *start) {
-                output += finish - start;
-            } else {
-                break;
-            }
-        }
-        output
-    };
+pub(crate) struct ClipWindow<'a> {
+    pub clip: &'a crate::TimelineSegment,
+    pub index: usize,
+    pub edited_start: f64,
+    pub edited_end: f64,
+}
+
+/// Where each playable clip starts and ends on the edited timeline before
+/// fullscreen-text holds are inserted, with transitions overlapping the clips
+/// on either side of them.
+pub(crate) fn clip_windows(timeline: &crate::TimelineConfiguration) -> Vec<ClipWindow<'_>> {
     let mut edited_start = 0.0;
-    let mut result = Vec::new();
-    let mut prepared: Vec<Option<PreparedKeyboardEvents>> =
-        (0..takes.len()).map(|_| None).collect();
+    let mut windows = Vec::with_capacity(timeline.segments.len());
     for (index, clip) in timeline.segments.iter().enumerate() {
         if !clip.start.is_finite()
             || !clip.end.is_finite()
@@ -695,6 +687,46 @@ fn project_keyboard_events(
             .effective_transition(index)
             .map_or(0.0, |transition| transition.duration);
         let edited_end = edited_start + clip.duration();
+        windows.push(ClipWindow {
+            clip,
+            index,
+            edited_start,
+            edited_end,
+        });
+        edited_start = edited_end;
+    }
+    windows
+}
+
+pub(crate) fn held_output_time(holds: &[(f64, f64)], time: f64, end: bool) -> f64 {
+    let mut output = time;
+    for (start, finish) in holds {
+        if output > *start || (!end && output == *start) {
+            output += finish - start;
+        } else {
+            break;
+        }
+    }
+    output
+}
+
+pub(crate) fn project_keyboard_events(
+    takes: &[(KeyboardEvents, f64)],
+    timeline: &crate::TimelineConfiguration,
+    settings: &crate::KeyboardSettings,
+) -> Vec<KeyboardTrackSegment> {
+    let holds = timeline.hold_windows();
+    let output_time = |time: f64, end: bool| held_output_time(&holds, time, end);
+    let mut result = Vec::new();
+    let mut prepared: Vec<Option<PreparedKeyboardEvents>> =
+        (0..takes.len()).map(|_| None).collect();
+    for ClipWindow {
+        clip,
+        index,
+        edited_start,
+        edited_end,
+    } in clip_windows(timeline)
+    {
         if let Some((events, capture_offset)) = takes.get(clip.recording_clip as usize)
             && capture_offset.is_finite()
         {
@@ -736,7 +768,6 @@ fn project_keyboard_events(
                     .filter(|segment| segment.end > segment.start),
             );
         }
-        edited_start = edited_end;
     }
     result.sort_by(|a, b| a.start.total_cmp(&b.start));
     result
