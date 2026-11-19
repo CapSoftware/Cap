@@ -1912,6 +1912,7 @@ pub struct SegmentMedia {
     pub cursor: Arc<CursorEvents>,
     pub hover_changes: Arc<HoverChanges>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
+    pub keyboard_offset_secs: f64,
     pub decoders: RecordingSegmentDecoders,
 }
 
@@ -2222,6 +2223,7 @@ async fn create_segments_with_audio(
                 cursor,
                 hover_changes,
                 keyboard: Arc::new(Default::default()),
+                keyboard_offset_secs: 0.0,
                 decoders,
             }])
         }
@@ -2287,6 +2289,7 @@ async fn create_segments_with_audio(
                     cursor,
                     hover_changes,
                     keyboard,
+                    keyboard_offset_secs: s.latest_start_time().unwrap_or(0.0),
                     decoders,
                 })
             });
