@@ -5159,6 +5159,25 @@ mod tests {
         assert_eq!(chosen(&ui), (ExportResolution::P1080, 60));
     }
 
+    /// Turbo is on for someone exporting for the first time; whoever saved
+    /// export settings before the toggle existed keeps it off, and a choice
+    /// either way is kept.
+    #[test]
+    fn turbo_starts_on_only_for_new_users() {
+        let saved_before_turbo: ExportPrefs = serde_json::from_str(
+            r#"{"format":"Mp4","fps":30,"export_to":"file","resolution":"720p","compression":"Maximum","custom_bpp":null}"#,
+        )
+        .unwrap();
+        assert!(!saved_before_turbo.turbo);
+        for chosen in [false, true] {
+            let mut prefs = saved_before_turbo.clone();
+            prefs.turbo = chosen;
+            let reread: ExportPrefs =
+                serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+            assert_eq!(reread.turbo, chosen);
+        }
+    }
+
     #[test]
     fn a_remembered_choice_wins_over_the_source() {
         let saved_before_this_change: ExportPrefs = serde_json::from_str(

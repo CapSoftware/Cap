@@ -150,8 +150,9 @@ pub struct ExportPrefs {
     pub advanced_open: bool,
     #[serde(default)]
     pub organization_id: Option<String>,
-    /// On unless turned off; prefs saved before the toggle existed read as on.
-    #[serde(default = "default_true")]
+    /// New users start with Turbo on (see `ExportUi::new`); prefs saved
+    /// before the toggle existed keep it off, as they were.
+    #[serde(default)]
     pub turbo: bool,
     #[serde(default)]
     pub gif_quality: Option<String>,
