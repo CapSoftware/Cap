@@ -253,32 +253,17 @@ fn rss_case_child() {
         }
         other => panic!("unknown case {other}"),
     }
+    #[cfg(unix)]
+    println!("{RSS_PEAK}{}", own_peak_rss());
 }
 
-#[cfg(unix)]
-fn run_child(case: &str) {
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "source_limit_tests::rss_case_child",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(RSS_CASE, case)
-        .stdout(std::process::Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success(), "{case} failed: {status}");
-}
+const RSS_PEAK: &str = "rss_peak=";
 
-/// Largest peak RSS of any child this process has waited for.
+/// This process's own peak RSS, so no earlier child's peak can mask it.
 #[cfg(unix)]
-fn children_peak_rss() -> u64 {
+fn own_peak_rss() -> u64 {
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
-    assert_eq!(
-        unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage) },
-        0
-    );
+    assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
     let peak = usage.ru_maxrss as u64;
     if cfg!(target_os = "macos") {
         peak
@@ -287,15 +272,35 @@ fn children_peak_rss() -> u64 {
     }
 }
 
-/// Runs `control`, then `case`, and returns (control peak, highest peak so
-/// far), which bounds the case's peak.
+#[cfg(unix)]
+fn child_peak_rss(case: &str) -> u64 {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "source_limit_tests::rss_case_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(RSS_CASE, case)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{case} failed: {}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+        .lines()
+        .find_map(|line| line.split_once(RSS_PEAK))
+        .and_then(|(_, peak)| peak.split_whitespace().next()?.parse().ok())
+        .unwrap_or_else(|| panic!("{case} reported no peak:\n{stdout}"))
+}
+
 #[cfg(unix)]
 fn peak_rss_against(control: &str, case: &str) -> (u64, u64) {
-    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
-    run_child(control);
-    let control = children_peak_rss();
-    run_child(case);
-    (control, children_peak_rss())
+    (child_peak_rss(control), child_peak_rss(case))
 }
 
 #[cfg(unix)]
