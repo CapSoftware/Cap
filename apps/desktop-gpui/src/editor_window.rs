@@ -5541,6 +5541,13 @@ impl EditorWindow {
                         self.seek_to_time(press_time, cx);
                         self.view.preview_time = None;
                     }
+                } else if kind == TrackKind::Keyboard {
+                    cx.stop_propagation();
+                    let length = (1.2_f64).max(secs_per_pixel * 60.);
+                    if self.add_keyboard_at(press_time, length, window, cx) {
+                        self.seek_to_time(press_time, cx);
+                        self.view.preview_time = None;
+                    }
                 } else if matches!(
                     kind,
                     TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
@@ -7327,6 +7334,99 @@ impl EditorWindow {
             self.set_selection(Some(Selection::single(TrackKind::Caption, index)), cx);
         }
         self.note_edit("add-caption", Some(TrackKind::Caption));
+        true
+    }
+
+    /// Adds a key press by hand at `time`, for a project with no recording
+    /// to take keys from, or a moment the recording missed. It starts as a
+    /// familiar shortcut, selected so its text can be retyped.
+    pub(crate) fn add_keyboard_at(
+        &mut self,
+        time: f64,
+        length: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let durations = self.clip_display_durations.clone();
+        if !edits::ensure_timeline(&mut self.project, &durations) {
+            return false;
+        }
+        let total = self.total_duration();
+        let length = length.min(total);
+        let placement = self.project.timeline.as_ref().and_then(|timeline| {
+            edits::find_placement(&timeline.keyboard_segments, time, length, total)
+        });
+        let Some((start, end)) = placement else {
+            self.show_notice(tr::editor::window::no_room_for_key(), window, cx);
+            return false;
+        };
+        let next = self.project.timeline.as_ref().map_or(0, |timeline| {
+            timeline
+                .keyboard_segments
+                .iter()
+                .filter_map(|segment| {
+                    segment
+                        .id
+                        .strip_prefix(cap_project::MANUAL_KEYBOARD_PREFIX)?
+                        .parse::<u64>()
+                        .ok()
+                })
+                .max()
+                .map_or(0, |last| last + 1)
+        });
+        let id = format!("{}{next}", cap_project::MANUAL_KEYBOARD_PREFIX);
+        let text = if cfg!(target_os = "macos") {
+            "⌘K"
+        } else {
+            "⌃K"
+        };
+        let showed_track = self.tracks.keyboard;
+        self.tracks.keyboard = true;
+        let added = self.edit_timeline_project(
+            |project| {
+                let keyboard = project
+                    .keyboard
+                    .get_or_insert_with(cap_project::KeyboardData::default);
+                keyboard.settings.enabled = true;
+                let Some(timeline) = project.timeline.as_mut() else {
+                    return false;
+                };
+                let segment = cap_project::KeyboardTrackSegment {
+                    id: id.clone(),
+                    start,
+                    end,
+                    display_text: text.to_string(),
+                    keys: cap_project::manual_key_presses(text),
+                    fade_duration_override: None,
+                    position_override: None,
+                    color_override: None,
+                    background_color_override: None,
+                    font_size_override: None,
+                    uppercase_override: None,
+                };
+                let at = timeline
+                    .keyboard_segments
+                    .partition_point(|other| other.start <= start);
+                timeline.keyboard_segments.insert(at, segment);
+                true
+            },
+            window,
+            cx,
+        );
+        if !added {
+            self.tracks.keyboard = showed_track;
+            return false;
+        }
+        let index = self.project.timeline.as_ref().and_then(|timeline| {
+            timeline
+                .keyboard_segments
+                .iter()
+                .position(|segment| segment.id == id)
+        });
+        if let Some(index) = index {
+            self.set_selection(Some(Selection::single(TrackKind::Keyboard, index)), cx);
+        }
+        self.note_edit("add-keyboard", Some(TrackKind::Keyboard));
         true
     }
 

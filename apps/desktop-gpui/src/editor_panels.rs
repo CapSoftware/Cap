@@ -3192,8 +3192,18 @@ impl EditorWindow {
             }
             FieldKey::KeyboardText(index) => {
                 self.edit_keyboard_segment("keyboard-text", index, window, cx, move |segment| {
+                    // A key added by hand takes a shortcut in words
+                    // (`cmd+shift+p`) and strikes whatever its text says.
+                    let text = if cap_project::is_manual_keyboard_segment(segment) {
+                        cap_project::manual_key_text(&text)
+                    } else {
+                        text
+                    };
                     if segment.display_text == text {
                         return false;
+                    }
+                    if cap_project::is_manual_keyboard_segment(segment) {
+                        segment.keys = cap_project::manual_key_presses(&text);
                     }
                     segment.display_text = text;
                     true

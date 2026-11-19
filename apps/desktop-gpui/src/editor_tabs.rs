@@ -2784,6 +2784,16 @@ impl EditorWindow {
                     let Some(timeline) = project.timeline.as_mut() else {
                         return false;
                     };
+                    // Keys added by hand are not the recording's to replace.
+                    let mut segments = segments;
+                    segments.extend(
+                        timeline
+                            .keyboard_segments
+                            .iter()
+                            .filter(|segment| cap_project::is_manual_keyboard_segment(segment))
+                            .cloned(),
+                    );
+                    segments.sort_by(|a, b| a.start.total_cmp(&b.start));
                     timeline.keyboard_segments = segments;
                     true
                 });

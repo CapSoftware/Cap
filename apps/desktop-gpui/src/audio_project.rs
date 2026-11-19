@@ -5,7 +5,9 @@ use std::{
 
 use cap_export::{
     audio::AudioExportFormat,
-    audio_project::{AudioProjectError, AudioProjectSources, create_audio_only_project},
+    audio_project::{
+        AudioProjectError, AudioProjectSources, create_audio_only_project, create_blank_project,
+    },
 };
 use gpui::{App, Window};
 
@@ -44,6 +46,43 @@ pub fn open_audio_in_editor(sources: AudioProjectSources, pretty_name: String, c
         Err(error) => {
             tracing::error!(error, "could not create an audio-only project");
             crate::import::show_error_dialog(tr::import::audio_failed(&error));
+        }
+    })
+    .detach();
+}
+
+/// Creates an empty Studio project in the recordings folder, with nothing
+/// recorded, and opens it in the editor to build a video from a background,
+/// music, keys, text and images. A failure is reported in a dialog.
+pub fn open_blank_in_editor(cx: &mut App) {
+    let pretty_name = tr::import::blank_name().to_string();
+    let created = cx.background_executor().spawn(async move {
+        let recordings_dir = crate::recording::recordings_dir();
+        std::fs::create_dir_all(&recordings_dir).map_err(|error| error.to_string())?;
+        let folder = sanitize_filename::sanitize(&pretty_name);
+        let mut attempts = 0;
+        loop {
+            let name =
+                cap_utils::ensure_unique_filename(&format!("{folder}.cap"), &recordings_dir)?;
+            let project_path = recordings_dir.join(name);
+            match create_blank_project(&project_path, &pretty_name) {
+                Ok(_) => break Ok(project_path),
+                Err(AudioProjectError::Exists(_)) if attempts < 8 => attempts += 1,
+                Err(error) => break Err(error.to_string()),
+            }
+        }
+    });
+    cx.spawn(async move |cx| match created.await {
+        Ok(project_path) => {
+            tracing::info!(path = %project_path.display(), "created a blank project");
+            cx.update(|cx| {
+                crate::import::refresh_libraries(cx);
+                app_windows::open_editor(project_path, cx);
+            });
+        }
+        Err(error) => {
+            tracing::error!(error, "could not create a blank project");
+            crate::import::show_error_dialog(tr::import::blank_failed(&error));
         }
     })
     .detach();

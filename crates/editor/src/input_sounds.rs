@@ -455,7 +455,21 @@ fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {
                 timeline
                     .keyboard_segments
                     .iter()
-                    .map(|segment| (segment.start, segment.end))
+                    .map(|segment| {
+                        (
+                            segment.start,
+                            segment.end,
+                            // A key added by hand sounds the keys its text
+                            // strikes.
+                            cap_project::is_manual_keyboard_segment(segment).then(|| {
+                                segment
+                                    .keys
+                                    .iter()
+                                    .map(|key| (key.key.as_str(), key.time_offset))
+                                    .collect::<Vec<_>>()
+                            }),
+                        )
+                    })
                     .collect::<Vec<_>>()
             })
         }),

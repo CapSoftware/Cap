@@ -30,6 +30,7 @@ website = "Website"
 commit = "Commit"
 
 [menu.file]
+new_blank_project = "New Blank Project"
 open_prompt = "Open Recording"
 close_window = "Close Window"
 title = "File"
@@ -1067,6 +1068,7 @@ copy_screenshot_failed = "Could not copy screenshot"
 import_recordings = "Import"
 import_screenshots = "Import image"
 importing = "Importing"
+new_project = { text = "New", context = "Button that starts a new blank project, with no recording, to build a video from backgrounds, music, keys and text." }
 no_matching_recordings = "No matching recordings"
 no_matching_screenshots = "No matching screenshots"
 no_recordings = "No recordings yet"
@@ -1542,6 +1544,8 @@ words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in
 
 [import]
 audio_failed = { text = "Failed to import audio: {error}", context = "{error} is a technical error message, usually in English." }
+blank_failed = { text = "Failed to create a project: {error}", context = "{error} is a technical error message, usually in English." }
+blank_name = { text = "Untitled", context = "The name of a new blank project, made without recording anything." }
 error_title = "Import Error"
 image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
 unsupported = "Unsupported media file."
@@ -3021,6 +3025,7 @@ title = { text = "Timeline", context = "Label above the timeline while the edito
 
 [editor.timeline.empty]
 add_audio = "Add audio"
+add_key = "Add a key press"
 add_scene = "Add scene"
 audio = "Add background music or import your own audio"
 captions = "No captions"
@@ -3159,6 +3164,7 @@ crop = "Crop"
 crop_tooltip = "Crop Video"
 no_room_for_3d_shot = "No room for another 3D shot"
 no_room_for_caption = "No room for another caption here"
+no_room_for_key = "No room for another key press here"
 redo = "Redo"
 save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
 undo = "Undo"

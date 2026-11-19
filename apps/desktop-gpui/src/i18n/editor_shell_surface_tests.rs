@@ -1301,6 +1301,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "No room for another caption here",
         ),
         (
+            tr::editor::window::no_room_for_key(),
+            "No room for another key press here",
+        ),
+        (tr::editor::timeline::empty::add_key(), "Add a key press"),
+        (
             tr::editor::window::open::damaged(),
             "This recording's video tracks could not be opened. The bundle looks damaged.",
         ),

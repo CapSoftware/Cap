@@ -2765,7 +2765,7 @@ fn active_hold_window(windows: &[(f64, f64)], time: f64) -> Option<(f64, f64)> {
         .copied()
 }
 
-fn held_time_before(windows: &[(f64, f64)], time: f64) -> f64 {
+pub(crate) fn held_time_before(windows: &[(f64, f64)], time: f64) -> f64 {
     windows
         .iter()
         .map(|(start, end)| (time.min(*end) - start).max(0.0))

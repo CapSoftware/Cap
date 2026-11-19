@@ -141,6 +141,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::device::format::loading(), "Loading formats..."),
         (tr::main::device::format::applying(), "Applying format..."),
         (tr::main::library::import_recordings(), "Import"),
+        (tr::main::library::new_project(), "New"),
         (tr::main::library::import_screenshots(), "Import image"),
         (tr::main::library::no_recordings(), "No recordings yet"),
         (tr::main::library::no_screenshots(), "No screenshots yet"),

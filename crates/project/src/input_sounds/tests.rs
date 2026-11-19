@@ -553,3 +553,52 @@ fn a_style_segment_that_hides_or_shows_the_cursor_gates_its_clicks() {
         .collect();
     assert_eq!(times, vec![3.0]);
 }
+
+#[test]
+fn keys_added_by_hand_sound_as_their_text_strikes_them() {
+    let keyboard = KeyboardEvents::default();
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    let mut project = project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let mut shortcut = shown(2.0, 3.0);
+    shortcut.id = format!("{}1", crate::keyboard::MANUAL_KEYBOARD_PREFIX);
+    shortcut.display_text = "⌘K".into();
+    shortcut.keys = crate::keyboard::manual_key_presses("⌘K");
+    let mut typed = shown(5.0, 6.0);
+    typed.id = format!("{}2", crate::keyboard::MANUAL_KEYBOARD_PREFIX);
+    typed.display_text = "hi".into();
+    typed.keys = crate::keyboard::manual_key_presses("hi");
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![shortcut, typed];
+
+    let events = input_sound_events(&project, &takes);
+    let downs: Vec<(f64, KeySoundClass)> = events
+        .iter()
+        .filter_map(|event| match event.kind {
+            InputSoundKind::Key { class, down: true } => Some((event.time, class)),
+            _ => None,
+        })
+        .collect();
+    // ⌘ goes down at the start with K a beat behind; "hi" one key at a time.
+    assert_eq!(downs.len(), 4);
+    assert!((downs[0].0 - 2.0).abs() < 1e-9 && downs[0].1 == KeySoundClass::Modifier);
+    assert!((downs[1].0 - 2.07).abs() < 1e-9 && downs[1].1 == KeySoundClass::Letter);
+    assert!((downs[2].0 - 5.0).abs() < 1e-9 && (downs[3].0 - 5.11).abs() < 1e-9);
+    assert_eq!(key_times(&events, false).len(), 4);
+
+    // A recorded segment of the same text makes no sound of its own.
+    project.timeline.as_mut().unwrap().keyboard_segments[0].id = "kb-1".into();
+    assert_eq!(
+        key_times(&input_sound_events(&project, &takes), true).len(),
+        2
+    );
+}

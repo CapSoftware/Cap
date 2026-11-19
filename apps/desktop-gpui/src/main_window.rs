@@ -4622,6 +4622,23 @@ impl MainWindow {
             .gap(px(8.))
             .items_center()
             .child(self.render_search_field(cx))
+            // A blank project: no recording, a background to build on.
+            .when(kind == LibraryKind::Recordings, |this| {
+                this.child(
+                    ui::Button::plain(
+                        &theme,
+                        "library-new-project",
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .label(tr::main::library::new_project())
+                    .icon("icons/plus.svg")
+                    .height(px(36.))
+                    .on_click(cx.listener(|_, _, _window, cx| {
+                        cx.defer(crate::audio_project::open_blank_in_editor);
+                    })),
+                )
+            })
             .child(
                 ui::Button::plain(
                     &theme,

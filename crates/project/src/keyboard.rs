@@ -95,6 +95,119 @@ const SPECIAL_KEY_SYMBOLS: &[(&str, &str)] = &[
     ("PageDown", "⇟"),
 ];
 
+/// Key presses made by hand in the editor, rather than recorded, carry ids
+/// with this prefix so regenerating from a recording keeps them.
+pub const MANUAL_KEYBOARD_PREFIX: &str = "kb-manual-";
+
+/// Whether `segment` was made by hand rather than recorded.
+pub fn is_manual_keyboard_segment(segment: &KeyboardTrackSegment) -> bool {
+    segment.id.starts_with(MANUAL_KEYBOARD_PREFIX)
+}
+
+/// The text a hand-made key press shows, from what was typed for it. A
+/// shortcut can be written in words, joined by `+` or spaces, as in
+/// `cmd+shift+p` or `ctrl k`, and becomes its keys' symbols; a named key on
+/// its own (`enter`, `tab`, `esc`, ...) becomes its symbol; anything else is
+/// typed text and shows as written.
+pub fn manual_key_text(input: &str) -> String {
+    let input = input.trim();
+    let modifier = |word: &str| -> Option<char> {
+        match word.to_ascii_lowercase().as_str() {
+            "cmd" | "command" | "meta" | "super" | "win" | "windows" | "⌘" => Some('⌘'),
+            "ctrl" | "control" | "⌃" => Some('⌃'),
+            "alt" | "opt" | "option" | "⌥" => Some('⌥'),
+            "shift" | "⇧" => Some('⇧'),
+            _ => None,
+        }
+    };
+    let named = |word: &str| -> Option<char> {
+        match word.to_ascii_lowercase().as_str() {
+            "enter" | "return" => Some('⏎'),
+            "tab" => Some('⇥'),
+            "esc" | "escape" => Some('⎋'),
+            "space" => Some('␣'),
+            "backspace" => Some('⌫'),
+            "delete" | "del" => Some('⌦'),
+            "up" => Some('↑'),
+            "down" => Some('↓'),
+            "left" => Some('←'),
+            "right" => Some('→'),
+            _ => None,
+        }
+    };
+    let words: Vec<&str> = if input.contains('+') {
+        input.split('+').map(str::trim).collect()
+    } else {
+        input.split_whitespace().collect()
+    };
+    let shortcut = words.len() > 1
+        && words[..words.len() - 1]
+            .iter()
+            .all(|word| modifier(word).is_some());
+    if shortcut {
+        let last = words[words.len() - 1];
+        let mut text: String = words[..words.len() - 1]
+            .iter()
+            .filter_map(|word| modifier(word))
+            .collect();
+        match (modifier(last), named(last)) {
+            (Some(symbol), _) | (None, Some(symbol)) => text.push(symbol),
+            _ => text.extend(last.chars().flat_map(char::to_uppercase)),
+        }
+        return text;
+    }
+    if words.len() == 1
+        && let Some(symbol) = named(words[0])
+    {
+        return symbol.to_string();
+    }
+    input.to_string()
+}
+
+/// The keys a hand-made key press strikes, from its text: a shortcut's
+/// modifiers go down together with its key a beat behind, and typed text
+/// one key after another at a typist's pace. Offsets are milliseconds from
+/// the segment's start, as recorded keys carry them.
+pub fn manual_key_presses(display_text: &str) -> Vec<KeyPressDisplay> {
+    const TYPING_GAP_MS: f64 = 110.0;
+    const SHORTCUT_KEY_MS: f64 = 70.0;
+    let key_name = |c: char| -> String {
+        match c {
+            '⌘' => "Meta".into(),
+            '⌥' => "LAlt".into(),
+            '⇧' => "LShift".into(),
+            '⌃' => "LControl".into(),
+            ' ' | '␣' => "Space".into(),
+            other => SPECIAL_KEY_SYMBOLS
+                .iter()
+                .find(|(_, symbol)| symbol.chars().eq(std::iter::once(other)))
+                .map(|(key, _)| (*key).to_string())
+                .unwrap_or_else(|| other.to_uppercase().collect()),
+        }
+    };
+    let shortcut = display_text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃'));
+    let mut offset = 0.0;
+    display_text
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| {
+            let key = key_name(c);
+            let time_offset = if shortcut {
+                if is_modifier_key(&key) {
+                    0.0
+                } else {
+                    SHORTCUT_KEY_MS
+                }
+            } else {
+                let at = offset;
+                offset += TYPING_GAP_MS;
+                at
+            };
+            KeyPressDisplay { key, time_offset }
+        })
+        .collect()
+}
+
 pub(crate) fn is_modifier_key(key: &str) -> bool {
     MODIFIER_KEYS.contains(&key)
 }
@@ -349,7 +462,7 @@ fn project_legacy_keyboard_track(
     let mut result: Vec<_> = timeline
         .keyboard_segments
         .iter()
-        .filter(|segment| segment.id.starts_with("kb-edit-"))
+        .filter(|segment| segment.id.starts_with("kb-edit-") || is_manual_keyboard_segment(segment))
         .cloned()
         .collect();
     for (index, clip) in timeline.segments.iter().enumerate() {
@@ -360,7 +473,7 @@ fn project_legacy_keyboard_track(
         let source_start = clip.start + offset;
         let source_end = clip.end + offset;
         for previous in &timeline.keyboard_segments {
-            if previous.id.starts_with("kb-edit-") {
+            if previous.id.starts_with("kb-edit-") || is_manual_keyboard_segment(previous) {
                 continue;
             }
             let start = previous.start.max(source_start);
@@ -2379,5 +2492,42 @@ mod timing_tests {
         segment.display_text = "⌘W".into();
         assert!(segment.split_at(11.0).is_none());
         assert!(!segment.ripple_delete(10.5, 11.5, 1.0));
+    }
+}
+
+#[cfg(test)]
+mod manual_key_tests {
+    use super::*;
+
+    #[test]
+    fn words_become_a_shortcuts_symbols_and_text_stays_text() {
+        assert_eq!(manual_key_text("cmd+shift+p"), "⌘⇧P");
+        assert_eq!(manual_key_text("Ctrl K"), "⌃K");
+        assert_eq!(manual_key_text("alt + enter"), "⌥⏎");
+        assert_eq!(manual_key_text("enter"), "⏎");
+        assert_eq!(manual_key_text("⌘K"), "⌘K");
+        assert_eq!(manual_key_text("hello world"), "hello world");
+        assert_eq!(manual_key_text("shift"), "shift");
+        assert_eq!(manual_key_text(""), "");
+    }
+
+    #[test]
+    fn a_shortcut_strikes_its_key_after_its_modifiers_and_text_one_key_at_a_time() {
+        let shortcut = manual_key_presses("⌘⇧P");
+        assert_eq!(
+            shortcut
+                .iter()
+                .map(|key| (key.key.as_str(), key.time_offset))
+                .collect::<Vec<_>>(),
+            vec![("Meta", 0.0), ("LShift", 0.0), ("P", 70.0)]
+        );
+        let typed = manual_key_presses("hi ⏎");
+        assert_eq!(
+            typed
+                .iter()
+                .map(|key| (key.key.as_str(), key.time_offset))
+                .collect::<Vec<_>>(),
+            vec![("H", 0.0), ("I", 110.0), ("Space", 220.0), ("Enter", 330.0)]
+        );
     }
 }

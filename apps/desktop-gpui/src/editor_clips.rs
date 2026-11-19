@@ -2498,6 +2498,7 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                 status: Some(StudioRecordingStatus::Complete),
                 cursor_shape_version: 0,
                 audio_only: false,
+                blank: false,
             },
         };
     }
@@ -3732,6 +3733,7 @@ mod tests {
                             status: Some(StudioRecordingStatus::Complete),
                             cursor_shape_version: 0,
                             audio_only: false,
+                            blank: false,
                         },
                     },
                 )),

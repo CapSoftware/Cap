@@ -884,6 +884,7 @@ mod fixture {
                 status: Some(StudioRecordingStatus::Complete),
                 cursor_shape_version: 0,
                 audio_only: false,
+                blank: false,
             },
         };
 

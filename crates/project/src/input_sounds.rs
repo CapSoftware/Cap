@@ -228,6 +228,9 @@ pub fn click_sounds_enabled(project: &ProjectConfiguration) -> bool {
             }))
 }
 
+/// How long a key added by hand is held down before it springs back.
+const MANUAL_KEY_HOLD_SECS: f64 = 0.085;
+
 /// Every key and click sound the edited timeline plays, sorted by output
 /// time. Recording time maps to output time exactly as the keyboard track
 /// does, so sounds stay on the frames that show them through cuts, speed
@@ -368,6 +371,50 @@ pub fn input_sound_events(
                     pan: ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.1,
                     gain: gain * visible,
                 });
+            }
+        }
+    }
+
+    // Keys added by hand have no recording behind them: they sound as their
+    // text strikes them, each key down and back up, over whatever clip lies
+    // beneath (silent where that clip is).
+    if keys {
+        let windows = clip_windows(timeline);
+        for (index, segment) in timeline
+            .keyboard_segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| crate::keyboard::is_manual_keyboard_segment(segment))
+        {
+            for key in &segment.keys {
+                let down = segment.start + key.time_offset / 1000.0;
+                if !down.is_finite() || down >= segment.end {
+                    continue;
+                }
+                let edited = down - crate::configuration::held_time_before(&holds, down);
+                let Some(window) = windows
+                    .iter()
+                    .find(|window| window.edited_start <= edited && edited < window.edited_end)
+                else {
+                    continue;
+                };
+                if window.clip.speed_audio_muted() {
+                    continue;
+                }
+                let up = (down + MANUAL_KEY_HOLD_SECS).min(segment.end);
+                let seed = event_seed(3, index as u32, key.time_offset, text_seed(&key.key));
+                for (time, down) in [(down, true), (up, false)] {
+                    events.push(InputSoundEvent {
+                        time,
+                        kind: InputSoundKind::Key {
+                            class: KeySoundClass::of(&key.key),
+                            down,
+                        },
+                        seed: seed ^ u64::from(down),
+                        pan: key_pan(&key.key),
+                        gain: window.clip.volume() as f32,
+                    });
+                }
             }
         }
     }

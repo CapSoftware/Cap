@@ -821,7 +821,12 @@ impl TrackSegmentOps for KeyboardTrackSegment {
     fn split_tail(&self, at: f64) -> Self {
         let mut tail = self.clone();
         tail.start = self.start + at;
-        tail.id = split_id("kb-edit");
+        // Half of a key added by hand is still one added by hand.
+        tail.id = split_id(if cap_project::is_manual_keyboard_segment(self) {
+            "kb-manual"
+        } else {
+            "kb-edit"
+        });
         tail
     }
 }

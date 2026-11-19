@@ -122,6 +122,7 @@ pub fn create_audio_only_project(
                 status: Some(StudioRecordingStatus::Complete),
                 cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
                 audio_only: true,
+                blank: false,
             },
         })),
         upload: None,
@@ -133,6 +134,98 @@ pub fn create_audio_only_project(
         .map_err(|error| AudioProjectError::Io(format!("Could not save the project: {error:?}")))?;
     cleanup.0 = None;
     Ok(meta)
+}
+
+/// How long a blank project can run: its placeholder is two black frames,
+/// so the length costs nothing on disk.
+pub const BLANK_PROJECT_LENGTH: Duration = Duration::from_secs(10 * 60);
+/// How long a new blank project's clip starts out; it can be dragged out to
+/// [`BLANK_PROJECT_LENGTH`].
+pub const BLANK_PROJECT_CLIP: Duration = Duration::from_secs(15);
+
+/// Creates `project_path` as an empty Studio project: no recording, just an
+/// animated background and a clip to lay music, keys, text and images over.
+/// Nothing is left behind when a step fails.
+pub fn create_blank_project(
+    project_path: &Path,
+    pretty_name: &str,
+) -> Result<RecordingMeta, AudioProjectError> {
+    let _ = ffmpeg::init();
+    if let Some(parent) = project_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| io(parent, error))?;
+    }
+    match std::fs::create_dir(project_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(AudioProjectError::Exists(project_path.to_path_buf()));
+        }
+        Err(error) => return Err(io(project_path, error)),
+    }
+    let mut cleanup = RemoveOnDrop(Some(project_path.to_path_buf()));
+    let segment_dir = project_path.join(SEGMENT_DIR);
+    std::fs::create_dir_all(&segment_dir).map_err(|error| io(&segment_dir, error))?;
+    write_placeholder(&segment_dir.join("display.mp4"), BLANK_PROJECT_LENGTH)?;
+
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: project_path.to_path_buf(),
+        pretty_name: pretty_name.to_string(),
+        sharing: None,
+        inner: RecordingMetaInner::Studio(Box::new(StudioRecordingMeta::MultipleSegments {
+            inner: MultipleSegments {
+                segments: vec![MultipleSegment {
+                    display: VideoMeta {
+                        path: format!("{SEGMENT_DIR}/display.mp4").into(),
+                        fps: AUDIO_ONLY_CANVAS_FPS,
+                        start_time: Some(0.0),
+                        device_id: None,
+                    },
+                    camera: None,
+                    mic: None,
+                    system_audio: None,
+                    cursor: None,
+                    keyboard: None,
+                    display_notch: None,
+                    cursor_shape_version: None,
+                }],
+                cursors: Cursors::default(),
+                status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
+                audio_only: false,
+                blank: true,
+            },
+        })),
+        upload: None,
+    };
+    blank_project_config()
+        .write(project_path)
+        .map_err(|error| io(project_path, error))?;
+    meta.save_for_project()
+        .map_err(|error| AudioProjectError::Io(format!("Could not save the project: {error:?}")))?;
+    cleanup.0 = None;
+    Ok(meta)
+}
+
+/// A blank project starts on a moving background with one short clip, and
+/// with keys ready to show as soon as one is added.
+pub fn blank_project_config() -> cap_project::ProjectConfiguration {
+    let mut config = cap_project::ProjectConfiguration::for_new_project();
+    config.background.source = cap_project::BackgroundSource::AnimatedGradient {
+        config: cap_project::AnimatedGradientConfig::default(),
+    };
+    config.timeline = serde_json::from_value(serde_json::json!({
+        "segments": [{
+            "recordingSegment": 0,
+            "start": 0.0,
+            "end": BLANK_PROJECT_CLIP.as_secs_f64(),
+            "timescale": 1.0
+        }],
+        "zoomSegments": []
+    }))
+    .ok();
+    let keyboard = config.keyboard.get_or_insert_with(Default::default);
+    keyboard.settings.enabled = true;
+    config
 }
 
 struct RemoveOnDrop(Option<PathBuf>);
@@ -194,6 +287,33 @@ fn write_placeholder(path: &Path, duration: Duration) -> Result<(), AudioProject
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_project_opens_on_a_moving_background_with_a_short_clip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Blank.cap");
+        let meta = create_blank_project(&path, "Blank").unwrap();
+        let studio = meta.studio_meta().unwrap();
+        assert!(studio.is_blank() && studio.hides_display() && !studio.is_audio_only());
+        let reread = RecordingMeta::load_for_project(&path).unwrap();
+        assert!(reread.studio_meta().unwrap().is_blank());
+        assert!(path.join(SEGMENT_DIR).join("display.mp4").exists());
+        let config = cap_project::ProjectConfiguration::load(&path).unwrap();
+        assert!(matches!(
+            config.background.source,
+            cap_project::BackgroundSource::AnimatedGradient { .. }
+        ));
+        let timeline = config.timeline.unwrap();
+        assert_eq!(timeline.segments.len(), 1);
+        assert_eq!(timeline.segments[0].end, BLANK_PROJECT_CLIP.as_secs_f64());
+        assert!(config.keyboard.unwrap().settings.enabled);
+        // A second project of the same name is refused, leaving the first.
+        assert!(matches!(
+            create_blank_project(&path, "Blank"),
+            Err(AudioProjectError::Exists(_))
+        ));
+        assert!(path.join("recording-meta.json").exists());
+    }
 
     #[test]
     fn a_project_needs_audio() {

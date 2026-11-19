@@ -43,6 +43,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::file::open_prompt(), "Open Recording".into()),
         (tr::menu::file::open_recent(), "Open Recent".into()),
         (tr::menu::file::import_media(), "Import Media…".into()),
+        (tr::menu::file::new_blank_project(), "New Blank Project".into()),
         (tr::menu::file::title(), "File".into()),
         (tr::menu::edit::copy(), "Copy".into()),
         (tr::menu::edit::cut(), "Cut".into()),

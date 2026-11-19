@@ -4882,7 +4882,9 @@ impl ProjectUniforms {
             scene_segments,
         ));
         let audio_only = constants.is_audio_only();
-        if audio_only {
+        // Audio-only and blank projects carry a placeholder display track
+        // that is never drawn: only what is laid over the background shows.
+        if constants.meta.hides_display() {
             scene.screen_opacity = 0.0;
             prev_scene.screen_opacity = 0.0;
         }
