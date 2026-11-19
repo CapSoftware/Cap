@@ -2339,6 +2339,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> PrerenderedAudioBuffer<T> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
@@ -2579,6 +2580,7 @@ impl<T: FromSampleBytes + cpal::FromSample<f32>> ProgressiveAudioBuffer<T> {
     /// small backwards drift corrections stay inside the first rendered pass.
     const START_PREROLL_SECS: f64 = 1.0;
 
+    #[allow(clippy::too_many_arguments)]
     fn new(
         segments: Vec<AudioSegment>,
         music: MusicTracks,
