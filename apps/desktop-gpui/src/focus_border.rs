@@ -217,7 +217,7 @@ pub fn open(target: &WindowId, cx: &mut App) -> Option<WindowId> {
                 y,
                 width,
                 height,
-                platform::target_overlay_level() - 1,
+                platform::recording_area_level() - 1,
             );
         }
     })

@@ -129,19 +129,18 @@ impl PresetsStore {
 }
 
 /// The built-in "Default" preset: what a fresh screen recording looks like
-/// with no user preset -- `ProjectConfiguration::default()` plus the
-/// presentation defaults the recorder applies (`recording.rs`
-/// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
-/// rounding and the default screen-movement spring.
+/// with no user preset -- `ProjectConfiguration::for_new_project()` with the
+/// background revealed: 10% even padding, the new-project rounding and the
+/// new-project zoom spring.
 pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
-    let mut config = ProjectConfiguration::default();
+    let mut config = ProjectConfiguration::for_new_project();
     if config.background.padding <= f64::EPSILON {
-        config.background.padding = 10.0;
+        config.background.padding = crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING;
     }
     if config.background.rounding <= f64::EPSILON {
-        config.background.rounding = 7.5;
+        config.background.rounding =
+            crate::editor_sidebar::default_background_rounding(config.background.padding_mode);
     }
-    config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
     current.with_preset(config)
 }
 
@@ -154,6 +153,8 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
         map.remove("markers");
+        map.remove("autoZoomVersion");
+        map.remove("autoZoomPending");
         if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
             captions.insert("segments".into(), Value::Array(Vec::new()));
             captions.remove("sourceTimed");

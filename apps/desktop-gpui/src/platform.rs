@@ -285,6 +285,7 @@ fn portal_filters(filters: &[(&str, &[&str])]) -> Vec<ashpd::desktop::file_choos
 async fn linux_open_file_panel(
     filters: &[(&str, &[&str])],
     directory: Option<std::path::PathBuf>,
+    select_folder: bool,
     owner: Option<(gpui::AnyWindowHandle, gpui::EntityId)>,
     parent: Option<LinuxFileDialogParent>,
     cx: &mut gpui::AsyncApp,
@@ -294,6 +295,7 @@ async fn linux_open_file_panel(
         let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
             .identifier(identifier)
             .multiple(false)
+            .directory(select_folder.then_some(true))
             .filters(filters)
             .current_folder::<&std::path::PathBuf>(directory.as_ref())
             .map_err(|error| LinuxFileDialogError::BeforeDispatch(error.to_string()))?
@@ -390,7 +392,24 @@ pub(crate) async fn open_file_panel_async(
             )
         })
         .ok()?;
-    let result = linux_open_file_panel(filters, directory, Some(owner), parent, cx).await;
+    let result = linux_open_file_panel(filters, directory, false, Some(owner), parent, cx).await;
+    finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn open_folder_panel_async(
+    directory: Option<std::path::PathBuf>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Option<std::path::PathBuf> {
+    let (owner, parent) = cx
+        .update_root(|root, window, _| {
+            (
+                (window.window_handle(), root.entity_id()),
+                LinuxFileDialogParent::from_window(window),
+            )
+        })
+        .ok()?;
+    let result = linux_open_file_panel(&[], directory, true, Some(owner), parent, cx).await;
     finish_linux_file_dialog(result, Some(owner), cx).await
 }
 
@@ -428,8 +447,43 @@ pub(crate) async fn open_file_panel_from_app_async(
             .ok()
     });
     let (owner, parent) = captured?;
-    let result = linux_open_file_panel(filters, None, Some(owner), parent, cx).await;
+    let result = linux_open_file_panel(filters, None, false, Some(owner), parent, cx).await;
     finish_linux_file_dialog(result, Some(owner), cx).await
+}
+
+/// `save_file_panel_async` parented to the calling window but not owned by
+/// it: the chosen path survives that window closing, so the caller must check
+/// its own state before using it. With no owner to show an alert in, a failed
+/// dialog comes back as a short message for the caller to show; raw portal
+/// errors are logged instead.
+#[cfg(target_os = "linux")]
+pub(crate) async fn save_file_panel_async_unowned(
+    suggested: &str,
+    extensions: &[&str],
+    cx: &mut gpui::AsyncWindowContext,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let parent = cx
+        .update(|window, _| LinuxFileDialogParent::from_window(window))
+        .ok()
+        .flatten();
+    linux_save_file_panel(suggested, extensions, None, parent, cx)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "native file dialog failed");
+            unowned_dialog_message(&error)
+        })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn unowned_dialog_message(error: &LinuxFileDialogError) -> String {
+    match error {
+        LinuxFileDialogError::BeforeDispatch(_) | LinuxFileDialogError::NativeResponse(_) => {
+            crate::i18n::tr::dialog::file::unavailable_title().into()
+        }
+        LinuxFileDialogError::Busy
+        | LinuxFileDialogError::Indeterminate(_)
+        | LinuxFileDialogError::RestartRequired => error.message(),
+    }
 }
 
 pub(crate) async fn save_file_panel_async(
@@ -1009,8 +1063,49 @@ mod mac {
         super::macos_exception_guard::install();
     }
 
+    const NATIVE_QUIT_DELEGATE_CLASS: &std::ffi::CStr = c"GPUIApplicationDelegate";
+    const NATIVE_QUIT_FOREIGN_DELEGATE: &str =
+        "Native Quit requires the owned GPUI application delegate";
+
+    // While AppKit key-value-observes the delegate (the Touch Bar finder does,
+    // because the delegate is a responder), the object's runtime class is a
+    // generated `NSKVONotifying_` subclass. Comparing that class's name failed
+    // on those launches and the app quit as soon as it opened, so the delegate
+    // is matched by kind and the method goes on the class GPUI registered: one
+    // added to the generated subclass would be lost when the observation ends.
+    fn native_quit_delegate_class(
+        delegate: &AnyObject,
+        class_name: &std::ffi::CStr,
+    ) -> Result<&'static objc2::runtime::AnyClass, String> {
+        let class =
+            objc2::runtime::AnyClass::get(class_name).ok_or(NATIVE_QUIT_FOREIGN_DELEGATE)?;
+        let owned: bool = unsafe { objc2::msg_send![delegate, isKindOfClass: class] };
+        if !owned {
+            return Err(NATIVE_QUIT_FOREIGN_DELEGATE.into());
+        }
+        Ok(class)
+    }
+
+    fn add_native_quit_method(class: &objc2::runtime::AnyClass) -> bool {
+        use objc2::{ffi, runtime::Imp, sel};
+
+        unsafe {
+            let implementation = std::mem::transmute::<
+                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
+                Imp,
+            >(application_should_terminate);
+            ffi::class_addMethod(
+                class as *const _ as *mut _,
+                sel!(applicationShouldTerminate:),
+                implementation,
+                c"Q@:@".as_ptr(),
+            )
+            .as_bool()
+        }
+    }
+
     pub fn install_native_quit_handler() -> Result<flume::Receiver<()>, String> {
-        use objc2::{class, ffi, msg_send, runtime::Imp, sel};
+        use objc2::{class, msg_send, sel};
         use objc2_foundation::MainThreadMarker;
 
         let _main_thread =
@@ -1022,33 +1117,132 @@ mod mac {
             let delegate = delegate
                 .as_ref()
                 .ok_or("Application delegate is unavailable")?;
-            let delegate_class = delegate.class();
-            if delegate_class.name() != c"GPUIApplicationDelegate" {
-                return Err("Native Quit requires the owned GPUI application delegate".into());
-            }
-            let selector = sel!(applicationShouldTerminate:);
-            if delegate_class.instance_method(selector).is_some() {
+            let delegate_class = native_quit_delegate_class(delegate, NATIVE_QUIT_DELEGATE_CLASS)?;
+            if delegate_class
+                .instance_method(sel!(applicationShouldTerminate:))
+                .is_some()
+            {
                 return Err("Application delegate already has a native Quit handler".into());
             }
             let (requests, receiver) = super::NativeQuitRequests::new();
             NATIVE_QUIT_REQUESTS
                 .set(requests)
                 .map_err(|_| "Native Quit request receiver was already installed")?;
-            let implementation = std::mem::transmute::<
-                unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject) -> usize,
-                Imp,
-            >(application_should_terminate);
-            if !ffi::class_addMethod(
-                delegate_class as *const _ as *mut _,
-                selector,
-                implementation,
-                c"Q@:@".as_ptr(),
-            )
-            .as_bool()
-            {
+            if !add_native_quit_method(delegate_class) {
                 return Err("Could not install the native Quit handler".into());
             }
             Ok(receiver)
+        }
+    }
+
+    #[cfg(test)]
+    mod native_quit_tests {
+        use std::{ffi::c_void, ptr};
+
+        use objc2::{
+            msg_send,
+            rc::Retained,
+            runtime::{AnyClass, AnyObject, ClassBuilder, Sel},
+            sel,
+        };
+        use objc2_foundation::NSString;
+
+        use super::{add_native_quit_method, native_quit_delegate_class};
+
+        const DELEGATE: &std::ffi::CStr = c"CapNativeQuitTestDelegate";
+
+        type ChangeHandler = unsafe extern "C-unwind" fn(
+            *mut AnyObject,
+            Sel,
+            *mut AnyObject,
+            *mut AnyObject,
+            *mut AnyObject,
+            *mut c_void,
+        );
+
+        unsafe extern "C-unwind" fn ignore_change(
+            _: *mut AnyObject,
+            _: Sel,
+            _: *mut AnyObject,
+            _: *mut AnyObject,
+            _: *mut AnyObject,
+            _: *mut c_void,
+        ) {
+        }
+
+        fn register(name: &std::ffi::CStr, superclass: &AnyClass) -> &'static AnyClass {
+            ClassBuilder::new(name, superclass).unwrap().register()
+        }
+
+        fn observer() -> Retained<AnyObject> {
+            let mut builder = ClassBuilder::new(
+                c"CapNativeQuitTestObserver",
+                AnyClass::get(c"NSObject").unwrap(),
+            )
+            .unwrap();
+            unsafe {
+                builder.add_method(
+                    sel!(observeValueForKeyPath:ofObject:change:context:),
+                    ignore_change as ChangeHandler,
+                );
+                msg_send![builder.register(), new]
+            }
+        }
+
+        fn responds_to_quit(object: &AnyObject) -> bool {
+            unsafe { msg_send![object, respondsToSelector: sel!(applicationShouldTerminate:)] }
+        }
+
+        #[test]
+        fn a_delegate_appkit_is_observing_still_gets_the_quit_handler() {
+            let responder = AnyClass::get(c"NSResponder").expect("AppKit is not loaded");
+            let class = register(DELEGATE, responder);
+            let delegate: Retained<AnyObject> = unsafe { msg_send![class, new] };
+            let observer = observer();
+            let key_path = NSString::from_str("nextResponder");
+
+            let _: () = unsafe {
+                msg_send![
+                    &*delegate,
+                    addObserver: &*observer,
+                    forKeyPath: &*key_path,
+                    options: 0usize,
+                    context: ptr::null_mut::<c_void>(),
+                ]
+            };
+            let runtime_class = delegate.class().name().to_string_lossy().into_owned();
+            assert_eq!(runtime_class, "NSKVONotifying_CapNativeQuitTestDelegate");
+
+            let resolved = native_quit_delegate_class(&delegate, DELEGATE).unwrap();
+            assert_eq!(resolved.name(), DELEGATE);
+            assert!(!responds_to_quit(&delegate));
+            assert!(add_native_quit_method(resolved));
+            assert!(responds_to_quit(&delegate));
+
+            let _: () = unsafe {
+                msg_send![&*delegate, removeObserver: &*observer, forKeyPath: &*key_path]
+            };
+            assert_eq!(delegate.class().name(), DELEGATE);
+            assert!(responds_to_quit(&delegate));
+            let reply: usize = unsafe {
+                msg_send![&*delegate, applicationShouldTerminate: ptr::null_mut::<AnyObject>()]
+            };
+            assert_eq!(reply, 0);
+
+            let subclass = register(c"CapNativeQuitTestDelegateSubclass", class);
+            let inherited: Retained<AnyObject> = unsafe { msg_send![subclass, new] };
+            assert_eq!(
+                native_quit_delegate_class(&inherited, DELEGATE).map(AnyClass::name),
+                Ok(DELEGATE)
+            );
+        }
+
+        #[test]
+        fn another_delegate_is_refused() {
+            let foreign: Retained<AnyObject> =
+                unsafe { msg_send![AnyClass::get(c"NSResponder").unwrap(), new] };
+            assert!(native_quit_delegate_class(&foreign, c"NSWindow").is_err());
+            assert!(native_quit_delegate_class(&foreign, c"CapNativeQuitNoSuchClass").is_err());
         }
     }
 
@@ -1378,14 +1572,28 @@ mod mac {
         super::MAIN_WINDOW_LEVEL + 1
     }
 
-    /// The level `windows.rs` gives every `TargetSelectOverlay`:
-    /// `CGWindowLevelForKey(10) - 1`, i.e. one below the recording controls
-    /// bar. Same mislabeled constant as [`recording_controls_level`] (key 10 is
-    /// `kCGModalPanelWindowLevelKey`, level 8), so the shipping overlay really
-    /// runs at level 7 -- above ordinary app windows, below the bar. Reproduced
-    /// verbatim rather than "fixed" from over here.
+    /// The target picker runs one level above the menu bar's status items
+    /// (`kCGStatusWindowLevelKey`, level 25; the menu bar itself is 24). At the
+    /// Tauri app's level 7 the menu bar sat over the overlay, so an area could
+    /// not be started or dragged into it (#1852).
     pub fn target_overlay_level() -> isize {
+        unsafe { CGWindowLevelForKey(9) as isize + 1 }
+    }
+
+    /// Where an Area overlay kept on screen as the recording outline goes once
+    /// the recording starts: the level every overlay had before #1852, one
+    /// below the recording controls bar (and the camera bubble), so the
+    /// stacking while recording is unchanged.
+    pub fn recording_area_level() -> isize {
         recording_controls_level() - 1
+    }
+
+    /// Set a panel's level outright, lowering it if needed. Same task-only rule
+    /// as every other ordering call here.
+    pub fn set_panel_level(native: &NativeWindow, level: isize) {
+        if native.0.level() != level {
+            native.0.setLevel(level);
+        }
     }
 
     /// A retained `NSWindow` that can outlive a `&Window` borrow -- what
@@ -1863,6 +2071,83 @@ mod mac {
     pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
         native.0.setIgnoresMouseEvents(click_through);
         native.0.ignoresMouseEvents() == click_through
+    }
+
+    thread_local! {
+        static DRAW_CURSOR: std::cell::OnceCell<Option<Retained<AnyObject>>> =
+            const { std::cell::OnceCell::new() };
+    }
+
+    /// A pen with its nib on the hot spot, dark ink inside a light outline so
+    /// it reads over any content, at 2x for Retina.
+    fn build_draw_cursor() -> Option<Retained<AnyObject>> {
+        use objc2::{class, msg_send};
+
+        const POINTS: u32 = 24;
+        const SCALE: u32 = 2;
+        let pen = r#"<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>"#;
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="white" stroke-width="4.5">{pen}</g><g stroke="black" stroke-width="1.75" fill="white">{pen}</g></svg>"#
+        );
+        let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default()).ok()?;
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(POINTS * SCALE, POINTS * SCALE)?;
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(SCALE as f32, SCALE as f32),
+            &mut pixmap.as_mut(),
+        );
+        let png = pixmap.encode_png().ok()?;
+        unsafe {
+            let data: *mut AnyObject = msg_send![
+                class!(NSData),
+                dataWithBytes: png.as_ptr().cast::<std::ffi::c_void>(),
+                length: png.len(),
+            ];
+            if data.is_null() {
+                return None;
+            }
+            let image: *mut AnyObject = msg_send![class!(NSImage), alloc];
+            let image: *mut AnyObject = msg_send![image, initWithData: data];
+            let image = Retained::from_raw(image)?;
+            let size = f64::from(POINTS);
+            let _: () = msg_send![&*image, setSize: objc2_foundation::NSSize::new(size, size)];
+            let cursor: *mut AnyObject = msg_send![class!(NSCursor), alloc];
+            let cursor: *mut AnyObject = msg_send![
+                cursor,
+                initWithImage: &*image,
+                hotSpot: objc2_foundation::NSPoint::new(2.5, 21.5),
+            ];
+            Retained::from_raw(cursor)
+        }
+    }
+
+    /// The pen while drawing on screen. The drawing panel never becomes the
+    /// key window, so gpui's cursor rects do not apply to it; the cursor is
+    /// set directly on pointer events instead. `set` registers the image with
+    /// the window server over a synchronous message each time, which profiled
+    /// as most of the main thread's work while drawing, so it only runs when
+    /// something else has replaced the pen.
+    pub fn set_draw_cursor() {
+        use objc2::{class, msg_send};
+        DRAW_CURSOR.with(|cursor| {
+            let Some(cursor) = cursor.get_or_init(build_draw_cursor) else {
+                return;
+            };
+            let current: *mut AnyObject = unsafe { msg_send![class!(NSCursor), currentCursor] };
+            if !std::ptr::eq(current.cast_const(), &**cursor) {
+                let _: () = unsafe { msg_send![&**cursor, set] };
+            }
+        });
+    }
+
+    pub fn reset_cursor() {
+        use objc2::{class, msg_send};
+        unsafe {
+            let arrow: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
+            if !arrow.is_null() {
+                let _: () = msg_send![arrow, set];
+            }
+        }
     }
 
     /// `orderOut:` -- hide without closing, the way the Tauri main window
@@ -3081,6 +3366,10 @@ mod stub {
     pub fn target_overlay_level() -> isize {
         0
     }
+    pub fn recording_area_level() -> isize {
+        0
+    }
+    pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
     pub fn teleprompter_level() -> isize {
         0
     }
@@ -3097,6 +3386,8 @@ mod stub {
     pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
         false
     }
+    pub fn set_draw_cursor() {}
+    pub fn reset_cursor() {}
     pub fn native_window(_window: &Window) -> Option<NativeWindow> {
         None
     }
@@ -3401,6 +3692,19 @@ pub use stub::*;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn target_picker_sits_above_the_menu_bar_and_recording_stacking_is_unchanged() {
+        const MAIN_MENU_LEVEL: isize = 24;
+        const STATUS_LEVEL: isize = 25;
+        const POP_UP_MENU_LEVEL: isize = 101;
+        let picker = super::target_overlay_level();
+        assert!(picker > STATUS_LEVEL && picker > MAIN_MENU_LEVEL);
+        assert!(picker < POP_UP_MENU_LEVEL);
+        assert_eq!(super::recording_controls_level(), 8);
+        assert_eq!(super::recording_area_level(), 7);
+    }
+
     #[test]
     fn dock_hide_waits_for_the_latest_show_without_extending_on_read() {
         use std::time::{Duration, Instant};
@@ -3569,6 +3873,27 @@ mod file_dialog_tests {
         sync::atomic::AtomicU8,
         task::{Context, Poll, Waker},
     };
+
+    #[test]
+    fn unowned_dialog_failures_read_without_raw_portal_errors() {
+        let raw = "org.freedesktop.portal.Error.Failed: zbus";
+        for error in [
+            LinuxFileDialogError::BeforeDispatch(raw.into()),
+            LinuxFileDialogError::NativeResponse(raw.into()),
+        ] {
+            let message = unowned_dialog_message(&error);
+            assert_eq!(message, "File dialog unavailable");
+        }
+        for error in [
+            LinuxFileDialogError::Busy,
+            LinuxFileDialogError::Indeterminate(raw.into()),
+            LinuxFileDialogError::RestartRequired,
+        ] {
+            let message = unowned_dialog_message(&error);
+            assert_eq!(message, error.message());
+            assert!(!message.contains(raw));
+        }
+    }
 
     #[test]
     fn active_native_dialog_rejects_repeated_requests() {

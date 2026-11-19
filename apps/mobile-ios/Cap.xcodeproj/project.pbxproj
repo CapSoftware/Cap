@@ -190,6 +190,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = CA0000000000000000000023 /* Build configuration list for PBXNativeTarget "Cap" */;
 			buildPhases = (
+				CA0000000000000000000070 /* Require the iOS 27.1 SDK */,
 				CA0000000000000000000011 /* Sources */,
 				CA0000000000000000000012 /* Frameworks */,
 				CA0000000000000000000013 /* Resources */,
@@ -336,6 +337,29 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		CA0000000000000000000070 /* Require the iOS 27.1 SDK */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Require the iOS 27.1 SDK";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"$CONFIGURATION\" = \"Release\" ] && [ \"$PLATFORM_NAME\" = \"iphoneos\" ]; then\n  major=${SDK_VERSION%%.*}\n  rest=${SDK_VERSION#*.}\n  minor=${rest%%.*}\n  if [ \"$major\" -lt 27 ] || { [ \"$major\" -eq 27 ] && [ \"$minor\" -lt 1 ]; }; then\n    echo \"error: Release builds need the iOS 27.1 SDK or later, not $SDK_VERSION. Older SDKs run Cap letterboxed in compatibility mode on iPhone Duo. Archive with Xcode 27.1 or later; the deployment target stays $IPHONEOS_DEPLOYMENT_TARGET.\"\n    exit 1\n  fi\nfi\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		CA0000000000000000000063 /* Sources */ = {

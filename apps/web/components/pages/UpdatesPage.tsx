@@ -8,7 +8,7 @@ import {
 } from "@/utils/blog-registry";
 import { generateGradientFromSlug } from "@/utils/gradients";
 
-const FEATURED_SLUGS = ["rebuilding-cap-in-gpui"];
+const FEATURED_SLUGS = ["introducing-cap-infra"];
 
 export const UpdatesPage = () => {
 	const allUpdates = getBlogPosts() as BlogPost[];

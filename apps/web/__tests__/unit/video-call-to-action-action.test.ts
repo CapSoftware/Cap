@@ -93,7 +93,11 @@ describe("updateVideoCallToAction", () => {
 		"requires an upgrade for an owner with subscription status %s",
 		async (stripeSubscriptionStatus) => {
 			mocks.user = { id: "owner", stripeSubscriptionStatus };
-			for (const input of [{ label: "Go", url: "example.com" }, null]) {
+			for (const input of [
+				{ label: "Go", url: "example.com" },
+				null,
+				"off" as const,
+			]) {
 				await expect(updateVideoCallToAction(videoId, input)).resolves.toEqual({
 					success: false,
 					errors: {},
@@ -143,6 +147,16 @@ describe("updateVideoCallToAction", () => {
 		expect(settings).toContain("JSON_MERGE_PATCH(");
 		expect(settings).toContain('"callToAction":null');
 		expect(settings).toContain('"url":"https://cal.com/demo"');
+	});
+
+	it("turns the call to action off for this video only", async () => {
+		const result = await updateVideoCallToAction(videoId, "off");
+		expect(result).toEqual({ success: true, callToAction: null });
+		const settings = sqlText(
+			(mocks.updates[0] as { settings: unknown }).settings,
+		);
+		expect(settings).toContain("JSON_MERGE_PATCH(");
+		expect(settings).toContain('{"callToAction":false}');
 	});
 
 	it("removes only the call to action key", async () => {

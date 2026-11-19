@@ -2,14 +2,14 @@
 
 import { Button } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { faCheck } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { useCurrency } from "hooks/useCurrency";
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { useStripeContext } from "@/app/Layout/StripeContext";
 import { trackEvent } from "@/app/utils/analytics";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { PRICING } from "@/data/pricing";
 import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 

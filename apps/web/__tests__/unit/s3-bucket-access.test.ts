@@ -90,6 +90,48 @@ describe("getRequestAccessibleS3Endpoint", () => {
 			client.destroy();
 		}
 	});
+
+	it("signs download URLs that save the file as an attachment", async () => {
+		const client = new S3.S3Client({
+			credentials: {
+				accessKeyId: "test-access-key",
+				secretAccessKey: "test-secret-key",
+			},
+			endpoint: "https://storage.example.com",
+			forcePathStyle: true,
+			region: "us-east-1",
+		});
+
+		try {
+			const access = await Effect.runPromise(
+				createS3BucketAccess.pipe(
+					Effect.provideService(S3BucketClientProvider, {
+						bucket: "capso",
+						getInternal: Effect.succeed(client),
+						getPublic: Effect.succeed(client),
+						isPathStyle: true,
+					}),
+				),
+			);
+			const signedUrl = new URL(
+				await Effect.runPromise(
+					access.getSignedDownloadUrl(
+						"owner/video/result.mp4",
+						"Two hour recording.mp4",
+					),
+				),
+			);
+
+			expect(signedUrl.pathname).toBe("/capso/owner/video/result.mp4");
+			expect(signedUrl.searchParams.get("response-content-disposition")).toBe(
+				"attachment; filename=\"Two hour recording.mp4\"; filename*=UTF-8''Two%20hour%20recording.mp4",
+			);
+			expect(signedUrl.searchParams.get("X-Amz-SignedHeaders")).toBe("host");
+			expect(signedUrl.searchParams.get("X-Amz-Signature")).toBeTruthy();
+		} finally {
+			client.destroy();
+		}
+	});
 });
 
 type StorageResponse = { status: number; body: string };

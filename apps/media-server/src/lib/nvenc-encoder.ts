@@ -1,4 +1,4 @@
-import { FfmpegExitError } from "./ffmpeg-errors";
+import { FfmpegExitError, isEncodeDeadlineError } from "./ffmpeg-errors";
 import { redactLogText } from "./log-redaction";
 
 const DEFAULT_PRESET = "p1";
@@ -195,7 +195,7 @@ export function nvencFallbackReason(
 	error: unknown,
 	aborted: boolean,
 ): string | null {
-	if (aborted) return null;
+	if (aborted || isEncodeDeadlineError(error)) return null;
 	const message = redactLogText(
 		error instanceof Error ? error.message : String(error),
 	);

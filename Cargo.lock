@@ -1080,13 +1080,14 @@ dependencies = [
 
 [[package]]
 name = "cap"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "base64 0.22.1",
  "cap-automation",
  "cap-camera",
  "cap-cli-install",
  "cap-editor",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-media-info",
  "cap-project",
@@ -1386,6 +1387,7 @@ dependencies = [
 name = "cap-enc-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-mediafoundation",
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
@@ -1691,12 +1693,15 @@ dependencies = [
  "base64 0.22.1",
  "cap-audio",
  "cap-editor",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-project",
  "cap-rendering",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1862,6 +1867,7 @@ dependencies = [
  "cap-camera-windows",
  "cap-editor",
  "cap-enc-avfoundation",
+ "cap-enc-ffmpeg",
  "cap-export",
  "cap-media-info",
  "cap-mediafoundation-utils",

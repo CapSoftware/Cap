@@ -8,6 +8,34 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
+enum CaptureMode: String, CaseIterable, Identifiable {
+    case instant
+    case studio
+    case screenshot
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .instant: "Instant Mode"
+        case .studio: "Studio Mode"
+        case .screenshot: "Screenshot Mode"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .instant: "bolt.fill"
+        case .studio: "film"
+        case .screenshot: "camera.viewfinder"
+        }
+    }
+
+    var isAvailable: Bool { self == .instant }
+
+    var comingSoonMessage: String { "\(title) is coming soon" }
+}
+
 enum RecordMode: String, CaseIterable, Identifiable {
     case camera
     case screen
@@ -118,6 +146,7 @@ final class ScreenRecordingSession {
     func began(withCamera: Bool) {
         guard recording == nil else { return }
         recording = (withCamera, .now, ProcessStats.mark())
+        Usage.track("recording_started", ["mode": "screen", "camera": .bool(withCamera)])
         startActivityIfNeeded()
         // iOS only starts Live Activities while Cap is in front, and the system sheet is still
         // closing as recording begins.
@@ -175,6 +204,9 @@ final class ScreenRecordingSession {
         endActivity()
         if let recording {
             self.recording = nil
+            // No length here: Cap may only notice the stop when it is next opened. The recorded length comes with
+            // `recording_completed`.
+            Usage.track("recording_stopped", ["mode": "screen"])
             ProcessStats.measure(since: recording.stats, process: "app", recordedSeconds: Date.now.timeIntervalSince(recording.startedAt), extra: ["bubble": CameraBubble.shared.isFloating ? 1 : 0]).save()
         }
         guard wasRecording else { return }
