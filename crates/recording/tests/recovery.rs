@@ -142,6 +142,7 @@ impl TestRecording {
                     cursors: Cursors::default(),
                     status: Some(status),
                     cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -2340,6 +2341,7 @@ fn recovery_aligns_tracks_with_the_start_times_persisted_while_recording() {
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
                 cursor_shape_version: 0,
+                audio_only: false,
             },
         })),
     };
@@ -2395,6 +2397,7 @@ fn recovery_keeps_the_camera_frame_rate_of_an_interrupted_recording() {
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
                 cursor_shape_version: 0,
+                audio_only: false,
             },
         })),
     };

@@ -1265,6 +1265,11 @@ async fn build_instant_recording_actor(
     }
     diagnostic.stage("initializing_capture");
 
+    anyhow::ensure!(
+        !inputs.capture_target.is_audio_only(),
+        "Audio only recordings are made in Studio Mode"
+    );
+
     #[cfg(target_os = "linux")]
     anyhow::ensure!(
         !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)

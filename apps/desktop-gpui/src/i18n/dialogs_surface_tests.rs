@@ -37,6 +37,7 @@ const FORMATTED: &[&str] = &[
     "dialog.clipboard.copy_image",
     "dialog.clipboard.unavailable_error",
     "dialog.file.failed",
+    "import.audio_failed",
     "import.image_failed",
     "import.video_failed",
     "import.progress.converting",
@@ -325,6 +326,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::import::filter::image(), "Image Files"),
         (tr::import::filter::media(), "Media Files"),
         (tr::import::filter::video(), "Video Files"),
+        (tr::import::filter::audio(), "Audio Files"),
         (tr::import::progress::analyzing(), "Analyzing video file..."),
         (tr::import::progress::complete(), "Import complete!"),
         (tr::import::progress::image(), "Importing image..."),
@@ -443,6 +445,23 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::overlay::camera_only::description(),
             "Record using only your camera and microphone",
         ),
+        (
+            tr::overlay::audio_only::description(),
+            "Record your microphone and your computer's sound, without the screen or camera",
+        ),
+        (
+            tr::overlay::audio_only::meter_hint(),
+            "Say something to check your level",
+        ),
+        (
+            tr::overlay::audio_only::system_audio_only(),
+            "Recording system audio only",
+        ),
+        (
+            tr::overlay::audio_only::choose_source(),
+            "Choose a microphone or turn on system audio",
+        ),
+        (tr::overlay::audio_only::system_audio(), "System audio"),
         (
             tr::overlay::camera_only::select_camera(),
             "Please select a camera",
@@ -1045,6 +1064,7 @@ fn assembled_dialog_messages_match_the_code_they_replaced() {
     for (media, formatted) in [
         ("video", tr::import::video_failed(message)),
         ("image", tr::import::image_failed(message)),
+        ("audio", tr::import::audio_failed(message)),
     ] {
         assert_eq!(formatted, format!("Failed to import {media}: {message}"));
     }
