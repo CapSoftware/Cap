@@ -1631,7 +1631,7 @@ impl TimelineModel {
         let key_style = config
             .keyboard
             .as_ref()
-            .map(|keyboard| KeycapStyle::from_str(&keyboard.settings.style))
+            .map(|keyboard| KeycapStyle::from_setting(&keyboard.settings.style))
             .filter(|style| *style != KeycapStyle::Classic)
             .unwrap_or(KeycapStyle::MacOs);
         let keyboard = timeline
@@ -1650,10 +1650,12 @@ impl TimelineModel {
                     keys: keycaps::keycaps_for(&segment.display_text, key_style)
                         .into_iter()
                         .map(|cap| {
-                            let label = if cap.label.is_empty() {
-                                SharedString::new_static("\u{2423}")
-                            } else {
-                                SharedString::from(cap.label)
+                            // Apple's named keys carry only their word; the
+                            // space bar carries nothing and reads as ␣.
+                            let label = match (cap.label.is_empty(), cap.legend) {
+                                (false, _) => SharedString::from(cap.label),
+                                (true, Some(word)) => SharedString::from(word),
+                                (true, None) => SharedString::new_static("\u{2423}"),
                             };
                             (label, cap.modifier)
                         })
@@ -2669,6 +2671,34 @@ pub fn new_gap_segment(
     }
     let start = preview.min(gap_end - min_duration);
     Some((start, start + min_duration))
+}
+
+/// A track's segments as the row draws them: key presses end where the next
+/// begins; every other track as stored. Hit-testing uses this so a handle is
+/// where it is drawn. Indices are unchanged.
+pub fn drawn_segments(
+    kind: TrackKind,
+    segments: &[Segment],
+    secs_per_pixel: f64,
+) -> std::borrow::Cow<'_, [Segment]> {
+    if kind != TrackKind::Keyboard {
+        return std::borrow::Cow::Borrowed(segments);
+    }
+    std::borrow::Cow::Owned(
+        segments
+            .iter()
+            .enumerate()
+            .map(
+                |(index, segment)| match keyboard_visible_end(segments, index, secs_per_pixel) {
+                    Some(end) => Segment {
+                        end,
+                        ..segment.clone()
+                    },
+                    None => segment.clone(),
+                },
+            )
+            .collect(),
+    )
 }
 
 /// Where a key press stops being the one on screen: just before the next
@@ -4767,6 +4797,30 @@ mod tests {
         let middle =
             preview_time_from_x(content_left() + content_width(width) / 2., width, transform);
         assert!((middle.unwrap() - 30.).abs() < 1e-6);
+    }
+
+    /// A key press that runs past the next one is drawn, and hit, only up
+    /// to it; the last press keeps its full length.
+    #[test]
+    fn key_presses_end_where_the_next_one_begins() {
+        let press = |start: f64, end: f64| Segment {
+            start,
+            end,
+            lane: 0,
+            detail: SegmentDetail::Keyboard {
+                text: SharedString::new_static("a"),
+                keys: Arc::from(Vec::new()),
+            },
+        };
+        let segments = [press(0., 2.), press(1., 3.), press(5., 6.)];
+        let drawn = drawn_segments(TrackKind::Keyboard, &segments, 0.01);
+        assert!((drawn[0].end - 0.98).abs() < 1e-9);
+        assert_eq!(drawn[1].end, 3.);
+        assert_eq!(drawn[2].end, 6.);
+        assert!(matches!(
+            drawn_segments(TrackKind::Zoom, &segments, 0.01),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     // -- Labels -------------------------------------------------------------

@@ -2675,24 +2675,21 @@ impl EditorWindow {
     ) -> impl IntoElement {
         use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
         let theme = self.theme;
-        let style = KeycapStyle::from_str(&settings.style);
-        let key_theme = KeycapTheme::from_str(&settings.theme);
+        let style = KeycapStyle::from_setting(&settings.style);
+        let key_theme = KeycapTheme::from_setting(&settings.theme);
         let tiles = KEY_STYLES.iter().map(|(value, label, keys)| {
             let value = *value;
-            let tile_style = KeycapStyle::from_str(value);
+            let tile_style = KeycapStyle::from_setting(value);
             self.key_choice_tile(
                 SharedString::from(format!("keyboard-style-{value}")),
                 label(),
                 settings.style == value,
                 key_preview(tile_style, key_theme, keys),
+                // The timeline's key labels follow the style, so it rebuilds.
                 cx.listener(move |this, _, window, cx| {
-                    this.set_keyboard_setting_inner(
-                        false,
-                        "keyboard-style",
-                        window,
-                        cx,
-                        move |settings| settings.style = value.to_string(),
-                    );
+                    this.set_keyboard_setting("keyboard-style", window, cx, move |settings| {
+                        settings.style = value.to_string()
+                    });
                 }),
             )
         });
@@ -2706,7 +2703,7 @@ impl EditorWindow {
                 SharedString::from(format!("keyboard-theme-{value}")),
                 label(),
                 settings.theme == value,
-                key_preview(style, KeycapTheme::from_str(value), keys),
+                key_preview(style, KeycapTheme::from_setting(value), keys),
                 cx.listener(move |this, _, window, cx| {
                     this.set_keyboard_setting_inner(
                         false,
@@ -2815,15 +2812,19 @@ impl EditorWindow {
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        .child(self.labelled_inline(
-                            tr::editor::tabs::keyboard::font_family(),
-                            self.menu_select(
-                                SidebarMenu::KeyboardFont,
-                                "keyboard-font",
-                                font_label,
-                                cx,
-                            ),
-                        ))
+                        // Keycaps are set in each keyboard's own face, so the
+                        // family and weight only apply to the classic label.
+                        .when(classic, |this| {
+                            this.child(self.labelled_inline(
+                                tr::editor::tabs::keyboard::font_family(),
+                                self.menu_select(
+                                    SidebarMenu::KeyboardFont,
+                                    "keyboard-font",
+                                    font_label,
+                                    cx,
+                                ),
+                            ))
+                        })
                         .child(
                             self.slider_field(
                                 tr::editor::tabs::keyboard::size_label(),
@@ -2885,16 +2886,18 @@ impl EditorWindow {
                     ),
                 ),
             )
-            .child(
-                ui::Field::inline(&theme, tr::editor::tabs::keyboard::font_weight()).child(
-                    self.menu_select(
-                        SidebarMenu::KeyboardWeight,
-                        "keyboard-weight",
-                        weight_label,
-                        cx,
+            .when(classic, |this| {
+                this.child(
+                    ui::Field::inline(&theme, tr::editor::tabs::keyboard::font_weight()).child(
+                        self.menu_select(
+                            SidebarMenu::KeyboardWeight,
+                            "keyboard-weight",
+                            weight_label,
+                            cx,
+                        ),
                     ),
-                ),
-            )
+                )
+            })
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::animation()).child(
                     div()

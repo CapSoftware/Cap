@@ -35,7 +35,7 @@ pub enum KeycapStyle {
 }
 
 impl KeycapStyle {
-    pub fn from_str(style: &str) -> Self {
+    pub fn from_setting(style: &str) -> Self {
         match style {
             "macos" => Self::MacOs,
             "windows" => Self::Windows,
@@ -91,7 +91,7 @@ pub enum KeycapTheme {
 }
 
 impl KeycapTheme {
-    pub fn from_str(theme: &str) -> Self {
+    pub fn from_setting(theme: &str) -> Self {
         match theme {
             "light" => Self::Light,
             "retro" => Self::Retro,

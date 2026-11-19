@@ -325,21 +325,31 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
     next
 }
 
-/// Which look the project is wearing, if it still matches one exactly in
-/// the parts a look sets.
+/// Which look the project is wearing: the one whose styling it still has
+/// in every part a look sets.
 pub fn current_look(project: &ProjectConfiguration) -> Option<&'static str> {
     LOOKS
         .iter()
-        .find(|look| {
-            let applied = apply_look(look, project);
-            serde_json::to_value(&applied.background).ok()
-                == serde_json::to_value(&project.background).ok()
-                && applied.screen_movement_spring.stiffness
-                    == project.screen_movement_spring.stiffness
-                && applied.screen_movement_spring.damping == project.screen_movement_spring.damping
-                && applied.screen_movement_spring.mass == project.screen_movement_spring.mass
-        })
+        .find(|look| look_settings(&apply_look(look, project)) == look_settings(project))
         .map(|look| look.id)
+}
+
+/// Every setting a look writes, for comparing two projects on them alone.
+fn look_settings(project: &ProjectConfiguration) -> serde_json::Value {
+    serde_json::json!({
+        "background": project.background,
+        "zoom": project.screen_movement_spring,
+        "cursor": [
+            serde_json::to_value(project.cursor.animation_style).ok(),
+            project.cursor.tension,
+            project.cursor.mass,
+            project.cursor.friction,
+        ],
+        "keys": project.keyboard.as_ref().map(|keyboard| {
+            (keyboard.settings.style.clone(), keyboard.settings.theme.clone())
+        }),
+        "captions": project.captions.as_ref().map(|captions| &captions.settings),
+    })
 }
 
 #[cfg(test)]
@@ -403,6 +413,13 @@ mod tests {
         assert!(!next.keyboard.as_ref().unwrap().settings.enabled);
         assert_eq!(current_look(&next), Some("launch-day"));
         assert_eq!(current_look(&project), None);
+        // Changing anything the look set means it is no longer the look.
+        let mut tweaked = next.clone();
+        tweaked.keyboard.as_mut().unwrap().settings.theme = "light".into();
+        assert_eq!(current_look(&tweaked), None);
+        let mut slower = next.clone();
+        slower.cursor.animation_style = CursorAnimationStyle::Slow;
+        assert_eq!(current_look(&slower), None);
     }
 
     #[test]

@@ -498,7 +498,7 @@ impl KeyboardLayer {
             Weight::NORMAL
         };
 
-        let style = KeycapStyle::from_str(&settings.style);
+        let style = KeycapStyle::from_setting(&settings.style);
         if style != KeycapStyle::Classic {
             // The first key lands as the overlay finishes fading in, so the
             // press is seen rather than lost in the fade.
@@ -510,7 +510,7 @@ impl KeyboardLayer {
                 KeycapFrame {
                     text: &visible_text,
                     style,
-                    theme: KeycapTheme::from_str(&settings.theme),
+                    theme: KeycapTheme::from_setting(&settings.theme),
                     font_size,
                     opacity: fade_opacity,
                     bounce: bounce_offset as f32,
@@ -893,20 +893,29 @@ impl KeyboardLayer {
             }
             _ => ((width as f32 - total) / 2.0).max(0.0),
         };
+        // Apple's keys sit sunk in the keyboard's deck, which reaches past
+        // them; the deck, not just the keys, keeps clear of the captions and
+        // the frame's edges.
+        let plate_pad = if frame.style == KeycapStyle::MacOs {
+            cap_height * 0.17
+        } else {
+            0.0
+        };
+        let outer_height = cap_height + plate_pad * 2.0;
         let center_y = height as f32 * resolved_position.y_factor();
-        let max_top = (height as f32 - cap_height).max(0.0);
-        let base_top = (center_y - cap_height / 2.0).clamp(0.0, max_top);
+        let max_top = (height as f32 - outer_height).max(0.0);
+        let base_top = (center_y - outer_height / 2.0).clamp(0.0, max_top);
         let top = resolve_background_top(
             [
-                left,
+                left - plate_pad,
                 (base_top + frame.bounce).clamp(0.0, max_top),
-                total,
-                cap_height,
+                total + plate_pad * 2.0,
+                outer_height,
             ],
             height as f32,
             frame.position,
             caption_layout,
-        );
+        ) + plate_pad;
 
         let press = keycaps::press_depth(frame.since_struck);
         let opacity = frame.opacity.clamp(0.0, 1.0);
@@ -1011,13 +1020,8 @@ impl KeyboardLayer {
             x += cap_width + gap;
         }
 
-        // Apple's keys sit sunk in the keyboard's deck: a black well on a
-        // MacBook Pro, silver aluminium on a Magic Keyboard.
-        let plate_pad = if frame.style == KeycapStyle::MacOs {
-            cap_height * 0.17
-        } else {
-            0.0
-        };
+        // The deck: a black well on a MacBook Pro, silver aluminium on a
+        // Magic Keyboard.
         if plate_pad > 0.0 {
             let deck = frame.theme.palette(false).plate;
             uniforms.plate = [

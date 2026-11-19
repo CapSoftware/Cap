@@ -313,11 +313,11 @@ fn look_preview(
                     .child(div().h(px(3.)).w(px(40.)).rounded(px(2.)).bg(line))
                     .child(div().h(px(3.)).w(px(22.)).rounded(px(2.)).bg(line)),
             );
-    let style = KeycapStyle::from_str(&look.keys.style.map_or_else(
+    let style = KeycapStyle::from_setting(&look.keys.style.map_or_else(
         cap_project::KeyboardSettings::platform_style,
         str::to_string,
     ));
-    let key_theme = KeycapTheme::from_str(look.keys.theme);
+    let key_theme = KeycapTheme::from_setting(look.keys.theme);
     let keys = div()
         .absolute()
         .right(px(5.))
@@ -5164,7 +5164,7 @@ impl EditorWindow {
         let position = self.view.transform.position;
         let total = self.total_duration();
         let hit = edits::hit_test(
-            self.timeline.segments(kind),
+            &timeline::drawn_segments(kind, self.timeline.segments(kind), secs_per_pixel),
             lane,
             x,
             position,
@@ -7079,7 +7079,7 @@ impl EditorWindow {
         let x = self.content_x(window_x);
         let position = self.view.transform.position;
         let hit = edits::hit_test(
-            self.timeline.segments(kind),
+            &timeline::drawn_segments(kind, self.timeline.segments(kind), secs_per_pixel),
             lane,
             x,
             position,
