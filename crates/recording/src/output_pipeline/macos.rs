@@ -1642,8 +1642,6 @@ mod tests {
         }
     }
 
-    /// A copier whose setup failed passes frames through, and is set up
-    /// again once the retry interval has passed.
     #[test]
     fn failed_copier_setup_is_retried() {
         let failed = |since: Duration| {
