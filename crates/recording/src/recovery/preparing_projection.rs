@@ -887,6 +887,7 @@ mod tests {
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::NeedsRemux),
                             cursor_shape_version: 0,
+                            audio_only: false,
                         },
                     },
                 )),

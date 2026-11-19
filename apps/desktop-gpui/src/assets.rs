@@ -40,6 +40,7 @@ const FONTS: &[(&str, &[u8])] = assets!("fonts":
 /// element's text colour, so these must be single-colour glyphs -- a full-colour
 /// illustration would come out as a filled silhouette.
 const ICONS: &[(&str, &[u8])] = assets!("icons":
+    "volume-2.svg",
     "app-window-mac.svg",
     "app-window.svg",
     "ban.svg",
@@ -352,6 +353,7 @@ mod tests {
         include_str!("editor_clips.rs"),
         // The export page's destination cards and share-status glyphs.
         include_str!("editor_export.rs"),
+        include_str!("editor_audio_only.rs"),
         // The screenshot editor's toolbar, popovers and zoom HUD; the
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),
