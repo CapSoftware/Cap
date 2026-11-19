@@ -1019,7 +1019,7 @@ fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
         (
             stream.index(),
             f64::from(tb.numerator()) / f64::from(tb.denominator()),
-            indexed_video_timestamps(&stream),
+            indexed_video_timestamps(path, &stream),
         )
     };
     let timestamps = indexed.unwrap_or_else(|| packet_video_timestamps(&mut ictx, stream_index));
@@ -1047,7 +1047,10 @@ fn packet_video_timestamps(ictx: &mut avformat::context::Input, stream_index: us
     timestamps
 }
 
-fn indexed_video_timestamps(stream: &avformat::stream::Stream) -> Option<Vec<i64>> {
+fn indexed_video_timestamps(path: &Path, stream: &avformat::stream::Stream) -> Option<Vec<i64>> {
+    if !crate::mp4_boxes::track_has_no_composition_offsets(path, stream.id()) {
+        return None;
+    }
     unsafe {
         let stream = stream.as_ptr().cast_mut();
         if (*(*stream).codecpar).video_delay > 0 {
@@ -2345,7 +2348,7 @@ mod tests {
         let mut input = ffmpeg::format::input(path).unwrap();
         let (stream_index, indexed) = {
             let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
-            (stream.index(), indexed_video_timestamps(&stream))
+            (stream.index(), indexed_video_timestamps(path, &stream))
         };
         let mut scanned = packet_video_timestamps(&mut input, stream_index);
         scanned.sort_unstable();
@@ -2379,6 +2382,34 @@ mod tests {
             assert_eq!(scanned.len(), timestamps.len());
             assert_eq!(indexed, Some(scanned));
         }
+    }
+
+    #[test]
+    fn varying_composition_offsets_fall_back_to_reading_packets() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../video-decode/tests/fixtures");
+
+        let varying = fixtures.join("h264-varying-composition-offset.mp4");
+        let (indexed, scanned) = indexed_and_scanned_timestamps(&varying);
+        assert_eq!(indexed, None);
+        let mut input = ffmpeg::format::input(&varying).unwrap();
+        let (stream_index, time_base) = {
+            let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+            (stream.index(), f64::from(stream.time_base()))
+        };
+        assert_eq!(packet_video_timestamps(&mut input, stream_index), scanned);
+        assert_eq!(
+            get_video_capture_fps(&varying),
+            capture_fps_from_timestamps(
+                scanned
+                    .iter()
+                    .map(|timestamp| *timestamp as f64 * time_base)
+                    .collect()
+            )
+        );
+
+        let plain = fixtures.join("h264-no-reordering.mp4");
+        let (indexed, scanned) = indexed_and_scanned_timestamps(&plain);
+        assert_eq!(indexed, Some(scanned));
     }
 
     #[test]
