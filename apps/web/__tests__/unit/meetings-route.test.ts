@@ -554,6 +554,67 @@ describe("POST /transcribe", () => {
 		expect(mocks.remove).toHaveBeenCalledWith("tr_1");
 	});
 
+	it("asks for speaker labels in a per-user session and returns the letters", async () => {
+		signIn();
+		mocks.submit.mockResolvedValue({
+			id: "tr_s",
+			status: "completed",
+			text: "Hi there.",
+			language_code: "en",
+			words: [
+				{ text: "Hi", start: 100, end: 300, confidence: 0.9, speaker: "A" },
+				{
+					text: "there.",
+					start: 320,
+					end: 700,
+					confidence: 0.9,
+					speaker: null,
+				},
+			],
+		});
+		const response = await transcribe(
+			wav(16_000),
+			"?session=doc_1:system&seq=4",
+		);
+		expect(response.status).toBe(200);
+		expect((await response.json()).words).toEqual([
+			{ text: "Hi", startMs: 100, endMs: 300, confidence: 0.9, speaker: "A" },
+			{
+				text: "there.",
+				startMs: 320,
+				endMs: 700,
+				confidence: 0.9,
+				speaker: null,
+			},
+		]);
+		const params = mocks.submit.mock.calls[0]?.[0] as Record<string, unknown>;
+		expect(params).toMatchObject({ speaker_labels: true, cap_speaker_seq: 4 });
+		expect(String(params.cap_speaker_session)).toMatch(/^.+:doc_1:system$/);
+		expect(String(params.cap_speaker_session)).not.toBe("doc_1:system");
+	});
+
+	it("sends no speaker fields without a session", async () => {
+		signIn();
+		mocks.submit.mockResolvedValue({
+			id: "tr_n",
+			status: "completed",
+			text: "",
+			language_code: "en",
+			words: [],
+		});
+		await transcribe(wav(16_000));
+		const params = mocks.submit.mock.calls[0]?.[0] as Record<string, unknown>;
+		expect(params).not.toHaveProperty("speaker_labels");
+		expect(params).not.toHaveProperty("cap_speaker_session");
+	});
+
+	it("rejects a malformed speaker session", async () => {
+		signIn();
+		const response = await transcribe(wav(16_000), "?session=a%20b");
+		expect(response.status).toBe(400);
+		expect(mocks.submit).not.toHaveBeenCalled();
+	});
+
 	it("drops keyterms the provider rejects", async () => {
 		signIn();
 		mocks.submit
