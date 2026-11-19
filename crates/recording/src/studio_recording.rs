@@ -868,6 +868,9 @@ struct ResumeAttempt {
     scope: crate::output_pipeline::PipelineBuildScope,
     directory: PathBuf,
     result: Arc<std::sync::Mutex<Option<Result<Pipeline, ResumeBuildError>>>>,
+    /// The segment is built on a copy of the factory, so the camera input it
+    /// made comes back here for the actor's factory to adopt on commit.
+    camera_input: Arc<std::sync::Mutex<Option<StudioCameraInput>>>,
     finished: ResumeCompletion,
     ready: ResumeCompletion,
     reply: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
@@ -998,6 +1001,7 @@ impl Message<ResumeFinished> for Actor {
                     && attempt.scope.commit()
                 {
                     let index = *next_index;
+                    self.segment_factory.live_camera = attempt.camera_input.lock().unwrap().take();
                     self.segment_factory.commit_next(&mut pipeline);
                     self.markers.segment_started(
                         index,
@@ -1086,6 +1090,7 @@ impl Message<Resume> for Actor {
         let scope = self.lifetime.lifecycle.0.scope.child_transaction();
         let lifetime_completion = self.lifetime.lifecycle.0.scope.task_completion();
         let result = Arc::new(std::sync::Mutex::new(None));
+        let camera_input = Arc::new(std::sync::Mutex::new(None));
         let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
         let (reply, ready) = tokio::sync::oneshot::channel();
         let attempt = ResumeAttempt {
@@ -1093,6 +1098,7 @@ impl Message<Resume> for Actor {
             scope: scope.clone(),
             directory: directory.clone(),
             result: result.clone(),
+            camera_input: camera_input.clone(),
             finished: async move {
                 finished_rx
                     .await
@@ -1133,6 +1139,7 @@ impl Message<Resume> for Actor {
                     quiescent: false,
                 })
             });
+            *camera_input.lock().unwrap() = factory.live_camera.take();
             *result.lock().unwrap() = Some(prepared);
             let _ = finished_tx.send(());
             let _ = notify_after_capture_publication(
@@ -3463,12 +3470,12 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
+        let camera_input = self.next_camera_input();
         #[cfg(test)]
         if let Some(prepare) = &self.prepare_override {
             return prepare(cursors, next_cursors_id).await;
         }
         let segment_start_time = Timestamps::now();
-        let camera_input = self.next_camera_input();
         create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
@@ -5518,6 +5525,14 @@ mod tests {
         }
 
         fn paused_resume_actor(path: &Path, prepare: ResumeTestFactory) -> ActorHandle {
+            paused_resume_actor_with_camera(path, prepare, None)
+        }
+
+        fn paused_resume_actor_with_camera(
+            path: &Path,
+            prepare: ResumeTestFactory,
+            camera_feed: Option<Arc<CameraFeedLock>>,
+        ) -> ActorHandle {
             let (completion_tx, completion_rx) = watch::channel(None);
             let target = screen_capture::ScreenCaptureTarget::CameraOnly;
             let mut factory = SegmentPipelineFactory::new(
@@ -5528,7 +5543,7 @@ mod tests {
                     window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
-                    camera_feed: None,
+                    camera_feed,
                     start_gate: None,
                     #[cfg(target_os = "macos")]
                     shareable_content: None,
@@ -6026,6 +6041,82 @@ mod tests {
                 drop(self.sender.take());
                 async { Ok(()) }.boxed()
             }
+        }
+
+        struct LiveCameraSnapshot;
+
+        impl Message<LiveCameraSnapshot> for Actor {
+            type Reply = Option<bool>;
+
+            async fn handle(
+                &mut self,
+                _: LiveCameraSnapshot,
+                _: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                self.segment_factory
+                    .live_camera
+                    .as_ref()
+                    .map(|input| input.lock().is_some())
+            }
+        }
+
+        /// Resume builds the segment on a copy of the factory. The camera
+        /// input that segment records through must reach the actor's factory,
+        /// or the next camera switch cannot find it and pauses instead.
+        #[tokio::test]
+        async fn a_resumed_segment_keeps_its_camera_switchable() {
+            let directory = tempfile::tempdir().unwrap();
+            let camera = crate::feeds::camera::synthetic::SyntheticCamera::spawn(
+                "camera",
+                test_video_info(),
+            );
+            let stop = Arc::new(std::sync::Mutex::new(None));
+            let next_path = directory
+                .path()
+                .join("content/segments/segment-1/display.mp4");
+            let handle = paused_resume_actor_with_camera(
+                directory.path(),
+                Arc::new(move |_, _| {
+                    let stop = stop.clone();
+                    let next_path = next_path.clone();
+                    async move {
+                        let start_time = Timestamps::now();
+                        let screen = OutputPipeline::builder(next_path)
+                            .with_video::<ResumeVideo>(stop)
+                            .with_timestamps(start_time)
+                            .build::<SuccessfulVideoMuxer>(())
+                            .await?;
+                        Ok(Pipeline {
+                            start_time,
+                            start_gate: None,
+                            screen,
+                            microphone: None,
+                            camera: None,
+                            system_audio: None,
+                            cursor: None,
+                            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+                            watcher_task: None,
+                            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                            system_audio_required: false,
+                        })
+                    }
+                    .boxed()
+                }),
+                Some(Arc::new(camera.lock().await.unwrap())),
+            );
+            assert_eq!(
+                handle.actor_ref.ask(LiveCameraSnapshot).await.unwrap(),
+                None
+            );
+            handle.resume().await.unwrap();
+            assert_eq!(
+                handle.actor_ref.ask(LiveCameraSnapshot).await.unwrap(),
+                Some(true)
+            );
+            tokio::time::timeout(Duration::from_secs(3), handle.stop())
+                .await
+                .unwrap()
+                .unwrap();
         }
 
         #[tokio::test]
