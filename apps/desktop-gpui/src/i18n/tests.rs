@@ -12,12 +12,12 @@ fn english_matches_the_literals_it_replaced() {
     let app_name = crate::menus::APP_NAME;
     let pairs: &[(&str, String)] = &[
         (tr::common::add(), "Add".into()),
-        (tr::editor::audio_only::add_visuals(), "Add Visuals".into()),
         (
             tr::editor::audio_only::body(),
             "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video.".into(),
         ),
         (tr::editor::audio_only::export_audio(), "Export Audio".into()),
+        (tr::editor::audio_only::make_video(), "Make it a video".into()),
         (tr::editor::audio_only::show_visuals(), "Show visuals".into()),
         (tr::editor::audio_only::size_large(), "Large".into()),
         (tr::editor::audio_only::size_medium(), "Medium".into()),

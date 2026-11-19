@@ -1861,9 +1861,9 @@ done = "Done"
 import = "Import file"
 
 [editor.audio_only]
-add_visuals = "Add Visuals"
 body = "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video."
 export_audio = "Export Audio"
+make_video = { text = "Make it a video", context = "Heading over visualiser choices that turn an audio-only recording into a video." }
 show_visuals = "Show visuals"
 size_large = "Large"
 size_medium = "Medium"

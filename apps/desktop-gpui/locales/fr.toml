@@ -1859,9 +1859,9 @@ done = "Terminé"
 import = "Importer un fichier"
 
 [editor.audio_only]
-add_visuals = "Ajouter des visuels"
 body = "Cet enregistrement n'a pas de vidéo. Exportez le son en MP3 ou WAV, ou ajoutez des visuels pour en faire une vidéo."
 export_audio = "Exporter l'audio"
+make_video = "En faire une vidéo"
 show_visuals = "Afficher les visuels"
 size_large = "Grand"
 size_medium = "Moyen"

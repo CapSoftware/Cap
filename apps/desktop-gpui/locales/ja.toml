@@ -1859,9 +1859,9 @@ done = "完了"
 import = "ファイルを読み込む"
 
 [editor.audio_only]
-add_visuals = "ビジュアルを追加"
 body = "この録音には映像がありません。音声をMP3またはWAVで書き出すか、ビジュアルを追加して動画にできます。"
 export_audio = "音声を書き出す"
+make_video = "動画にする"
 show_visuals = "ビジュアルを表示"
 size_large = "大"
 size_medium = "中"

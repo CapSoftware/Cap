@@ -1859,9 +1859,9 @@ done = "完成"
 import = "导入文件"
 
 [editor.audio_only]
-add_visuals = "添加视觉效果"
 body = "此录制没有视频。可将声音导出为 MP3 或 WAV，或添加视觉效果把它变成视频。"
 export_audio = "导出音频"
+make_video = "做成视频"
 show_visuals = "显示视觉效果"
 size_large = "大"
 size_medium = "中"

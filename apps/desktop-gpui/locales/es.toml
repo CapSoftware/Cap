@@ -1859,9 +1859,9 @@ done = "Listo"
 import = "Importar archivo"
 
 [editor.audio_only]
-add_visuals = "Añadir visuales"
 body = "Esta grabación no tiene vídeo. Exporta el sonido como MP3 o WAV, o añade elementos visuales para convertirla en un vídeo."
 export_audio = "Exportar audio"
+make_video = "Convertirlo en vídeo"
 show_visuals = "Mostrar visuales"
 size_large = "Grande"
 size_medium = "Mediano"

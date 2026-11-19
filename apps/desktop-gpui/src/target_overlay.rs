@@ -3410,6 +3410,16 @@ impl OverlayWindow {
         } else {
             tr::overlay::audio_only::choose_source()
         };
+        // The stage is dark in both themes, over a dimmed screen, so its ink
+        // is light in both.
+        let ink = |alpha: f32| gpui::hsla(0., 0., 1., alpha);
+        let status_dot = if has_microphone {
+            gpui::hsla(0.39, 0.62, 0.52, 1.)
+        } else if system_audio {
+            Hsla::from(self.theme.blue_9)
+        } else {
+            ink(0.3)
+        };
         div()
             .size_full()
             .relative()
@@ -3417,71 +3427,101 @@ impl OverlayWindow {
             .flex_col()
             .items_center()
             .justify_center()
-            .bg(gpui::hsla(0., 0., 0., 0.7))
+            .bg(gpui::hsla(0., 0., 0., 0.62))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .items_center()
-                    .mb(px(36.))
+                    .gap(px(6.))
+                    .mb(px(20.))
                     .child(
                         div()
-                            .mb(px(10.))
-                            .text_size(px(30.))
-                            .font_weight(FontWeight::BOLD)
+                            .text_size(px(22.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ink(0.96))
                             .child(tr::main::target::audio_only()),
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .text_color(self.theme.gray_11)
+                            .text_size(px(13.))
+                            .text_color(ink(0.6))
                             .child(tr::overlay::audio_only::description()),
                     ),
             )
-            // The meter stands on the dimmed screen, not in a card of its
-            // own, so the controls are the only panel.
+            // One stage holds the sound: a live meter that breathes with the
+            // microphone, and a line saying what will be recorded.
             .child(
                 div()
                     .id("overlay-audio-meter")
                     .w(px(CLUSTER_WIDTH))
-                    .mb(px(36.))
+                    .mb(px(14.))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(16.))
+                    .gap(px(14.))
+                    .pt(px(26.))
+                    .pb(px(18.))
+                    .rounded(px(20.))
+                    .bg(gpui::hsla(0.63, 0.08, 0.09, 0.82))
+                    .border_1()
+                    .border_color(ink(0.08))
+                    .shadow(vec![
+                        gpui::BoxShadow {
+                            color: gpui::hsla(0., 0., 0., 0.45),
+                            offset: gpui::point(px(0.), px(18.)),
+                            blur_radius: px(48.),
+                            spread_radius: px(-8.),
+                            inset: false,
+                        },
+                        gpui::BoxShadow {
+                            color: ink(0.06),
+                            offset: gpui::point(px(0.), px(1.)),
+                            blur_radius: px(0.),
+                            spread_radius: px(0.),
+                            inset: true,
+                        },
+                    ])
                     .child(self.render_level_bars(fill, has_microphone))
-                    // A capsule keeps the hint legible over whatever is on
-                    // screen behind the dimming.
                     .child(
                         div()
-                            .px(px(12.))
-                            .py(px(5.))
-                            .rounded_full()
-                            .bg(gpui::hsla(0., 0., 0., 0.55))
-                            .text_size(px(12.))
-                            // The capsule is dark in both themes, so its ink
-                            // is light in both.
-                            .text_color(gpui::hsla(0., 0., 0.86, 1.))
-                            .child(caption),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(div().size(px(6.)).rounded_full().bg(status_dot))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(ink(0.72))
+                                    .child(caption),
+                            ),
                     ),
             )
             .child(self.render_controls_cluster(self.target(cx), false, cx))
     }
 
+    /// The meter: bars mirrored about a centre line, tallest in the middle,
+    /// each swaying a little out of step with its neighbours while the
+    /// microphone is live, so the stage breathes with the voice rather than
+    /// jumping as one block. Silent, it rests as a faint outline.
     fn render_level_bars(&self, fill: f32, live: bool) -> impl IntoElement {
-        const BARS: usize = 31;
-        const MAX_HEIGHT: f32 = 56.;
-        const MIN_HEIGHT: f32 = 4.;
+        const BARS: usize = 41;
+        const MAX_HEIGHT: f32 = 72.;
+        const MIN_HEIGHT: f32 = 3.;
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         let fill = if fill.is_finite() {
             fill.clamp(0., 1.)
         } else {
             0.
         };
-        let lit = if live {
-            Hsla::from(self.theme.blue_9)
-        } else {
-            Hsla::from(self.theme.gray_7)
-        };
+        // Quiet speech still reads: the level is eased up from the floor.
+        let fill = fill.sqrt();
+        let seconds = START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs_f32();
+        let accent = Hsla::from(self.theme.blue_9);
         div()
             .h(px(MAX_HEIGHT))
             .flex()
@@ -3490,14 +3530,33 @@ impl OverlayWindow {
             .gap(px(4.))
             .children((0..BARS).map(move |index| {
                 let offset = index as f32 - (BARS - 1) as f32 / 2.;
-                let envelope = (std::f32::consts::PI * offset / BARS as f32).cos();
-                let texture = 0.75 + 0.25 * ((index * 7 % 5) as f32 / 4.);
-                let height = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) * fill * envelope * texture;
+                let envelope = (std::f32::consts::FRAC_PI_2 * offset / ((BARS - 1) as f32 / 2.))
+                    .cos()
+                    .powf(1.4);
+                let sway = 0.72
+                    + 0.28 * (seconds * 7.0 + index as f32 * 0.9).sin()
+                    + 0.12 * (seconds * 11.0 - index as f32 * 1.7).sin();
+                // At rest the bars hold a faint outline of a voice, so the
+                // stage reads as a meter before any sound arrives.
+                let resting = 0.1 * envelope * (0.7 + 0.3 * ((index * 7 % 5) as f32 / 4.));
+                let level = if live {
+                    (fill * envelope * sway.clamp(0.4, 1.0)).max(resting)
+                } else {
+                    resting
+                };
+                let height = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) * level;
+                // Louder bars warm from white toward the accent.
+                let color = if live {
+                    let white = gpui::hsla(0., 0., 1., 0.55 + 0.4 * level);
+                    if level > 0.55 { accent } else { white }
+                } else {
+                    gpui::hsla(0., 0., 1., 0.22)
+                };
                 div()
-                    .w(px(4.))
+                    .w(px(3.))
                     .h(px(height.max(MIN_HEIGHT)))
                     .rounded_full()
-                    .bg(lit)
+                    .bg(color)
             }))
     }
 
