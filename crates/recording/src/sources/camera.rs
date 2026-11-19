@@ -17,8 +17,6 @@ const CAMERA_SENDER_ATTACH_TIMEOUT: Duration = Duration::from_millis(1500);
 
 struct CameraFrameScaler {
     context: ffmpeg::software::scaling::Context,
-    source_width: u32,
-    source_height: u32,
 }
 
 unsafe impl Send for CameraFrameScaler {}
@@ -42,15 +40,14 @@ impl CameraFrameScaler {
             ffmpeg::software::scaling::Flags::BILINEAR,
         )?;
 
-        Ok(Self {
-            context,
-            source_width: src_width,
-            source_height: src_height,
-        })
+        Ok(Self { context })
     }
 
-    fn matches_source(&self, width: u32, height: u32) -> bool {
-        self.source_width == width && self.source_height == height
+    fn matches_source(&self, frame: &ffmpeg::frame::Video) -> bool {
+        let source = self.context.input();
+        source.width == frame.width()
+            && source.height == frame.height()
+            && source.format == frame.format()
     }
 
     fn scale(&mut self, input: &ffmpeg::frame::Video) -> anyhow::Result<ffmpeg::frame::Video> {
@@ -138,14 +135,17 @@ impl VideoSource for Camera {
 
                                 let frame_width = frame.inner.width();
                                 let frame_height = frame.inner.height();
+                                let frame_format = frame.inner.format();
 
-                                if frame_width != original_width || frame_height != original_height {
+                                if frame_width != original_width
+                                    || frame_height != original_height
+                                    || frame_format != original_format
+                                {
                                     let needs_new_scaler = scaler
                                         .as_ref()
-                                        .is_none_or(|s| !s.matches_source(frame_width, frame_height));
+                                        .is_none_or(|s| !s.matches_source(&frame.inner));
 
                                     if needs_new_scaler {
-                                        let frame_format = frame.inner.format();
                                         match CameraFrameScaler::new(
                                             frame_width,
                                             frame_height,
@@ -158,9 +158,11 @@ impl VideoSource for Camera {
                                                 tracing::info!(
                                                     src_width = frame_width,
                                                     src_height = frame_height,
+                                                    src_format = ?frame_format,
                                                     dst_width = original_width,
                                                     dst_height = original_height,
-                                                    "Camera source: created scaler for dimension change"
+                                                    dst_format = ?original_format,
+                                                    "Camera source: created scaler for format change"
                                                 );
                                                 scaler = Some(new_scaler);
                                             }
@@ -199,7 +201,7 @@ impl VideoSource for Camera {
                                     let total_scaled = scaled_count_clone.load(Ordering::Relaxed);
                                     tracing::info!(
                                         total_scaled,
-                                        "Camera source: dimensions restored to original, removing scaler"
+                                        "Camera source: format restored to original, removing scaler"
                                     );
                                     scaler = None;
                                 }
@@ -292,5 +294,115 @@ impl VideoSource for Camera {
             Ok(())
         }
         .boxed()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        TaskPool,
+        feeds::camera::synthetic::SyntheticCamera,
+        output_pipeline::{AudioFrame, AudioMuxer, Muxer, OutputPipeline, VideoMuxer},
+    };
+    use cap_media_info::{AudioInfo, Pixel};
+    use cap_timestamp::Timestamp;
+    use std::path::PathBuf;
+
+    struct ObservedCamera(flume::Sender<ffmpeg::frame::Video>);
+
+    impl Muxer for ObservedCamera {
+        type Config = flume::Sender<ffmpeg::frame::Video>;
+
+        async fn setup(
+            tx: Self::Config,
+            _: PathBuf,
+            _: Option<VideoInfo>,
+            _: Option<AudioInfo>,
+            _: Arc<AtomicBool>,
+            _: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self(tx))
+        }
+
+        fn finish(&mut self, _: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for ObservedCamera {
+        fn send_audio_frame(&mut self, _: AudioFrame, _: Duration) -> anyhow::Result<()> {
+            unreachable!()
+        }
+    }
+
+    impl VideoMuxer for ObservedCamera {
+        type VideoFrame = FFmpegVideoFrame;
+
+        fn send_video_frame(&mut self, frame: Self::VideoFrame, _: Duration) -> anyhow::Result<()> {
+            self.0.send(frame.inner)?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn camera_keeps_frames_when_pixel_format_changes() {
+        ffmpeg::init().unwrap();
+        let info = VideoInfo::from_raw_ffmpeg(Pixel::YUVJ422P, 64, 48, 30);
+        let camera = SyntheticCamera::spawn("format-changing-camera", info);
+        let (tx, rx) = flume::unbounded();
+        let dir = tempfile::tempdir().unwrap();
+        let pipeline = OutputPipeline::builder(dir.path().join("camera.mp4"))
+            .with_video::<Camera>(Arc::new(camera.lock().await.unwrap()))
+            .build::<ObservedCamera>(tx)
+            .await
+            .unwrap();
+
+        let result = async {
+            for (index, (format, width, height)) in [
+                (Pixel::YUVJ422P, 64, 48),
+                (Pixel::YUVJ422P, 32, 24),
+                (Pixel::YUVJ420P, 32, 24),
+                (Pixel::YUVJ420P, 32, 24),
+                (Pixel::YUVJ420P, 64, 48),
+                (Pixel::YUVJ422P, 64, 48),
+                (Pixel::YUVJ444P, 96, 72),
+                (Pixel::YUVJ422P, 64, 48),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut frame = ffmpeg::frame::Video::new(format, width, height);
+                for plane in 0..frame.planes() {
+                    frame.data_mut(plane).fill(128);
+                }
+                frame.set_pts(Some(index as i64));
+                camera
+                    .push(FFmpegVideoFrame {
+                        inner: frame,
+                        timestamp: Timestamp::Instant(std::time::Instant::now()),
+                    })
+                    .await;
+                let output = tokio::time::timeout(Duration::from_secs(2), rx.recv_async())
+                    .await
+                    .map_err(|_| {
+                        anyhow!("Camera dropped frame {index}: {format:?} {width}x{height}")
+                    })??;
+                anyhow::ensure!(
+                    (output.width(), output.height(), output.format())
+                        == (info.width, info.height, info.pixel_format),
+                    "Camera changed output format on frame {index}: {:?} {}x{}",
+                    output.format(),
+                    output.width(),
+                    output.height()
+                );
+                anyhow::ensure!(output.pts() == Some(index as i64), "Camera lost frame PTS");
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+
+        pipeline.stop().await.unwrap();
+        result.unwrap();
     }
 }
