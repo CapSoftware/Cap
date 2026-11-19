@@ -142,6 +142,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Cannot import a recording into itself",
         ),
         (
+            tr::editor::clips::error::audio_only_mix(),
+            "Audio only recordings and video clips cannot be combined in one project",
+        ),
+        (
             tr::editor::clips::error::no_duration(),
             "Imported video has no valid duration",
         ),
@@ -1488,6 +1492,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Choose at least one track to export.",
         ),
         (tr::editor::export::tracks::cta(), "Export Tracks"),
+        (tr::editor::export::audio::cta(), "Export Audio"),
+        (tr::editor::export::audio::exported(), "Audio exported"),
+        (tr::editor::export::audio::exporting(), "Exporting audio"),
+        (tr::editor::export::audio::file_type(), "File type"),
+        (tr::editor::export::audio::format(), "Audio"),
+        (
+            tr::editor::export::audio::mp3_description(),
+            "Small and plays everywhere. 192 kb/s stereo.",
+        ),
+        (
+            tr::editor::export::audio::wav_description(),
+            "Lossless 16-bit, 48 kHz. Best for further editing.",
+        ),
         (tr::editor::export::tracks::exported(), "Tracks exported"),
         (tr::editor::export::tracks::exporting(), "Exporting tracks"),
         (

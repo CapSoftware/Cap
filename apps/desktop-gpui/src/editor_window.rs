@@ -1567,6 +1567,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    pub(crate) audio_levels: Option<Arc<cap_rendering::AudioLevels>>,
     /// Held from the window opening until it gives up its engine, so the
     /// library refuses to delete the project from under an open editor.
     open_project: Option<crate::library::ProjectOpenInEditor>,
@@ -1604,7 +1605,7 @@ pub struct EditorWindow {
 
     // -- Timeline -----------------------------------------------------------
     /// Every track the strip draws.
-    timeline: TimelineModel,
+    pub(crate) timeline: TimelineModel,
     /// The viewport, the hover ghost and the hovered track.
     pub(crate) view: TimelineView,
     playback_follow: timeline::PlaybackFollow,
@@ -2376,6 +2377,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            audio_levels: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -2689,6 +2691,7 @@ impl EditorWindow {
     ) {
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.refresh_audio_levels();
         cx.notify();
         window.refresh();
     }
@@ -3647,6 +3650,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The render device exists by now, so a software fallback has been
+        // noted and an unchosen default can step down to Half.
+        self.preview_quality = crate::store::GeneralSettings::load().editor_preview_quality;
         transport.set_resolution(self.preview_resolution());
         self.transport = Some(transport);
         self.stats = Some(stats);
@@ -4836,11 +4842,11 @@ impl EditorWindow {
     /// Redraw the paused frame once at the canvas's device-pixel size.
     ///
     /// Playback and paused interactions keep rendering at the saved preview
-    /// quality, so their cost does not change. With the default Half quality
-    /// that frame is smaller than a Retina canvas and gets magnified, so once
-    /// the preview has been still for `delay` (a pause, the end of a scrub or
-    /// an edit, a resize) the same frame is rendered again at the canvas size.
-    /// Full and Quarter are explicit choices and are drawn as chosen.
+    /// quality, so their cost does not change. Half and Full frames are
+    /// smaller than a large Retina canvas and get magnified, so once the
+    /// preview has been still for `delay` (a pause, the end of a scrub or an
+    /// edit, a resize) the same frame is rendered again at the canvas size.
+    /// Quarter is an explicit choice for speed and is drawn as chosen.
     pub(crate) fn schedule_sharp_preview(
         &mut self,
         delay: Duration,
@@ -4850,7 +4856,7 @@ impl EditorWindow {
         if self.playing {
             return SharpPreview::Playing;
         }
-        if self.preview_quality != crate::store::EditorPreviewQuality::Half {
+        if self.preview_quality == crate::store::EditorPreviewQuality::Quarter {
             return SharpPreview::ChosenQuality;
         }
         if self.preparing_presentation.is_some()
@@ -8536,6 +8542,9 @@ impl EditorWindow {
         quality: crate::store::EditorPreviewQuality,
         cx: &mut Context<Self>,
     ) {
+        if !crate::store::set_editor_preview_quality(quality) {
+            tracing::warn!("failed to persist preview quality");
+        }
         if quality == self.preview_quality {
             return;
         }
@@ -8545,14 +8554,6 @@ impl EditorWindow {
         let resolution = self.preview_resolution();
         if let Some(transport) = &self.transport {
             transport.set_resolution(resolution);
-        }
-        let value = serde_json::Value::String(quality.as_json().to_string());
-        if !crate::store::set_store_setting(
-            crate::store::GENERAL_SETTINGS,
-            "editorPreviewQuality",
-            value,
-        ) {
-            tracing::warn!("failed to persist preview quality");
         }
         if was_playing {
             self.stop_playback(cx);
@@ -11967,8 +11968,11 @@ impl EditorWindow {
     /// the sprite atlas.
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let audio_card =
+            self.project_ready() && self.is_audio_only() && !self.audio_visuals_enabled();
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
+            _ if audio_card => self.render_audio_card(cx),
             (_, true) => loading::reveal(
                 "editor-preview-ready",
                 self.preview
@@ -11995,7 +11999,7 @@ impl EditorWindow {
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(if self.project_ready() {
+            .children(if self.project_ready() && !audio_card {
                 self.render_canvas_overlay(cx)
             } else {
                 None
@@ -14661,6 +14665,26 @@ mod tests {
                 assert_eq!(editor.finish_ordinary_handoff(13, window, cx), None);
                 assert_eq!(editor.ordinary_handoff_frame, Some(12));
                 assert!(editor.preparing_presentation.is_some());
+            });
+        }
+
+        #[gpui::test]
+        fn full_gets_the_sharp_redraw_and_quarter_is_drawn_as_chosen(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.playing = false;
+                editor.preview_quality = crate::store::EditorPreviewQuality::Full;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::NoEngine
+                );
+                editor.preview_quality = crate::store::EditorPreviewQuality::Quarter;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::ChosenQuality
+                );
             });
         }
 
