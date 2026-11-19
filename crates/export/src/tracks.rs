@@ -689,7 +689,8 @@ impl Nv12Converter {
 }
 
 /// The largest size with `source`'s aspect that fits in `target`, rounded to
-/// even pixels so NV12 chroma lines up.
+/// even pixels so NV12 chroma lines up. A side that fills an odd-sized track
+/// keeps the track's odd length.
 fn fitted_size(source: (u32, u32), target: (u32, u32)) -> (u32, u32) {
     let scale =
         (f64::from(target.0) / f64::from(source.0)).min(f64::from(target.1) / f64::from(source.1));
@@ -704,12 +705,16 @@ fn place_centered(frame: &frame::Video, target: &mut frame::Video) -> Result<(),
     let x = (target.width() as usize - width) / 4 * 2;
     let y = (target.height() as usize - height) / 4 * 2;
     fill_black(target);
-    for (plane, rows, row) in [(0, height, y), (1, height.div_ceil(2), y / 2)] {
+    let planes = [
+        (0, width, height, y),
+        (1, width.div_ceil(2) * 2, height.div_ceil(2), y / 2),
+    ];
+    for (plane, row_bytes, rows, row) in planes {
         let target_stride = target.stride(plane);
         copy_plane(
             frame.data(plane),
             frame.stride(plane),
-            width,
+            row_bytes,
             rows,
             target
                 .data_mut(plane)
@@ -1498,12 +1503,22 @@ mod tests {
     }
 
     fn nv12_frame(y: u8, u: u8, v: u8, matrix: YuvMatrix) -> DecodedFrame {
-        let (width, height) = (16u32, 16u32);
+        sized_nv12_frame((16, 16), y, u, v, matrix)
+    }
+
+    fn sized_nv12_frame(
+        (width, height): (u32, u32),
+        y: u8,
+        u: u8,
+        v: u8,
+        matrix: YuvMatrix,
+    ) -> DecodedFrame {
         let mut data = vec![y; (width * height) as usize];
-        for _ in 0..(width * height / 4) {
+        for _ in 0..(width.div_ceil(2) * height.div_ceil(2)) {
             data.extend_from_slice(&[u, v]);
         }
-        DecodedFrame::new_nv12(data, width, height, width, width).with_matrix(matrix)
+        let uv_stride = width.div_ceil(2) * 2;
+        DecodedFrame::new_nv12(data, width, height, width, uv_stride).with_matrix(matrix)
     }
 
     #[test]
@@ -1571,6 +1586,23 @@ mod tests {
         assert!(
             close(chroma[32], 90) && close(chroma[33], 240),
             "{chroma:?}"
+        );
+    }
+
+    #[test]
+    fn odd_width_clips_keep_colour_in_the_last_column() {
+        ffmpeg::init().unwrap();
+        let mut converter = Nv12Converter::default();
+        let clip = sized_nv12_frame((1001, 500), 200, 90, 240, YuvMatrix::Bt709);
+        let mut track = black_nv12(1001, 777);
+
+        converter.fill(&clip, &mut track).unwrap();
+
+        let row = &track.data(1)[200 * track.stride(1)..][..1002];
+        assert!(
+            row.chunks_exact(2).all(|pair| pair == [90, 240]),
+            "{:?}",
+            &row[996..]
         );
     }
 
