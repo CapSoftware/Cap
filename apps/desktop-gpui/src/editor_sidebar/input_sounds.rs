@@ -135,7 +135,8 @@ impl EditorWindow {
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
+        // Painted like the key style and theme tiles above it.
+        let editor = self.theme.editor;
         div()
             .id(id)
             .group(TILE_GROUP)
@@ -147,17 +148,15 @@ impl EditorWindow {
             .items_center()
             .justify_center()
             .px(px(8.))
-            .cursor_pointer()
             .map(|this| {
                 if selected {
-                    this.border_2()
-                        .border_color(Hsla::from(theme.blue_8))
-                        .bg(with_alpha(theme.blue_3, 0.4))
+                    this.bg(editor.pill_fill())
+                        .shadow(editor.choice_selected_shadow())
                 } else {
-                    this.border_1()
-                        .border_color(Hsla::from(theme.gray_3))
-                        .bg(Hsla::from(theme.gray_2))
-                        .hover(|this| this.border_color(Hsla::from(theme.gray_5)))
+                    this.bg(Hsla::from(editor.ctl))
+                        .shadow(editor.trough_ring())
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
                 }
             })
             .child(
@@ -167,11 +166,10 @@ impl EditorWindow {
                     .overflow_hidden()
                     .text_ellipsis()
                     .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
                     .text_color(Hsla::from(if selected {
-                        theme.gray_12
+                        editor.text_1
                     } else {
-                        theme.gray_11
+                        editor.text_2
                     }))
                     .child(label),
             )

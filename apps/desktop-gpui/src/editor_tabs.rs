@@ -2926,6 +2926,7 @@ impl EditorWindow {
             .gap(px(16.))
             .when(!enabled, |this| this.opacity(0.5))
             .child(self.render_key_style_picker(&settings, cx))
+            .child(self.render_key_sounds(cx))
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::font_settings()).child(
                     div()
@@ -3153,7 +3154,6 @@ impl EditorWindow {
                         ),
                 ),
             )
-            .child(self.render_key_sounds(cx))
             .child(
                 div().pt(px(8.)).child(
                     ui::Button::plain(
