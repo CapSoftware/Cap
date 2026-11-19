@@ -236,19 +236,31 @@ fn rss_case_child() {
                 .block_on(probe(probe_request(project.path())))
                 .unwrap();
         }
-        "render-small" => {
-            let project = project("small.mp4");
-            runtime
-                .block_on(video::render(video_request(project.path(), [0, 1])))
+        "decode-small" => {
+            let decoder = runtime
+                .block_on(cap_rendering::decoder::spawn_decoder(
+                    "screen",
+                    fixture("small.mp4"),
+                    30,
+                    0.0,
+                    true,
+                ))
                 .unwrap();
+            runtime
+                .block_on(decoder.get_frame_initial(0.0))
+                .expect("no frame from small.mp4");
         }
-        "render-understated" => {
-            let project = project("understated.mp4");
+        "decode-understated" => {
             let error = runtime
-                .block_on(video::render(video_request(project.path(), [0, 1])))
+                .block_on(cap_rendering::decoder::spawn_decoder(
+                    "screen",
+                    fixture("understated.mp4"),
+                    30,
+                    0.0,
+                    true,
+                ))
                 .err()
-                .expect("render decoded an 8192x8192 stream");
-            let error = format!("{error:#}");
+                .expect("opened a decoder for an 8192x8192 stream");
             assert!(error.contains("8192x8192"), "{error}");
         }
         other => panic!("unknown case {other}"),
@@ -315,12 +327,26 @@ fn video_stream_in_an_audio_file_is_not_decoded() {
 
 /// A container can declare a smaller frame than its stream carries, which
 /// the header check cannot see, so the decoder's own limit has to stop it.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn stream_larger_than_its_container_declares_is_not_decoded() {
-    let (control, rendered) = peak_rss_against("render-small", "render-understated");
+    let (control, decoded) = peak_rss_against("decode-small", "decode-understated");
     assert!(
-        rendered < control + FFMPEG_RSS_BUDGET,
-        "refusing an 8192x8192 stream peaked at {rendered} bytes, {control} for a 1080p render"
+        decoded < control + FFMPEG_RSS_BUDGET,
+        "refusing an 8192x8192 stream peaked at {decoded} bytes, {control} decoding 1080p"
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn chunk_with_a_stream_larger_than_its_container_declares_fails() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let project = project("understated.mp4");
+    let error = runtime()
+        .block_on(video::render(video_request(project.path(), [0, 1])))
+        .err()
+        .expect("render decoded an 8192x8192 stream");
+    let error = format!("{error:#}");
+    assert!(error.contains("8192x8192"), "{error}");
 }
