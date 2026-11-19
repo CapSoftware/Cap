@@ -261,3 +261,13 @@ fn cubic_interpolation_hits_the_samples_it_passes_through() {
     }
     assert!(cubic(&samples, 10.0).abs() <= 1.0);
 }
+
+#[test]
+fn hiding_the_cursor_on_a_clip_changes_the_click_sounds() {
+    let mut before = key_project(0.6);
+    before.cursor.click_sounds = true;
+    let mut after = before.clone();
+    assert!(!input_sounds_changed(&before, &after));
+    after.timeline.as_mut().unwrap().segments[0].hide_cursor = Some(true);
+    assert!(input_sounds_changed(&before, &after));
+}

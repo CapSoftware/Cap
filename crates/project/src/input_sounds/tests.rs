@@ -378,3 +378,78 @@ fn muted_clips_stay_silent_and_clip_volume_carries_over() {
     assert!(events.iter().all(|event| (event.time - 2.5).abs() < 1e-9));
     assert!(events.iter().all(|event| event.gain == 0.5));
 }
+
+#[test]
+fn a_split_keeps_a_held_key_and_a_cut_drops_its_release() {
+    let keyboard = KeyboardEvents {
+        presses: vec![press("a", 1000.0, true), press("a", 1080.0, false)],
+    };
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    let events_for = |segments: serde_json::Value| {
+        let mut project = project(
+            serde_json::json!({ "segments": segments, "zoomSegments": [] }),
+            true,
+            false,
+        );
+        project.timeline.as_mut().unwrap().keyboard_segments = vec![shown(0.0, 3.0)];
+        input_sound_events(&project, &takes)
+    };
+    let whole = events_for(serde_json::json!([
+        { "start": 0.0, "end": 3.0, "timescale": 1.0, "recordingSegment": 0 }
+    ]));
+    let split = events_for(serde_json::json!([
+        { "start": 0.0, "end": 1.04, "timescale": 1.0, "recordingSegment": 0 },
+        { "start": 1.04, "end": 3.0, "timescale": 1.0, "recordingSegment": 0 }
+    ]));
+    assert_eq!(key_times(&whole, true).len(), 1);
+    assert_eq!(key_times(&whole, false).len(), 1);
+    // Splitting without removing anything sounds exactly the same.
+    assert_eq!(split.len(), whole.len());
+    for (a, b) in split.iter().zip(&whole) {
+        assert!((a.time - b.time).abs() < 1e-9);
+        assert_eq!(a.kind, b.kind);
+    }
+    // Cutting out the moment between press and release drops the release.
+    let cut = events_for(serde_json::json!([
+        { "start": 0.0, "end": 1.04, "timescale": 1.0, "recordingSegment": 0 },
+        { "start": 1.06, "end": 3.0, "timescale": 1.0, "recordingSegment": 0 }
+    ]));
+    assert_eq!(key_times(&cut, true).len(), 1);
+    assert!(key_times(&cut, false).is_empty());
+}
+
+#[test]
+fn a_clip_that_hides_the_cursor_hides_its_clicks() {
+    let clicks = [
+        click(500.0, true),
+        click(560.0, false),
+        click(3500.0, true),
+        click(3560.0, false),
+    ];
+    let keyboard = KeyboardEvents::default();
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &clicks,
+    }];
+    let mut project = project(
+        serde_json::json!({
+            "segments": [
+                { "start": 0.0, "end": 2.0, "timescale": 1.0, "recordingSegment": 0 },
+                { "start": 2.0, "end": 5.0, "timescale": 1.0, "recordingSegment": 0 }
+            ],
+            "zoomSegments": []
+        }),
+        false,
+        true,
+    );
+    assert_eq!(input_sound_events(&project, &takes).len(), 4);
+    project.timeline.as_mut().unwrap().segments[1].hide_cursor = Some(true);
+    let events = input_sound_events(&project, &takes);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event.time < 1.0));
+}

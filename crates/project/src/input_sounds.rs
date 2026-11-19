@@ -238,6 +238,9 @@ pub fn input_sound_events(
     let mut ordered_keys: Vec<Option<Vec<&KeyPressEvent>>> = vec![None; takes.len()];
     let mut ordered_clicks: Vec<Option<Vec<&CursorClickEvent>>> = vec![None; takes.len()];
     let mut held: Vec<&str> = Vec::new();
+    // Where the last clip's keys left off, so a key held across a split is
+    // still released on the far side of it.
+    let mut held_until: Option<(u32, f64)> = None;
 
     for window in clip_windows(timeline) {
         let clip = window.clip;
@@ -271,7 +274,16 @@ pub fn input_sound_events(
             let source_end = clip.end + take.keyboard_offset_secs;
             let first = presses.partition_point(|press| press.time_ms / 1000.0 < source_start);
             let last = presses.partition_point(|press| press.time_ms / 1000.0 < source_end);
-            held.clear();
+            // Only a clip that carries straight on from the last one keeps
+            // its held keys; after a cut, a release whose press was cut away
+            // stays silent.
+            let continues = held_until.is_some_and(|(recording_clip, end)| {
+                recording_clip == clip.recording_clip && (end - clip.start).abs() < 1e-6
+            });
+            if !continues {
+                held.clear();
+            }
+            held_until = Some((clip.recording_clip, clip.end));
             for &press in &presses[first..last.max(first)] {
                 let time = to_output(press.time_ms / 1000.0 - take.keyboard_offset_secs);
                 if press.down {
@@ -315,6 +327,13 @@ pub fn input_sound_events(
             let first = presses.partition_point(|click| click.time_ms / 1000.0 < clip.start);
             let last = presses.partition_point(|click| click.time_ms / 1000.0 < clip.end);
             for &click in &presses[first..last.max(first)] {
+                // A clip that hides the cursor hides its clicks too, fading
+                // with the cursor at the ends of the hidden run.
+                let time = to_output(click.time_ms / 1000.0);
+                let visible = timeline.cursor_visibility_at(time) as f32;
+                if visible <= 0.0 {
+                    continue;
+                }
                 let seed = event_seed(
                     2,
                     clip.recording_clip,
@@ -322,11 +341,11 @@ pub fn input_sound_events(
                     u64::from(click.cursor_num),
                 );
                 events.push(InputSoundEvent {
-                    time: to_output(click.time_ms / 1000.0),
+                    time,
                     kind: InputSoundKind::Click { down: click.down },
                     seed,
                     pan: ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.1,
-                    gain,
+                    gain: gain * visible,
                 });
             }
         }

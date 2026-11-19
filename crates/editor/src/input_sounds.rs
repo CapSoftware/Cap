@@ -476,6 +476,7 @@ fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {
                             segment.timescale,
                             segment.speed_audio_mode,
                             segment.volume(),
+                            segment.hides_cursor(),
                         )
                     })
                     .collect::<Vec<_>>(),

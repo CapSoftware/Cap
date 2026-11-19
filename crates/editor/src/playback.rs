@@ -1601,26 +1601,31 @@ impl Playback {
                         self.render_constants.options.screen_size,
                     );
                     cached_project = Arc::new(next_project);
-                    if adopted.is_none()
-                        && audio_changed
-                        && let Some(generation) = audio_generation
-                    {
-                        self.audio_output.refresh_playback(
-                            PlaySpec {
-                                segments: audio_segments.clone(),
-                                music: self.music.clone(),
-                                input_sounds: InputSounds::for_segments(
-                                    &cached_project,
-                                    &self.segment_medias,
-                                ),
-                                project: (*cached_project).clone(),
-                                duration_secs: duration,
-                                start_playhead_secs: frame_number as f64 / fps_f64,
-                                playhead_rx: audio_playhead_rx.clone(),
-                                preview_speed: self.preview_speed.clone(),
-                            },
-                            generation,
-                        );
+                    if adopted.is_none() && audio_changed {
+                        let input_sounds =
+                            InputSounds::for_segments(&cached_project, &self.segment_medias);
+                        let spec = PlaySpec {
+                            segments: audio_segments.clone(),
+                            music: self.music.clone(),
+                            input_sounds,
+                            project: (*cached_project).clone(),
+                            duration_secs: duration,
+                            start_playhead_secs: frame_number as f64 / fps_f64,
+                            playhead_rx: audio_playhead_rx.clone(),
+                            preview_speed: self.preview_speed.clone(),
+                        };
+                        if let Some(generation) = audio_generation {
+                            self.audio_output.refresh_playback(spec, generation);
+                        } else if has_playback_audio(
+                            &audio_segments,
+                            !self.music.is_empty() || spec.input_sounds.is_some(),
+                        ) {
+                            // Playback that started silent gains a source the
+                            // moment an edit gives it something to play, such
+                            // as turning key or click sounds on.
+                            audio_generation = self.audio_output.play(spec);
+                            has_audio = audio_generation.is_some();
+                        }
                     }
                     if cursor_changed {
                         cursor_timelines = build_cursor_timelines(&cached_project);
