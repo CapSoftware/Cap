@@ -278,8 +278,10 @@ fn transitions_and_holds_match_the_keyboard_track() {
         })
         .collect();
     let keyboard = KeyboardEvents { presses };
+    // Plain letters are typing, which new projects hide; show it.
     let settings = KeyboardSettings {
         show_modifiers: true,
+        show_typing: true,
         ..Default::default()
     };
     let timeline = project.timeline.clone().unwrap();
