@@ -572,6 +572,163 @@ fn window_capture_uses_shm_and_survives_resize() {
     );
 }
 
+fn tracking_grabber(config: &X11InputConfig) -> X11Grabber {
+    let mut grabber = grabber(config, true);
+    grabber.track_changes().unwrap();
+    grabber
+}
+
+fn assert_unchanged(grabber: &mut X11Grabber) {
+    for _ in 0..3 {
+        assert!(grabber.grab_if_changed().unwrap().is_none());
+    }
+}
+
+#[test]
+fn static_screen_is_grabbed_once_until_damaged() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(320, 240, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    draw_pattern(&conn, root, 320, 240);
+    conn.sync().unwrap();
+
+    let mut grabber = tracking_grabber(&config(&server.display(), 0, 0, 320, 240));
+    let first = grabber.grab_if_changed().unwrap().unwrap();
+    assert_eq!(bgr_rows(&first), expected_bgr(0, 0, 320, 240));
+    drop(first);
+    assert_unchanged(&mut grabber);
+
+    fill_rect(&conn, root, 320, 240, 0x00ff00);
+    let damaged = grabber.grab_if_changed().unwrap().unwrap();
+    assert!(
+        bgr_rows(&damaged)
+            .chunks_exact(3)
+            .all(|pixel| pixel == [0, 255, 0])
+    );
+    drop(damaged);
+    assert_unchanged(&mut grabber);
+}
+
+#[test]
+fn display_capture_tracks_damage_to_child_windows() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(320, 240, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    let window = conn.generate_id().unwrap();
+    conn.create_window(
+        24,
+        window,
+        root,
+        20,
+        20,
+        100,
+        80,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new().background_pixel(0),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.map_window(window).unwrap().check().unwrap();
+    conn.sync().unwrap();
+
+    let mut grabber = tracking_grabber(&config(&server.display(), 0, 0, 320, 240));
+    assert!(grabber.grab_if_changed().unwrap().is_some());
+    assert_unchanged(&mut grabber);
+
+    fill_rect(&conn, window, 100, 80, 0x0000ff);
+    let frame = grabber.grab_if_changed().unwrap().unwrap();
+    let rows = bgr_rows(&frame);
+    let pixel = (30 * 320 + 30) * 3;
+    assert_eq!(&rows[pixel..pixel + 3], [255, 0, 0]);
+    drop(frame);
+    assert_unchanged(&mut grabber);
+}
+
+#[test]
+fn untracked_grabber_grabs_every_frame() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(320, 240, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let mut grabber = grabber(&config(&server.display(), 0, 0, 320, 240), true);
+    for _ in 0..3 {
+        assert!(grabber.grab_if_changed().unwrap().is_some());
+    }
+}
+
+#[test]
+fn pointer_motion_changes_a_frame_that_draws_the_cursor() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(320, 240, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    let mut config = config(&server.display(), 0, 0, 320, 240);
+    config.show_cursor = true;
+    let mut grabber = tracking_grabber(&config);
+    assert!(grabber.grab_if_changed().unwrap().is_some());
+    assert_unchanged(&mut grabber);
+
+    conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, 100, 80)
+        .unwrap()
+        .check()
+        .unwrap();
+    assert!(grabber.grab_if_changed().unwrap().is_some());
+    assert_unchanged(&mut grabber);
+}
+
+#[test]
+fn window_capture_tracks_damage_to_the_window() {
+    let _guard = serial();
+    let Some(server) = Xvfb::start(640, 480, &["-nolisten", "tcp"]) else {
+        return;
+    };
+    let (conn, root) = connect(&server.display());
+    let window = conn.generate_id().unwrap();
+    conn.create_window(
+        24,
+        window,
+        root,
+        40,
+        30,
+        200,
+        150,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new().background_pixel(0),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.map_window(window).unwrap().check().unwrap();
+    conn.sync().unwrap();
+
+    let mut config = config(&server.display(), 40, 30, 200, 150);
+    config.window_id = Some(window);
+    let mut grabber = tracking_grabber(&config);
+    assert!(grabber.grab_if_changed().unwrap().is_some());
+    assert_unchanged(&mut grabber);
+
+    draw_pattern(&conn, window, 200, 150);
+    conn.sync().unwrap();
+    let frame = grabber.grab_if_changed().unwrap().unwrap();
+    assert_eq!(bgr_rows(&frame), expected_bgr(0, 0, 200, 150));
+    drop(frame);
+    assert_unchanged(&mut grabber);
+
+    conn.destroy_window(window).unwrap().check().unwrap();
+    conn.sync().unwrap();
+    assert!(grabber.grab_if_changed().is_err());
+}
+
 fn soak(frames: usize) {
     let _guard = serial();
     let Some(server) = Xvfb::start(256, 256, &["-nolisten", "tcp"]) else {

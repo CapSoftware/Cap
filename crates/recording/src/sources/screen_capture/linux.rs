@@ -72,11 +72,19 @@ impl ScreenCaptureFormat for X11Capture {
 pub struct VideoSourceConfig {
     video_info: VideoInfo,
     input: LinuxInputConfig,
+    every_frame: bool,
 }
 
 impl VideoSourceConfig {
     pub(crate) fn video_info(&self) -> VideoInfo {
         self.video_info
+    }
+
+    pub(crate) fn with_every_frame(self) -> Self {
+        Self {
+            every_frame: true,
+            ..self
+        }
     }
 }
 
@@ -165,6 +173,7 @@ impl ScreenCaptureConfig<X11Capture> {
             VideoSourceConfig {
                 video_info,
                 input: LinuxInputConfig::Wayland(input),
+                every_frame: false,
             }
         } else {
             let display = Display::from_id(&self.config.display)
@@ -224,6 +233,7 @@ impl ScreenCaptureConfig<X11Capture> {
                     fps: self.config.fps,
                     show_cursor: self.config.show_cursor,
                 }),
+                every_frame: false,
             }
         };
         let system_audio = if self.system_audio {
@@ -339,11 +349,12 @@ impl OutputVideoSource for VideoSource {
         let stop_token = ctx.stop_token();
         let health_tx = ctx.health_tx().clone();
         let info = config.video_info;
+        let every_frame = config.every_frame;
         match config.input {
             LinuxInputConfig::X11(input) => {
                 ctx.tasks().spawn_thread("x11-capture-thread", {
                     let stop_token = stop_token.clone();
-                    move || capture_x11(info, input, video_tx, stop_token, health_tx)
+                    move || capture_x11(info, input, every_frame, video_tx, stop_token, health_tx)
                 });
             }
             LinuxInputConfig::Wayland(input) => {
@@ -2428,21 +2439,47 @@ fn pactl_default_device(command: &str) -> Option<String> {
 fn capture_x11(
     video_info: VideoInfo,
     input_config: X11InputConfig,
+    every_frame: bool,
     mut video_tx: mpsc::Sender<FFmpegVideoFrame>,
     stop_token: CancellationToken,
     health_tx: output_pipeline::HealthSender,
 ) -> anyhow::Result<()> {
     let mut grabber = X11Grabber::new(&input_config)?;
     grabber.output = video_info;
+    if !every_frame && let Err(error) = grabber.track_changes() {
+        tracing::info!(
+            error = %format!("{error:#}"),
+            "X11 DAMAGE unavailable, capturing every frame"
+        );
+    }
     let frame_interval = Duration::from_secs_f64(1.0 / f64::from(input_config.fps.max(1)));
     let started = Instant::now();
     let mut next_capture = Instant::now();
     let mut sent = 0u64;
     let mut dropped = 0u64;
+    let mut unchanged = 0u64;
 
     while !stop_token.is_cancelled() {
-        let mut frame = match grabber.grab() {
-            Ok(frame) => frame,
+        match grabber.grab_if_changed() {
+            Ok(Some(mut frame)) => {
+                frame.set_pts(Some(started.elapsed().as_micros() as i64));
+
+                let timestamp = Timestamp::Instant(Instant::now());
+                match send_with_stall_budget_futures(
+                    &mut video_tx,
+                    FFmpegVideoFrame {
+                        inner: frame,
+                        timestamp,
+                    },
+                    "linux-screen-video",
+                    &health_tx,
+                ) {
+                    StallSendOutcome::Sent => sent += 1,
+                    StallSendOutcome::StalledAndDropped { .. } => dropped += 1,
+                    StallSendOutcome::Disconnected => return Ok(()),
+                }
+            }
+            Ok(None) => unchanged += 1,
             Err(error) if input_config.window_id.is_some() => return Err(error),
             Err(error) => {
                 // X11 servers can transiently fail GetImage (e.g. while the
@@ -2451,22 +2488,6 @@ fn capture_x11(
                 std::thread::sleep(frame_interval);
                 continue;
             }
-        };
-        frame.set_pts(Some(started.elapsed().as_micros() as i64));
-
-        let timestamp = Timestamp::Instant(Instant::now());
-        match send_with_stall_budget_futures(
-            &mut video_tx,
-            FFmpegVideoFrame {
-                inner: frame,
-                timestamp,
-            },
-            "linux-screen-video",
-            &health_tx,
-        ) {
-            StallSendOutcome::Sent => sent += 1,
-            StallSendOutcome::StalledAndDropped { .. } => dropped += 1,
-            StallSendOutcome::Disconnected => return Ok(()),
         }
 
         // Pace to the requested framerate without accumulating drift, while
@@ -2483,6 +2504,7 @@ fn capture_x11(
     tracing::info!(
         sent,
         dropped,
+        unchanged,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Linux X11 capture stopped"
     );
@@ -2515,6 +2537,13 @@ pub struct X11Grabber {
     scaler: Option<FrameScaler>,
     show_cursor: bool,
     force_shm_row_copy: bool,
+    changes: Option<X11Changes>,
+}
+
+struct X11Changes {
+    damage: x11rb::protocol::damage::Damage,
+    pending: bool,
+    pointer: Option<(i16, i16)>,
 }
 
 enum GrabBackend {
@@ -2834,6 +2863,7 @@ impl X11Grabber {
             scaler: None,
             show_cursor,
             force_shm_row_copy: false,
+            changes: None,
         };
         grabber.refresh_window_pixmap()?;
         grabber.backend = grabber.initial_backend(allow_shm);
@@ -2920,27 +2950,98 @@ impl X11Grabber {
         pool.publish_idle(width, height, image_bytes, format)
     }
 
-    fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
-        let Some(window) = self.window.as_mut() else {
-            return Ok(());
+    #[doc(hidden)]
+    pub fn track_changes(&mut self) -> anyhow::Result<()> {
+        use x11rb::protocol::damage::{ConnectionExt as _, ReportLevel};
+        use x11rb::protocol::xfixes::{ConnectionExt as _, CursorNotifyMask};
+
+        self.conn
+            .damage_query_version(1, 1)?
+            .reply()
+            .context("query X11 DAMAGE version")?;
+        let damage = self.conn.generate_id()?;
+        let drawable = self.window.as_ref().map_or(self.root, |window| window.id);
+        self.conn
+            .damage_create(damage, drawable, ReportLevel::NON_EMPTY)?
+            .check()
+            .context("create X11 damage tracker")?;
+        if self.show_cursor {
+            self.conn
+                .xfixes_select_cursor_input(self.root, CursorNotifyMask::DISPLAY_CURSOR)?
+                .check()
+                .context("watch X11 cursor shape")?;
+        }
+        self.changes = Some(X11Changes {
+            damage,
+            pending: true,
+            pointer: None,
+        });
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn grab_if_changed(&mut self) -> anyhow::Result<Option<ffmpeg::frame::Video>> {
+        if self.changes.is_none() {
+            return self.grab().map(Some);
+        }
+        self.refresh_window_pixmap()?;
+        let pointer = if self.show_cursor {
+            let pointer = self
+                .conn
+                .query_pointer(self.root)?
+                .reply()
+                .context("read X11 pointer position")?;
+            Some((pointer.root_x, pointer.root_y))
+        } else {
+            None
         };
+        let Some(changes) = self.changes.as_mut() else {
+            return self.grab().map(Some);
+        };
+        if changes.pointer != pointer {
+            changes.pointer = pointer;
+            changes.pending = true;
+        }
+        if !changes.pending {
+            return Ok(None);
+        }
+        self.capture().map(Some)
+    }
+
+    fn drain_events(&mut self) -> anyhow::Result<bool> {
+        let window = self.window.as_ref().map(|window| window.id);
         let mut storage_changed = false;
         while let Some(event) = self.conn.poll_for_event()? {
             match event {
-                Event::UnmapNotify(event) if event.window == window.id => {
+                Event::DamageNotify(_) | Event::XfixesCursorNotify(_) => {
+                    if let Some(changes) = self.changes.as_mut() {
+                        changes.pending = true;
+                    }
+                }
+                Event::UnmapNotify(event) if Some(event.window) == window => {
                     bail!("Selected X11 window was unmapped");
                 }
-                Event::DestroyNotify(event) if event.window == window.id => {
+                Event::DestroyNotify(event) if Some(event.window) == window => {
                     bail!("Selected X11 window was closed");
                 }
-                Event::ConfigureNotify(event) if event.window == window.id => {
+                Event::ConfigureNotify(event) if Some(event.window) == window => {
                     storage_changed = true
                 }
-                Event::ReparentNotify(event) if event.window == window.id => storage_changed = true,
-                Event::MapNotify(event) if event.window == window.id => storage_changed = true,
+                Event::ReparentNotify(event) if Some(event.window) == window => {
+                    storage_changed = true
+                }
+                Event::MapNotify(event) if Some(event.window) == window => storage_changed = true,
                 _ => {}
             }
         }
+        Ok(storage_changed)
+    }
+
+    fn refresh_window_pixmap(&mut self) -> anyhow::Result<()> {
+        let storage_changed = self.drain_events()?;
+        let Some(window) = self.window.as_mut() else {
+            return Ok(());
+        };
         let attributes = self
             .conn
             .get_window_attributes(window.id)?
@@ -2976,6 +3077,9 @@ impl X11Grabber {
             self.width = geometry.width;
             self.height = geometry.height;
             window.border_width = geometry.border_width;
+            if let Some(changes) = self.changes.as_mut() {
+                changes.pending = true;
+            }
         }
 
         if self.show_cursor {
@@ -2993,6 +3097,26 @@ impl X11Grabber {
     /// Capture one frame of the configured region as a BGRZ video frame.
     pub fn grab(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
         self.refresh_window_pixmap()?;
+        self.capture()
+    }
+
+    fn capture(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
+        if let Some(changes) = self.changes.as_mut() {
+            use x11rb::protocol::damage::ConnectionExt as _;
+            self.conn
+                .damage_subtract(changes.damage, x11rb::NONE, x11rb::NONE)?;
+            changes.pending = false;
+        }
+        let frame = self.read_frame();
+        if frame.is_err()
+            && let Some(changes) = self.changes.as_mut()
+        {
+            changes.pending = true;
+        }
+        frame
+    }
+
+    fn read_frame(&mut self) -> anyhow::Result<ffmpeg::frame::Video> {
         let (drawable, x, y) = match &self.window {
             Some(window) => {
                 let border = i16::try_from(window.border_width)
