@@ -3079,20 +3079,19 @@ async fn stop_recording(
             // content by the length of every capture gap (static screens, dropped frames).
             // This is the timeline the recorder persists to project-config.json, so it is
             // what un-edited recordings use.
-            let standin_duration = audio_only
+            let display_media_duration = match s.pipeline.screen.video_timestamp_span {
+                Some((first, last)) if display_fps > 0 => {
+                    last.saturating_sub(first).as_secs_f64() + 1.0 / f64::from(display_fps)
+                }
+                _ if display_fps > 0 => {
+                    s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
+                }
+                _ => 0.0,
+            };
+            let display_media_duration = audio_only
                 .then(|| cap_enc_ffmpeg::remux::get_media_duration(&s.pipeline.screen.path))
-                .flatten();
-            let display_media_duration = standin_duration
-                .map(|duration| duration.as_secs_f64())
-                .unwrap_or(match s.pipeline.screen.video_timestamp_span {
-                    Some((first, last)) if display_fps > 0 => {
-                        last.saturating_sub(first).as_secs_f64() + 1.0 / f64::from(display_fps)
-                    }
-                    _ if display_fps > 0 => {
-                        s.pipeline.screen.video_frame_count as f64 / f64::from(display_fps)
-                    }
-                    _ => 0.0,
-                });
+                .flatten()
+                .map_or(display_media_duration, |duration| duration.as_secs_f64());
 
             // Non-fragmented recordings have their final display file already;
             // verify the muxed container matches the timestamps we sent it.
