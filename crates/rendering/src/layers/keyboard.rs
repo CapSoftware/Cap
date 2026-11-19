@@ -855,7 +855,10 @@ impl KeyboardLayer {
         constants: &RenderVideoConstants,
     ) {
         let mut caps: Vec<Keycap> = keycaps::keycaps_for(frame.text, frame.style);
-        caps.truncate(MAX_KEYCAPS);
+        // The newest keys are the ones being struck: keep those.
+        if caps.len() > MAX_KEYCAPS {
+            caps.drain(..caps.len() - MAX_KEYCAPS);
+        }
         if caps.is_empty() {
             return;
         }

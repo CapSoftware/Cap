@@ -322,11 +322,16 @@ fn push_typed(caps: &mut Vec<Keycap>, typed: &str, style: KeycapStyle) {
             },
             _ if MODIFIERS.contains(&c) || is_special_key(c) => {
                 flush(caps, &mut run);
-                caps.push(if MODIFIERS.contains(&c) {
+                let cap = if MODIFIERS.contains(&c) {
                     modifier_cap(c, style)
                 } else {
                     single_cap(c, style)
-                });
+                };
+                // A key struck again and again is one key, as a repeated
+                // shortcut is.
+                if caps.last() != Some(&cap) {
+                    caps.push(cap);
+                }
             }
             _ => run.push(c),
         }
@@ -596,6 +601,16 @@ mod tests {
             ]
         );
         assert_eq!(labels("my⇧name", KeycapStyle::MacOs)[0].0, "myName");
+        // Held or repeated special keys are one key, so what is typed after
+        // them always fits.
+        let arrows = format!("{}x", "←".repeat(17));
+        assert_eq!(
+            labels(&arrows, KeycapStyle::MacOs),
+            vec![
+                ("◀".into(), None, KeycapKind::Square),
+                ("x".into(), None, KeycapKind::Wide),
+            ]
+        );
         assert_eq!(
             labels("⇧a", KeycapStyle::MacOs),
             vec![("A".into(), None, KeycapKind::Square)]
