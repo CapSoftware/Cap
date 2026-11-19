@@ -5183,6 +5183,15 @@ impl ProjectUniforms {
                 final_target_bounds[2] - final_target_bounds[0],
                 final_target_bounds[3] - final_target_bounds[1],
             ];
+            // The cursor is placed on the card after the split and takeover
+            // morphs, which the zoom bounds above know nothing about; while
+            // either moves the card, its carried motion is not the zoom's.
+            let display_motion_delta = display_motion_delta.filter(|_| {
+                final_target_bounds
+                    .iter()
+                    .zip(base_target_bounds)
+                    .all(|(placed, zoomed)| (placed - zoomed).abs() < 0.01)
+            });
             let final_min_axis = final_target_size[0].min(final_target_size[1]) as f64;
 
             let display_rounding_px =
