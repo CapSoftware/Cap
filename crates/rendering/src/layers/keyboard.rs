@@ -539,9 +539,12 @@ impl KeyboardLayer {
             // With typing shown, what is not a shortcut is typed text, from
             // its first letter on.
             let typed = |segment: &cap_project::KeyboardTrackSegment| {
-                // Text typed into the composer is typing, shown or not.
-                (settings.show_typing || cap_project::is_manual_keyboard_segment(segment))
+                // Text typed into the composer is typing, shown or not; a
+                // space struck on its own there is the space bar.
+                let manual = cap_project::is_manual_keyboard_segment(segment);
+                (settings.show_typing || manual)
                     && !is_shortcut(segment)
+                    && !(manual && segment.display_text == "␣")
             };
             // Typed into the composer, a word arrives a letter at a time, each
             // on its own key, and comes together on one key a beat after the
@@ -1476,6 +1479,13 @@ impl KeyboardLayer {
         let (mut reach_left, mut reach_right) = (f32::INFINITY, f32::NEG_INFINITY);
         let mut reach_bottom = top + cap_height;
         for (index, (cap, (label, legend, _), slot, motion, travel)) in drawn.iter().enumerate() {
+            // While a word types out, only the letter just struck dips, its
+            // face and its print together.
+            let press = if frame.press_newest && index + 1 != drawn.len() {
+                0.0
+            } else {
+                press
+            };
             let opacity = (motion.opacity * frame.opacity).clamp(0.0, 1.0);
             let x = motion.x;
             let cap_top = top + motion.drop;
@@ -1493,16 +1503,7 @@ impl KeyboardLayer {
                 side_b: palette.side[1],
                 border: palette.border,
                 highlight: palette.highlight,
-                shape: [
-                    radius,
-                    depth,
-                    inset,
-                    if frame.press_newest && index + 1 != drawn.len() {
-                        0.0
-                    } else {
-                        press
-                    },
-                ],
+                shape: [radius, depth, inset, press],
                 finish: [geometry.dish, palette.grain, palette.gloss, opacity],
                 motion: [travel[0], travel[1], geometry.sculpt, 0.0],
             };

@@ -181,7 +181,9 @@ pub fn manual_key_runs(text: &str, split: &str) -> Vec<ManualKeyRun> {
     // Long enough for its letters to come together on one key and be read.
     const WORD_HOLD: f64 = 0.85;
     const KEY_HOLD: f64 = 0.16;
-    let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃'));
+    // Any modifier makes a shortcut, Shift too: `shift+tab` is struck
+    // together, never split into keys of its own.
+    let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃' | '⇧'));
     let pieces: Vec<String> = match split {
         _ if shortcut => vec![text.to_string()],
         "keys" => text
@@ -2594,6 +2596,7 @@ mod manual_key_tests {
         assert_eq!(manual_key_runs("ship it", "sentence").len(), 1);
         // A shortcut is always one key press.
         assert_eq!(manual_key_runs("⌘⇧P", "keys").len(), 1);
+        assert_eq!(manual_key_runs("⇧⇥", "keys").len(), 1);
         assert!(manual_key_runs("   ", "words").is_empty());
     }
 
