@@ -486,7 +486,7 @@ impl FFmpegDecoder {
             let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
                 .map_err(|e| format!("decoder context / {e}"))?
                 .decoder();
-            unsafe { cap_enc_ffmpeg::decode_limit::apply_decode_pixel_limit(decoder.as_mut_ptr()) };
+            cap_enc_ffmpeg::decode_limit::apply_decode_pixel_limit(&mut decoder);
             if software_threading {
                 configure_software_threading(&mut decoder, width, height);
             }

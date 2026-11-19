@@ -17,7 +17,7 @@ fn first_frame(path: &Path) -> Result<(u32, u32), ffmpeg::Error> {
         .ok_or(ffmpeg::Error::StreamNotFound)?;
     let index = stream.index();
     let mut context = ffmpeg::codec::Context::from_parameters(stream.parameters())?;
-    unsafe { apply_decode_pixel_limit(context.as_mut_ptr()) };
+    apply_decode_pixel_limit(&mut context);
     let mut decoder = context.decoder().video()?;
     let mut frame = ffmpeg::frame::Video::empty();
     for (stream, packet) in input.packets() {

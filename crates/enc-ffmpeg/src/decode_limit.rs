@@ -24,12 +24,9 @@ pub fn decode_pixel_limit() -> Option<i64> {
 }
 
 /// Applies the limit to a decoder before `avcodec_open2`.
-///
-/// # Safety
-/// `context` must point to a valid, unopened codec context.
-pub unsafe fn apply_decode_pixel_limit(context: *mut ffmpeg::ffi::AVCodecContext) {
+pub fn apply_decode_pixel_limit(context: &mut ffmpeg::codec::context::Context) {
     if let Some(limit) = decode_pixel_limit() {
-        unsafe { (*context).max_pixels = limit };
+        unsafe { (*context.as_mut_ptr()).max_pixels = limit };
     }
 }
 
@@ -38,6 +35,9 @@ pub unsafe fn apply_decode_pixel_limit(context: *mut ffmpeg::ffi::AVCodecContext
 /// # Safety
 /// `context` must point to a valid, opened input format context.
 pub unsafe fn find_stream_info(context: *mut ffmpeg::ffi::AVFormatContext) -> c_int {
+    if context.is_null() {
+        return ffmpeg::Error::InvalidData.into();
+    }
     let Some(limit) = decode_pixel_limit() else {
         return unsafe { ffmpeg::ffi::avformat_find_stream_info(context, ptr::null_mut()) };
     };
