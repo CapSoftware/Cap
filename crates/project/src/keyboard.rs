@@ -164,6 +164,18 @@ pub fn manual_key_text(input: &str) -> String {
     input.to_string()
 }
 
+/// How long a hand-made key press stays up: long enough to strike its last
+/// key and then be read, and never shorter than a glance.
+pub fn manual_key_length(keys: &[KeyPressDisplay]) -> f64 {
+    const READ_SECS: f64 = 1.1;
+    const MIN_SECS: f64 = 1.2;
+    let last = keys
+        .iter()
+        .map(|key| key.time_offset)
+        .fold(0.0_f64, f64::max);
+    (last / 1000.0 + READ_SECS).max(MIN_SECS)
+}
+
 /// The keys a hand-made key press strikes, from its text: a shortcut's
 /// modifiers go down together with its key a beat behind, and typed text
 /// one key after another at a typist's pace. Offsets are milliseconds from

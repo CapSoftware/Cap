@@ -2315,12 +2315,16 @@ save_failed = "Dieser Verlauf konnte nicht gespeichert werden. Versuchen Sie es 
 save_tooltip = "Aktuellen Verlauf speichern"
 saved = "Gespeichert"
 still = "Still"
+style = "Stil"
+style_dither = "Dither"
+style_smooth = "Weich"
 
 [editor.sidebar.animated_gradient.control]
 contrast = "Kontrast"
 curvature = "Krümmung"
 detail = "Detail"
 direction = "Richtung"
+dither_size = "Dither-Größe"
 exposure = "Belichtung"
 flow_scale = "Flussgröße"
 flow_strength = "Flussstärke"
@@ -2904,6 +2908,7 @@ smooth = "Weich"
 smooth_description = "Weiche, schwebende Bewegung"
 
 [editor.tabs.keyboard]
+add_keys = "Hinzufügen"
 animation = "Animation"
 background_color = "Hintergrundfarbe"
 background_opacity = "Hintergrunddeckkraft"
@@ -2943,6 +2948,9 @@ theme_retro = "Retro"
 timeline_unavailable = "Die Projektzeitleiste ist nicht verfügbar."
 timeline_unreadable = "Die Projektzeitleiste konnte nicht gelesen werden."
 title = "Tastatur anzeigen"
+type_keys = "Tasten eingeben"
+type_keys_hint = "Mit Enter am Abspielkopf zeigen, dann das Nächste eingeben."
+type_keys_placeholder = "Ein Satz oder ein Kürzel wie cmd+k"
 uppercase = "Großbuchstaben"
 
 [editor.tabs.padding]

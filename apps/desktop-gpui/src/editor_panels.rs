@@ -2790,6 +2790,9 @@ pub enum FieldKey {
     /// Single-line names and labels.
     AudioName(usize),
     KeyboardText(usize),
+    /// The Keyboard tab's composer: a draft of keys to add, never written
+    /// from the project.
+    KeyComposer,
     /// `<Input type="number">` boxes.
     CaptionStart(usize),
     CaptionEnd(usize),
@@ -2842,11 +2845,15 @@ impl EditorWindow {
             return;
         }
         let input = cx.new(|cx| {
-            if key.multi_line() {
+            let mut input = if key.multi_line() {
                 ui::TextInputState::multi_line(window, cx)
             } else {
                 ui::TextInputState::single_line(window, cx)
+            };
+            if key == FieldKey::KeyComposer {
+                input.set_placeholder(tr::editor::tabs::keyboard::type_keys_placeholder());
             }
+            input
         });
         self.push_text_subscription(cx.subscribe_in(
             &input,
@@ -2919,6 +2926,10 @@ impl EditorWindow {
     /// `out`. `None` leaves the field alone.
     fn write_field_value(&self, key: FieldKey, out: &mut String) -> Option<()> {
         use std::fmt::Write as _;
+
+        if key == FieldKey::KeyComposer {
+            return None;
+        }
 
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
@@ -3029,6 +3040,28 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if key == FieldKey::KeyComposer {
+            // Enter adds what was typed and clears the box for the next
+            // entry, keeping it focused; Escape clears it.
+            let Some(input) = self.field(key).cloned() else {
+                return;
+            };
+            match event {
+                ui::TextInputEvent::Confirmed => {
+                    let text = input.read(cx).text().to_string();
+                    if self.add_typed_keys(&text, window, cx) {
+                        input.update(cx, |input, cx| input.set_text("", cx));
+                    }
+                }
+                ui::TextInputEvent::Cancelled => {
+                    input.update(cx, |input, cx| input.set_text("", cx));
+                }
+                // The Add button follows whether there is anything to add.
+                ui::TextInputEvent::Changed => cx.notify(),
+                ui::TextInputEvent::Blurred => {}
+            }
+            return;
+        }
         match event {
             ui::TextInputEvent::Changed => {
                 self.begin_field_edit(key);
@@ -3085,6 +3118,8 @@ impl EditorWindow {
         };
         let text = input.read(cx).text().to_string();
         match key {
+            // The composer adds its keys on Enter only (`on_field_event`).
+            FieldKey::KeyComposer => {}
             FieldKey::StyleName(index) | FieldKey::ImageName(index) => {
                 let style = matches!(key, FieldKey::StyleName(_));
                 self.edit_project("segment-name", window, cx, move |project| {
@@ -3191,6 +3226,23 @@ impl EditorWindow {
                 });
             }
             FieldKey::KeyboardText(index) => {
+                // Typed text a key added by hand now carries may run past its
+                // end; it grows to fit, up to the next key or the end.
+                let room = self.project.timeline.as_ref().map(|timeline| {
+                    timeline
+                        .keyboard_segments
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .map(|(_, other)| other.start)
+                        .filter(|start| {
+                            timeline
+                                .keyboard_segments
+                                .get(index)
+                                .is_some_and(|segment| *start >= segment.start)
+                        })
+                        .fold(timeline.duration(), f64::min)
+                });
                 self.edit_keyboard_segment("keyboard-text", index, window, cx, move |segment| {
                     // A key added by hand takes a shortcut in words
                     // (`cmd+shift+p`) and strikes whatever its text says.
@@ -3204,6 +3256,12 @@ impl EditorWindow {
                     }
                     if cap_project::is_manual_keyboard_segment(segment) {
                         segment.keys = cap_project::manual_key_presses(&text);
+                        let needed = cap_project::manual_key_length(&segment.keys);
+                        if let Some(room) = room
+                            && segment.end - segment.start < needed
+                        {
+                            segment.end = (segment.start + needed).min(room).max(segment.end);
+                        }
                     }
                     segment.display_text = text;
                     true
@@ -8494,7 +8552,8 @@ impl EditorWindow {
                     }
                 }
                 crate::editor_sidebar::SidebarTab::Keyboard => {
-                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
+                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground]);
+                    fields.push(FieldKey::KeyComposer);
                 }
                 crate::editor_sidebar::SidebarTab::Audio => {
                     if let Some(summary) = self.summary() {

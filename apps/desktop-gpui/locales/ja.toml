@@ -2315,12 +2315,16 @@ save_failed = "このグラデーションを保存できませんでした。�
 save_tooltip = "現在のグラデーションを保存"
 saved = "保存済み"
 still = "静止"
+style = "スタイル"
+style_dither = "ディザ"
+style_smooth = "なめらか"
 
 [editor.sidebar.animated_gradient.control]
 contrast = "コントラスト"
 curvature = "曲率"
 detail = "ディテール"
 direction = "方向"
+dither_size = "ディザのサイズ"
 exposure = "露出"
 flow_scale = "流れの大きさ"
 flow_strength = "流れの強さ"
@@ -2904,6 +2908,7 @@ smooth = "なめらか"
 smooth_description = "柔らかく浮遊するような動き"
 
 [editor.tabs.keyboard]
+add_keys = "追加"
 animation = "アニメーション"
 background_color = "背景色"
 background_opacity = "背景の不透明度"
@@ -2943,6 +2948,9 @@ theme_retro = "レトロ"
 timeline_unavailable = "プロジェクトのタイムラインを利用できません。"
 timeline_unreadable = "プロジェクトのタイムラインを読み込めませんでした。"
 title = "キーボードを表示"
+type_keys = "キーを入力"
+type_keys_hint = "Enter で再生位置に表示し、続けて次を入力します。"
+type_keys_placeholder = "文章、または cmd+k のようなショートカット"
 uppercase = "大文字"
 
 [editor.tabs.padding]

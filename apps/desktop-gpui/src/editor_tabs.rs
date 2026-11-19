@@ -3277,7 +3277,76 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
+            .child(self.render_key_composer(cx))
             .child(body)
+            .into_any_element()
+    }
+
+    /// Type a sentence or a shortcut and press Enter: it shows at the
+    /// playhead, sized to be typed and read, and the playhead moves on so
+    /// the next entry follows. The fastest way to put keys on a video made
+    /// without a recording.
+    fn render_key_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let Some(input) = self
+            .field(crate::editor_panels::FieldKey::KeyComposer)
+            .cloned()
+        else {
+            return div().into_any_element();
+        };
+        let has_text = !input.read(cx).text().trim().is_empty();
+        let add_input = input.clone();
+        ui::Field::section(&theme, tr::editor::tabs::keyboard::type_keys())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.))
+                            .items_center()
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    ui::TextInput::plain(&theme, "key-composer", &input)
+                                        .flex(true)
+                                        .padding_x(px(12.))
+                                        .text_size(px(14.))
+                                        .height(px(36.))
+                                        .bg(Hsla::from(theme.gray_2))
+                                        .border(Hsla::from(theme.editor.line)),
+                                ),
+                            )
+                            .child(
+                                ui::Button::plain(
+                                    &theme,
+                                    "key-composer-add",
+                                    ui::ButtonVariant::Blue,
+                                    ui::ButtonSize::Sm,
+                                )
+                                .label(tr::editor::tabs::keyboard::add_keys())
+                                .height(px(36.))
+                                .disabled(!has_text)
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        let text = add_input.read(cx).text().to_string();
+                                        if this.add_typed_keys(&text, window, cx) {
+                                            add_input
+                                                .update(cx, |input, cx| input.set_text("", cx));
+                                        }
+                                    },
+                                )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.gray_10))
+                            .child(tr::editor::tabs::keyboard::type_keys_hint()),
+                    ),
+            )
             .into_any_element()
     }
 

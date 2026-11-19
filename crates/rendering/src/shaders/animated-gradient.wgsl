@@ -5,6 +5,8 @@ struct GradientUniforms {
 	texture: vec4<f32>,
 	motion: vec4<f32>,
 	output: vec4<f32>,
+	// 1 for an ordered dither of the palette, then the cell in output pixels.
+	dither: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -147,7 +149,43 @@ fn fs_surface(input: VertexOutput) -> @location(0) vec4<f32> {
 	let highlight = pow(max(illumination, 0.0), 4.0) * u.lighting.y * relief * 0.32;
 	let shadow = (1.0 - smoothstep(0.12, 0.82, illumination)) * u.lighting.z * relief * 0.28;
 	color = color * (1.0 - shadow) + vec3<f32>(highlight);
-	return vec4<f32>(color, 1.0);
+	// The palette position rides along in alpha, so the composite can dither
+	// it at full resolution.
+	return vec4<f32>(color, gradient_position);
+}
+
+// The 8x8 Bayer threshold for a cell, in (0, 1).
+fn bayer8(cell: vec2<u32>) -> f32 {
+	let x = cell.x & 7u;
+	let xy = (cell.x ^ cell.y) & 7u;
+	let index = ((xy & 1u) << 5u) | ((x & 1u) << 4u) | ((xy & 2u) << 2u)
+		| ((x & 2u) << 1u) | ((xy & 4u) >> 1u) | ((x & 4u) >> 2u);
+	return (f32(index) + 0.5) / 64.0;
+}
+
+// The palette at `position`, as a dither: between two stops, each cell takes
+// one stop or the other, more of the nearer one, so only the palette's own
+// colours are ever drawn.
+fn dithered_palette(position: f32, threshold: f32) -> vec3<f32> {
+	let count = u32(clamp(round(u.output.z), 2.0, 5.0));
+	let first = u.stops[0];
+	if (position <= first.w) {
+		return first.rgb;
+	}
+	var previous = first;
+	for (var index = 1u; index < 5u; index = index + 1u) {
+		if (index >= count) {
+			break;
+		}
+		let current = u.stops[index];
+		if (position <= current.w) {
+			let interval = max(current.w - previous.w, 0.00001);
+			let progress = clamp((position - previous.w) / interval, 0.0, 1.0);
+			return select(previous.rgb, current.rgb, progress > threshold);
+		}
+		previous = current;
+	}
+	return previous.rgb;
 }
 
 fn hash_u32(input: u32) -> u32 {
@@ -172,7 +210,13 @@ fn grain_value(uv: vec2<f32>) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-	var color = textureSample(surface, surface_sampler, input.uv).rgb;
+	let surface_sample = textureSample(surface, surface_sampler, input.uv);
+	var color = surface_sample.rgb;
+	let dither = u.dither.x > 0.5;
+	if (dither) {
+		let cell = vec2<u32>(floor(input.position.xy / max(u.dither.y, 1.0)));
+		color = dithered_palette(surface_sample.a, bayer8(cell));
+	}
 	color *= exp2(u.texture.z);
 	color = (color - vec3<f32>(0.5)) * u.texture.w + vec3<f32>(0.5);
 	let luminance = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -184,7 +228,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 		let vibrance = 1.0 + (u.motion.y - 1.0) * (1.0 - clamp(saturation, 0.0, 1.0));
 		color = neutral + (color - neutral) * vibrance;
 	}
-	let grain = (grain_value(input.uv) - 0.5) * u.texture.x * 0.18;
+	// A dither is its own texture: grain would only blur its cells.
+	let grain = (grain_value(input.uv) - 0.5) * u.texture.x * 0.18 * select(1.0, 0.0, dither);
 	color += vec3<f32>(grain);
 	return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

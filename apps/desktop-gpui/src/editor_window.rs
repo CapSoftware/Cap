@@ -7347,9 +7347,54 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let text = if cfg!(target_os = "macos") {
+            "⌘K"
+        } else {
+            "⌃K"
+        };
+        self.add_manual_keys(time, length, text, true, window, cx)
+            .is_some()
+    }
+
+    /// Shows what was typed into the Keyboard tab's composer at the playhead,
+    /// sized to strike every key and be read, then moves the playhead past
+    /// it so the next entry follows on. A sentence types out letter by
+    /// letter; `cmd+shift+p` shows as its keys.
+    pub(crate) fn add_typed_keys(
+        &mut self,
+        input: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let text = cap_project::manual_key_text(input);
+        if text.trim().is_empty() {
+            return false;
+        }
+        let length = cap_project::manual_key_length(&cap_project::manual_key_presses(&text));
+        let start = self.playhead_time();
+        let Some((_, end)) =
+            self.add_manual_keys(start + length / 2.0, length, &text, false, window, cx)
+        else {
+            return false;
+        };
+        self.seek_to_time((end + 0.15).min(self.total_duration()), cx);
+        true
+    }
+
+    /// Adds a key press by hand around `time`, striking `text`, and returns
+    /// where it landed. `select` opens its panel.
+    fn add_manual_keys(
+        &mut self,
+        time: f64,
+        length: f64,
+        text: &str,
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(f64, f64)> {
         let durations = self.clip_display_durations.clone();
         if !edits::ensure_timeline(&mut self.project, &durations) {
-            return false;
+            return None;
         }
         let total = self.total_duration();
         let length = length.min(total);
@@ -7358,7 +7403,7 @@ impl EditorWindow {
         });
         let Some((start, end)) = placement else {
             self.show_notice(tr::editor::window::no_room_for_key(), window, cx);
-            return false;
+            return None;
         };
         let next = self.project.timeline.as_ref().map_or(0, |timeline| {
             timeline
@@ -7375,11 +7420,6 @@ impl EditorWindow {
                 .map_or(0, |last| last + 1)
         });
         let id = format!("{}{next}", cap_project::MANUAL_KEYBOARD_PREFIX);
-        let text = if cfg!(target_os = "macos") {
-            "⌘K"
-        } else {
-            "⌃K"
-        };
         let showed_track = self.tracks.keyboard;
         self.tracks.keyboard = true;
         let added = self.edit_timeline_project(
@@ -7415,19 +7455,21 @@ impl EditorWindow {
         );
         if !added {
             self.tracks.keyboard = showed_track;
-            return false;
+            return None;
         }
-        let index = self.project.timeline.as_ref().and_then(|timeline| {
-            timeline
-                .keyboard_segments
-                .iter()
-                .position(|segment| segment.id == id)
-        });
-        if let Some(index) = index {
-            self.set_selection(Some(Selection::single(TrackKind::Keyboard, index)), cx);
+        if select {
+            let index = self.project.timeline.as_ref().and_then(|timeline| {
+                timeline
+                    .keyboard_segments
+                    .iter()
+                    .position(|segment| segment.id == id)
+            });
+            if let Some(index) = index {
+                self.set_selection(Some(Selection::single(TrackKind::Keyboard, index)), cx);
+            }
         }
         self.note_edit("add-keyboard", Some(TrackKind::Keyboard));
-        true
+        Some((start, end))
     }
 
     /// `finish(e)`: resume the history, and -- if the drag never promoted --

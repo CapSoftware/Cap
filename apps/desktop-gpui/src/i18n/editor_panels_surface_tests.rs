@@ -497,7 +497,10 @@ fn editor_panels_match_the_literals_they_replaced() {
             "Background Blur",
         ),
         (tr::editor::sidebar::layout::padding(), "Padding"),
-        (tr::editor::sidebar::layout::padding_style(), "Padding Style"),
+        (
+            tr::editor::sidebar::layout::padding_style(),
+            "Padding Style",
+        ),
         (
             tr::editor::sidebar::layout::custom_position(),
             "Custom screen position (dragged on canvas)",
@@ -680,6 +683,19 @@ fn editor_panels_match_the_literals_they_replaced() {
             "Add a colour",
         ),
         (tr::editor::sidebar::animated_gradient::motion(), "Motion"),
+        (tr::editor::sidebar::animated_gradient::style(), "Style"),
+        (
+            tr::editor::sidebar::animated_gradient::style_dither(),
+            "Dither",
+        ),
+        (
+            tr::editor::sidebar::animated_gradient::style_smooth(),
+            "Smooth",
+        ),
+        (
+            tr::editor::sidebar::animated_gradient::control::dither_size(),
+            "Dither Size",
+        ),
         (
             tr::editor::sidebar::animated_gradient::fine_tune(),
             "Fine-tune",
@@ -853,30 +869,15 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::crop::full(), "Full"),
         (tr::editor::crop::loading_frame(), "Loading frame…"),
         (tr::editor::crop::rendering_preview(), "Rendering preview…"),
-        (
-            tr::editor::panel::style_presets::apply(),
-            "Apply",
-        ),
-        (
-            tr::editor::panel::style_presets::create(),
-            "Save",
-        ),
+        (tr::editor::panel::style_presets::apply(), "Apply"),
+        (tr::editor::panel::style_presets::create(), "Save"),
         (
             tr::editor::panel::style_presets::create_title(),
             "Save Style Preset",
         ),
-        (
-            tr::editor::panel::style_presets::custom(),
-            "Custom style",
-        ),
-        (
-            tr::editor::panel::style_presets::default_badge(),
-            "Default",
-        ),
-        (
-            tr::editor::panel::style_presets::delete(),
-            "Delete",
-        ),
+        (tr::editor::panel::style_presets::custom(), "Custom style"),
+        (tr::editor::panel::style_presets::default_badge(), "Default"),
+        (tr::editor::panel::style_presets::delete(), "Delete"),
         (
             tr::editor::panel::style_presets::delete_title(),
             "Delete Style Preset",
@@ -889,22 +890,13 @@ fn editor_panels_match_the_literals_they_replaced() {
             tr::editor::panel::style_presets::empty_help(),
             "Save a style to reuse it in any project.",
         ),
-        (
-            tr::editor::panel::style_presets::move_down(),
-            "Move down",
-        ),
-        (
-            tr::editor::panel::style_presets::move_up(),
-            "Move up",
-        ),
+        (tr::editor::panel::style_presets::move_down(), "Move down"),
+        (tr::editor::panel::style_presets::move_up(), "Move up"),
         (
             tr::editor::panel::style_presets::remove_default(),
             "Remove as default",
         ),
-        (
-            tr::editor::panel::style_presets::rename(),
-            "Rename",
-        ),
+        (tr::editor::panel::style_presets::rename(), "Rename"),
         (
             tr::editor::panel::style_presets::rename_title(),
             "Rename Style Preset",
@@ -921,10 +913,7 @@ fn editor_panels_match_the_literals_they_replaced() {
             tr::editor::panel::style_presets::set_default(),
             "Set as default",
         ),
-        (
-            tr::editor::panel::style_presets::tooltip(),
-            "Style presets",
-        ),
+        (tr::editor::panel::style_presets::tooltip(), "Style presets"),
         (
             tr::editor::panel::style_presets::update(),
             "Update with current style",

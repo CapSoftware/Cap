@@ -1361,6 +1361,7 @@ mod tests {
             .map(describe)
             .collect();
         let expected_file_items = vec![
+            "New Blank Project".into(),
             "Open File…".into(),
             "Import Media…".into(),
             "-".into(),

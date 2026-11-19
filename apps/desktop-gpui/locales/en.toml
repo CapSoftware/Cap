@@ -2317,12 +2317,16 @@ save_failed = "Could not save this gradient. Try again."
 save_tooltip = "Save the current gradient"
 saved = "Saved"
 still = { text = "Still", context = "Motion speed readout when the speed is zero." }
+style = "Style"
+style_dither = { text = "Dither", context = "A background style drawn as a fine ordered dither of a few colours, like an old print." }
+style_smooth = "Smooth"
 
 [editor.sidebar.animated_gradient.control]
 contrast = "Contrast"
 curvature = "Curvature"
 detail = "Detail"
 direction = "Direction"
+dither_size = "Dither Size"
 exposure = "Exposure"
 flow_scale = "Flow Scale"
 flow_strength = "Flow Strength"
@@ -2906,6 +2910,7 @@ smooth = "Smooth"
 smooth_description = "Soft, floaty movement"
 
 [editor.tabs.keyboard]
+add_keys = "Add"
 animation = "Animation"
 background_color = "Background Color"
 background_opacity = "Background Opacity"
@@ -2945,6 +2950,9 @@ theme_retro = "Retro"
 timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
+type_keys = "Type Keys"
+type_keys_hint = "Press Enter to show it at the playhead, then type the next."
+type_keys_placeholder = { text = "A sentence, or a shortcut like cmd+k", context = "Placeholder in a text box; cmd+k is typed as is and must stay in English." }
 uppercase = "Uppercase"
 
 [editor.tabs.padding]

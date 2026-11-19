@@ -2315,12 +2315,16 @@ save_failed = "यह ग्रेडिएंट सेव नहीं हो 
 save_tooltip = "मौजूदा ग्रेडिएंट सेव करें"
 saved = "सेव किए गए"
 still = "स्थिर"
+style = "स्टाइल"
+style_dither = "डिथर"
+style_smooth = "स्मूद"
 
 [editor.sidebar.animated_gradient.control]
 contrast = "कंट्रास्ट"
 curvature = "वक्रता"
 detail = "डिटेल"
 direction = "दिशा"
+dither_size = "डिथर आकार"
 exposure = "एक्सपोज़र"
 flow_scale = "फ़्लो स्केल"
 flow_strength = "फ़्लो की ताकत"
@@ -2904,6 +2908,7 @@ smooth = "स्मूथ"
 smooth_description = "मुलायम, तैरता हुआ मूवमेंट"
 
 [editor.tabs.keyboard]
+add_keys = "जोड़ें"
 animation = "एनिमेशन"
 background_color = "बैकग्राउंड रंग"
 background_opacity = "बैकग्राउंड अपारदर्शिता"
@@ -2943,6 +2948,9 @@ theme_retro = "रेट्रो"
 timeline_unavailable = "प्रोजेक्ट टाइमलाइन उपलब्ध नहीं है।"
 timeline_unreadable = "प्रोजेक्ट टाइमलाइन पढ़ी नहीं जा सकी।"
 title = "कीबोर्ड दिखाएँ"
+type_keys = "की टाइप करें"
+type_keys_hint = "प्लेहेड पर दिखाने के लिए Enter दबाएँ, फिर अगला लिखें।"
+type_keys_placeholder = "कोई वाक्य, या cmd+k जैसा शॉर्टकट"
 uppercase = "बड़े अक्षर"
 
 [editor.tabs.padding]
