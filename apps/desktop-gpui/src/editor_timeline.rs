@@ -2452,6 +2452,12 @@ fn render_track_content(
         content = content.child(empty);
     }
 
+    let visible_ends = if row.kind == TrackKind::Keyboard {
+        keyboard_visible_ends(segments, secs_per_pixel)
+    } else {
+        Vec::new()
+    };
+
     // Enumerated before the lane filter so the index stays the **config**
     // index -- what the selection and every mutator address segments by.
     for (index, segment) in segments
@@ -2467,8 +2473,9 @@ fn render_track_content(
         // Key presses linger after the key goes up, so one often runs past
         // the next press; the overlay then shows the newer one. Each is drawn
         // only until the next begins, so the row reads like the video.
-        let clipped = (row.kind == TrackKind::Keyboard)
-            .then(|| keyboard_visible_end(segments, index, secs_per_pixel))
+        let clipped = visible_ends
+            .get(index)
+            .copied()
             .flatten()
             .map(|end| Segment {
                 end,
@@ -2684,38 +2691,43 @@ pub fn drawn_segments(
     if kind != TrackKind::Keyboard {
         return std::borrow::Cow::Borrowed(segments);
     }
+    let ends = keyboard_visible_ends(segments, secs_per_pixel);
     std::borrow::Cow::Owned(
         segments
             .iter()
-            .enumerate()
-            .map(
-                |(index, segment)| match keyboard_visible_end(segments, index, secs_per_pixel) {
-                    Some(end) => Segment {
-                        end,
-                        ..segment.clone()
-                    },
-                    None => segment.clone(),
-                },
-            )
+            .zip(ends)
+            .map(|(segment, end)| Segment {
+                end: end.unwrap_or(segment.end),
+                ..segment.clone()
+            })
             .collect(),
     )
 }
 
-/// Where a key press stops being the one on screen: just before the next
-/// press starts, when that comes before its own end. Never shorter than a
-/// few pixels, so a burst of presses stays clickable.
-fn keyboard_visible_end(segments: &[Segment], index: usize, secs_per_pixel: f64) -> Option<f64> {
-    let segment = segments.get(index)?;
-    let next = segments
-        .iter()
-        .enumerate()
-        .filter(|(other, next)| {
-            *other != index && next.start > segment.start && next.start < segment.end
-        })
-        .map(|(_, next)| next.start)
-        .fold(f64::INFINITY, f64::min);
-    next.is_finite()
-        .then(|| (next - 2.0 * secs_per_pixel).max(segment.start + 6.0 * secs_per_pixel))
+/// Where each key press stops being the one on screen: just before the next
+/// press to start, when that comes before its own end. Never shorter than a
+/// few pixels, so a burst of presses stays clickable. One sort, so hovering
+/// a long track stays cheap.
+pub fn keyboard_visible_ends(segments: &[Segment], secs_per_pixel: f64) -> Vec<Option<f64>> {
+    let mut order: Vec<usize> = (0..segments.len()).collect();
+    order.sort_by(|a, b| segments[*a].start.total_cmp(&segments[*b].start));
+    let mut ends = vec![None; segments.len()];
+    let mut next = 0;
+    for (position, &index) in order.iter().enumerate() {
+        let segment = &segments[index];
+        next = next.max(position + 1);
+        while next < order.len() && segments[order[next]].start <= segment.start {
+            next += 1;
+        }
+        if let Some(&following) = order.get(next) {
+            let start = segments[following].start;
+            if start < segment.end {
+                ends[index] =
+                    Some((start - 2.0 * secs_per_pixel).max(segment.start + 6.0 * secs_per_pixel));
+            }
+        }
+    }
+    ends
 }
 
 /// The 3D lane's create ghost: where a click would put a shot, and what it
@@ -4812,11 +4824,13 @@ mod tests {
                 keys: Arc::from(Vec::new()),
             },
         };
-        let segments = [press(0., 2.), press(1., 3.), press(5., 6.)];
+        let segments = [press(1., 3.), press(0., 2.), press(5., 6.), press(1., 1.5)];
         let drawn = drawn_segments(TrackKind::Keyboard, &segments, 0.01);
-        assert!((drawn[0].end - 0.98).abs() < 1e-9);
-        assert_eq!(drawn[1].end, 3.);
+        assert_eq!(drawn[0].end, 3.);
+        assert!((drawn[1].end - 0.98).abs() < 1e-9);
         assert_eq!(drawn[2].end, 6.);
+        // Two presses starting together don't clip each other.
+        assert_eq!(drawn[3].end, 1.5);
         assert!(matches!(
             drawn_segments(TrackKind::Zoom, &segments, 0.01),
             std::borrow::Cow::Borrowed(_)

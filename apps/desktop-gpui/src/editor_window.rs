@@ -5297,6 +5297,13 @@ impl EditorWindow {
             return;
         }
         let (start, end) = (segments[index].start, segments[index].end);
+        // A key press's end handle sits where its drawn end is, so the trim
+        // starts there.
+        let drawn_end = if kind == TrackKind::Keyboard {
+            timeline::keyboard_visible_ends(segments, secs_per_pixel)[index].unwrap_or(end)
+        } else {
+            end
+        };
 
         // The clip's own recording-domain edges, which its handles move.
         let source_edges = self
@@ -5340,7 +5347,7 @@ impl EditorWindow {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
                 let bounds = edits::trim_end_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimEnd {
-                    end,
+                    end: drawn_end,
                     bounds: audio_segment.map_or(bounds, |segment| {
                         edits::audio_trim_end_bounds(segment, bounds)
                     }),

@@ -82,7 +82,6 @@ pub struct KeycapGeometry {
     pub dish: f32,
 }
 
-/// The keycaps' colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeycapTheme {
     Light,
@@ -199,7 +198,6 @@ fn rgba(value: u32, alpha: f32) -> [f32; 4] {
     ]
 }
 
-/// How a key is laid out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeycapKind {
     /// A letter, digit, arrow or symbol: a square key.
@@ -413,7 +411,6 @@ pub fn cap_width(cap: &Keycap, height: f32, label_width: f32, legend_width: f32)
     }
 }
 
-/// The gap between two keys.
 pub fn cap_gap(height: f32) -> f32 {
     height * 0.16
 }
