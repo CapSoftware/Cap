@@ -140,6 +140,9 @@ pub struct ScreenEnhanceFrame {
     pub deband_threshold: f32,
     pub deband_iterations: u32,
     pub upscale_strength: f32,
+    /// The screen is drawn smaller than its source: the composite shader
+    /// samples it with an 8-tap filter instead of the 4 to 5 tap one.
+    pub detail_downscale: bool,
 }
 
 impl ScreenEnhanceFrame {
@@ -147,6 +150,7 @@ impl ScreenEnhanceFrame {
         deband_threshold: 0.0,
         deband_iterations: 0,
         upscale_strength: 0.0,
+        detail_downscale: false,
     };
 
     pub fn resolve(
@@ -178,6 +182,7 @@ impl ScreenEnhanceFrame {
             } else {
                 scaled
             },
+            detail_downscale: magnification < 1.0,
         }
     }
 
@@ -190,7 +195,17 @@ impl ScreenEnhanceFrame {
     }
 
     pub fn is_active(&self) -> bool {
-        self.debands() || self.upscales()
+        self.debands() || self.upscales() || self.detail_downscale
+    }
+
+    fn detail_flag(&self) -> f32 {
+        if self.detail_downscale { 1.0 } else { 0.0 }
+    }
+
+    /// `enhance_params` for the composite shader: (upscale mix, detail
+    /// downscale flag, unused, unused).
+    pub fn shader_params(&self, upscale_mix: f32) -> [f32; 4] {
+        [upscale_mix, self.detail_flag(), 0.0, 0.0]
     }
 }
 
@@ -589,7 +604,7 @@ impl ScreenEnhancer {
         self.debanded = false;
         self.sharpened = false;
         self.upscale_region = None;
-        if !frame.is_active() || source_size[0] == 0 || source_size[1] == 0 {
+        if !(frame.debands() || frame.upscales()) || source_size[0] == 0 || source_size[1] == 0 {
             return false;
         }
 
@@ -846,6 +861,18 @@ mod tests {
         assert!(on.debands() && on.upscales());
         let unzoomed = ScreenEnhanceFrame::resolve(0.5, 0.0, 1.0, 1.0);
         assert!(unzoomed.debands() && !unzoomed.upscales());
+    }
+
+    #[test]
+    fn detail_downscale_is_only_for_a_shrunk_screen() {
+        let at = |strength, magnification| {
+            ScreenEnhanceFrame::resolve(strength, 0.0, 1.0, magnification)
+        };
+        assert!(at(0.5, 0.5).detail_downscale && at(0.5, 0.5).is_active());
+        assert_eq!(at(0.5, 0.5).shader_params(0.0), [0.0, 1.0, 0.0, 0.0]);
+        assert!(!at(0.5, 1.0).detail_downscale);
+        assert!(!at(0.5, 2.0).detail_downscale);
+        assert_eq!(at(0.0, 0.5), ScreenEnhanceFrame::NONE);
     }
 
     #[test]

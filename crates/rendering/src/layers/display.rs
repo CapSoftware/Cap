@@ -137,6 +137,7 @@ impl DisplayLayer {
         let Some(pending) = self.pending_enhancement.as_mut() else {
             return uniforms;
         };
+        uniforms.enhance_params = pending.frame.shader_params(0.0);
         pending.uniforms = uniforms;
         pending.region = if pending.frame.upscales() {
             screen_enhance::upscale_region(&uniforms, device.limits().max_texture_dimension_2d)
@@ -150,7 +151,7 @@ impl DisplayLayer {
                 (region[2] - region[0]) as f32,
                 (region[3] - region[1]) as f32,
             ];
-            uniforms.enhance_params = [pending.frame.upscale_strength, 0.0, 0.0, 0.0];
+            uniforms.enhance_params = pending.frame.shader_params(pending.frame.upscale_strength);
         }
         uniforms
     }
@@ -167,7 +168,7 @@ impl DisplayLayer {
         let Some(pending) = self.pending_enhancement else {
             return;
         };
-        if !self.has_valid_frame {
+        if !self.has_valid_frame || !(pending.frame.debands() || pending.frame.upscales()) {
             return;
         }
         let frame_texture = &self.frame_textures[self.current_texture];
@@ -198,7 +199,7 @@ impl DisplayLayer {
         if pending.region.is_some() && upscaled.is_none() {
             let mut uniforms = pending.uniforms;
             uniforms.enhance_region = [0.0; 4];
-            uniforms.enhance_params = [0.0; 4];
+            uniforms.enhance_params = pending.frame.shader_params(0.0);
             uniforms.write_to_buffer(queue, &self.uniforms_buffer);
         }
         if !produced {
