@@ -91,8 +91,9 @@ impl KeyboardPosition {
 const BOUNCE_OFFSET_PIXELS: f32 = 6.0;
 const MIN_OVERLAY_GAP: f32 = 15.0;
 
-/// A keycap is this many times the size setting tall.
-const KEYCAP_HEIGHT_PER_SIZE: f32 = 2.0;
+/// A keycap is this many times the size setting tall, at 1080p: the default
+/// size of 50 makes a key a tenth of the frame's height.
+const KEYCAP_HEIGHT_PER_SIZE: f32 = 2.15;
 
 /// The keycaps stand a little apart from the captions, more on a taller frame,
 /// so their shadows never touch the caption card.

@@ -3023,7 +3023,7 @@ impl Default for KeyboardSettings {
             enabled: false,
             font: DEFAULT_KEYBOARD_FONT.to_string(),
             // Keys a tenth of the frame tall.
-            size: 62,
+            size: 50,
             color: DEFAULT_KEYBOARD_COLOR.to_string(),
             background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
             background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,
