@@ -3,6 +3,16 @@ use crate::frame::{LumaFrame, Rect};
 use crate::ocr::{ReadLine, TextReader};
 use crate::track::{Motion, Similarity, changed_tiles, follow, global_motion, plausible};
 
+pub trait ReadText {
+    fn read_text(&self, frame: &LumaFrame) -> anyhow::Result<Vec<ReadLine>>;
+}
+
+impl ReadText for TextReader {
+    fn read_text(&self, frame: &LumaFrame) -> anyhow::Result<Vec<ReadLine>> {
+        self.read(frame)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ScanSettings {
     pub sample_fps: f64,
@@ -146,6 +156,8 @@ const MARGIN: f32 = 0.3;
 const GLOBAL_SNAP: f32 = 3.0;
 const MOTION_WIDTH: u32 = 240;
 const EDGE_SNAP: f32 = 4.0;
+const ALTERED_LEVEL: u8 = 24;
+const ALTERED_PIXELS: usize = 4;
 
 fn difference(a: &LumaFrame, b: &LumaFrame) -> f32 {
     if (a.width, a.height) != (b.width, b.height) {
@@ -173,6 +185,18 @@ fn changed(a: &LumaFrame, b: &LumaFrame) -> bool {
         || changed_tiles(a, b, &[Similarity::IDENTITY]).changed.len() >= MIN_CHANGED_TILES
 }
 
+fn altered(a: &LumaFrame, b: &LumaFrame) -> bool {
+    (a.width, a.height) != (b.width, b.height)
+        || a.pixels
+            .iter()
+            .zip(&b.pixels)
+            .filter(|(x, y)| x.abs_diff(**y) >= ALTERED_LEVEL)
+            .take(ALTERED_PIXELS)
+            .count()
+            >= ALTERED_PIXELS
+        || changed(a, b)
+}
+
 fn covered_share(rect: Rect, tiles: &[Rect]) -> f32 {
     let area = rect.area();
     if area <= 0.0 {
@@ -196,8 +220,8 @@ fn leaving_view(rect: Rect, bounds: Rect) -> bool {
     visible > 0.0 && visible < rect.area() * EDGE_VISIBLE
 }
 
-pub struct Scanner<'a> {
-    reader: &'a TextReader,
+pub struct Scanner<'a, R: ReadText = TextReader> {
+    reader: &'a R,
     settings: ScanSettings,
     scale: Option<(f32, f32, f32, f32)>,
     last_read: Option<(f64, LumaFrame)>,
@@ -212,8 +236,8 @@ pub struct Scanner<'a> {
     finished: Vec<SensitiveTrack>,
 }
 
-impl<'a> Scanner<'a> {
-    pub fn new(reader: &'a TextReader, settings: ScanSettings) -> Self {
+impl<'a, R: ReadText> Scanner<'a, R> {
+    pub fn new(reader: &'a R, settings: ScanSettings) -> Self {
         Self {
             reader,
             settings,
@@ -333,12 +357,12 @@ impl<'a> Scanner<'a> {
         if self
             .last_read
             .as_ref()
-            .is_some_and(|(_, read)| !changed(read, &entry.frame))
+            .is_some_and(|(_, read)| !altered(read, &entry.frame))
         {
             return Ok(());
         }
         let (sx, sy, _, _) = self.scale.unwrap_or((1.0, 1.0, 1.0, 1.0));
-        let detections = detect(&self.reader.read(&frame)?, &self.settings.phrases);
+        let detections = detect(&self.reader.read_text(&frame)?, &self.settings.phrases);
         self.ocr_frames += 1;
         let current = entry.frame.clone();
         let arrival = entry.arrival;
@@ -369,6 +393,9 @@ impl<'a> Scanner<'a> {
         let changed_now = previous
             .as_ref()
             .is_none_or(|previous| changed(previous, &small));
+        let altered_now = previous
+            .as_ref()
+            .is_none_or(|previous| altered(previous, &small));
         let mut after_cut = false;
 
         match previous.as_ref() {
@@ -435,16 +462,17 @@ impl<'a> Scanner<'a> {
             None => true,
             Some((read_at, read_frame)) => {
                 self.force_read.is_some_and(|at| time >= at)
+                    || (time - read_at >= self.settings.max_ocr_interval
+                        && altered(read_frame, &small))
                     || (changed(read_frame, &small)
                         && (time - self.still_since >= SETTLE_TIME
-                            || time - read_at >= self.settings.max_ocr_interval
                             || self.travel >= small.height as f32 * TRAVEL_SHARE))
             }
         };
         let arrival = self.arrival;
         if due {
             self.ocr_frames += 1;
-            let detections = detect(&self.reader.read(frame)?, &self.settings.phrases);
+            let detections = detect(&self.reader.read_text(frame)?, &self.settings.phrases);
             self.apply_detections(time, &small, arrival, detections, sx, sy);
             self.window.clear();
             self.last_read = Some((time, small.clone()));
@@ -456,7 +484,7 @@ impl<'a> Scanner<'a> {
         }
 
         match self.window.last_mut() {
-            Some(previous) if !changed_now && !due => previous.last = time,
+            Some(previous) if !altered_now && !due => previous.last = time,
             _ => self.window.push(WindowFrame {
                 first: time,
                 last: time,
@@ -676,6 +704,102 @@ impl<'a> Scanner<'a> {
 mod tests {
     use super::*;
     use crate::synthetic::{Canvas, PROSE, sans};
+    use std::cell::Cell;
+
+    const EMAIL: &str = "al@ab.io";
+    const PAGE: u8 = 245;
+
+    struct PageReader {
+        email: Rect,
+        reads: Cell<usize>,
+    }
+
+    impl ReadText for PageReader {
+        fn read_text(&self, frame: &LumaFrame) -> anyhow::Result<Vec<ReadLine>> {
+            self.reads.set(self.reads.get() + 1);
+            let (_, y) = self.email.center();
+            let row = y as usize * frame.width as usize;
+            let inked = frame.pixels[row + self.email.x0 as usize..row + self.email.x1 as usize]
+                .iter()
+                .any(|pixel| pixel.abs_diff(PAGE) > 60);
+            if !inked {
+                return Ok(Vec::new());
+            }
+            let count = EMAIL.chars().count();
+            let step = self.email.width() / count as f32;
+            Ok(vec![ReadLine {
+                text: EMAIL.into(),
+                boxes: (0..count)
+                    .map(|index| {
+                        Rect::new(
+                            self.email.x0 + step * index as f32,
+                            self.email.y0,
+                            self.email.x0 + step * (index + 1) as f32,
+                            self.email.y1,
+                        )
+                    })
+                    .collect(),
+            }])
+        }
+    }
+
+    fn still_page_then_small_email() -> (LumaFrame, LumaFrame, Rect) {
+        let font = sans();
+        let mut canvas = Canvas::new(1924, 1084, PAGE);
+        for line in 0..12 {
+            canvas.text(
+                &font,
+                26.0,
+                80.0,
+                60.0 + line as f32 * 36.0,
+                PROSE[line % PROSE.len()],
+                40,
+            );
+        }
+        let before = canvas.view(0.0, 0.0, 1920, 1080, 1.0, PAGE);
+        let email = canvas.text(&font, 14.0, 1030.0, 804.0, EMAIL, 40);
+        let after = canvas.view(0.0, 0.0, 1920, 1080, 1.0, PAGE);
+        (before, after, email)
+    }
+
+    fn scan_small_email(appears: usize, frames: usize) -> (Vec<SensitiveTrack>, usize) {
+        let (before, after, email) = still_page_then_small_email();
+        let settings = ScanSettings::default();
+        assert!(!changed(
+            &before.downscaled(settings.tracking_width),
+            &after.downscaled(settings.tracking_width)
+        ));
+        let reader = PageReader {
+            email,
+            reads: Cell::new(0),
+        };
+        let fps = settings.sample_fps;
+        let mut scanner = Scanner::new(&reader, settings);
+        for index in 0..frames {
+            let frame = if index < appears { &before } else { &after };
+            scanner.push_frame(index as f64 / fps, frame).unwrap();
+        }
+        (scanner.finish().unwrap(), reader.reads.get())
+    }
+
+    #[test]
+    fn a_small_text_change_on_a_still_screen_is_read_within_the_maximum_interval() {
+        let (tracks, reads) = scan_small_email(5, 45);
+        assert_eq!(reads, 2);
+        assert_eq!(tracks.len(), 1, "{tracks:?}");
+        assert_eq!(tracks[0].kind, SensitiveKind::Email);
+        assert!(tracks[0].start < 5.0 / 15.0, "{}", tracks[0].start);
+        assert!(tracks[0].end >= 44.0 / 15.0, "{}", tracks[0].end);
+    }
+
+    #[test]
+    fn a_small_text_change_just_before_the_end_is_read_when_the_scan_finishes() {
+        let (tracks, reads) = scan_small_email(5, 10);
+        assert_eq!(reads, 2);
+        assert_eq!(tracks.len(), 1, "{tracks:?}");
+        assert!(tracks[0].start < 5.0 / 15.0, "{}", tracks[0].start);
+        assert!(tracks[0].end >= 9.0 / 15.0, "{}", tracks[0].end);
+    }
 
     #[test]
     fn scrolling_is_motion_and_a_still_page_is_not() {
