@@ -97,15 +97,17 @@ fn off_by_default_and_for_old_projects() {
 
 #[test]
 fn settings_round_trip_through_json() {
-    let mut project = ProjectConfiguration::default();
-    project.keyboard = Some(KeyboardData {
-        settings: KeyboardSettings {
-            key_sounds: true,
-            key_sound_type: crate::KeySoundType::Typewriter,
-            key_sound_volume: 0.25,
-            ..Default::default()
-        },
-    });
+    let mut project = ProjectConfiguration {
+        keyboard: Some(KeyboardData {
+            settings: KeyboardSettings {
+                key_sounds: true,
+                key_sound_type: crate::KeySoundType::Typewriter,
+                key_sound_volume: 0.25,
+                ..Default::default()
+            },
+        }),
+        ..Default::default()
+    };
     project.cursor.click_sounds = true;
     project.cursor.click_sound_type = crate::ClickSoundType::Trackpad;
     project.cursor.click_sound_volume = 0.8;
@@ -349,4 +351,28 @@ fn keys_are_classed_and_placed_across_the_keyboard() {
     for code in ["Grave", "Q", "A", "Z", "Backspace", "RShift", "Right"] {
         assert!(key_pan(code).abs() <= 0.35);
     }
+}
+
+#[test]
+fn muted_clips_stay_silent_and_clip_volume_carries_over() {
+    let mut project = project(cut_and_sped_timeline(), true, true);
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![shown(0.0, 10.0)];
+    let keyboard = KeyboardEvents {
+        presses: vec![press("a", 1_000.0, true), press("a", 5_000.0, true)],
+    };
+    let clicks = [click(1_000.0, true), click(5_000.0, true)];
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &clicks,
+    }];
+    {
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments[0].speed_audio_mode = Some(crate::ClipSpeedAudioMode::Mute);
+        timeline.segments[1].volume = Some(0.5);
+    }
+    let events = input_sound_events(&project, &takes);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| (event.time - 2.5).abs() < 1e-9));
+    assert!(events.iter().all(|event| event.gain == 0.5));
 }

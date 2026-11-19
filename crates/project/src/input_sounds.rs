@@ -1,5 +1,5 @@
 use crate::{
-    CursorClickEvent, KeyPressEvent, KeyboardEvents, ProjectConfiguration,
+    ClipSpeedAudioMode, CursorClickEvent, KeyPressEvent, KeyboardEvents, ProjectConfiguration,
     keyboard::{clip_windows, held_output_time, is_modifier_key},
 };
 
@@ -36,6 +36,8 @@ pub struct InputSoundEvent {
     pub seed: u64,
     /// -1 is hard left, 1 hard right.
     pub pan: f32,
+    /// The clip's own volume, so a quieter clip is quieter throughout.
+    pub gain: f32,
 }
 
 impl KeySoundClass {
@@ -239,9 +241,13 @@ pub fn input_sound_events(
 
     for window in clip_windows(timeline) {
         let clip = window.clip;
+        if clip.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
+            continue;
+        }
         let Some(take) = takes.get(clip.recording_clip as usize) else {
             continue;
         };
+        let gain = clip.volume() as f32;
         let to_output = |source_secs: f64| {
             held_output_time(
                 &holds,
@@ -291,6 +297,7 @@ pub fn input_sound_events(
                         text_seed(&press.key_code),
                     ),
                     pan: key_pan(&press.key_code),
+                    gain,
                 });
             }
         }
@@ -319,6 +326,7 @@ pub fn input_sound_events(
                     kind: InputSoundKind::Click { down: click.down },
                     seed,
                     pan: ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.1,
+                    gain,
                 });
             }
         }

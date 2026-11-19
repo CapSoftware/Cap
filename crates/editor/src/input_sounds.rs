@@ -291,6 +291,7 @@ impl InputSounds {
                 }
                 InputSoundKind::Click { down } => (click_pack, CLICK, None, down, click_gain),
             };
+            let gain = gain * event.gain;
             if gain <= 0.0 {
                 continue;
             }
@@ -473,6 +474,8 @@ fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {
                             segment.start,
                             segment.end,
                             segment.timescale,
+                            segment.speed_audio_mode,
+                            segment.volume(),
                         )
                     })
                     .collect::<Vec<_>>(),
@@ -525,6 +528,7 @@ pub fn render_input_sound_preview(preview: InputSoundPreview, volume: f32) -> Op
             kind,
             seed: seed ^ (seed >> 29),
             pan,
+            gain: 1.0,
         });
     };
     let (keys, clicks) = match preview {
