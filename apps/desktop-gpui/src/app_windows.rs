@@ -6018,6 +6018,7 @@ fn load_editor_project_candidate(
                 view.set_summary(summary, window, cx);
                 view.set_project(config, window, cx);
                 view.set_instance(instance.clone());
+                view.apply_pending_auto_zoom(window, cx);
                 view.refine_caption_timings(window, cx);
             })
             .is_err()
@@ -6781,6 +6782,10 @@ pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut Ap
     if let Ok(pending) = handle.update(cx, |view, _window, _cx| view.pending_save()) {
         pending.borrow_mut().flush();
     }
+    let unused_media = handle
+        .update(cx, |view, _window, _cx| view.unused_media_request())
+        .ok()
+        .flatten();
     let instance = handle
         .update(cx, |view, _window, _cx| view.take_instance())
         .ok()
@@ -6788,20 +6793,140 @@ pub fn editor_closed(project_path: &Path, window_id: gpui::WindowId, cx: &mut Ap
     if let Some(instance) = instance {
         let refresh =
             gpui_tokio::Tokio::spawn(cx, async move { instance.dispose_with_thumbnail().await });
+        let closed = key.clone();
         cx.spawn(async move |cx| {
-            if refresh.await.unwrap_or(false) {
-                cx.update(|cx| {
+            let refreshed = refresh.await.unwrap_or(false);
+            cx.update(|cx| {
+                if refreshed {
                     refresh_library_after_delete(cx);
                     let main = cx.global::<AppWindows>().main;
                     main.update(cx, |view, window, cx| view.refresh_open_library(window, cx))
                         .ok();
-                });
-            }
+                }
+                clean_unused_media(closed, unused_media, cx);
+            });
         })
         .detach();
     }
 
     restore_after_editor_close(&key, cx);
+}
+
+/// Runs once the closed editor's engine has let go of the media, off the UI
+/// thread, on a thread of its own (see `unused_media::move_to_trash`).
+fn clean_unused_media(key: PathBuf, request: Option<crate::unused_media::Request>, cx: &mut App) {
+    let Some(request) = request else {
+        cx.background_executor()
+            .spawn(async move { crate::unused_media::trash_leftovers(key) })
+            .detach();
+        return;
+    };
+    if let Some(reason) = unused_media_busy(&key, cx) {
+        tracing::info!(path = %key.display(), reason, "Kept unused clip media");
+        return;
+    }
+    let (ready_tx, ready_rx) = flume::bounded(1);
+    let project = key.clone();
+    let spawned = std::thread::Builder::new()
+        .name("unused-media".into())
+        .spawn(move || {
+            let free = crate::unused_media::wait_until_free(&project, &request);
+            ready_tx.send((free, request)).ok();
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "Could not start the unused clip media cleanup");
+        return;
+    }
+    cx.spawn(async move |cx| {
+        if let Ok((free, request)) = ready_rx.recv_async().await {
+            cx.update(|cx| start_unused_media_cleanup(key, request, free, cx));
+        }
+    })
+    .detach();
+}
+
+/// Everything that keeps a closed editor's project out of reach of the
+/// cleanup, checked again once the media is free, since the project may have
+/// been opened, exported or deleted while the cleanup waited.
+fn unused_media_busy(key: &Path, cx: &App) -> Option<&'static str> {
+    let session = RecordingSession::global(cx);
+    let session = session.read(cx);
+    let windows = cx.global::<AppWindows>();
+    crate::unused_media::Busy {
+        open_in_editor: windows.editors.iter().any(|(path, _)| path == key)
+            || crate::library::ensure_not_open_in_editor(key).is_err(),
+        deleting: windows.deleting_editors.contains(key) || crate::library::is_being_deleted(key),
+        recording: crate::library::is_recording_in_progress(key)
+            || session
+                .active_project_dir()
+                .is_some_and(|path| editor_key(path) == key)
+            || session
+                .preparing_studio_editor()
+                .is_some_and(|pending| editor_key(&pending.project_path) == key),
+        exporting_or_uploading: crate::recordings_overlay::work_in_flight(cx),
+        automation: crate::automation::studio_rules_running(key),
+    }
+    .reason()
+}
+
+fn start_unused_media_cleanup(
+    key: PathBuf,
+    request: crate::unused_media::Request,
+    free: bool,
+    cx: &mut App,
+) {
+    if !free {
+        tracing::info!(path = %key.display(), reason = "media still in use", "Kept unused clip media");
+        return;
+    }
+    if let Some(reason) = unused_media_busy(&key, cx) {
+        tracing::info!(path = %key.display(), reason, "Kept unused clip media");
+        return;
+    }
+    let Some(claim) = crate::unused_media::Claim::take(&key) else {
+        return;
+    };
+    let (done_tx, done_rx) = flume::bounded(1);
+    let project = key.clone();
+    let spawned = std::thread::Builder::new()
+        .name("unused-media".into())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let outcome = match cap_recording::upload_resume::UploadLock::acquire(&project) {
+                Ok(_lock) => crate::unused_media::run(&project, &request),
+                Err(error) => Err(format!("project in use: {error}")),
+            };
+            drop(claim);
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            match &outcome {
+                Ok(outcome) => {
+                    let trashed = crate::unused_media::trash_staged(
+                        &project,
+                        &crate::unused_media::move_to_trash,
+                    );
+                    tracing::info!(path = %project.display(), ?outcome, ?trashed, elapsed_ms, "Unused clip media cleanup finished");
+                }
+                Err(error) => {
+                    tracing::warn!(path = %project.display(), %error, elapsed_ms, "Unused clip media cleanup failed");
+                }
+            }
+            done_tx
+                .send(matches!(
+                    outcome,
+                    Ok(crate::unused_media::Outcome::Cleaned { .. })
+                ))
+                .ok();
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "Could not start the unused clip media cleanup");
+        return;
+    }
+    cx.spawn(async move |cx| {
+        if done_rx.recv_async().await.unwrap_or(false) {
+            cx.update(|cx| crate::recordings_overlay::project_changed(&key, cx));
+        }
+    })
+    .detach();
 }
 
 fn take_editor_window(

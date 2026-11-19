@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     CursorEventOrder, HoverChanges, PrecomputedCursorTimeline, ProjectRecordingsMeta,
-    ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants, RendererLayers,
+    ProjectUniforms, RecordingSegmentDecoders, RenderQuality, RenderVideoConstants, RendererLayers,
     SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
@@ -1633,7 +1633,8 @@ impl EditorInstance {
                                             outgoing_zoom,
                                             cursor_cache.event_order(&outgoing_media.cursor),
                                         )
-                                    };
+                                    }
+                                    .with_quality(RenderQuality::PausedPreview);
                                     Some((
                                         outgoing_frames,
                                         outgoing_uniforms,
@@ -1696,7 +1697,8 @@ impl EditorInstance {
                                         zoom_timeline,
                                         cursor_cache.event_order(&segment_medias.cursor),
                                     )
-                                };
+                                }
+                                .with_quality(RenderQuality::PausedPreview);
 
                                 if still_now {
                                     self.renderer.forget_last_frame().await;
