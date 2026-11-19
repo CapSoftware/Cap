@@ -408,7 +408,7 @@ impl KeyboardLayer {
             .fade_duration_override
             .unwrap_or(settings.fade_duration) as f64;
 
-        let raw_text = build_visible_text(active.segment, current_time, settings.show_typing);
+        let raw_text = build_visible_text(active.segment, current_time);
 
         if raw_text.is_empty() {
             return;
@@ -1208,12 +1208,8 @@ fn find_active_keyboard_segment<'a>(
         .map(|segment| ActiveKeyboardSegment { segment })
 }
 
-fn build_visible_text(
-    segment: &cap_project::KeyboardTrackSegment,
-    current_time: f64,
-    show_typing: bool,
-) -> String {
-    if segment.keys.is_empty() || is_shortcut(segment, show_typing) {
+fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time: f64) -> String {
+    if segment.keys.is_empty() || is_shortcut(segment) {
         return segment.display_text.clone();
     }
 
@@ -1249,16 +1245,25 @@ fn build_visible_text(
 
 /// A shortcut shows whole from the start, however many times it was struck:
 /// its keys are presses of one combination, not letters typed one by one.
-fn is_shortcut(segment: &cap_project::KeyboardTrackSegment, show_typing: bool) -> bool {
-    // Only shortcuts-only grouping strikes one key over and over in a
-    // segment; with typing shown, a doubled letter is typed and revealed.
-    segment.display_text.contains(['⌃', '⌥', '⌘'])
-        || (!show_typing
-            && segment.keys.len() > 1
-            && segment
-                .keys
-                .iter()
-                .all(|key| key.key == segment.keys[0].key))
+fn is_shortcut(segment: &cap_project::KeyboardTrackSegment) -> bool {
+    if segment.display_text.contains(['⌃', '⌥', '⌘']) {
+        return true;
+    }
+    // One key struck again and again: a repeated shortcut shows its combo
+    // once, while a doubled typed letter shows one character per press.
+    let repeated = segment.keys.len() > 1
+        && segment
+            .keys
+            .iter()
+            .all(|key| key.key == segment.keys[0].key);
+    if !repeated {
+        return false;
+    }
+    let mut chars = segment.display_text.chars();
+    let first = chars.next();
+    let typed = segment.display_text.chars().count() == segment.keys.len()
+        && chars.all(|c| Some(c) == first);
+    !typed
 }
 
 fn calculate_fade(current_time: f64, start: f64, end: f64, fade_duration: f64) -> f32 {
@@ -1334,23 +1339,39 @@ mod tests {
                 "keys": [{"key": "c", "timeOffset": 100.0}, {"key": "c", "timeOffset": 600.0}]
             }))
             .unwrap();
-        assert_eq!(build_visible_text(&segment, 1.0, false), "⌘C");
-        assert_eq!(build_visible_text(&segment, 1.2, false), "⌘C");
+        assert_eq!(build_visible_text(&segment, 1.0), "⌘C");
+        assert_eq!(build_visible_text(&segment, 1.2), "⌘C");
         let typed: cap_project::KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
             "id": "t", "start": 1.0, "end": 3.0, "displayText": "hi",
             "keys": [{"key": "h", "timeOffset": 0.0}, {"key": "i", "timeOffset": 500.0}]
         }))
         .unwrap();
-        assert_eq!(build_visible_text(&typed, 1.2, false), "h");
-        // With typing shown, a doubled letter appears as it is typed.
+        assert_eq!(build_visible_text(&typed, 1.2), "h");
+        // A doubled letter appears as it is typed, whichever grouping made it.
         let doubled: cap_project::KeyboardTrackSegment =
             serde_json::from_value(serde_json::json!({
                 "id": "d", "start": 1.0, "end": 3.0, "displayText": "aa",
                 "keys": [{"key": "a", "timeOffset": 0.0}, {"key": "a", "timeOffset": 500.0}]
             }))
             .unwrap();
-        assert_eq!(build_visible_text(&doubled, 1.2, true), "a");
-        assert_eq!(build_visible_text(&doubled, 1.6, true), "aa");
+        assert_eq!(build_visible_text(&doubled, 1.2), "a");
+        assert_eq!(build_visible_text(&doubled, 1.6), "aa");
+        // A shortcut struck twice shows whole from its first strike, even
+        // with typing switched on after it was generated.
+        let repeated: cap_project::KeyboardTrackSegment =
+            serde_json::from_value(serde_json::json!({
+                "id": "r", "start": 1.0, "end": 3.0, "displayText": "⇧⇥",
+                "keys": [{"key": "Tab", "timeOffset": 0.0}, {"key": "Tab", "timeOffset": 500.0}]
+            }))
+            .unwrap();
+        assert_eq!(build_visible_text(&repeated, 1.2), "⇧⇥");
+        let escaped: cap_project::KeyboardTrackSegment =
+            serde_json::from_value(serde_json::json!({
+                "id": "e", "start": 1.0, "end": 3.0, "displayText": "⎋",
+                "keys": [{"key": "Escape", "timeOffset": 0.0}, {"key": "Escape", "timeOffset": 500.0}]
+            }))
+            .unwrap();
+        assert_eq!(build_visible_text(&escaped, 1.2), "⎋");
     }
 
     #[test]
@@ -1363,7 +1384,7 @@ mod tests {
         };
         let segments = [segment("previous", 7.0, 7.8), segment("current", 7.2, 8.0)];
         let active = find_active_keyboard_segment(7.5, &segments, 0.15).unwrap();
-        assert_eq!(build_visible_text(active.segment, 7.5, false), "current");
+        assert_eq!(build_visible_text(active.segment, 7.5), "current");
         assert_eq!(
             find_active_keyboard_segment(8.1, &segments, 0.15)
                 .unwrap()
@@ -1392,7 +1413,7 @@ mod tests {
             uppercase_override: None,
         };
 
-        assert_eq!(build_visible_text(&segment, 1.0, false), "⌘T");
+        assert_eq!(build_visible_text(&segment, 1.0), "⌘T");
     }
 
     #[test]
