@@ -1060,6 +1060,42 @@ impl Default for ScreenMovementSpring {
     }
 }
 
+/// Export and paused-preview enhancement of the screen recording: debanding
+/// and an edge-aware upscale of magnified content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenEnhancement {
+    pub enabled: bool,
+    pub strength: f32,
+}
+
+impl ScreenEnhancement {
+    pub const DEFAULT_STRENGTH: f32 = 0.5;
+
+    pub const fn on() -> Self {
+        Self {
+            enabled: true,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+
+    pub fn effective_strength(&self) -> f32 {
+        if self.enabled && self.strength.is_finite() {
+            self.strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Default for ScreenEnhancement {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+}
+
 impl ScreenMovementSpring {
     /// How far ahead of its segment an early zoom starts moving.
     pub const EARLY_START_SECS: f64 = 0.35;
@@ -3140,6 +3176,10 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// Set for one render by the export page's option or the editor's preview
+    /// toggle; never read from or written to a project file.
+    #[serde(skip)]
+    pub screen_enhancement: ScreenEnhancement,
     /// Per-layer cinematic color grades. Field-level default keeps old
     /// project files (and old saved presets) deserializing to the identity
     /// grade.
@@ -3238,6 +3278,7 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            screen_enhancement: Default::default(),
             color_correction: Default::default(),
             clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
@@ -3935,6 +3976,30 @@ mod tests {
         assert_eq!(written["paddingMode"], "even");
         let restored: BackgroundConfiguration = serde_json::from_value(written).unwrap();
         assert_eq!(restored.padding_mode, PaddingMode::Even);
+    }
+
+    #[test]
+    fn screen_enhancement_is_never_saved_or_loaded_with_the_project() {
+        let config = ProjectConfiguration {
+            screen_enhancement: ScreenEnhancement::on(),
+            ..ProjectConfiguration::default()
+        };
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written.get("screenEnhancement").is_none());
+        assert_eq!(
+            written,
+            serde_json::to_value(ProjectConfiguration::default()).unwrap()
+        );
+
+        let mut saved = written;
+        saved["screenEnhancement"] = serde_json::json!({"enabled": true, "strength": 1.0});
+        let loaded: ProjectConfiguration = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.screen_enhancement, ScreenEnhancement::default());
+        assert!(
+            !ProjectConfiguration::for_new_project()
+                .screen_enhancement
+                .enabled
+        );
     }
 
     #[test]

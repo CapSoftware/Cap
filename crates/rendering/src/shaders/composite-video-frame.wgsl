@@ -32,11 +32,17 @@ struct Uniforms {
     color_adjust_b: vec4<f32>,
     // (grain amount, grain seed, grade-active flag, full-frame vignette flag).
     grain_params: vec4<f32>,
+    // Output-pixel rect (x, y, width, height) that `enhanced_texture` covers
+    // one to one.
+    enhance_region: vec4<f32>,
+    // (upscale mix, unused, unused, unused). Zero leaves the plain sample.
+    enhance_params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var frame_texture: texture_2d<f32>;
 @group(0) @binding(2) var frame_sampler: sampler;
+@group(0) @binding(3) var enhanced_texture: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -421,6 +427,31 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
+    let plain = sample_frame(uv, crop_bounds_uv);
+    let mix_amount = uniforms.enhance_params.x;
+    if mix_amount <= 0.0 {
+        return plain;
+    }
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        return plain;
+    }
+    let region_px = uniforms.target_bounds.xy + uv * uniforms.target_size
+        - uniforms.enhance_region.xy;
+    let region_size = uniforms.enhance_region.zw;
+    if any(region_px < vec2<f32>(0.0)) || any(region_px > region_size) {
+        return plain;
+    }
+    let texel = clamp(region_px, vec2<f32>(0.5), max(region_size - vec2<f32>(0.5), vec2<f32>(0.5)));
+    let enhanced = textureSampleLevel(
+        enhanced_texture,
+        frame_sampler,
+        texel / vec2<f32>(textureDimensions(enhanced_texture)),
+        0.0
+    );
+    return vec4<f32>(mix(plain.rgb, enhanced.rgb, mix_amount), plain.a);
+}
+
+fn sample_frame(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
     if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
         var sample_uv = uv;
         if uniforms.mirror_x != 0.0 {

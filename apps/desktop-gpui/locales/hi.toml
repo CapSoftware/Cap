@@ -2518,6 +2518,10 @@ retry_copy = "फिर से कॉपी करें"
 reuploaded = "आपका नया संपादन उसी लिंक पर तैयार है"
 uploaded = "आपका Cap सफलतापूर्वक अपलोड हो गया"
 
+[editor.export.enhance]
+description = "ज़ूम की गई और कम कंट्रास्ट वाली स्क्रीन सामग्री को शार्प करता है। एक्सपोर्ट में अधिक समय लग सकता है।"
+title = "क्वालिटी बेहतर करें"
+
 [editor.export.estimate]
 gigabytes = "~{value} GB"
 gigabytes_range = "~{lower}–{upper} GB"
@@ -3254,7 +3258,11 @@ wipe_down = "नीचे वाइप"
 zoom = "ज़ूम"
 
 [editor.window.transport]
+compare = "तुलना करें"
+compare_tooltip = "मूल देखने के लिए दबाकर रखें"
 done_splitting = "विभाजन पूरा"
+enhance = "बेहतर करें"
+enhance_tooltip = "रुके हुए फ़्रेम को बेहतर रूप में दिखाएँ"
 play_pause = "वीडियो चलाएँ/रोकें"
 speed = "प्रीव्यू की स्पीड"
 split = "विभाजित करें"
