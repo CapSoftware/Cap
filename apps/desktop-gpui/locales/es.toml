@@ -2382,6 +2382,23 @@ to = "Hasta"
 [editor.sidebar.image]
 prompt = "Haz clic para elegir o arrastra y suelta una imagen"
 
+[editor.sidebar.input_sounds]
+click_sounds = "Sonidos de clic"
+deep = "Grave"
+deep_description = "Interruptores lineales con un golpe grave y redondo."
+key_sounds = "Sonidos de teclas"
+laptop = "Portátil"
+laptop_description = "Teclas de portátil suaves y de poco recorrido."
+mechanical = "Mecánico"
+mechanical_description = "Interruptores nítidos con un clac brillante y táctil."
+mouse = "Ratón"
+mouse_description = "Pulsar y soltar un botón del ratón."
+trackpad = "Trackpad"
+trackpad_description = "El clic más suave de un trackpad de portátil."
+typewriter = "Máquina de escribir"
+typewriter_description = "Tipos que golpean, con retorno de carro al pulsar Intro."
+volume = "Volumen"
+
 [editor.sidebar.layout]
 background_blur = "Desenfoque del fondo"
 custom_position = "Posición de pantalla personalizada (arrastrada en el lienzo)"

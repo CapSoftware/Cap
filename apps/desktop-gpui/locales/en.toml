@@ -2384,6 +2384,23 @@ to = "To"
 [editor.sidebar.image]
 prompt = "Click to select or drag and drop image"
 
+[editor.sidebar.input_sounds]
+click_sounds = "Click Sounds"
+deep = "Deep"
+deep_description = "Linear switches with a low, rounded thock."
+key_sounds = "Key Sounds"
+laptop = "Laptop"
+laptop_description = "Soft, shallow laptop keys."
+mechanical = "Mechanical"
+mechanical_description = "Crisp switches with a bright, tactile clack."
+mouse = "Mouse"
+mouse_description = "The press and release of a mouse button."
+trackpad = "Trackpad"
+trackpad_description = "The softer click of a laptop trackpad."
+typewriter = "Typewriter"
+typewriter_description = "Type bars striking, with a carriage return on enter."
+volume = "Volume"
+
 [editor.sidebar.layout]
 background_blur = "Background Blur"
 custom_position = "Custom screen position (dragged on canvas)"

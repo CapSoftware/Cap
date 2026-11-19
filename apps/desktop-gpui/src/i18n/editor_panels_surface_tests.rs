@@ -593,6 +593,51 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::sidebar::cursor::strength(), "Strength"),
         (tr::editor::sidebar::cursor::ripple_size(), "Size"),
         (tr::editor::sidebar::cursor::duration(), "Duration"),
+        (
+            tr::editor::sidebar::input_sounds::click_sounds(),
+            "Click Sounds",
+        ),
+        (tr::editor::sidebar::input_sounds::deep(), "Deep"),
+        (
+            tr::editor::sidebar::input_sounds::deep_description(),
+            "Linear switches with a low, rounded thock.",
+        ),
+        (
+            tr::editor::sidebar::input_sounds::key_sounds(),
+            "Key Sounds",
+        ),
+        (tr::editor::sidebar::input_sounds::laptop(), "Laptop"),
+        (
+            tr::editor::sidebar::input_sounds::laptop_description(),
+            "Soft, shallow laptop keys.",
+        ),
+        (
+            tr::editor::sidebar::input_sounds::mechanical(),
+            "Mechanical",
+        ),
+        (
+            tr::editor::sidebar::input_sounds::mechanical_description(),
+            "Crisp switches with a bright, tactile clack.",
+        ),
+        (tr::editor::sidebar::input_sounds::mouse(), "Mouse"),
+        (
+            tr::editor::sidebar::input_sounds::mouse_description(),
+            "The press and release of a mouse button.",
+        ),
+        (tr::editor::sidebar::input_sounds::trackpad(), "Trackpad"),
+        (
+            tr::editor::sidebar::input_sounds::trackpad_description(),
+            "The softer click of a laptop trackpad.",
+        ),
+        (
+            tr::editor::sidebar::input_sounds::typewriter(),
+            "Typewriter",
+        ),
+        (
+            tr::editor::sidebar::input_sounds::typewriter_description(),
+            "Type bars striking, with a carriage return on enter.",
+        ),
+        (tr::editor::sidebar::input_sounds::volume(), "Volume"),
         (tr::editor::sidebar::animated_gradient::still(), "Still"),
         (
             tr::editor::sidebar::animated_gradient::name_placeholder(),

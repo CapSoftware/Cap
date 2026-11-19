@@ -2382,6 +2382,23 @@ to = "終了"
 [editor.sidebar.image]
 prompt = "クリックして選択するか、画像をドラッグ＆ドロップ"
 
+[editor.sidebar.input_sounds]
+click_sounds = "クリック音"
+deep = "ディープ"
+deep_description = "低く丸みのある打鍵音のリニアスイッチ。"
+key_sounds = "キー音"
+laptop = "ノートパソコン"
+laptop_description = "柔らかく浅いノートパソコンのキー。"
+mechanical = "メカニカル"
+mechanical_description = "明るく歯切れのよいタクタイルスイッチ。"
+mouse = "マウス"
+mouse_description = "マウスボタンを押して離す音。"
+trackpad = "トラックパッド"
+trackpad_description = "ノートパソコンのトラックパッドの柔らかいクリック。"
+typewriter = "タイプライター"
+typewriter_description = "活字が打たれ、Enterでキャリッジが戻ります。"
+volume = "音量"
+
 [editor.sidebar.layout]
 background_blur = "背景のぼかし"
 custom_position = "カスタムの画面位置（キャンバスでドラッグ）"

@@ -65,6 +65,9 @@ use crate::{
 
 mod animated_gradient;
 mod cursor;
+mod input_sounds;
+
+pub(crate) use input_sounds::InputSoundSlider;
 
 // ---------------------------------------------------------------------------
 // The catalogue: every constant the background section reads
@@ -730,6 +733,7 @@ pub enum SliderKey {
     Keyboard(KeyboardSlider),
     Panel(PanelSlider, usize),
     VoiceEq(crate::editor_voice_eq::VoiceEqSlider),
+    InputSound(InputSoundSlider),
 }
 
 /// Which colour the open `NSColorPanel` is editing.
@@ -1323,6 +1327,7 @@ impl EditorWindow {
             SliderKey::Keyboard(slider) => slider.limits(),
             SliderKey::Panel(slider, index) => self.panel_slider_limits(slider, index),
             SliderKey::VoiceEq(slider) => slider.limits(),
+            SliderKey::InputSound(slider) => slider.limits(),
         }
     }
 
@@ -1353,6 +1358,7 @@ impl EditorWindow {
             SliderKey::Keyboard(slider) => slider.read(&project),
             SliderKey::Panel(slider, index) => self.panel_slider_value(slider, index),
             SliderKey::VoiceEq(slider) => self.voice_eq_slider_value(slider),
+            SliderKey::InputSound(slider) => slider.read(&self.project),
         }
     }
 
@@ -1387,6 +1393,9 @@ impl EditorWindow {
                 self.apply_panel_slider(slider, index, value, window, cx)
             }
             SliderKey::VoiceEq(slider) => self.apply_voice_eq_slider(slider, value, window, cx),
+            SliderKey::InputSound(slider) => {
+                self.apply_input_sound_slider(slider, value, window, cx)
+            }
         }
     }
 

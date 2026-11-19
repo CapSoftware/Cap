@@ -2382,6 +2382,23 @@ to = "तक"
 [editor.sidebar.image]
 prompt = "चुनने के लिए क्लिक करें या इमेज ड्रैग करके छोड़ें"
 
+[editor.sidebar.input_sounds]
+click_sounds = "क्लिक ध्वनियाँ"
+deep = "गहरी"
+deep_description = "गहरी, गोल आवाज़ वाले लीनियर स्विच।"
+key_sounds = "कुंजी ध्वनियाँ"
+laptop = "लैपटॉप"
+laptop_description = "नरम, उथली लैपटॉप कुंजियाँ।"
+mechanical = "मैकेनिकल"
+mechanical_description = "साफ़, स्पर्शनीय खटखट वाले कुरकुरे स्विच।"
+mouse = "माउस"
+mouse_description = "माउस बटन को दबाना और छोड़ना।"
+trackpad = "ट्रैकपैड"
+trackpad_description = "लैपटॉप ट्रैकपैड का हल्का क्लिक।"
+typewriter = "टाइपराइटर"
+typewriter_description = "टकराती टाइप बार, एंटर पर कैरिज रिटर्न के साथ।"
+volume = "वॉल्यूम"
+
 [editor.sidebar.layout]
 background_blur = "बैकग्राउंड ब्लर"
 custom_position = "कस्टम स्क्रीन पोज़िशन (कैनवास पर ड्रैग की गई)"

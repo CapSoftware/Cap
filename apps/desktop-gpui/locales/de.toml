@@ -2382,6 +2382,23 @@ to = "Bis"
 [editor.sidebar.image]
 prompt = "Klicken Sie zum Auswählen oder ziehen Sie ein Bild hierher"
 
+[editor.sidebar.input_sounds]
+click_sounds = "Klickgeräusche"
+deep = "Tief"
+deep_description = "Lineare Schalter mit tiefem, rundem Klang."
+key_sounds = "Tastengeräusche"
+laptop = "Laptop"
+laptop_description = "Weiche, flache Laptoptasten."
+mechanical = "Mechanisch"
+mechanical_description = "Knackige Schalter mit hellem, taktilem Klacken."
+mouse = "Maus"
+mouse_description = "Drücken und Loslassen einer Maustaste."
+trackpad = "Trackpad"
+trackpad_description = "Der leisere Klick eines Laptop-Trackpads."
+typewriter = "Schreibmaschine"
+typewriter_description = "Anschlagende Typenhebel, mit Wagenrücklauf bei Eingabe."
+volume = "Lautstärke"
+
 [editor.sidebar.layout]
 background_blur = "Hintergrundunschärfe"
 custom_position = "Eigene Bildschirmposition (auf der Leinwand verschoben)"

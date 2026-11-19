@@ -2382,6 +2382,23 @@ to = "结束"
 [editor.sidebar.image]
 prompt = "点击选择或拖放图片"
 
+[editor.sidebar.input_sounds]
+click_sounds = "点击音效"
+deep = "低沉"
+deep_description = "声音低沉圆润的线性轴。"
+key_sounds = "按键音效"
+laptop = "笔记本"
+laptop_description = "柔和、键程短的笔记本键盘。"
+mechanical = "机械"
+mechanical_description = "清脆明亮、段落感强的机械轴。"
+mouse = "鼠标"
+mouse_description = "按下并松开鼠标按键的声音。"
+trackpad = "触控板"
+trackpad_description = "笔记本触控板更柔和的点击声。"
+typewriter = "打字机"
+typewriter_description = "字锤敲击，按回车时托架复位。"
+volume = "音量"
+
 [editor.sidebar.layout]
 background_blur = "背景模糊"
 custom_position = "自定义屏幕位置（在画布上拖动）"

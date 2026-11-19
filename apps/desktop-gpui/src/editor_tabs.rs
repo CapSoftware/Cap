@@ -2476,6 +2476,7 @@ impl EditorWindow {
                 cx,
             ))
             .child(self.render_cursor_ripple(cx))
+            .child(self.render_click_sounds(cx))
             .child(
                 ui::Field::inline(&theme, tr::editor::tabs::cursor::hide_when_idle()).value(
                     ui::Toggle::plain(&theme, "cursor-idle", idle)
@@ -3152,6 +3153,7 @@ impl EditorWindow {
                         ),
                 ),
             )
+            .child(self.render_key_sounds(cx))
             .child(
                 div().pt(px(8.)).child(
                     ui::Button::plain(

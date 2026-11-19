@@ -2382,6 +2382,23 @@ to = "À"
 [editor.sidebar.image]
 prompt = "Cliquez pour choisir ou glissez-déposez une image"
 
+[editor.sidebar.input_sounds]
+click_sounds = "Sons des clics"
+deep = "Grave"
+deep_description = "Interrupteurs linéaires au son grave et rond."
+key_sounds = "Sons des touches"
+laptop = "Portable"
+laptop_description = "Touches de portable douces et peu profondes."
+mechanical = "Mécanique"
+mechanical_description = "Interrupteurs nets au clac vif et tactile."
+mouse = "Souris"
+mouse_description = "L'appui et le relâchement d'un bouton de souris."
+trackpad = "Trackpad"
+trackpad_description = "Le clic plus doux d'un trackpad de portable."
+typewriter = "Machine à écrire"
+typewriter_description = "Des barres qui frappent, avec un retour chariot sur Entrée."
+volume = "Volume"
+
 [editor.sidebar.layout]
 background_blur = "Flou de l'arrière-plan"
 custom_position = "Position d'écran personnalisée (déplacée sur le canevas)"
