@@ -47,8 +47,8 @@ impl AudioData {
     }
 
     fn decode(path: &Path, range: Option<Range<usize>>, allow_seek: bool) -> Result<Self, String> {
-        let mut input_ctx =
-            ffmpeg::format::input(&path).map_err(|e| format!("Input Open / {e}"))?;
+        let mut input_ctx = cap_enc_ffmpeg::decode_limit::open_input(path)
+            .map_err(|e| format!("Input Open / {e}"))?;
         let input_stream = input_ctx
             .streams()
             .best(ffmpeg::media::Type::Audio)
