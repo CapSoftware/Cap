@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bump when detection changes so cached results from older detectors are
 /// analysed again.
-pub const DETECTOR_VERSION: u32 = 2;
+pub const DETECTOR_VERSION: u32 = 3;
 
 const CACHE_FILE: &str = "cursor-hover.json";
 
@@ -1048,5 +1048,29 @@ mod tests {
         let fallback = Downscale::new(Pixel::YUV420P10LE, 2560, 1440).unwrap();
         assert!(matches!(fallback, Downscale::Scaler { .. }));
         assert_eq!((fallback.width(), fallback.height()), (640, 360));
+    }
+
+    #[test]
+    fn caches_from_older_detectors_are_analysed_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let display = dir.path().join("display.mp4");
+        std::fs::write(&display, b"video").unwrap();
+
+        write_cache(&display, &[600.0]).unwrap();
+        assert_eq!(cached_changes(&display), Some(vec![600.0]));
+        assert!(!needs_analysis(&display));
+
+        let stale = HoverCache {
+            version: DETECTOR_VERSION - 1,
+            display_bytes: display_bytes(&display).unwrap(),
+            changes_ms: vec![600.0],
+        };
+        std::fs::write(
+            cache_path(&display).unwrap(),
+            serde_json::to_vec(&stale).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cached_changes(&display), None);
+        assert!(needs_analysis(&display));
     }
 }
