@@ -264,7 +264,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::optimize::title(), "Optimize file size"),
         (
             tr::editor::export::enhance::description(),
-            "Sharpens zoomed-in and low-contrast screen content. Exports can take longer.",
+            "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer.",
         ),
         (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
