@@ -2518,6 +2518,10 @@ retry_copy = "Erneut kopieren"
 reuploaded = "Ihre neueste Bearbeitung ist unter demselben Link bereit"
 uploaded = "Ihr Cap wurde erfolgreich hochgeladen"
 
+[editor.export.enhance]
+description = "Schärft vergrößerte und kontrastarme Bildschirminhalte. Exporte können länger dauern."
+title = "Qualität verbessern"
+
 [editor.export.estimate]
 gigabytes = "~{value} GB"
 gigabytes_range = "~{lower}–{upper} GB"
@@ -3254,7 +3258,11 @@ wipe_down = "Wischen nach unten"
 zoom = "Zoom"
 
 [editor.window.transport]
+compare = "Vergleichen"
+compare_tooltip = "Gedrückt halten, um das Original zu sehen"
 done_splitting = "Teilen beenden"
+enhance = "Verbessern"
+enhance_tooltip = "Angehaltenes Bild verbessert anzeigen"
 play_pause = "Video abspielen/pausieren"
 speed = "Vorschaugeschwindigkeit"
 split = "Teilen"
