@@ -12,7 +12,6 @@ import {
 	CHROME_EXTENSION_BUTTON_CLASS,
 } from "@/lib/chrome-extension";
 import { getDownloadStartedUrl } from "@/lib/download";
-import { LAST_TAURI_VERSION } from "@/utils/native-release";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -229,26 +228,6 @@ export const DownloadPage = ({
 									{getVersionText(platform)}
 								</div>
 							</>
-						)}
-
-						{nativeReleaseLive && (
-							<p className="text-xs text-gray-10">
-								Looking for the original app?{" "}
-								<Link
-									href={`/download/versions#v${LAST_TAURI_VERSION}`}
-									onClick={() =>
-										trackDownloadClick(
-											"last_tauri_version",
-											"/download/versions",
-											"tauri_app",
-										)
-									}
-									className="underline underline-offset-2 hover:text-gray-12"
-								>
-									Cap {LAST_TAURI_VERSION}
-								</Link>{" "}
-								is still available.
-							</p>
 						)}
 					</div>
 				</div>
