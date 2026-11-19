@@ -602,3 +602,31 @@ fn keys_added_by_hand_sound_as_their_text_strikes_them() {
         2
     );
 }
+
+#[test]
+fn a_key_added_by_hand_sounds_only_its_own_keys_over_recorded_typing() {
+    let keyboard = KeyboardEvents {
+        presses: vec![press("a", 2_200.0, true), press("a", 2_260.0, false)],
+    };
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    let mut project = project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let mut shortcut = shown(2.0, 3.0);
+    shortcut.id = format!("{}0", crate::keyboard::MANUAL_KEYBOARD_PREFIX);
+    shortcut.display_text = "⌘K".into();
+    shortcut.keys = crate::keyboard::manual_key_presses("⌘K");
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![shortcut];
+    let downs = key_times(&input_sound_events(&project, &takes), true);
+    assert_eq!(downs.len(), 2, "{downs:?}");
+    assert!(downs.iter().all(|time| (*time - 2.2).abs() > 1e-6));
+}

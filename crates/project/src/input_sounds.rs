@@ -178,9 +178,12 @@ fn shown_key_ranges(project: &ProjectConfiguration) -> Vec<(f64, f64)> {
     let Some(timeline) = &project.timeline else {
         return Vec::new();
     };
+    // Keys added by hand sound their own text; a recorded press under one
+    // is not on screen.
     let mut ranges = timeline
         .keyboard_segments
         .iter()
+        .filter(|segment| !crate::keyboard::is_manual_keyboard_segment(segment))
         .filter(|segment| {
             segment.start.is_finite() && segment.end.is_finite() && segment.end > segment.start
         })

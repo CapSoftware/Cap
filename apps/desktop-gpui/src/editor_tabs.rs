@@ -3293,7 +3293,9 @@ impl EditorWindow {
         const FRAME_HEIGHT: f32 = 132.;
         let theme = self.theme;
         let editor = theme.editor;
-        // An older project's "above captions" sits where bottom-center does.
+        // An older project's "above captions" sits where bottom-center does,
+        // and lights that spot; clicking it still writes bottom-center.
+        let stored = current.to_string();
         let current = match current {
             "top" => "top-center",
             "bottom" | "above-captions" => "bottom-center",
@@ -3351,7 +3353,7 @@ impl EditorWindow {
                             .group_hover(value, |style| style.opacity(1.))
                             .into_any_element()
                     })
-                    .when(!selected, |this| {
+                    .when(stored != value, |this| {
                         let value = value.to_string();
                         this.on_click(cx.listener(move |this, _, window, cx| {
                             let value = value.clone();

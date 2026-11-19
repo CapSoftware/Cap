@@ -1918,7 +1918,12 @@ pub fn split_segment(
         let Some((head, mut tail)) = segment.split_at(segment.start + at) else {
             return false;
         };
-        tail.id = split_id("kb-edit");
+        // Half of a key added by hand is still one added by hand.
+        tail.id = split_id(if cap_project::is_manual_keyboard_segment(&head) {
+            "kb-manual"
+        } else {
+            "kb-edit"
+        });
         timeline.keyboard_segments[index] = head;
         timeline.keyboard_segments.insert(index + 1, tail);
         return true;
@@ -4618,8 +4623,21 @@ mod tests {
         );
         assert_eq!(left.keys[0].time_offset, 500.0);
         assert_eq!(right.keys[0].time_offset, 500.0);
+        assert!(!cap_project::is_manual_keyboard_segment(right));
         assert_ne!(left.id, right.id);
         assert!(right.id.starts_with("kb-edit-split-"));
+
+        // Half of a key added by hand stays one added by hand, so it keeps
+        // its sounds and survives regenerating from the recording.
+        let manual = &mut timeline.keyboard_segments[1];
+        manual.id = "kb-manual-0".into();
+        manual.display_text = "hi".into();
+        manual.keys = cap_project::manual_key_presses("hi");
+        manual.keys[1].time_offset = 1500.0;
+        assert!(split_segment(timeline, TrackKind::Keyboard, 1, 1.0));
+        assert!(cap_project::is_manual_keyboard_segment(
+            &timeline.keyboard_segments[2]
+        ));
     }
 
     #[test]
