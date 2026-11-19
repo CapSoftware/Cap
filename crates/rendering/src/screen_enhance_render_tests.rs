@@ -275,23 +275,33 @@ async fn export_shrink_keeps_edges_sharper() {
     .await;
     assert_ne!(rgba(&plain), rgba(&enhanced));
 
-    let soft = |frame: &RenderedFrame| {
-        let mut count = 0;
+    // Edge contrast: summed luma steps between horizontal neighbours.
+    let contrast = |frame: &RenderedFrame| {
+        let mut sum = 0u64;
         for y in 2..frame.height - 2 {
-            for x in 2..frame.width - 2 {
-                if (96..=160).contains(&luma_at(frame, x, y)) {
-                    count += 1;
-                }
+            for x in 2..frame.width - 3 {
+                sum += luma_at(frame, x, y).abs_diff(luma_at(frame, x + 1, y)) as u64;
             }
         }
-        count
+        sum
     };
     assert!(
-        soft(&enhanced) < soft(&plain),
-        "enhanced {} vs plain {} mid-grey pixels",
-        soft(&enhanced),
-        soft(&plain)
+        contrast(&enhanced) > contrast(&plain),
+        "enhanced {} vs plain {} edge contrast",
+        contrast(&enhanced),
+        contrast(&plain)
     );
+}
+
+#[tokio::test]
+async fn large_shrinks_render_like_main() {
+    let fixture = fixture(XY::new(192, 128)).await;
+    let pixels = edge_pattern(192, 128);
+    let off = project(ScreenEnhancement::default());
+    let on = project(ScreenEnhancement::on());
+    let plain = render(&fixture, &off, &pixels, 0.25, RenderQuality::Export).await;
+    let enhanced = render(&fixture, &on, &pixels, 0.25, RenderQuality::Export).await;
+    assert_eq!(rgba(&plain), rgba(&enhanced));
 }
 
 #[tokio::test]
