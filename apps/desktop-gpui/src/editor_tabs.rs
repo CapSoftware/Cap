@@ -3378,6 +3378,44 @@ impl EditorWindow {
             .into_any_element()
     }
 
+    /// How the composer shows a sentence: a key per word (the default, and
+    /// the most like watching someone type), a key per keystroke, or whole.
+    fn render_typing_split(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let current = keyboard_settings(&self.project).typing_split;
+        let splits: [(&'static str, Label); 3] = [
+            ("words", tr::editor::tabs::keyboard::split_words),
+            ("keys", tr::editor::tabs::keyboard::split_keys),
+            ("sentence", tr::editor::tabs::keyboard::split_sentence),
+        ];
+        ui::Field::inline(&theme, tr::editor::tabs::keyboard::show_as())
+            .value(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "keyboard-typing-split",
+                    splits
+                        .iter()
+                        .map(|(value, label)| ui::SegmentOption::new(label(), *value == current))
+                        .collect(),
+                )
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    let Some((value, _)) = splits.get(*index) else {
+                        return;
+                    };
+                    let value = value.to_string();
+                    this.set_keyboard_setting_inner(
+                        false,
+                        "keyboard-typing-split",
+                        window,
+                        cx,
+                        move |settings| settings.typing_split = value,
+                    );
+                }))
+                .into_any_element(),
+            )
+            .into_any_element()
+    }
+
     /// Type a sentence or a shortcut and press Enter: it shows at the
     /// playhead, sized to be typed and read, and the playhead moves on so
     /// the next entry follows. The fastest way to put keys on a video made
@@ -3484,6 +3522,7 @@ impl EditorWindow {
                                 )),
                             ),
                     )
+                    .child(self.render_typing_split(cx))
                     .map(|this| match preview {
                         Some(preview) => this.child(preview),
                         None => this.child(

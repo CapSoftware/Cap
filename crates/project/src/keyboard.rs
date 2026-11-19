@@ -164,6 +164,64 @@ pub fn manual_key_text(input: &str) -> String {
     input.to_string()
 }
 
+/// One key press of a run the composer lays out: its text, where it starts
+/// after the first, and how long it stays up, in seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManualKeyRun {
+    pub text: String,
+    pub offset: f64,
+    pub length: f64,
+}
+
+/// Lays `text` out as the key presses that show it, back to back. A
+/// shortcut is always one; typed text is one long key (`sentence`), a key
+/// per word typed out letter by letter (`words`), or a key per keystroke
+/// (`keys`), each held a beat before the next, the last held to be read.
+pub fn manual_key_runs(text: &str, split: &str) -> Vec<ManualKeyRun> {
+    const WORD_HOLD: f64 = 0.32;
+    const KEY_HOLD: f64 = 0.16;
+    let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃'));
+    let pieces: Vec<String> = match split {
+        _ if shortcut => vec![text.to_string()],
+        "keys" => text
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(|c| {
+                if c == ' ' {
+                    "␣".to_string()
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect(),
+        "sentence" => vec![text.to_string()],
+        _ => text.split_whitespace().map(str::to_string).collect(),
+    };
+    let count = pieces.len();
+    let mut offset = 0.0;
+    pieces
+        .into_iter()
+        .enumerate()
+        .filter(|(_, piece)| !piece.is_empty())
+        .map(|(index, piece)| {
+            let keys = manual_key_presses(&piece);
+            let length = if index + 1 == count {
+                manual_key_length(&keys)
+            } else {
+                let typing = keys.iter().map(|key| key.time_offset).fold(0.0, f64::max) / 1000.0;
+                typing + if split == "keys" { KEY_HOLD } else { WORD_HOLD }
+            };
+            let run = ManualKeyRun {
+                text: piece,
+                offset,
+                length,
+            };
+            offset += length;
+            run
+        })
+        .collect()
+}
+
 /// How long a hand-made key press stays up: long enough to strike its last
 /// key and then be read, and never shorter than a glance.
 pub fn manual_key_length(keys: &[KeyPressDisplay]) -> f64 {
@@ -2510,6 +2568,33 @@ mod timing_tests {
 #[cfg(test)]
 mod manual_key_tests {
     use super::*;
+
+    #[test]
+    fn a_sentence_splits_into_words_or_keys_back_to_back() {
+        let words = manual_key_runs("ship it now", "words");
+        assert_eq!(
+            words
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ship", "it", "now"]
+        );
+        for pair in words.windows(2) {
+            assert!((pair[0].offset + pair[0].length - pair[1].offset).abs() < 1e-9);
+        }
+        // The last word is held to be read.
+        assert!(words[2].length >= 1.2);
+        let keys = manual_key_runs("hi you", "keys");
+        assert_eq!(
+            keys.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+            vec!["h", "i", "␣", "y", "o", "u"]
+        );
+        assert!(keys[0].length < 0.3);
+        assert_eq!(manual_key_runs("ship it", "sentence").len(), 1);
+        // A shortcut is always one key press.
+        assert_eq!(manual_key_runs("⌘⇧P", "keys").len(), 1);
+        assert!(manual_key_runs("   ", "words").is_empty());
+    }
 
     #[test]
     fn words_become_a_shortcuts_symbols_and_text_stays_text() {

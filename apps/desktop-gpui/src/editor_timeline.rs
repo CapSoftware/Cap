@@ -1695,7 +1695,8 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.display_text.clone())
                     },
-                    typed: show_typing && is_typed_text(segment),
+                    typed: (show_typing || cap_project::is_manual_keyboard_segment(segment))
+                        && is_typed_text(segment),
                     keys: keycaps::keycaps_for(&segment.display_text, key_style)
                         .into_iter()
                         .map(|cap| {

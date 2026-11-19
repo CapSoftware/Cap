@@ -7355,14 +7355,20 @@ impl EditorWindow {
         } else {
             "⌃K"
         };
-        self.add_manual_keys(time, length, text, true, window, cx)
+        let runs = [cap_project::ManualKeyRun {
+            text: text.to_string(),
+            offset: 0.0,
+            length,
+        }];
+        self.add_manual_keys(time, &runs, true, window, cx)
             .is_some()
     }
 
     /// Shows what was typed into the Keyboard tab's composer at the playhead,
     /// sized to strike every key and be read, then moves the playhead past
-    /// it so the next entry follows on. A sentence types out letter by
-    /// letter; `cmd+shift+p` shows as its keys.
+    /// it so the next entry follows on. A sentence pops up a word at a time,
+    /// a key at a time, or whole, as the tab's "Show as" says; `cmd+shift+p`
+    /// always shows as its keys.
     pub(crate) fn add_typed_keys(
         &mut self,
         input: &str,
@@ -7373,10 +7379,13 @@ impl EditorWindow {
         if text.trim().is_empty() {
             return false;
         }
-        let length = cap_project::manual_key_length(&cap_project::manual_key_presses(&text));
+        let split = crate::editor_tabs::keyboard_settings(&self.project).typing_split;
+        let runs = cap_project::manual_key_runs(&text, &split);
+        let Some(length) = runs.last().map(|run| run.offset + run.length) else {
+            return false;
+        };
         let start = self.playhead_time();
-        let Some((_, end)) =
-            self.add_manual_keys(start + length / 2.0, length, &text, false, window, cx)
+        let Some((_, end)) = self.add_manual_keys(start + length / 2.0, &runs, false, window, cx)
         else {
             return false;
         };
@@ -7384,17 +7393,18 @@ impl EditorWindow {
         true
     }
 
-    /// Adds a key press by hand around `time`, striking `text`, and returns
-    /// where it landed. `select` opens its panel.
+    /// Adds key presses by hand around `time`: `runs` back to back, each
+    /// striking its own text, and returns where they landed. `select` opens
+    /// the first one's panel.
     fn add_manual_keys(
         &mut self,
         time: f64,
-        length: f64,
-        text: &str,
+        runs: &[cap_project::ManualKeyRun],
         select: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<(f64, f64)> {
+        let length = runs.last().map(|run| run.offset + run.length)?;
         let durations = self.clip_display_durations.clone();
         if !edits::ensure_timeline(&mut self.project, &durations) {
             return None;
@@ -7423,6 +7433,8 @@ impl EditorWindow {
                 .map_or(0, |last| last + 1)
         });
         let id = format!("{}{next}", cap_project::MANUAL_KEYBOARD_PREFIX);
+        // Squeezed in proportion when only less room than asked was free.
+        let scale = (end - start) / length.max(1e-9);
         let showed_track = self.tracks.keyboard;
         self.tracks.keyboard = true;
         let added = self.edit_timeline_project(
@@ -7434,23 +7446,34 @@ impl EditorWindow {
                 let Some(timeline) = project.timeline.as_mut() else {
                     return false;
                 };
-                let segment = cap_project::KeyboardTrackSegment {
-                    id: id.clone(),
-                    start,
-                    end,
-                    display_text: text.to_string(),
-                    keys: cap_project::manual_key_presses(text),
-                    fade_duration_override: None,
-                    position_override: None,
-                    color_override: None,
-                    background_color_override: None,
-                    font_size_override: None,
-                    uppercase_override: None,
-                };
-                let at = timeline
-                    .keyboard_segments
-                    .partition_point(|other| other.start <= start);
-                timeline.keyboard_segments.insert(at, segment);
+                for (index, run) in runs.iter().enumerate() {
+                    let run_start = start + run.offset * scale;
+                    let segment = cap_project::KeyboardTrackSegment {
+                        id: if index == 0 {
+                            id.clone()
+                        } else {
+                            format!(
+                                "{}{}",
+                                cap_project::MANUAL_KEYBOARD_PREFIX,
+                                next + index as u64
+                            )
+                        },
+                        start: run_start,
+                        end: (run_start + run.length * scale).min(end),
+                        display_text: run.text.clone(),
+                        keys: cap_project::manual_key_presses(&run.text),
+                        fade_duration_override: None,
+                        position_override: None,
+                        color_override: None,
+                        background_color_override: None,
+                        font_size_override: None,
+                        uppercase_override: None,
+                    };
+                    let at = timeline
+                        .keyboard_segments
+                        .partition_point(|other| other.start <= run_start);
+                    timeline.keyboard_segments.insert(at, segment);
+                }
                 true
             },
             window,

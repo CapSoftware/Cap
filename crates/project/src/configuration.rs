@@ -3037,6 +3037,10 @@ pub struct KeyboardSettings {
     /// typing.
     #[serde(default = "KeyboardSettings::legacy_show_typing")]
     pub show_typing: bool,
+    /// How the Keyboard tab's composer shows a sentence: `words`, each word
+    /// typed out on its own key, `keys`, every keystroke on its own, or
+    /// `sentence`, the whole of it on one key.
+    pub typing_split: String,
     pub key_sounds: bool,
     pub key_sound_type: KeySoundType,
     pub key_sound_volume: f32,
@@ -3146,6 +3150,7 @@ impl Default for KeyboardSettings {
             style: Self::platform_style(),
             theme: Self::default_theme(),
             show_typing: false,
+            typing_split: "words".to_string(),
             key_sounds: false,
             key_sound_type: KeySoundType::default(),
             key_sound_volume: DEFAULT_INPUT_SOUND_VOLUME,

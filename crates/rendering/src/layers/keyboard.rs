@@ -548,7 +548,9 @@ impl KeyboardLayer {
             // With typing shown, what is not a shortcut is typed text, from
             // its first letter on.
             let typed = |segment: &cap_project::KeyboardTrackSegment| {
-                settings.show_typing && !is_shortcut(segment)
+                // Text typed into the composer is typing, shown or not.
+                (settings.show_typing || cap_project::is_manual_keyboard_segment(segment))
+                    && !is_shortcut(segment)
             };
             let change = match before_strike {
                 Some(before) if since_press >= (KEYCAP_MOVE + KEYCAP_ENTER) * pace => KeyChange {

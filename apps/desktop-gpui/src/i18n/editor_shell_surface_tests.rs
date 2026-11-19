@@ -289,6 +289,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Press Enter to show it at the playhead, then type the next.",
         ),
         (tr::editor::tabs::keyboard::add_keys(), "Add"),
+        (tr::editor::tabs::keyboard::show_as(), "Show As"),
+        (tr::editor::tabs::keyboard::split_words(), "Words"),
+        (tr::editor::tabs::keyboard::split_keys(), "Keys"),
+        (tr::editor::tabs::keyboard::split_sentence(), "Sentence"),
         (
             tr::editor::tabs::keyboard::type_keys_as_text(),
             "This will be typed out. Shortcuts look like cmd+shift+p.",
