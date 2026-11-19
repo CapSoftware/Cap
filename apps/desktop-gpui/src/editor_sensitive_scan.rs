@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use cap_editor::EditorInstance;
@@ -28,6 +28,9 @@ use crate::{
 
 const SCAN_RESOLUTION: XY<u32> = XY { x: 1920, y: 1080 };
 const MODEL_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+static MODEL_INSTALL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static NEXT_DOWNLOAD: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum ScanStage {
@@ -63,6 +66,18 @@ fn model_installed(dir: &Path, model: &ModelFile) -> bool {
     std::fs::metadata(dir.join(model.file_name)).is_ok_and(|metadata| metadata.len() == model.size)
 }
 
+async fn install_model(
+    dir: &Path,
+    model: &ModelFile,
+    progress: impl Fn(f32),
+) -> Result<(), String> {
+    let _installing = MODEL_INSTALL.lock().await;
+    if model_installed(dir, model) {
+        return Ok(());
+    }
+    download_model(dir, model, progress).await
+}
+
 async fn download_model(
     dir: &Path,
     model: &ModelFile,
@@ -72,7 +87,12 @@ async fn download_model(
     use std::io::Write as _;
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create {dir:?}: {e}"))?;
     let path = dir.join(model.file_name);
-    let staging = path.with_extension("onnx.downloading");
+    let staging = dir.join(format!(
+        "{}.{}-{}.downloading",
+        model.file_name,
+        std::process::id(),
+        NEXT_DOWNLOAD.fetch_add(1, Ordering::Relaxed)
+    ));
     let result = async {
         let response = reqwest::Client::new()
             .get(model.url)
@@ -110,13 +130,16 @@ async fn download_model(
         if hex != model.sha256 {
             return Err(format!("{} is corrupt (sha256 {hex})", model.file_name));
         }
-        std::fs::rename(&staging, &path)
-            .map_err(|e| format!("Failed to install {}: {e}", model.file_name))
+        drop(file);
+        match std::fs::rename(&staging, &path) {
+            Err(_) if model_installed(dir, model) => Ok(()),
+            installed => {
+                installed.map_err(|e| format!("Failed to install {}: {e}", model.file_name))
+            }
+        }
     }
     .await;
-    if result.is_err() {
-        let _ = std::fs::remove_file(&staging);
-    }
+    let _ = std::fs::remove_file(&staging);
     result
 }
 
@@ -133,7 +156,7 @@ async fn scan(
     for model in &MODELS {
         if !model_installed(&dir, model) {
             let base = done;
-            download_model(&dir, model, |fraction| {
+            install_model(&dir, model, |fraction| {
                 let received = base as f32 + fraction * model.size as f32;
                 let _ = events.send(ScanEvent::Stage(ScanStage::Downloading(
                     received / total as f32,
@@ -246,13 +269,12 @@ async fn render_luma(
 
 fn scan_input(project: &ProjectConfiguration) -> ProjectConfiguration {
     let mut project = project.clone();
-    project.sensitive_phrases.clear();
     project.captions = None;
     project.keyboard = None;
     project.annotations.clear();
     if let Some(timeline) = project.timeline.as_mut() {
         timeline.mask_segments.clear();
-        timeline.text_segments.clear();
+        project.hidden_text_segments = (0..timeline.text_segments.len()).collect();
         timeline.caption_segments.clear();
         timeline.keyboard_segments.clear();
         timeline.image_segments.clear();
@@ -436,6 +458,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.sensitive_scan.is_some() {
+            return;
+        }
         let phrase = phrase.to_string();
         self.edit_project_without_timeline("sensitive-phrase", window, cx, move |project| {
             add_phrase(&mut project.sensitive_phrases, &phrase)
@@ -631,10 +656,115 @@ mod tests {
         project.sensitive_phrases = vec!["Acme".into()];
         let input = scan_input(&project);
         let timeline = input.timeline.as_ref().unwrap();
-        assert!(timeline.text_segments.is_empty());
+        assert_eq!(timeline.text_segments.len(), 1);
+        assert_eq!(input.hidden_text_segments, [0]);
         assert!(timeline.caption_segments.is_empty());
         assert!(timeline.keyboard_segments.is_empty());
-        assert!(input.sensitive_phrases.is_empty());
         assert!(input.captions.is_none() && input.keyboard.is_none());
+    }
+
+    #[test]
+    fn the_scan_keeps_the_timing_of_fullscreen_text_holds() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": [],
+                "textSegments": [
+                    { "start": 2.0, "end": 4.0, "content": "Title", "layout": "fullscreen" },
+                    { "start": 6.0, "end": 7.0, "content": "Note" },
+                ],
+            },
+        }))
+        .unwrap();
+        let timeline = project.timeline.as_ref().unwrap();
+        assert_eq!(timeline.hold_windows(), [(2.0, 4.0)]);
+        let input = scan_input(&project);
+        let scanned = input.timeline.as_ref().unwrap();
+        assert_eq!(scanned.hold_windows(), timeline.hold_windows());
+        assert_eq!(scanned.duration(), timeline.duration());
+        assert_eq!(scanned.duration(), 12.0);
+        assert_eq!(input.hidden_text_segments, [0, 1]);
+    }
+
+    #[test]
+    fn a_phrase_added_during_a_scan_makes_its_result_stale() {
+        let mut project = ProjectConfiguration {
+            sensitive_phrases: vec!["Acme".into()],
+            ..Default::default()
+        };
+        let snapshot = serde_json::to_value(scan_input(&project)).unwrap();
+        assert_eq!(
+            serde_json::to_value(scan_input(&project)).unwrap(),
+            snapshot
+        );
+        assert!(add_phrase(&mut project.sensitive_phrases, "Project Falcon"));
+        assert_ne!(
+            serde_json::to_value(scan_input(&project)).unwrap(),
+            snapshot
+        );
+    }
+
+    fn serve_in_step(body: Vec<u8>, downloads: usize) -> String {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let halfway = Arc::new(std::sync::Barrier::new(downloads));
+        std::thread::spawn(move || {
+            for _ in 0..downloads {
+                let (mut stream, _) = listener.accept().unwrap();
+                let body = body.clone();
+                let halfway = halfway.clone();
+                std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut byte = [0u8; 1];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        if stream.read(&mut byte).unwrap() == 0 {
+                            return;
+                        }
+                        request.push(byte[0]);
+                    }
+                    let (first, second) = body.split_at(body.len() / 2);
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .unwrap();
+                    stream.write_all(first).unwrap();
+                    stream.flush().unwrap();
+                    halfway.wait();
+                    stream.write_all(second).unwrap();
+                });
+            }
+        });
+        format!("http://{address}/model.onnx")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_scans_that_download_a_model_together_both_install_it() {
+        use sha2::Digest as _;
+        let body: Vec<u8> = (0..200_000u32).map(|index| (index % 251) as u8).collect();
+        let sha256: String = sha2::Sha256::digest(&body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let model = ModelFile {
+            file_name: "model.onnx",
+            url: Box::leak(serve_in_step(body.clone(), 2).into_boxed_str()),
+            sha256: Box::leak(sha256.into_boxed_str()),
+            size: body.len() as u64,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = tokio::join!(
+            download_model(dir.path(), &model, |_| {}),
+            download_model(dir.path(), &model, |_| {}),
+        );
+        assert_eq!((first, second), (Ok(()), Ok(())));
+        let files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(files, ["model.onnx"]);
+        assert_eq!(std::fs::read(dir.path().join("model.onnx")).unwrap(), body);
     }
 }

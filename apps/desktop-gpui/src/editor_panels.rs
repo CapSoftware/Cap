@@ -3037,7 +3037,9 @@ impl EditorWindow {
         if key == FieldKey::SensitivePhrase {
             match event {
                 ui::TextInputEvent::Confirmed => {
-                    if let Some(input) = self.field(key).cloned() {
+                    if self.sensitive_scan.is_none()
+                        && let Some(input) = self.field(key).cloned()
+                    {
                         let phrase = input.read(cx).text().to_string();
                         self.add_sensitive_phrase(&phrase, window, cx);
                         input.update(cx, |input, cx| input.set_text("", cx));
