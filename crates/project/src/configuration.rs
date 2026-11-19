@@ -2953,7 +2953,8 @@ impl KeyboardSettings {
                 .background_color
                 .eq_ignore_ascii_case(DEFAULT_KEYBOARD_BACKGROUND)
             && self.background_opacity == DEFAULT_KEYBOARD_BACKGROUND_OPACITY
-            && self.font == DEFAULT_KEYBOARD_FONT;
+            && self.font == DEFAULT_KEYBOARD_FONT
+            && self.font_weight == DEFAULT_KEYBOARD_FONT_WEIGHT;
         if untouched {
             Self::platform_style_name()
         } else {
@@ -2986,6 +2987,7 @@ const DEFAULT_KEYBOARD_FONT: &str = "System Sans-Serif";
 const DEFAULT_KEYBOARD_COLOR: &str = "#FFFFFF";
 const DEFAULT_KEYBOARD_BACKGROUND: &str = "#000000";
 const DEFAULT_KEYBOARD_BACKGROUND_OPACITY: u32 = 95;
+const DEFAULT_KEYBOARD_FONT_WEIGHT: u32 = 400;
 
 impl Default for KeyboardSettings {
     fn default() -> Self {
@@ -2998,7 +3000,7 @@ impl Default for KeyboardSettings {
             background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
             background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,
             position: "bottom-center".to_string(),
-            font_weight: 400,
+            font_weight: DEFAULT_KEYBOARD_FONT_WEIGHT,
             fade_duration: 0.15,
             linger_duration: 1.5,
             grouping_threshold_ms: 500.0,
@@ -5638,6 +5640,11 @@ mod tests {
             ..old.clone()
         };
         assert_eq!(styled.effective_style(), "classic");
+        let bold = KeyboardSettings {
+            font_weight: 700,
+            ..old.clone()
+        };
+        assert_eq!(bold.effective_style(), "classic");
         let chosen = KeyboardSettings {
             style: "windows".into(),
             ..styled

@@ -1208,7 +1208,7 @@ fn find_active_keyboard_segment<'a>(
 }
 
 fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time: f64) -> String {
-    if segment.keys.is_empty() {
+    if segment.keys.is_empty() || is_shortcut(segment) {
         return segment.display_text.clone();
     }
 
@@ -1240,6 +1240,17 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
     }
 
     visible
+}
+
+/// A shortcut shows whole from the start, however many times it was struck:
+/// its keys are presses of one combination, not letters typed one by one.
+fn is_shortcut(segment: &cap_project::KeyboardTrackSegment) -> bool {
+    segment.display_text.contains(['⌃', '⌥', '⌘'])
+        || (segment.keys.len() > 1
+            && segment
+                .keys
+                .iter()
+                .all(|key| key.key == segment.keys[0].key))
 }
 
 fn calculate_fade(current_time: f64, start: f64, end: f64, fade_duration: f64) -> f32 {
@@ -1305,6 +1316,24 @@ mod tests {
         assert!(peak > 1.0 && peak < 1.05, "{peak}");
         assert!((keycap_pop(1.0, 0.0, 2.0, 0.15) - 1.0).abs() < 1e-6);
         assert!((keycap_pop(2.15, 0.0, 2.0, 0.15) - 0.94).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_shortcut_struck_as_often_as_it_has_characters_shows_whole() {
+        let segment: cap_project::KeyboardTrackSegment =
+            serde_json::from_value(serde_json::json!({
+                "id": "s", "start": 1.0, "end": 3.0, "displayText": "⌘C",
+                "keys": [{"key": "c", "timeOffset": 100.0}, {"key": "c", "timeOffset": 600.0}]
+            }))
+            .unwrap();
+        assert_eq!(build_visible_text(&segment, 1.0), "⌘C");
+        assert_eq!(build_visible_text(&segment, 1.2), "⌘C");
+        let typed: cap_project::KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
+            "id": "t", "start": 1.0, "end": 3.0, "displayText": "hi",
+            "keys": [{"key": "h", "timeOffset": 0.0}, {"key": "i", "timeOffset": 500.0}]
+        }))
+        .unwrap();
+        assert_eq!(build_visible_text(&typed, 1.2), "h");
     }
 
     #[test]

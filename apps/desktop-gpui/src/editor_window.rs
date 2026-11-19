@@ -3247,6 +3247,14 @@ impl EditorWindow {
     /// `projectHistory.undo()` -- reconcile the previous snapshot back over the
     /// store. The playhead is not moved and the selection is not restored;
     /// neither is in the snapshot (`editorState` is a separate store).
+    /// An undo or redo while the Presets menu is open changes which look the
+    /// project wears; the menu's outline follows it.
+    fn refresh_presets_menu_look(&mut self) {
+        if let Some(menu) = self.presets_menu.as_mut() {
+            menu.current_look = crate::looks::current_look(&self.project);
+        }
+    }
+
     pub(crate) fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
@@ -3257,6 +3265,7 @@ impl EditorWindow {
             return;
         };
         self.apply_history(config, window, cx);
+        self.refresh_presets_menu_look();
         self.note_edit("undo", None);
     }
 
@@ -3270,6 +3279,7 @@ impl EditorWindow {
             return;
         };
         self.apply_history(config, window, cx);
+        self.refresh_presets_menu_look();
         self.note_edit("redo", None);
     }
 

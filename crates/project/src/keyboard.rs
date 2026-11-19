@@ -1014,6 +1014,9 @@ const SHORTCUT_REPEAT_MS: f64 = 2000.0;
 /// goes down, and stops a moment before the next one shows.
 const SHORTCUT_LEAD_MS: f64 = 100.0;
 const SHORTCUT_GAP_MS: f64 = 120.0;
+/// However close the next shortcut, a label stays this long after its last
+/// press, and the next one waits for it.
+const SHORTCUT_MIN_VISIBLE_MS: f64 = 250.0;
 /// Plain keys this close together are someone typing, not single-key
 /// shortcuts.
 const TYPING_GAP_MS: f64 = 1000.0;
@@ -1118,12 +1121,13 @@ pub fn group_shortcuts(
             last_press_ms = press.time_ms;
             continue;
         }
-        let start = ((press.time_ms - SHORTCUT_LEAD_MS) / 1000.0).max(0.0);
+        let mut start = ((press.time_ms - SHORTCUT_LEAD_MS) / 1000.0).max(0.0);
         if let Some(previous) = segments.last_mut() {
             previous.end = previous
                 .end
                 .min(start - SHORTCUT_GAP_MS / 1000.0)
-                .max(previous.start);
+                .max((last_press_ms + SHORTCUT_MIN_VISIBLE_MS) / 1000.0);
+            start = start.max(previous.end);
         }
         segments.push(KeyboardTrackSegment {
             id: format!("kb-{}", segments.len() + 1),
@@ -1132,7 +1136,7 @@ pub fn group_shortcuts(
             display_text: press.display,
             keys: vec![KeyPressDisplay {
                 key: press.key,
-                time_offset: press.time_ms - start * 1000.0,
+                time_offset: (press.time_ms - start * 1000.0).max(0.0),
             }],
             fade_duration_override: None,
             position_override: None,
@@ -1228,6 +1232,18 @@ mod tests {
         let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
         assert_eq!(segments.len(), 2);
         assert!((segments[0].end - (1.5 - 0.12)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn shortcuts_pressed_in_quick_succession_each_get_their_moment() {
+        let mut presses = Vec::new();
+        presses.extend(shortcut(&["LMeta"], "c", 1000.0));
+        presses.extend(shortcut(&["LMeta"], "v", 1200.0));
+        let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
+        assert_eq!(segments.len(), 2);
+        assert!((segments[0].end - 1.25).abs() < 1e-9, "{}", segments[0].end);
+        assert!(segments[1].start >= segments[0].end);
+        assert!(segments[1].end > segments[1].start);
     }
 
     #[test]
