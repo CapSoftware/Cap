@@ -53,6 +53,9 @@ struct Draw {
     crop: [f32; 4],
     target: [f32; 4],
     preserve_alpha: bool,
+    motion_blur: [f32; 2],
+    // Enhance quality's 8-tap filter (`enhance_params.y`).
+    detail: bool,
 }
 
 fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
@@ -104,6 +107,13 @@ fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
         rounding_px: 0.0,
         corner_radii: [0.0; 4],
         preserve_source_alpha: if draw.preserve_alpha { 1.0 } else { 0.0 },
+        motion_blur_vector: draw.motion_blur,
+        motion_blur_params: if draw.motion_blur == [0.0; 2] {
+            [0.0; 4]
+        } else {
+            [1.0, 1.0, 0.0, 0.0]
+        },
+        enhance_params: [0.0, if draw.detail { 1.0 } else { 0.0 }, 0.0, 0.0],
         ..Default::default()
     };
     let frame_view = frame.create_view(&Default::default());
@@ -189,6 +199,8 @@ fn full_frame_draw(source: &Source, output: [u32; 2]) -> Draw {
         crop: [0.0, 0.0, source.width as f32, source.height as f32],
         target: [0.0, 0.0, output[0] as f32, output[1] as f32],
         preserve_alpha: false,
+        motion_blur: [0.0; 2],
+        detail: false,
     }
 }
 
@@ -293,5 +305,146 @@ fn shrunk_cutout_edges_keep_their_colour() {
     assert!(
         edge_pixels > 0,
         "the shrunk edge should be partly transparent"
+    );
+}
+
+#[test]
+fn heavily_shrunk_stripes_stay_flat() {
+    let Some(gpu) = gpu() else { return };
+    // A 1 px stripe pattern shrunk 3.3x, as a Retina recording in a 720p
+    // export. A 2x2 box of bilinear taps passed about a third of the stripe
+    // contrast as a beat (spread about 62 levels); the turned ring takes it to
+    // about 9.
+    let source = Source::from_fn(330, 99, |x, _| {
+        let v = if x % 2 == 0 { 0 } else { 255 };
+        [v, v, v, 255]
+    });
+    let output = [100, 30];
+    let pixels = render(&gpu, &source, &full_frame_draw(&source, output));
+    let (mean, spread) = luma_spread(&pixels, output[0], 4);
+    assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
+    assert!(spread < 25.0, "spread {spread:.1}");
+}
+
+#[test]
+fn motion_blur_keeps_the_shrink_filter() {
+    let Some(gpu) = gpu() else { return };
+    // Horizontal 1 px stripes shrunk 3.3x and blurred by a horizontal move:
+    // the blur runs along the stripes, so it can't hide aliasing and the
+    // blurred frame has to be as flat as the still one (spread about 9). The
+    // 2x2 box left a beat with a spread of about 60 levels in both.
+    let source = Source::from_fn(330, 99, |_, y| {
+        let v = if y % 2 == 0 { 0 } else { 255 };
+        [v, v, v, 255]
+    });
+    let output = [100, 30];
+    let still = render(&gpu, &source, &full_frame_draw(&source, output));
+    let moving = render(
+        &gpu,
+        &source,
+        &Draw {
+            motion_blur: [0.02, 0.0],
+            ..full_frame_draw(&source, output)
+        },
+    );
+    let (_, still_spread) = luma_spread(&still, output[0], 4);
+    let (mean, moving_spread) = luma_spread(&moving, output[0], 4);
+    assert!((mean - 127.5).abs() < 4.0, "mean {mean:.1}");
+    assert!(
+        moving_spread < 25.0,
+        "still {still_spread:.1}, moving {moving_spread:.1}"
+    );
+}
+
+fn text_like(width: u32, height: u32) -> Source {
+    Source::from_fn(width, height, |x, y| {
+        let ink = (x / 3 + y / 5) % 4 == 0 || (x * 7 + y * 3) % 11 < 2;
+        let v = if ink { 30 } else { 230 };
+        [v, v, v, 255]
+    })
+}
+
+#[test]
+fn detail_filter_leaves_large_shrinks_and_their_blur_alone() {
+    let Some(gpu) = gpu() else { return };
+    // 3.3x: past the 2.2x to 2.8x handover, Enhance quality renders exactly
+    // like main, still and with short or long motion smears.
+    let source = text_like(330, 99);
+    let output = [100, 30];
+    for blur in [0.0, 0.002, 0.005, 0.01, 0.02] {
+        let draw = |detail| Draw {
+            motion_blur: [blur, 0.0],
+            detail,
+            ..full_frame_draw(&source, output)
+        };
+        assert_eq!(
+            render(&gpu, &source, &draw(false)),
+            render(&gpu, &source, &draw(true)),
+            "blur {blur}"
+        );
+    }
+}
+
+#[test]
+fn detail_filter_fades_in_from_full_size() {
+    let Some(gpu) = gpu() else { return };
+    let source = text_like(420, 210);
+    let change = |ratio: f32| {
+        let output = [(420.0 / ratio).ceil() as u32, (210.0 / ratio).ceil() as u32];
+        let draw = |detail| Draw {
+            target: [0.0, 0.0, 420.0 / ratio, 210.0 / ratio],
+            detail,
+            ..full_frame_draw(&source, output)
+        };
+        let off = render(&gpu, &source, &draw(false));
+        let on = render(&gpu, &source, &draw(true));
+        let total: u64 = off
+            .iter()
+            .zip(&on)
+            .map(|(a, b)| a.abs_diff(*b) as u64)
+            .sum();
+        total as f64 / off.len() as f64
+    };
+    assert_eq!(change(1.0), 0.0);
+    let steps = [1.005, 1.02, 1.04, 1.06].map(change);
+    assert!(
+        steps.windows(2).all(|pair| pair[0] <= pair[1]),
+        "change should grow towards full strength: {steps:?}"
+    );
+    assert!(
+        steps[0] * 4.0 < steps[3],
+        "a near-1:1 shrink should barely change: {steps:?}"
+    );
+}
+
+#[test]
+fn detail_filter_keeps_sharpness_when_motion_stops() {
+    let Some(gpu) = gpu() else { return };
+    // 2.5x is inside the 2.2x to 2.8x handover, where the still sample is a
+    // partial blend of the 8-tap filter. A smear far under half a pixel has to
+    // look like that still frame, not like a softer one.
+    let source = text_like(500, 250);
+    let output = [200, 100];
+    let worst = |detail| {
+        let draw = |blur| Draw {
+            motion_blur: [blur, 0.0],
+            detail,
+            ..full_frame_draw(&source, output)
+        };
+        let still = render(&gpu, &source, &draw(0.0));
+        let settling = render(&gpu, &source, &draw(0.0001));
+        still
+            .iter()
+            .zip(&settling)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0)
+    };
+    // Without the option a near-zero smear already rounds a level or two away
+    // from the still sample; with it, it may not drift further than that.
+    let (plain, detail) = (worst(false), worst(true));
+    assert!(
+        detail <= plain + 1,
+        "largest difference {detail} levels with the filter, {plain} without"
     );
 }

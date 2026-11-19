@@ -21,23 +21,28 @@ interface OSSFriendsResponse {
 	data: OSSFriend[];
 }
 
+// The list comes from a third-party API at build time. If it is unreachable, render an
+// empty list instead of failing the whole deploy; the hourly revalidation refills it.
 async function fetchOSSFriends(): Promise<OSSFriendsResponse> {
-	const response = await fetch("https://formbricks.com/api/oss-friends", {
-		next: { revalidate: 3600 },
-	});
+	try {
+		const response = await fetch("https://formbricks.com/api/oss-friends", {
+			next: { revalidate: 3600 },
+		});
 
-	if (!response.ok) {
-		throw new Error("Failed to fetch OSS friends");
+		if (!response.ok) {
+			throw new Error(`OSS friends request failed with ${response.status}`);
+		}
+
+		const data = await response.json();
+
+		return {
+			...data,
+			data: data.data.filter((friend: any) => friend.name !== "Cap"),
+		};
+	} catch (error) {
+		console.error("Failed to fetch OSS friends", error);
+		return { data: [] };
 	}
-
-	const data = await response.json();
-
-	const filteredData = {
-		...data,
-		data: data.data.filter((friend: any) => friend.name !== "Cap"),
-	};
-
-	return filteredData;
 }
 
 export default async function OSSFriends() {

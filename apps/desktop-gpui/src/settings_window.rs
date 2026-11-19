@@ -2925,6 +2925,14 @@ impl SettingsWindow {
                 .flex_shrink_0()
                 .rounded(px(4.))
                 .bg(theme.gray_10)
+                .when(row.item.audio_only, |this| {
+                    this.flex().items_center().justify_center().child(
+                        gpui::svg()
+                            .path("icons/microphone.svg")
+                            .size(px(18.))
+                            .text_color(theme.gray_1),
+                    )
+                })
                 .into_any_element(),
         };
 
@@ -5290,6 +5298,7 @@ mod tests {
             sharing: None,
             sort_time_millis: 0.,
             thumbnail: None,
+            audio_only: false,
         }
     }
 

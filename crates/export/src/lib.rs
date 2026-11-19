@@ -1,3 +1,5 @@
+pub mod audio;
+pub mod audio_project;
 pub mod estimates;
 pub mod gif;
 pub mod mov;
@@ -69,6 +71,7 @@ pub struct ExporterBuilder {
     config: Option<ProjectConfiguration>,
     output_path: Option<PathBuf>,
     force_ffmpeg_decoder: bool,
+    screen_enhancement: Option<bool>,
 }
 
 impl ExporterBuilder {
@@ -84,6 +87,14 @@ impl ExporterBuilder {
 
     pub fn with_force_ffmpeg_decoder(mut self, force: bool) -> Self {
         self.force_ffmpeg_decoder = force;
+        self
+    }
+
+    /// Enhances the screen recording in this export (the export page's
+    /// option). Without it a config passed to `with_config` keeps its own
+    /// choice; a project loaded from disk is never enhanced.
+    pub fn with_screen_enhancement(mut self, enhance: bool) -> Self {
+        self.screen_enhancement = Some(enhance);
         self
     }
 
@@ -123,6 +134,13 @@ impl ExporterBuilder {
 
         cap_editor::release_playback_audio_caches();
         let mut project_config = self.load_project_config()?;
+        if let Some(enhance) = self.screen_enhancement {
+            project_config.screen_enhancement = if enhance {
+                cap_project::ScreenEnhancement::on()
+            } else {
+                Default::default()
+            };
+        }
 
         let recording_meta =
             RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
@@ -198,6 +216,20 @@ impl ExporterBuilder {
             .await
             .map_err(Error::RendererSetup)?,
         );
+        if studio_meta.is_audio_only()
+            && project_config
+                .audio_visuals
+                .as_ref()
+                .is_some_and(|visuals| visuals.enabled)
+        {
+            let levels = Box::pin(load_audio_levels(
+                recording_meta.clone(),
+                studio_meta.clone(),
+                cancellation.clone().unwrap_or_default(),
+            ))
+            .await?;
+            render_constants.set_audio_levels(Some(Arc::new(levels)));
+        }
 
         let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
@@ -273,6 +305,22 @@ impl ExporterBuilder {
             turbo_chunk_failure: None,
         })
     }
+}
+
+// Boxed at the call site: this runs only for audio-only exports with visuals,
+// and keeping its state off `build_inner`'s future keeps every other export's
+// future as small as it was.
+async fn load_audio_levels(
+    recording: RecordingMeta,
+    studio: StudioRecordingMeta,
+    cancel: Arc<AtomicBool>,
+) -> Result<cap_rendering::AudioLevels, ExporterBuildError> {
+    tokio::task::spawn_blocking(move || {
+        cap_editor::compute_audio_levels(&recording, &studio, &cancel)
+    })
+    .await
+    .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?
+    .map_err(ExporterBuildError::MediaLoad)
 }
 
 async fn finish_audio_preparation(
@@ -556,6 +604,7 @@ impl ExporterBase {
             config: None,
             output_path: None,
             force_ffmpeg_decoder: false,
+            screen_enhancement: None,
         }
     }
 }
@@ -895,9 +944,12 @@ mod clip_offset_tests {
                     cursor: None,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 }],
                 cursors: Cursors::default(),
                 status: None,
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         }
     }
