@@ -411,7 +411,8 @@ impl FFmpegDecoder {
             DecoderInput::Segmented(open_fragmented_input(&path)?)
         } else {
             DecoderInput::File(
-                ffmpeg::format::input(&path).map_err(|e| format!("open file / {e}"))?,
+                cap_enc_ffmpeg::decode_limit::open_input(&path)
+                    .map_err(|e| format!("open file / {e}"))?,
             )
         };
 
@@ -471,6 +472,13 @@ impl FFmpegDecoder {
                 (*parameters).height.max(0) as u32,
             )
         };
+        if let Some(limit) = cap_enc_ffmpeg::decode_limit::decode_pixel_limit()
+            && i64::from(width) * i64::from(height) > limit
+        {
+            return Err(format!(
+                "video is {width}x{height}, above the {limit}-pixel decode limit"
+            ));
+        }
 
         // avcodec_open2, which `.video()` calls, reads the thread settings, so
         // software threading must be configured on the unopened decoder.
@@ -478,6 +486,7 @@ impl FFmpegDecoder {
             let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
                 .map_err(|e| format!("decoder context / {e}"))?
                 .decoder();
+            cap_enc_ffmpeg::decode_limit::apply_decode_pixel_limit(&mut decoder);
             if software_threading {
                 configure_software_threading(&mut decoder, width, height);
             }
