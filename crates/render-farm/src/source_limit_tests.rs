@@ -1,7 +1,7 @@
 use crate::{ProbeRequest, probe, video};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Mutex, Once,
         atomic::{AtomicUsize, Ordering},
@@ -71,22 +71,30 @@ fn init() {
     });
 }
 
-fn project(fixture: &str) -> tempfile::TempDir {
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn project(display: &str) -> tempfile::TempDir {
+    project_with_mic(display, None)
+}
+
+fn project_with_mic(display: &str, mic: Option<&str>) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(fixture),
-        directory.path().join("display.mp4"),
-    )
-    .unwrap();
+    std::fs::copy(fixture(display), directory.path().join("display.mp4")).unwrap();
+    let mut meta = serde_json::json!({
+        "pretty_name": "Source limit",
+        "display": { "path": "display.mp4", "fps": 30 }
+    });
+    if let Some(mic) = mic {
+        std::fs::copy(fixture(mic), directory.path().join("mic.m4a")).unwrap();
+        meta["audio"] = serde_json::json!({ "path": "mic.m4a" });
+    }
     std::fs::write(
         directory.path().join("recording-meta.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "pretty_name": "Source limit",
-            "display": { "path": "display.mp4", "fps": 30 }
-        }))
-        .unwrap(),
+        serde_json::to_vec(&meta).unwrap(),
     )
     .unwrap();
     std::fs::write(
@@ -202,31 +210,112 @@ fn large_source_under_the_limit_still_renders() {
     );
 }
 
-/// The farm decodes with FFmpeg on Linux. A container can declare a smaller
-/// frame than its stream carries, which the header check cannot see, so the
-/// decoder's own limit has to stop it.
+/// FFmpeg allocates decoded frames outside the Rust heap, so these cases run
+/// in a child process and compare its peak RSS with a small control. One
+/// 8192x8192 frame is about 100 MB.
+const FFMPEG_RSS_BUDGET: u64 = 48 << 20;
+const RSS_CASE: &str = "CAP_RENDER_FARM_RSS_CASE";
+
+#[test]
+fn rss_case_child() {
+    let Ok(case) = std::env::var(RSS_CASE) else {
+        return;
+    };
+    init();
+    let runtime = runtime();
+    match case.as_str() {
+        "probe-small" => {
+            let project = project("small.mp4");
+            runtime
+                .block_on(probe(probe_request(project.path())))
+                .unwrap();
+        }
+        "probe-video-as-mic" => {
+            let project = project_with_mic("small.mp4", Some("understated.mp4"));
+            runtime
+                .block_on(probe(probe_request(project.path())))
+                .unwrap();
+        }
+        "render-small" => {
+            let project = project("small.mp4");
+            runtime
+                .block_on(video::render(video_request(project.path(), [0, 1])))
+                .unwrap();
+        }
+        "render-understated" => {
+            let project = project("understated.mp4");
+            let error = runtime
+                .block_on(video::render(video_request(project.path(), [0, 1])))
+                .err()
+                .expect("render decoded an 8192x8192 stream");
+            let error = format!("{error:#}");
+            assert!(error.contains("8192x8192"), "{error}");
+        }
+        other => panic!("unknown case {other}"),
+    }
+}
+
+#[cfg(unix)]
+fn run_child(case: &str) {
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "source_limit_tests::rss_case_child",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(RSS_CASE, case)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success(), "{case} failed: {status}");
+}
+
+/// Largest peak RSS of any child this process has waited for.
+#[cfg(unix)]
+fn children_peak_rss() -> u64 {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage) },
+        0
+    );
+    let peak = usage.ru_maxrss as u64;
+    if cfg!(target_os = "macos") {
+        peak
+    } else {
+        peak * 1024
+    }
+}
+
+/// Runs `control`, then `case`, and returns (control peak, highest peak so
+/// far), which bounds the case's peak.
+#[cfg(unix)]
+fn peak_rss_against(control: &str, case: &str) -> (u64, u64) {
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    run_child(control);
+    let control = children_peak_rss();
+    run_child(case);
+    (control, children_peak_rss())
+}
+
+#[cfg(unix)]
+#[test]
+fn video_stream_in_an_audio_file_is_not_decoded() {
+    let (control, probed) = peak_rss_against("probe-small", "probe-video-as-mic");
+    assert!(
+        probed < control + FFMPEG_RSS_BUDGET,
+        "probing an 8192x8192 video named mic.m4a peaked at {probed} bytes, {control} without it"
+    );
+}
+
+/// A container can declare a smaller frame than its stream carries, which
+/// the header check cannot see, so the decoder's own limit has to stop it.
 #[cfg(target_os = "linux")]
 #[test]
 fn stream_larger_than_its_container_declares_is_not_decoded() {
-    init();
-    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
-    let project = project("understated.mp4");
-    let runtime = runtime();
-
-    let probed = runtime
-        .block_on(probe(probe_request(project.path())))
-        .unwrap();
-    assert_eq!(probed["total_frames"], 1);
-    let (rendered, peak) =
-        peak_heap_during(|| runtime.block_on(video::render(video_request(project.path(), [0, 1]))));
-
-    let error = format!(
-        "{:#}",
-        rendered.err().expect("render decoded an 8192x8192 stream")
-    );
-    assert!(error.contains("8192x8192"), "{error}");
+    let (control, rendered) = peak_rss_against("render-small", "render-understated");
     assert!(
-        peak < REFUSAL_HEAP_BUDGET,
-        "refusing an 8192x8192 stream grew the heap by {peak} bytes"
+        rendered < control + FFMPEG_RSS_BUDGET,
+        "refusing an 8192x8192 stream peaked at {rendered} bytes, {control} for a 1080p render"
     );
 }

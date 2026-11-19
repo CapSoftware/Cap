@@ -1698,6 +1698,7 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "ffmpeg-next",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

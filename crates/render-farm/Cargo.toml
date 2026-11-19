@@ -28,6 +28,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3"
 
 [lints]
