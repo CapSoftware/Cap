@@ -278,3 +278,83 @@ fn make_caption_demo_project() {
         eprintln!("{}", serde_json::to_string(&segment.words).unwrap());
     }
 }
+
+/// Short studio recordings shaped like the one users reported: a mono mic
+/// track, near-silent stereo system audio, and a display track that runs on
+/// past the audio. The v1 int8 encoder heard four of the twelve words in one
+/// of these clips; the full model scores a WER of 0.13 on the set.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+#[test]
+#[ignore = "needs CAP_PARAKEET_MODEL (a parakeet-best directory) and ffmpeg"]
+fn recommended_parakeet_hears_short_studio_recordings() {
+    use cap_verify::{
+        audio_code::AudioSource,
+        fixture::{self, AudioTrackSpec, FixtureSpec, SegmentSpec, Timing, VideoTrackSpec},
+    };
+    let model = PathBuf::from(std::env::var("CAP_PARAKEET_MODEL").expect("CAP_PARAKEET_MODEL"));
+    let manifest = Manifest::load(&fixture_dir()).expect("fixture manifest");
+    let mut tally = Tally::default();
+    for clip in manifest
+        .clips
+        .iter()
+        .filter(|clip| clip.id.starts_with("splice"))
+    {
+        let duration = clip.duration + 0.6;
+        let track = |source, channels| AudioTrackSpec {
+            source,
+            sample_rate: 48_000,
+            channels,
+            duration,
+            start_time: 0.0,
+        };
+        let spec = FixtureSpec {
+            name: "short-speech".into(),
+            segments: vec![SegmentSpec {
+                display: VideoTrackSpec::new(640, 360, 30, Timing::Constant { duration }),
+                camera: None,
+                mic: Some(track(AudioSource::Mic, 1)),
+                system_audio: Some(track(AudioSource::System, 2)),
+            }],
+        };
+        let source = fixture::ensure_fixture(&spec, fixture::write_fixture).expect("fixture");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let project = dir.path().join("project.cap");
+        let copy = std::process::Command::new("cp")
+            .arg("-R")
+            .arg(&source)
+            .arg(&project)
+            .status()
+            .expect("cp");
+        assert!(copy.success());
+        let segment = project.join("content/segments/segment-0");
+        let encode = |input: &[&str], channels: &str, output: &str| {
+            let status = std::process::Command::new("ffmpeg")
+                .args(["-loglevel", "error", "-y"])
+                .args(input)
+                .args(["-ar", "48000", "-ac", channels, "-c:a", "libopus"])
+                .arg(segment.join(output))
+                .status()
+                .expect("ffmpeg");
+            assert!(status.success());
+        };
+        let speech = fixture_dir().join(&clip.audio);
+        encode(&["-i", speech.to_str().unwrap()], "1", "audio-input.ogg");
+        let noise = format!("anoisesrc=a=0.00005:seed=1:d={}", clip.duration);
+        encode(&["-f", "lavfi", "-i", &noise], "2", "system_audio.ogg");
+
+        let segments =
+            transcribe_project_first_pass(&project, "best", &model, "en", None, &[duration])
+                .unwrap_or_else(|error| panic!("{}: {error}", clip.id));
+        let words: Vec<CaptionWord> = segments.into_iter().flat_map(|s| s.words).collect();
+        let heard: Vec<&str> = words.iter().map(|word| word.text.as_str()).collect();
+        eprintln!("{}: {}", clip.id, heard.join(" "));
+        assert!(
+            words.len() * 2 >= clip.words.len(),
+            "{}: heard {heard:?}",
+            clip.id
+        );
+        tally.score(&clip.words, &words, TimingTruth::None, None);
+    }
+    eprintln!("WER {:.3}", tally.wer());
+    assert!(tally.wer() <= 0.16, "WER {:.3}", tally.wer());
+}

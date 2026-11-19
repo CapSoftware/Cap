@@ -16,8 +16,10 @@
 //! with a few f32 steps of slack for the request time. The correct answer is
 //! the newest sample whose label is at or before that index
 //! (the frame on screen at `t`); when several samples share that label any of
-//! them is accepted. A request before the first sample is answered with the
-//! first sample.
+//! them is accepted. When `t` lies past the middle of its cell and the sample
+//! labelled with the next index is presented at or before `t`, that sample is
+//! the answer instead (`request_next_frame`). A request before the first
+//! sample is answered with the first sample.
 //!
 //! An answer that is not the grid frame but is the sample on screen at the
 //! exact request time is `grid-rounding`: correct for a seek straight to `t`,
@@ -230,6 +232,46 @@ impl Oracle {
         (oldest, newest)
     }
 
+    /// Inclusive range of acceptable sample indices for a request at
+    /// `time`: the grid answer, or the sample filed under the next index
+    /// when it is already on screen at `time` (`request_next_frame`).
+    fn expect_at(&self, time: f32) -> (usize, usize) {
+        let grid = self.expect(self.index(time));
+        let Some(next) = self.next_index(time) else {
+            return grid;
+        };
+        let first = self.labels.partition_point(|&label| label < next);
+        let after = self.labels.partition_point(|&label| label <= next);
+        let presented = (first..after)
+            .filter(|&sample| super::presented_by(self.secs[sample], time, self.fps))
+            .collect::<Vec<_>>();
+        match presented.last() {
+            Some(_) if presented.len() == after - first => (first, after - 1),
+            // Samples sharing the next index straddle `time`: either answer.
+            Some(&last) => (grid.0, last),
+            None => grid,
+        }
+    }
+
+    /// The next grid index the handle also asks for: only past the middle
+    /// of a cell, and not while the grid answer is a hold of two cells or
+    /// more (past the end of the stream or across a long gap).
+    fn next_index(&self, time: f32) -> Option<u32> {
+        let next = super::request_next_frame(time, self.fps)?;
+        let held = self.labels[self.expect(self.index(time)).1];
+        (held + 2 >= next).then_some(next)
+    }
+
+    /// Grid index the decoder may read up to for a request at `time`.
+    fn reach_index(&self, time: f32) -> u32 {
+        self.next_index(time).unwrap_or_else(|| self.index(time))
+    }
+
+    /// Newest sample the decoder may read up to for a request at `time`.
+    fn reach(&self, time: f32) -> usize {
+        self.expect(self.reach_index(time)).1
+    }
+
     fn last_label(&self) -> u32 {
         *self.labels.last().unwrap()
     }
@@ -312,7 +354,8 @@ fn run_case(case: &Case, runtime: &tokio::runtime::Runtime, trace: bool) -> Outc
         let mut past_end = 0u64;
         for (position, request) in case.requests.iter().enumerate() {
             let index = oracle.index(request.time);
-            let (oldest, newest) = oracle.expect(index);
+            let (oldest, newest) = oracle.expect_at(request.time);
+            let reach = oracle.reach(request.time);
             if previous.is_none_or(|(previous_index, previous_sample)| {
                 index < previous_index
                     || index > previous_index + 2
@@ -322,7 +365,7 @@ fn run_case(case: &Case, runtime: &tokio::runtime::Runtime, trace: bool) -> Outc
             }) {
                 discontinuities += 1;
             }
-            if index > oracle.last_label() {
+            if oracle.reach_index(request.time) > oracle.last_label() {
                 past_end += 1;
             }
             previous = Some((index, newest));
@@ -405,7 +448,7 @@ fn run_case(case: &Case, runtime: &tokio::runtime::Runtime, trace: bool) -> Outc
                 }
             }
             if let Some(&furthest) = vended.iter().max()
-                && furthest as usize > newest.max(got_index) + 1
+                && furthest as usize > reach.max(got_index) + 1
             {
                 note(
                     &mut failures,
@@ -568,7 +611,7 @@ fn shrink(case: &Case, failure: &Failure, runtime: &tokio::runtime::Runtime) -> 
     let needed = best
         .requests
         .iter()
-        .map(|request| oracle.expect(oracle.index(request.time)).1 + 2)
+        .map(|request| oracle.reach(request.time) + 2)
         .max()
         .unwrap_or(1);
     if needed < best.script.frames.len() {
@@ -1476,4 +1519,66 @@ fn avassetreader_stops_reading_only_once_every_request_is_abandoned() {
         );
         assert_eq!(handle.decoder_type(), DecoderType::AVAssetReader);
     });
+}
+
+/// Samples captured off the 60 Hz grid, read by a timeline whose requests
+/// sit 0.98 of a frame into each cell (a trim or stream offset that is not a
+/// whole number of frames). Every answer must be the sample on screen at the
+/// request time: the cursor is drawn at that time, so the frame before it
+/// shows the screen one frame behind the cursor.
+#[test]
+fn answers_track_the_request_time_between_grid_lines() {
+    let runtime = runtime();
+    let mut decoders = vec![Decoder::Ffmpeg];
+    #[cfg(target_os = "macos")]
+    decoders.push(Decoder::Avf);
+    for phase in [0.0, 0.3, 0.5, 0.75, 0.99] {
+        let script = Script {
+            time_base: (1, 90_000),
+            frames: (0..240)
+                .map(|sample| scripted::ScriptFrame {
+                    pts: ((f64::from(sample) + phase) * 1500.0).round() as i64,
+                    keyframe: sample % 12 == 0,
+                })
+                .collect(),
+            last_duration: 1500,
+        };
+        for &decoder in &decoders {
+            for mode in [Mode::Export, Mode::Playback] {
+                let case = Case {
+                    name: format!("between-grid-lines/phase-{phase}"),
+                    seed_index: 0,
+                    seed: 0,
+                    decoder,
+                    mode,
+                    fps: 60,
+                    max_fallback_distance: 4,
+                    script: script.clone(),
+                    requests: (0..200)
+                        .map(|frame| Request {
+                            time: ((f64::from(frame) + 0.98) / 60.0 + 0.5) as f32,
+                            initial: mode == Mode::Playback && frame == 0,
+                        })
+                        .collect(),
+                };
+                let oracle = Oracle::new(&case.script, decoder, case.fps);
+                for request in &case.requests {
+                    let (oldest, newest) = oracle.expect_at(request.time);
+                    let on_screen = oracle.on_screen(request.time);
+                    assert!(
+                        (oldest..=newest).contains(&on_screen),
+                        "phase {phase}: t={} expects {oldest}..={newest}, on screen {on_screen}",
+                        request.time
+                    );
+                }
+                let outcome = run_case(&case, &runtime, false);
+                assert!(
+                    outcome.failures.is_empty(),
+                    "{decoder:?} {mode:?} phase {phase}: {:?}",
+                    outcome.failures
+                );
+                assert_eq!(outcome.requests, case.requests.len());
+            }
+        }
+    }
 }

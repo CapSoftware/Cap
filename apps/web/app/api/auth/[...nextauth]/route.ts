@@ -102,7 +102,11 @@ async function emailCodeLimitResponse(
 	}
 	if (nextauth[0] === "callback") {
 		const query = request.nextUrl.searchParams;
-		const email = normalizeSignInEmail(query.get("email"));
+		const rawEmail = query.get("email");
+		const email = normalizeSignInEmail(rawEmail);
+		if (rawEmail && !email) {
+			return NextResponse.redirect(authErrorUrl("Verification"), 302);
+		}
 		if (
 			!email ||
 			!query.get("token") ||

@@ -823,7 +823,7 @@ async fn probe_media_duration(path: &Path) -> anyhow::Result<Duration> {
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
             .collect();
-        fragments.sort();
+        cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
 
         if fragments.is_empty() {
             return Ok(Duration::ZERO);
@@ -1068,7 +1068,7 @@ fn combine_fragmented_to_file(dir: &Path, output: &Path) -> anyhow::Result<()> {
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
         .collect();
-    fragments.sort();
+    cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut fragments);
 
     let mut combined_data = std::fs::read(&init_segment)?;
     for fragment in &fragments {

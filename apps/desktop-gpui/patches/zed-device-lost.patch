@@ -1,0 +1,193 @@
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index e09e75a..8dd40de 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -97,6 +97,19 @@ struct InProgressConfigure {
+ /// new role. Compositors that send one do so within a frame or two.
+ const REMAP_CONFIGURE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+ 
++/// How long an unmapped window waits before drawing again after a frame that
++/// presented nothing.
++const UNMAPPED_FRAME_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
++
++/// Whether a frame that presented nothing has to be drawn again without a
++/// frame callback. Compositors send those only for a mapped surface, so when
++/// the frame that would have attached the first buffer finds the GPU device
++/// lost, or is spent recovering from that, nothing else asks for the next one
++/// and the window stays invisible for good (GitHub #3946).
++fn unmapped_frame_needs_retry(presented: bool, buffer_attached: bool, render_owed: bool) -> bool {
++    !presented && !buffer_attached && render_owed
++}
++
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ enum VisibilityPhase {
+     Visible,
+@@ -257,6 +270,7 @@ pub struct WaylandWindowState {
+     hovered: bool,
+     pub(crate) force_render_after_recovery: bool,
+     renderer_presented: bool,
++    frame_retry_scheduled: bool,
+     /// A buffer is committed on the surface: it is mapped.
+     buffer_attached: bool,
+     /// The renderer's surface was retired by an unmap and must be recreated
+@@ -827,6 +841,7 @@ impl WaylandWindowState {
+             hovered: false,
+             force_render_after_recovery: false,
+             renderer_presented: false,
++            frame_retry_scheduled: false,
+             buffer_attached: false,
+             surface_retired: false,
+             in_progress_window_controls: None,
+@@ -2310,7 +2325,11 @@ impl PlatformWindow for WaylandWindow {
+             WaylandWindowStatePtr::visibility_sync(&state, transition, true);
+         }
+ 
+-        if state.renderer.needs_redraw() {
++        // A draw that found the device lost presented nothing: the next frame
++        // recovers and has to render even if nothing else changed.
++        if state.renderer.needs_redraw()
++            || (!state.renderer_presented && state.renderer.device_lost())
++        {
+             state.force_render_after_recovery = true;
+         }
+     }
+@@ -2331,7 +2350,33 @@ impl PlatformWindow for WaylandWindow {
+             state.surface.commit();
+         }
+ 
++        let retry = !state.frame_retry_scheduled
++            && unmapped_frame_needs_retry(
++                state.renderer_presented,
++                state.buffer_attached,
++                state.force_render_after_recovery,
++            );
+         state.renderer_presented = false;
++        if retry {
++            state.frame_retry_scheduled = true;
++            let background = state
++                .client
++                .get_client()
++                .borrow()
++                .common
++                .background_executor
++                .clone();
++            let foreground = state.globals.executor.clone();
++            drop(state);
++            let window = self.0.clone();
++            foreground
++                .spawn(async move {
++                    background.timer(UNMAPPED_FRAME_RETRY).await;
++                    window.state.borrow_mut().frame_retry_scheduled = false;
++                    window.frame();
++                })
++                .detach();
++        }
+     }
+ 
+     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+@@ -2771,6 +2816,27 @@ mod tests {
+     }
+ }
+ 
++#[cfg(test)]
++mod unmapped_frame_retry_tests {
++    use super::unmapped_frame_needs_retry;
++
++    #[test]
++    fn a_first_frame_lost_to_gpu_recovery_is_drawn_again() {
++        assert!(unmapped_frame_needs_retry(false, false, true));
++    }
++
++    #[test]
++    fn a_mapped_surface_waits_for_its_frame_callback() {
++        assert!(!unmapped_frame_needs_retry(false, true, true));
++    }
++
++    #[test]
++    fn a_presented_or_idle_frame_is_not_retried() {
++        assert!(!unmapped_frame_needs_retry(true, false, true));
++        assert!(!unmapped_frame_needs_retry(false, false, false));
++    }
++}
++
+ #[cfg(test)]
+ mod retained_visibility_tests {
+     use super::{RetainedVisibility, VisibilityPhase};
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 72ce028..da38590 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -1220,6 +1220,13 @@ impl WgpuRenderer {
+             return false;
+         }
+ 
++        if device_loss_injected() {
++            log::error!("wgpu device lost: injected through GPUI_INJECT_DEVICE_LOSS");
++            self.device_lost
++                .store(true, std::sync::atomic::Ordering::SeqCst);
++            return false;
++        }
++
+         let last_error = self.last_error.lock().unwrap().take();
+         if let Some(error) = last_error {
+             self.failed_frame_count += 1;
+@@ -2275,18 +2282,37 @@ impl WgpuRenderer {
+ 
+             // Drop old resources to release Arc<Device>/Arc<Queue> and GPU resources
+             self.resources = None;
+-            *gpu_context.borrow_mut() = None;
++
++            // The lost context stays in place until its replacement exists,
++            // and the replacement is made on the same instance. NVIDIA's
++            // Vulkan driver cannot have a second instance created and the
++            // first destroyed while Wayland surfaces are in use: the next
++            // surface query or swapchain creation on the survivor calls a
++            // null pointer inside the driver (GitHub #3946). One instance for
++            // the life of the app never runs that teardown, and a failed
++            // attempt retries with it.
++            let (instance, was_software) = match gpu_context.borrow().as_ref() {
++                Some(context) => (
++                    context.instance.clone(),
++                    context.adapter.get_info().device_type == wgpu::DeviceType::Cpu,
++                ),
++                None => (WgpuContext::instance(Box::new(window.clone())), false),
++            };
+ 
+             // Wait briefly for the GPU driver to stabilize, then try to
+             // recreate the context without software renderers. If this fails
+             // the caller should request another frame and retry — the real GPU
+             // may need more time to come back (e.g. after suspend/resume).
++            // A session that was on a software renderer has no GPU to wait
++            // for, and would otherwise never recover.
+             std::thread::sleep(std::time::Duration::from_millis(350));
+ 
+-            let instance = WgpuContext::instance(Box::new(window.clone()));
+             let surface = create_surface(&instance, window_handle.as_raw())?;
+-            let new_context =
+-                WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?;
++            let new_context = if was_software {
++                WgpuContext::new(instance, &surface, self.compositor_gpu)?
++            } else {
++                WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?
++            };
+             *gpu_context.borrow_mut() = Some(new_context);
+             surface
+         } else {
+@@ -2324,6 +2350,17 @@ impl WgpuRenderer {
+     }
+ }
+ 
++/// Test hook: `GPUI_INJECT_DEVICE_LOSS` names a file, and creating that file
++/// makes the next frame end the way a frame does when the driver reports the
++/// device lost. Real losses need a driver fault, which tests cannot ask for.
++fn device_loss_injected() -> bool {
++    static TRIGGER: std::sync::LazyLock<Option<std::path::PathBuf>> =
++        std::sync::LazyLock::new(|| std::env::var_os("GPUI_INJECT_DEVICE_LOSS").map(Into::into));
++    TRIGGER
++        .as_ref()
++        .is_some_and(|trigger| std::fs::remove_file(trigger).is_ok())
++}
++
+ #[cfg(not(target_family = "wasm"))]
+ fn create_surface(
+     instance: &wgpu::Instance,

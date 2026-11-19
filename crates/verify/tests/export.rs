@@ -1443,6 +1443,133 @@ fn crop() {
     common::finish(case);
 }
 
+/// Even padding: the exported screen sits inside the same margin on every
+/// side, a fraction of the screen's shorter side, in auto aspect and inside
+/// a fixed 16:9 frame (where the shorter canvas side sets the margin).
+#[test]
+fn even_padding() {
+    use cap_project::{AspectRatio, PaddingMode};
+    use cap_rendering::{ProjectUniforms, RenderOptions};
+    use cap_verify::{
+        media,
+        video_code::{self, PixelSource},
+    };
+    let spec = catalog::basic(report::tier());
+    let id = case_id(
+        &spec.name,
+        "even-padding",
+        Format::Mp4,
+        30,
+        Decoder::Default,
+    );
+    if !report::selected(&id) {
+        return;
+    }
+    let project = common::project(&spec);
+    let mut case = Case::new(&id);
+    let dir = common::scratch_dir(&id);
+    for (name, aspect) in [("auto", None), ("wide", Some(AspectRatio::Wide))] {
+        let mut config = project.config();
+        config.camera.hide = true;
+        let fixed_aspect = aspect.is_some();
+        config.aspect_ratio = aspect;
+        config.background.padding = 10.0;
+        config.background.padding_mode = PaddingMode::Even;
+        let options = RenderOptions {
+            camera_size: None,
+            screen_size: XY::new(catalog::SCREEN_W, catalog::SCREEN_H),
+            preserve_screen_alpha: false,
+        };
+        let resolution = XY::new(RES.0, RES.1);
+        let expected_size = ProjectUniforms::get_output_size(&options, &config, resolution);
+        let expected = ProjectUniforms::display_offset(&options, &config, resolution).coord;
+        let run = ExportRun {
+            custom_bpp: None,
+            fps: 30,
+            resolution: RES,
+            format: Format::Mp4,
+            decoder: Decoder::Default,
+        };
+        let out = dir.path().join(format!("{name}.mp4"));
+        let path = match common::runtime().block_on(common::export(&project, config, &run, &out)) {
+            Ok(path) => path,
+            Err(e) => {
+                case.problem("error", format!("{name}: export failed: {e}"));
+                continue;
+            }
+        };
+        let mut wrong = Vec::new();
+        let mut sampled = 0usize;
+        let mut index = 0usize;
+        let decoded = media::decode_video(&path, |picture| {
+            let i = index;
+            index += 1;
+            if i % common::LAYOUT_SAMPLE_EVERY != 0 {
+                return;
+            }
+            sampled += 1;
+            let view = picture.view();
+            let size = (view.width() as u32, view.height() as u32);
+            if size != expected_size {
+                wrong.push(format!(
+                    "frame {i}: {size:?}, layout says {expected_size:?}"
+                ));
+                return;
+            }
+            let Some(region) = video_code::locate_region(&view, video_code::StreamKind::Screen)
+            else {
+                wrong.push(format!("frame {i}: no screen region"));
+                return;
+            };
+            let margins = [
+                region.x0,
+                region.y0,
+                f64::from(size.0) - region.x1,
+                f64::from(size.1) - region.y1,
+            ];
+            let shorter = margins[1].min(margins[3]);
+            let uneven = if !fixed_aspect {
+                // Same margin on every side, give or take the output's
+                // even-dimension rounding.
+                margins.iter().any(|m| (m - shorter).abs() > 3.0)
+            } else {
+                // The frame's height binds: equal top and bottom, the rest
+                // centred across.
+                (margins[1] - margins[3]).abs() > 2.0 || (margins[0] - margins[2]).abs() > 2.0
+            };
+            let misplaced =
+                (margins[0] - expected.x).abs() > 2.0 || (margins[1] - expected.y).abs() > 2.0;
+            if uneven || misplaced {
+                wrong.push(format!(
+                    "frame {i}: margins l/t/r/b {:.1}/{:.1}/{:.1}/{:.1}, layout puts the screen at ({:.1}, {:.1})",
+                    margins[0], margins[1], margins[2], margins[3], expected.x, expected.y
+                ));
+            }
+        });
+        if let Err(e) = decoded {
+            case.problem("error", format!("{name}: decode: {e:?}"));
+        }
+        if sampled == 0 {
+            case.problem("layout", format!("{name}: no frames sampled"));
+        } else if wrong.is_empty() {
+            case.note(format!(
+                "{name}: {sampled} frames, {}x{} with the screen at ({:.1}, {:.1})",
+                expected_size.0, expected_size.1, expected.x, expected.y
+            ));
+        } else {
+            case.problem(
+                "layout",
+                format!(
+                    "{name}: {} of {sampled} sampled frames: {}",
+                    wrong.len(),
+                    wrong[..wrong.len().min(3)].join("; ")
+                ),
+            );
+        }
+    }
+    common::finish(case);
+}
+
 /// Audio of a Studio project recorded through the real recording pipeline:
 /// every marker the synthetic mic and loopback system audio emitted (at a
 /// known time on the same clock as the screen frames) must be heard once in
@@ -1714,6 +1841,7 @@ fn camera_blur_and_captions(config: &mut ProjectConfiguration) {
                 end: segment.end as f32,
                 text: segment.text.clone(),
                 words: Vec::new(),
+                recording_clip: None,
             })
             .collect(),
         settings: cap_project::CaptionSettings {

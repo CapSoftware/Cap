@@ -57,7 +57,21 @@ fn encode_track(
     width: u32,
     height: u32,
     fps: u32,
+    noise: u32,
+) -> Vec<PathBuf> {
+    encode_track_at_phase(root, track, width, height, fps, noise, 0.0)
+}
+
+/// Frames after the first are presented `phase` of a frame after their grid
+/// line, like capture timestamps that do not sit on the grid.
+fn encode_track_at_phase(
+    root: &Path,
+    track: &str,
+    width: u32,
+    height: u32,
+    fps: u32,
     mut noise: u32,
+    phase: f64,
 ) -> Vec<PathBuf> {
     let directory = root.join(track);
     let mut encoder = SegmentedVideoEncoder::init(
@@ -89,7 +103,11 @@ fn encode_track(
         encoder
             .queue_frame(
                 frame,
-                Duration::from_micros(index * 1_000_000 / u64::from(fps)),
+                Duration::from_secs_f64(if index == 0 {
+                    0.0
+                } else {
+                    (index as f64 + phase) / f64::from(fps)
+                }),
             )
             .unwrap();
     }
@@ -120,13 +138,18 @@ fn finalize_track(root: &Path, paths: &[PathBuf], output: &Path) {
 }
 
 fn fixture(svg: bool) -> Fixture {
+    fixture_with_display_phase(svg, 0.0)
+}
+
+fn fixture_with_display_phase(svg: bool, display_phase: f64) -> Fixture {
     ffmpeg::init().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let original = directory.path().join("original");
     let reference = directory.path().join("reference");
     std::fs::create_dir(&original).unwrap();
     std::fs::create_dir(&reference).unwrap();
-    let display = encode_track(&original, "display", 160, 120, 30, 123456789);
+    let display =
+        encode_track_at_phase(&original, "display", 160, 120, 30, 123456789, display_phase);
     let camera = encode_track(&original, "camera", 80, 80, 24, 987654321);
     finalize_track(&original, &display, &reference.join("display.mp4"));
     finalize_track(&original, &camera, &reference.join("camera.mp4"));
@@ -370,7 +393,12 @@ async fn ordinary_composed_frames(
             )
             .await
             .unwrap();
-        let timeline = cache.get(segment.recording_clip, &fixture.cursor, &fixture.project);
+        let timeline = cache.get(
+            segment.recording_clip,
+            &fixture.cursor,
+            &cap_rendering::HoverChanges::default(),
+            &fixture.project,
+        );
         let mut zoom = ZoomTransformTimeline::from_project_for_clip(
             &fixture.project,
             &fixture.cursor,
@@ -873,6 +901,34 @@ async fn native_preparing_png_cursor_zoom_camera_and_relocation_match_finalized_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_preparing_svg_cursor_zoom_camera_and_relocation_match_finalized_render() {
     composed_parity(fixture(true), &[0, 45, 12, 90]).await;
+}
+
+/// Display samples 0.75 of a frame after each grid line, read 0.98 of a
+/// frame into each cell (a mic that starts 0.266 s after the display puts
+/// the screen 7.98 frames in): every request takes the sample filed under
+/// the next grid index, in the preparing preview as in the finished editor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_preparing_reads_samples_between_grid_lines_like_the_finalized_editor() {
+    let mut fixture = fixture_with_display_phase(false, 0.75);
+    let screen_offset = 0.266;
+    for metadata in [&mut fixture.metadata, &mut fixture.reference_metadata] {
+        let cap_project::RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+            panic!("Studio metadata expected");
+        };
+        let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+            panic!("Indexed metadata expected");
+        };
+        inner.segments[0].mic.as_mut().unwrap().start_time = Some(screen_offset);
+    }
+    let frames = [0, 45, 12, 90];
+    for frame in frames {
+        let display_time = (f64::from(frame) / 30.0 + screen_offset) as f32;
+        assert!(
+            cap_rendering::decoder::request_next_frame(display_time, 30).is_some(),
+            "frame {frame} must read past the middle of its cell"
+        );
+    }
+    composed_parity(fixture, &frames).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1705,4 +1761,155 @@ async fn native_studio_sound_releases_preparing_audio_and_preserves_transport() 
         .unwrap();
         candidate.dispose().await;
     }
+}
+
+/// A project without hover anchors never pays for hover analysis: no analysis
+/// thread, nothing decoded and no cache written, however long the editor is
+/// open and idle. Turning the setting on starts it on the next preview.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hover_analysis_never_starts_until_hover_anchors_are_turned_on() {
+    let fixture = fixture(false);
+    let root = fixture.directory.path().join("finished.cap");
+    std::fs::create_dir(&root).unwrap();
+    let display = root.join("display.mp4");
+    finalize_track(&fixture.metadata.project_path, &fixture.display, &display);
+    let mut metadata = fixture.metadata.clone();
+    metadata.project_path = root.clone();
+    let cap_project::RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+        panic!("Studio metadata expected");
+    };
+    let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+        panic!("Indexed metadata expected");
+    };
+    inner.segments[0].display.path = "display.mp4".into();
+    inner.segments[0].camera = None;
+    inner.segments[0].mic = None;
+    inner.status = Some(cap_project::StudioRecordingStatus::Complete);
+    metadata.save_for_project().unwrap();
+    let cache = root.join("cursor-hover.json");
+    let opened = || {
+        crate::hover_analysis::OPENED_FOR_TEST
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&display)
+    };
+    let mut project = fixture.project.clone();
+    project.cursor.interaction_anchors = true;
+    project.cursor.hover_anchors = false;
+    project.camera.hide = true;
+    project.write(&root).unwrap();
+
+    let editor = crate::EditorInstance::new_with_audio_output(
+        root.clone(),
+        |_| {},
+        Box::new(|_, _| {}),
+        None,
+        Arc::new(crate::AudioOutput::new_headless(Box::new(|_, _| {}))),
+    )
+    .await
+    .unwrap();
+    for frame in [0, 15, 30, 45] {
+        editor
+            .preview_tx
+            .send(Some((frame, 30, XY::new(160, 120))))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Well past the idle second after which an opted-in project would start.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(!editor.hover_analysis_started());
+    assert!(!opened());
+    assert!(!cache.exists());
+
+    editor
+        .project_config
+        .0
+        .send_modify(|project| project.cursor.hover_anchors = true);
+    editor
+        .preview_tx
+        .send(Some((0, 30, XY::new(160, 120))))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !cache.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("hover analysis never saved its result");
+    assert!(editor.hover_analysis_started());
+    assert!(opened());
+    editor.dispose().await;
+}
+
+/// A paused frame is drawn again from the kept source video once it settles,
+/// including a seek past the last playable frame, which the preview clamps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_settled_frame_reads_the_kept_source_after_a_seek_to_the_end() {
+    let fixture = fixture(false);
+    let root = fixture.directory.path().join("kept.cap");
+    std::fs::create_dir(&root).unwrap();
+    let display = root.join("display.mp4");
+    finalize_track(&fixture.metadata.project_path, &fixture.display, &display);
+    let source = fixture.directory.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let source_track = encode_track(&source, "display", 160, 120, 30, 42);
+    finalize_track(
+        &source,
+        &source_track,
+        &cap_rendering::source_video_path(&display),
+    );
+    let mut metadata = fixture.metadata.clone();
+    metadata.project_path = root.clone();
+    let cap_project::RecordingMetaInner::Studio(studio) = &mut metadata.inner else {
+        panic!("Studio metadata expected");
+    };
+    let cap_project::StudioRecordingMeta::MultipleSegments { inner } = studio.as_mut() else {
+        panic!("Indexed metadata expected");
+    };
+    inner.segments[0].display.path = "display.mp4".into();
+    inner.segments[0].camera = None;
+    inner.segments[0].mic = None;
+    inner.status = Some(cap_project::StudioRecordingStatus::Complete);
+    metadata.save_for_project().unwrap();
+    let mut project = fixture.project.clone();
+    project.camera.hide = true;
+    project.write(&root).unwrap();
+
+    let frames = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let sink = frames.clone();
+    let editor = crate::EditorInstance::new_with_audio_output(
+        root.clone(),
+        |_| {},
+        Box::new(move |output, _| {
+            if let crate::editor::EditorFrameOutput::Rgba(frame) = output {
+                sink.lock().unwrap().push(visible_rgba(&frame));
+            }
+        }),
+        None,
+        Arc::new(crate::AudioOutput::new_headless(Box::new(|_, _| {}))),
+    )
+    .await
+    .unwrap();
+
+    let end = editor.get_total_frames(30);
+    for frame in [15, end] {
+        frames.lock().unwrap().clear();
+        editor
+            .preview_tx
+            .send(Some((frame, 30, XY::new(160, 120))))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while frames.lock().unwrap().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("frame {frame} was never drawn again from the kept source"));
+        let frames = frames.lock().unwrap();
+        assert_ne!(
+            frames[0], frames[1],
+            "frame {frame}: the settled frame should come from the kept source"
+        );
+    }
+    editor.dispose().await;
 }

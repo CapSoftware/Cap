@@ -1,0 +1,206 @@
+.doodle {
+	display: block;
+	flex-shrink: 0;
+	overflow: visible;
+}
+
+.ink {
+	fill: none;
+	stroke: var(--gray-12);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.soft {
+	fill: none;
+	stroke: var(--gray-8);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.track {
+	fill: none;
+	stroke: var(--gray-5);
+	stroke-linecap: round;
+}
+
+.accent {
+	fill: none;
+	stroke: var(--doodle-accent, #4785ff);
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.accentFill {
+	fill: var(--doodle-accent, #4785ff);
+}
+
+.paperFill {
+	fill: var(--gray-1);
+}
+
+.label {
+	fill: var(--gray-12);
+	font-weight: 700;
+}
+
+.draw {
+	stroke-dasharray: 1;
+	stroke-dashoffset: 1;
+	animation: draw var(--t, 0.7s) ease var(--d, 0s) forwards;
+}
+
+.pop {
+	opacity: 0;
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: pop 0.5s ease var(--d, 0s) forwards;
+}
+
+.meterFill {
+	stroke-dasharray: var(--fill, 0) 1;
+	animation: meter 0.9s ease 0.15s backwards;
+	transition: stroke-dasharray 0.45s ease;
+}
+
+.float {
+	animation: float 3.2s ease-in-out 1.2s infinite;
+}
+
+.march {
+	stroke-dasharray: 2 5;
+	animation: march 1.1s linear infinite;
+}
+
+.host:hover .boil,
+.host:focus-within .boil {
+	filter: url(#settings-doodle-boil);
+}
+
+.host:hover .wiggle,
+.host:focus-within .wiggle {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: wiggle 0.6s ease;
+}
+
+.host:hover .spin,
+.host:focus-within .spin {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: spin 0.7s ease;
+}
+
+.host:hover .hop,
+.host:focus-within .hop {
+	transform-box: fill-box;
+	transform-origin: center bottom;
+	animation: hop 0.55s ease;
+}
+
+@keyframes draw {
+	from {
+		stroke-dashoffset: 1;
+	}
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+
+@keyframes pop {
+	from {
+		opacity: 0;
+		transform: scale(0.2);
+	}
+	60% {
+		opacity: 1;
+		transform: scale(1.15);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes meter {
+	from {
+		stroke-dasharray: 0 1;
+	}
+}
+
+@keyframes float {
+	0%,
+	100% {
+		transform: translate(0, 0) rotate(0);
+	}
+	50% {
+		transform: translate(3px, -4px) rotate(-2deg);
+	}
+}
+
+@keyframes march {
+	to {
+		stroke-dashoffset: -7;
+	}
+}
+
+@keyframes wiggle {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	25% {
+		transform: rotate(-10deg);
+	}
+	60% {
+		transform: rotate(8deg);
+	}
+}
+
+@keyframes spin {
+	from {
+		transform: rotate(0);
+	}
+	to {
+		transform: rotate(180deg);
+	}
+}
+
+@keyframes hop {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	40% {
+		transform: translateY(-3px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.host:hover .boil,
+	.host:focus-within .boil {
+		filter: none;
+	}
+
+	.draw,
+	.pop {
+		animation-duration: 0.01ms;
+		animation-delay: 0s;
+	}
+
+	.meterFill {
+		animation: none;
+		transition: none;
+	}
+
+	.float,
+	.march,
+	.host:hover .wiggle,
+	.host:focus-within .wiggle,
+	.host:hover .spin,
+	.host:focus-within .spin,
+	.host:hover .hop,
+	.host:focus-within .hop {
+		animation: none;
+	}
+}
