@@ -876,7 +876,11 @@ impl Muxer for AVFoundationMp4Muxer {
 struct FrameCopier {
     size: (usize, usize),
     scaler: Option<screen_capture::FrameScaler>,
+    set_up_at: std::time::Instant,
 }
+
+/// How long frames go out uncopied before a failed copier setup is retried.
+const FRAME_COPIER_RETRY: Duration = Duration::from_secs(1);
 
 impl FrameCopier {
     /// The copy, or the original frame if it cannot be copied.
@@ -890,10 +894,22 @@ impl FrameCopier {
         else {
             return sample_buf;
         };
-        if copier.as_ref().is_none_or(|c| c.size != size) {
+        let set_up = copier.as_ref().is_none_or(|c| {
+            c.size != size || (c.scaler.is_none() && c.set_up_at.elapsed() >= FRAME_COPIER_RETRY)
+        });
+        if set_up {
+            let scaler = screen_capture::FrameScaler::copier(size.0, size.1);
+            if scaler.is_none() {
+                warn!(
+                    width = size.0,
+                    height = size.1,
+                    "Could not set up the screen frame copy; recording capture frames directly"
+                );
+            }
             *copier = Some(Self {
                 size,
-                scaler: screen_capture::FrameScaler::copier(size.0, size.1),
+                scaler,
+                set_up_at: std::time::Instant::now(),
             });
         }
         copier
@@ -1624,6 +1640,35 @@ mod tests {
             assert_eq!((to.width(), to.height()), (width, height));
             assert_eq!(copy.pts(), source.pts());
         }
+    }
+
+    /// A copier whose setup failed passes frames through, and is set up
+    /// again once the retry interval has passed.
+    #[test]
+    fn failed_copier_setup_is_retried() {
+        let failed = |since: Duration| {
+            Some(FrameCopier {
+                size: (64, 48),
+                scaler: None,
+                set_up_at: std::time::Instant::now().checked_sub(since).unwrap(),
+            })
+        };
+        let source = screen_frame(64, 48, 0);
+
+        let mut copier = failed(Duration::ZERO);
+        let frame = FrameCopier::copy(&mut copier, source.clone());
+        assert!(std::ptr::eq(
+            source.image_buf().unwrap(),
+            frame.image_buf().unwrap()
+        ));
+
+        let mut copier = failed(FRAME_COPIER_RETRY);
+        let frame = FrameCopier::copy(&mut copier, source.clone());
+        assert!(!std::ptr::eq(
+            source.image_buf().unwrap(),
+            frame.image_buf().unwrap()
+        ));
+        assert!(copier.unwrap().scaler.is_some());
     }
 
     /// The writers behind a resumed Studio segment that got no screen frame
