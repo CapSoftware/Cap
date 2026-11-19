@@ -2795,6 +2795,8 @@ impl EditorWindow {
                     self.render_style_group(index, group, cx)
                 } else if self.audio_picker.is_some() {
                     self.render_audio_library(cx)
+                } else if self.key_prompt.is_some() {
+                    self.render_key_prompt(cx)
                 } else {
                     match selection {
                         Some(selection) => self.render_selection_panel(&selection, cx),

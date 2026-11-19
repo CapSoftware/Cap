@@ -20,6 +20,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.tabs.keyboard.type_keys_summary",
     "editor.transcript.captions_save_failed",
     "editor.transcript.fillers.remove_all",
     "editor.transcript.pauses.summary",
@@ -284,19 +285,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::keyboard::type_keys_placeholder(),
             "A sentence, or a shortcut like cmd+k",
         ),
+        (tr::editor::tabs::keyboard::show_as(), "Show As"),
+        (tr::editor::tabs::keyboard::type_keys_button(), "Type Keys…"),
+        (
+            tr::editor::tabs::keyboard::add_to_timeline(),
+            "Add to Timeline",
+        ),
         (
             tr::editor::tabs::keyboard::type_keys_hint(),
-            "Press Enter to show it at the playhead, then type the next.",
+            "Paste a sentence, a script or a transcript, or a shortcut like cmd+shift+p. It types out as key presses from where you opened this.",
         ),
-        (tr::editor::tabs::keyboard::add_keys(), "Add"),
-        (tr::editor::tabs::keyboard::show_as(), "Show As"),
         (tr::editor::tabs::keyboard::split_words(), "Words"),
         (tr::editor::tabs::keyboard::split_keys(), "Keys"),
         (tr::editor::tabs::keyboard::split_sentence(), "Sentence"),
-        (
-            tr::editor::tabs::keyboard::type_keys_as_text(),
-            "This will be typed out. Shortcuts look like cmd+shift+p.",
-        ),
         (tr::editor::tabs::keyboard::theme_light(), "Light"),
         (tr::editor::tabs::keyboard::theme_dark(), "Dark"),
         (tr::editor::tabs::keyboard::theme_retro(), "Retro"),

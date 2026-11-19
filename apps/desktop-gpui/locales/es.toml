@@ -2908,7 +2908,7 @@ smooth = "Suave"
 smooth_description = "Movimiento suave y flotante"
 
 [editor.tabs.keyboard]
-add_keys = "Añadir"
+add_to_timeline = "Añadir a la línea de tiempo"
 animation = "Animación"
 background_color = "Color de fondo"
 background_opacity = "Opacidad del fondo"
@@ -2953,9 +2953,10 @@ timeline_unavailable = "La línea de tiempo del proyecto no está disponible."
 timeline_unreadable = "No se pudo leer la línea de tiempo del proyecto."
 title = "Mostrar teclado"
 type_keys = "Escribir teclas"
-type_keys_as_text = "Se escribirá tal cual. Los atajos se escriben así: cmd+shift+p."
-type_keys_hint = "Pulsa Intro para mostrarlo en el cabezal y escribe el siguiente."
+type_keys_button = "Escribir teclas…"
+type_keys_hint = "Pega una frase, un guion o una transcripción, o un atajo como cmd+shift+p. Se escribe como pulsaciones desde donde abriste esto."
 type_keys_placeholder = "Una frase o un atajo como cmd+k"
+type_keys_summary = "Unos {seconds} s de escritura"
 uppercase = "Mayúsculas"
 
 [editor.tabs.padding]

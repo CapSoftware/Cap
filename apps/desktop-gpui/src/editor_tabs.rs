@@ -528,6 +528,12 @@ fn key_preview(
         .into_any_element()
 }
 
+/// What was pasted into Type Keys as one line: a script's line breaks and
+/// runs of spaces become single spaces.
+pub(crate) fn key_prompt_text(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub static CAPTION_PRESETS: &[CaptionPreset] = &[
     // New captions start here: see `CaptionSettings::default`.
     CaptionPreset {
@@ -3267,7 +3273,16 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
-            .child(self.render_key_composer(cx))
+            // Typing keys onto the video opens its own panel.
+            .child(
+                ui::EditorButton::plain(&theme, "keyboard-type-keys")
+                    .left_icon("icons/keyboard.svg")
+                    .label(tr::editor::tabs::keyboard::type_keys_button())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let at = this.playhead;
+                        this.open_key_prompt(at, window, cx);
+                    })),
+            )
             .child(body)
             .into_any_element()
     }
@@ -3366,8 +3381,8 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// How the composer shows a sentence: a key per word (the default, and
-    /// the most like watching someone type), a key per keystroke, or whole.
+    /// How a typed sentence shows: a key per word (the default, and the most
+    /// like watching someone type), a key per keystroke, or whole.
     fn render_typing_split(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let current = keyboard_settings(&self.project).typing_split;
@@ -3404,11 +3419,11 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// Type a sentence or a shortcut and press Enter: it shows at the
-    /// playhead, sized to be typed and read, and the playhead moves on so
-    /// the next entry follows. The fastest way to put keys on a video made
-    /// without a recording.
-    fn render_key_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The Type Keys panel, in place of the sidebar while it is open: paste a
+    /// sentence, a script or a transcript, or a shortcut like cmd+shift+p,
+    /// and Add turns it into key presses on the timeline, typed out from
+    /// where the panel was opened.
+    pub(crate) fn render_key_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let Some(input) = self
             .field(crate::editor_panels::FieldKey::KeyComposer)
@@ -3416,112 +3431,111 @@ impl EditorWindow {
         else {
             return div().into_any_element();
         };
-        let typed = input.read(cx).text().to_string();
+        let typed = cap_project::manual_key_text(&key_prompt_text(input.read(cx).text()));
         let has_text = !typed.trim().is_empty();
+        let split = keyboard_settings(&self.project).typing_split;
+        let runs = cap_project::manual_key_runs(&typed, &split);
+        let seconds = runs.last().map_or(0.0, |run| run.offset + run.length);
         let add_input = input.clone();
-        // What Enter will add, drawn as it will show: a shortcut as its keys,
-        // anything else typed out on one long key.
-        let preview = has_text.then(|| {
-            use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
-            let settings = keyboard_settings(&self.project);
-            let effective = self.effective_key_style(&settings).to_string();
-            let style = match KeycapStyle::from_setting(&effective) {
-                KeycapStyle::Classic => KeycapStyle::MacOs,
-                style => style,
-            };
-            let theme_keys = KeycapTheme::from_setting(&settings.theme);
-            let text = cap_project::manual_key_text(&typed);
-            let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃' | '⇧'))
-                && text.chars().count() <= 6;
-            let labels: Vec<String> = if shortcut {
-                cap_rendering::keycaps::keycaps_for(&text, style)
-                    .into_iter()
-                    .map(|cap| match (cap.label.is_empty(), cap.legend) {
-                        (false, _) => cap.label,
-                        (true, Some(word)) => word,
-                        (true, None) => "\u{2423}".to_string(),
-                    })
-                    .collect()
-            } else {
-                let mut shown: String = text.chars().take(28).collect();
-                if text.chars().count() > 28 {
-                    shown.push('\u{2026}');
-                }
-                vec![shown]
-            };
-            let keys: Vec<&str> = labels.iter().map(String::as_str).collect();
-            // A `+` that did not make a shortcut is most likely a typo in one.
-            let looks_like_shortcut = !shortcut && typed.contains('+');
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .child(key_preview(style, theme_keys, &keys))
-                .when(looks_like_shortcut, |this| {
-                    this.child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
-                            .child(tr::editor::tabs::keyboard::type_keys_as_text()),
-                    )
-                })
-        });
-        ui::Field::section(&theme, tr::editor::tabs::keyboard::type_keys())
+        div()
+            .id("key-prompt")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p(px(16.))
+            .gap(px(16.))
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .flex_row()
+                    .items_center()
                     .gap(px(8.))
                     .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(8.))
-                            .items_center()
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    ui::TextInput::plain(&theme, "key-composer", &input)
-                                        .flex(true)
-                                        .padding_x(px(12.))
-                                        .text_size(px(14.))
-                                        .height(px(36.))
-                                        .bg(Hsla::from(theme.gray_2))
-                                        .border(Hsla::from(theme.editor.line)),
-                                ),
-                            )
-                            .child(
-                                ui::Button::plain(
-                                    &theme,
-                                    "key-composer-add",
-                                    ui::ButtonVariant::Blue,
-                                    ui::ButtonSize::Sm,
-                                )
-                                .label(tr::editor::tabs::keyboard::add_keys())
-                                .height(px(36.))
-                                .disabled(!has_text)
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        let text = add_input.read(cx).text().to_string();
-                                        if this.add_typed_keys(&text, window, cx) {
-                                            add_input
-                                                .update(cx, |input, cx| input.set_text("", cx));
-                                        }
-                                    },
-                                )),
-                            ),
+                        ui::EditorButton::plain(&theme, "key-prompt-close")
+                            .left_icon("icons/x.svg")
+                            .icon_size(px(14.))
+                            .label(tr::common::cancel())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_key_prompt(cx);
+                            })),
                     )
-                    .child(self.render_typing_split(cx))
-                    .map(|this| match preview {
-                        Some(preview) => this.child(preview),
-                        None => this.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(Hsla::from(theme.gray_10))
-                                .child(tr::editor::tabs::keyboard::type_keys_hint()),
-                        ),
-                    }),
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .text_color(Hsla::from(theme.editor.text_1))
+                            .child(tr::editor::tabs::keyboard::type_keys()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .text_color(Hsla::from(theme.gray_10))
+                    .child(tr::editor::tabs::keyboard::type_keys_hint()),
+            )
+            .child(
+                ui::TextInput::plain(&theme, "key-prompt-text", &input)
+                    .flex(true)
+                    .padding_x(px(12.))
+                    .padding_y(px(10.))
+                    .text_size(px(14.))
+                    .height(px(150.))
+                    .bg(Hsla::from(theme.gray_2))
+                    .border(Hsla::from(theme.editor.line)),
+            )
+            .child(self.render_typing_split(cx))
+            .when(has_text, |this| {
+                this.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::keyboard::type_keys_summary(&format!(
+                            "{seconds:.1}"
+                        ))),
+                )
+            })
+            .child(
+                ui::Button::plain(
+                    &theme,
+                    "key-prompt-add",
+                    ui::ButtonVariant::Blue,
+                    ui::ButtonSize::Md,
+                )
+                .label(tr::editor::tabs::keyboard::add_to_timeline())
+                .full_width()
+                .disabled(!has_text)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let text = key_prompt_text(add_input.read(cx).text());
+                    let at = this.key_prompt.unwrap_or(this.playhead);
+                    if this.add_typed_keys(&text, at, window, cx) {
+                        add_input.update(cx, |input, cx| input.set_text("", cx));
+                        this.close_key_prompt(cx);
+                    }
+                })),
             )
             .into_any_element()
+    }
+
+    /// Opens Type Keys, to add key presses from `at` on.
+    pub(crate) fn open_key_prompt(&mut self, at: f64, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selection(None, cx);
+        self.audio_picker = None;
+        self.key_prompt = Some(at);
+        self.ensure_field(crate::editor_panels::FieldKey::KeyComposer, window, cx);
+        if let Some(input) = self
+            .field(crate::editor_panels::FieldKey::KeyComposer)
+            .cloned()
+        {
+            input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_key_prompt(&mut self, cx: &mut Context<Self>) {
+        self.key_prompt = None;
+        cx.notify();
     }
 
     /// A slider with a `text-xs text-right` readout underneath -- the shape the

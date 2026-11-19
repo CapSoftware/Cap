@@ -2908,7 +2908,7 @@ smooth = "स्मूथ"
 smooth_description = "मुलायम, तैरता हुआ मूवमेंट"
 
 [editor.tabs.keyboard]
-add_keys = "जोड़ें"
+add_to_timeline = "टाइमलाइन में जोड़ें"
 animation = "एनिमेशन"
 background_color = "बैकग्राउंड रंग"
 background_opacity = "बैकग्राउंड अपारदर्शिता"
@@ -2953,9 +2953,10 @@ timeline_unavailable = "प्रोजेक्ट टाइमलाइन उ
 timeline_unreadable = "प्रोजेक्ट टाइमलाइन पढ़ी नहीं जा सकी।"
 title = "कीबोर्ड दिखाएँ"
 type_keys = "की टाइप करें"
-type_keys_as_text = "यह वैसे ही टाइप होगा। शॉर्टकट ऐसे लिखें: cmd+shift+p।"
-type_keys_hint = "प्लेहेड पर दिखाने के लिए Enter दबाएँ, फिर अगला लिखें।"
+type_keys_button = "की टाइप करें…"
+type_keys_hint = "कोई वाक्य, स्क्रिप्ट या ट्रांसक्रिप्ट पेस्ट करें, या cmd+shift+p जैसा शॉर्टकट। यह यहीं से की प्रेस के रूप में टाइप होगा।"
 type_keys_placeholder = "कोई वाक्य, या cmd+k जैसा शॉर्टकट"
+type_keys_summary = "लगभग {seconds} से. की टाइपिंग"
 uppercase = "बड़े अक्षर"
 
 [editor.tabs.padding]

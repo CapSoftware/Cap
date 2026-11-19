@@ -2825,7 +2825,10 @@ impl FieldKey {
     }
 
     fn multi_line(self) -> bool {
-        matches!(self, Self::TextContent(_) | Self::CaptionText(_))
+        matches!(
+            self,
+            Self::TextContent(_) | Self::CaptionText(_) | Self::KeyComposer
+        )
     }
 }
 
@@ -3047,14 +3050,11 @@ impl EditorWindow {
                 return;
             };
             match event {
-                ui::TextInputEvent::Confirmed => {
-                    let text = input.read(cx).text().to_string();
-                    if self.add_typed_keys(&text, window, cx) {
-                        input.update(cx, |input, cx| input.set_text("", cx));
-                    }
-                }
+                // A script can run over lines, so Enter is a new line and
+                // the panel's Add button adds it; Escape closes the panel.
+                ui::TextInputEvent::Confirmed => {}
                 ui::TextInputEvent::Cancelled => {
-                    input.update(cx, |input, cx| input.set_text("", cx));
+                    self.close_key_prompt(cx);
                 }
                 // The Add button follows whether there is anything to add.
                 ui::TextInputEvent::Changed => cx.notify(),

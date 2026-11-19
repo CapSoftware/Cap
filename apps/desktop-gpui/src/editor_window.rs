@@ -1975,6 +1975,8 @@ pub struct EditorWindow {
     add_track: Option<AddTrackMenu>,
     add_track_opens: usize,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
+    /// Type Keys is open, to add key presses from this time on.
+    pub(crate) key_prompt: Option<f64>,
     pub(crate) audio_picker_generation: u64,
     pub(crate) audio_import_pending: Option<u64>,
     audio_picker_request: Option<AudioImportRequest>,
@@ -2658,6 +2660,7 @@ impl EditorWindow {
             add_track: None,
             add_track_opens: 0,
             audio_picker: None,
+            key_prompt: None,
             audio_picker_generation: 0,
             audio_import_pending: None,
             audio_picker_request: None,
@@ -4792,6 +4795,7 @@ impl EditorWindow {
                     || self.style_presets.menu_open()
                     || self.clips.has_open_menu()
                     || self.audio_picker.is_some()
+                    || self.key_prompt.is_some()
                     || self.camera3d_picker
                     || self.frame_controls.is_open()
                 {
@@ -4838,6 +4842,10 @@ impl EditorWindow {
                 if self.audio_picker.is_some() {
                     self.audio_picker = None;
                     cx.notify();
+                    return;
+                }
+                if self.key_prompt.is_some() {
+                    self.close_key_prompt(cx);
                     return;
                 }
                 if self.camera3d_picker {
@@ -5562,12 +5570,11 @@ impl EditorWindow {
                         self.view.preview_time = None;
                     }
                 } else if kind == TrackKind::Keyboard {
+                    // Type Keys opens where the track was pressed.
                     cx.stop_propagation();
-                    let length = (1.2_f64).max(secs_per_pixel * 60.);
-                    if self.add_keyboard_at(press_time, length, window, cx) {
-                        self.seek_to_time(press_time, cx);
-                        self.view.preview_time = None;
-                    }
+                    self.seek_to_time(press_time, cx);
+                    self.view.preview_time = None;
+                    self.open_key_prompt(press_time, window, cx);
                 } else if matches!(
                     kind,
                     TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
@@ -7357,31 +7364,7 @@ impl EditorWindow {
         true
     }
 
-    /// Adds a key press by hand at `time`, for a project with no recording
-    /// to take keys from, or a moment the recording missed. It starts as a
-    /// familiar shortcut, selected so its text can be retyped.
-    pub(crate) fn add_keyboard_at(
-        &mut self,
-        time: f64,
-        length: f64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let text = if cfg!(target_os = "macos") {
-            "⌘K"
-        } else {
-            "⌃K"
-        };
-        let runs = [cap_project::ManualKeyRun {
-            text: text.to_string(),
-            offset: 0.0,
-            length,
-        }];
-        self.add_manual_keys(time, &runs, true, window, cx)
-            .is_some()
-    }
-
-    /// Shows what was typed into the Keyboard tab's composer at the playhead,
+    /// Turns what was typed into Type Keys into key presses from `at`,
     /// sized to strike every key and be read, then moves the playhead past
     /// it so the next entry follows on. A sentence pops up a word at a time,
     /// a key at a time, or whole, as the tab's "Show as" says; `cmd+shift+p`
@@ -7389,6 +7372,7 @@ impl EditorWindow {
     pub(crate) fn add_typed_keys(
         &mut self,
         input: &str,
+        at: f64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -7401,7 +7385,7 @@ impl EditorWindow {
         let Some(length) = runs.last().map(|run| run.offset + run.length) else {
             return false;
         };
-        let start = self.playhead_time();
+        let start = at;
         let Some((_, end)) = self.add_manual_keys(start + length / 2.0, &runs, false, window, cx)
         else {
             return false;
@@ -9390,6 +9374,12 @@ impl EditorWindow {
                 self.add_overlay_segment(kind, window, cx);
             }
             TrackKind::Shape => self.add_shape_at_playhead(window, cx),
+            TrackKind::Keyboard => {
+                self.tracks.keyboard = true;
+                self.rebuild_timeline();
+                let at = self.playhead;
+                self.open_key_prompt(at, window, cx);
+            }
             _ => {}
         }
         cx.notify();
@@ -9953,6 +9943,10 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if spec == "type-keys" {
+            self.open_key_prompt(0.0, window, cx);
+            return;
+        }
         self.open_add_track(window, cx);
         let kind = match spec {
             "style" => TrackKind::Style,

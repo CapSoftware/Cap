@@ -2908,7 +2908,7 @@ smooth = "なめらか"
 smooth_description = "柔らかく浮遊するような動き"
 
 [editor.tabs.keyboard]
-add_keys = "追加"
+add_to_timeline = "タイムラインに追加"
 animation = "アニメーション"
 background_color = "背景色"
 background_opacity = "背景の不透明度"
@@ -2953,9 +2953,10 @@ timeline_unavailable = "プロジェクトのタイムラインを利用でき�
 timeline_unreadable = "プロジェクトのタイムラインを読み込めませんでした。"
 title = "キーボードを表示"
 type_keys = "キーを入力"
-type_keys_as_text = "このまま入力されます。ショートカットは cmd+shift+p のように書きます。"
-type_keys_hint = "Enter で再生位置に表示し、続けて次を入力します。"
+type_keys_button = "キーを入力…"
+type_keys_hint = "文章、台本、文字起こし、または cmd+shift+p のようなショートカットを貼り付けます。ここからキー入力として打ち込まれます。"
 type_keys_placeholder = "文章、または cmd+k のようなショートカット"
+type_keys_summary = "入力は約 {seconds} 秒"
 uppercase = "大文字"
 
 [editor.tabs.padding]

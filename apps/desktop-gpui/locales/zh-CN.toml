@@ -2908,7 +2908,7 @@ smooth = "顺滑"
 smooth_description = "柔软、轻盈的移动"
 
 [editor.tabs.keyboard]
-add_keys = "添加"
+add_to_timeline = "添加到时间线"
 animation = "动画"
 background_color = "背景颜色"
 background_opacity = "背景不透明度"
@@ -2953,9 +2953,10 @@ timeline_unavailable = "项目时间线不可用。"
 timeline_unreadable = "无法读取项目时间线。"
 title = "显示键盘"
 type_keys = "输入按键"
-type_keys_as_text = "将按原样输入。快捷键写法如 cmd+shift+p。"
-type_keys_hint = "按回车在播放头处显示，然后输入下一个。"
+type_keys_button = "输入按键…"
+type_keys_hint = "粘贴一句话、脚本或文字稿，或 cmd+shift+p 这样的快捷键。将从这里开始以按键形式打出。"
 type_keys_placeholder = "一句话，或 cmd+k 这样的快捷键"
+type_keys_summary = "约 {seconds} 秒的输入"
 uppercase = "大写"
 
 [editor.tabs.padding]

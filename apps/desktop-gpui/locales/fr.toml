@@ -2908,7 +2908,7 @@ smooth = "Fluide"
 smooth_description = "Mouvement souple et flottant"
 
 [editor.tabs.keyboard]
-add_keys = "Ajouter"
+add_to_timeline = "Ajouter à la timeline"
 animation = "Animation"
 background_color = "Couleur d'arrière-plan"
 background_opacity = "Opacité de l'arrière-plan"
@@ -2953,9 +2953,10 @@ timeline_unavailable = "La timeline du projet n'est pas disponible."
 timeline_unreadable = "Impossible de lire la timeline du projet."
 title = "Afficher le clavier"
 type_keys = "Taper des touches"
-type_keys_as_text = "Ce texte sera tapé tel quel. Un raccourci s’écrit cmd+shift+p."
-type_keys_hint = "Appuyez sur Entrée pour l’afficher à la tête de lecture, puis tapez la suite."
+type_keys_button = "Taper des touches…"
+type_keys_hint = "Collez une phrase, un script ou une transcription, ou un raccourci comme cmd+shift+p. Le texte est tapé en touches à partir d’ici."
 type_keys_placeholder = "Une phrase ou un raccourci comme cmd+k"
+type_keys_summary = "Environ {seconds} s de frappe"
 uppercase = "Majuscules"
 
 [editor.tabs.padding]

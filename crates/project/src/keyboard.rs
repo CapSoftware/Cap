@@ -178,8 +178,8 @@ pub struct ManualKeyRun {
 /// per word typed out letter by letter (`words`), or a key per keystroke
 /// (`keys`), each held a beat before the next, the last held to be read.
 pub fn manual_key_runs(text: &str, split: &str) -> Vec<ManualKeyRun> {
-    // Long enough for its letters to come together on one key and be read.
-    const WORD_HOLD: f64 = 0.85;
+    // Long enough to read before the next word types in over it.
+    const WORD_HOLD: f64 = 0.55;
     const KEY_HOLD: f64 = 0.16;
     // Any modifier makes a shortcut, Shift too: `shift+tab` is struck
     // together, never split into keys of its own.

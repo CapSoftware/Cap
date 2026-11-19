@@ -2908,7 +2908,7 @@ smooth = "Weich"
 smooth_description = "Weiche, schwebende Bewegung"
 
 [editor.tabs.keyboard]
-add_keys = "Hinzufügen"
+add_to_timeline = "Zur Timeline hinzufügen"
 animation = "Animation"
 background_color = "Hintergrundfarbe"
 background_opacity = "Hintergrunddeckkraft"
@@ -2953,9 +2953,10 @@ timeline_unavailable = "Die Projektzeitleiste ist nicht verfügbar."
 timeline_unreadable = "Die Projektzeitleiste konnte nicht gelesen werden."
 title = "Tastatur anzeigen"
 type_keys = "Tasten eingeben"
-type_keys_as_text = "Das wird ausgeschrieben. Kürzel sehen so aus: cmd+shift+p."
-type_keys_hint = "Mit Enter am Abspielkopf zeigen, dann das Nächste eingeben."
+type_keys_button = "Tasten eingeben…"
+type_keys_hint = "Füge einen Satz, ein Skript oder ein Transkript ein, oder ein Kürzel wie cmd+shift+p. Es wird ab hier als Tastenanschläge getippt."
 type_keys_placeholder = "Ein Satz oder ein Kürzel wie cmd+k"
+type_keys_summary = "Etwa {seconds} s Tippen"
 uppercase = "Großbuchstaben"
 
 [editor.tabs.padding]
