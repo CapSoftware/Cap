@@ -33,6 +33,23 @@ def measured(value, case="export/instant-gated-mic-only/output/mp4/native", cls=
     return result
 
 
+class LaneTests(unittest.TestCase):
+    def test_shards_and_tiers_share_their_runner_lane(self):
+        cases = {
+            "verify-report-windows-fast-2": "windows",
+            "verify-report-macos-vt-full-1": "macos-vt",
+            "verify-recording-windows-2022": "recording-windows-2022",
+            "verify-recording-windows-2022-full-3": "recording-windows-2022",
+            "verify-recording-windows-2022-fast-1": "recording-windows-2022",
+            "verify-recording-report-blacksmith-6vcpu-macos-15": "recording-blacksmith-6vcpu-macos-15",
+            "verify-recording-blacksmith-6vcpu-macos-26": "recording-blacksmith-6vcpu-macos-26",
+            "verify-recording-macos-15": "recording-macos-15",
+        }
+        for artifact, lane in cases.items():
+            with self.subTest(artifact=artifact):
+                self.assertEqual(diff.lane_of(artifact), lane)
+
+
 class ComparisonTests(unittest.TestCase):
     def test_witness_frame_movement_does_not_change_severity(self):
         for cls in ["stale", "future", "unreadable", "timestamps", "nondeterministic"]:

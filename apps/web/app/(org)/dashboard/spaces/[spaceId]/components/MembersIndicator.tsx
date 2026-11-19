@@ -72,7 +72,7 @@ export const MembersIndicator = ({
 		},
 	});
 
-	useEffect(() => {
+	const resetToSaved = useCallback(() => {
 		setMemberRoles(
 			Object.fromEntries(
 				members.map((member) => [
@@ -85,6 +85,16 @@ export const MembersIndicator = ({
 			members: members.map((member) => member.userId),
 		});
 	}, [members, form]);
+
+	useEffect(() => {
+		resetToSaved();
+	}, [resetToSaved]);
+
+	// Edits that were closed without saving must not come back on reopen.
+	const handleOpenChange = (next: boolean) => {
+		if (next) resetToSaved();
+		setOpen(next);
+	};
 
 	const handleSaveMembers = async (selectedUserIds: User.UserId[]) => {
 		if (!canManageMembers) return;
@@ -117,13 +127,13 @@ export const MembersIndicator = ({
 				role: "member",
 			});
 			toast.success("Members updated!");
+			setOpen(false);
 			router.refresh();
 		} catch (error) {
 			console.error("Failed to update members:", error);
 			toast.error("Failed to update members");
 		} finally {
 			setIsLoading(false);
-			setOpen(false);
 		}
 	};
 
@@ -141,12 +151,15 @@ export const MembersIndicator = ({
 	);
 
 	return (
-		<div className="flex gap-3 items-center">
-			<Dialog open={open} onOpenChange={setOpen}>
+		<div className="flex gap-2 items-center">
+			<Dialog open={open} onOpenChange={handleOpenChange}>
 				<DialogTrigger asChild>
-					<Button variant="gray" size="sm" className="z-10">
-						<FontAwesomeIcon className="mr-1 size-4" icon={faUserGroup} />
-						{memberCount} members
+					<Button variant="secondary" size="sm" className="z-10 gap-2 px-4 h-9">
+						<FontAwesomeIcon
+							className="size-3.5 text-gray-10"
+							icon={faUserGroup}
+						/>
+						{memberCount} {memberCount === 1 ? "member" : "members"}
 					</Button>
 				</DialogTrigger>
 				<DialogContent className="p-0 w-full max-w-md rounded-xl border bg-gray-2 border-gray-4">
@@ -297,7 +310,12 @@ export const MembersIndicator = ({
 			</Dialog>
 
 			{onAddVideos && (
-				<Button variant="dark" size="sm" onClick={onAddVideos}>
+				<Button
+					variant="blue"
+					size="sm"
+					className="gap-2 px-4 h-9"
+					onClick={onAddVideos}
+				>
 					<FontAwesomeIcon className="size-3" icon={faPlus} />
 					Add videos
 				</Button>

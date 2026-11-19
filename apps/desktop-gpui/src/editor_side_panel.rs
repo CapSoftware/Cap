@@ -190,7 +190,8 @@ pub(crate) fn panel_header(
 }
 
 /// The one empty state the panel's tabs share: a quiet icon, a title, a line
-/// of help. The caller adds whatever action belongs under it.
+/// of help (left out when empty). The caller adds whatever action belongs
+/// under it.
 pub(crate) fn panel_empty_state(
     theme: &Theme,
     icon: &'static str,
@@ -198,6 +199,7 @@ pub(crate) fn panel_empty_state(
     description: impl Into<SharedString>,
 ) -> Div {
     let editor = theme.editor;
+    let description = description.into();
     div()
         .flex_1()
         .min_h_0()
@@ -222,15 +224,17 @@ pub(crate) fn panel_empty_state(
                 .text_color(Hsla::from(editor.text_1))
                 .child(title.into()),
         )
-        .child(
-            div()
-                .max_w(px(280.))
-                .text_size(px(12.))
-                .line_height(px(18.))
-                .text_center()
-                .text_color(Hsla::from(editor.text_2))
-                .child(description.into()),
-        )
+        .when(!description.is_empty(), |empty| {
+            empty.child(
+                div()
+                    .max_w(px(280.))
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+                    .text_center()
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(description),
+            )
+        })
 }
 
 impl EditorWindow {

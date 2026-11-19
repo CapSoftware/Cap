@@ -98,6 +98,7 @@ pub fn set_cuts(config: &mut ProjectConfiguration, cuts: &[(f64, f64, f64)]) {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         })
         .collect();
@@ -116,6 +117,7 @@ pub fn set_clip_cuts(config: &mut ProjectConfiguration, cuts: &[(u32, f64, f64, 
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         })
         .collect();

@@ -131,6 +131,35 @@ impl RecordingMarkers {
         }
     }
 
+    /// The segment was left out of the recording (its screen captured no
+    /// frame) and the next segment takes its index. Markers pressed in it
+    /// move to the end of the segment before, or go when it was the first.
+    pub(crate) fn segment_dropped(&self, segment: u32) {
+        let revision = {
+            let mut state = self.lock();
+            state.segments.retain(|clock| clock.segment != segment);
+            if !state.markers.iter().any(|marker| marker.segment == segment) {
+                return;
+            }
+            let before = segment.checked_sub(1);
+            state.markers = std::mem::take(&mut state.markers)
+                .into_iter()
+                .filter_map(|marker| {
+                    if marker.segment != segment {
+                        return Some(marker);
+                    }
+                    before.map(|segment| RecordedMarker {
+                        segment,
+                        offset: None,
+                    })
+                })
+                .collect();
+            state.revision += 1;
+            state.revision
+        };
+        self.persist(revision);
+    }
+
     pub(crate) fn stopped(&self) {
         self.lock().stopped_at.get_or_insert_with(Instant::now);
     }
@@ -406,6 +435,48 @@ mod tests {
         assert_eq!(times[1], (0, 0.0));
         assert_eq!(times[2], (1, 5.0));
         assert_eq!(times[3], (1, 5.0));
+    }
+
+    #[test]
+    fn a_dropped_segment_hands_its_markers_to_the_segment_before() {
+        let markers = RecordingMarkers::new(None);
+        let start = Timestamps::now();
+        markers.segment_started(0, start, None);
+        markers.add(start.instant() + Duration::from_millis(500));
+        markers.segment_paused(0);
+        let resumed = Timestamps::now();
+        markers.segment_started(1, resumed, None);
+        markers.add(resumed.instant() + Duration::from_millis(1));
+        markers.segment_paused(1);
+
+        markers.segment_dropped(1);
+        let kept = markers.snapshot();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].segment, 0);
+        assert!(kept[0].offset.is_some());
+        assert_eq!(
+            kept[1],
+            RecordedMarker {
+                segment: 0,
+                offset: None
+            }
+        );
+
+        let reused = Timestamps::now();
+        markers.segment_started(1, reused, None);
+        let placed = markers
+            .add(reused.instant() + Duration::from_millis(1))
+            .unwrap();
+        assert_eq!(placed, 3);
+        assert_eq!(markers.snapshot()[2].segment, 1);
+        assert!(markers.snapshot()[2].offset.is_some());
+
+        let first = RecordingMarkers::new(None);
+        let start = Timestamps::now();
+        first.segment_started(0, start, None);
+        first.add(start.instant() + Duration::from_millis(1));
+        first.segment_dropped(0);
+        assert!(first.snapshot().is_empty());
     }
 
     #[test]

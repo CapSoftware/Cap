@@ -38,6 +38,7 @@ const FORMATTED: &[&str] = &[
     "main.storage.blocked",
     "main.storage.can_start",
     "main.storage.check_failed",
+    "controls.settings.switch_failed",
 ];
 
 #[test]
@@ -73,6 +74,7 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::main::target::window(), "Window"),
         (tr::main::target::area(), "Area"),
         (tr::main::target::camera_only(), "Camera Only"),
+        (tr::main::target::audio_only(), "Audio Only"),
         (tr::main::target::choose_display(), "Choose a display"),
         (tr::main::target::choose_window(), "Choose a window"),
         (tr::main::target::no_displays(), "No displays found"),
@@ -214,6 +216,10 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "Camera-only recording requires a selected camera.",
         ),
         (
+            tr::main::error::audio_only_needs_audio(),
+            "Audio only recording needs a microphone or system audio.",
+        ),
+        (
             tr::main::error::devices_not_ready(),
             "Recording devices are not ready. Open the recorder and try again.",
         ),
@@ -270,6 +276,21 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::stop::resuming(), "Resuming…"),
         (tr::controls::stop::pausing(), "Pausing…"),
         (tr::controls::stop::paused(), "Paused"),
+        (tr::controls::draw::start(), "Draw on screen"),
+        (tr::controls::draw::stop(), "Stop drawing"),
+        (
+            tr::controls::draw::window_unavailable(),
+            "Drawing works in display and area recordings",
+        ),
+        (tr::controls::draw::pen(), "Pen, ⇧ for a straight line"),
+        (
+            tr::controls::draw::highlighter(),
+            "Highlighter, ⇧ for a straight line",
+        ),
+        (tr::controls::draw::arrow(), "Arrow, ⇧ snaps to 45°"),
+        (tr::controls::draw::rectangle(), "Rectangle, ⇧ for a square"),
+        (tr::controls::draw::undo(), "Undo"),
+        (tr::controls::draw::clear(), "Clear all"),
         (tr::controls::stop::error(), "Error"),
         (tr::controls::confirm::restart_title(), "Confirm Restart"),
         (
@@ -291,6 +312,20 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::controls::pause::pausing(), "Pausing recording…"),
         (tr::controls::pause::resume(), "Resume recording"),
         (tr::controls::marker::add(), "Add marker"),
+        (tr::controls::settings::open(), "Recording settings"),
+        (
+            tr::controls::settings::show_camera_preview(),
+            "Show camera preview",
+        ),
+        (tr::controls::settings::switching(), "Switching…"),
+        (
+            tr::controls::settings::locked(),
+            "Can't change in this recording",
+        ),
+        (
+            tr::controls::settings::not_in_recording(),
+            "Not in this recording",
+        ),
         (tr::controls::pause::pause(), "Pause recording"),
         (
             tr::controls::low_storage(),
@@ -310,6 +345,22 @@ fn main_surfaces_match_the_literals_they_replaced() {
             "Click to allow Cap to use your camera in System Settings.",
         ),
         (tr::camera::issue::unavailable_title(), "Camera unavailable"),
+        (
+            tr::camera::issue::disconnected_title(),
+            "Camera disconnected",
+        ),
+        (
+            tr::camera::issue::disconnected_message(),
+            "The selected camera stopped sending video.",
+        ),
+        (
+            tr::controls::disconnected::microphone(),
+            "Microphone disconnected. Silence will be used until it reconnects.",
+        ),
+        (
+            tr::controls::disconnected::camera(),
+            "Camera disconnected. Recording continues without camera overlay.",
+        ),
         (
             tr::camera::issue::not_found(),
             "This camera is no longer available. Check that it is connected and allowed by system permissions.",
@@ -637,6 +688,14 @@ fn main_surfaces_match_the_literals_they_replaced() {
     for key in FORMATTED {
         assert!(KEYS.contains(key), "{key}");
     }
+}
+
+#[test]
+fn a_failed_input_switch_names_the_device_and_says_recording_continues() {
+    assert_eq!(
+        tr::controls::settings::switch_failed("USB Mic"),
+        "Couldn't switch to USB Mic. The recording continues."
+    );
 }
 
 #[test]

@@ -215,6 +215,35 @@ describe("embed page server load", () => {
 		expect(mocks.transcribe).not.toHaveBeenCalled();
 	});
 
+	it("serves a regular Cap video from Cap tables only, with or without the old sdk flag", async () => {
+		const plain = await loadContent();
+		const flagged = await loadContent({ sdk: "1" });
+
+		expect(flagged.props).toEqual(plain.props);
+		expect(plain.props.data).toMatchObject({
+			id: "video-1",
+			name: "Ten minute walkthrough",
+		});
+		const queries = mocks.query.mock.calls.map(([query]) => String(query));
+		expect(queries.some((query) => query.includes("from `videos`"))).toBe(true);
+		expect(queries.some((query) => query.includes("developer_"))).toBe(false);
+	});
+
+	it("answers 404 for an ID that is not a regular Cap video and never looks in developer videos", async () => {
+		mocks.query.mockImplementation(async (query: string) => ({
+			rows: query.includes("from `videos`") ? [] : rowsFor(query),
+		}));
+
+		await expect(
+			EmbedVideoPage({
+				params: Promise.resolve({ videoId: "developer-video-1" }),
+				searchParams: Promise.resolve({ sdk: "1" }),
+			}),
+		).rejects.toThrow("NOT_FOUND");
+		const queries = mocks.query.mock.calls.map(([query]) => String(query));
+		expect(queries.some((query) => query.includes("developer_"))).toBe(false);
+	});
+
 	it("keeps anonymous, minimal and inherited settings behavior", async () => {
 		mocks.getCurrentUser.mockResolvedValue(null);
 		disableChapters = true;

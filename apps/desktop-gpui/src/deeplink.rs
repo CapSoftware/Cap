@@ -80,6 +80,8 @@ pub enum CaptureMode {
     Area(Box<CaptureArea>),
     #[cfg(debug_assertions)]
     CameraOnly,
+    #[cfg(debug_assertions)]
+    AudioOnly,
 }
 
 /// `CameraPreviewShape` (`src-tauri/src/camera.rs:161-168`), mirrored here so
@@ -129,6 +131,10 @@ pub enum DeepLinkAction {
     PauseRecording,
     #[cfg(debug_assertions)]
     ResumeRecording,
+    #[cfg(debug_assertions)]
+    SwitchMicrophone {
+        mic_label: Option<String>,
+    },
     #[cfg(debug_assertions)]
     OpenCamera {
         camera: DeviceOrModelID,
@@ -364,6 +370,8 @@ impl DeepLinkAction {
                     }
                     #[cfg(debug_assertions)]
                     CaptureMode::CameraOnly => ScreenCaptureTarget::CameraOnly,
+                    #[cfg(debug_assertions)]
+                    CaptureMode::AudioOnly => ScreenCaptureTarget::AudioOnly,
                 };
 
                 let mode = match mode {
@@ -477,6 +485,13 @@ impl DeepLinkAction {
                     ) {
                         session.toggle_pause(cx);
                     }
+                });
+                Ok(())
+            }
+            #[cfg(debug_assertions)]
+            DeepLinkAction::SwitchMicrophone { mic_label } => {
+                RecordingSession::global(cx).update(cx, |session, cx| {
+                    session.switch_input(crate::session::InputRequest::Microphone(mic_label), cx);
                 });
                 Ok(())
             }
@@ -760,6 +775,27 @@ mod tests {
         assert_eq!(
             DeepLinkAction::try_from(&resume_url),
             Ok(DeepLinkAction::ResumeRecording)
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn parses_switch_microphone_action_urls() {
+        let parse = |value: serde_json::Value| {
+            let mut url = Url::parse("cap-desktop://action").unwrap();
+            url.query_pairs_mut()
+                .append_pair("value", &value.to_string());
+            DeepLinkAction::try_from(&url)
+        };
+        assert_eq!(
+            parse(serde_json::json!({ "switch_microphone": { "mic_label": "USB Mic" } })),
+            Ok(DeepLinkAction::SwitchMicrophone {
+                mic_label: Some("USB Mic".into())
+            })
+        );
+        assert_eq!(
+            parse(serde_json::json!({ "switch_microphone": { "mic_label": null } })),
+            Ok(DeepLinkAction::SwitchMicrophone { mic_label: None })
         );
     }
 

@@ -469,9 +469,11 @@ fn resize_triangle(
     let vertical_weights = triangle_axis(height, new_height);
     let horizontal_weights = triangle_axis(width, new_width);
     let row_bytes = width as usize * 4;
-    let mut vertical = vec![0f32; row_bytes * new_height as usize];
+    let mut vertical = vec![0f32; row_bytes];
+    let packed = (horizontal_weights.max_taps <= 3).then(|| pack_tap3(&horizontal_weights));
+    let out_row = new_width as usize * 4;
+    let mut out = vec![0u8; out_row * new_height as usize];
     for out_y in 0..new_height as usize {
-        let dst = &mut vertical[out_y * row_bytes..(out_y + 1) * row_bytes];
         let tap_count = vertical_weights.count[out_y] as usize;
         let weight_at = vertical_weights.offset[out_y];
         let src_y0 = vertical_weights.start[out_y];
@@ -479,29 +481,18 @@ fn resize_triangle(
         for (tap, &weight) in weights.iter().enumerate() {
             let src_y = src_y0 + tap as u32;
             let start = (y0 + src_y) as usize * stride + x0 as usize * 4;
-            accumulate_row(dst, &src[start..start + row_bytes], weight, tap == 0);
-        }
-    }
-
-    let out_row = new_width as usize * 4;
-    let mut out = vec![0u8; out_row * new_height as usize];
-    if horizontal_weights.max_taps <= 3 {
-        let packed = pack_tap3(&horizontal_weights);
-        for y in 0..new_height as usize {
-            sample_horizontal_tap3(
-                &vertical[y * row_bytes..(y + 1) * row_bytes],
-                &mut out[y * out_row..(y + 1) * out_row],
-                &packed,
-                width,
+            accumulate_row(
+                &mut vertical,
+                &src[start..start + row_bytes],
+                weight,
+                tap == 0,
             );
         }
-    } else {
-        for y in 0..new_height as usize {
-            sample_horizontal_general(
-                &vertical[y * row_bytes..(y + 1) * row_bytes],
-                &mut out[y * out_row..(y + 1) * out_row],
-                &horizontal_weights,
-            );
+        let dst = &mut out[out_y * out_row..(out_y + 1) * out_row];
+        if let Some(packed) = &packed {
+            sample_horizontal_tap3(&vertical, dst, packed, width);
+        } else {
+            sample_horizontal_general(&vertical, dst, &horizontal_weights);
         }
     }
     out

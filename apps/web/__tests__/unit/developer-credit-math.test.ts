@@ -4,15 +4,8 @@ import {
 	MICRO_CREDITS_PER_DOLLAR,
 } from "@/lib/developer-pricing";
 
-const MICRO_CREDITS_PER_MINUTE = 5_000;
-const MIN_BALANCE_MICRO_CREDITS = 5_000;
-
 function purchaseCreditsFormula(amountCents: number): number {
 	return Math.floor((amountCents / 100) * MICRO_CREDITS_PER_DOLLAR);
-}
-
-function videoRecordingCost(durationMinutes: number): number {
-	return Math.floor(durationMinutes * MICRO_CREDITS_PER_MINUTE);
 }
 
 function balanceDollars(balanceMicroCredits: number): string {
@@ -60,59 +53,27 @@ describe("Purchase Credits Conversion", () => {
 	});
 });
 
-describe("Video Recording Cost", () => {
-	it("charges 5,000 micro-credits for 1 minute video", () => {
-		expect(videoRecordingCost(1)).toBe(5_000);
-	});
-
-	it("charges 25,000 micro-credits for 5 minute video", () => {
-		expect(videoRecordingCost(5)).toBe(25_000);
-	});
-
-	it("charges 50,000 micro-credits for 10 minute video", () => {
-		expect(videoRecordingCost(10)).toBe(50_000);
-	});
-
-	it("charges 2,500 micro-credits for 30 second video (0.5 min)", () => {
-		expect(videoRecordingCost(0.5)).toBe(2_500);
-	});
-
-	it("charges 7,500 micro-credits for 90 second video (1.5 min)", () => {
-		expect(videoRecordingCost(1.5)).toBe(7_500);
-	});
-
-	it("charges 0 micro-credits for 0 duration", () => {
-		expect(videoRecordingCost(0)).toBe(0);
-	});
-
-	it("charges 83 micro-credits for 1 second video (1/60 min)", () => {
-		const oneSecondInMinutes = 1 / 60;
-		expect(videoRecordingCost(oneSecondInMinutes)).toBe(
-			Math.floor(0.016666666666666666 * 5_000),
-		);
-		expect(videoRecordingCost(oneSecondInMinutes)).toBe(83);
-	});
-});
-
 describe("Daily Storage Cost", () => {
-	it("charges 2 micro-credits for 1 minute stored", () => {
-		expect(dailyStorageMicroCredits(1)).toBe(2);
+	const stored = (minutes: number) => ({
+		"1080p": minutes,
+		"1440p": 0,
+		"2160p": 0,
 	});
 
-	it("charges 26 micro-credits for 10 minutes stored", () => {
-		expect(dailyStorageMicroCredits(10)).toBe(26);
+	it("charges 2 micro-credits a day for 1 minute up to 1080p", () => {
+		expect(dailyStorageMicroCredits(stored(1))).toBe(2);
 	});
 
-	it("charges 266 micro-credits for 100 minutes stored", () => {
-		expect(dailyStorageMicroCredits(100)).toBe(266);
+	it("charges 28 micro-credits a day for 10 minutes up to 1080p", () => {
+		expect(dailyStorageMicroCredits(stored(10))).toBe(28);
 	});
 
-	it("charges 2666 micro-credits for 1000 minutes stored", () => {
-		expect(dailyStorageMicroCredits(1000)).toBe(2666);
+	it("charges 2,833 micro-credits a day for 1,000 minutes up to 1080p", () => {
+		expect(dailyStorageMicroCredits(stored(1000))).toBe(2833);
 	});
 
 	it("charges 0 micro-credits for 0 minutes stored", () => {
-		expect(dailyStorageMicroCredits(0)).toBe(0);
+		expect(dailyStorageMicroCredits(stored(0))).toBe(0);
 	});
 });
 
@@ -153,23 +114,5 @@ describe("Balance Protection (GREATEST(0, balance - charge))", () => {
 
 	it("handles exact depletion: 5000 - 5000 = 0", () => {
 		expect(balanceAfterCharge(5000, 5000)).toBe(0);
-	});
-});
-
-describe("Minimum Balance Check", () => {
-	it("4,999 micro-credits is insufficient", () => {
-		expect(4_999 < MIN_BALANCE_MICRO_CREDITS).toBe(true);
-	});
-
-	it("5,000 micro-credits is sufficient", () => {
-		expect(5_000 < MIN_BALANCE_MICRO_CREDITS).toBe(false);
-	});
-
-	it("5,001 micro-credits is sufficient", () => {
-		expect(5_001 < MIN_BALANCE_MICRO_CREDITS).toBe(false);
-	});
-
-	it("0 micro-credits is insufficient", () => {
-		expect(0 < MIN_BALANCE_MICRO_CREDITS).toBe(true);
 	});
 });

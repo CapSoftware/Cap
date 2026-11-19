@@ -14,6 +14,7 @@ nonisolated final class AppServices: Sendable {
     let backgroundUploads: BackgroundUploads
     let recordings: RecordingUploads
     let screenRecordings: RecordingUploads?
+    let analytics: Analytics
     let unauthorized: AsyncStream<CredentialSnapshot>
     /// True on the first launch after an install, when stale keychain items are wiped.
     let firstLaunch: Bool
@@ -38,6 +39,19 @@ nonisolated final class AppServices: Sendable {
 
     static var recordingsDirectory: URL {
         URL.applicationSupportDirectory.appending(path: "CapRecordings", directoryHint: .isDirectory)
+    }
+
+    static var analyticsQueue: URL {
+        URL.applicationSupportDirectory.appending(path: "CapAnalytics", directoryHint: .isDirectory).appending(path: "queue.json")
+    }
+
+    /// Debug builds talk to cap.so unless pointed elsewhere, and a developer's taps are not usage.
+    static func recordsUsage(_ environment: CapEnvironment) -> Bool {
+        #if DEBUG
+        environment.baseURL.host().map(CapEnvironment.isLocalDevelopmentHost) ?? false
+        #else
+        true
+        #endif
     }
 
     init(environment: CapEnvironment, store: any CredentialPersisting, firstLaunch: Bool = false) {
@@ -78,6 +92,13 @@ nonisolated final class AppServices: Sendable {
                 adoptsHandOffs: true
             )
         }
+        analytics = Analytics(
+            api: api,
+            app: .current(),
+            storage: Self.analyticsQueue,
+            isEnabled: Self.recordsUsage(environment),
+            currentUserId: { vault.credentials?.userId }
+        )
         self.firstLaunch = firstLaunch
     }
 
@@ -227,6 +248,10 @@ final class AppModel {
     }
 
     func signOut() async {
+        Usage.track("user_signed_out")
+        // Goes out under the session that is about to end. Nothing here waits for it.
+        let analytics = services.analytics
+        Task { await analytics.flush() }
         let api = services.api
         let revoke = Task {
             await PushNotifications.shared.unregister()
@@ -247,6 +272,7 @@ final class AppModel {
         phase = .signedOut
         signedOutNotice = notice
         pendingShareLink = nil
+        services.analytics.signedOut()
         services.api.clearVideoAccess()
         await services.backgroundUploads.cancelAll()
         await services.recordings.discardAll()

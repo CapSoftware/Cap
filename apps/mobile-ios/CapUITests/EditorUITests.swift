@@ -75,6 +75,20 @@ final class EditorUITests: XCTestCase {
         XCTAssertFalse(split.exists)
     }
 
+    /// On a large screen such as the open iPhone Duo the tools sit either side of the strip, leaving the picture more height.
+    func testWideScreenToolsBesideTimeline() throws {
+        let app = openEditor()
+        let window = app.windows.firstMatch
+        try XCTSkipUnless(min(window.frame.width, window.frame.height) >= 600, "Needs a large screen such as the open iPhone Duo")
+        let timeline = app.descendants(matching: .any)["editor-timeline"].firstMatch
+        XCTAssertTrue(timeline.exists)
+        let undo = app.buttons["Undo"]
+        let split = app.buttons["Split"]
+        XCTAssertLessThan(abs(undo.frame.midY - timeline.frame.midY), 8)
+        XCTAssertLessThan(undo.frame.maxX, timeline.frame.minX)
+        XCTAssertGreaterThan(split.frame.minX, timeline.frame.maxX)
+    }
+
     /// Each step is a touch the Photos trimmer was measured with, and has to end the same way here: the strip
     /// stays where it is, a handle follows 3.6 points inside the finger, and the playhead comes to rest on it.
     func testTrimHandlesFollowPhotos() throws {
@@ -92,9 +106,11 @@ final class EditorUITests: XCTestCase {
             Double(((element(label).value as? String) ?? "").replacingOccurrences(of: " seconds", with: "")) ?? -1
         }
         func drag(from: CGFloat, to: CGFloat) {
-            let origin = app.coordinate(withNormalizedOffset: .zero)
-            origin.withOffset(CGVector(dx: from, dy: frame.midY))
-                .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to, dy: frame.midY)), withVelocity: 200, thenHoldForDuration: 0)
+            // Measured from the strip rather than the app: on the iPhone Duo's inner display the app's frame is in the
+            // panel's portrait space while elements report the landscape interface.
+            let origin = timeline.coordinate(withNormalizedOffset: .zero)
+            origin.withOffset(CGVector(dx: from - frame.minX, dy: frame.height / 2))
+                .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: to - frame.minX, dy: frame.height / 2)), withVelocity: 200, thenHoldForDuration: 0)
             usleep(900_000)
         }
 

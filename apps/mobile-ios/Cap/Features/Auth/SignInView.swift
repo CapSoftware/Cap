@@ -88,18 +88,20 @@ struct SignInView: View {
     }
 
     private func signIn(_ model: SignInModel, provider: String) async {
+        Usage.track("auth_started", ["method": .string(provider)])
         guard let session = await model.signIn(provider: provider, using: webAuthenticationSession) else { return }
-        complete(session, model: model)
+        complete(session, model: model, method: provider)
     }
 
     private func verify(_ model: SignInModel) async {
         guard let session = await model.verify() else { return }
-        complete(session, model: model)
+        complete(session, model: model, method: "email")
     }
 
-    private func complete(_ session: APIKeySession, model: SignInModel) {
+    private func complete(_ session: APIKeySession, model: SignInModel, method: String) {
         do {
             try app.completeSignIn(session)
+            Usage.track("user_signed_in", ["method": .string(method)])
         } catch {
             model.errorMessage = "Cap couldn't save your session securely. Try again."
         }

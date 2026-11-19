@@ -9,6 +9,11 @@ import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import { hasLiveProSubscription } from "@/lib/checkout/live-subscription";
 import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
 import {
+	createWithPromotion,
+	findPromotionCodeId,
+	promotionParams,
+} from "@/lib/checkout/promotion";
+import {
 	createWithReferralDiscount,
 	referralDiscountForCheckout,
 	referralDiscountMetadata,
@@ -20,7 +25,8 @@ import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
-	const { priceId, quantity, isOnBoarding, hosted } = await request.json();
+	const { priceId, quantity, isOnBoarding, hosted, promo } =
+		await request.json();
 
 	const environment =
 		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
@@ -57,7 +63,7 @@ export async function POST(request: NextRequest) {
 	if (userIsPro(user)) {
 		if (plan && inAppCheckout) {
 			return Response.json(
-				{ url: checkoutPath({ plan, seats: safeQuantity }) },
+				{ url: checkoutPath({ plan, seats: safeQuantity, promo }) },
 				{ status: 200 },
 			);
 		}
@@ -72,6 +78,7 @@ export async function POST(request: NextRequest) {
 					plan,
 					seats: safeQuantity,
 					onboarding: Boolean(isOnBoarding),
+					promo,
 				}),
 			},
 			{ status: 200 },
@@ -91,16 +98,16 @@ export async function POST(request: NextRequest) {
 
 	try {
 		const customerLookup = ensureStripeCustomerId(user);
-		const [customerId, alreadySubscribed, referralDiscount] = await Promise.all(
-			[
+		const [customerId, alreadySubscribed, referralDiscount, promotionCodeId] =
+			await Promise.all([
 				customerLookup,
 				customerLookup.then(hasLiveProSubscription),
 				referralDiscountForCheckout(
 					user,
 					request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
 				),
-			],
-		);
+				findPromotionCodeId(promo),
+			]);
 		if (alreadySubscribed) {
 			return Response.json(
 				{ error: true, subscription: true },
@@ -108,27 +115,32 @@ export async function POST(request: NextRequest) {
 			);
 		}
 
+		// A partner referral coupon wins: Stripe applies one discount here.
 		const checkoutSession = await createWithReferralDiscount(
 			referralDiscount,
 			(discount) =>
-				stripe().checkout.sessions.create({
-					customer: customerId,
-					line_items: [{ price: priceId, quantity: safeQuantity }],
-					mode: "subscription",
-					success_url: isOnBoarding
-						? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
-						: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
-					cancel_url: isOnBoarding
-						? `${serverEnv().WEB_URL}/onboarding`
-						: `${serverEnv().WEB_URL}/pricing`,
-					...referralDiscountParams(discount),
-					metadata: {
-						platform: "web",
-						dubCustomerId: user.id,
-						isOnBoarding: isOnBoarding ? "true" : "false",
-						...referralDiscountMetadata(discount),
-					},
-				}),
+				createWithPromotion(discount ? null : promotionCodeId, (code) =>
+					stripe().checkout.sessions.create({
+						customer: customerId,
+						line_items: [{ price: priceId, quantity: safeQuantity }],
+						mode: "subscription",
+						success_url: isOnBoarding
+							? `${serverEnv().WEB_URL}/dashboard/settings/organization?upgrade=true&session_id={CHECKOUT_SESSION_ID}`
+							: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&session_id={CHECKOUT_SESSION_ID}`,
+						cancel_url: isOnBoarding
+							? `${serverEnv().WEB_URL}/onboarding`
+							: `${serverEnv().WEB_URL}/pricing`,
+						...(discount
+							? referralDiscountParams(discount)
+							: promotionParams(code)),
+						metadata: {
+							platform: "web",
+							dubCustomerId: user.id,
+							isOnBoarding: isOnBoarding ? "true" : "false",
+							...referralDiscountMetadata(discount),
+						},
+					}),
+				),
 		);
 
 		if (checkoutSession.url) {

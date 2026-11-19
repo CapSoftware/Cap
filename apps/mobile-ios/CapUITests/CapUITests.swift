@@ -36,6 +36,12 @@ final class CapUITests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: url)
     }
 
+    /// The iPhone Duo draws its tabs in a side rail, which isn't a tab bar.
+    private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let bar = app.tabBars.buttons[label]
+        return bar.exists ? bar : app.buttons[label].firstMatch
+    }
+
     private func waitFor(_ element: XCUIElement, _ timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
         let found = element.waitForExistence(timeout: timeout)
         if !found { shot("FAIL-\(name.split(separator: " ").last?.dropLast() ?? "test")-line\(line)") }
@@ -230,7 +236,7 @@ final class CapUITests: XCTestCase {
             app.launchEnvironment["CAP_DEBUG_SESSION"] = "\(key):\(user)"
             app.launchEnvironment["CAP_DEBUG_STOREFRONT"] = storefront
             app.launch()
-            let tab = app.tabBars.buttons["Record"]
+            let tab = tabButton("Record", in: app)
             waitFor(tab, 20)
             let hittable = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: tab)
             wait(for: [hittable], timeout: 10)
@@ -246,7 +252,7 @@ final class CapUITests: XCTestCase {
 
     func testCaptureModes() {
         let app = launch()
-        let tab = app.tabBars.buttons["Record"]
+        let tab = tabButton("Record", in: app)
         waitFor(tab, 20)
         let hittable = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: tab)
         wait(for: [hittable], timeout: 10)
@@ -299,6 +305,29 @@ final class CapUITests: XCTestCase {
         XCTAssertFalse(limit.exists)
     }
 
+    /// Photos runs the change block off the main thread, so a block isolated to the main actor stops the app here.
+    func testSaveToPhotos() {
+        // Starts from no decision, so an earlier denial can't stop the save before it reaches Photos.
+        XCUIApplication().resetAuthorizationStatus(for: .photos)
+        let app = launch(route: "cap:cap_london")
+        let more = app.buttons["More"].firstMatch
+        waitFor(more, 15)
+        more.tap()
+        let save = app.buttons["Save to Photos"].firstMatch
+        waitFor(save)
+        save.tap()
+        let saved = app.staticTexts["Saved to Photos"]
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons.matching(NSPredicate(format: "label BEGINSWITH 'Allow'")).firstMatch
+        let deadline = Date().addingTimeInterval(30)
+        while !saved.exists, Date() < deadline {
+            XCTAssertNotEqual(app.state, .notRunning, "Cap stopped while saving to Photos")
+            if allow.exists { allow.tap() }
+        }
+        XCTAssertTrue(saved.exists, "Missing the Saved to Photos toast")
+        XCTAssertEqual(app.state, .runningForeground)
+        shot("93-saved-to-photos")
+    }
+
     func testScopeBar() {
         let app = launch()
         let myCaps = app.buttons["My Caps"]
@@ -311,6 +340,12 @@ final class CapUITests: XCTestCase {
         shot("21-scope-space")
         app.buttons["Engineering"].tap()
         waitFor(app.navigationBars["Engineering"])
+        // In the iPhone Duo's narrow library column the chips scroll; bring My Caps back before tapping it.
+        let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+        for _ in 0..<3 where myCaps.frame.minX < 0 {
+            let y = myCaps.frame.midY
+            origin.withOffset(CGVector(dx: 40, dy: y)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 300, dy: y)))
+        }
         myCaps.tap()
         waitFor(app.navigationBars["My Caps"])
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Organization, '")).firstMatch.tap()
@@ -537,6 +572,88 @@ final class CapUITests: XCTestCase {
         }.resume()
         done.wait()
         return box.value
+    }
+
+    private func usageBatches(reset: Bool = false) -> [[String: Any]] {
+        var request = URLRequest(url: URL(string: "\(fixtureURL)/fixture/events")!)
+        if reset { request.httpMethod = "DELETE" }
+        return fetchObject(request)["batches"] as? [[String: Any]] ?? []
+    }
+
+    private func waitForUsageBatches(_ count: Int, timeout: TimeInterval = 20) -> [[String: Any]] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var batches = usageBatches()
+        while batches.count < count, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            batches = usageBatches()
+        }
+        return batches
+    }
+
+    private func usageEvents(_ batch: [String: Any]) -> [(name: String, properties: [String: Any])] {
+        (batch["events"] as? [[String: Any]] ?? []).map { (($0["name"] as? String) ?? "", ($0["properties"] as? [String: Any]) ?? [:]) }
+    }
+
+    /// A visit to three tabs costs one request, sent as the app leaves the screen, and the next visit is its own batch.
+    func testUsageIsSentInOneBatchPerVisit() {
+        _ = usageBatches(reset: true)
+        let app = launch()
+        waitFor(app.staticTexts["Walkthrough: the new Cap 0.6.2 editor"], 15)
+        tabButton("Analytics", in: app).tap()
+        waitFor(app.navigationBars["Analytics"])
+        tabButton("Settings", in: app).tap()
+        waitFor(app.buttons["Notifications"].firstMatch)
+        XCTAssertTrue(usageBatches().isEmpty, "nothing is sent while the visit is still going")
+
+        XCUIDevice.shared.press(.home)
+        let first = waitForUsageBatches(1)
+        XCTAssertEqual(first.count, 1)
+        let appInfo = first[0]["app"] as? [String: String] ?? [:]
+        XCTAssertEqual(appInfo["device"], "phone")
+        XCTAssertNotNil(appInfo["version"]?.range(of: #"^\d+(\.\d+){0,3}$"#, options: .regularExpression))
+        XCTAssertNotNil(appInfo["build"]?.range(of: #"^\d+$"#, options: .regularExpression))
+        XCTAssertNotNil(appInfo["os"]?.range(of: #"^\d+(\.\d+){0,3}$"#, options: .regularExpression))
+        let events = usageEvents(first[0])
+        XCTAssertEqual(events.map(\.name), ["app_opened", "screen_view", "screen_view", "screen_view"])
+        XCTAssertEqual(events.first?.properties["signed_in"] as? Bool, true)
+        let screens = events.filter { $0.name == "screen_view" }.compactMap { $0.properties["screen"] as? String }
+        XCTAssertEqual(screens, ["caps", "analytics", "settings"])
+
+        app.activate()
+        waitFor(app.buttons["Notifications"].firstMatch)
+        XCUIDevice.shared.press(.home)
+        let second = waitForUsageBatches(2)
+        XCTAssertEqual(second.count, 2)
+        XCTAssertEqual(usageEvents(second[1]).filter { $0.name == "app_opened" }.count, 1)
+    }
+
+    /// Nothing is sent while signed out. What happened before sign-in goes out with the new session, in order.
+    func testUsageBeforeSignInIsSentOnceSignedIn() {
+        _ = usageBatches(reset: true)
+        let app = launch(key: nil)
+        let email = app.textFields["Email address"]
+        waitFor(email)
+        email.tap()
+        email.typeText("richie@cap.so")
+        app.buttons["Continue with email"].tap()
+        waitFor(app.staticTexts["Check your email"])
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(usageBatches().isEmpty, "a signed-out app sends nothing")
+
+        app.activate()
+        waitFor(app.staticTexts["Check your email"])
+        app.typeText("123456")
+        waitFor(app.buttons["Caps"], 15)
+        XCUIDevice.shared.press(.home)
+        let batches = waitForUsageBatches(1)
+        XCTAssertEqual(batches.count, 1)
+        let events = usageEvents(batches[0])
+        XCTAssertEqual(Array(events.map(\.name).prefix(4)), ["app_opened", "screen_view", "auth_started", "auth_email_sent"])
+        XCTAssertEqual(events.first?.properties["signed_in"] as? Bool, false)
+        let signedIn = events.first { $0.name == "user_signed_in" }
+        XCTAssertEqual(signedIn?.properties["method"] as? String, "email")
+        XCTAssertTrue(events.contains { $0.name == "screen_view" && $0.properties["screen"] as? String == "caps" })
     }
 
     func testEmptyAccount() {

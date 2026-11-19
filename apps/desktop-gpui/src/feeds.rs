@@ -1327,6 +1327,62 @@ impl Feeds {
         cx.notify();
     }
 
+    /// Opens the selected camera again on the same feed, for a camera that was
+    /// unplugged and is back. A feed a recording holds takes the same device
+    /// back without a new lock. The camera epoch stays: it is the same
+    /// selection, and a Linux Instant recording's camera worker checks the
+    /// epoch on every frame, so a new one would end its video. The input
+    /// watch never runs two reopens at once.
+    pub fn restart_camera(&mut self, cx: &mut Context<Self>) {
+        let Some(selection) = self.camera.clone() else {
+            return;
+        };
+        if self.camera_preview_parked {
+            return;
+        }
+        self.camera_ready = None;
+        self.start_camera_preview(selection, cx);
+        cx.notify();
+    }
+
+    /// An Instant recording moved onto `label`, opened on a feed of its own.
+    /// Selects it (the main window persists that) and lets the app feed close
+    /// the microphone the recording left, so the level meter only hears the
+    /// new one. The app feed reopens the selection after the recording.
+    pub fn adopt_recording_microphone(&mut self, label: String, cx: &mut Context<Self>) {
+        self.mic_epoch += 1;
+        self.mic_input_epoch
+            .store(self.mic_epoch, Ordering::Release);
+        self.microphone_settings = crate::store::RecordingDeviceSettings::for_microphone(&label);
+        self.microphone = Some(label);
+        self.mic_input_pending = false;
+        self.mic_input_released = true;
+        self.microphone_error = None;
+        self.applied_settings.microphone = None;
+        self.microphone_ready = None;
+        if let Some(actor) = self.mic_actor.clone() {
+            let gate = self.mic_input_gate.clone();
+            let current_epoch = self.mic_input_epoch.clone();
+            let epoch = self.mic_epoch;
+            gpui_tokio::Tokio::spawn(cx, async move {
+                if let Err(error) = camera_input_operation(&gate, &current_epoch, epoch, async {
+                    actor
+                        .ask(microphone::RemoveInput)
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+                .await
+                {
+                    tracing::warn!(
+                        "releasing the microphone a recording switched away from: {error}"
+                    );
+                }
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     pub fn mic_level(&self) -> &Entity<MicLevel> {
         &self.mic_level
     }

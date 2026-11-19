@@ -23,7 +23,13 @@ import {
 	type Source,
 	UrlSource,
 } from "mediabunny";
+import { createGuardedMediaFetch } from "./media-address-guard";
 import { registerMediaEngine } from "./media-engine";
+
+export {
+	createGuardedMediaFetch,
+	isPrivateHostLiteral,
+} from "./media-address-guard";
 
 export type ProgressCallback = (progress: number, message: string) => void;
 
@@ -31,6 +37,47 @@ export const PROCESS_TIMEOUT_MS = 45 * 60 * 1000;
 export const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const mediaFetch: typeof fetch = globalThis.fetch.bind(globalThis);
+
+const ENCODE_LENGTH_MARGIN_SECONDS = 2;
+const ENCODE_LENGTH_MARGIN_RATIO = 0.02;
+
+// The longest output an encode of a source this long may write: the probed
+// length, with room for a last frame the probe and FFmpeg time differently.
+// An encode follows the timestamps it finds, so without a limit a file that
+// plays for longer than the probe measured would be encoded, and its job
+// slot held, for as long as it lasts. Null when the length is not known.
+export function maxEncodeSeconds(probedSeconds: number): number | null {
+	if (!Number.isFinite(probedSeconds) || probedSeconds <= 0) return null;
+	const margin = Math.max(
+		ENCODE_LENGTH_MARGIN_SECONDS,
+		probedSeconds * ENCODE_LENGTH_MARGIN_RATIO,
+	);
+	return Math.ceil((probedSeconds + margin) * 1000) / 1000;
+}
+
+// The output limit for an encode of a probed file: its longest measured
+// length with the margin. Null, so nothing is cut, when the probe could not
+// measure how long the timestamps run: a header alone can say too little,
+// as a browser recording often does.
+export function encodeLengthLimit(metadata: {
+	duration: number;
+	timestampSpan?: number | null;
+}): number | null {
+	const span = metadata.timestampSpan;
+	if (typeof span !== "number" || !Number.isFinite(span) || span <= 0)
+		return null;
+	return maxEncodeSeconds(
+		Number.isFinite(metadata.duration)
+			? Math.max(span, metadata.duration)
+			: span,
+	);
+}
+
+export function outputLengthCapArgs(
+	maxOutputSeconds: number | null | undefined,
+): string[] {
+	return maxOutputSeconds ? ["-t", String(maxOutputSeconds)] : [];
+}
 
 export function decodeThreadsFromEnv(
 	name: string,
@@ -84,9 +131,23 @@ function isHttpUrl(path: string): boolean {
 	}
 }
 
-function isHlsPath(path: string): boolean {
-	const normalized = (path.split("?")[0] ?? "").toLowerCase();
+export function isHlsPath(path: string): boolean {
+	let name = path.split("?")[0] ?? "";
+	if (isHttpUrl(path)) name = new URL(path).pathname;
+	const normalized = name.toLowerCase();
 	return normalized.endsWith(".m3u8") || normalized.endsWith(".m3u");
+}
+
+function childRefusal(child: string, root: URL): string | null {
+	let url: URL;
+	try {
+		url = new URL(child);
+	} catch {
+		return "a remote playlist referenced a file this server cannot address";
+	}
+	return url.origin === root.origin
+		? null
+		: "a remote playlist may only reference files on its own host";
 }
 
 function withInheritedQuery(path: string, query: string): string {
@@ -102,21 +163,46 @@ function withInheritedQuery(path: string, query: string): string {
 	}
 }
 
-function createHttpSource(path: string): Source {
-	const query = new URL(path).search;
+// A refused entry is answered with an empty file, not an exception: thrown
+// from here the error escapes MediaBunny unhandled. The reason is reported
+// through onRefused so the caller can fail the input for what it was.
+function createHttpSource(
+	path: string,
+	onRefused: (reason: string) => void,
+	onTransportFailure: () => void,
+): Source {
+	const root = new URL(path);
+	const guarded = createGuardedMediaFetch(path);
+	// A range past the end of the file (416) is the file's own fault: a
+	// field in it points at bytes it does not have.
+	const fetchFn = Object.assign(
+		async (...args: Parameters<typeof fetch>) => {
+			try {
+				const response = await guarded(...args);
+				if (!response.ok && response.status !== 416) onTransportFailure();
+				return response;
+			} catch (error) {
+				onTransportFailure();
+				throw error;
+			}
+		},
+		{ preconnect: guarded.preconnect },
+	) as typeof fetch;
 	const options = {
-		fetchFn: mediaFetch,
+		fetchFn,
 		getRetryDelay: () => null,
 	};
 
-	return new CustomPathedSource(
-		path,
-		(request) =>
-			new UrlSource(
-				request.isRoot ? request.path : withInheritedQuery(request.path, query),
-				options,
-			),
-	);
+	return new CustomPathedSource(path, (request) => {
+		if (request.isRoot) return new UrlSource(request.path, options);
+		const child = withInheritedQuery(request.path, root.search);
+		const refusal = childRefusal(child, root);
+		if (refusal) {
+			onRefused(refusal);
+			return new BufferSource(new Uint8Array(0));
+		}
+		return new UrlSource(child, options);
+	});
 }
 
 function createLocalHlsSource(path: string): Source {
@@ -135,13 +221,55 @@ function createLocalHlsSource(path: string): Source {
 	});
 }
 
+// MediaBunny's dispose() chains onto the demuxer promise without a catch. For
+// an input whose format was never recognised that promise is rejected, so
+// disposing it surfaced as an unhandled rejection for every unreadable upload.
+function withSafeDispose<S extends Source>(input: Input<S>): Input<S> {
+	const dispose = input.dispose.bind(input);
+	input.dispose = () => {
+		const internal = input as unknown as {
+			_demuxerPromise?: Promise<{ dispose(): void }>;
+		};
+		internal._demuxerPromise = internal._demuxerPromise?.catch(() => ({
+			dispose() {},
+		}));
+		dispose();
+	};
+	return input;
+}
+
+const refusedInputs = new WeakMap<Input<Source>, string>();
+
+// Why a remote input was not allowed to read something it referenced, if it
+// was. An input that was refused anything must not be used.
+export function mediaInputRefusal(input: Input<Source>): string | undefined {
+	return refusedInputs.get(input);
+}
+
+const transportFailedInputs = new WeakSet<Input<Source>>();
+
+// Whether a remote input failed to fetch something it asked for. An error
+// from reading such an input is about the network, not about the file.
+export function mediaInputTransportFailed(input: Input<Source>): boolean {
+	return transportFailedInputs.has(input);
+}
+
 export function createMediaInput(path: string): Input<Source> {
 	registerMediaEngine();
 	if (isHttpUrl(path)) {
-		return new Input({
-			source: createHttpSource(path),
-			formats: ALL_FORMATS,
-		});
+		const input: Input<Source> = withSafeDispose(
+			new Input({
+				source: createHttpSource(
+					path,
+					(reason) => {
+						if (!refusedInputs.has(input)) refusedInputs.set(input, reason);
+					},
+					() => transportFailedInputs.add(input),
+				),
+				formats: ALL_FORMATS,
+			}),
+		);
+		return input;
 	}
 
 	const normalizedPath = normalizeLocalPath(path);
@@ -149,12 +277,14 @@ export function createMediaInput(path: string): Input<Source> {
 		throw new Error(`Media input does not exist: ${normalizedPath}`);
 	}
 
-	return new Input({
-		source: isHlsPath(normalizedPath)
-			? createLocalHlsSource(normalizedPath)
-			: new FilePathSource(normalizedPath),
-		formats: ALL_FORMATS,
-	});
+	return withSafeDispose(
+		new Input({
+			source: isHlsPath(normalizedPath)
+				? createLocalHlsSource(normalizedPath)
+				: new FilePathSource(normalizedPath),
+			formats: ALL_FORMATS,
+		}),
+	);
 }
 
 export function parseBitrate(value: string | number | undefined): number {
@@ -213,7 +343,7 @@ export function normalizeLocalPath(path: string): string {
 
 export async function getSourceSize(path: string): Promise<number> {
 	if (/^https?:\/\//i.test(path)) {
-		const response = await mediaFetch(path, {
+		const response = await createGuardedMediaFetch(path)(path, {
 			headers: { Range: "bytes=0-0" },
 			signal: AbortSignal.timeout(10_000),
 		});

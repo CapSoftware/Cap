@@ -65,17 +65,13 @@ fn macos_window_crop(
         .raw_handle()
         .logical_bounds()?;
     let display_position = display.raw_handle().logical_position();
-    // The video reads the window inside its rounded corners; the cursor
-    // is placed against the same trimmed frame.
-    Some(CursorCropBounds::new_macos(
-        crate::sources::screen_capture::trim_window_corners(LogicalBounds::new(
-            LogicalPosition::new(
-                window_bounds.position().x() - display_position.x(),
-                window_bounds.position().y() - display_position.y(),
-            ),
-            window_bounds.size(),
-        )),
-    ))
+    Some(CursorCropBounds::new_macos(LogicalBounds::new(
+        LogicalPosition::new(
+            window_bounds.position().x() - display_position.x(),
+            window_bounds.position().y() - display_position.y(),
+        ),
+        window_bounds.size(),
+    )))
 }
 
 #[cfg(windows)]
@@ -225,6 +221,11 @@ impl CursorActor {
 }
 
 const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
+/// How often the cursor image is checked while the pointer is still. Apps
+/// change the cursor under a resting pointer (a link under it, a loading
+/// state, a text field gaining focus); without a check the recording keeps
+/// the old shape until the pointer next moves.
+const STATIONARY_SHAPE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 #[cfg(target_os = "linux")]
 fn prefers_wayland_portal_cursor() -> bool {
@@ -752,6 +753,7 @@ pub fn spawn_cursor_recorder(
         let mut last_cursor_id: Option<String> = None;
         let mut last_cursor_image = None;
         let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
+        let mut last_shape_check = Instant::now();
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -817,15 +819,26 @@ pub fn spawn_cursor_recorder(
             #[cfg(any(windows, target_os = "macos"))]
             let crop_bounds = last_window_crop.unwrap_or(crop_bounds);
 
-            // The cursor image only labels this tick's move and click events,
-            // and reading it builds a full TIFF of every representation
-            // (~0.5 ms, ~580 KB on a Retina Mac), so skip it on ticks that
-            // record neither.
+            // Reading the cursor image builds a full TIFF of every
+            // representation (~0.5 ms, ~580 KB on a Retina Mac), so a still
+            // pointer only compares the cheap fingerprint, and only every
+            // STATIONARY_SHAPE_CHECK_INTERVAL. The TIFF is built only for a
+            // shape that has not been registered yet.
             let buttons_changed = buttons_changed(
                 &last_mouse_state.button_pressed,
                 &mouse_state.button_pressed,
             );
-            let cursor_id = if !position_changed && !buttons_changed && last_cursor_id.is_some() {
+            let previous_cursor_id = last_cursor_id.clone();
+            let sample_image = should_sample_cursor_image(
+                position_changed,
+                buttons_changed,
+                previous_cursor_id.is_some(),
+                last_shape_check.elapsed() >= STATIONARY_SHAPE_CHECK_INTERVAL,
+            );
+            if sample_image {
+                last_shape_check = Instant::now();
+            }
+            let cursor_id = if !sample_image {
                 last_cursor_id.clone()
             } else {
                 // While the pointer moves the shape rarely changes, so compare
@@ -861,7 +874,10 @@ pub fn spawn_cursor_recorder(
                 continue;
             };
 
-            if position_changed {
+            // Playback takes the drawn shape from move events only, so a shape
+            // change under a still pointer is written as a move to the same
+            // position.
+            if records_cursor_move(position_changed, previous_cursor_id.as_deref(), &cursor_id) {
                 let cropped_norm_pos = position
                     .relative_to_display(display)
                     .and_then(|p| p.normalize())
@@ -928,6 +944,13 @@ pub fn spawn_cursor_recorder(
 
         info!("cursor recorder done");
 
+        if let Some(epoch) = input_epoch(start_gate.as_ref(), start_time)
+            && let Some(confirmation) =
+                still_shape_confirmation(&response.moves, epoch.elapsed().as_secs_f64() * 1000.0)
+        {
+            response.moves.push(confirmation);
+        }
+
         let delta = has_incremental_outputs.then(|| flushed.take(&incremental_outputs, &response));
         match writer {
             Some(writer) => {
@@ -952,6 +975,44 @@ pub fn spawn_cursor_recorder(
         thread: Some(thread),
         rx: rx.shared(),
     }
+}
+
+/// Whether this tick reads the cursor image: always when it records a move or
+/// a click, or before any shape is known, and otherwise at the stationary
+/// check interval.
+fn should_sample_cursor_image(
+    position_changed: bool,
+    buttons_changed: bool,
+    has_cursor_id: bool,
+    stationary_check_due: bool,
+) -> bool {
+    position_changed || buttons_changed || !has_cursor_id || stationary_check_due
+}
+
+/// Whether this tick writes a move event: when the pointer moved, or when it
+/// stayed put and its shape changed from the last known one.
+fn records_cursor_move(
+    position_changed: bool,
+    previous_cursor_id: Option<&str>,
+    cursor_id: &str,
+) -> bool {
+    position_changed || previous_cursor_id.is_some_and(|previous| previous != cursor_id)
+}
+
+/// A closing move at the stop time when the recording ends on a shape change
+/// under a still pointer. The stationary check kept seeing that shape until
+/// the stop, but on its own the event is zero milliseconds long, and loading
+/// replaces short-lived final shapes with the pointer.
+fn still_shape_confirmation(moves: &[CursorMoveEvent], stop_ms: f64) -> Option<CursorMoveEvent> {
+    let [.., previous, last] = moves else {
+        return None;
+    };
+    let shape_only =
+        previous.x == last.x && previous.y == last.y && previous.cursor_id != last.cursor_id;
+    (shape_only && stop_ms > last.time_ms).then(|| CursorMoveEvent {
+        time_ms: stop_ms,
+        ..last.clone()
+    })
 }
 
 /// Whether any button present in both samples changed state: the same pairs
@@ -1772,6 +1833,89 @@ fn get_cursor_data() -> Option<CursorData> {
         };
         LAST_CURSOR.set(Some((handle, data.clone())));
         Some(data)
+    }
+}
+
+#[cfg(test)]
+mod stationary_shape_tests {
+    use super::{records_cursor_move, should_sample_cursor_image, still_shape_confirmation};
+    use cap_project::{
+        CursorEvents, CursorMoveEvent, MIN_VISIBLE_CURSOR_SHAPE_MS, SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+    };
+
+    fn cursor_move(time_ms: f64, x: f64, cursor_id: &str) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: cursor_id.into(),
+            time_ms,
+            x,
+            y: 0.5,
+        }
+    }
+
+    #[test]
+    fn a_final_still_shape_change_lasts_until_the_stop() {
+        let mut moves = vec![
+            cursor_move(0.0, 0.2, "arrow"),
+            cursor_move(500.0, 0.4, "arrow"),
+            cursor_move(3000.0, 0.4, "ibeam"),
+        ];
+        let confirmation = still_shape_confirmation(&moves, 10_000.0).unwrap();
+        assert_eq!(confirmation.time_ms, 10_000.0);
+        assert_eq!(confirmation.cursor_id, "ibeam");
+        assert_eq!((confirmation.x, confirmation.y), (0.4, 0.5));
+        moves.push(confirmation);
+
+        let events = CursorEvents {
+            moves,
+            clicks: vec![],
+        };
+        let mut debounced = events.clone();
+        debounced.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        assert_eq!(debounced.moves[2].cursor_id, "ibeam");
+        assert_eq!(debounced.moves[3].cursor_id, "ibeam");
+        let mut held = events;
+        held.hold_brief_cursor_shapes(None, MIN_VISIBLE_CURSOR_SHAPE_MS);
+        assert_eq!(held.moves[2].cursor_id, "ibeam");
+        assert_eq!(held.moves[3].cursor_id, "ibeam");
+    }
+
+    #[test]
+    fn recordings_that_end_moving_get_no_closing_move() {
+        let moving = [
+            cursor_move(0.0, 0.2, "arrow"),
+            cursor_move(500.0, 0.4, "ibeam"),
+        ];
+        assert!(still_shape_confirmation(&moving, 10_000.0).is_none());
+        let unchanged = [
+            cursor_move(0.0, 0.4, "arrow"),
+            cursor_move(500.0, 0.4, "arrow"),
+        ];
+        assert!(still_shape_confirmation(&unchanged, 10_000.0).is_none());
+        let shape_only = [
+            cursor_move(0.0, 0.4, "arrow"),
+            cursor_move(500.0, 0.4, "ibeam"),
+        ];
+        assert!(still_shape_confirmation(&shape_only, 500.0).is_none());
+        assert!(still_shape_confirmation(&shape_only[..1], 10_000.0).is_none());
+    }
+
+    #[test]
+    fn a_still_pointer_checks_its_shape_only_when_the_check_is_due() {
+        assert!(!should_sample_cursor_image(false, false, true, false));
+        assert!(should_sample_cursor_image(false, false, true, true));
+        assert!(should_sample_cursor_image(true, false, true, false));
+        assert!(should_sample_cursor_image(false, true, true, false));
+        assert!(should_sample_cursor_image(false, false, false, false));
+    }
+
+    #[test]
+    fn a_shape_change_under_a_still_pointer_is_recorded_as_a_move() {
+        assert!(records_cursor_move(false, Some("1"), "2"));
+        assert!(!records_cursor_move(false, Some("1"), "1"));
+        assert!(!records_cursor_move(false, None, "1"));
+        assert!(records_cursor_move(true, Some("1"), "1"));
+        assert!(records_cursor_move(true, None, "1"));
     }
 }
 

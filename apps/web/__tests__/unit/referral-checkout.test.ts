@@ -6,6 +6,7 @@ import { POST as subscribe } from "@/app/api/settings/billing/subscribe/route";
 
 const mocks = vi.hoisted(() => ({
 	create: vi.fn(),
+	listPromotionCodes: vi.fn(),
 	getCurrentUser: vi.fn(),
 	env: {} as Record<string, string | undefined>,
 }));
@@ -36,6 +37,7 @@ vi.mock("@cap/utils", async (importOriginal) => {
 				update: vi.fn().mockResolvedValue({ id: "cus_new" }),
 			},
 			checkout: { sessions: { create: mocks.create } },
+			promotionCodes: { list: mocks.listPromotionCodes },
 		}),
 		userIsPro: vi.fn().mockReturnValue(false),
 	};
@@ -116,6 +118,9 @@ beforeEach(() => {
 	mocks.create.mockResolvedValue({
 		id: "cs_test",
 		url: "https://pay.cap.so/session",
+	});
+	mocks.listPromotionCodes.mockResolvedValue({
+		data: [{ id: "promo_bf", code: "BLACKFRIDAY" }],
 	});
 });
 
@@ -313,5 +318,109 @@ describe("guest checkout referral handling", () => {
 		);
 
 		expect(sessionParams()).not.toHaveProperty("client_reference_id");
+	});
+});
+
+describe("campaign promotion codes on hosted checkout", () => {
+	const priceId = STRIPE_PLAN_IDS.production.yearly;
+	const rejected = () =>
+		Object.assign(new Error("This promotion code cannot be applied"), {
+			type: "StripeInvalidRequestError",
+			code: "promotion_code_not_applicable",
+			param: "discounts[0][promotion_code]",
+		});
+
+	it("applies the code from the request to a signed-in buyer's session", async () => {
+		dubRoutes([]);
+
+		await subscribe(
+			request("/api/settings/billing/subscribe", {
+				priceId,
+				quantity: 2,
+				promo: "blackfriday",
+			}),
+		);
+
+		expect(mocks.listPromotionCodes).toHaveBeenCalledWith({
+			code: "BLACKFRIDAY",
+			active: true,
+			limit: 1,
+		});
+		const params = sessionParams();
+		expect(params.discounts).toEqual([{ promotion_code: "promo_bf" }]);
+		expect(params).not.toHaveProperty("allow_promotion_codes");
+	});
+
+	it("keeps the partner coupon for a referred buyer", async () => {
+		dubRoutes(referredCustomer);
+
+		await subscribe(
+			request("/api/settings/billing/subscribe", {
+				priceId,
+				quantity: 1,
+				promo: "BLACKFRIDAY",
+			}),
+		);
+
+		expect(sessionParams().discounts).toEqual([{ coupon: "cpn_partner20" }]);
+	});
+
+	it("falls back to the code box when Stripe won't apply the code", async () => {
+		dubRoutes([]);
+		mocks.create.mockRejectedValueOnce(rejected());
+
+		const response = await subscribe(
+			request("/api/settings/billing/subscribe", {
+				priceId,
+				quantity: 1,
+				promo: "BLACKFRIDAY",
+			}),
+		);
+
+		expect(response.status).toBe(200);
+		expect(mocks.create).toHaveBeenCalledTimes(2);
+		const retry = mocks.create.mock.calls[1]?.[0] as Record<string, unknown>;
+		expect(retry).not.toHaveProperty("discounts");
+		expect(retry.allow_promotion_codes).toBe(true);
+	});
+
+	it("ignores a code Stripe doesn't know and a malformed one", async () => {
+		dubRoutes([]);
+		mocks.listPromotionCodes.mockResolvedValueOnce({ data: [] });
+
+		await subscribe(
+			request("/api/settings/billing/subscribe", {
+				priceId,
+				quantity: 1,
+				promo: "NOSUCHCODE",
+			}),
+		);
+		expect(sessionParams().allow_promotion_codes).toBe(true);
+
+		mocks.create.mockClear();
+		mocks.listPromotionCodes.mockClear();
+		await subscribe(
+			request("/api/settings/billing/subscribe", {
+				priceId,
+				quantity: 1,
+				promo: "not a code",
+			}),
+		);
+		expect(mocks.listPromotionCodes).not.toHaveBeenCalled();
+		expect(sessionParams().allow_promotion_codes).toBe(true);
+	});
+
+	it("applies the code to a guest's session", async () => {
+		await startGuestCheckout(
+			request("/api/settings/billing/guest-checkout", {
+				priceId,
+				quantity: 1,
+				promo: "BLACKFRIDAY",
+			}),
+		);
+
+		const params = sessionParams();
+		expect(params.discounts).toEqual([{ promotion_code: "promo_bf" }]);
+		expect(params).not.toHaveProperty("allow_promotion_codes");
 	});
 });

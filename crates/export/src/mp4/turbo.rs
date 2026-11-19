@@ -917,6 +917,7 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
             .iter()
             .map(|segment| RenderSegment {
                 cursor: segment.cursor.clone(),
+                hover_changes: segment.hover_changes.clone(),
                 keyboard: segment.keyboard.clone(),
                 decoders: segment.decoders.clone(),
                 render_display: true,
