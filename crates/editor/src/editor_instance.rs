@@ -1353,7 +1353,7 @@ impl EditorInstance {
 
                 loop {
                     let still_now = std::mem::take(&mut render_still);
-                    let Some((frame_number, fps, resolution_base)) =
+                    let Some(request @ (frame_number, fps, resolution_base)) =
                         *preview_rx.borrow_and_update()
                     else {
                         break;
@@ -1770,7 +1770,7 @@ impl EditorInstance {
                             {
                                 still_due = Some((
                                     tokio::time::Instant::now() + PREVIEW_STILL_SETTLE,
-                                    (frame_number, fps, resolution_base),
+                                    request,
                                 ));
                             }
 
