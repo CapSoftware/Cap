@@ -27,11 +27,13 @@
 
 use cap_project::{
     AudioTrackSegment, Camera3DProperties, Camera3DSegment, CaptionTrackSegment,
-    ClipSpeedAudioMode, CursorClickEvent, GlideDirection, KeyboardTrackSegment, MaskKind,
-    MaskSegment, OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment,
-    TextSegment, TimelineConfiguration, TimelineSegment, VoiceEq, XY, ZoomMode, ZoomSegment,
-    mask_effect_contract,
+    ClipSpeedAudioMode, CursorClickEvent, KeyboardTrackSegment, MaskKind, MaskSegment,
+    OverlayTrack, ProjectConfiguration, SceneMode, SceneSegment, ShapeSegment, TextSegment,
+    TimelineConfiguration, TimelineSegment, VoiceEq, XY, ZoomSegment, mask_effect_contract,
 };
+
+use cap_project::auto_zoom::auto_zoom_segments;
+pub use cap_project::auto_zoom::generate_zoom_segments_from_clicks;
 
 use crate::editor_timeline::{self, Segment, TrackKind};
 
@@ -247,6 +249,12 @@ impl ProjectHistory {
     /// `canRedo = count > 0`.
     pub fn can_redo(&self) -> bool {
         self.count > 0
+    }
+
+    /// A paused gesture changes the project before it records an entry, so
+    /// `can_undo` alone reads a drag in progress as untouched.
+    pub fn is_untouched(&self) -> bool {
+        self.entries.len() == 1 && self.paused == 0 && !self.dirty
     }
 
     /// `move(1)`: step the cursor back one and hand back the state there.
@@ -2500,10 +2508,38 @@ pub fn clip_trim_end(
 // Auto zoom
 // ---------------------------------------------------------------------------
 
+pub fn settle_pending_auto_zoom(
+    project: &mut ProjectConfiguration,
+    clicks_by_clip: &[Vec<CursorClickEvent>],
+    edited: bool,
+    enabled: bool,
+    zoom_amount: f64,
+) -> bool {
+    if !project.auto_zoom_pending {
+        return false;
+    }
+    project.auto_zoom_pending = false;
+    let version = project.auto_zoom_version;
+    let Some(timeline) = project.timeline.as_mut() else {
+        return false;
+    };
+    if edited || !enabled || !timeline.zoom_segments.is_empty() {
+        return false;
+    }
+    let segments =
+        generate_zoom_segments_for_timeline(clicks_by_clip, timeline, zoom_amount, version);
+    if segments.is_empty() {
+        return false;
+    }
+    timeline.zoom_segments = segments;
+    true
+}
+
 pub fn generate_zoom_segments_for_timeline(
     clicks_by_clip: &[Vec<CursorClickEvent>],
     timeline: &TimelineConfiguration,
     zoom_amount: f64,
+    auto_zoom_version: u32,
 ) -> Vec<ZoomSegment> {
     let ordered_clicks: Vec<_> = clicks_by_clip
         .iter()
@@ -2541,91 +2577,13 @@ pub fn generate_zoom_segments_for_timeline(
             mapped.push(click);
         }
     }
-    generate_zoom_segments_from_clicks(mapped, timeline.duration(), zoom_amount)
-}
-
-/// `generate_zoom_segments_from_clicks_impl`
-/// (`src-tauri/src/recording.rs:3706-3782`), the algorithm behind the Tauri
-/// command the empty zoom track's generate button invokes: every click grows
-/// into a padded interval (300ms before, 2.5s after), clicks in the last
-/// second are ignored, intervals closer than 2.5s merge, and the result is
-/// clamped inside the recording. The Tauri signature also takes the cursor
-/// *moves* and ignores them; this one does not pretend to want them.
-pub fn generate_zoom_segments_from_clicks(
-    mut clicks: Vec<CursorClickEvent>,
-    max_duration: f64,
-    zoom_amount: f64,
-) -> Vec<ZoomSegment> {
-    const MS_PER_SECOND: f64 = 1000.0;
-    const START_MIN_MS: f64 = 1.0;
-    const CLICK_PRE_PADDING_MS: f64 = 300.0;
-    const CLICK_POST_PADDING_MS: f64 = 2500.0;
-    const CLICK_END_CLAMP_PADDING_MS: f64 = 800.0;
-    const TRAILING_CLICK_IGNORE_MS: f64 = 1000.0;
-    const MERGE_GAP_MS: f64 = 2500.0;
-
-    if max_duration <= 0.0 {
-        return Vec::new();
+    // Crossfades overlap neighbouring clips, so clip order is not output
+    // order. Version 1 joins ranges in the order it is given them; version 0
+    // sorts on its own and is left exactly as it was.
+    if auto_zoom_version >= cap_project::auto_zoom::AUTO_ZOOM_VERSION {
+        mapped.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     }
-
-    let duration_ms = max_duration * MS_PER_SECOND;
-    let click_cutoff_ms = duration_ms - TRAILING_CLICK_IGNORE_MS;
-    let end_limit_ms = duration_ms - CLICK_END_CLAMP_PADDING_MS;
-    if click_cutoff_ms <= 0.0 || end_limit_ms <= START_MIN_MS {
-        return Vec::new();
-    }
-
-    clicks.sort_by(|a, b| {
-        a.time_ms
-            .partial_cmp(&b.time_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut intervals: Vec<(f64, f64)> = Vec::new();
-    for click in clicks {
-        let time_ms = click.time_ms.floor();
-        if time_ms >= click_cutoff_ms {
-            continue;
-        }
-
-        let start = (time_ms - CLICK_PRE_PADDING_MS).max(START_MIN_MS);
-        let end = (time_ms + CLICK_POST_PADDING_MS).min(end_limit_ms);
-
-        if end > start {
-            intervals.push((start, end));
-        }
-    }
-
-    if intervals.is_empty() {
-        return Vec::new();
-    }
-
-    intervals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    for interval in intervals {
-        if let Some(last) = merged.last_mut()
-            && interval.0 <= last.1 + MERGE_GAP_MS
-        {
-            last.1 = last.1.max(interval.1);
-            continue;
-        }
-        merged.push(interval);
-    }
-
-    merged
-        .into_iter()
-        .map(|(start, end)| ZoomSegment {
-            start: start.round() / MS_PER_SECOND,
-            end: end.round() / MS_PER_SECOND,
-            amount: zoom_amount,
-            mode: ZoomMode::Auto,
-            glide_direction: GlideDirection::None,
-            glide_speed: 0.5,
-            instant_animation: false,
-            edge_snap_ratio: 0.25,
-        })
-        .collect()
+    auto_zoom_segments(auto_zoom_version, mapped, timeline.duration(), zoom_amount)
 }
 
 /// `splitClipSegment(time, index)` (`ED/context.ts:512-580`).
@@ -3414,6 +3372,24 @@ mod tests {
     }
 
     #[test]
+    fn history_counts_a_gesture_in_progress_as_an_edit() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        assert!(history.is_untouched());
+        history.pause();
+        assert!(!history.is_untouched());
+        history.record(&with_zoom_count(1));
+        assert!(!history.is_untouched());
+        history.resume(&with_zoom_count(1));
+        assert!(!history.is_untouched());
+        assert!(history.can_undo());
+
+        let mut clicked = ProjectHistory::new(with_zoom_count(0));
+        clicked.pause();
+        clicked.resume(&with_zoom_count(0));
+        assert!(clicked.is_untouched());
+    }
+
+    #[test]
     fn history_walks_back_and_forward_through_snapshots() {
         let mut history = ProjectHistory::new(with_zoom_count(0));
         assert!(!history.can_undo(), "one entry is nothing to undo");
@@ -4157,6 +4133,7 @@ mod tests {
             ],
             timeline,
             2.0,
+            0,
         );
         let bounds: Vec<_> = zooms.iter().map(|zoom| (zoom.start, zoom.end)).collect();
         assert_eq!(bounds, vec![(1.7, 4.5), (13.7, 16.5), (23.7, 26.5)]);
@@ -4169,6 +4146,7 @@ mod tests {
             &[vec![click(2000.0)], vec![click(4000.0)]],
             project.timeline.as_ref().unwrap(),
             2.0,
+            0,
         );
         assert_eq!(zooms.len(), 2);
         assert_eq!((zooms[1].start, zooms[1].end), (13.7, 16.5));
@@ -4195,6 +4173,7 @@ mod tests {
             &[vec![click(3000.0)], vec![click(4000.0)]],
             timeline,
             2.0,
+            0,
         );
         let bounds: Vec<_> = zooms.iter().map(|zoom| (zoom.start, zoom.end)).collect();
         assert_eq!(bounds, vec![(5.7, 8.5), (16.7, 19.5)]);
@@ -4219,6 +4198,7 @@ mod tests {
             ]],
             project.timeline.as_ref().unwrap(),
             2.0,
+            0,
         );
         assert_eq!(zooms.len(), 1);
         assert_eq!((zooms[0].start, zooms[0].end), (7.7, 9.2));
@@ -4241,7 +4221,8 @@ mod tests {
             bounds(generate_zoom_segments_for_timeline(
                 std::slice::from_ref(&clicks),
                 timeline,
-                2.5
+                2.5,
+                0
             )),
             bounds(expected.clone())
         );
@@ -4250,10 +4231,296 @@ mod tests {
             bounds(generate_zoom_segments_for_timeline(
                 &[clicks],
                 timeline,
-                2.5
+                2.5,
+                0
             )),
             bounds(expected)
         );
+    }
+
+    fn v1_bounds(zooms: Vec<ZoomSegment>) -> Vec<(f64, f64)> {
+        zooms
+            .into_iter()
+            .map(|zoom| ((zoom.start * 1000.0).round(), (zoom.end * 1000.0).round()))
+            .collect()
+    }
+
+    #[test]
+    fn newer_rules_follow_output_time_across_a_crossfade() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 8.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 2.0 }],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = project.timeline.as_ref().unwrap();
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let zooms = generate_zoom_segments_for_timeline(
+            &[vec![click(9900.0)], vec![click(100.0)]],
+            timeline,
+            2.0,
+            version,
+        );
+        assert_eq!(v1_bounds(zooms), vec![(7800.0, 12400.0)]);
+        let earlier = generate_zoom_segments_for_timeline(
+            &[vec![click(9900.0)], vec![click(100.0)]],
+            timeline,
+            2.0,
+            0,
+        );
+        assert_eq!(
+            earlier
+                .iter()
+                .map(|zoom| (zoom.start, zoom.end))
+                .collect::<Vec<_>>(),
+            vec![(7.8, 12.4)]
+        );
+    }
+
+    #[test]
+    fn newer_rules_follow_output_time_across_reordered_and_repeated_takes() {
+        let project = config(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 1, "timescale": 2.0, "start": 10.0, "end": 30.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 10.0, "end": 30.0 }
+                ],
+                "transitions": [{ "segmentIndex": 2, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            }
+        }));
+        let timeline = project.timeline.as_ref().unwrap();
+        let clicks = [
+            vec![click(4000.0), click(9800.0)],
+            vec![click(2000.0), click(14000.0), click(10200.0)],
+        ];
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let zooms = v1_bounds(generate_zoom_segments_for_timeline(
+            &clicks, timeline, 2.0, version,
+        ));
+        assert!(
+            zooms.windows(2).all(|pair| pair[0].1 < pair[1].0),
+            "{zooms:?}"
+        );
+        assert_eq!(
+            zooms,
+            v1_bounds(generate_zoom_segments_for_timeline(
+                &clicks, timeline, 2.0, 0
+            ))
+        );
+    }
+
+    #[test]
+    fn newer_rules_keep_a_single_take_the_same_across_a_split() {
+        let mut project = two_clip_config();
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments.truncate(1);
+        let version = cap_project::auto_zoom::AUTO_ZOOM_VERSION;
+        let clicks = vec![click(0.0), click(4000.0), click(5000.0), click(9500.0)];
+        let whole = v1_bounds(generate_zoom_segments_for_timeline(
+            std::slice::from_ref(&clicks),
+            timeline,
+            2.0,
+            version,
+        ));
+        assert!(split_clip_segment(timeline, 5.0, Some(0)));
+        assert_eq!(
+            v1_bounds(generate_zoom_segments_for_timeline(
+                &[clicks],
+                timeline,
+                2.0,
+                version
+            )),
+            whole
+        );
+        assert_eq!(whole, vec![(1.0, 7500.0)]);
+    }
+
+    #[test]
+    fn new_projects_generate_through_the_timeline_with_the_newer_rules() {
+        let project = two_clip_config();
+        let timeline = project.timeline.as_ref().unwrap();
+        let clicks = [
+            vec![click(2000.0), click(9400.0)],
+            vec![click(1000.0), click(4000.0)],
+        ];
+        let offset = timeline.segments[0].duration() * 1000.0;
+        let flattened: Vec<_> = [2000.0, 9400.0, offset + 1000.0, offset + 4000.0]
+            .into_iter()
+            .map(click)
+            .collect();
+        let bounds = |zooms: Vec<ZoomSegment>| {
+            zooms
+                .into_iter()
+                .map(|zoom| (zoom.start, zoom.end, zoom.amount))
+                .collect::<Vec<_>>()
+        };
+        let generated = bounds(generate_zoom_segments_for_timeline(
+            &clicks,
+            timeline,
+            2.0,
+            cap_project::auto_zoom::AUTO_ZOOM_VERSION,
+        ));
+        assert_eq!(
+            generated,
+            bounds(cap_project::auto_zoom::generate_auto_zoom_segments(
+                &flattened,
+                timeline.duration(),
+                2.0
+            ))
+        );
+        assert_eq!(generated, vec![(1.7, 4.5, 2.0), (9.1, 16.5, 2.0)]);
+    }
+
+    fn fresh_recording() -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: two_clip_config().timeline,
+            ..ProjectConfiguration::for_new_project()
+        }
+    }
+
+    fn fresh_clicks() -> [Vec<CursorClickEvent>; 2] {
+        [
+            vec![click(2000.0), click(2080.0), click(9400.0)],
+            vec![click(1000.0), click(4000.0)],
+        ]
+    }
+
+    #[test]
+    fn a_fresh_recording_opens_with_the_newer_rules_zooms() {
+        let mut project = fresh_recording();
+        let clicks = fresh_clicks();
+        assert!(project.auto_zoom_pending);
+        assert!(settle_pending_auto_zoom(
+            &mut project,
+            &clicks,
+            false,
+            true,
+            2.0
+        ));
+        assert!(!project.auto_zoom_pending);
+        let timeline = project.timeline.as_ref().unwrap();
+        let offset = timeline.segments[0].duration() * 1000.0;
+        let flattened: Vec<_> = [2000.0, 2080.0, 9400.0, offset + 1000.0, offset + 4000.0]
+            .into_iter()
+            .map(click)
+            .collect();
+        let expected = cap_project::auto_zoom::generate_auto_zoom_segments(
+            &flattened,
+            timeline.duration(),
+            2.0,
+        );
+        assert_eq!(timeline.zoom_segments, expected);
+        assert_eq!(
+            v1_bounds(timeline.zoom_segments.clone()),
+            vec![(1700.0, 4580.0), (9100.0, 16500.0)]
+        );
+        assert!(timeline.zoom_segments.iter().all(|zoom| zoom.amount == 2.0));
+    }
+
+    #[test]
+    fn reopening_a_fresh_recording_never_regenerates() {
+        let mut project = fresh_recording();
+        let clicks = fresh_clicks();
+        assert!(settle_pending_auto_zoom(
+            &mut project,
+            &clicks,
+            false,
+            true,
+            2.0
+        ));
+        project.timeline.as_mut().unwrap().zoom_segments.clear();
+        let saved = serde_json::to_value(&project).unwrap();
+        assert!(saved.get("autoZoomPending").is_none());
+        let mut reopened: ProjectConfiguration = serde_json::from_value(saved).unwrap();
+        assert!(!settle_pending_auto_zoom(
+            &mut reopened,
+            &clicks,
+            false,
+            true,
+            2.0
+        ));
+        assert!(reopened.timeline.unwrap().zoom_segments.is_empty());
+    }
+
+    #[test]
+    fn an_edited_recording_or_one_with_zooms_keeps_its_own() {
+        let mut edited = fresh_recording();
+        assert!(!settle_pending_auto_zoom(
+            &mut edited,
+            &fresh_clicks(),
+            true,
+            true,
+            2.0
+        ));
+        assert!(!edited.auto_zoom_pending);
+        assert!(edited.timeline.unwrap().zoom_segments.is_empty());
+
+        let mut zoomed = fresh_recording();
+        let drawn = generate_zoom_segments_for_timeline(
+            &[vec![click(5000.0)], vec![]],
+            zoomed.timeline.as_ref().unwrap(),
+            3.0,
+            cap_project::auto_zoom::AUTO_ZOOM_VERSION,
+        );
+        zoomed.timeline.as_mut().unwrap().zoom_segments = drawn.clone();
+        assert!(!settle_pending_auto_zoom(
+            &mut zoomed,
+            &fresh_clicks(),
+            false,
+            true,
+            2.0
+        ));
+        assert!(!zoomed.auto_zoom_pending);
+        assert_eq!(zoomed.timeline.unwrap().zoom_segments, drawn);
+    }
+
+    #[test]
+    fn saved_projects_are_never_touched() {
+        let mut saved = two_clip_config();
+        let before = serde_json::to_value(&saved).unwrap();
+        assert!(!saved.auto_zoom_pending);
+        assert!(!settle_pending_auto_zoom(
+            &mut saved,
+            &fresh_clicks(),
+            false,
+            true,
+            2.0
+        ));
+        assert_eq!(serde_json::to_value(&saved).unwrap(), before);
+    }
+
+    #[test]
+    fn with_auto_zoom_off_a_fresh_recording_opens_without_zooms() {
+        let mut project = fresh_recording();
+        assert!(!settle_pending_auto_zoom(
+            &mut project,
+            &fresh_clicks(),
+            false,
+            false,
+            2.0
+        ));
+        assert!(!project.auto_zoom_pending);
+        assert!(project.timeline.unwrap().zoom_segments.is_empty());
+    }
+
+    #[test]
+    fn a_recording_without_clicks_opens_without_zooms() {
+        let mut project = fresh_recording();
+        assert!(!settle_pending_auto_zoom(
+            &mut project,
+            &[vec![], vec![]],
+            false,
+            true,
+            2.0
+        ));
+        assert!(!project.auto_zoom_pending);
+        assert!(project.timeline.unwrap().zoom_segments.is_empty());
     }
 
     // -- Split --------------------------------------------------------------

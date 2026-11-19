@@ -805,7 +805,7 @@ pub fn start(cx: &mut App) {
         let canvas_ink = ink.clone();
         let Some(canvas) = open_panel(
             frame,
-            platform::target_overlay_level() - 1,
+            platform::recording_area_level() - 1,
             false,
             move |_, cx| {
                 cx.observe(&canvas_ink, |_, _, cx| cx.notify()).detach();
@@ -820,7 +820,7 @@ pub fn start(cx: &mut App) {
     let input_mode = mode.clone();
     let Some(input) = open_panel(
         frame,
-        platform::target_overlay_level(),
+        platform::recording_area_level(),
         true,
         move |_, _| DrawInput {
             ink,

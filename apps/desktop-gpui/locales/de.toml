@@ -2439,6 +2439,7 @@ mp4_filter = "MP4-Video"
 prepare_controls_failed = "Die Aufnahmesteuerung konnte nicht vorbereitet werden: {error}"
 record = "Aufnehmen"
 record_new = "Neuen Clip aufnehmen"
+removed_media = "{name} (entfernte Clips)"
 save_before_recording_failed = "Das aktuelle Projekt konnte vor der Aufnahme nicht gespeichert werden: {error}"
 split = "Teil {number}"
 title = "Clips"
@@ -2516,6 +2517,10 @@ open_link = "Link öffnen"
 retry_copy = "Erneut kopieren"
 reuploaded = "Ihre neueste Bearbeitung ist unter demselben Link bereit"
 uploaded = "Ihr Cap wurde erfolgreich hochgeladen"
+
+[editor.export.enhance]
+description = "Schärft vergrößerte und kontrastarme Bildschirminhalte. Exporte können länger dauern."
+title = "Qualität verbessern"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -2805,6 +2810,7 @@ rounded = "Abgerundet"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+follow_hover = "Hover-Hervorhebungen folgen"
 friction = "Reibung"
 hide_when_idle = "Bei Inaktivität ausblenden"
 inactivity_delay = "Verzögerung bei Inaktivität"
@@ -3252,7 +3258,11 @@ wipe_down = "Wischen nach unten"
 zoom = "Zoom"
 
 [editor.window.transport]
+compare = "Vergleichen"
+compare_tooltip = "Gedrückt halten, um das Original zu sehen"
 done_splitting = "Teilen beenden"
+enhance = "Verbessern"
+enhance_tooltip = "Angehaltenes Bild verbessert anzeigen"
 play_pause = "Video abspielen/pausieren"
 speed = "Vorschaugeschwindigkeit"
 split = "Teilen"

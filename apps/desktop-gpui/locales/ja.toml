@@ -2439,6 +2439,7 @@ mp4_filter = "MP4動画"
 prepare_controls_failed = "録画コントロールを準備できませんでした：{error}"
 record = "録画"
 record_new = "新しいクリップを録画"
+removed_media = "{name}（削除したクリップ）"
 save_before_recording_failed = "録画前に現在のプロジェクトを保存できませんでした：{error}"
 split = "分割{number}"
 title = "クリップ"
@@ -2516,6 +2517,10 @@ open_link = "リンクを開く"
 retry_copy = "コピーを再試行"
 reuploaded = "最新の編集内容が同じリンクで利用できます"
 uploaded = "録画のアップロードが完了しました"
+
+[editor.export.enhance]
+description = "拡大した画面や低コントラストの画面内容を鮮明にします。書き出しに時間がかかる場合があります。"
+title = "画質を向上"
 
 [editor.export.estimate]
 gigabytes = "約{value} GB"
@@ -2805,6 +2810,7 @@ rounded = "角丸"
 squircle = "スクワークル"
 
 [editor.tabs.cursor]
+follow_hover = "ホバー表示に合わせる"
 friction = "摩擦"
 hide_when_idle = "操作がないときは非表示"
 inactivity_delay = "非表示までの時間"
@@ -3252,7 +3258,11 @@ wipe_down = "下へワイプ"
 zoom = "ズーム"
 
 [editor.window.transport]
+compare = "比較"
+compare_tooltip = "長押しで元の映像を表示"
 done_splitting = "分割を終了"
+enhance = "画質向上"
+enhance_tooltip = "一時停止中のフレームを高画質で表示"
 play_pause = "動画を再生/一時停止"
 speed = "プレビューの再生速度"
 split = "分割"

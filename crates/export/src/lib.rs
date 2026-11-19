@@ -69,6 +69,7 @@ pub struct ExporterBuilder {
     config: Option<ProjectConfiguration>,
     output_path: Option<PathBuf>,
     force_ffmpeg_decoder: bool,
+    screen_enhancement: Option<bool>,
 }
 
 impl ExporterBuilder {
@@ -84,6 +85,14 @@ impl ExporterBuilder {
 
     pub fn with_force_ffmpeg_decoder(mut self, force: bool) -> Self {
         self.force_ffmpeg_decoder = force;
+        self
+    }
+
+    /// Enhances the screen recording in this export (the export page's
+    /// option). Without it a config passed to `with_config` keeps its own
+    /// choice; a project loaded from disk is never enhanced.
+    pub fn with_screen_enhancement(mut self, enhance: bool) -> Self {
+        self.screen_enhancement = Some(enhance);
         self
     }
 
@@ -123,6 +132,13 @@ impl ExporterBuilder {
 
         cap_editor::release_playback_audio_caches();
         let mut project_config = self.load_project_config()?;
+        if let Some(enhance) = self.screen_enhancement {
+            project_config.screen_enhancement = if enhance {
+                cap_project::ScreenEnhancement::on()
+            } else {
+                Default::default()
+            };
+        }
 
         let recording_meta =
             RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
@@ -556,6 +572,7 @@ impl ExporterBase {
             config: None,
             output_path: None,
             force_ffmpeg_decoder: false,
+            screen_enhancement: None,
         }
     }
 }
@@ -895,9 +912,11 @@ mod clip_offset_tests {
                     cursor: None,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 }],
                 cursors: Cursors::default(),
                 status: None,
+                cursor_shape_version: 0,
             },
         }
     }

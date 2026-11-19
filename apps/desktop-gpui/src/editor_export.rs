@@ -358,6 +358,14 @@ pub struct PreviewStats {
     pub estimated_size_mb: f64,
 }
 
+fn screen_enhancement(enhance: bool) -> cap_project::ScreenEnhancement {
+    if enhance {
+        cap_project::ScreenEnhancement::on()
+    } else {
+        cap_project::ScreenEnhancement::default()
+    }
+}
+
 pub struct ExportUi {
     pub destination: ExportDestination,
     pub format: ExportFormatKind,
@@ -366,6 +374,7 @@ pub struct ExportUi {
     pub compression: ExportCompression,
     pub gif_quality: GifQualityPreset,
     pub optimize_filesize: bool,
+    pub enhance_quality: bool,
     pub turbo: bool,
     pub cursor_only: bool,
     pub custom_bpp: Option<f32>,
@@ -459,6 +468,7 @@ impl ExportUi {
             excluded_tracks: None,
             resolution_from_source: true,
             fps_from_source: true,
+            enhance_quality: false,
         });
         Self::from_preferences(prefs)
     }
@@ -477,6 +487,7 @@ impl ExportUi {
             },
             gif_quality: GifQualityPreset::from_slug(prefs.gif_quality.as_deref()),
             optimize_filesize: prefs.optimize_filesize,
+            enhance_quality: prefs.enhance_quality,
             turbo: prefs.turbo && turbo_available(),
             cursor_only: prefs.cursor_only,
             custom_bpp: prefs.custom_bpp,
@@ -594,6 +605,7 @@ impl ExportUi {
             resolution: self.resolution.label().to_string(),
             compression: format!("{:?}", self.compression),
             optimize_filesize: self.optimize_filesize,
+            enhance_quality: self.enhance_quality,
             cursor_only: self.cursor_only,
             custom_bpp: self.custom_bpp,
             force_ffmpeg_decoder: self.force_ffmpeg,
@@ -952,10 +964,13 @@ impl EditorWindow {
             XY::new(width, height)
         });
         let fps = highest_recorded_fps(
-            segments.iter().map(|segment| {
+            segments.iter().enumerate().map(|(index, segment)| {
+                let recorded = summary.recorded_fps.get(index);
                 (
-                    segment.display.fps,
-                    segment.camera.as_ref().map(|camera| camera.fps),
+                    capture_fps(segment.display.fps, recorded.map(|(display, _)| *display)),
+                    segment.camera.as_ref().map(|camera| {
+                        capture_fps(camera.fps, recorded.and_then(|(_, camera)| *camera))
+                    }),
                 )
             }),
             !self.project.camera.hide,
@@ -990,7 +1005,8 @@ impl EditorWindow {
         let Some(ui) = self.export.as_mut() else {
             return;
         };
-        let project = self.project.clone();
+        let mut project = self.project.clone();
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         ui.estimate_cancel.store(true, Ordering::Release);
         ui.estimate_cancel = Arc::new(AtomicBool::new(false));
         ui.estimate = None;
@@ -1185,7 +1201,8 @@ impl EditorWindow {
         let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
-        let project = self.project.clone();
+        let mut project = self.project.clone();
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         ui.cancel = Arc::new(AtomicBool::new(false));
         let cancel = ui.cancel.clone();
         ui.phase = if destination == ExportDestination::File {
@@ -1668,7 +1685,8 @@ impl EditorWindow {
         let turbo = ui.turbo;
         let force = ui.force_ffmpeg;
         let project_path = self.project_path.clone();
-        let project = self.project.clone();
+        let mut project = self.project.clone();
+        project.screen_enhancement = screen_enhancement(ui.enhance_quality);
         let organization_id = ui.organization_id.clone().or_else(|| {
             store::auth_snapshot()
                 .organizations
@@ -3098,6 +3116,7 @@ impl EditorWindow {
                     .child(tr::editor::export::quality::larger()),
             )
             .child(self.export_optimize_row(ui, cx))
+            .child(self.export_enhance_row(ui, cx))
             .when(turbo_available(), |this| {
                 this.child(self.export_turbo_row(ui, cx))
             })
@@ -3143,6 +3162,24 @@ impl EditorWindow {
                     .child(tr::editor::export::quality::smaller())
                     .child(tr::editor::export::quality::larger()),
             )
+            .child(self.export_enhance_row(ui, cx))
+    }
+
+    fn export_enhance_row(&self, ui: &ExportUi, cx: &mut Context<Self>) -> impl IntoElement {
+        self.export_toggle_row(
+            "export-enhance",
+            tr::editor::export::enhance::title(),
+            tr::editor::export::enhance::description(),
+            ui.enhance_quality,
+            cx.listener(|this, _, window, cx| {
+                if let Some(ui) = this.export.as_mut() {
+                    ui.enhance_quality = !ui.enhance_quality;
+                    ui.persist();
+                }
+                this.refresh_export_preview(window, cx);
+                cx.notify();
+            }),
+        )
     }
 
     fn export_toggle_row(
@@ -4065,6 +4102,14 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     }
 }
 
+/// The rate a track was captured at. The probed rate is the track's average,
+/// which a mostly still screen keeps far below its capture rate (a 60 fps
+/// macOS capture of a still page averages a few fps), so the rate the recorder
+/// stored wins when it is higher.
+fn capture_fps(probed: u32, recorded: Option<u32>) -> u32 {
+    probed.max(recorded.unwrap_or(0))
+}
+
 fn highest_recorded_fps(
     segments: impl IntoIterator<Item = (u32, Option<u32>)>,
     camera_visible: bool,
@@ -4281,9 +4326,9 @@ mod tests {
 
     use super::{
         ExportDestination, ExportFormatKind, ExportPhase, ExportResolution, ExportSource, ExportUi,
-        GifQualityPreset, TrackKind, TrackOption, cancel_matching_export, estimated_tracks_bytes,
-        export_file_name, export_fps_options, export_name_stem, export_resolutions,
-        highest_recorded_fps, normalize_export_options, selected_tracks,
+        GifQualityPreset, TrackKind, TrackOption, cancel_matching_export, capture_fps,
+        estimated_tracks_bytes, export_file_name, export_fps_options, export_name_stem,
+        export_resolutions, highest_recorded_fps, normalize_export_options, selected_tracks,
     };
     use crate::store::ExportPrefs;
     use cap_project::XY;
@@ -4315,6 +4360,7 @@ mod tests {
             excluded_tracks: None,
             resolution_from_source: false,
             fps_from_source: false,
+            enhance_quality: false,
         }
     }
 
@@ -4435,6 +4481,17 @@ mod tests {
         assert_eq!(highest_recorded_fps(segments, true), Some(60));
         assert_eq!(highest_recorded_fps(segments, false), Some(30));
         assert_eq!(highest_recorded_fps([(0, None)], true), None);
+    }
+
+    #[test]
+    fn a_still_screen_exports_at_the_rate_it_was_captured_at() {
+        // A 60 fps macOS capture of a mostly still screen averages 4.7 fps.
+        assert_eq!(capture_fps(5, Some(60)), 60);
+        assert_eq!(new_export(1920, 1200, capture_fps(5, Some(60))).fps, 60);
+        // A stored placeholder or a missing rate leaves the probed one.
+        assert_eq!(capture_fps(60, Some(30)), 60);
+        assert_eq!(capture_fps(24, Some(0)), 24);
+        assert_eq!(capture_fps(48, None), 48);
     }
 
     #[test]

@@ -46,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.removed_media",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -261,6 +262,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Re-encodes with software for much smaller files (slower)",
         ),
         (tr::editor::export::optimize::title(), "Optimize file size"),
+        (
+            tr::editor::export::enhance::description(),
+            "Sharpens zoomed-in and low-contrast screen content. Exports can take longer.",
+        ),
+        (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
         (
             tr::editor::export::phase::clipboard_failed(),
@@ -639,6 +645,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::corner::squircle(), "Squircle"),
         (tr::editor::tabs::padding::even(), "Even"),
         (tr::editor::tabs::padding::proportional(), "Proportional"),
+        (
+            tr::editor::tabs::cursor::follow_hover(),
+            "Follow Hover Highlights",
+        ),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (
@@ -1299,6 +1309,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
         ),
+        (tr::editor::window::transport::enhance(), "Enhance"),
+        (
+            tr::editor::window::transport::enhance_tooltip(),
+            "Show the paused frame enhanced",
+        ),
+        (tr::editor::window::transport::compare(), "Compare"),
+        (
+            tr::editor::window::transport::compare_tooltip(),
+            "Hold to see the original",
+        ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
         (tr::editor::window::undo(), "Undo"),
@@ -1626,6 +1646,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::clips::prepare_controls_failed(&error),
         format!("Could not prepare the recording controls: {error}")
+    );
+    assert_eq!(
+        tr::editor::clips::removed_media("Demo"),
+        "Demo (removed clips)"
     );
     assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),

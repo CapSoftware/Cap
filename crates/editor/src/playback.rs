@@ -1212,11 +1212,18 @@ impl Playback {
                                 &seg.cursor,
                                 cursor_smoothing,
                                 Some(click_spring),
-                                project.cursor.interaction_anchors,
+                                cap_rendering::CursorAnchors::from_config(&project.cursor),
+                                &seg.hover_changes.times_ms(),
                             ))
                         })
                         .collect()
                 };
+            let hover_generation = || {
+                self.segment_medias
+                    .iter()
+                    .map(|seg| seg.hover_changes.generation())
+                    .sum::<u64>()
+            };
 
             let build_zoom_timelines =
                 |project: &ProjectConfiguration| -> Vec<ZoomTransformTimeline> {
@@ -1258,6 +1265,7 @@ impl Playback {
                         .collect()
                 };
 
+            let mut cursor_hover_generation = hover_generation();
             let mut cursor_timelines = build_cursor_timelines(&cached_project);
             let mut zoom_timelines = build_zoom_timelines(&cached_project);
             let mut outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
@@ -1600,6 +1608,10 @@ impl Playback {
                         zoom_timelines = build_zoom_timelines(&cached_project);
                         outgoing_zoom_timelines = build_outgoing_zoom_timelines(&cached_project);
                     }
+                }
+                if hover_generation() != cursor_hover_generation {
+                    cursor_hover_generation = hover_generation();
+                    cursor_timelines = build_cursor_timelines(&cached_project);
                 }
 
                 let requested_speed = if adopted.is_some() {

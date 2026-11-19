@@ -2441,6 +2441,7 @@ mp4_filter = { text = "MP4 Video", context = "File type filter name in the file 
 prepare_controls_failed = "Could not prepare the recording controls: {error}"
 record = { text = "Record", context = "Button that records a new clip into this project." }
 record_new = "Record a new clip"
+removed_media = { text = "{name} (removed clips)", context = "Name of the folder moved to the system Trash that holds the media of clips deleted from a recording; {name} is the recording name." }
 save_before_recording_failed = "Could not save the current project before recording: {error}"
 split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
 title = "Clips"
@@ -2518,6 +2519,10 @@ open_link = "Open link"
 retry_copy = "Retry Copy"
 reuploaded = "Your latest edit is ready at the same link"
 uploaded = "Your Cap has been uploaded successfully"
+
+[editor.export.enhance]
+description = "Sharpens zoomed-in and low-contrast screen content. Exports can take longer."
+title = "Enhance quality"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -2807,6 +2812,7 @@ rounded = "Rounded"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+follow_hover = "Follow Hover Highlights"
 friction = "Friction"
 hide_when_idle = "Hide When Idle"
 inactivity_delay = "Inactivity Delay"
@@ -3254,7 +3260,11 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
+compare = "Compare"
+compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
+enhance = "Enhance"
+enhance_tooltip = "Show the paused frame enhanced"
 play_pause = "Play/Pause video"
 speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"
