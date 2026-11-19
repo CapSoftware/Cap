@@ -92,9 +92,9 @@ impl LumaFrame {
     pub fn from_rgba(width: u32, height: u32, stride: usize, rgba: &[u8]) -> Self {
         let mut pixels = Vec::with_capacity(width as usize * height as usize);
         for row in rgba.chunks(stride).take(height as usize) {
-            pixels.extend(row[..width as usize * 4].chunks_exact(4).map(|px| {
-                ((u32::from(px[0]) * 77 + u32::from(px[1]) * 150 + u32::from(px[2]) * 29) >> 8)
-                    as u8
+            let (rgba, _) = row[..width as usize * 4].as_chunks::<4>();
+            pixels.extend(rgba.iter().map(|&[r, g, b, _]| {
+                ((u32::from(r) * 77 + u32::from(g) * 150 + u32::from(b) * 29) >> 8) as u8
             }));
         }
         Self::new(width, height, pixels)
