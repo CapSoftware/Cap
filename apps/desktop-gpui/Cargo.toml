@@ -5,7 +5,7 @@
 # gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build", "glass"]
+members = [".", "kernels", "i18n-build", "glass", "sensitive-scan"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -90,6 +90,7 @@ cap-editor = { path = "../../crates/editor" }
 # export *page* can also drive the `cap-exporter` subprocess protocol, so this
 # is the cheaper of the two options rather than the only one.
 cap-export = { path = "../../crates/export" }
+cap-sensitive-scan = { path = "sensitive-scan" }
 # The first-frame JPEG a finished recording's Recents card is drawn from
 # (`create_screenshot`, ported from 0.6.0). Same package/git/rev the root
 # workspace pins, and cap-recording already builds it, so this is an import,

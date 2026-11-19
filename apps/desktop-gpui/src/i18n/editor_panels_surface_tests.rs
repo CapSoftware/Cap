@@ -21,6 +21,9 @@ const FORMATTED: &[&str] = &[
     "editor.panel.keyboard.title",
     "editor.panel.audio.title",
     "editor.panel.mask.title",
+    "editor.panel.mask.scan_downloading",
+    "editor.panel.mask.scan_found",
+    "editor.panel.mask.scan_progress",
     "editor.shape.title",
     "editor.panel.camera3d.shots",
     "editor.panel.camera3d.pose_start",
@@ -260,6 +263,26 @@ fn editor_panels_match_the_literals_they_replaced() {
             tr::editor::panel::mask::outside_darkness(),
             "Outside Darkness",
         ),
+        (tr::editor::panel::mask::scan_title(), "Hide sensitive data"),
+        (
+            tr::editor::panel::mask::scan_description(),
+            "Cap reads the text on screen and blurs emails, phone numbers, card numbers, keys and your own phrases wherever they appear.",
+        ),
+        (tr::editor::panel::mask::scan_start(), "Scan recording"),
+        (tr::editor::panel::mask::scan_phrases(), "Custom phrases"),
+        (
+            tr::editor::panel::mask::scan_phrase_placeholder(),
+            "Add a phrase and press Enter",
+        ),
+        (
+            tr::editor::panel::mask::scan_failed(),
+            "Couldn't scan the recording",
+        ),
+        (tr::editor::panel::mask::scan_none(), "No sensitive data found"),
+        (
+            tr::editor::panel::mask::scan_changed(),
+            "The project changed during the scan. Scan again to add masks.",
+        ),
         (tr::editor::panel::scene::camera_layout(), "Camera Layout"),
         (tr::editor::panel::scene::transition(), "Transition"),
         (tr::editor::panel::scene::screen_zoom(), "Screen Zoom"),
@@ -474,6 +497,7 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::sidebar::tab::cursor(), "Cursor"),
         (tr::editor::sidebar::tab::keyboard(), "Keyboard"),
         (tr::editor::sidebar::tab::captions(), "Captions"),
+        (tr::editor::sidebar::tab::privacy(), "Privacy"),
         (tr::editor::sidebar::source::desktop(), "Desktop"),
         (tr::editor::sidebar::source::wallpaper(), "Wallpaper"),
         (tr::editor::sidebar::source::image(), "Image"),
@@ -1012,6 +1036,8 @@ fn style_preset_messages_format_their_arguments() {
         tr::editor::panel::style_presets::text_segment::applied_all(4),
         "Applied to all text segments (4)"
     );
+    assert_eq!(tr::editor::panel::mask::scan_found(1), "Added 1 mask");
+    assert_eq!(tr::editor::panel::mask::scan_found(3), "Added 3 masks");
     assert_eq!(
         tr::editor::panel::style_presets::mask::apply_all(2),
         "Apply to all masks (2)"
@@ -1065,6 +1091,14 @@ fn editor_panel_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::editor::panel::mask::title(number),
             format!("Mask {}", index + 1)
+        );
+        assert_eq!(
+            tr::editor::panel::mask::scan_progress(number),
+            format!("Scanning… {}%", index + 1)
+        );
+        assert_eq!(
+            tr::editor::panel::mask::scan_downloading(number),
+            format!("Downloading text recognition… {}%", index + 1)
         );
         assert_eq!(
             tr::editor::shape::title(number),

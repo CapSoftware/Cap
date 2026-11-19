@@ -1568,6 +1568,7 @@ pub struct EditorWindow {
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
     pub(crate) audio_levels: Option<Arc<cap_rendering::AudioLevels>>,
+    pub(crate) sensitive_scan: Option<crate::editor_sensitive_scan::SensitiveScanJob>,
     /// Held from the window opening until it gives up its engine, so the
     /// library refuses to delete the project from under an open editor.
     open_project: Option<crate::library::ProjectOpenInEditor>,
@@ -1813,7 +1814,7 @@ pub struct EditorWindow {
     pub(crate) camera3d_count_hover: Option<usize>,
     /// The user's drag on the resize grip. `None` means the card hugs its
     /// track rows and re-hugs whenever a track is added or removed.
-    timeline_height_override: Option<f32>,
+    pub(crate) timeline_height_override: Option<f32>,
     initial_timeline_rows: Option<usize>,
     timeline_resize: Option<(f32, f32)>,
     /// The header's Presets dropdown (`PresetsDropdown.tsx`), and whichever
@@ -2378,6 +2379,7 @@ impl EditorWindow {
             frame_layout: None,
             instance: None,
             audio_levels: None,
+            sensitive_scan: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -17172,6 +17174,42 @@ mod tests {
 
         assert_eq!(editor_notifies.get(), 0);
         assert_eq!(sidebar_notifies.get(), 1);
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn typing_a_sensitive_phrase_redraws_the_sidebar(cx: &mut gpui::TestAppContext) {
+        use crate::editor_panels::FieldKey;
+        use gpui::EntityInputHandler as _;
+        use std::cell::Cell;
+
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        let input = editor.update_in(cx, |editor, window, cx| {
+            editor.ensure_field(FieldKey::SensitivePhrase, window, cx);
+            editor.field(FieldKey::SensitivePhrase).unwrap().clone()
+        });
+        let sidebar = editor.read_with(cx, |editor, _| editor.sidebar_view.clone());
+        let sidebar_notifies = Rc::new(Cell::new(0));
+        let count = sidebar_notifies.clone();
+        let _subscription =
+            cx.update(|_, cx| cx.observe(&sidebar, move |_, _| count.set(count.get() + 1)));
+        cx.run_until_parked();
+        sidebar_notifies.set(0);
+
+        input.update_in(cx, |input, window, cx| {
+            input.replace_text_in_range(None, "Acme", window, cx)
+        });
+        cx.run_until_parked();
+
+        assert!(sidebar_notifies.get() > 0);
+        assert_eq!(
+            input.read_with(cx, |input, _| input.text().to_string()),
+            "Acme"
+        );
     }
 
     // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.

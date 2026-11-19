@@ -2084,6 +2084,17 @@ highlight = "Highlight"
 outside_darkness = "Outside Darkness"
 pixel_size = "Pixel Size"
 pixelate = "Pixelate"
+scan_changed = "The project changed during the scan. Scan again to add masks."
+scan_description = "Cap reads the text on screen and blurs emails, phone numbers, card numbers, keys and your own phrases wherever they appear."
+scan_downloading = { text = "Downloading text recognition… {percent}%", context = "{percent} is a whole number from 0 to 100." }
+scan_failed = "Couldn't scan the recording"
+scan_found = { one = "Added {count} mask", other = "Added {count} masks" }
+scan_none = "No sensitive data found"
+scan_phrase_placeholder = { text = "Add a phrase and press Enter", context = "A name or word to hide, such as a client's name." }
+scan_phrases = "Custom phrases"
+scan_progress = { text = "Scanning… {percent}%", context = "{percent} is a whole number from 0 to 100." }
+scan_start = "Scan recording"
+scan_title = "Hide sensitive data"
 sensitive = "Sensitive"
 title = "Mask {number}"
 
@@ -2430,6 +2441,7 @@ camera = "Camera"
 captions = "Captions"
 cursor = "Cursor"
 keyboard = "Keyboard"
+privacy = "Privacy"
 
 [editor.sidebar.wallpaper_theme]
 blue = "Blue"

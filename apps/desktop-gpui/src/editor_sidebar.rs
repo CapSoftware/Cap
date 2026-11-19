@@ -265,16 +265,18 @@ pub enum SidebarTab {
     Cursor,
     Keyboard,
     Captions,
+    Privacy,
 }
 
 impl SidebarTab {
-    pub const ALL: [SidebarTab; 6] = [
+    pub const ALL: [SidebarTab; 7] = [
         Self::Background,
         Self::Camera,
         Self::Audio,
         Self::Cursor,
         Self::Keyboard,
         Self::Captions,
+        Self::Privacy,
     ];
 
     pub fn icon(self) -> &'static str {
@@ -285,6 +287,7 @@ impl SidebarTab {
             Self::Cursor => "icons/cursor.svg",
             Self::Keyboard => "icons/keyboard.svg",
             Self::Captions => "icons/message-bubble.svg",
+            Self::Privacy => "icons/eye-off.svg",
         }
     }
 
@@ -296,6 +299,7 @@ impl SidebarTab {
             Self::Cursor => tr::editor::sidebar::tab::cursor(),
             Self::Keyboard => tr::editor::sidebar::tab::keyboard(),
             Self::Captions => tr::editor::sidebar::tab::captions(),
+            Self::Privacy => tr::editor::sidebar::tab::privacy(),
         }
     }
 
@@ -310,6 +314,7 @@ impl SidebarTab {
             Self::Cursor => "Cursor",
             Self::Keyboard => "Keyboard",
             Self::Captions => "Captions",
+            Self::Privacy => "Privacy",
         }
     }
 }
@@ -2742,6 +2747,7 @@ impl EditorWindow {
             SidebarTab::Cursor => self.render_cursor_tab(cx),
             SidebarTab::Keyboard => self.render_keyboard_tab(cx),
             SidebarTab::Captions => self.render_captions_tab(cx),
+            SidebarTab::Privacy => self.render_sensitive_scan(cx),
         };
 
         // Block, not a flex column: its one child lays out the same, without
