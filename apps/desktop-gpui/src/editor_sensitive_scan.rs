@@ -66,6 +66,14 @@ fn model_installed(dir: &Path, model: &ModelFile) -> bool {
     std::fs::metadata(dir.join(model.file_name)).is_ok_and(|metadata| metadata.len() == model.size)
 }
 
+struct StagingFile(PathBuf);
+
+impl Drop for StagingFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 async fn install_model(
     dir: &Path,
     model: &ModelFile,
@@ -87,60 +95,54 @@ async fn download_model(
     use std::io::Write as _;
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create {dir:?}: {e}"))?;
     let path = dir.join(model.file_name);
-    let staging = dir.join(format!(
+    let staging_file = StagingFile(dir.join(format!(
         "{}.{}-{}.downloading",
         model.file_name,
         std::process::id(),
         NEXT_DOWNLOAD.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = async {
-        let response = reqwest::Client::new()
-            .get(model.url)
-            .timeout(MODEL_DOWNLOAD_TIMEOUT)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download {}: {e}", model.file_name))?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "Failed to download {}: HTTP {}",
-                model.file_name,
-                response.status()
-            ));
-        }
-        let mut file = std::fs::File::create(&staging)
-            .map_err(|e| format!("Failed to create {staging:?}: {e}"))?;
-        let mut hasher = sha2::Sha256::new();
-        let mut received = 0u64;
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("Error while downloading: {e}"))?;
-            hasher.update(&chunk);
-            file.write_all(&chunk)
-                .map_err(|e| format!("Error while writing {}: {e}", model.file_name))?;
-            received += chunk.len() as u64;
-            progress((received as f32 / model.size as f32).min(1.0));
-        }
-        file.flush()
-            .map_err(|e| format!("Failed to flush {}: {e}", model.file_name))?;
-        let hex: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        if hex != model.sha256 {
-            return Err(format!("{} is corrupt (sha256 {hex})", model.file_name));
-        }
-        drop(file);
-        match std::fs::rename(&staging, &path) {
-            Err(_) if model_installed(dir, model) => Ok(()),
-            installed => {
-                installed.map_err(|e| format!("Failed to install {}: {e}", model.file_name))
-            }
-        }
+    )));
+    let staging = &staging_file.0;
+    let response = reqwest::Client::new()
+        .get(model.url)
+        .timeout(MODEL_DOWNLOAD_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download {}: {e}", model.file_name))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Failed to download {}: HTTP {}",
+            model.file_name,
+            response.status()
+        ));
     }
-    .await;
-    let _ = std::fs::remove_file(&staging);
-    result
+    let mut file =
+        std::fs::File::create(staging).map_err(|e| format!("Failed to create {staging:?}: {e}"))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut received = 0u64;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("Error while downloading: {e}"))?;
+        hasher.update(&chunk);
+        file.write_all(&chunk)
+            .map_err(|e| format!("Error while writing {}: {e}", model.file_name))?;
+        received += chunk.len() as u64;
+        progress((received as f32 / model.size as f32).min(1.0));
+    }
+    file.flush()
+        .map_err(|e| format!("Failed to flush {}: {e}", model.file_name))?;
+    let hex: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if hex != model.sha256 {
+        return Err(format!("{} is corrupt (sha256 {hex})", model.file_name));
+    }
+    drop(file);
+    match std::fs::rename(staging, &path) {
+        Err(_) if model_installed(dir, model) => Ok(()),
+        installed => installed.map_err(|e| format!("Failed to install {}: {e}", model.file_name)),
+    }
 }
 
 async fn scan(
@@ -766,5 +768,30 @@ mod tests {
             .collect();
         assert_eq!(files, ["model.onnx"]);
         assert_eq!(std::fs::read(dir.path().join("model.onnx")).unwrap(), body);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_download_dropped_part_way_leaves_no_staging_file() {
+        let body: Vec<u8> = (0..200_000u32).map(|index| (index % 251) as u8).collect();
+        let model = ModelFile {
+            file_name: "model.onnx",
+            url: Box::leak(serve_in_step(body.clone(), 2).into_boxed_str()),
+            sha256: "",
+            size: body.len() as u64,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().to_path_buf();
+        let (started, mut receiving) = tokio::sync::mpsc::unbounded_channel();
+        let download = tokio::spawn(async move {
+            download_model(&target, &model, |_| {
+                let _ = started.send(());
+            })
+            .await
+        });
+        receiving.recv().await.unwrap();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        download.abort();
+        assert!(download.await.unwrap_err().is_cancelled());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }
