@@ -2555,7 +2555,7 @@ reuploaded = "Votre dernière modification est disponible sur le même lien"
 uploaded = "Votre Cap a bien été mis en ligne"
 
 [editor.export.enhance]
-description = "Rend plus net le contenu agrandi et peu contrasté. Les exports peuvent prendre plus de temps."
+description = "Rend le texte et les détails fins plus nets quand votre enregistrement est agrandi ou réduit. Les exports peuvent prendre plus de temps."
 title = "Améliorer la qualité"
 
 [editor.export.estimate]

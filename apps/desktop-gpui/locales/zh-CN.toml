@@ -2555,7 +2555,7 @@ reuploaded = "你最新的编辑已在同一链接上就绪"
 uploaded = "你的录制已成功上传"
 
 [editor.export.enhance]
-description = "让放大和低对比度的屏幕内容更清晰。导出可能需要更长时间。"
+description = "录制内容放大或缩小时，让文字和细节更清晰。导出可能需要更长时间。"
 title = "提升画质"
 
 [editor.export.estimate]
