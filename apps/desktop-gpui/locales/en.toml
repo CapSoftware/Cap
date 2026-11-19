@@ -2808,6 +2808,8 @@ minimal = "Minimal"
 minimal_description = "Subtle outlined text with no background."
 pop = "Pop"
 pop_description = "Playful caps that pop in with a vibrant accent."
+soft = "Soft"
+soft_description = "Rounded charcoal card that matches the keys."
 
 [editor.tabs.corner]
 rounded = "Rounded"

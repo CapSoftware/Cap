@@ -126,7 +126,12 @@ pub const CURSOR_STYLES: [(CursorAnimationStyle, Label, Label); 4] = [
 ];
 
 /// `FONT_OPTIONS` (`text-style.tsx:12-16`).
-pub const FONT_OPTIONS: [&str; 3] = ["System Sans-Serif", "System Serif", "System Monospace"];
+pub const FONT_OPTIONS: [&str; 4] = [
+    "Inter",
+    "System Sans-Serif",
+    "System Serif",
+    "System Monospace",
+];
 
 /// The project keeps the English `FONT_OPTIONS` value; menus show it translated.
 fn font_option_label(font: &str) -> SharedString {
@@ -269,6 +274,7 @@ pub struct CaptionPreset {
     pub id: &'static str,
     pub label: Label,
     pub description: Label,
+    pub font: &'static str,
     pub font_weight: u32,
     pub size: u32,
     pub color: &'static str,
@@ -290,6 +296,7 @@ pub(crate) fn apply_caption_preset_settings(
     preset: &CaptionPreset,
 ) {
     settings.preset = preset.id.to_string();
+    settings.font = preset.font.to_string();
     settings.font_weight = preset.font_weight;
     settings.size = preset.size;
     settings.color = preset.color.to_string();
@@ -440,10 +447,31 @@ fn key_preview(
 }
 
 pub static CAPTION_PRESETS: &[CaptionPreset] = &[
+    // New captions start here: see `CaptionSettings::default`.
+    CaptionPreset {
+        id: "soft",
+        label: tr::editor::tabs::captions::preset::soft,
+        description: tr::editor::tabs::captions::preset::soft_description,
+        font: "Inter",
+        font_weight: 600,
+        size: 46,
+        color: "#FFFFFF",
+        background_color: "#1C1C1F",
+        background_opacity: 86,
+        outline: false,
+        outline_color: "#000000",
+        highlight_color: "#FFFFFF",
+        active_word_highlight: true,
+        highlight_style: "color",
+        animation: "pop",
+        uppercase: false,
+        fade_duration: 0.15,
+    },
     CaptionPreset {
         id: "classic",
         label: tr::editor::tabs::captions::preset::classic,
         description: tr::editor::tabs::captions::preset::classic_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 50,
         color: "#FFFFFF",
@@ -462,6 +490,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "karaoke",
         label: tr::editor::tabs::captions::preset::karaoke,
         description: tr::editor::tabs::captions::preset::karaoke_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 52,
         color: "#FFFFFF",
@@ -480,6 +509,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "highlight",
         label: tr::editor::tabs::captions::preset::highlight,
         description: tr::editor::tabs::captions::preset::highlight_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 54,
         color: "#FFFFFF",
@@ -498,6 +528,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "pop",
         label: tr::editor::tabs::captions::preset::pop,
         description: tr::editor::tabs::captions::preset::pop_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 56,
         color: "#FFFFFF",
@@ -516,6 +547,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "minimal",
         label: tr::editor::tabs::captions::preset::minimal,
         description: tr::editor::tabs::captions::preset::minimal_description,
+        font: "System Sans-Serif",
         font_weight: 600,
         size: 46,
         color: "#FFFFFF",
@@ -2890,18 +2922,21 @@ impl EditorWindow {
                     ),
                 ),
             )
-            .when(classic, |this| {
-                this.child(
-                    ui::Field::inline(&theme, tr::editor::tabs::keyboard::font_weight()).child(
-                        self.menu_select(
-                            SidebarMenu::KeyboardWeight,
-                            "keyboard-weight",
-                            weight_label,
-                            cx,
+            .when(
+                classic && settings.font != cap_rendering::keycaps::OVERLAY_TEXT_FONT,
+                |this| {
+                    this.child(
+                        ui::Field::inline(&theme, tr::editor::tabs::keyboard::font_weight()).child(
+                            self.menu_select(
+                                SidebarMenu::KeyboardWeight,
+                                "keyboard-weight",
+                                weight_label,
+                                cx,
+                            ),
                         ),
-                    ),
-                )
-            })
+                    )
+                },
+            )
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::animation()).child(
                     div()
@@ -3756,15 +3791,21 @@ impl EditorWindow {
                         )),
                 ),
             )
-            .child(
-                ui::Field::inline(&theme, tr::editor::tabs::captions::font_weight()).child(
-                    self.menu_select(
-                        SidebarMenu::CaptionWeight,
-                        "caption-weight",
-                        weight_label,
-                        cx,
-                    ),
-                ),
+            // Inter ships at one weight, so it has no weight to pick.
+            .when(
+                settings.font != cap_rendering::keycaps::OVERLAY_TEXT_FONT,
+                |this| {
+                    this.child(
+                        ui::Field::inline(&theme, tr::editor::tabs::captions::font_weight()).child(
+                            self.menu_select(
+                                SidebarMenu::CaptionWeight,
+                                "caption-weight",
+                                weight_label,
+                                cx,
+                            ),
+                        ),
+                    )
+                },
             );
 
         // An extra flex ancestor here repeats intrinsic layout while scrolling.
@@ -3891,6 +3932,19 @@ impl EditorWindow {
                     .px(px(8.))
                     .py(px(4.))
                     .bg(background)
+                    // The Soft card's shadow and lit top edge.
+                    .when(preset.id == "soft", |this| {
+                        this.rounded(px(5.))
+                            .border_t_1()
+                            .border_color(gpui::hsla(0., 0., 1., 0.12))
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::hsla(0., 0., 0., 0.45),
+                                offset: gpui::point(px(0.), px(2.)),
+                                blur_radius: px(6.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                    })
                     .children(words.into_iter().enumerate().map(|(index, word)| {
                         let emphasised = preset.active_word_highlight && index == 2;
                         let pill = emphasised && preset.highlight_style == "pill";
@@ -4717,12 +4771,13 @@ mod tests {
 
     #[test]
     fn the_catalogues_match_the_source() {
-        assert_eq!(CAPTION_PRESETS.len(), 5);
-        assert_eq!(CAPTION_PRESETS[0].id, "classic");
-        assert_eq!(CAPTION_PRESETS[2].highlight_style, "pill");
+        assert_eq!(CAPTION_PRESETS.len(), 6);
+        assert_eq!(CAPTION_PRESETS[0].id, "soft");
+        assert_eq!(CAPTION_PRESETS[1].id, "classic");
+        assert_eq!(CAPTION_PRESETS[3].highlight_style, "pill");
         assert_eq!(CAPTION_POSITIONS[0].0, "manual");
         assert_eq!(KEYBOARD_POSITIONS.len(), 6);
-        assert_eq!(FONT_OPTIONS.len(), 3);
+        assert_eq!(FONT_OPTIONS.len(), 4);
         for font in FONT_OPTIONS {
             assert_eq!(font_option_label(font).as_ref(), font);
         }

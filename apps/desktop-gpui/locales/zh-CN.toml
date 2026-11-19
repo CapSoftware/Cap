@@ -2806,6 +2806,8 @@ minimal = "极简"
 minimal_description = "无背景的低调描边文字。"
 pop = "跳跃"
 pop_description = "活泼的大写文字，以鲜艳的强调色弹出。"
+soft = "柔和"
+soft_description = "与按键相配的圆角炭灰卡片。"
 
 [editor.tabs.corner]
 rounded = "圆角"

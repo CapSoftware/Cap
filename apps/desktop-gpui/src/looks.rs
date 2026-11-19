@@ -79,7 +79,7 @@ pub static LOOKS: [Look; 8] = [
             style: Some("macos"),
             theme: "dark",
         },
-        captions: "classic",
+        captions: "soft",
         dark_app: false,
     },
     Look {
@@ -98,7 +98,7 @@ pub static LOOKS: [Look; 8] = [
             style: Some("macos"),
             theme: "light",
         },
-        captions: "classic",
+        captions: "soft",
         dark_app: false,
     },
     Look {
@@ -117,7 +117,7 @@ pub static LOOKS: [Look; 8] = [
             style: Some("macos"),
             theme: "dark",
         },
-        captions: "classic",
+        captions: "soft",
         dark_app: true,
     },
     Look {
@@ -211,7 +211,7 @@ pub static LOOKS: [Look; 8] = [
             style: None,
             theme: "light",
         },
-        captions: "classic",
+        captions: "soft",
         dark_app: false,
     },
     Look {

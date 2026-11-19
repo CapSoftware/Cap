@@ -2806,6 +2806,8 @@ minimal = "ミニマル"
 minimal_description = "背景なしの控えめな縁取りテキスト。"
 pop = "ポップ"
 pop_description = "鮮やかなアクセントで飛び出す遊び心のある大文字。"
+soft = "ソフト"
+soft_description = "キーと揃えた、角の丸いチャコールのカード。"
 
 [editor.tabs.corner]
 rounded = "角丸"

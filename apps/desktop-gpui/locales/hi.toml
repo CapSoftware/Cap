@@ -2806,6 +2806,8 @@ minimal = "मिनिमल"
 minimal_description = "बिना बैकग्राउंड के हल्का आउटलाइन टेक्स्ट।"
 pop = "पॉप"
 pop_description = "चटक रंग के साथ उभरते मज़ेदार बड़े अक्षर।"
+soft = "सॉफ़्ट"
+soft_description = "कुंजियों से मेल खाता गोल चारकोल कार्ड।"
 
 [editor.tabs.corner]
 rounded = "गोल"

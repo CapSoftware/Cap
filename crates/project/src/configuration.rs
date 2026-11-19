@@ -2760,16 +2760,26 @@ pub enum CaptionPosition {
 #[serde(rename_all = "camelCase", default)]
 pub struct CaptionSettings {
     pub enabled: bool,
+    /// New captions start in the Soft style; a project saved without one of
+    /// these fields keeps the Classic value it was drawn with.
+    #[serde(default = "CaptionSettings::legacy_font")]
     pub font: String,
+    #[serde(default = "CaptionSettings::legacy_size")]
     pub size: u32,
     pub color: String,
-    #[serde(alias = "backgroundColor")]
+    #[serde(
+        alias = "backgroundColor",
+        default = "CaptionSettings::legacy_background_color"
+    )]
     pub background_color: String,
-    #[serde(alias = "backgroundOpacity")]
+    #[serde(
+        alias = "backgroundOpacity",
+        default = "CaptionSettings::legacy_background_opacity"
+    )]
     pub background_opacity: u32,
     pub position: String,
     pub italic: bool,
-    #[serde(alias = "fontWeight")]
+    #[serde(alias = "fontWeight", default = "CaptionSettings::default_font_weight")]
     pub font_weight: u32,
     pub outline: bool,
     #[serde(alias = "outlineColor")]
@@ -2793,7 +2803,9 @@ pub struct CaptionSettings {
     pub active_word_highlight: bool,
     #[serde(alias = "manualPosition")]
     pub manual_position: Option<XY<f32>>,
+    #[serde(default = "CaptionSettings::default_preset")]
     pub preset: String,
+    #[serde(default = "CaptionSettings::default_animation")]
     pub animation: String,
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
@@ -2838,6 +2850,22 @@ impl CaptionSettings {
         false
     }
 
+    fn legacy_font() -> String {
+        "System Sans-Serif".to_string()
+    }
+
+    fn legacy_size() -> u32 {
+        50
+    }
+
+    fn legacy_background_color() -> String {
+        "#000000".to_string()
+    }
+
+    fn legacy_background_opacity() -> u32 {
+        90
+    }
+
     fn default_preset() -> String {
         "classic".to_string()
     }
@@ -2853,17 +2881,17 @@ impl CaptionSettings {
 
 impl Default for CaptionSettings {
     fn default() -> Self {
+        // The Soft preset: the keycaps' charcoal, Inter and a gentle pop.
         Self {
             enabled: false,
-            font: "System Sans-Serif".to_string(),
-            // The Classic preset's size, which new captions start from.
-            size: 50,
+            font: "Inter".to_string(),
+            size: 46,
             color: "#FFFFFF".to_string(),
-            background_color: "#000000".to_string(),
-            background_opacity: 90,
+            background_color: "#1C1C1F".to_string(),
+            background_opacity: 86,
             position: "bottom-center".to_string(),
             italic: false,
-            font_weight: Self::default_font_weight(),
+            font_weight: 600,
             outline: false,
             outline_color: "#000000".to_string(),
             export_with_subtitles: false,
@@ -2873,8 +2901,8 @@ impl Default for CaptionSettings {
             word_transition_duration: Self::default_word_transition_duration(),
             active_word_highlight: true,
             manual_position: None,
-            preset: Self::default_preset(),
-            animation: Self::default_animation(),
+            preset: "soft".to_string(),
+            animation: "pop".to_string(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
             show_filler_words: false,
@@ -2995,7 +3023,7 @@ impl Default for KeyboardSettings {
             enabled: false,
             font: DEFAULT_KEYBOARD_FONT.to_string(),
             // Keys a tenth of the frame tall.
-            size: 68,
+            size: 62,
             color: DEFAULT_KEYBOARD_COLOR.to_string(),
             background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
             background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,
@@ -5620,6 +5648,33 @@ mod tests {
 
         assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    #[test]
+    fn older_captions_keep_their_classic_look_and_new_ones_start_soft() {
+        let older: CaptionSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "color": "#FFFFFF",
+            "position": "bottom-center"
+        }))
+        .unwrap();
+        assert_eq!(older.font, "System Sans-Serif");
+        assert_eq!(older.size, 50);
+        assert_eq!(older.background_color, "#000000");
+        assert_eq!(older.background_opacity, 90);
+        assert_eq!(older.font_weight, 700);
+        assert_eq!(older.preset, "classic");
+        assert_eq!(older.animation, "bounce");
+        assert!(!older.active_word_highlight);
+
+        let new = CaptionSettings::default();
+        assert_eq!(new.preset, "soft");
+        assert_eq!(new.font, "Inter");
+        let saved: CaptionSettings =
+            serde_json::from_value(serde_json::to_value(&new).unwrap()).unwrap();
+        assert_eq!(saved.preset, "soft");
+        assert_eq!(saved.font, "Inter");
+        assert_eq!(saved.size, new.size);
     }
 
     #[test]

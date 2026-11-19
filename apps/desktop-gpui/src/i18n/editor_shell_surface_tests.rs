@@ -686,6 +686,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::captions::preset::pop_description(),
             "Playful caps that pop in with a vibrant accent.",
         ),
+        (tr::editor::tabs::captions::preset::soft(), "Soft"),
+        (
+            tr::editor::tabs::captions::preset::soft_description(),
+            "Rounded charcoal card that matches the keys.",
+        ),
         (
             tr::editor::tabs::captions::refining_word_timings(),
             "Refining word timings…",

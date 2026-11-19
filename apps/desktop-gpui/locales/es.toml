@@ -2806,6 +2806,8 @@ minimal = "Mínimo"
 minimal_description = "Texto sutil con contorno y sin fondo."
 pop = "Pop"
 pop_description = "Mayúsculas divertidas que aparecen con un acento vibrante."
+soft = "Suave"
+soft_description = "Tarjeta redondeada en gris carbón a juego con las teclas."
 
 [editor.tabs.corner]
 rounded = "Redondeadas"

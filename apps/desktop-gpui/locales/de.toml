@@ -2806,6 +2806,8 @@ minimal = "Minimal"
 minimal_description = "Dezenter, umrandeter Text ohne Hintergrund."
 pop = "Pop"
 pop_description = "Verspielte Großbuchstaben, die mit einem kräftigen Akzent aufpoppen."
+soft = "Weich"
+soft_description = "Abgerundete anthrazitfarbene Karte passend zu den Tasten."
 
 [editor.tabs.corner]
 rounded = "Abgerundet"

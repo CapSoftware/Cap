@@ -2806,6 +2806,8 @@ minimal = "Minimal"
 minimal_description = "Texte discret avec contour, sans arrière-plan."
 pop = "Pop"
 pop_description = "Majuscules ludiques qui apparaissent avec une touche de couleur vive."
+soft = "Doux"
+soft_description = "Carte arrondie anthracite assortie aux touches."
 
 [editor.tabs.corner]
 rounded = "Arrondi"
