@@ -13,6 +13,8 @@
 
 mod audio;
 mod project;
+#[cfg(test)]
+mod source_limit_tests;
 mod video;
 
 use anyhow::Result;
@@ -123,6 +125,11 @@ async fn handle(op: Op) -> Result<Value> {
     })
 }
 
+fn init_engine() -> Result<()> {
+    ffmpeg::init()?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -131,7 +138,7 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|_| "warn,cap_render_farm=info".into()),
         )
         .init();
-    ffmpeg::init()?;
+    init_engine()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
