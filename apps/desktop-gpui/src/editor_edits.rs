@@ -3041,11 +3041,7 @@ pub fn set_clip_segment_timescale(
 }
 
 pub fn clip_is_muted(segment: &TimelineSegment) -> bool {
-    if (segment.timescale - 1.0).abs() < f64::EPSILON {
-        segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
-    } else {
-        segment.speed_audio_mode.unwrap_or(ClipSpeedAudioMode::Mute) == ClipSpeedAudioMode::Mute
-    }
+    segment.speed_audio_muted()
 }
 
 pub fn set_clip_volume(timeline: &mut TimelineConfiguration, index: usize, volume: f64) -> bool {

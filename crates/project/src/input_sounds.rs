@@ -1,5 +1,5 @@
 use crate::{
-    ClipSpeedAudioMode, CursorClickEvent, KeyPressEvent, KeyboardEvents, ProjectConfiguration,
+    CursorClickEvent, KeyPressEvent, KeyboardEvents, ProjectConfiguration,
     keyboard::{clip_windows, held_output_time, is_modifier_key},
 };
 
@@ -211,8 +211,21 @@ pub fn key_sounds_enabled(project: &ProjectConfiguration) -> bool {
         .is_some_and(|keyboard| keyboard.settings.enabled && keyboard.settings.key_sounds)
 }
 
+/// Click sounds are on, and the cursor shows somewhere: globally, or in a
+/// style segment that shows it over a hidden global cursor.
 pub fn click_sounds_enabled(project: &ProjectConfiguration) -> bool {
-    !project.cursor.hide && project.cursor.click_sounds
+    project.cursor.click_sounds
+        && (!project.cursor.hide
+            || project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.style_segments.iter().any(|segment| {
+                    segment.enabled
+                        && segment
+                            .overrides
+                            .cursor
+                            .as_ref()
+                            .is_some_and(|cursor| !cursor.hide)
+                })
+            }))
 }
 
 /// Every key and click sound the edited timeline plays, sorted by output
@@ -244,7 +257,9 @@ pub fn input_sound_events(
 
     for window in clip_windows(timeline) {
         let clip = window.clip;
-        if clip.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
+        // A clip whose own audio is silent, muted or sped up without kept
+        // audio, is silent here too.
+        if clip.speed_audio_muted() {
             continue;
         }
         let Some(take) = takes.get(clip.recording_clip as usize) else {
@@ -334,8 +349,10 @@ pub fn input_sound_events(
                 // A clip that hides the cursor hides its clicks too, fading
                 // with the cursor at the ends of the hidden run.
                 let time = to_output(click.time_ms / 1000.0);
+                // So does a style segment that hides it, and one that shows
+                // it over a hidden global cursor brings them back.
                 let visible = timeline.cursor_visibility_at(time) as f32;
-                if visible <= 0.0 {
+                if visible <= 0.0 || project.cursor_at(time).hide {
                     continue;
                 }
                 let seed = event_seed(

@@ -86,6 +86,8 @@ impl AudioExportFormat {
     }
 }
 
+/// Whether the edited project makes any sound: a recorded audio track, or
+/// key and click sounds that are turned on.
 pub fn has_audio(
     recordings: &cap_rendering::ProjectRecordingsMeta,
     project: &ProjectConfiguration,
@@ -93,6 +95,8 @@ pub fn has_audio(
     crate::tracks::available_tracks(recordings, project)
         .iter()
         .any(|kind| !kind.is_video())
+        || cap_project::input_sounds::key_sounds_enabled(project)
+        || cap_project::input_sounds::click_sounds_enabled(project)
 }
 
 /// Writes the project's edited sound to `output_path` in `format`. The file

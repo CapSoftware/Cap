@@ -45,8 +45,10 @@ fn cut_and_sped_timeline() -> serde_json::Value {
     serde_json::json!({
         "segments": [
             { "start": 0.0, "end": 2.0, "timescale": 1.0, "recordingSegment": 0 },
-            { "start": 4.0, "end": 6.0, "timescale": 2.0, "recordingSegment": 0 },
-            { "start": 1.0, "end": 2.0, "timescale": 0.5, "recordingSegment": 1 }
+            { "start": 4.0, "end": 6.0, "timescale": 2.0, "recordingSegment": 0,
+              "speedAudioMode": "maintainPitch" },
+            { "start": 1.0, "end": 2.0, "timescale": 0.5, "recordingSegment": 1,
+              "speedAudioMode": "maintainPitch" }
         ],
         "zoomSegments": []
     })
@@ -262,7 +264,8 @@ fn transitions_and_holds_match_the_keyboard_track() {
         serde_json::json!({
             "segments": [
                 { "start": 0.0, "end": 3.0, "timescale": 1.0, "recordingSegment": 0 },
-                { "start": 5.0, "end": 9.0, "timescale": 1.5, "recordingSegment": 0 }
+                { "start": 5.0, "end": 9.0, "timescale": 1.5, "recordingSegment": 0,
+                  "speedAudioMode": "maintainPitch" }
             ],
             "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 0.5 }],
             "zoomSegments": [],
@@ -377,6 +380,17 @@ fn muted_clips_stay_silent_and_clip_volume_carries_over() {
     assert_eq!(events.len(), 2);
     assert!(events.iter().all(|event| (event.time - 2.5).abs() < 1e-9));
     assert!(events.iter().all(|event| event.gain == 0.5));
+
+    // A sped-up clip is silent unless its audio was kept, as its own sound
+    // is, and so is a clip faster than audio can follow.
+    project.timeline.as_mut().unwrap().segments[1].speed_audio_mode = None;
+    assert!(input_sound_events(&project, &takes).is_empty());
+    {
+        let timeline = project.timeline.as_mut().unwrap();
+        timeline.segments[1].speed_audio_mode = Some(crate::ClipSpeedAudioMode::MatchSpeed);
+        timeline.segments[1].timescale = 16.0;
+    }
+    assert!(input_sound_events(&project, &takes).is_empty());
 }
 
 #[test]
@@ -488,4 +502,54 @@ fn a_transition_never_sounds_a_release_before_its_press() {
             downs[0]
         );
     }
+}
+
+#[test]
+fn a_style_segment_that_hides_or_shows_the_cursor_gates_its_clicks() {
+    let clicks = [click(1_000.0, true), click(3_000.0, true)];
+    let keyboard = KeyboardEvents::default();
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &clicks,
+    }];
+    let mut project = project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 5.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        false,
+        true,
+    );
+    let mut hidden = project.cursor.clone();
+    hidden.hide = true;
+    project.timeline.as_mut().unwrap().style_segments = vec![crate::StyleSegment {
+        start: 2.0,
+        end: 4.0,
+        overrides: crate::StyleOverrides {
+            cursor: Some(hidden),
+            ..Default::default()
+        },
+        ..Default::default()
+    }];
+    let times: Vec<f64> = input_sound_events(&project, &takes)
+        .iter()
+        .map(|event| event.time)
+        .collect();
+    assert_eq!(times, vec![1.0]);
+
+    // The other way round: hidden everywhere but shown in the segment.
+    project.cursor.hide = true;
+    let timeline = project.timeline.as_mut().unwrap();
+    let cursor = timeline.style_segments[0]
+        .overrides
+        .cursor
+        .as_mut()
+        .unwrap();
+    cursor.hide = false;
+    let times: Vec<f64> = input_sound_events(&project, &takes)
+        .iter()
+        .map(|event| event.time)
+        .collect();
+    assert_eq!(times, vec![3.0]);
 }

@@ -42,7 +42,8 @@ fn key_project(volume: f32) -> ProjectConfiguration {
         "timeline": {
             "segments": [
                 { "start": 0.0, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 },
-                { "start": 6.0, "end": 8.0, "timescale": 2.0, "recordingSegment": 0 }
+                { "start": 6.0, "end": 8.0, "timescale": 2.0, "recordingSegment": 0,
+                  "speedAudioMode": "maintainPitch" }
             ],
             "zoomSegments": [],
             "keyboardSegments": [

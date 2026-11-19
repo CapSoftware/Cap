@@ -462,7 +462,27 @@ fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         clicks.then_some((
             project.cursor.click_sound_type,
             project.cursor.click_sound_volume,
+            project.cursor.hide,
         )),
+        // Style segments that hide or show the cursor gate its clicks.
+        clicks.then(|| {
+            timeline.map(|timeline| {
+                timeline
+                    .style_segments
+                    .iter()
+                    .filter_map(|segment| {
+                        let cursor = segment.overrides.cursor.as_ref()?;
+                        Some((
+                            segment.start,
+                            segment.end,
+                            segment.track,
+                            segment.enabled,
+                            cursor.hide,
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }),
         timeline.map(|timeline| {
             (
                 timeline

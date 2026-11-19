@@ -1345,6 +1345,20 @@ impl TimelineSegment {
             .map(|voice_eq| voice_eq.sanitized())
     }
 
+    /// Whether this clip's own audio is silent: a clip at normal speed only
+    /// when muted outright, a sped-up or slowed one unless its audio was
+    /// kept, and any clip whose speed is outside what audio can follow.
+    pub fn speed_audio_muted(&self) -> bool {
+        if !self.timescale.is_finite() || !(0.25..=8.0).contains(&self.timescale) {
+            return true;
+        }
+        if (self.timescale - 1.0).abs() < f64::EPSILON {
+            self.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
+        } else {
+            self.speed_audio_mode.unwrap_or_default() == ClipSpeedAudioMode::Mute
+        }
+    }
+
     pub fn volume(&self) -> f64 {
         self.volume
             .filter(|volume| volume.is_finite())
@@ -2916,8 +2930,9 @@ impl CaptionSettings {
         "System Sans-Serif".to_string()
     }
 
+    /// Captions saved without a size had the old default.
     fn legacy_size() -> u32 {
-        50
+        24
     }
 
     fn legacy_background_color() -> String {
@@ -3040,11 +3055,22 @@ impl KeyboardSettings {
         "auto".to_string()
     }
 
-    /// The style to draw. `auto` gives an older project the platform's keys
-    /// when its label was never styled, and keeps the classic label for one
-    /// whose colours or font were chosen. Read every frame, so it allocates
-    /// nothing.
+    /// The style to draw, on the platform this process runs on. See
+    /// [`KeyboardSettings::effective_style_for`], which every renderer uses.
     pub fn effective_style(&self) -> &str {
+        self.effective_style_for(None, false)
+    }
+
+    /// The style to draw. `auto` gives an older project the keys of the
+    /// platform it was recorded on (this machine's when that is unknown) when
+    /// its label was never styled, and keeps the classic label for one whose
+    /// colours or font were chosen, globally or on any key (`styled_keys`).
+    /// Read every frame, so it allocates nothing.
+    pub fn effective_style_for(
+        &self,
+        platform: Option<&crate::Platform>,
+        styled_keys: bool,
+    ) -> &str {
         if self.style != "auto" {
             return &self.style;
         }
@@ -3054,9 +3080,10 @@ impl KeyboardSettings {
                 .eq_ignore_ascii_case(DEFAULT_KEYBOARD_BACKGROUND)
             && self.background_opacity == DEFAULT_KEYBOARD_BACKGROUND_OPACITY
             && self.font == DEFAULT_KEYBOARD_FONT
-            && self.font_weight == DEFAULT_KEYBOARD_FONT_WEIGHT;
+            && self.font_weight == DEFAULT_KEYBOARD_FONT_WEIGHT
+            && !styled_keys;
         if untouched {
-            Self::platform_style_name()
+            Self::platform_style_name_for(platform)
         } else {
             "classic"
         }
@@ -3070,6 +3097,15 @@ impl KeyboardSettings {
     /// platform it was made on.
     pub fn platform_style() -> String {
         Self::platform_style_name().to_string()
+    }
+
+    fn platform_style_name_for(platform: Option<&crate::Platform>) -> &'static str {
+        match platform {
+            Some(crate::Platform::MacOS) => "macos",
+            Some(crate::Platform::Windows) => "windows",
+            Some(crate::Platform::Linux) => "linux",
+            None => Self::platform_style_name(),
+        }
     }
 
     fn platform_style_name() -> &'static str {
@@ -5832,7 +5868,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(older.font, "System Sans-Serif");
-        assert_eq!(older.size, 50);
+        assert_eq!(older.size, 24);
         assert_eq!(older.background_color, "#000000");
         assert_eq!(older.background_opacity, 90);
         assert_eq!(older.font_weight, 700);
@@ -5878,6 +5914,17 @@ mod tests {
             ..styled
         };
         assert_eq!(chosen.effective_style(), "windows");
+        // The renderer resolves `auto` for the platform the recording was
+        // made on, wherever it runs, and keeps the label when any key was
+        // coloured on its own.
+        for (platform, style) in [
+            (crate::Platform::MacOS, "macos"),
+            (crate::Platform::Windows, "windows"),
+            (crate::Platform::Linux, "linux"),
+        ] {
+            assert_eq!(old.effective_style_for(Some(&platform), false), style);
+            assert_eq!(old.effective_style_for(Some(&platform), true), "classic");
+        }
     }
 
     #[test]

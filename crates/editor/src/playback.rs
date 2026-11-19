@@ -1014,8 +1014,11 @@ impl Playback {
         diagnostic.stage("waiting_for_audio_decode");
         let audio_wait_start = Instant::now();
         let audio_segments = get_audio_segments(&self.segment_medias).await;
+        // The project the sounds are built from, to catch an edit made while
+        // the video warms up.
+        let sounds_project = Arc::new(self.project.borrow().clone());
         let input_sounds = {
-            let project = self.project.borrow().clone();
+            let project = sounds_project.clone();
             let segment_medias = self.segment_medias.clone();
             tokio::task::spawn_blocking(move || {
                 InputSounds::for_segments(&project, &segment_medias)
@@ -1201,6 +1204,11 @@ impl Playback {
 
             let playback_start_frame = frame_number;
             let mut cached_project = Arc::new(self.project.borrow().clone());
+            // An edit to the sounds made during warm-up is already in
+            // `cached_project`, so the change check below would miss it:
+            // refresh them once on the first pass.
+            let mut sounds_stale =
+                crate::input_sounds::input_sounds_changed(&sounds_project, &cached_project);
             let mut speed = if adopted.is_some() {
                 PreviewSpeed::NORMAL
             } else {
@@ -1585,9 +1593,10 @@ impl Playback {
                     continue;
                 }
 
-                if self.project.has_changed().unwrap_or(false) {
+                if self.project.has_changed().unwrap_or(false) || sounds_stale {
                     let next_project = self.project.borrow_and_update().clone();
-                    let audio_changed = cached_project.audio != next_project.audio
+                    let audio_changed = std::mem::take(&mut sounds_stale)
+                        || cached_project.audio != next_project.audio
                         || clip_audio_changed(&cached_project, &next_project)
                         || crate::input_sounds::input_sounds_changed(
                             &cached_project,
