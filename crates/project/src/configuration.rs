@@ -3226,6 +3226,8 @@ pub struct ProjectConfiguration {
     pub markers: Vec<TimelineMarker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensitive_phrases: Vec<String>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -3289,6 +3291,7 @@ impl Default for ProjectConfiguration {
             auto_zoom_pending: false,
             markers: Vec::new(),
             audio_visuals: None,
+            sensitive_phrases: Vec::new(),
         }
     }
 }
@@ -3868,6 +3871,23 @@ mod notch_tests {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn sensitive_phrases_round_trip_and_stay_out_of_projects_without_them() {
+        let empty = serde_json::to_value(ProjectConfiguration::default()).unwrap();
+        assert!(empty.get("sensitivePhrases").is_none());
+        let project = ProjectConfiguration {
+            sensitive_phrases: vec!["Acme Robotics".into()],
+            ..Default::default()
+        };
+        let written = serde_json::to_value(&project).unwrap();
+        assert_eq!(
+            written["sensitivePhrases"],
+            serde_json::json!(["Acme Robotics"])
+        );
+        let reopened: ProjectConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(reopened.sensitive_phrases, ["Acme Robotics"]);
+    }
 
     #[test]
     fn new_projects_use_the_newer_auto_zoom_rules_and_saved_ones_keep_theirs() {
