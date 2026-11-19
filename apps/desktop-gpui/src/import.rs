@@ -3397,11 +3397,7 @@ mod tests {
         );
         assert_eq!(rotated.pts(), Some(42), "{format:?} {rotation:?}");
 
-        let chroma_samples = if format == avformat::Pixel::NV12 {
-            2
-        } else {
-            1
-        };
+        let chroma_samples = if format == avformat::Pixel::NV12 { 2 } else { 1 };
         let [(u_plane, u_channel), (v_plane, v_channel)] = chroma_channels(format);
         for (plane, channel, channels, source_width, source_height) in [
             (0, 0, 1, 8, 6),
