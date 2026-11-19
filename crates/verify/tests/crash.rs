@@ -92,6 +92,11 @@ const SECONDS: f64 = 8.0;
 /// container round to at most 1/90000 s; half a millisecond is far below the
 /// 33 ms frame period and above any rounding.
 const PTS_TOLERANCE: f64 = 0.0005;
+/// Under the 50 ms after which the pipeline stops trusting the capture time
+/// of the first frame after a quiet source, and above Windows' 15.6 ms timer
+/// granularity.
+const MAX_HAND_OFF_LATENESS: Duration = Duration::from_millis(25);
+const MAX_LATE_WAKES: u32 = 20;
 const CHILD_ENV: &str = "CAP_VERIFY_CRASH_CHILD";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -424,15 +429,32 @@ async fn record(
     let mut health = pipeline.take_health_rx();
     let base = Instant::now() + Duration::from_millis(50);
     let mut handed = Vec::new();
+    let period = 1.0 / f64::from(FPS);
+    let mut previous_slot: Option<u32> = None;
     for index in slots {
-        let at = base + Duration::from_secs_f64(f64::from(index) / f64::from(FPS));
-        tokio::time::sleep_until(at.into()).await;
+        // On a mostly static screen every frame follows a quiet gap, and the
+        // pipeline restamps such a frame from its hand-off on purpose when its
+        // capture time is much older. So when the timer wakes late (a loaded
+        // runner) the frame moves to a later slot of the nominal grid instead.
+        // A steady stream keeps its capture times however late it is handed.
+        let mut slot = previous_slot.map_or(index, |previous| index.max(previous + 1));
+        let mut at = base + Duration::from_secs_f64(f64::from(slot) * period);
+        for wake in 1.. {
+            tokio::time::sleep_until(at.into()).await;
+            let late = Instant::now().saturating_duration_since(at);
+            if step <= 1 || late <= MAX_HAND_OFF_LATENESS || wake == MAX_LATE_WAKES {
+                break;
+            }
+            slot += (late.as_secs_f64() / period).ceil() as u32;
+            at = base + Duration::from_secs_f64(f64::from(slot) * period);
+        }
+        previous_slot = Some(slot);
         let picture = pictures.next().expect("rendered");
         let frame = source::frame(picture, at);
         tx.send_async(frame)
             .await
             .map_err(|_| anyhow!("pipeline stopped taking frames at {index}"))?;
-        let secs = f64::from(index) / f64::from(FPS);
+        let secs = f64::from(slot) * period;
         handed.push(Handed { index, secs });
         log.line(&format!("f {index} {secs:.6}"));
         if let Some(hook) = live.on_frame.as_mut() {
