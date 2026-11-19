@@ -257,8 +257,8 @@ describe("createS3Bucket", () => {
 		mockSend.mockImplementation(async (command) => {
 			if (command instanceof CreateBucketCommand) {
 				throw new BucketAlreadyOwnedByYou({
-					$fault: "client",
 					$metadata: {},
+					message: "Bucket already owned by you",
 				});
 			}
 			if (command instanceof GetBucketPolicyCommand) {
@@ -280,8 +280,8 @@ describe("createS3Bucket", () => {
 		mockSend.mockImplementation(async (command) => {
 			if (command instanceof CreateBucketCommand) {
 				throw new BucketAlreadyExists({
-					$fault: "client",
 					$metadata: {},
+					message: "Bucket already exists",
 				});
 			}
 			if (command instanceof GetBucketPolicyCommand) {
