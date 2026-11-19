@@ -1,12 +1,26 @@
 import { db } from "@cap/database";
 import { developerVideos } from "@cap/database/schema";
-import { and, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import {
+	and,
+	gt,
+	gte,
+	inArray,
+	isNull,
+	lt,
+	ne,
+	type SQL,
+	sql,
+} from "drizzle-orm";
 import {
 	type BillableVideo,
 	billableVideo,
+	firstMonthStorageMicroCredits,
 	type StorageUsage,
+	storageMicroCreditsPerMinutePerMonth,
 	storageUsage,
 } from "@/lib/developer-pricing";
+import { firstMonthChargesBegan } from "@/lib/infra-first-month-start";
+import type { InfraResolutionTier } from "@/lib/infra-pricing";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 
 type StoredVideoGroup = {
@@ -17,54 +31,113 @@ type StoredVideoGroup = {
 	maxResolutionTier: string | null;
 	seconds: number | string | null;
 	count: number | string;
+	rows: number | string;
+	dailySeconds: number | string | null;
+	dailyCount: number | string | null;
+	firstMonth1080p: number | string | null;
+	firstMonth1440p: number | string | null;
+	firstMonth2160p: number | string | null;
+	owedFirstMonth1080p: number | string | null;
+	owedFirstMonth1440p: number | string | null;
+	owedFirstMonth2160p: number | string | null;
 };
+
+const firstMonthSum = (tier: InfraResolutionTier) =>
+	sql<
+		number | string | null
+	>`COALESCE(SUM(GREATEST(1, FLOOR(${developerVideos.duration} / 60 * ${storageMicroCreditsPerMinutePerMonth(tier)}))), 0)`;
+
+const owedFirstMonthSum = (tier: InfraResolutionTier, owesMonth: SQL) =>
+	sql<
+		number | string | null
+	>`COALESCE(SUM(CASE WHEN ${owesMonth} THEN GREATEST(1, FLOOR(${developerVideos.duration} / 60 * ${storageMicroCreditsPerMinutePerMonth(tier)})) ELSE 0 END), 0)`;
 
 const APP_ID_CHUNK = 500;
 
 export type StorageUsageOptions = {
 	includeProcessing?: boolean;
 	excludeVideoId?: string;
+	dailyChargeAt?: Date;
+	createdBefore?: Date;
 };
+
+export function storedVideoGroupsQuery(
+	appIds: readonly string[],
+	executor: Pick<InfraDbExecutor, "select">,
+	excludeVideoId?: string,
+	now: Date = new Date(),
+	createdBefore?: Date,
+	firstMonthsOwedSince?: Date | null,
+) {
+	const owesMonth = firstMonthsOwedSince
+		? sql`(${developerVideos.status} = 'ready' AND ${developerVideos.storagePaidUntil} IS NULL AND ${gte(developerVideos.createdAt, firstMonthsOwedSince)})`
+		: sql`FALSE`;
+	const inFirstMonth = sql`(${gt(developerVideos.storagePaidUntil, now)} OR ${owesMonth})`;
+	return executor
+		.select({
+			appId: developerVideos.appId,
+			width: developerVideos.width,
+			height: developerVideos.height,
+			status: developerVideos.status,
+			maxResolutionTier: developerVideos.maxResolutionTier,
+			seconds: sql<
+				number | string | null
+			>`COALESCE(SUM(${developerVideos.duration}), 0)`,
+			count: sql<number | string>`COUNT(${developerVideos.duration})`,
+			rows: sql<number | string>`COUNT(*)`,
+			dailySeconds: sql<
+				number | string | null
+			>`COALESCE(SUM(CASE WHEN ${inFirstMonth} THEN 0 ELSE ${developerVideos.duration} END), 0)`,
+			dailyCount: sql<
+				number | string | null
+			>`COALESCE(SUM(CASE WHEN ${inFirstMonth} THEN 0 WHEN ${developerVideos.duration} IS NULL THEN 0 ELSE 1 END), 0)`,
+			firstMonth1080p: firstMonthSum("1080p"),
+			firstMonth1440p: firstMonthSum("1440p"),
+			firstMonth2160p: firstMonthSum("2160p"),
+			owedFirstMonth1080p: owedFirstMonthSum("1080p", owesMonth),
+			owedFirstMonth1440p: owedFirstMonthSum("1440p", owesMonth),
+			owedFirstMonth2160p: owedFirstMonthSum("2160p", owesMonth),
+		})
+		.from(developerVideos)
+		.where(
+			and(
+				inArray(developerVideos.appId, [...appIds]),
+				isNull(developerVideos.deletedAt),
+				excludeVideoId ? ne(developerVideos.id, excludeVideoId) : undefined,
+				createdBefore
+					? lt(developerVideos.createdAt, createdBefore)
+					: undefined,
+			),
+		)
+		.groupBy(
+			developerVideos.appId,
+			developerVideos.status,
+			developerVideos.maxResolutionTier,
+			developerVideos.width,
+			developerVideos.height,
+		);
+}
 
 async function storedVideoGroups(
 	appIds: readonly string[],
 	executor: InfraDbExecutor,
 	excludeVideoId?: string,
+	now?: Date,
+	createdBefore?: Date,
+	firstMonthsOwedSince?: Date | null,
 ) {
 	const groups: StoredVideoGroup[] = [];
 	for (let start = 0; start < appIds.length; start += APP_ID_CHUNK) {
-		const rows = await executor
-			.select({
-				appId: developerVideos.appId,
-				width: developerVideos.width,
-				height: developerVideos.height,
-				status: developerVideos.status,
-				maxResolutionTier: developerVideos.maxResolutionTier,
-				seconds: sql<
-					number | string | null
-				>`COALESCE(SUM(${developerVideos.duration}), 0)`,
-				count: sql<number | string>`COUNT(*)`,
-			})
-			.from(developerVideos)
-			.where(
-				and(
-					inArray(
-						developerVideos.appId,
-						appIds.slice(start, start + APP_ID_CHUNK),
-					),
-					isNull(developerVideos.deletedAt),
-					isNotNull(developerVideos.duration),
-					excludeVideoId ? ne(developerVideos.id, excludeVideoId) : undefined,
-				),
-			)
-			.groupBy(
-				developerVideos.appId,
-				developerVideos.width,
-				developerVideos.height,
-				developerVideos.status,
-				developerVideos.maxResolutionTier,
-			);
-		groups.push(...rows);
+		groups.push(
+			...(await storedVideoGroupsQuery(
+				appIds.slice(start, start + APP_ID_CHUNK),
+				executor,
+				excludeVideoId,
+				now,
+				createdBefore,
+				firstMonthsOwedSince,
+			)),
+		);
 	}
 	return groups;
 }
@@ -81,21 +154,24 @@ export async function getStorageUsageByApp(
 	>();
 	for (const appId of appIds) entriesByApp.set(appId, []);
 	if (appIds.length > 0) {
+		const daily = options.dailyChargeAt !== undefined;
 		for (const group of await storedVideoGroups(
 			appIds,
 			executor,
 			options.excludeVideoId,
+			options.dailyChargeAt,
+			options.createdBefore,
 		)) {
 			entriesByApp.get(group.appId)?.push({
 				video: billableVideo({
-					duration: Number(group.seconds),
+					duration: Number(daily ? group.dailySeconds : group.seconds),
 					width: group.width,
 					height: group.height,
 					status: group.status,
 					maxResolutionTier: group.maxResolutionTier,
 					includeProcessing: options.includeProcessing,
 				}),
-				count: Number(group.count) || 0,
+				count: Number(daily ? group.dailyCount : group.count) || 0,
 			});
 		}
 	}
@@ -122,4 +198,65 @@ export async function getAppStorageUsage(
 		options,
 	);
 	return usageByApp.get(appId) ?? storageUsage([]);
+}
+
+export type AppStorage = {
+	stored: StorageUsage;
+	dailyCharge: StorageUsage;
+	firstMonthMicroCredits: number;
+	uploadingVideos: number;
+};
+
+export async function getAppStorage(
+	appId: string,
+	newVideo?: BillableVideo | null,
+	executor: InfraDbExecutor = db(),
+	options: { excludeVideoId?: string; now?: Date } = {},
+): Promise<AppStorage> {
+	const groups = await storedVideoGroups(
+		[appId],
+		executor,
+		options.excludeVideoId,
+		options.now,
+		undefined,
+		await firstMonthChargesBegan(executor),
+	);
+	const videoOf = (group: StoredVideoGroup, daily: boolean) =>
+		billableVideo({
+			duration: Number(daily ? group.dailySeconds : group.seconds),
+			width: group.width,
+			height: group.height,
+			maxResolutionTier: group.maxResolutionTier,
+		});
+	const ready = groups.filter((group) => group.status === "ready");
+	const usage = (daily: boolean) =>
+		storageUsage(
+			ready.map((group) => ({
+				video: videoOf(group, daily),
+				count: Number(daily ? group.dailyCount : group.count) || 0,
+			})),
+		);
+	const firstMonthOf = (group: StoredVideoGroup) => {
+		const video = videoOf(group, false);
+		if (!video) return 0;
+		return group.status === "processing"
+			? Number(group[`firstMonth${video.tier}`]) || 0
+			: Number(group[`owedFirstMonth${video.tier}`]) || 0;
+	};
+	return {
+		stored: usage(false),
+		dailyCharge: usage(true),
+		firstMonthMicroCredits:
+			groups
+				.filter(
+					(group) => group.status === "processing" || group.status === "ready",
+				)
+				.reduce((sum, group) => sum + firstMonthOf(group), 0) +
+			(newVideo ? firstMonthStorageMicroCredits(newVideo) : 0),
+		uploadingVideos: groups.reduce(
+			(sum, group) =>
+				sum + (Number(group.rows) || 0) - (Number(group.count) || 0),
+			0,
+		),
+	};
 }

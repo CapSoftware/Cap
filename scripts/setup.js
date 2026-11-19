@@ -153,10 +153,7 @@ async function main() {
 
 		const ffmpegDir = path.join(targetDir, "ffmpeg");
 		if (!(await fileExists(ffmpegDir)) || downloadedFfmpeg) {
-			await exec(
-				`Expand-Archive -Path "${ffmpegZipPath}" -DestinationPath "${targetDir}" -Force`,
-				{ shell: "powershell.exe" },
-			);
+			await expandArchive(ffmpegZipPath, targetDir);
 			await fs.rm(ffmpegDir, { recursive: true, force: true }).catch(() => {});
 			await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
 			console.log("Extracted ffmpeg");
@@ -234,6 +231,8 @@ async function main() {
 			"\\",
 			"/",
 		)}"\n`;
+
+		await setupWindowsVcRuntime(vcInstallDir.trim());
 
 		const cmakePath = path.join(
 			vcInstallDir.trim(),
@@ -412,46 +411,82 @@ async function signMacOSFrameworkLibs(frameworkDir) {
 		);
 }
 
+// 1.24.2 through 1.26 keep memory from every inference whose input changes: a
+// 30 minute Parakeet transcription peaked at 2.6 GB on 1.24.2 and 1.9 GB on
+// 1.30. Microsoft publishes no x86_64 macOS build after 1.23.2, so Intel Macs
+// stay on that release.
+const ONNX_RUNTIME_VERSION = "1.30.0";
+const ONNX_RUNTIME_INTEL_MAC_VERSION = "1.23.2";
+
+// Microsoft's official NuGet package. It carries the same builds as the GitHub
+// release archives (the 1.30.0 macOS arm64 dylib matches byte for byte once
+// both code signatures are removed), and nuget.org keeps every version. Every
+// platform Cap ships comes from runtimes/<rid>/native in it.
+const ONNX_RUNTIME_PACKAGE_SHA256 = {
+	"1.30.0": "30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2",
+	"1.23.2": "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a",
+};
+
+function onnxRuntimePackage(version, rid) {
+	const sha256 = ONNX_RUNTIME_PACKAGE_SHA256[version];
+	if (!sha256) throw new Error(`No pinned ONNX Runtime package for ${version}`);
+	const id = `microsoft.ml.onnxruntime.${version}`;
+	return {
+		// Expand-Archive only accepts a .zip extension.
+		name: `${id}.zip`,
+		url: `https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${version}/${id}.nupkg`,
+		sha256,
+		marker: `${id}:${rid}:${sha256}`,
+		async extract() {
+			const archivePath = await downloadVerifiedAsset(this);
+			const extractDir = path.join(targetDir, id);
+			await fs.rm(extractDir, { recursive: true, force: true });
+			if (process.platform === "win32")
+				await expandArchive(archivePath, extractDir);
+			else
+				await execFile("unzip", [
+					"-q",
+					"-o",
+					archivePath,
+					`runtimes/${rid}/native/*`,
+					"-d",
+					extractDir,
+				]);
+			return {
+				nativeDir: path.join(extractDir, "runtimes", rid, "native"),
+				cleanup: () => fs.rm(extractDir, { recursive: true, force: true }),
+			};
+		},
+	};
+}
+
+async function readMarker(markerPath) {
+	return await fs
+		.readFile(markerPath, "utf-8")
+		.then((value) => value.trim())
+		.catch(() => null);
+}
+
 async function setupMacOSOnnxRuntime() {
-	const asset =
+	const onnxPackage =
 		arch === "aarch64"
-			? {
-					version: "1.24.2",
-					name: "onnxruntime-osx-arm64-1.24.2.tgz",
-				}
-			: {
-					version: "1.23.2",
-					name: "onnxruntime-osx-x86_64-1.23.2.tgz",
-				};
-	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
-	const archivePath = path.join(targetDir, asset.name);
-	const extractDir = path.join(targetDir, asset.name.replace(/\.tgz$/, ""));
+			? onnxRuntimePackage(ONNX_RUNTIME_VERSION, "osx-arm64")
+			: onnxRuntimePackage(ONNX_RUNTIME_INTEL_MAC_VERSION, "osx-x64");
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.dylib");
 	const markerPath = path.join(outputDir, "asset.txt");
 	// Microsoft's dylib keeps ~12 MB of local symbols nothing in Cap reads; the
 	// marker changes with the preparation so a cached unstripped copy is redone.
-	const preparedMarker = `${asset.name}:stripped`;
-	const marker = await fs
-		.readFile(markerPath, "utf-8")
-		.then((value) => value.trim())
-		.catch(() => null);
+	const preparedMarker = `${onnxPackage.marker}:stripped`;
 
-	if (!(await fileExists(archivePath))) {
-		console.log(`Downloading ${asset.name}`);
-		const bytes = await downloadBytes(url);
-		await fs.writeFile(archivePath, Buffer.from(bytes));
-		console.log(`Downloaded ${asset.name}`);
-	} else console.log(`Using cached ${asset.name}`);
-
-	if (!(await fileExists(outputPath)) || marker !== preparedMarker) {
-		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+	if (
+		!(await fileExists(outputPath)) ||
+		(await readMarker(markerPath)) !== preparedMarker
+	) {
+		const { nativeDir, cleanup } = await onnxPackage.extract();
 		await fs.mkdir(outputDir, { recursive: true });
-		await fs.copyFile(
-			path.join(extractDir, "lib", "libonnxruntime.dylib"),
-			outputPath,
-		);
+		await fs.copyFile(path.join(nativeDir, "libonnxruntime.dylib"), outputPath);
+		await cleanup();
 		// Local symbols only: the exported C API (OrtGetApiBase) that ort loads
 		// through is unchanged.
 		await execFile("strip", ["-x", outputPath]);
@@ -467,57 +502,33 @@ async function setupMacOSOnnxRuntime() {
 }
 
 async function setupWindowsOnnxRuntime() {
-	const assets = {
-		x86_64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-x64-1.24.2.zip",
-		},
-		aarch64: {
-			version: "1.24.2",
-			name: "onnxruntime-win-arm64-1.24.2.zip",
-		},
-	};
-	const asset = assets[arch];
-	if (!asset)
+	const rid = { x86_64: "win-x64", aarch64: "win-arm64" }[arch];
+	if (!rid)
 		throw new Error(`Unsupported Windows arch for ONNX Runtime: ${arch}`);
 
-	const url = `https://github.com/microsoft/onnxruntime/releases/download/v${asset.version}/${asset.name}`;
-	const archivePath = path.join(targetDir, asset.name);
-	const extractDir = path.join(targetDir, asset.name.replace(/\.zip$/, ""));
+	const onnxPackage = onnxRuntimePackage(ONNX_RUNTIME_VERSION, rid);
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "onnxruntime.dll");
 	const markerPath = path.join(outputDir, "asset.txt");
-	const marker = await fs
-		.readFile(markerPath, "utf-8")
-		.then((value) => value.trim())
-		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		console.log(`Downloading ${asset.name}`);
-		const bytes = await downloadBytes(url);
-		await fs.writeFile(archivePath, Buffer.from(bytes));
-		console.log(`Downloaded ${asset.name}`);
-	} else console.log(`Using cached ${asset.name}`);
-
-	if (!(await fileExists(outputPath)) || marker !== asset.name) {
-		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${targetDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+	if (
+		!(await fileExists(outputPath)) ||
+		(await readMarker(markerPath)) !== onnxPackage.marker
+	) {
+		const { nativeDir, cleanup } = await onnxPackage.extract();
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
-		const libDir = path.join(extractDir, "lib");
-		const dllNames = (await fs.readdir(libDir)).filter((name) =>
+		const dllNames = (await fs.readdir(nativeDir)).filter((name) =>
 			name.toLowerCase().endsWith(".dll"),
 		);
 		if (!dllNames.includes("onnxruntime.dll"))
-			throw new Error(`ONNX Runtime archive is missing onnxruntime.dll`);
+			throw new Error(`ONNX Runtime package is missing onnxruntime.dll`);
 
 		for (const name of dllNames) {
-			await fs.copyFile(path.join(libDir, name), path.join(outputDir, name));
+			await fs.copyFile(path.join(nativeDir, name), path.join(outputDir, name));
 		}
-		await fs.writeFile(markerPath, asset.name);
+		await cleanup();
+		await fs.writeFile(markerPath, onnxPackage.marker);
 		console.log("Prepared ONNX Runtime DLLs");
 	} else console.log("Using cached ONNX Runtime DLLs");
 
@@ -540,47 +551,79 @@ async function setupWindowsOnnxRuntime() {
 }
 
 async function setupLinuxOnnxRuntime() {
-	const version = "1.24.3";
-	const platformArch = { x86_64: "x64", aarch64: "aarch64" }[arch];
-	if (!platformArch)
-		throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
+	const rid = { x86_64: "linux-x64", aarch64: "linux-arm64" }[arch];
+	if (!rid) throw new Error(`Unsupported Linux arch for ONNX Runtime: ${arch}`);
 
-	const archiveName = `onnxruntime-linux-${platformArch}-${version}.tgz`;
-	const archivePath = path.join(targetDir, archiveName);
-	const extractDir = path.join(targetDir, archiveName.replace(/\.tgz$/, ""));
+	const onnxPackage = onnxRuntimePackage(ONNX_RUNTIME_VERSION, rid);
 	const outputDir = path.join(targetDir, "native-deps", "onnxruntime", "lib");
 	const outputPath = path.join(outputDir, "libonnxruntime.so");
 	const markerPath = path.join(outputDir, "asset.txt");
-	const marker = await fs
-		.readFile(markerPath, "utf-8")
-		.then((value) => value.trim())
-		.catch(() => null);
 
-	if (!(await fileExists(archivePath))) {
-		const response = await fetch(
-			`https://github.com/microsoft/onnxruntime/releases/download/v${version}/${archiveName}`,
-		);
-		if (!response.ok)
-			throw new Error(
-				`Failed to download ${archiveName}: HTTP ${response.status}`,
-			);
-		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
-		console.log(`Downloaded ${archiveName}`);
-	} else console.log(`Using cached ${archiveName}`);
-
-	if (!(await fileExists(outputPath)) || marker !== archiveName) {
-		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await execFile("tar", ["xf", archivePath, "-C", targetDir]);
+	if (
+		!(await fileExists(outputPath)) ||
+		(await readMarker(markerPath)) !== onnxPackage.marker
+	) {
+		const { nativeDir, cleanup } = await onnxPackage.extract();
 		await fs.mkdir(outputDir, { recursive: true });
-		await fs.copyFile(
-			path.join(extractDir, "lib", "libonnxruntime.so"),
-			outputPath,
-		);
-		await fs.writeFile(markerPath, archiveName);
+		await fs.copyFile(path.join(nativeDir, "libonnxruntime.so"), outputPath);
+		await cleanup();
+		await fs.writeFile(markerPath, onnxPackage.marker);
 		console.log("Prepared ONNX Runtime shared library");
 	} else console.log("Using cached ONNX Runtime shared library");
 
 	return outputPath;
+}
+
+const WINDOWS_VC_RUNTIME_DLLS = [
+	"msvcp140.dll",
+	"msvcp140_1.dll",
+	"vcruntime140.dll",
+	"vcruntime140_1.dll",
+];
+
+// Cap.exe, cap-cli.exe, cap-muxer.exe, onnxruntime.dll and dxcompiler.dll all
+// import the Visual C++ runtime, which a clean Windows 11 does not have. The
+// installer ships the runtime next to them (app-local deployment) from the
+// same Visual Studio that linked them, so it is never older than the build.
+async function setupWindowsVcRuntime(vcInstallDir) {
+	const redistArch = { x86_64: "x64", aarch64: "arm64" }[arch];
+	if (!redistArch)
+		throw new Error(
+			`Unsupported Windows architecture for the VC runtime: ${arch}`,
+		);
+	const version = (
+		await fs.readFile(
+			path.join(
+				vcInstallDir,
+				"VC/Auxiliary/Build/Microsoft.VCRedistVersion.default.txt",
+			),
+			"utf-8",
+		)
+	).trim();
+	const archDir = path.join(
+		vcInstallDir,
+		"VC/Redist/MSVC",
+		version,
+		redistArch,
+	);
+	const crtDir = (await fs.readdir(archDir))
+		.filter((name) => /^Microsoft\.VC\d+\.CRT$/.test(name))
+		.sort()
+		.pop();
+	if (!crtDir)
+		throw new Error(
+			`No Visual C++ runtime redistributable found in ${archDir}`,
+		);
+
+	const outputDir = path.join(targetDir, "native-deps", "vcruntime");
+	await fs.rm(outputDir, { recursive: true, force: true });
+	await fs.mkdir(outputDir, { recursive: true });
+	for (const name of WINDOWS_VC_RUNTIME_DLLS)
+		await fs.copyFile(
+			path.join(archDir, crtDir, name),
+			path.join(outputDir, name),
+		);
+	console.log(`Prepared the Visual C++ runtime ${version} for ${redistArch}`);
 }
 
 async function setupWindowsDxc() {
@@ -624,10 +667,7 @@ async function setupWindowsDxc() {
 
 	if (currentMarker !== marker || missingAssets.length > 0) {
 		await fs.rm(extractDir, { recursive: true, force: true }).catch(() => {});
-		await exec(
-			`Expand-Archive -Path "${archivePath}" -DestinationPath "${extractDir}" -Force`,
-			{ shell: "powershell.exe" },
-		);
+		await expandArchive(archivePath, extractDir);
 		await fs.rm(outputDir, { recursive: true, force: true }).catch(() => {});
 		await fs.mkdir(outputDir, { recursive: true });
 		for (const file of files)
@@ -663,12 +703,11 @@ async function setupWindowsDxc() {
 async function downloadVerifiedAsset(asset) {
 	const archivePath = path.join(targetDir, asset.name);
 	if (!(await fileExists(archivePath))) {
-		const response = await fetch(asset.url);
-		if (!response.ok)
-			throw new Error(
-				`Failed to download ${asset.name}: HTTP ${response.status}`,
-			);
-		await fs.writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
+		console.log(`Downloading ${asset.name}`);
+		await fs.writeFile(
+			archivePath,
+			Buffer.from(await downloadBytes(asset.url)),
+		);
 		console.log(`Downloaded ${asset.name}`);
 	} else console.log(`Using cached ${asset.name}`);
 
@@ -700,6 +739,21 @@ async function signMacOSDylib(filePath) {
 
 	await exec(
 		`codesign ${keychain} ${timestamp} -s "${signId}" -f "${filePath}"`,
+	);
+}
+
+async function expandArchive(archivePath, destination) {
+	// Under a pwsh parent, PSModulePath points Windows PowerShell at
+	// PowerShell 7's Archive module, which fails on .NET Framework without a
+	// non-zero exit, leaving nothing extracted.
+	const env = Object.fromEntries(
+		Object.entries(process.env).filter(
+			([key]) => key.toLowerCase() !== "psmodulepath",
+		),
+	);
+	await exec(
+		`$ErrorActionPreference = 'Stop'; Expand-Archive -Path "${archivePath}" -DestinationPath "${destination}" -Force`,
+		{ shell: "powershell.exe", env },
 	);
 }
 

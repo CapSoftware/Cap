@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEVELOPER_VIDEO_TAKEDOWN_KEY } from "@cap/database/types";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +14,16 @@ const mocks = vi.hoisted(() => ({
 	appId: "app-1",
 	playbackUrl: undefined as string | undefined,
 	redrive: vi.fn(),
+	settleAtDelete: vi.fn(),
+	cancelJob: vi.fn(),
+	createImport: vi.fn(),
+	importView: vi.fn(),
+	startWorkflow: vi.fn(),
+	purge: vi.fn(),
+}));
+
+vi.mock("@vercel/functions", () => ({
+	dangerouslyDeleteByTag: mocks.purge,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -31,11 +42,29 @@ vi.mock("@cap/env", () => ({
 vi.mock("@/lib/developer-video-start", () => ({
 	redriveDeveloperVideoProcessing: mocks.redrive,
 }));
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtDelete: mocks.settleAtDelete,
+}));
+
+vi.mock("@/lib/infra-video-import", () => ({
+	createInfraVideoImport: mocks.createImport,
+	developerVideoImportView: mocks.importView,
+	newImportVideoId: () => "new-video-1",
+}));
+vi.mock("@/workflows/import-developer-video", () => ({
+	importDeveloperVideoWorkflow: "import-workflow",
+}));
+vi.mock("workflow/api", () => ({ start: mocks.startWorkflow }));
+
+vi.mock("@/lib/media-client", () => ({
+	cancelMediaServerVideoJob: mocks.cancelJob,
+}));
 vi.mock("@/app/api/utils", async () => {
 	const { createMiddleware } = await import("hono/factory");
 	return {
 		withDeveloperSecretAuth: createMiddleware(async (c, next) => {
 			c.set("developerAppId", mocks.appId);
+			c.set("developerKeyId", "key-1");
 			c.set("developerKeyType", "secret");
 			await next();
 		}),
@@ -43,6 +72,9 @@ vi.mock("@/app/api/utils", async () => {
 });
 
 const { app } = await import("@/app/api/developer/v1/[...route]/videos");
+const { markDeveloperVideoDeleted } = await import(
+	"@/lib/developer-video-delete"
+);
 
 const BASE =
 	"https://web.example/api/developer/playback/playback-id-0123456789ab";
@@ -107,9 +139,11 @@ beforeEach(() => {
 	mocks.store.video = ready();
 	mocks.store.more = [];
 	mocks.store.updates = [];
+	mocks.store.captionRows = [];
 	mocks.appId = "app-1";
 	mocks.playbackUrl = undefined;
 	mocks.redrive.mockResolvedValue(false);
+	mocks.cancelJob.mockResolvedValue("cancelled");
 });
 
 describe("developer video API", () => {
@@ -123,6 +157,7 @@ describe("developer video API", () => {
 			externalUserId: null,
 			name: "Untitled",
 			duration: 12,
+			durationSeconds: 12,
 			width: 1920,
 			height: 1080,
 			fps: 30,
@@ -146,11 +181,194 @@ describe("developer video API", () => {
 			deletedAt: null,
 			createdAt: "2026-11-01T00:00:00.000Z",
 			updatedAt: "2026-11-01T00:00:00.000Z",
+			takenDown: false,
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 			shareUrl: PAGE,
 			embedUrl: `${PAGE}/embed`,
+			captions: [],
+		});
+	});
+
+	it("lists the captions made from the video's transcripts on get and list", async () => {
+		mocks.store.captionRows = [
+			{ videoId: "video-1", language: "fr" },
+			{ videoId: "video-1", language: "en" },
+			{ videoId: "video-1", language: null },
+			{ videoId: "video-other", language: "de" },
+		];
+		const captions = [
+			{ language: "en", url: `${BASE}/captions-en.vtt` },
+			{ language: "fr", url: `${BASE}/captions-fr.vtt` },
+			{ language: "und", url: `${BASE}/captions-und.vtt` },
+		];
+
+		expect((await get("/video-1")).body.data.captions).toEqual(captions);
+		expect((await get("/")).body.data[0].captions).toEqual(captions);
+	});
+
+	it("lists no captions for a video that was taken down", async () => {
+		mocks.store.captionRows = [{ videoId: "video-1", language: "en" }];
+		const video = ready();
+		video.metadata = {
+			[DEVELOPER_VIDEO_TAKEDOWN_KEY]: { at: "2026-11-01", metadata: null },
+		};
+		mocks.store.video = video;
+
+		const { body } = await get("/video-1");
+
+		expect(body.data.takenDown).toBe(true);
+		expect(body.data.captions).toEqual([]);
+	});
+
+	describe("output states", () => {
+		const outputsOf = async (path: string) =>
+			(await get(path)).body.data.outputs;
+		const withParts = (
+			status: "uploading" | "processing" | "ready" | "errored",
+			hls: Record<string, unknown>,
+			mp4: Record<string, unknown>,
+		) => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status,
+				processing: processingState({
+					...base.processing,
+					hls,
+					mp4,
+				} as never),
+			};
+		};
+
+		it("says an MP4 that failed for good will not come on a ready video", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "failed", reason: "encoder refused" },
+			);
+			for (const path of ["/video-1", "/video-1/status"]) {
+				const { body } = await get(path);
+				expect(body.data.hlsUrl).toBe(`${BASE}/master.m3u8`);
+				expect(body.data.mp4Url).toBeNull();
+				expect(body.data.outputs).toEqual({ hls: "ready", mp4: "failed" });
+			}
+		});
+
+		it("says an MP4 still encoding or waiting for a retry is still coming", async () => {
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "running", token: "t", jobId: null, startedAt: 1 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+			withParts(
+				"ready",
+				{ state: "complete", output: "hls-out" },
+				{ state: "unavailable", reason: "busy", retryAt: 2 },
+			);
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "ready",
+				mp4: "processing",
+			});
+		});
+
+		it("never says ready while the URL is still null", async () => {
+			withParts(
+				"processing",
+				{ state: "complete", output: "hls-out" },
+				{ state: "pending" },
+			);
+			const { body } = await get("/video-1");
+			expect(body.data.hlsUrl).toBeNull();
+			expect(body.data.outputs).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("says nothing is coming for an errored video", async () => {
+			withParts("errored", { state: "pending" }, { state: "pending" });
+			expect(await outputsOf("/video-1/status")).toEqual({
+				hls: "failed",
+				mp4: "failed",
+			});
+		});
+
+		it("reads a video still uploading as processing", async () => {
+			mocks.store.video = { ...ready(), status: "uploading", processing: null };
+			expect(await outputsOf("/video-1")).toEqual({
+				hls: "processing",
+				mp4: "processing",
+			});
+		});
+
+		it("reports no duration for a video that failed before it was measured", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				errorReason: "This file could not be read as a video.",
+				duration: 0.02,
+				processing: processingState({
+					...base.processing,
+					probe: null,
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("reports no duration when a length measured at upload was never confirmed by processing", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "errored",
+				errorReason: "Processing took too long. Upload the video again.",
+				duration: 60,
+				processing: null,
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("reports no duration when processing read the file but not its length", async () => {
+			const base = ready();
+			mocks.store.video = {
+				...base,
+				status: "errored",
+				duration: 45,
+				processing: processingState({
+					...base.processing,
+					probe: { duration: null, width: 1920, height: 1080, fps: 30 },
+				} as never),
+			};
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBeNull();
+			}
+		});
+
+		it("keeps the measured duration of a video that failed after it was measured", async () => {
+			mocks.store.video = { ...ready(), status: "errored", duration: 12 };
+			for (const path of ["/video-1", "/video-1/status"]) {
+				expect((await get(path)).body.data.duration).toBe(12);
+			}
+		});
+
+		it("says none for a video uploaded before encoding existed", async () => {
+			mocks.store.video = {
+				...ready(),
+				status: "ready",
+				playbackId: null,
+				processing: null,
+			};
+			expect(await outputsOf("/video-1")).toEqual({ hls: "none", mp4: "none" });
 		});
 	});
 
@@ -175,17 +393,66 @@ describe("developer video API", () => {
 		}
 	});
 
+	it.each([
+		["a measured video", { duration: 95.25 }],
+		["a video with no length yet", { duration: null }],
+	])(
+		"gives durationSeconds the value of duration for %s, on get, list and status",
+		async (_name, row) => {
+			mocks.store.video = { ...ready(), ...row };
+
+			const got = (await get("/video-1")).body.data;
+			const listed = (await get("/")).body.data[0];
+			const status = (await get("/video-1/status")).body.data;
+			for (const video of [got, listed, status]) {
+				expect(video.durationSeconds).toBe(row.duration);
+				expect(video.duration).toBe(row.duration);
+			}
+		},
+	);
+
+	it("marks duration deprecated in favour of durationSeconds in the OpenAPI description only", async () => {
+		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
+		const schemas = developerOpenApiSpec("https://cap.so").components.schemas;
+
+		for (const schema of [schemas.DeveloperVideo, schemas.VideoStatus]) {
+			expect(schema.properties.duration.description).toMatch(
+				/^Deprecated: use durationSeconds/,
+			);
+			expect(schema.properties.duration).not.toHaveProperty("deprecated");
+			expect(schema.properties.durationSeconds.type).toEqual([
+				"number",
+				"null",
+			]);
+		}
+	});
+
 	it("returns exactly the fields the OpenAPI description lists", async () => {
 		const { developerOpenApiSpec } = await import("@/lib/developer-openapi");
 		const schemas = developerOpenApiSpec("https://cap.so").components.schemas;
 
+		const always = (properties: object) =>
+			Object.keys(properties)
+				.filter((name) => name !== "import")
+				.sort();
+
 		const video = await get("/video-1");
 		expect(Object.keys(video.body.data).sort()).toEqual(
-			Object.keys(schemas.DeveloperVideo.properties).sort(),
+			always(schemas.DeveloperVideo.properties),
 		);
 		const status = await get("/video-1/status");
 		expect(Object.keys(status.body.data).sort()).toEqual(
-			Object.keys(schemas.VideoStatus.properties).sort(),
+			always(schemas.VideoStatus.properties),
+		);
+
+		mocks.importView.mockResolvedValueOnce({
+			sourceUrl: "https://media.example.com/a.mp4",
+			state: "complete",
+			errorCode: null,
+		});
+		const imported = await get("/video-1");
+		expect(Object.keys(imported.body.data).sort()).toEqual(
+			Object.keys(schemas.DeveloperVideo.properties).sort(),
 		);
 	});
 
@@ -194,7 +461,9 @@ describe("developer video API", () => {
 		const status = Object.keys((await get("/video-1/status")).body.data).sort();
 		const reference = [
 			...docsSection("## Video Object Reference").matchAll(/^\| `(\w+)` \|/gm),
-		].map((row) => row[1]);
+		]
+			.map((row) => row[1])
+			.filter((name) => name !== "import");
 
 		expect(reference.sort()).toEqual(video);
 		expect(Object.keys(docsExampleResponse("### Get Video")).sort()).toEqual(
@@ -627,6 +896,159 @@ describe("developer video API", () => {
 			expect(response.status).toBe(200);
 			expect(await response.json()).toEqual({ success: true });
 			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
+			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+		});
+
+		it("drops the video's cached playback once it is marked deleted", async () => {
+			mocks.purge.mockReset();
+			mocks.purge.mockImplementation(async () => {
+				expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			});
+
+			expect((await remove()).status).toBe(200);
+			expect(mocks.purge.mock.calls).toEqual([["infra-video-video-1"]]);
+		});
+
+		it("still deletes the video when the cache purge fails", async () => {
+			mocks.purge.mockReset();
+			mocks.purge.mockRejectedValue(new Error("429"));
+			vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(mocks.settleAtDelete).toHaveBeenCalledWith("video-1");
+			mocks.purge.mockReset();
+		});
+
+		it("cancels the encode jobs of a video deleted mid-encode", async () => {
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: "job-hls",
+						startedAt: 2_000,
+					},
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+			mocks.cancelJob.mockImplementation(async () => {
+				expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+				return "cancelled";
+			});
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.cancelJob.mock.calls.flat().sort()).toEqual([
+				"job-hls",
+				"job-mp4",
+			]);
+
+			await remove();
+			expect(mocks.cancelJob).toHaveBeenCalledTimes(2);
+		});
+
+		it("cancels only the part that is still running and has a job", async () => {
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: null,
+						startedAt: 2_000,
+					},
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+
+			await remove();
+
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-mp4"]]);
+		});
+
+		it("answers as before and settles and cancels once, also on a repeat delete", async () => {
+			const now = new Date("2026-11-13T12:00:00.000Z");
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					hls: {
+						state: "running",
+						token: "t-hls",
+						jobId: "job-hls",
+						startedAt: 2_000,
+					},
+				}),
+			});
+
+			const first = await remove();
+			const repeated = await remove();
+
+			expect([first.status, repeated.status]).toEqual([200, 200]);
+			expect(await first.text()).toBe('{"success":true}');
+			expect(await repeated.text()).toBe('{"success":true}');
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(mocks.store.updates).toEqual([{ deletedAt: expect.any(Date) }]);
+			expect(mocks.settleAtDelete.mock.calls).toEqual([["video-1"]]);
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-hls"]]);
+
+			mocks.store.updates = [];
+			mocks.store.video = { ...mocks.store.video, deletedAt: null } as never;
+			await markDeveloperVideoDeleted(
+				{ appId: "app-1", videoId: "video-1" },
+				now,
+			);
+			expect(mocks.store.updates).toEqual([{ deletedAt: now }]);
+			expect(mocks.settleAtDelete.mock.calls).toEqual([
+				["video-1"],
+				["video-1"],
+			]);
+			expect(mocks.cancelJob.mock.calls).toEqual([["job-hls"], ["job-hls"]]);
+		});
+
+		it("cancels nothing for a video that finished encoding", async () => {
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(mocks.cancelJob).not.toHaveBeenCalled();
+		});
+
+		it("still deletes when the media server cannot cancel the job", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			mocks.store.video = developerVideo({
+				processing: processingState({
+					mp4: {
+						state: "running",
+						token: "t-mp4",
+						jobId: "job-mp4",
+						startedAt: 2_000,
+					},
+				}),
+			});
+			mocks.cancelJob.mockResolvedValue("failed");
+
+			const response = await remove();
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ success: true });
+			expect(mocks.store.video?.deletedAt).toBeInstanceOf(Date);
+			expect(warn).toHaveBeenCalledWith(
+				"[developer-video] Could not cancel encode job",
+				{ videoId: "video-1", jobId: "job-mp4" },
+			);
+			warn.mockRestore();
 		});
 
 		it("answers a repeated delete with success and leaves the row alone", async () => {
@@ -639,6 +1061,7 @@ describe("developer video API", () => {
 			expect(await second.json()).toEqual({ success: true });
 			expect(mocks.store.updates).toHaveLength(1);
 			expect(mocks.store.video?.deletedAt).toBe(deletedAt);
+			expect(mocks.settleAtDelete).toHaveBeenCalledTimes(1);
 		});
 
 		it("still answers 404 for a video of another app, deleted or not", async () => {
@@ -703,6 +1126,7 @@ describe("developer video API", () => {
 			id: "video-1",
 			externalUserId: null,
 			duration: 12,
+			durationSeconds: 12,
 			width: 1920,
 			height: 1080,
 			transcriptionStatus: null,
@@ -711,9 +1135,11 @@ describe("developer video API", () => {
 			errorReason: null,
 			playbackId: "playback-id-0123456789ab",
 			renditions: ready().renditions,
+			takenDown: false,
 			hlsUrl: `${BASE}/master.m3u8`,
 			mp4Url: `${BASE}/video.mp4`,
 			posterUrl: `${BASE}/poster.jpg`,
+			outputs: { hls: "ready", mp4: "ready" },
 		});
 	});
 
@@ -863,5 +1289,167 @@ describe("developer video API", () => {
 
 		expect((await get("/video-1")).status).toBe(404);
 		expect((await get("/video-1/status")).status).toBe(404);
+	});
+});
+
+describe("import from a URL", () => {
+	const post = (body: unknown, headers: Record<string, string> = {}) =>
+		app.request("/", {
+			method: "POST",
+			headers: { "content-type": "application/json", ...headers },
+			body: JSON.stringify(body),
+		});
+
+	beforeEach(() => {
+		mocks.store.video = developerVideo({ status: "uploading" });
+		mocks.createImport.mockResolvedValue({
+			status: 202,
+			videoId: "video-1",
+			replayed: false,
+		});
+		mocks.importView.mockResolvedValue({
+			sourceUrl: "https://media.example.com/a.mp4",
+			state: "downloading",
+			errorCode: null,
+		});
+	});
+
+	it("starts an import with the key, a new video id and the fields sent", async () => {
+		const response = await post({
+			url: "https://media.example.com/a.mp4",
+			name: "Launch film",
+			userId: "user-7",
+			maxResolutionTier: "1440p",
+			metadata: { campaign: "spring" },
+		});
+		expect(response.status).toBe(200);
+		const [input, deps] = mocks.createImport.mock.calls[0] ?? [];
+		expect(input).toEqual({
+			url: "https://media.example.com/a.mp4",
+			name: "Launch film",
+			userId: "user-7",
+			maxResolutionTier: "1440p",
+			metadata: { campaign: "spring" },
+			appId: "app-1",
+			keyId: "key-1",
+			idempotencyKey: undefined,
+			videoId: "new-video-1",
+		});
+		const body = await response.json();
+		expect(body.data).toMatchObject({
+			id: "video-1",
+			status: "uploading",
+			import: {
+				sourceUrl: "https://media.example.com/a.mp4",
+				state: "downloading",
+				errorCode: null,
+			},
+		});
+
+		await deps.startImport("video-1");
+		expect(mocks.startWorkflow).toHaveBeenCalledWith("import-workflow", [
+			{ videoId: "video-1" },
+		]);
+	});
+
+	it("derives the video id from an Idempotency-Key", async () => {
+		const { developerVideoIdForIdempotencyKey } = await import(
+			"@/lib/developer-ids"
+		);
+		await post(
+			{ url: "https://media.example.com/a.mp4" },
+			{ "idempotency-key": "import-key-1" },
+		);
+		expect(mocks.createImport.mock.calls[0]?.[0]).toMatchObject({
+			idempotencyKey: "import-key-1",
+			videoId: developerVideoIdForIdempotencyKey("app-1", "import-key-1"),
+		});
+	});
+
+	it("keeps the id of a video imported under the key before keyed ids changed", async () => {
+		const { legacyDeveloperVideoIdForIdempotencyKey } = await import(
+			"@/lib/developer-ids"
+		);
+		const legacy = legacyDeveloperVideoIdForIdempotencyKey(
+			"app-1",
+			"import-key-1",
+		);
+		mocks.store.video = { ...ready(), id: legacy };
+
+		await post(
+			{ url: "https://media.example.com/a.mp4" },
+			{ "idempotency-key": "import-key-1" },
+		);
+		expect(mocks.createImport.mock.calls[0]?.[0]).toMatchObject({
+			idempotencyKey: "import-key-1",
+			videoId: legacy,
+		});
+	});
+
+	it.each([
+		["no url", {}],
+		["an empty url", { url: "" }],
+		["an unknown field", { url: "https://media.example.com/a.mp4", file: "x" }],
+		[
+			"a misspelt field",
+			{ url: "https://media.example.com/a.mp4", userid: "u" },
+		],
+		["a url that is not a string", { url: 42 }],
+		[
+			"a url over the length limit",
+			{ url: `https://a.example/${"a".repeat(2_050)}` },
+		],
+		[
+			"upload-only options",
+			{
+				url: "https://media.example.com/a.mp4",
+				corsOrigin: "https://a.example",
+			},
+		],
+	])("refuses %s with 400 before doing anything", async (_label, body) => {
+		const response = await post(body);
+		expect(response.status).toBe(400);
+		expect((await response.json()).code).toBe("invalid_request");
+		expect(mocks.createImport).not.toHaveBeenCalled();
+	});
+
+	it("refuses a malformed Idempotency-Key", async () => {
+		const response = await post(
+			{ url: "https://media.example.com/a.mp4" },
+			{ "idempotency-key": "no spaces allowed" },
+		);
+		expect(response.status).toBe(400);
+		expect(mocks.createImport).not.toHaveBeenCalled();
+	});
+
+	it("shows the import on Get Video and Get Video Status, and nothing on other videos", async () => {
+		for (const path of ["/video-1", "/video-1/status"]) {
+			const imported = await get(path);
+			expect(imported.body.data.import).toEqual({
+				sourceUrl: "https://media.example.com/a.mp4",
+				state: "downloading",
+				errorCode: null,
+			});
+		}
+		expect(mocks.importView).toHaveBeenCalledWith("video-1");
+
+		mocks.importView.mockResolvedValue(null);
+		for (const path of ["/video-1", "/video-1/status"]) {
+			expect(Object.keys((await get(path)).body.data)).not.toContain("import");
+		}
+		const listed = await get("/");
+		expect(Object.keys(listed.body.data[0])).not.toContain("import");
+	});
+
+	it("passes refusals through with their status and Retry-After", async () => {
+		mocks.createImport.mockResolvedValueOnce({
+			status: 429,
+			body: { code: "too_many_imports", error: "busy" },
+			headers: { "Retry-After": "15" },
+		});
+		const response = await post({ url: "https://media.example.com/a.mp4" });
+		expect(response.status).toBe(429);
+		expect(response.headers.get("Retry-After")).toBe("15");
+		expect((await response.json()).code).toBe("too_many_imports");
 	});
 });

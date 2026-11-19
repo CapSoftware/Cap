@@ -1,5 +1,5 @@
 diff --git a/dist/modules/src/isobmff/isobmff-demuxer.js b/dist/modules/src/isobmff/isobmff-demuxer.js
-index b5cce3d36e7385dc2c925ef0743383ca58150df6..052a4812671f2f50e9fe66ffacd384451209740c 100644
+index b5cce3d36e7385dc2c925ef0743383ca58150df6..bcf68572294591bed068d20e6a525bae8d696a8a 100644
 --- a/dist/modules/src/isobmff/isobmff-demuxer.js
 +++ b/dist/modules/src/isobmff/isobmff-demuxer.js
 @@ -18,6 +18,8 @@ import { DEFAULT_TRACK_DISPOSITION, RichImageData } from '../metadata.js';
@@ -91,7 +91,22 @@ index b5cce3d36e7385dc2c925ef0743383ca58150df6..052a4812671f2f50e9fe66ffacd38445
          const isPcmCodec = internalTrack.info?.type === 'audio'
              && internalTrack.info.codec
              && PCM_AUDIO_CODECS.includes(internalTrack.info.codec);
-@@ -281,6 +356,13 @@ export class IsobmffDemuxer extends Demuxer {
+@@ -236,8 +311,12 @@ export class IsobmffDemuxer extends Demuxer {
+             for (let i = 0; i < sampleTable.sampleToChunk.length; i++) {
+                 const chunkEntry = sampleTable.sampleToChunk[i];
+                 const nextEntry = sampleTable.sampleToChunk[i + 1];
+-                const chunkCount = (nextEntry ? nextEntry.startChunkIndex : sampleTable.chunkOffsets.length)
+-                    - chunkEntry.startChunkIndex;
++                // A chunk that has no offset in the file cannot hold samples, so a run of chunks ends at the
++                // last chunk the file lists, whatever the next entry claims. Without this, a gap between two
++                // entries makes the loop below run once per claimed chunk, up to four billion times.
++                const PCM_CHUNK_SPAN_LIMIT = sampleTable.chunkOffsets.length;
++                const chunkCount = Math.max(0, Math.min(nextEntry ? nextEntry.startChunkIndex : PCM_CHUNK_SPAN_LIMIT, PCM_CHUNK_SPAN_LIMIT)
++                    - chunkEntry.startChunkIndex);
+                 for (let j = 0; j < chunkCount; j++) {
+                     const startSampleIndex = chunkEntry.startSampleIndex + j * chunkEntry.samplesPerChunk;
+                     const endSampleIndex = startSampleIndex + chunkEntry.samplesPerChunk; // Exclusive, outside of chunk
+@@ -281,6 +360,13 @@ export class IsobmffDemuxer extends Demuxer {
          if (sampleTable.sampleCompositionTimeOffsets.length > 0) {
              // If composition time offsets are defined, we must build a list of all presentation timestamps and then
              // sort them
@@ -105,7 +120,7 @@ index b5cce3d36e7385dc2c925ef0743383ca58150df6..052a4812671f2f50e9fe66ffacd38445
              sampleTable.presentationTimestamps = [];
              for (const entry of sampleTable.sampleTimingEntries) {
                  for (let i = 0; i < entry.count; i++) {
-@@ -1813,6 +1895,10 @@ export class IsobmffDemuxer extends Demuxer {
+@@ -1813,6 +1899,10 @@ export class IsobmffDemuxer extends Demuxer {
                          };
                          this.currentFragment.trackData.set(track.id, trackData);
                      }

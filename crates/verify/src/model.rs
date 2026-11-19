@@ -12,7 +12,9 @@
 //!   its last `duration` seconds) and the incoming one's; fades through black
 //!   are not checked.
 //! - Every track of a recording segment is aligned to the latest track start
-//!   (`latest_start_time - track.start_time` is added to the request). The
+//!   (`latest_start_time - track.start_time` is added to the request), except
+//!   an audio track starting more than `LATE_AUDIO_START_SECS` after the later
+//!   of the screen and camera starts, which does not count. The
 //!   camera additionally takes the clip's camera offset when the user set it;
 //!   an auto-calculated camera offset describes the same start alignment and
 //!   must not be applied a second time.
@@ -157,11 +159,17 @@ impl ReferenceModel {
                     .zip(present)
                     .all(|(start, present)| !present || start.is_some());
                 let latest = all_known.then(|| {
-                    starts
+                    let video = starts[..2]
                         .iter()
                         .flatten()
                         .copied()
-                        .fold(f64::NEG_INFINITY, f64::max)
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    starts[2..]
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .filter(|audio| audio - video <= cap_project::LATE_AUDIO_START_SECS)
+                        .fold(video, f64::max)
                 });
                 let align = |start: Option<f64>| match (latest, start) {
                     (Some(latest), Some(start)) => latest - start,
@@ -339,16 +347,45 @@ impl ReferenceModel {
             .iter()
             .map(|f| (f.pts_secs * f64::from(timing.fps)).round() as i64)
             .collect();
+        // A request past the middle of its cell is answered with the picture
+        // numbered with the next slot when that picture is presented by the
+        // request time (decoder::request_next_frame). Within SLOT_EPSILON of
+        // either boundary the f32 request time can fall on both sides, so both
+        // answers are allowed there.
+        let presented_next = |slot: i64| {
+            let into_cell = x - slot as f64;
+            let latest = request + SLOT_EPSILON / f64::from(timing.fps);
+            let earliest = request - SLOT_EPSILON / f64::from(timing.fps);
+            let next = track
+                .frames
+                .iter()
+                .zip(&numbers)
+                .filter(|(_, n)| **n == slot + 1);
+            let maybe = into_cell > 0.5 - SLOT_EPSILON
+                && next.clone().any(|(frame, _)| frame.pts_secs <= latest);
+            let surely = into_cell > 0.5 + SLOT_EPSILON
+                && next.clone().all(|(frame, _)| frame.pts_secs <= earliest)
+                && next.count() > 0;
+            (maybe, surely)
+        };
         let mut allowed = Vec::new();
         for slot in slots {
             let upto = numbers.partition_point(|&n| n <= slot);
-            let target = if upto == 0 {
+            let grid = if upto == 0 {
                 numbers[0]
             } else {
                 numbers[upto - 1]
             };
+            // A hold of two slots or more (past the end of the track, a long
+            // gap) is never checked against the next slot.
+            let targets = match presented_next(slot) {
+                _ if grid + 1 < slot => vec![grid],
+                (_, true) => vec![slot + 1],
+                (true, false) => vec![grid, slot + 1],
+                (false, false) => vec![grid],
+            };
             for (frame, &n) in track.frames.iter().zip(&numbers) {
-                if n == target && !allowed.contains(&frame.index) {
+                if targets.contains(&n) && !allowed.contains(&frame.index) {
                     allowed.push(frame.index);
                 }
             }

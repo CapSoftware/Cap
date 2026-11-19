@@ -16,6 +16,7 @@ import { Array as Arr, Cause, Effect, Exit, Option } from "effect";
 import type { Schema } from "effect/Schema";
 
 import { Database } from "../Database.ts";
+import { getCustomThumbnailKey } from "../Storage/custom-thumbnail.ts";
 import { Storage as StorageService } from "../Storage/index.ts";
 import { getPublishedRecordingThumbnailKey } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
@@ -258,6 +259,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const getThumbnailURLForVideo = Effect.fn("Videos.getThumbnailURLForVideo")(
 			function* (video: Video.Video) {
 				const [bucket] = yield* storage.getAccessForVideo(video);
+				const customThumbnail = getCustomThumbnailKey({
+					id: video.id,
+					ownerId: video.ownerId,
+					metadata: Option.getOrNull(video.metadata),
+				});
+				if (customThumbnail) {
+					return Option.some(yield* bucket.getSignedObjectUrl(customThumbnail));
+				}
 				const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
 				if (publishedThumbnail) {
 					return Option.some(

@@ -27,7 +27,7 @@ const Row = ({
 }) => (
 	<article
 		id={id}
-		className="grid scroll-mt-14 items-start gap-x-16 gap-y-6 border-b border-[rgba(222,230,246,0.08)] py-10 first:border-t lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:py-12"
+		className="grid scroll-mt-[85px] items-start gap-x-16 gap-y-6 border-b border-[rgba(222,230,246,0.08)] py-10 first:border-t lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:py-12"
 	>
 		<div>
 			<h2 className={`${H_SECTION} m-0 text-[22px]`}>{title}</h2>

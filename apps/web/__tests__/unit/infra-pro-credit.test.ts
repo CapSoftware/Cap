@@ -4,6 +4,8 @@ type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({
 	balance: 0,
+	heldMicroCredits: 0,
+	reads: [] as string[],
 	owner: "user-1",
 	transactions: [] as Record<string, unknown>[],
 	lock: Promise.resolve(),
@@ -38,13 +40,23 @@ vi.mock("@cap/database", () => ({
 						const chain = {
 							innerJoin: () => chain,
 							where: (conditions: Row[]) => ({
-								limit: () =>
-									Object.assign(Promise.resolve(read(table, conditions)), {
-										for: async () => {
-											await lock();
-											return read(table, conditions);
-										},
-									}),
+								limit: () => ({
+									then: (
+										resolve: (rows: Row[]) => unknown,
+										reject: (error: unknown) => unknown,
+									) => {
+										state.reads.push(`read ${table.table}`);
+										return Promise.resolve(read(table, conditions)).then(
+											resolve,
+											reject,
+										);
+									},
+									for: async () => {
+										state.reads.push(`lock ${table.table}`);
+										await lock();
+										return read(table, conditions);
+									},
+								}),
 							}),
 						};
 						return chain;
@@ -75,6 +87,10 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/database/helpers", () => ({ nanoId: () => "txn" }));
 vi.mock("@cap/env", () => ({ buildEnv: { NEXT_PUBLIC_IS_CAP: "true" } }));
 vi.mock("@cap/utils", () => ({ stripe: () => ({}), userIsPro: () => true }));
+vi.mock("@/lib/infra-balance", () => ({
+	AVAILABLE_AFTER_FIELD: "availableAfterMicroCredits",
+	heldTranscriptMicroCredits: async () => state.heldMicroCredits,
+}));
 vi.mock("@cap/database/schema", () => ({
 	users: { table: "users", id: "id" },
 	developerCreditAccounts: {
@@ -112,6 +128,8 @@ const claim = (now = november, accountId = "account-1") =>
 describe("Cap Pro monthly Infra credit", () => {
 	beforeEach(() => {
 		state.balance = 0;
+		state.heldMicroCredits = 0;
+		state.reads = [];
 		state.owner = "user-1";
 		state.transactions = [];
 		state.lock = Promise.resolve();
@@ -133,6 +151,28 @@ describe("Cap Pro monthly Infra credit", () => {
 		expect(
 			nextProCreditDate(new Date("2026-12-15T08:00:00Z")).toISOString(),
 		).toBe("2027-01-01T00:00:00.000Z");
+	});
+
+	it("records the credit available after the claim, net of held transcript credit", async () => {
+		state.balance = 100_000;
+		state.heldMicroCredits = 60_000;
+
+		await claim();
+
+		expect(state.transactions[0]?.metadata).toMatchObject({
+			period: "2026-11",
+			availableAfterMicroCredits: 100_000 + 500_000 - 60_000,
+		});
+	});
+
+	it("locks the credit account before its first plain read, so the held credit it reads is current", async () => {
+		await claim();
+
+		const firstPlainRead = state.reads.findIndex((entry) =>
+			entry.startsWith("read "),
+		);
+		expect(state.reads.indexOf("lock accounts")).toBeGreaterThanOrEqual(0);
+		expect(state.reads.indexOf("lock accounts")).toBeLessThan(firstPlainRead);
 	});
 
 	it("adds the credit and writes one ledger row", async () => {

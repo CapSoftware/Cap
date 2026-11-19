@@ -200,10 +200,13 @@ pub(crate) mod tests {
                             cursor: None,
                             keyboard: None,
                             display_notch: None,
+                            cursor_shape_version: None,
                         })
                         .collect(),
                     cursors: Default::default(),
                     status: Some(StudioRecordingStatus::Complete),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         }

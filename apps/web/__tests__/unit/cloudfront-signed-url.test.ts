@@ -5,6 +5,7 @@ import {
 	cloudFrontExpiresAt,
 	createCloudFrontSignedUrl,
 	getCloudFrontObjectUrl,
+	isCloudFrontSignedUrl,
 } from "../../../../packages/web-backend/src/S3Buckets/cloudfront-signed-url";
 
 const { privateKey } = generateKeyPairSync("rsa", {
@@ -90,6 +91,19 @@ describe("createCloudFrontSignedUrl", () => {
 		expect(sign("user/video/result.mp4")).toBe(signedUrl);
 		expect(sign("user/video/result.mp4", 1_900_000_001)).not.toBe(signedUrl);
 		expect(sign("user/video/other.mp4")).not.toBe(signedUrl);
+	});
+});
+
+describe("isCloudFrontSignedUrl", () => {
+	it("recognises what the signer returns and nothing else", () => {
+		expect(isCloudFrontSignedUrl(sign("user/video/result.mp4"))).toBe(true);
+		expect(
+			isCloudFrontSignedUrl(
+				"https://bucket.s3.us-east-1.amazonaws.com/user/video/result.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=64800&X-Amz-Signature=abc",
+			),
+		).toBe(false);
+		expect(isCloudFrontSignedUrl("https://cdn.example.com/a.mp4")).toBe(false);
+		expect(isCloudFrontSignedUrl("not a url")).toBe(false);
 	});
 });
 

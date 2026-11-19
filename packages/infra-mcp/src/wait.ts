@@ -20,6 +20,11 @@ export const DEFAULT_WAIT_TUNING: WaitTuning = {
 const POLL_GROWTH = 1.2;
 const SHORTEST_USEFUL_POLL_MS = 1_000;
 
+// A wait returns after its first check unless a second one fits before the
+// deadline, so any timeout below this many seconds makes exactly one check.
+export const singleCheckBelowSeconds = (tuning: WaitTuning) =>
+	Math.ceil((tuning.pollIntervalMs + SHORTEST_USEFUL_POLL_MS) / 1000);
+
 export type WaitOutcome<T> = {
 	settled: boolean;
 	last: T | null;

@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
 	claim: vi.fn(),
 	release: vi.fn(),
 	prepare: vi.fn(),
-	readParts: vi.fn(),
 	dispatch: vi.fn(),
 	fail: vi.fn(),
 	order: [] as string[],
@@ -23,8 +22,7 @@ vi.mock("@/lib/developer-video-processing", () => ({
 	claimDeveloperVideoProcessing: mocks.claim,
 	releaseDeveloperVideoClaim: mocks.release,
 	prepareDeveloperVideoProcessing: mocks.prepare,
-	readDeveloperVideoParts: mocks.readParts,
-	dispatchDeveloperVideoPart: mocks.dispatch,
+	dispatchDeveloperVideoParts: mocks.dispatch,
 	failDeveloperVideoProcessing: mocks.fail,
 	isDeveloperVideoRefusal: (error: unknown) => error instanceof Refused,
 }));
@@ -53,10 +51,9 @@ beforeEach(() => {
 		return "ready";
 	});
 	mocks.fail.mockResolvedValue(undefined);
-	mocks.readParts.mockResolvedValue({ hls: "dispatch", mp4: "dispatch" });
-	mocks.dispatch.mockImplementation(async (_video, _encode, part) => {
-		mocks.order.push(`dispatch:${part}`);
-		return "dispatched";
+	mocks.dispatch.mockImplementation(async () => {
+		mocks.order.push("dispatch");
+		return [];
 	});
 	vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
@@ -70,12 +67,7 @@ describe("developer video start", () => {
 		expect(mocks.start).toHaveBeenCalledWith("workflow", [
 			{ videoId: "video-1", encodeId: "encode-1" },
 		]);
-		expect(mocks.order[0]).toBe("workflow");
-		expect(mocks.order[1]).toBe("prepare");
-		expect(mocks.order.slice(2).sort()).toEqual([
-			"dispatch:hls",
-			"dispatch:mp4",
-		]);
+		expect(mocks.order).toEqual(["workflow", "prepare", "dispatch"]);
 		expect(mocks.after).toHaveBeenCalledTimes(1);
 	});
 
@@ -85,34 +77,49 @@ describe("developer video start", () => {
 		});
 
 		expect(await startDeveloperVideoProcessing("video-1", claim)).toBe(true);
-		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(1));
 	});
 
-	it("only sends the outputs that still need a job", async () => {
-		mocks.readParts.mockResolvedValue({ hls: "dispatch", mp4: "done" });
+	it("hands the source the probe read to the dispatch so it is not read again", async () => {
+		const source = { bytes: 1_000, contentType: "video/quicktime" };
+		mocks.prepare.mockImplementation(
+			async (_video: string, _encode: string, seen: { source?: unknown }) => {
+				seen.source = source;
+				return "ready";
+			},
+		);
 
 		await kickStartDeveloperVideo("video-1", "encode-1");
 
-		expect(mocks.dispatch.mock.calls).toEqual([["video-1", "encode-1", "hls"]]);
+		expect(mocks.dispatch).toHaveBeenCalledWith("video-1", "encode-1", source);
 	});
 
-	it("waits for both outputs to be sent even when one of them fails", async () => {
+	it("leaves the source unknown when the probe was done before", async () => {
+		await kickStartDeveloperVideo("video-1", "encode-1");
+
+		expect(mocks.dispatch).toHaveBeenCalledWith(
+			"video-1",
+			"encode-1",
+			undefined,
+		);
+	});
+
+	it("waits for the outputs to be sent before the first pass ends", async () => {
 		let release: () => void = () => undefined;
 		const slow = new Promise<void>((resolve) => {
 			release = resolve;
 		});
-		mocks.dispatch.mockImplementation(async (_video, _encode, part) => {
-			if (part === "mp4") throw new Error("storage unavailable");
+		mocks.dispatch.mockImplementation(async () => {
 			await slow;
-			mocks.order.push("dispatch:hls");
-			return "dispatched";
+			mocks.order.push("dispatch");
+			return [];
 		});
 
 		let settled = false;
 		const kick = kickStartDeveloperVideo("video-1", "encode-1").then(() => {
 			settled = true;
 		});
-		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(1));
 		await Promise.resolve();
 
 		expect(settled).toBe(false);
@@ -120,7 +127,7 @@ describe("developer video start", () => {
 		release();
 		await kick;
 
-		expect(mocks.order).toContain("dispatch:hls");
+		expect(mocks.order).toContain("dispatch");
 	});
 
 	it.each(["retry", "stale", "probing"])(
@@ -130,7 +137,6 @@ describe("developer video start", () => {
 
 			await kickStartDeveloperVideo("video-1", "encode-1");
 
-			expect(mocks.readParts).not.toHaveBeenCalled();
 			expect(mocks.dispatch).not.toHaveBeenCalled();
 		},
 	);
@@ -195,12 +201,13 @@ describe("developer video start", () => {
 			action: "retry-hls",
 			encodeId: "encode-9",
 		});
-		mocks.readParts.mockResolvedValue({ hls: "dispatch", mp4: "done" });
 
 		expect(await redriveDeveloperVideoProcessing("video-1")).toBe(true);
 		await kicked();
 
-		expect(mocks.prepare).toHaveBeenCalledWith("video-1", "encode-9");
-		expect(mocks.dispatch.mock.calls).toEqual([["video-1", "encode-9", "hls"]]);
+		expect(mocks.prepare).toHaveBeenCalledWith("video-1", "encode-9", {});
+		expect(mocks.dispatch.mock.calls).toEqual([
+			["video-1", "encode-9", undefined],
+		]);
 	});
 });

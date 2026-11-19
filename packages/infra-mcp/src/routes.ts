@@ -46,6 +46,10 @@ export const ROUTES = {
 	deleteVideo: route("DELETE", `${REST}/videos/{id}`, "secret", {
 		query: ["userId"],
 	}),
+	importVideo: route("POST", `${REST}/videos`, "secret", {
+		body: ["url", "name", "userId", "maxResolutionTier", "metadata"],
+		headers: IDEMPOTENCY,
+	}),
 	createUpload: route("POST", `${REST}/uploads`, "secret", {
 		body: ["name", "userId", "maxResolutionTier", "metadata"],
 	}),
@@ -63,7 +67,7 @@ export const ROUTES = {
 		body: ["videoId", "uploadId"],
 	}),
 	createTranscript: route("POST", `${REST}/transcripts`, "secret", {
-		body: ["url", ...TRANSCRIPT_OPTIONS],
+		body: ["url", "videoId", ...TRANSCRIPT_OPTIONS],
 		headers: IDEMPOTENCY,
 	}),
 	createTranscriptUpload: route(

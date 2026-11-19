@@ -76,6 +76,7 @@
 		"./emails/config": "./emails/config.ts",
 		"./emails/*": "./emails/*.tsx",
 		"./types": "./types/index.ts",
+		"./developer-video-takedown": "./developer-video-takedown.ts",
 		"./migrate": "./migrate.ts"
 	},
 	"publishConfig": {

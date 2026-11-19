@@ -14,7 +14,7 @@ const FOOTER_LINKS = [
 const LINK =
 	"rounded-[6px] text-[13px] text-[rgba(232,236,244,0.46)] transition-colors duration-200 hover:text-[#E8ECF4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(232,236,244,0.7)]";
 
-export const Footer = () => (
+export const Footer = ({ anchorBase = "" }: { anchorBase?: string }) => (
 	<footer className="border-t border-[rgba(222,230,246,0.07)] px-5 py-8 sm:px-8">
 		<div className="mx-auto flex max-w-[1120px] flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
 			<div className="flex items-center gap-4">
@@ -41,7 +41,7 @@ export const Footer = () => (
 									{link.label}
 								</a>
 							) : link.href.startsWith("#") ? (
-								<a href={link.href} className={LINK}>
+								<a href={`${anchorBase}${link.href}`} className={LINK}>
 									{link.label}
 								</a>
 							) : (

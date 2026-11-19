@@ -338,7 +338,7 @@ describe("audio with no speech", () => {
 			resultKey: RESULT_KEY,
 		});
 
-		expect(again.message).toBe("Transcript is not waiting to run");
+		expect(again.message).toBe("Transcript completed");
 		expect(resettled).toEqual({
 			state: "complete",
 			chargedMicroCredits: 0,

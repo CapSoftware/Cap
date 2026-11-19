@@ -98,12 +98,17 @@ export function expectNoSecrets(stub: StubApi, output: readonly string[]) {
 	expect(everything).not.toMatch(/cut_[0-9a-f]{12}/);
 }
 
+export const MP4_HEADER = new Uint8Array([
+	0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d,
+]);
+
 export async function tempFiles() {
 	const directory = await mkdtemp(join(tmpdir(), "infra-mcp-"));
 	return {
-		async write(name: string, bytes: number) {
+		async write(name: string, bytes: number, header: Uint8Array = MP4_HEADER) {
 			const path = join(directory, name);
 			const content = randomBytes(bytes);
+			content.set(header.subarray(0, bytes));
 			await writeFile(path, content);
 			return { path, content };
 		},

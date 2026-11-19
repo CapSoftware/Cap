@@ -12,7 +12,7 @@ import { BTN_PRIMARY, H_SECTION, MONO } from "./theme";
 
 const STEPS = 1000;
 
-type MeterKey = "stored" | "audio";
+type MeterKey = "stored" | "delivered" | "audio";
 
 type Meter = {
 	key: MeterKey;
@@ -23,7 +23,7 @@ type Meter = {
 	initial: number;
 	rate: (tier: InfraResolutionTier) => number;
 	per: number;
-	rateUnit: string;
+	rateUnit: string | null;
 };
 
 const METERS: readonly Meter[] = [
@@ -37,6 +37,17 @@ const METERS: readonly Meter[] = [
 		rate: (tier) => PRICES.storagePer1000Minutes[tier],
 		per: 1000,
 		rateUnit: "per 1,000 minutes, per month",
+	},
+	{
+		key: "delivered",
+		label: "Minutes delivered per month",
+		unit: "min",
+		min: 100,
+		max: 10_000_000,
+		initial: 20_000,
+		rate: () => PRICES.deliveryPer1000Minutes,
+		per: 1000,
+		rateUnit: null,
 	},
 	{
 		key: "audio",
@@ -53,6 +64,7 @@ const METERS: readonly Meter[] = [
 
 const BREAKDOWN_LABEL: Record<MeterKey, string> = {
 	stored: "Storage",
+	delivered: "Delivery",
 	audio: "Speech to text",
 };
 
@@ -172,9 +184,11 @@ const MeterInput = ({
 					>
 						{meter.label}
 					</label>
-					<p className="m-0 mt-0.5 text-[13px] text-[rgba(232,236,244,0.42)]">
-						{usd(meter.rate(tier))} {meter.rateUnit}
-					</p>
+					{meter.rateUnit ? (
+						<p className="m-0 mt-0.5 text-[13px] text-[rgba(232,236,244,0.42)]">
+							{usd(meter.rate(tier))} {meter.rateUnit}
+						</p>
+					) : null}
 				</div>
 				<div className="flex shrink-0 items-baseline border-b border-[rgba(222,230,246,0.16)] pb-1 transition-colors duration-200 focus-within:border-[rgba(232,236,244,0.7)]">
 					<input
@@ -249,10 +263,12 @@ const MeterInput = ({
 };
 
 export const Calculator = () => {
-	const [values, setValues] = useState<Record<MeterKey, number>>(() => ({
-		stored: METERS[0]?.initial ?? 0,
-		audio: METERS[1]?.initial ?? 0,
-	}));
+	const [values, setValues] = useState<Record<MeterKey, number>>(
+		() =>
+			Object.fromEntries(
+				METERS.map((meter) => [meter.key, meter.initial]),
+			) as Record<MeterKey, number>,
+	);
 	const [pro, setPro] = useState(false);
 	const proId = useId();
 	const tier = useTier();

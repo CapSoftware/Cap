@@ -4,16 +4,21 @@ import styles from "./scene.module.css";
 import { Actions, Section, SectionHeading } from "./shared";
 import { MONO } from "./theme";
 
-const Figure = ({ value, label }: { value: number; label: string }) => (
+const Figure = ({
+	qualifier,
+	value,
+	unit,
+	label,
+}: (typeof SPEED_TESTS)[number]) => (
 	<div className="shrink-0">
 		<p className="m-0 flex items-baseline gap-2 text-[14px] text-[rgba(232,236,244,0.5)]">
-			about
+			{qualifier}
 			<span
 				className={`${MONO} text-[clamp(34px,4vw,44px)] leading-none tracking-[-0.04em] text-[#E8ECF4]`}
 			>
 				{value}
 			</span>
-			seconds
+			{unit}
 		</p>
 		<p className="m-0 mt-2 max-w-[160px] text-pretty text-[13px] sm:max-w-[220px] leading-[1.4] text-[rgba(232,236,244,0.46)]">
 			{label}
@@ -30,21 +35,18 @@ export const Performance = () => (
 		<div className="grid gap-x-16 gap-y-10 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:grid-rows-[auto_1fr] lg:gap-y-8">
 			<SectionHeading title="Fast to first play.">
 				<p>
-					In our tests, a video was playable seconds after its upload finished.
+					An hour of 4K is playable in under 5 seconds after its upload
+					finishes.
 				</p>
 			</SectionHeading>
 			<figure className="m-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
 				<figcaption className="flex flex-col gap-x-8 gap-y-5 sm:flex-row sm:items-end sm:justify-between">
 					<p className="m-0 text-[15px] leading-[1.5] text-[#E8ECF4]">
-						From upload finished to playable
+						From upload finished
 					</p>
 					<div className="flex flex-wrap gap-x-8 gap-y-5 sm:gap-x-12">
 						{SPEED_TESTS.map((test) => (
-							<Figure
-								key={test.source}
-								value={test.seconds}
-								label={`for ${test.source}`}
-							/>
+							<Figure key={test.label} {...test} />
 						))}
 					</div>
 				</figcaption>
@@ -65,8 +67,8 @@ export const Performance = () => (
 					</div>
 				</div>
 				<p className="m-0 mt-6 max-w-[560px] text-pretty text-[13px] leading-[1.6] text-[rgba(232,236,244,0.46)]">
-					Measured on production from a cloud machine. For short clips, the
-					adaptive streaming renditions followed within seconds.
+					Playback starts while the rest of the ladder encodes. Every rendition
+					up to 4K follows in about 2 minutes.
 				</p>
 			</figure>
 			<Actions

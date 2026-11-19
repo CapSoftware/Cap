@@ -6,7 +6,12 @@ import {
 	LocalError,
 	withContext,
 } from "./errors";
-import { inspectFile, type LocalFile, storageTimeoutMs } from "./files";
+import {
+	inspectFile,
+	type LocalFile,
+	refuseUnsupportedVideo,
+	storageTimeoutMs,
+} from "./files";
 import {
 	asRecord,
 	confirmed,
@@ -366,6 +371,7 @@ export async function uploadVideo(
 		maxBytes: MAX_VIDEO_BYTES,
 		what: "a video",
 	});
+	refuseUnsupportedVideo(file);
 
 	const existing =
 		input.videoId === undefined

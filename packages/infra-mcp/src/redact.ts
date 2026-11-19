@@ -13,19 +13,27 @@ export function createRedactor(secretKey: string) {
 			.replace(URL_CREDENTIAL, "$1[redacted]");
 }
 
+export class Disclosed {
+	constructor(readonly value: string) {}
+}
+
 export function redactValue(
 	redact: (text: string) => string,
 	value: unknown,
+	options: { disclose?: boolean } = {},
 ): unknown {
+	if (value instanceof Disclosed) {
+		return options.disclose ? value.value : redact(value.value);
+	}
 	if (typeof value === "string") return redact(value);
 	if (Array.isArray(value)) {
-		return value.map((entry) => redactValue(redact, entry));
+		return value.map((entry) => redactValue(redact, entry, options));
 	}
 	if (typeof value === "object" && value !== null) {
 		return Object.fromEntries(
 			Object.entries(value).map(([name, entry]) => [
 				redact(name),
-				redactValue(redact, entry),
+				redactValue(redact, entry, options),
 			]),
 		);
 	}

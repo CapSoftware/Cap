@@ -21,7 +21,7 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		{
 			title: "Completely Free, Zero Watermarks",
 			description:
-				"Cap's Studio Mode is 100% free for personal use with no watermarks, no time limits, and no hidden fees. Unlike most screen recorders, Cap produces clean, professional recordings without branding overlays. <a href='/free-screen-recorder'>Download Cap's free screen recorder</a> today.",
+				"Cap Desktop is free for personal use, and the free plan includes Studio Mode with the full editor and 4K export at 60 fps. <a href='/free-screen-recorder'>Download Cap's free screen recorder</a> today.",
 		},
 		{
 			title: "Instant Shareable Links",
@@ -46,7 +46,7 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		{
 			title: "Thread Comments on Recordings",
 			description:
-				"Viewers can leave timestamped comments directly on your recordings. Collect structured feedback without email threads or follow-up calls — built-in collaboration sets Cap apart from basic screen recorders.",
+				"Viewers can leave timestamped comments directly on your recordings. Collect structured feedback without email threads or follow-up calls.",
 		},
 		{
 			title: "Open Source and Privacy-First",
@@ -81,97 +81,9 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Best Screen Recorders Compared Side by Side",
-		headers: ["Feature", "Cap", "OBS Studio", "Loom", "Camtasia"],
-		rows: [
-			[
-				"Price",
-				{
-					text: `Free / $${PRICING.pro.annualPerMonth}/mo`,
-					status: "positive",
-				},
-				{ text: "Free", status: "positive" },
-				{ text: "Free / $18/mo", status: "warning" },
-				{ text: "$299.99 one-time", status: "negative" },
-			],
-			[
-				"No watermark",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Free plan adds watermark", status: "negative" },
-				{ text: "Yes (paid only)", status: "warning" },
-			],
-			[
-				"Instant share link",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"4K recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes (paid)", status: "warning" },
-			],
-			[
-				"Open source",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Mac and Windows",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Browser only", status: "warning" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Built-in comments",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes (paid)", status: "warning" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"AI captions",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes (paid)", status: "warning" },
-				{ text: "Yes (paid)", status: "warning" },
-			],
-		],
-	},
-
-	comparisonTitle: "How Cap Compares to Other Screen Recorders",
-	comparisonDescription:
-		"The best screen recorder depends on your workflow. Here's how Cap stacks up against the most popular alternatives",
-
-	comparison: [
-		{
-			title: "Cap vs OBS Studio",
-			description:
-				"OBS is powerful and free but requires significant configuration — it's built for streamers, not everyday screen recording. Cap is designed for simplicity and instant sharing, making it the best screen recorder for teams and professionals who don't want to spend time on setup. <a href='/screen-recording-software'>Compare screen recording software in detail</a>.",
-		},
-		{
-			title: "Cap vs Loom",
-			description: `Cap starts at $${PRICING.pro.annualPerMonth}/month compared to Loom's $18/month, and Cap's Studio Mode is completely free with no watermarks. Cap is also open-source, supports custom S3 storage, and records at up to 4K — quality that Loom's free and paid plans don't match. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
-		},
-		{
-			title: "Cap vs Camtasia",
-			description:
-				"Camtasia costs $299.99 as a one-time purchase and is primarily an editing-focused tool. Cap is free and built for the full workflow from recording to sharing — making it the best screen recorder for users who want professional results without enterprise pricing.",
-		},
-		{
-			title: "Cap vs macOS / Windows Built-in Tools",
-			description:
-				"Built-in screen recorders on <a href='/screen-recorder-mac'>macOS</a> and <a href='/screen-recorder-windows'>Windows</a> lack system audio capture, webcam overlay, instant sharing, and cloud storage. Cap adds all of these natively, making it the best screen recorder upgrade from default OS tools.",
-		},
-	],
+	comparisonTitle: "How Cap compares to Loom",
+	comparisonDescription: `Billed monthly, Cap Pro costs $${PRICING.pro.monthly} per user per month, compared with $18 for Loom Business. Cap is open source, and Cap Pro organizations can store recordings in their own S3-compatible bucket. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.`,
+	comparison: [],
 
 	useCasesTitle: "Who Uses Cap as Their Best Screen Recorder",
 	useCasesDescription:
@@ -215,7 +127,7 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		{
 			question: "What is the best screen recorder?",
 			answer:
-				"Cap is the best screen recorder for most users — it records in 4K at 60fps, works on Mac and Windows, has no watermarks, and generates shareable links instantly. It's free, open-source, and designed to be simple enough for first-time users while powerful enough for professionals. For streaming-focused use cases, OBS Studio is also excellent but requires more configuration.",
+				"Cap is an open source screen recorder with instant share links. Cap Desktop is a native app for macOS, Windows and Linux, and exports MP4 video at up to 4K and 60 frames per second. It is free for personal use.",
 		},
 		{
 			question: "What is the best free screen recorder?",
@@ -225,12 +137,12 @@ export const bestScreenRecorderContent: SeoPageContent = {
 		{
 			question: "What is the best screen recorder for Mac?",
 			answer:
-				"Cap is the best screen recorder for Mac. It is natively optimized for macOS, records at up to 4K with system audio and webcam overlay, and generates instant shareable links. Unlike macOS's built-in Cmd+Shift+5 recorder, Cap captures system audio, supports webcam overlay, and includes cloud sharing. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
+				"Cap Desktop is a native Mac app with builds for both Apple silicon and Intel Macs. It runs on macOS 12.3 or later. Instant Mode uploads while you record, so the share link is ready the moment you stop. <a href='/screen-recorder-mac'>Learn more about screen recording on Mac</a>.",
 		},
 		{
 			question: "What is the best screen recorder for Windows?",
 			answer:
-				"Cap is the best screen recorder for Windows. It supports Windows 10 and 11, records your full screen, specific windows, or custom regions, and includes audio and webcam capture. Unlike Xbox Game Bar, Cap records any application and generates instant shareable links. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
+				"Cap Desktop runs on 64-bit Windows 10 version 1903 or later, including Windows 11. It has three capture modes: Instant, Studio and Screenshot. <a href='/screen-recorder-windows'>Learn more about screen recording on Windows</a>.",
 		},
 		{
 			question: "Which screen recorder has no watermark?",

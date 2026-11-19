@@ -107,11 +107,23 @@ pub enum Mode {
     Screenshot,
 }
 
-fn effective_recording_mode(preferred: Mode, editor_recording: bool) -> Mode {
+fn recording_mode_for(mode: Mode) -> Option<recording::RecordingMode> {
+    match mode {
+        Mode::Instant => Some(recording::RecordingMode::Instant),
+        Mode::Studio => Some(recording::RecordingMode::Studio),
+        Mode::Screenshot => None,
+    }
+}
+
+fn effective_recording_mode(
+    preferred: Mode,
+    capture: Option<Mode>,
+    editor_recording: bool,
+) -> Mode {
     if editor_recording {
         Mode::Studio
     } else {
-        preferred
+        capture.unwrap_or(preferred)
     }
 }
 
@@ -142,6 +154,15 @@ impl Mode {
             .as_deref()
             .and_then(Self::from_slug)
             .unwrap_or(Self::Instant)
+    }
+
+    /// The mode a "Record …" shortcut or tray item records in: this one, or
+    /// Studio when this is Screenshot, so a Record command always records.
+    pub fn for_recording(self) -> Self {
+        match self {
+            Self::Screenshot => Self::Studio,
+            mode => mode,
+        }
     }
 
     pub fn icon(self) -> &'static str {
@@ -499,6 +520,7 @@ pub enum TargetType {
     Window,
     Area,
     CameraOnly,
+    AudioOnly,
 }
 
 impl TargetType {
@@ -508,6 +530,7 @@ impl TargetType {
             Self::Window => "Window",
             Self::Area => "Area",
             Self::CameraOnly => "Camera Only",
+            Self::AudioOnly => "Audio Only",
         }
     }
 
@@ -519,6 +542,7 @@ impl TargetType {
             Self::Window => tr::main::target::window(),
             Self::Area => tr::main::target::area(),
             Self::CameraOnly => tr::main::target::camera_only(),
+            Self::AudioOnly => tr::main::target::audio_only(),
         }
     }
 
@@ -528,6 +552,7 @@ impl TargetType {
             Self::Window => "icons/window.svg",
             Self::Area => "icons/area.svg",
             Self::CameraOnly => "icons/camera.svg",
+            Self::AudioOnly => "icons/microphone.svg",
         }
     }
 }
@@ -930,6 +955,9 @@ impl RecordingStartPermit {
 /// re-open for `kind` once the account is signed in.
 struct SignInPrompt {
     kind: TargetType,
+    /// The mode a Start shortcut asked for, so signing in carries on in it
+    /// without changing the selected mode.
+    mode: Option<Mode>,
     error: Option<String>,
 }
 
@@ -943,6 +971,11 @@ struct MicrophoneWarning {
 pub struct MainWindow {
     theme: Theme,
     mode: Mode,
+    /// The mode the shortcut or tray item that opened the picker asked for,
+    /// in place of `mode` until that capture ends, the picker is dismissed,
+    /// or the user arms it or picks a mode themselves. Those commands name
+    /// what they capture; `mode` stays the user's own pick.
+    capture_mode: Option<Mode>,
     mode_hover: ModeHoverState,
     mode_hover_task: Option<Task<()>>,
     mode_hover_bounds: [Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>; 3],
@@ -1078,8 +1111,24 @@ impl MainWindow {
                 this.clear_mode_hover();
             }
             if phase == Phase::Idle && previous_phase != Phase::Idle {
+                this.end_capture_mode(cx);
                 this.scan_incomplete_recordings(window, cx, std::time::Duration::ZERO);
-                if let Some(notice) = session.read(cx).storage_notice.clone() {
+                let notice = {
+                    let session = session.read(cx);
+                    session
+                        .storage_notice
+                        .clone()
+                        .map(|notice| (tr::main::storage::title(), notice))
+                        .or_else(|| {
+                            session.capture_source_lost.then(|| {
+                                (
+                                    tr::dialog::capture::source_lost_title(),
+                                    tr::dialog::capture::source_lost().into(),
+                                )
+                            })
+                        })
+                };
+                if let Some((title, notice)) = notice {
                     let main = cx.global::<app_windows::AppWindows>().main;
                     cx.spawn(async move |_, cx| {
                         let receiver = cx.update(|cx| {
@@ -1088,7 +1137,7 @@ impl MainWindow {
                             main.update(cx, |_, window, cx| {
                                 window.prompt(
                                     gpui::PromptLevel::Warning,
-                                    tr::main::storage::title(),
+                                    title,
                                     Some(&notice),
                                     &[gpui::PromptButton::cancel(tr::common::ok())],
                                     cx,
@@ -1216,11 +1265,11 @@ impl MainWindow {
             };
             match outcome {
                 SignInOutcome::SignedIn => {
-                    let kind = prompt.kind;
+                    let (kind, mode) = (prompt.kind, prompt.mode);
                     this.sign_in_prompt = None;
                     let session = this.session.read(cx);
                     if session.phase == Phase::Idle && session.editor_recording_target().is_none() {
-                        this.arm_overlay(kind, cx);
+                        this.arm_overlay_in(kind, mode, cx);
                     }
                 }
                 SignInOutcome::Failed(error) if matches!(origin, SignInOrigin::Overlay(_)) => {
@@ -1244,6 +1293,7 @@ impl MainWindow {
             // window has to start where the store left it rather than at a
             // hardcoded Instant.
             mode: Mode::from_store(),
+            capture_mode: None,
             mode_hover: ModeHoverState::default(),
             mode_hover_task: None,
             mode_hover_bounds: std::array::from_fn(|_| Rc::new(Cell::new(None))),
@@ -1620,8 +1670,8 @@ impl MainWindow {
                     .ok();
                 }))
             }
-            // Area and Camera Only have no cards to fill.
-            TargetType::Area | TargetType::CameraOnly => None,
+            // Area, Camera Only and Audio Only have no cards to fill.
+            TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly => None,
         }
     }
 
@@ -1639,7 +1689,10 @@ impl MainWindow {
     /// Nothing here runs while no target panel is open: `close_panel` drops the
     /// task, which is the `enabled:` on every one of those queries.
     fn start_target_poll(&mut self, kind: TargetType, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(kind, TargetType::Area | TargetType::CameraOnly) {
+        if matches!(
+            kind,
+            TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly
+        ) {
             self.target_poll_task = None;
             return;
         }
@@ -2012,7 +2065,16 @@ impl MainWindow {
     /// Called when the overlays are dismissed (Escape, their close button) so
     /// the armed tile stops looking armed.
     pub fn clear_target(&mut self, cx: &mut Context<Self>) {
+        self.end_capture_mode(cx);
         if self.target.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Back to the saved mode: the capture a shortcut or tray item opened the
+    /// picker for is over, or the user took the picker over.
+    pub fn end_capture_mode(&mut self, cx: &mut Context<Self>) {
+        if self.capture_mode.take().is_some() {
             cx.notify();
         }
     }
@@ -2026,6 +2088,7 @@ impl MainWindow {
     pub(crate) fn effective_mode(&self, cx: &gpui::App) -> Mode {
         effective_recording_mode(
             self.mode(),
+            self.capture_mode,
             self.session.read(cx).editor_recording_target().is_some(),
         )
     }
@@ -2037,15 +2100,26 @@ impl MainWindow {
     pub fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
         self.clear_mode_hover();
         cx.notify();
-        if self.mode == mode
-            || self.is_preparing_recording()
+        if self.is_preparing_recording()
             || self.session.read(cx).editor_recording_target().is_some()
         {
             return;
         }
+        // A pick ends the capture command's mode, so a picker it opened
+        // follows the pick even when that is already the saved mode.
+        let select = crate::target_overlay::TargetSelect::global(cx);
+        if self
+            .capture_mode
+            .take()
+            .is_some_and(|capture| capture != mode)
+        {
+            select.update(cx, |select, cx| select.set_recording_mode(mode, cx));
+        }
+        if self.mode == mode {
+            return;
+        }
         self.mode = mode;
         // Open overlays label their start button with the mode.
-        let select = crate::target_overlay::TargetSelect::global(cx);
         select.update(cx, |select, cx| select.set_recording_mode(mode, cx));
         tracing::info!(
             mode = mode.panel_title(),
@@ -2092,17 +2166,14 @@ impl MainWindow {
             }
             TargetType::Area => None,
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
+            TargetType::AudioOnly => Some(ScreenCaptureTarget::AudioOnly),
         }
     }
 
     /// The recording mode the Mode pill maps to, `None` for Screenshot (that
     /// path does not go through the recording actors at all).
     fn recording_mode(&self, cx: &gpui::App) -> Option<recording::RecordingMode> {
-        match self.effective_mode(cx) {
-            Mode::Instant => Some(recording::RecordingMode::Instant),
-            Mode::Studio => Some(recording::RecordingMode::Studio),
-            Mode::Screenshot => None,
-        }
+        recording_mode_for(self.effective_mode(cx))
     }
 
     /// Dev-only end-to-end driver (`CAP_GPUI_AUTO_RECORD=studio:5`): synthetic
@@ -2342,11 +2413,25 @@ impl MainWindow {
 
     /// Arm a target mode the way clicking its tile does, picking a concrete
     /// window for the window variant since the harness cannot hover one.
-    ///
-    /// Also the tray's Record Display/Window/Area path: those items are
-    /// `crate::open_target_picker(&app, RecordingTargetMode::*)` over there,
-    /// which is the same "set the target mode, open the overlays" pair.
     pub fn arm_overlay(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        self.arm_overlay_in(kind, None, cx);
+    }
+
+    /// [`Self::arm_overlay`] for one capture in `mode`, leaving the saved mode
+    /// alone: the "Record …" and "Screenshot …" shortcuts and tray items.
+    /// The tray's are `crate::open_target_picker(&app, RecordingTargetMode::*)`
+    /// over there, the same "set the target mode, open the overlays" pair.
+    pub fn arm_overlay_for(&mut self, kind: TargetType, mode: Mode, cx: &mut Context<Self>) {
+        self.arm_overlay_in(kind, Some(mode), cx);
+    }
+
+    fn arm_overlay_in(
+        &mut self,
+        kind: TargetType,
+        capture_mode: Option<Mode>,
+        cx: &mut Context<Self>,
+    ) {
+        self.capture_mode = capture_mode;
         if kind == TargetType::Window {
             self.selected_window = match auto_window_title() {
                 Some(title) => self
@@ -2428,6 +2513,26 @@ impl MainWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_recording_as(target, excluded_windows, None, cx);
+    }
+
+    pub fn start_recording_in_mode(
+        &mut self,
+        target: ScreenCaptureTarget,
+        mode: Mode,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_recording_as(target, Vec::new(), Some(mode), cx);
+    }
+
+    fn start_recording_as(
+        &mut self,
+        target: ScreenCaptureTarget,
+        excluded_windows: Vec<scap_targets::WindowId>,
+        requested: Option<Mode>,
+        cx: &mut Context<Self>,
+    ) {
         if self.session.read(cx).phase != Phase::Idle || self.checking_storage {
             return;
         }
@@ -2437,10 +2542,12 @@ impl MainWindow {
         // needed here because a Screenshot-mode pill maps to no recording
         // mode at all and would otherwise bail out of an editor-flow start.
         let editor_flow = self.session.read(cx).editor_recording_target().is_some();
-        let mode = if editor_flow {
+        // An audio-only recording is always a Studio project: Instant uploads
+        // a video and Screenshot captures one.
+        let mode = if editor_flow || target.is_audio_only() {
             recording::RecordingMode::Studio
         } else {
-            match self.recording_mode(cx) {
+            match requested.map_or_else(|| self.recording_mode(cx), recording_mode_for) {
                 Some(mode) => mode,
                 None => return,
             }
@@ -2451,9 +2558,20 @@ impl MainWindow {
                 ScreenCaptureTarget::Window { .. } => TargetType::Window,
                 ScreenCaptureTarget::Area { .. } => TargetType::Area,
                 ScreenCaptureTarget::CameraOnly => TargetType::CameraOnly,
+                ScreenCaptureTarget::AudioOnly => TargetType::AudioOnly,
             };
-            self.show_sign_in_prompt(kind, cx);
+            self.show_sign_in_prompt_for(kind, requested, cx);
             cx.defer(app_windows::show_main_window);
+            return;
+        }
+        if target.is_audio_only() && self.microphone.is_none() && !self.system_audio {
+            self.session.update(cx, |session, cx| {
+                session.error = Some(tr::main::error::audio_only_needs_audio().into());
+                cx.notify();
+            });
+            if editor_flow {
+                cx.defer(app_windows::abort_editor_recording_flow);
+            }
             return;
         }
         if matches!(target, ScreenCaptureTarget::CameraOnly) && self.camera.is_none() {
@@ -2834,6 +2952,10 @@ impl MainWindow {
     }
 
     /// The microphone the next recording will use.
+    pub fn system_audio(&self) -> bool {
+        self.system_audio
+    }
+
     pub fn microphone_selection(&self) -> Option<&MicrophoneOption> {
         self.microphone.as_ref()
     }
@@ -3229,8 +3351,21 @@ impl MainWindow {
     }
 
     pub fn show_sign_in_prompt(&mut self, kind: TargetType, cx: &mut Context<Self>) {
+        self.show_sign_in_prompt_for(kind, None, cx);
+    }
+
+    fn show_sign_in_prompt_for(
+        &mut self,
+        kind: TargetType,
+        mode: Option<Mode>,
+        cx: &mut Context<Self>,
+    ) {
         self.clear_mode_hover();
-        self.sign_in_prompt = Some(SignInPrompt { kind, error: None });
+        self.sign_in_prompt = Some(SignInPrompt {
+            kind,
+            mode,
+            error: None,
+        });
         cx.notify();
     }
 
@@ -4957,7 +5092,11 @@ impl MainWindow {
         self.library_card(
             gpui::ElementId::Path(item.path.as_path().into()),
             row.thumbnail.clone(),
-            "icons/square-play.svg",
+            if item.audio_only {
+                "icons/microphone.svg"
+            } else {
+                "icons/square-play.svg"
+            },
             item.pretty_name.clone(),
             Some(subtitle),
             item.clip_count,
@@ -5044,6 +5183,17 @@ impl MainWindow {
                     })
                     .detach();
                 }),
+            ));
+        }
+        if item.audio_only {
+            let audio = path.clone();
+            row = row.child(self.library_action(
+                "lib-rec-save-audio",
+                "icons/download.svg",
+                tr::settings::recordings::save_audio(),
+                move |_, window, cx| {
+                    crate::audio_project::save_audio_as(audio.clone(), window, cx);
+                },
             ));
         }
         let folder = path.clone();
@@ -6067,6 +6217,7 @@ impl MainWindow {
                             cx.listener(move |this, _, _window, cx| {
                                 this.selected_display = Some(chosen.clone());
                                 this.target = Some(TargetType::Display);
+                                this.end_capture_mode(cx);
                                 this.close_panel(cx);
                                 this.sync_overlays(cx);
                             }),
@@ -6100,6 +6251,7 @@ impl MainWindow {
                             cx.listener(move |this, _, _window, cx| {
                                 this.selected_window = Some(chosen.clone());
                                 this.target = Some(TargetType::Window);
+                                this.end_capture_mode(cx);
                                 this.close_panel(cx);
                                 this.sync_overlays(cx);
                                 this.focus_selected_window(cx);
@@ -6109,8 +6261,8 @@ impl MainWindow {
                     );
                 }
             }
-            // Area and Camera Only have nothing to pick between.
-            TargetType::Area | TargetType::CameraOnly => {}
+            // Area, Camera Only and Audio Only have nothing to pick between.
+            TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly => {}
         }
 
         if cards.is_empty() {
@@ -6873,7 +7025,8 @@ impl MainWindow {
                     .items_stretch()
                     .w_full()
                     .child(self.render_target_tile(TargetType::Area, cx))
-                    .child(self.render_target_tile(TargetType::CameraOnly, cx)),
+                    .child(self.render_target_tile(TargetType::CameraOnly, cx))
+                    .child(self.render_target_tile(TargetType::AudioOnly, cx)),
             )
     }
 
@@ -6950,7 +7103,7 @@ impl MainWindow {
             )
     }
 
-    /// Area and Camera Only are plain tiles with their own border.
+    /// Area, Camera Only and Audio Only are plain tiles with their own border.
     fn render_target_tile(&self, target: TargetType, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let selected = self.target == Some(target);
@@ -7016,6 +7169,7 @@ impl MainWindow {
                 if target == TargetType::Window {
                     this.selected_window = None;
                 }
+                this.end_capture_mode(cx);
                 this.sync_overlays(cx);
                 cx.notify();
             }));
@@ -7284,6 +7438,7 @@ pub fn auto_overlay_kind() -> Option<TargetType> {
         "window" => Some(TargetType::Window),
         "area" => Some(TargetType::Area),
         "camera" => Some(TargetType::CameraOnly),
+        "audio" => Some(TargetType::AudioOnly),
         _ => None,
     }
 }
@@ -7683,9 +7838,36 @@ mod recording_start_permit_tests {
     #[test]
     fn editor_recording_mode_does_not_change_the_normal_preference() {
         for preferred in [Mode::Instant, Mode::Studio, Mode::Screenshot] {
-            assert_eq!(effective_recording_mode(preferred, true), Mode::Studio);
-            assert_eq!(effective_recording_mode(preferred, false), preferred);
+            assert_eq!(
+                effective_recording_mode(preferred, None, true),
+                Mode::Studio
+            );
+            assert_eq!(effective_recording_mode(preferred, None, false), preferred);
         }
+    }
+
+    #[test]
+    fn a_capture_command_mode_wins_without_changing_the_preference() {
+        let modes = [Mode::Instant, Mode::Studio, Mode::Screenshot];
+        for preferred in modes {
+            for capture in modes {
+                assert_eq!(
+                    effective_recording_mode(preferred, Some(capture), false),
+                    capture
+                );
+                assert_eq!(
+                    effective_recording_mode(preferred, Some(capture), true),
+                    Mode::Studio
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn record_commands_record_whatever_the_saved_mode() {
+        assert_eq!(Mode::Studio.for_recording(), Mode::Studio);
+        assert_eq!(Mode::Instant.for_recording(), Mode::Instant);
+        assert_eq!(Mode::Screenshot.for_recording(), Mode::Studio);
     }
 }
 

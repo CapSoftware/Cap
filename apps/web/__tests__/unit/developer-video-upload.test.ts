@@ -96,37 +96,48 @@ vi.mock("@/workflows/process-developer-video", () => ({
 
 vi.mock("@/lib/infra-storage", async () => {
 	const schema = await import("@cap/database/schema");
-	const { billableVideo, storageUsage } = await import(
-		"@/lib/developer-pricing"
-	);
+	const { billableVideo, firstMonthStorageMicroCredits, storageUsage } =
+		await import("@/lib/developer-pricing");
 	return {
-		getAppStorageUsage: async (
+		getAppStorage: async (
 			appId: string,
 			newVideo?: Parameters<typeof storageUsage>[0][number]["video"],
 			_executor?: unknown,
-			options: { includeProcessing?: boolean; excludeVideoId?: string } = {},
+			options: { excludeVideoId?: string } = {},
 		) => {
-			const entries = (context.fake?.rows(schema.developerVideos) ?? [])
-				.filter(
-					(row) =>
-						row.appId === appId &&
-						!row.deletedAt &&
-						row.duration !== null &&
-						row.id !== options.excludeVideoId,
-				)
-				.map((row) => ({
-					video: billableVideo({
-						duration: row.duration as number,
-						width: row.width as number | null,
-						height: row.height as number | null,
-						status: row.status as string,
-						maxResolutionTier: row.maxResolutionTier as string | null,
-						includeProcessing: options.includeProcessing,
-					}),
-					count: 1,
-				}));
-			if (newVideo) entries.push({ video: newVideo, count: 1 });
-			return storageUsage(entries);
+			const rows = (context.fake?.rows(schema.developerVideos) ?? []).filter(
+				(row) =>
+					row.appId === appId &&
+					!row.deletedAt &&
+					row.duration !== null &&
+					row.id !== options.excludeVideoId,
+			);
+			const entriesIn = (status: string) =>
+				rows
+					.filter((row) => row.status === status)
+					.map((row) => ({
+						video: billableVideo({
+							duration: row.duration as number,
+							width: row.width as number | null,
+							height: row.height as number | null,
+							maxResolutionTier: row.maxResolutionTier as string | null,
+						}),
+						count: 1,
+					}));
+			const ready = entriesIn("ready");
+			const due = entriesIn("processing");
+			if (newVideo) due.push({ video: newVideo, count: 1 });
+			return {
+				stored: storageUsage(ready),
+				dailyCharge: storageUsage(ready),
+				firstMonthMicroCredits: due.reduce(
+					(sum, entry) =>
+						sum +
+						(entry.video ? firstMonthStorageMicroCredits(entry.video) : 0),
+					0,
+				),
+				uploadingVideos: 0,
+			};
 		},
 	};
 });
@@ -175,6 +186,7 @@ import {
 	developerTranscripts,
 	developerVideos,
 } from "@cap/database/schema";
+import { legacyDeveloperVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
@@ -204,8 +216,8 @@ const storedCopies = () =>
 	[...context.objects.keys()].filter((key) => key.startsWith(STORED_PREFIX));
 const START = Date.parse("2026-11-11T10:05:00.000Z");
 const FOUR_K = { duration: 7200, width: 3840, height: 2160, fps: 30 };
-const CAPPED_4K_ADMISSION = 2_380;
-const UNCAPPED_4K_ADMISSION = 7_840;
+const CAPPED_4K_ADMISSION = 10_200;
+const UNCAPPED_4K_ADMISSION = 33_600;
 
 const create = (overrides: Record<string, unknown> = {}) =>
 	createDeveloperVideoUpload("app-1", {
@@ -367,7 +379,7 @@ describe("developer video upload target", () => {
 			ok: false,
 			status: 402,
 			code: "insufficient_credits",
-			message: "This app has no credit. Add credits to start uploading.",
+			message: "Not enough credit to upload. Add credits to start uploading.",
 			shortfallMicroCredits: 1,
 		});
 		expect(videos()).toHaveLength(0);
@@ -388,7 +400,7 @@ describe("developer video upload target", () => {
 			status: 402,
 			code: "insufficient_credits",
 			message:
-				"Uploading needs $0.02380 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.01, so add at least $0.01380.",
+				"Not enough credit to upload. Uploading needs $0.02380, enough for 7 days of storage for the videos past their first month. The balance is $0.01, so add at least $0.01380.",
 			shortfallMicroCredits: 1_380,
 		});
 	});
@@ -424,6 +436,30 @@ describe("developer video upload target", () => {
 		expect(first.video.id).toBe(
 			developerVideoIdForIdempotencyKey("app-1", "same-key-00000001"),
 		);
+	});
+});
+
+describe("a video created under an Idempotency-Key before ids changed", () => {
+	it("is returned again for the same key, and a new key gets a regular id", async () => {
+		const key = "older-key-00000001";
+		const legacy = legacyDeveloperVideoIdForIdempotencyKey("app-1", key);
+		fake().seed(developerVideos, {
+			id: legacy,
+			appId: "app-1",
+			name: "demo.mov",
+			s3Key: `developer/app-1/${legacy}/video`,
+			playbackId: "playback-legacy-0001",
+			duration: null,
+			deletedAt: null,
+		});
+
+		const repeated = await create({ idempotencyKey: key });
+		const fresh = await create({ idempotencyKey: "newer-key-00000001" });
+		if (!repeated.ok || !fresh.ok) throw new Error("create failed");
+
+		expect(repeated.video.id).toBe(legacy);
+		expect(fresh.video.id).toMatch(/^[0-9a-hjkmnp-tv-z]{15}$/);
+		expect(videos()).toHaveLength(2);
 	});
 });
 
@@ -704,7 +740,7 @@ describe("admission when the upload is recorded", () => {
 			status: 402,
 			code: "insufficient_credits",
 			message:
-				"Uploading needs $0.02380 of credit, enough for 7 days of storage for everything this app stores. The balance is $0.01, so add at least $0.01380.",
+				"Not enough credit to upload. Uploading needs $0.10200, enough for the first month of storage for each video being uploaded or encoded. The balance is $0.01, so add at least $0.09200.",
 			shortfallMicroCredits: CAPPED_4K_ADMISSION - 1_000,
 		});
 		expect(videos()[0]).toMatchObject({

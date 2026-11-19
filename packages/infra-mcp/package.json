@@ -1,9 +1,12 @@
 {
 	"name": "@cap/infra-mcp",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"private": true,
 	"description": "MCP server for Cap Infra, the video and speech API",
 	"type": "module",
+	"exports": {
+		"./hosted": "./src/hosted.ts"
+	},
 	"bin": {
 		"cap-infra-mcp": "./dist/bin.js"
 	},
@@ -18,7 +21,8 @@
 	"scripts": {
 		"build": "tsup",
 		"test": "tsup && vitest run",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"pack:npm": "tsup && node scripts/npm-package.mjs"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "1.32.2",

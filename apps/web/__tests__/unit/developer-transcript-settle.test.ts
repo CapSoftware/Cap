@@ -12,6 +12,11 @@ const context = vi.hoisted(() => ({
 		reset: () => void;
 	},
 	ledgerIds: 0,
+	scheduleAutoTopUp: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-auto-top-up", () => ({
+	scheduleAutoTopUp: context.scheduleAutoTopUp,
 }));
 
 vi.mock("@cap/database", async () => {
@@ -99,6 +104,7 @@ const settle = (durationSeconds = ONE_HOUR, transcriptId = "tr-1") =>
 beforeEach(() => {
 	fake().reset();
 	context.ledgerIds = 0;
+	context.scheduleAutoTopUp.mockReset();
 	fake().seed(developerCreditAccounts, {
 		id: "account-1",
 		appId: "app-1",
@@ -400,6 +406,48 @@ describe("transcript settlement", () => {
 		fake().rows(developerTranscripts).length = 0;
 		expect(await settle()).toEqual({ state: "skipped", reason: "missing" });
 		expect(ledger()).toHaveLength(0);
+	});
+});
+
+describe("auto top-up after a transcript charge or hold", () => {
+	const scheduled = () => context.scheduleAutoTopUp.mock.calls;
+
+	it("asks for a top-up once after a settle that charged, not on a retry", async () => {
+		await settle();
+		await settle();
+
+		expect(scheduled()).toEqual([[{ appId: "app-1" }]]);
+	});
+
+	it("asks for a top-up when the balance could not cover the transcript", async () => {
+		const current = account();
+		if (current) current.balanceMicroCredits = 9_999;
+
+		await settle();
+
+		expect(scheduled()).toEqual([[{ appId: "app-1" }]]);
+	});
+
+	it("asks for a top-up after a hold or a reservation, and not for skipped work", async () => {
+		addTranscript("tr-2");
+		await holdTranscriptCredits({ transcriptId: "tr-1", microCredits: 1_000 });
+		await reserveTranscriptCredits({
+			transcriptId: "tr-2",
+			durationSeconds: ONE_HOUR,
+		});
+		expect(scheduled()).toEqual([[{ appId: "app-1" }], [{ appId: "app-1" }]]);
+
+		addTranscript("tr-failed", { status: "error" });
+		await holdTranscriptCredits({
+			transcriptId: "tr-failed",
+			microCredits: 1_000,
+		});
+		await reserveTranscriptCredits({
+			transcriptId: "tr-failed",
+			durationSeconds: ONE_HOUR,
+		});
+		await settle(ONE_HOUR, "tr-failed");
+		expect(scheduled()).toHaveLength(2);
 	});
 });
 

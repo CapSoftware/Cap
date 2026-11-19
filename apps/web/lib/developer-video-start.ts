@@ -4,14 +4,12 @@ import { processDeveloperVideoWorkflow } from "@/workflows/process-developer-vid
 import {
 	claimDeveloperVideoProcessing,
 	type DeveloperVideoClaim,
-	dispatchDeveloperVideoPart,
+	dispatchDeveloperVideoParts,
 	failDeveloperVideoProcessing,
 	isDeveloperVideoRefusal,
 	prepareDeveloperVideoProcessing,
-	readDeveloperVideoParts,
 	releaseDeveloperVideoClaim,
 } from "./developer-video-processing";
-import { DEVELOPER_VIDEO_PARTS } from "./developer-video-state";
 
 export function claimDeveloperVideoUpload(videoId: string) {
 	return claimDeveloperVideoProcessing(videoId, { uploadCompleted: true });
@@ -46,15 +44,14 @@ export async function kickStartDeveloperVideo(
 	encodeId: string,
 ): Promise<void> {
 	try {
-		const prepared = await prepareDeveloperVideoProcessing(videoId, encodeId);
-		if (prepared !== "ready") return;
-		const parts = await readDeveloperVideoParts(videoId, encodeId);
-		if (!parts) return;
-		await Promise.allSettled(
-			DEVELOPER_VIDEO_PARTS.filter((part) => parts[part] === "dispatch").map(
-				(part) => dispatchDeveloperVideoPart(videoId, encodeId, part),
-			),
+		const seen: Parameters<typeof prepareDeveloperVideoProcessing>[2] = {};
+		const prepared = await prepareDeveloperVideoProcessing(
+			videoId,
+			encodeId,
+			seen,
 		);
+		if (prepared !== "ready") return;
+		await dispatchDeveloperVideoParts(videoId, encodeId, seen.source);
 	} catch (error) {
 		// A refused upload is failed here, so the customer hears within a second
 		// or two. Anything else is left to the workflow, which runs the same

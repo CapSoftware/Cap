@@ -1,3 +1,11 @@
+// Mirrors crates/render-farm/src/project.rs: sources are user uploads, and
+// decoding allocates per pixel.
+export const MAX_SOURCE_PIXELS = 40_000_000;
+export const MAX_SOURCE_SIDE = 16_384;
+export const MAX_DECODE_PIXELS =
+	MAX_SOURCE_PIXELS + 80 * MAX_SOURCE_SIDE + 1024;
+const DECODE_LIMIT = ["-max_pixels", String(MAX_DECODE_PIXELS)];
+
 /**
  * ffmpeg arguments that re-encode a recording's video track into an H.264 MP4
  * the planner can index: a keyframe every `keyframeSeconds`, no B-frames
@@ -21,6 +29,7 @@ export function transcodeArgs(
 		"pipe:1",
 		"-nostats",
 		...(nvenc ? ["-hwaccel", "cuda"] : []),
+		...DECODE_LIMIT,
 		"-i",
 		input,
 		"-map",
@@ -63,11 +72,25 @@ export function probeArgs(input: string) {
 		"-select_streams",
 		"v:0",
 		"-show_entries",
-		"stream=codec_name,pix_fmt,has_b_frames:packet=pts_time,dts_time,flags",
+		"stream=codec_name,pix_fmt,has_b_frames,width,height:packet=pts_time,dts_time,flags",
 		"-of",
 		"compact=p=0:nk=0",
+		...DECODE_LIMIT,
 		input,
 	];
+}
+
+export function sourceSizeError(probe: string) {
+	const width = Number(probe.match(/(?:^|\|)width=(\d+)/m)?.[1]);
+	const height = Number(probe.match(/(?:^|\|)height=(\d+)/m)?.[1]);
+	if (!width || !height) return null;
+	if (
+		width * height <= MAX_SOURCE_PIXELS &&
+		Math.max(width, height) <= MAX_SOURCE_SIDE
+	) {
+		return null;
+	}
+	return `the recording is ${width}x${height}, larger than cloud export supports (${MAX_SOURCE_PIXELS} pixels, ${MAX_SOURCE_SIDE} on a side)`;
 }
 
 /**
@@ -121,6 +144,7 @@ export function remuxArgs(input: string, output: string) {
 		"-progress",
 		"pipe:1",
 		"-nostats",
+		...DECODE_LIMIT,
 		"-i",
 		input,
 		"-map",

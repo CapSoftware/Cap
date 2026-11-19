@@ -147,6 +147,12 @@ export async function deleteDeveloperObjects(keys: readonly string[]) {
 	);
 }
 
+export async function removeDeveloperObject(key: string) {
+	await run(
+		defaultBucket.pipe(Effect.flatMap((bucket) => bucket.deleteObject(key))),
+	);
+}
+
 export function copyDeveloperObject(fromKey: string, toKey: string) {
 	return run(
 		defaultBucket.pipe(

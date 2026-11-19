@@ -13,6 +13,7 @@ import {
 	type LucideIcon,
 	Plus,
 	Settings2,
+	Webhook,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -25,7 +26,7 @@ import {
 	infraAppPath,
 	parseInfraPathname,
 } from "@/lib/infra-routes";
-import { formatCredits } from "@/lib/infra-usage";
+import { formatBalanceCents, formatCredits } from "@/lib/infra-usage";
 import type { InfraAppSummary } from "../infra-data";
 import { AppSwitcher } from "./app-switcher";
 import { FOCUS, FOCUS_INSET, LIT, MONO, SURFACE } from "./ui";
@@ -44,6 +45,7 @@ export function Brand({
 		<Link
 			href={href}
 			onNavigate={onNavigate}
+			aria-label="Cap Infra"
 			className={clsx("flex shrink-0 items-center rounded-[6px]", FOCUS)}
 		>
 			<Lockup height={22} />
@@ -63,18 +65,26 @@ const SECTION_ICONS: Record<InfraSection, LucideIcon> = {
 	usage: ChartNoAxesColumn,
 	billing: CreditCard,
 	keys: KeyRound,
+	webhooks: Webhook,
 	settings: Settings2,
 };
 
-const ACCOUNT_SECTIONS = new Set<InfraSection>(["billing", "keys", "settings"]);
+const ACCOUNT_SECTIONS = new Set<InfraSection>([
+	"billing",
+	"keys",
+	"webhooks",
+	"settings",
+]);
 
 export function Shell({
 	apps,
 	appId,
+	balanceMicroCredits,
 	children,
 }: {
 	apps: InfraAppSummary[];
 	appId: string;
+	balanceMicroCredits: number;
 	children: React.ReactNode;
 }) {
 	const pathname = usePathname();
@@ -213,12 +223,18 @@ export function Shell({
 									</Link>
 								</div>
 								<p
+									title={formatCredits(balanceMicroCredits)}
 									className={clsx(
 										MONO,
 										"m-0 mt-1.5 text-[21px] leading-[1.1] tracking-[-0.04em] tabular-nums text-white [overflow-wrap:anywhere]",
 									)}
 								>
-									{formatCredits(current.balanceMicroCredits)}
+									<span aria-hidden="true">
+										{formatBalanceCents(balanceMicroCredits)}
+									</span>
+									<span className="sr-only">
+										{formatCredits(balanceMicroCredits)}
+									</span>
 								</p>
 							</div>
 							<div

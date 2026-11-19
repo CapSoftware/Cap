@@ -9,7 +9,7 @@ export const Faq = () => (
 			<SectionHeading title="Questions">
 				<p>
 					The full reference is in the{" "}
-					<Link href={LINKS.docs} className={TEXT_LINK}>
+					<Link href={LINKS.reference} className={TEXT_LINK}>
 						docs
 					</Link>
 					.

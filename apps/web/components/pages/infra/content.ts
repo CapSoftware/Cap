@@ -1,5 +1,8 @@
 import { canUseInfra } from "@/lib/infra-access";
 import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_DELIVERY_PRICE,
+	INFRA_DELIVERY_PRICE_UNIT,
 	INFRA_RESOLUTION_TIERS,
 	INFRA_SPEECH_DOLLARS_PER_HOUR,
 	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
@@ -8,11 +11,21 @@ import {
 
 export const PRICES = {
 	storagePer1000Minutes: INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+	deliveryPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 	speechPerHour: INFRA_SPEECH_DOLLARS_PER_HOUR,
 	proMonthlyCredit: 5,
 } as const;
 
 export const TIERS = INFRA_RESOLUTION_TIERS;
+
+export const STORAGE_RULE =
+	"Each video is charged one month of storage when it first becomes ready, then daily once that month is over. Uploading and encoding are free.";
+
+export const DELIVERED_MINUTE =
+	"A delivered minute is a minute of video your viewers' players download. Delivered minutes are the media seconds in the video bytes we actually send, counting part of a segment in proportion; transfers the viewer abandons part-way aren't counted. For HLS it counts the exact seconds of the segments served, from each segment's EXTINF duration and EXT-X-BYTERANGE range. For MP4 downloads it counts the bytes served divided by the file's average bytes per second. Playlists, posters, HEAD requests, responses other than 200 or 206 and empty responses are never counted.";
+
+export const DELIVERY_RULE =
+	"Delivery is billed per delivered minute and charged once a day from the app's balance, when the day's figures become final. The player is included: the hosted page and the iframe embed have no separate fee. The video it streams counts as delivery.";
 
 export const DEFAULT_TIER: InfraResolutionTier = "1080p";
 
@@ -50,7 +63,7 @@ export const infraSeo = {
 	path: "/infra",
 	url: "https://cap.so/infra",
 	title: "Cap Infra: cheap, fast & reliable video infrastructure",
-	description: `${HEADLINE} Upload a video and get back adaptive HLS up to 4K, an MP4, a poster and a hosted player. Uploading and encoding are free, storage is from ${usd(PRICES.storagePer1000Minutes[DEFAULT_TIER])} per 1,000 minutes a month and speech to text is ${usd(PRICES.speechPerHour)} per audio hour.`,
+	description: `${HEADLINE} Upload a video and get back adaptive HLS up to 4K, an MP4, a poster and a hosted player. Uploading and encoding are free, storage is from ${usd(PRICES.storagePer1000Minutes[DEFAULT_TIER])} per 1,000 minutes a month, delivery is billed per delivered minute and speech to text is ${usd(PRICES.speechPerHour)} per audio hour.`,
 	ogDescription: `${HEADLINE} Adaptive HLS up to 4K, an MP4 and a hosted player from one upload.`,
 	keywords: [
 		"video infrastructure",
@@ -92,11 +105,12 @@ export const BAA = "BAA available.";
 
 export const TRUST = [COMPLIANCE, BAA, "Open source."] as const;
 
-const DOCS = "/docs/api/rest-api";
+const REFERENCE = "/docs/api/rest-api";
 
 export const LINKS = {
-	docs: DOCS,
-	uploadDocs: `${DOCS}#multipart-upload`,
+	docs: "/docs/api/get-started",
+	reference: REFERENCE,
+	uploadDocs: `${REFERENCE}#multipart-upload`,
 	pro: "/pricing",
 	trust: "https://trust.cap.so",
 	signIn: "/login",
@@ -121,26 +135,29 @@ export const PREVIEW_NOTE = OPEN_ACCESS
 	? null
 	: `Cap Infra is in preview. Email ${ACCESS_EMAIL} for access.`;
 
-export const SPEED_SHORT_CLIP_SECONDS = 3;
+// The same figures as the launch film.
+export const SPEED_PLAYABLE_SECONDS = 5;
 
-export const SPEED_LONG_MINUTES = 20;
-
-export const SPEED_LONG_SECONDS = 15;
+export const SPEED_PROCESSED_MINUTES = 2;
 
 export const SPEED_TESTS = [
 	{
-		source: "a short clip",
-		seconds: SPEED_SHORT_CLIP_SECONDS,
+		qualifier: "under",
+		value: SPEED_PLAYABLE_SECONDS,
+		unit: "seconds",
+		label: "for 1 hour of 4K to be playable",
 	},
 	{
-		source: `a ${SPEED_LONG_MINUTES} minute 4K screen recording`,
-		seconds: SPEED_LONG_SECONDS,
+		qualifier: "about",
+		value: SPEED_PROCESSED_MINUTES,
+		unit: "minutes",
+		label: "for 1 hour of 4K to be fully processed",
 	},
 ] as const;
 
 export const SPEED_LONG = {
-	sourceSeconds: SPEED_LONG_MINUTES * 60,
-	seconds: SPEED_LONG_SECONDS,
+	sourceSeconds: 60 * 60,
+	seconds: SPEED_PLAYABLE_SECONDS,
 } as const;
 
 export const clock = (totalSeconds: number) => {
@@ -172,9 +189,10 @@ export const PRICE_ROWS: readonly PriceRow[] = [
 		rates: PRICES.storagePer1000Minutes,
 	},
 	{
-		meter: "Speech to text",
-		unit: "per hour of audio",
-		price: usd(PRICES.speechPerHour),
+		meter: "Delivery",
+		unit: INFRA_DELIVERY_PRICE_UNIT,
+		price: INFRA_DELIVERY_PRICE,
+		note: "at every resolution",
 	},
 	{
 		meter: "Player",
@@ -202,6 +220,7 @@ export const VIDEO_STATUS_RESPONSE = `{
     "id": "abc123def456",
     "externalUserId": "user_42",
     "duration": 124.5,
+    "durationSeconds": 124.5,
     "width": 1920,
     "height": 1080,
     "transcriptionStatus": null,
@@ -214,9 +233,11 @@ export const VIDEO_STATUS_RESPONSE = `{
       { "name": "720p", "width": 1280, "height": 720, "bitrate": 1161000, "bytes": 18070000, "codecs": "avc1.64001f,mp4a.40.2" },
       { "name": "360p", "width": 640, "height": 360, "bitrate": 261000, "bytes": 4060000, "codecs": "avc1.64001e,mp4a.40.2" }
     ],
+    "takenDown": false,
     "hlsUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/master.m3u8",
     "mp4Url": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/video.mp4",
-    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg"
+    "posterUrl": "https://cap.so/api/developer/playback/Zk3vQ9s2Lm8Rt1Xy7Bc4Df6G/poster.jpg",
+    "outputs": { "hls": "ready", "mp4": "ready" }
   }
 }`;
 
@@ -257,7 +278,7 @@ export const PLAYER: readonly CodeSample[] = [
   src="${SAMPLE_PLAYBACK.embed}"
   title="Product Demo"
   style="width: 100%; aspect-ratio: 16 / 9; border: 0"
-  allow="fullscreen; picture-in-picture"
+  allow="autoplay"
   allowfullscreen
   loading="lazy"
 ></iframe>`,
@@ -333,12 +354,15 @@ export const infraFaqs: readonly Faq[] = [
 	...PREVIEW_FAQ,
 	{
 		question: "What does Cap Infra charge for?",
-		answer:
-			"Two things: stored video and speech to text. Uploading and encoding are free at every resolution.",
+		answer: `Three things: stored video, delivered video and speech to text. ${STORAGE_RULE} ${DELIVERY_RULE}`,
+	},
+	{
+		question: "What is a delivered minute?",
+		answer: `${DELIVERED_MINUTE} Delivery is one flat rate at every resolution.`,
 	},
 	{
 		question: "How does resolution change the price?",
-		answer: `Storage is priced per 1,000 minutes a month by resolution tier: ${perTier(PRICES.storagePer1000Minutes)}. A video is billed at the lower of its source resolution and the tier it was created with. The default tier is 1080p, and 1440p and 4K are set per upload.`,
+		answer: `Storage is priced per 1,000 minutes a month by resolution tier: ${perTier(PRICES.storagePer1000Minutes)}. One month is charged when a video first becomes ready, then it is charged daily once that month is over. A video is billed at the lower of its source resolution and the tier it was created with. The default tier is 1080p, and 1440p and 4K are set per upload. Delivery is one flat rate at every resolution.`,
 	},
 	{
 		question: "How do I pay?",
@@ -356,7 +380,7 @@ export const infraFaqs: readonly Faq[] = [
 	{
 		question: "How do I know when a video is ready?",
 		answer:
-			"Check the video's status from your server every few seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
+			"Check the video's status from your server every 3 seconds until it is ready or errored. A video is ready as soon as its first output can be played, and the other output follows.",
 	},
 	{
 		question: "How do API keys work?",
@@ -383,7 +407,7 @@ export const infraSoftwareSchema = {
 		"@type": "Offer",
 		price: 0,
 		priceCurrency: "USD",
-		description: `Usage-based pricing. Uploading and encoding are free. Storage per 1,000 minutes a month: ${perTier(PRICES.storagePer1000Minutes)}. Speech to text: ${usd(PRICES.speechPerHour)} per audio hour.`,
+		description: `Usage-based pricing. Uploading and encoding are free. Storage per 1,000 minutes a month: ${perTier(PRICES.storagePer1000Minutes)}. Delivery: billed per delivered minute. Speech to text: ${usd(PRICES.speechPerHour)} per audio hour.`,
 	},
 	publisher: {
 		"@type": "Organization",

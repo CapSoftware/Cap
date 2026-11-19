@@ -20,6 +20,11 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 	},
 	{
 		status: 400,
+		code: "invalid_video_id",
+		meaning: "videoId is empty or longer than 64 characters",
+	},
+	{
+		status: 400,
 		code: "invalid_name",
 		meaning: "The name is longer than 255 characters",
 	},
@@ -75,7 +80,7 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		status: 402,
 		code: "out_of_credit",
 		meaning:
-			"The app is in grace or paused because a daily storage charge could not be paid. The message says how much to add",
+			"The app is in grace or paused because a storage charge could not be paid. The message says how much to add",
 	},
 	{
 		status: 402,
@@ -92,6 +97,17 @@ export const TRANSCRIPT_REQUEST_ERRORS = [
 		status: 404,
 		code: "transcript_not_found",
 		meaning: "No transcript with this ID belongs to the app",
+	},
+	{
+		status: 404,
+		code: "video_not_found",
+		meaning: "No video with this ID belongs to the app, or it was deleted",
+	},
+	{
+		status: 409,
+		code: "video_not_ready",
+		meaning:
+			"The video is not ready yet, or it failed to process and has no file to transcribe. The message says which",
 	},
 	{
 		status: 409,
@@ -135,12 +151,16 @@ export const TRANSCRIPT_FAILURE_CODES = [
 			"The URL, or a redirect from it, did not point to a public address",
 	},
 	{ code: "source_too_large", meaning: "The file is larger than 2 GB" },
-	{ code: "source_missing", meaning: "The uploaded file was not found" },
+	{
+		code: "source_missing",
+		meaning:
+			"The uploaded file was not found, or the video was deleted before the transcript ran",
+	},
 	{ code: "no_audio_track", meaning: "The file has no audio" },
 	{
 		code: "unsupported_format",
 		meaning:
-			"The file is not a self-contained audio or video file. Playlists and manifests are not accepted",
+			"The file is not a self-contained audio or video file. Playlists and manifests are not accepted. When a URL returns a web page, the message says so",
 	},
 	{
 		code: "no_speech",

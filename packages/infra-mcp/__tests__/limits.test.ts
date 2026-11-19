@@ -86,8 +86,8 @@ describe("rate limits", () => {
 			status: 429,
 			retryAfterSeconds: 31,
 		});
-		expect((refused.body.error as { hint: string }).hint).toMatch(
-			/60 requests per minute/,
+		expect((refused.body.error as { hint: string }).hint).toBe(
+			"Wait for the Retry-After seconds, then retry.",
 		);
 
 		const again = await session.call("videos_list");

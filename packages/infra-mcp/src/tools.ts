@@ -1,70 +1,49 @@
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import type { Config } from "./config";
-import { ApiError, isUnanswered, LocalError, withContext } from "./errors";
+import { creditLinkFor } from "./credit-link";
+import { createDocsTool, fetchDocs } from "./docs";
+import {
+	ApiError,
+	isCreditCode,
+	isUnanswered,
+	LocalError,
+	withContext,
+} from "./errors";
 import { inspectFile, storageTimeoutMs } from "./files";
+import { createHostedUploadTools } from "./hosted-upload";
+import { asRecord, confirmed, dataOf, listOf, storagePut } from "./http";
 import {
-	asRecord,
-	confirmed,
-	dataOf,
-	type InfraClient,
-	listOf,
-	storagePut,
-} from "./http";
-import {
+	captionsNext,
 	page,
 	transactionRow,
 	transcriptView,
 	videoDetail,
+	videoDurationSeconds,
+	videoImport,
 	videoLinks,
 	videoRow,
 } from "./shape";
-import { type UploadTuning, uploadVideo } from "./upload";
-import { type WaitTuning, waitFor } from "./wait";
+import {
+	RESOLUTION_TIERS,
+	type Tool,
+	type ToolCall,
+	type ToolDeps,
+	tool,
+} from "./tool";
+import { uploadVideo } from "./upload";
+import { singleCheckBelowSeconds, waitFor } from "./wait";
 
-export type ToolKind = "read" | "write" | "delete";
-
-export type ToolCall = {
-	signal: AbortSignal;
-	wantsProgress: boolean;
-	progress: (done: number, total: number | undefined, message: string) => void;
-	announce: (event: string, fields: Record<string, unknown>) => void;
-};
-
-export type ToolDeps = {
-	config: Config;
-	client: InfraClient;
-	upload: UploadTuning;
-	wait: WaitTuning;
-};
-
-export type Tool = {
-	name: string;
-	title: string;
-	description: string;
-	kind: ToolKind;
-	input: z.ZodRawShape;
-	run: (args: unknown, call: ToolCall) => Promise<unknown>;
-};
-
-function tool<Shape extends z.ZodRawShape>(definition: {
-	name: string;
-	title: string;
-	description: string;
-	kind: ToolKind;
-	input: Shape;
-	run: (args: z.infer<z.ZodObject<Shape>>, call: ToolCall) => Promise<unknown>;
-}): Tool {
-	const schema = z.object(definition.input);
-	return {
-		...definition,
-		run: (args, call) => definition.run(schema.parse(args), call),
-	};
-}
+export type {
+	Tool,
+	ToolCall,
+	ToolDeps,
+	ToolKind,
+	ToolSurface,
+} from "./tool";
+export { RESOLUTION_TIERS } from "./tool";
 
 export const TRANSCRIPT_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
-export const RESOLUTION_TIERS = ["1080p", "1440p", "2160p"] as const;
 export const TRANSCRIPT_STATUSES = [
 	"uploading",
 	"queued",
@@ -73,7 +52,7 @@ export const TRANSCRIPT_STATUSES = [
 	"error",
 ] as const;
 export const VIDEO_OUTPUTS = ["all", "hls", "mp4", "any"] as const;
-const MAX_WAIT_SECONDS = 900;
+export const MAX_WAIT_SECONDS = 900;
 const START_ATTEMPTS = 2;
 const MEGABYTE = 1_000_000;
 
@@ -88,22 +67,42 @@ const OUTPUT_LINKS: Record<VideoOutput, readonly ("hlsUrl" | "mp4Url")[]> = {
 
 const megabytes = (bytes: number) => (bytes / MEGABYTE).toFixed(1);
 
-const MISSING_LINK_ADVICE: Record<"hlsUrl" | "mp4Url", string> = {
-	mp4Url:
-		"The MP4 link has not arrived since the video became ready and may not be coming. The video plays with hlsUrl, shareUrl and embedUrl. An MP4 is needed only for download and for transcripts_create with videoId. If you need one of those, read the video later with videos_get, or transcribe the original file with transcripts_create and path.",
-	hlsUrl:
-		"The HLS link has not arrived since the video became ready and may not be coming. The video plays with mp4Url, shareUrl and embedUrl. If you need adaptive streaming, read the video later with videos_get.",
+const HLS_ADVICE =
+	"The HLS link has not arrived since the video became ready and may not be coming. The video plays with mp4Url, shareUrl and embedUrl. If you need adaptive streaming, read the video later with videos_get.";
+
+const MISSING_LINK_ADVICE: Record<
+	"local" | "hosted",
+	Record<"hlsUrl" | "mp4Url", string>
+> = {
+	local: {
+		mp4Url:
+			"The MP4 link has not arrived since the video became ready and may not be coming. The video plays with hlsUrl, shareUrl and embedUrl. An MP4 is needed only for download and for transcripts_create with videoId. If you need one of those, read the video later with videos_get, or transcribe the original file with transcripts_create and path.",
+		hlsUrl: HLS_ADVICE,
+	},
+	hosted: {
+		mp4Url:
+			"The MP4 link has not arrived since the video became ready and may not be coming. The video plays with hlsUrl, shareUrl and embedUrl. An MP4 is needed only for download and for transcripts_create with videoId. If you need one of those, read the video later with videos_get, or transcribe a public link to the original file with transcripts_create and url.",
+		hlsUrl: HLS_ADVICE,
+	},
 };
 
 const videoCanPlay = (video: Record<string, unknown>) =>
 	video.ready === true || video.status === "ready";
 
+const videoIsDownloading = (video: Record<string, unknown>) =>
+	asRecord(video.import).state === "downloading";
+
 const videoIsFinal = (video: Record<string, unknown>) =>
 	video.status === "errored" ||
-	video.status === "uploading" ||
+	(video.status === "uploading" && !videoIsDownloading(video)) ||
 	(videoCanPlay(video) && video.playbackId === null);
 
 const videoId = z.string().min(1).describe("The video id");
+const localPath = z
+	.string()
+	.min(1)
+	.optional()
+	.describe("Absolute path of an audio or video file on this machine");
 const transcriptId = z.string().min(1).describe("The transcript id");
 const userScope = z
 	.string()
@@ -124,15 +123,20 @@ const offset = z
 	.min(0)
 	.optional()
 	.describe("How many to skip (default 0)");
-const timeoutSeconds = z
-	.number()
-	.int()
-	.min(1)
-	.max(MAX_WAIT_SECONDS)
-	.optional()
-	.describe(
-		`Longest time to wait, in seconds (default and maximum ${MAX_WAIT_SECONDS})`,
-	);
+const waitSeconds = (
+	max: number,
+	pollSeconds: number,
+	singleCheckBelow: number,
+) =>
+	z
+		.number()
+		.int()
+		.min(1)
+		.max(max)
+		.optional()
+		.describe(
+			`Longest time to wait, in seconds (default and maximum ${max}). Checks are at least ${pollSeconds} seconds apart, so a timeout below ${singleCheckBelow} makes one check and returns at once`,
+		);
 const metadata = z
 	.record(z.string(), z.unknown())
 	.optional()
@@ -141,10 +145,36 @@ const metadata = z
 const waitAgain = (toolName: string) =>
 	`Still in progress when the wait ended. Call ${toolName} again to keep waiting.`;
 
+const UPLOADING_NEXT = {
+	local:
+		"This video has no file yet. Upload one with videos_upload and this videoId, or remove it with videos_delete.",
+	hosted:
+		"This video has no file yet. Upload one with videos_create_upload and this videoId, or remove it with videos_delete.",
+} as const;
+
 export function createTools(deps: ToolDeps): Tool[] {
 	const { client, config } = deps;
-	const transcript = (fields: Record<string, unknown>, text = false) =>
-		transcriptView(fields, config.consoleUrl, { text });
+	const surface = deps.surface ?? "local";
+	const local = surface === "local";
+	const maxWaitSeconds = deps.maxWaitSeconds ?? MAX_WAIT_SECONDS;
+	const timeoutSeconds = waitSeconds(
+		maxWaitSeconds,
+		deps.wait.pollIntervalMs / 1000,
+		singleCheckBelowSeconds(deps.wait),
+	);
+	const credit = deps.credit ?? creditLinkFor(config.consoleUrl, client);
+	const transcript = async (
+		fields: Record<string, unknown>,
+		text = false,
+		signal?: AbortSignal,
+	) =>
+		transcriptView(
+			fields,
+			isCreditCode(asRecord(fields.error).code)
+				? await credit.resolve(signal)
+				: credit.url,
+			{ text },
+		);
 
 	const waitOutcome = (
 		outcome: { settled: boolean; waitedSeconds: number; lastError: unknown },
@@ -188,7 +218,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			);
 		}
 		call.announce("transcript_created", { transcriptId: id });
-		if (target === null) return transcript(created);
+		if (target === null) return transcript(created, false, call.signal);
 
 		let stored = false;
 		try {
@@ -217,10 +247,12 @@ export function createTools(deps: ToolDeps): Tool[] {
 			stored = true;
 			for (let attempt = 1; ; attempt++) {
 				try {
-					return transcript(
+					return await transcript(
 						dataOf(
 							await client.call("startTranscript", { id, signal: call.signal }),
 						),
+						false,
+						call.signal,
 					);
 				} catch (error) {
 					if (!isUnanswered(error) || attempt >= START_ATTEMPTS) throw error;
@@ -251,10 +283,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 		}
 	};
 
-	const videoTranscriptSource = async (
-		id: string,
-		call: ToolCall,
-	): Promise<{ url: string; name: string | undefined }> => {
+	const waitForVideoMp4 = async (id: string, call: ToolCall): Promise<void> => {
 		const outcome = await waitFor({
 			poll: async (deadlineAt) =>
 				dataOf(
@@ -297,18 +326,14 @@ export function createTools(deps: ToolDeps): Tool[] {
 				context,
 			);
 		}
-		return {
-			url: video.mp4Url,
-			name: typeof video.name === "string" ? video.name : undefined,
-		};
 	};
 
-	return [
+	const tools = [
 		tool({
 			name: "videos_upload",
 			title: "Upload a video",
 			description:
-				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free, and stored video is billed daily by its length and resolution tier until it is deleted. Pass videoId to retry a failed upload into the same video.",
+				"Upload a local video file to Cap Infra and start encoding it. Returns the video id with its share and embed links; call videos_wait for the playback links once it is ready. Uploading and encoding are free. Stored video is billed by its length and resolution tier: one month when it becomes ready, then daily until it is deleted. Video that viewers stream is billed per delivered minute. Pass videoId to retry a failed upload into the same video.",
 			kind: "write",
 			input: {
 				path: z
@@ -368,6 +393,63 @@ export function createTools(deps: ToolDeps): Tool[] {
 					bytes: uploaded.bytes,
 					...videoLinks(uploaded),
 					next: "Call videos_wait with this videoId to get the playback links when encoding finishes.",
+				};
+			},
+		}),
+		tool({
+			name: "videos_import",
+			title: "Import a video from a URL",
+			description:
+				"Create a video from a public https link to a video file, such as an .mp4 on a CDN or storage bucket (not a page that plays it). Cap downloads and encodes it, so nothing is uploaded from here. Returns the video id with its share and embed links; call videos_wait, which keeps waiting while the file downloads. A link that is not public https, does not answer, is a web page or is over the size limit is refused straight away. The download must finish within 12 minutes; for larger or slower files upload them instead. Billed like an upload.",
+			kind: "write",
+			input: {
+				url: z
+					.string()
+					.url()
+					.max(2048)
+					.describe("Public https URL of the video file itself"),
+				name: z.string().max(255).optional().describe("Video name"),
+				userId: z
+					.string()
+					.min(1)
+					.max(255)
+					.optional()
+					.describe("Your own user id for this video, used to filter lists"),
+				maxResolutionTier: z
+					.enum(RESOLUTION_TIERS)
+					.optional()
+					.describe(
+						"Highest resolution to encode and bill (default 1080p, the cheapest)",
+					),
+				metadata,
+				idempotencyKey: z
+					.string()
+					.regex(/^[A-Za-z0-9._-]{8,128}$/)
+					.optional()
+					.describe(
+						"Repeat the same key to get the same video back instead of a second download",
+					),
+			},
+			run: async (args, call) => {
+				const { idempotencyKey, ...body } = args;
+				const video = dataOf(
+					await client.call("importVideo", {
+						body,
+						headers:
+							idempotencyKey === undefined
+								? undefined
+								: { "Idempotency-Key": idempotencyKey },
+						signal: call.signal,
+					}),
+				);
+				const id = String(video.id ?? "");
+				call.announce("video_created", { videoId: id });
+				return {
+					videoId: id,
+					status: video.status ?? "uploading",
+					...videoImport(video),
+					...videoLinks(video),
+					next: "Call videos_wait with this videoId to get the playback links once the file is downloaded and encoded.",
 				};
 			},
 		}),
@@ -437,7 +519,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 						return Date.now() - playableAt >= deps.wait.outputGraceMs;
 					},
 					tuning: deps.wait,
-					timeoutMs: (args.timeoutSeconds ?? MAX_WAIT_SECONDS) * 1000,
+					timeoutMs: (args.timeoutSeconds ?? maxWaitSeconds) * 1000,
 					signal: call.signal,
 					onPoll: (video, polls) =>
 						call.progress(
@@ -455,17 +537,19 @@ export function createTools(deps: ToolDeps): Tool[] {
 					status: last.status ?? "unknown",
 					...(last.errorReason ? { errorReason: last.errorReason } : {}),
 					duration: last.duration ?? null,
+					durationSeconds: videoDurationSeconds(last),
 					...videoLinks({ ...firstLook(), ...last }),
 					...(firstAbsent === undefined
 						? waitOutcome(outcome, "videos_wait")
 						: {
 								missing: absent,
 								waitedSeconds: outcome.waitedSeconds,
-								next: MISSING_LINK_ADVICE[firstAbsent],
+								next: MISSING_LINK_ADVICE[surface][firstAbsent],
 							}),
-					...(last.status === "uploading"
+					...videoImport(last),
+					...(last.status === "uploading" && !videoIsDownloading(last)
 						? {
-								next: "This video has no file yet. Upload one with videos_upload and this videoId, or remove it with videos_delete.",
+								next: UPLOADING_NEXT[surface],
 							}
 						: {}),
 				};
@@ -502,7 +586,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 			name: "videos_delete",
 			title: "Delete a video",
 			description:
-				"Delete a video and its files for good. This cannot be undone, breaks its playback, share and embed links, and stops its daily storage charge.",
+				"Delete a video and its files for good. This cannot be undone, breaks its playback, share and embed links, and stops its daily storage charge. The first month, charged when it became ready, is not given back.",
 			kind: "delete",
 			input: { videoId, userId: userScope },
 			run: async (args, call) => {
@@ -519,8 +603,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 		tool({
 			name: "transcripts_create",
 			title: "Create a transcript",
-			description:
-				"Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
+			description: local
+				? "Turn speech into text from exactly one source: url (a public audio or video link), path (a local file up to 2 GB) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged."
+				: "Turn speech into text from exactly one source: url (a public audio or video link) or videoId (a stored video that is ready, which also gets captions when it completes). Returns the transcript id; call transcripts_wait for the result. Transcription is billed per audio hour when it completes, and a transcript that fails is not charged.",
 			kind: "write",
 			input: {
 				url: z
@@ -529,11 +614,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					.max(2048)
 					.optional()
 					.describe("Public http or https link to an audio or video file"),
-				path: z
-					.string()
-					.min(1)
-					.optional()
-					.describe("Absolute path of an audio or video file on this machine"),
+				...(local ? { path: localPath } : {}),
 				videoId: z
 					.string()
 					.min(1)
@@ -555,7 +636,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 					.max(255)
 					.optional()
 					.describe(
-						"Your own user id for this transcript, used to filter lists",
+						"Your own user id for this transcript, used to filter lists. With videoId, leave it out to use the video's userId",
 					),
 				metadata,
 				idempotencyKey: z
@@ -567,14 +648,20 @@ export function createTools(deps: ToolDeps): Tool[] {
 					),
 			},
 			run: async (args, call) => {
-				const sources = [args.url, args.path, args.videoId].filter(
+				const path = typeof args.path === "string" ? args.path : undefined;
+				const sources = [args.url, path, args.videoId].filter(
 					(source) => source !== undefined,
 				);
 				if (sources.length !== 1) {
-					throw new LocalError(
+					throw new ApiError(
+						400,
 						"invalid_source",
-						"Send exactly one of url, path or videoId",
-						null,
+						local
+							? "Send exactly one of url, path or videoId"
+							: "Send exactly one of url or videoId",
+						local
+							? "Use url for a public audio or video link, path for a file on this machine, or videoId for a ready video in this app. Send only one of them."
+							: "Use url for a public audio or video link, or videoId for a ready video in this app. Send only one of them.",
 					);
 				}
 				const headers =
@@ -589,10 +676,10 @@ export function createTools(deps: ToolDeps): Tool[] {
 				const next =
 					"Call transcripts_wait with this id, then transcripts_text for the text.";
 
-				if (args.path !== undefined) {
+				if (path !== undefined) {
 					return {
 						...(await transcriptFromFile(
-							args.path,
+							path,
 							{
 								...options,
 								...(args.metadata === undefined
@@ -606,30 +693,38 @@ export function createTools(deps: ToolDeps): Tool[] {
 					};
 				}
 
-				const fromVideo =
-					args.videoId === undefined
-						? null
-						: await videoTranscriptSource(args.videoId, call);
-				const url = fromVideo?.url ?? args.url;
-				const name = args.name ?? fromVideo?.name;
-				const stored =
-					args.videoId === undefined
-						? args.metadata
-						: { ...args.metadata, videoId: args.videoId };
+				if (args.videoId !== undefined) {
+					if (local) await waitForVideoMp4(args.videoId, call);
+					const created = dataOf(
+						await client.call("createTranscript", {
+							body: {
+								videoId: args.videoId,
+								...options,
+								...(args.metadata === undefined
+									? {}
+									: { metadata: args.metadata }),
+							},
+							headers,
+							signal: call.signal,
+						}),
+					);
+					return { ...(await transcript(created, false, call.signal)), next };
+				}
 
 				const created = dataOf(
 					await client.call("createTranscript", {
 						body: {
-							url,
+							url: args.url,
 							...options,
-							...(name === undefined ? {} : { name }),
-							...(stored === undefined ? {} : { metadata: stored }),
+							...(args.metadata === undefined
+								? {}
+								: { metadata: args.metadata }),
 						},
 						headers,
 						signal: call.signal,
 					}),
 				);
-				return { ...transcript(created), next };
+				return { ...(await transcript(created, false, call.signal)), next };
 			},
 		}),
 		tool({
@@ -664,9 +759,10 @@ export function createTools(deps: ToolDeps): Tool[] {
 					}),
 				);
 				return {
-					...transcript(found, true),
+					...(await transcript(found, true, call.signal)),
 					...(args.words ? { words: found.words ?? null } : {}),
 					...(args.segments ? { segments: found.segments ?? null } : {}),
+					...captionsNext(found),
 				};
 			},
 		}),
@@ -693,7 +789,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 						found.status === "error" ||
 						found.status === "uploading",
 					tuning: deps.wait,
-					timeoutMs: (args.timeoutSeconds ?? MAX_WAIT_SECONDS) * 1000,
+					timeoutMs: (args.timeoutSeconds ?? maxWaitSeconds) * 1000,
 					signal: call.signal,
 					onPoll: (found, polls) =>
 						call.progress(
@@ -706,8 +802,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 				return {
 					...(last === null
 						? { id: args.transcriptId, status: "unknown" }
-						: transcript(last)),
+						: await transcript(last, false, call.signal)),
 					...waitOutcome(outcome, "transcripts_wait"),
+					...(outcome.settled && last !== null ? captionsNext(last) : {}),
 					...(last?.status === "uploading"
 						? {
 								next: "This transcript never received its file. Remove it with transcripts_delete, then create it again.",
@@ -737,6 +834,11 @@ export function createTools(deps: ToolDeps): Tool[] {
 					...(found.status === "error" && found.error !== null
 						? { error: asRecord(found.error) }
 						: {}),
+					...(found.status === "complete" || found.status === "error"
+						? {}
+						: {
+								next: "The transcript is not complete yet, so there is no text. Call transcripts_wait with this id, then transcripts_text again.",
+							}),
 				};
 			},
 		}),
@@ -772,7 +874,9 @@ export function createTools(deps: ToolDeps): Tool[] {
 					},
 					signal: call.signal,
 				});
-				const transcripts = listOf(reply).map((row) => transcript(row));
+				const transcripts = await Promise.all(
+					listOf(reply).map((row) => transcript(row, false, call.signal)),
+				);
 				return { transcripts, ...page(reply, size, skip, transcripts.length) };
 			},
 		}),
@@ -804,6 +908,7 @@ export function createTools(deps: ToolDeps): Tool[] {
 				const usage = dataOf(
 					await client.call("getUsage", { signal: call.signal }),
 				);
+				credit.learn(usage);
 				const standing = asRecord(usage.standing).state;
 				const needsCredit =
 					asRecord(usage.upload).allowed === false ||
@@ -811,7 +916,13 @@ export function createTools(deps: ToolDeps): Tool[] {
 					standing === "paused";
 				return {
 					...usage,
-					...(needsCredit ? { addCreditAt: config.consoleUrl } : {}),
+					...(typeof usage.totalDurationMinutes === "number"
+						? {
+								totalDurationMinutes:
+									Math.round(usage.totalDurationMinutes * 100) / 100,
+							}
+						: {}),
+					...(needsCredit ? { addCreditAt: credit.url } : {}),
 				};
 			},
 		}),
@@ -836,5 +947,12 @@ export function createTools(deps: ToolDeps): Tool[] {
 				};
 			},
 		}),
+		createDocsTool(config.apiUrl, deps.docs ?? fetchDocs(config.apiUrl)),
+	];
+
+	if (local) return tools;
+	return [
+		...createHostedUploadTools(deps),
+		...tools.filter((entry) => entry.name !== "videos_upload"),
 	];
 }

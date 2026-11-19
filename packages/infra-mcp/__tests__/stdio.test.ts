@@ -112,10 +112,10 @@ describe("over stdio", () => {
 
 	it("serves the tool list and its name and version", async () => {
 		const { tools } = await client.listTools();
-		expect(tools).toHaveLength(13);
+		expect(tools).toHaveLength(15);
 		expect(client.getServerVersion()).toMatchObject({
 			name: "cap-infra",
-			version: "0.1.0",
+			version: "0.2.0",
 		});
 	});
 
