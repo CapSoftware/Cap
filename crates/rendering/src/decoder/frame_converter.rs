@@ -15,6 +15,7 @@ pub(crate) struct PlanePool {
 }
 
 const MAX_SPARE_PACKED_PLANES: usize = 2;
+const MAX_SPARE_PLANE_BYTES: usize = cap_video_decode::ffmpeg::MAX_DECODE_PIXELS as usize * 4;
 
 impl PlanePool {
     pub(crate) fn new() -> Self {
@@ -45,7 +46,7 @@ impl PlanePool {
     }
 
     pub(crate) fn recycle(&self, mut buf: Vec<u8>) {
-        if buf.capacity() == 0 {
+        if buf.capacity() == 0 || buf.capacity() > MAX_SPARE_PLANE_BYTES {
             return;
         }
         buf.clear();
@@ -456,6 +457,16 @@ mod tests {
         assert_eq!(pool.spare_count(), MAX_SPARE_PACKED_PLANES);
         let taken = pool.take(200);
         assert!(taken.capacity() >= 200);
+        assert_eq!(pool.spare_count(), 1);
+    }
+
+    #[test]
+    fn spare_planes_never_keep_a_buffer_above_the_frame_limit() {
+        let limit = MAX_SPARE_PLANE_BYTES;
+        let pool = PlanePool::new();
+        pool.recycle(Vec::with_capacity(limit + 1));
+        assert_eq!(pool.spare_count(), 0);
+        pool.recycle(Vec::with_capacity(limit));
         assert_eq!(pool.spare_count(), 1);
     }
 }
