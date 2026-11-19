@@ -196,6 +196,34 @@ describe("transcribe query", () => {
 		expect(parseTranscribeQuery({ language: "klingon" }).ok).toBe(false);
 	});
 
+	it("takes a speaker session and clip number for meeting clips", () => {
+		expect(
+			parseTranscribeQuery({ session: "doc_8f2:mic", seq: "12" }),
+		).toEqual({
+			ok: true,
+			data: {
+				language: "auto",
+				keywords: [],
+				speakers: { session: "doc_8f2:mic", seq: 12 },
+			},
+		});
+		expect(parseTranscribeQuery({ session: "doc_8f2:system" })).toMatchObject({
+			ok: true,
+			data: { speakers: { session: "doc_8f2:system", seq: 0 } },
+		});
+	});
+
+	it("rejects malformed speaker sessions and clip numbers", () => {
+		expect(parseTranscribeQuery({ seq: "3" })).toEqual({
+			ok: false,
+			detail: "seq: needs a session",
+		});
+		expect(parseTranscribeQuery({ session: "a b" }).ok).toBe(false);
+		expect(parseTranscribeQuery({ session: "x".repeat(101) }).ok).toBe(false);
+		expect(parseTranscribeQuery({ session: "s", seq: "-1" }).ok).toBe(false);
+		expect(parseTranscribeQuery({ session: "s", seq: "1.5" }).ok).toBe(false);
+	});
+
 	it("rejects keywords in the URL without echoing them", () => {
 		const result = parseTranscribeQuery({ keywordsQuery: SECRET });
 		expect(result).toEqual({

@@ -150,7 +150,13 @@ export function parseMeetingBody<T>(
 export type TranscribeQuery = {
 	language: AiGenerationLanguage;
 	keywords: string[];
+	/** Speaker labels for a meeting sent as clips: one session per meeting and
+	 * track (opaque to the server) and the clip's number in it. */
+	speakers?: { session: string; seq: number };
 };
+
+const SPEAKER_SESSION = /^[A-Za-z0-9_.:-]{1,100}$/;
+const SPEAKER_SEQ_MAX = 10_000_000;
 
 function decodeKeywordsHeader(value: string | undefined): string[] {
 	if (!value || value.length > MEETING_KEYWORDS_HEADER_MAX_CHARS) return [];
@@ -172,6 +178,8 @@ export function parseTranscribeQuery(input: {
 	language?: string;
 	keywordsQuery?: string;
 	keywordsHeader?: string;
+	session?: string;
+	seq?: string;
 }): ParseResult<TranscribeQuery> {
 	const language = input.language ?? AI_GENERATION_LANGUAGE_AUTO;
 	if (
@@ -198,9 +206,29 @@ export function parseTranscribeQuery(input: {
 			detail: `keywords: each term must be at most ${MEETING_KEYWORD_MAX_CHARS} characters`,
 		};
 
+	if (input.session === undefined && input.seq !== undefined)
+		return { ok: false, detail: "seq: needs a session" };
+	if (input.session === undefined)
+		return {
+			ok: true,
+			data: { language: language as AiGenerationLanguage, keywords },
+		};
+	if (!SPEAKER_SESSION.test(input.session))
+		return {
+			ok: false,
+			detail: "session: 1 to 100 letters, digits, '.', '_', ':' or '-'",
+		};
+	const seq = input.seq === undefined ? 0 : Number(input.seq);
+	if (!Number.isInteger(seq) || seq < 0 || seq > SPEAKER_SEQ_MAX)
+		return { ok: false, detail: "seq: a whole number from 0" };
+
 	return {
 		ok: true,
-		data: { language: language as AiGenerationLanguage, keywords },
+		data: {
+			language: language as AiGenerationLanguage,
+			keywords,
+			speakers: { session: input.session, seq },
+		},
 	};
 }
 

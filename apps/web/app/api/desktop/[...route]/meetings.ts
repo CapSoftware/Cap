@@ -210,7 +210,14 @@ type TranscribeResult = {
 	text: string;
 	language: string | null;
 	durationMs: number;
-	words: { text: string; startMs: number; endMs: number; confidence: number }[];
+	words: {
+		text: string;
+		startMs: number;
+		endMs: number;
+		confidence: number;
+		/** "A", "B", ... per meeting session; only when the request named one. */
+		speaker?: string | null;
+	}[];
 };
 
 const emptyTranscription = (durationMs: number): TranscribeResult => ({
@@ -234,6 +241,8 @@ app.post("/transcribe", async (c) => {
 		language: c.req.query("language"),
 		keywordsQuery: c.req.query("keywords"),
 		keywordsHeader: c.req.header(MEETING_KEYWORDS_HEADER),
+		session: c.req.query("session"),
+		seq: c.req.query("seq"),
 	});
 	if (!query.ok) {
 		log({ outcome: "invalid_request", status: 400 });
@@ -298,6 +307,7 @@ app.post("/transcribe", async (c) => {
 			query.data,
 			clip.durationMs,
 			signal,
+			user.id,
 		);
 		log({
 			outcome: "ok",
@@ -324,9 +334,21 @@ async function transcribeClip(
 	query: TranscribeQuery,
 	durationMs: number,
 	signal: AbortSignal,
+	userId: string,
 ): Promise<TranscribeResult> {
 	const client = createAssemblyAIClient();
-	const options = getAssemblyAITranscriptionOptions(query.language);
+	// Speaker labels that stay the same across a meeting's clips: the farm keeps
+	// one speaker state per session, namespaced by user so sessions never mix.
+	const options = {
+		...getAssemblyAITranscriptionOptions(query.language),
+		...(query.speakers
+			? {
+					speaker_labels: true,
+					cap_speaker_session: `${userId}:${query.speakers.session}`,
+					cap_speaker_seq: query.speakers.seq,
+				}
+			: {}),
+	} as ReturnType<typeof getAssemblyAITranscriptionOptions>;
 	const audio = await untilAborted(
 		client.files.upload(
 			Buffer.from(wav.buffer, wav.byteOffset, wav.byteLength),
@@ -382,6 +404,14 @@ async function transcribeClip(
 			startMs: word.start,
 			endMs: word.end,
 			confidence: word.confidence,
+			...(query.speakers
+				? {
+						speaker:
+							typeof word.speaker === "string" && word.speaker
+								? word.speaker
+								: null,
+					}
+				: {}),
 		})),
 	};
 }
