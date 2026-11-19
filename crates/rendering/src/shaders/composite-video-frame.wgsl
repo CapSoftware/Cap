@@ -335,11 +335,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     let shrink = shrink_ring(crop_bounds_uv);
-    let detail = uniforms.enhance_params.y > 0.5;
+    let detail = detail_amount(crop_bounds_uv);
     let sample_target_uv = clamp(target_uv, vec2<f32>(0.0), vec2<f32>(1.0));
     var base_color: vec4<f32>;
-    if detail {
-        base_color = sample_detail(sample_target_uv, crop_bounds_uv, shrink);
+    if detail > 0.0 {
+        base_color = sample_detail(sample_target_uv, crop_bounds_uv, shrink, detail);
     } else {
         base_color = sample_layer(sample_target_uv, crop_bounds_uv, shrink);
     }
@@ -384,8 +384,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return shadow_color;
         }
         var smeared = vec4(accum / alpha_sum, out_alpha);
-        if detail {
-            smeared = settle_into_detail(smeared, base_color, velocity_uv);
+        if detail > 0.0 {
+            smeared = settle_into_detail(smeared, base_color, velocity_uv, detail);
         }
         return composite_source_over(
             apply_color_grade(smeared, target_uv, p),
@@ -432,8 +432,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         return shadow_color;
     }
     var smeared = vec4(accum / alpha_sum, out_alpha);
-    if detail {
-        smeared = settle_into_detail(smeared, base_color, scaled_dir);
+    if detail > 0.0 {
+        smeared = settle_into_detail(smeared, base_color, scaled_dir, detail);
     }
     return composite_source_over(
         apply_color_grade(smeared, target_uv, p),
@@ -652,22 +652,35 @@ fn sample_layer(uv: vec2<f32>, crop_bounds_uv: vec4<f32>, ring: ShrinkRing) -> v
     return vec4(color, 1.0);
 }
 
-// Enhance quality's filter for an opaque screen shrunk up to 2.8x, such as a
-// Retina or 4K recording in a 1080p or 2160p export. Four bilinear taps on a
-// ring turned 20 degrees average the texels under the output pixel, no two on
-// the same row or column. Four more on a wider cross are subtracted from that
-// average, like the negative lobes of a cubic, to give back the sharpness the
-// averaging takes away. Eight reads against sample_layer()'s four or five.
-// Past 2.2x it hands over to shrink_ring(), which keeps 1 px detail better
-// there, and from 2.8x it renders exactly like sample_layer().
-fn sample_detail(uv: vec2<f32>, crop_bounds_uv: vec4<f32>, ring: ShrinkRing) -> vec4<f32> {
+// How much of Enhance quality's 8-tap filter an opaque layer gets: none
+// unless the option is on, fading in from 1:1 to a 1.05x shrink so a zoom
+// passing full size doesn't change sharpness suddenly, and handing over to
+// shrink_ring() from 2.2x to 2.8x, which keeps 1 px detail better there. Zero
+// leaves the layer exactly as without the option.
+fn detail_amount(crop_bounds_uv: vec4<f32>) -> f32 {
+    if uniforms.enhance_params.y < 0.5 || uniforms.preserve_source_alpha > 0.5 {
+        return 0.0;
+    }
     let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
     let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
     let ratio = max(scale_ratio.x, scale_ratio.y);
-    let handover = smoothstep(2.2, 2.8, ratio);
-    if ratio <= 1.01 || handover >= 1.0 || uniforms.preserve_source_alpha > 0.5 ||
-        uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0
-    {
+    return smoothstep(1.0, 1.05, ratio) * (1.0 - smoothstep(2.2, 2.8, ratio));
+}
+
+// Enhance quality's filter for an opaque screen drawn smaller than its source,
+// such as a Retina or 4K recording in a 1080p or 2160p export. Four bilinear
+// taps on a ring turned 20 degrees average the texels under the output pixel,
+// no two on the same row or column. Four more on a wider cross are subtracted
+// from that average, like the negative lobes of a cubic, to give back the
+// sharpness the averaging takes away. Eight reads against sample_layer()'s
+// four or five, mixed with it by `amount` from detail_amount().
+fn sample_detail(
+    uv: vec2<f32>,
+    crop_bounds_uv: vec4<f32>,
+    ring: ShrinkRing,
+    amount: f32,
+) -> vec4<f32> {
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
         return sample_layer(uv, crop_bounds_uv, ring);
     }
 
@@ -675,6 +688,9 @@ fn sample_detail(uv: vec2<f32>, crop_bounds_uv: vec4<f32>, ring: ShrinkRing) -> 
     if uniforms.mirror_x != 0.0 {
         sample_uv.x = 1.0 - sample_uv.x;
     }
+    let crop_size = crop_bounds_uv.zw - crop_bounds_uv.xy;
+    let scale_ratio = uniforms.frame_size * crop_size / uniforms.target_size;
+    let ratio = max(scale_ratio.x, scale_ratio.y);
     let texel_offset = 1.0 / uniforms.frame_size;
     let safe_min = crop_bounds_uv.xy + texel_offset;
     let safe_max = crop_bounds_uv.zw - texel_offset;
@@ -698,19 +714,24 @@ fn sample_detail(uv: vec2<f32>, crop_bounds_uv: vec4<f32>, ring: ShrinkRing) -> 
         + sample_clamped(center + vec2<f32>(0.0, reach.y), safe_min, safe_max)
         + sample_clamped(center - vec2<f32>(0.0, reach.y), safe_min, safe_max);
     let detail = clamp(average + (average - cross * 0.25) * sharpen, vec3<f32>(0.0), vec3<f32>(1.0));
-    if handover <= 0.0 {
+    if amount >= 1.0 {
         return vec4(detail, 1.0);
     }
-    return vec4(mix(detail, sample_layer(uv, crop_bounds_uv, ring).rgb, handover), 1.0);
+    return vec4(mix(sample_layer(uv, crop_bounds_uv, ring).rgb, detail, amount), 1.0);
 }
 
 // Blur taps keep sample_layer(): the smear hides the finer filter and there
 // are 13 to 21 of them. A smear under two output pixels still looks sharp, so
-// it hands over to the still detail sample there and the end of a zoom
-// doesn't snap into focus.
-fn settle_into_detail(smeared: vec4<f32>, still: vec4<f32>, smear_uv: vec2<f32>) -> vec4<f32> {
+// as far as the still sample uses the 8-tap filter (`amount`), it hands over
+// to that sample there and the end of a zoom doesn't snap into focus.
+fn settle_into_detail(
+    smeared: vec4<f32>,
+    still: vec4<f32>,
+    smear_uv: vec2<f32>,
+    amount: f32,
+) -> vec4<f32> {
     let smear_px = length(smear_uv * uniforms.target_size);
-    return mix(still, smeared, smoothstep(0.5, 2.0, smear_px));
+    return mix(smeared, still, (1.0 - smoothstep(0.5, 2.0, smear_px)) * amount);
 }
 
 fn sample_clamped(uv: vec2<f32>, safe_min: vec2<f32>, safe_max: vec2<f32>) -> vec3<f32> {

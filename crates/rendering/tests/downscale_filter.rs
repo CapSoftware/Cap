@@ -54,6 +54,8 @@ struct Draw {
     target: [f32; 4],
     preserve_alpha: bool,
     motion_blur: [f32; 2],
+    // Enhance quality's 8-tap filter (`enhance_params.y`).
+    detail: bool,
 }
 
 fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
@@ -111,6 +113,7 @@ fn render(gpu: &Gpu, source: &Source, draw: &Draw) -> Vec<u8> {
         } else {
             [1.0, 1.0, 0.0, 0.0]
         },
+        enhance_params: [0.0, if draw.detail { 1.0 } else { 0.0 }, 0.0, 0.0],
         ..Default::default()
     };
     let frame_view = frame.create_view(&Default::default());
@@ -197,6 +200,7 @@ fn full_frame_draw(source: &Source, output: [u32; 2]) -> Draw {
         target: [0.0, 0.0, output[0] as f32, output[1] as f32],
         preserve_alpha: false,
         motion_blur: [0.0; 2],
+        detail: false,
     }
 }
 
@@ -349,5 +353,66 @@ fn motion_blur_keeps_the_shrink_filter() {
     assert!(
         moving_spread < 25.0,
         "still {still_spread:.1}, moving {moving_spread:.1}"
+    );
+}
+
+fn text_like(width: u32, height: u32) -> Source {
+    Source::from_fn(width, height, |x, y| {
+        let ink = (x / 3 + y / 5) % 4 == 0 || (x * 7 + y * 3) % 11 < 2;
+        let v = if ink { 30 } else { 230 };
+        [v, v, v, 255]
+    })
+}
+
+#[test]
+fn detail_filter_leaves_large_shrinks_and_their_blur_alone() {
+    let Some(gpu) = gpu() else { return };
+    // 3.3x: past the 2.2x to 2.8x handover, Enhance quality renders exactly
+    // like main, still and with short or long motion smears.
+    let source = text_like(330, 99);
+    let output = [100, 30];
+    for blur in [0.0, 0.002, 0.005, 0.01, 0.02] {
+        let draw = |detail| Draw {
+            motion_blur: [blur, 0.0],
+            detail,
+            ..full_frame_draw(&source, output)
+        };
+        assert_eq!(
+            render(&gpu, &source, &draw(false)),
+            render(&gpu, &source, &draw(true)),
+            "blur {blur}"
+        );
+    }
+}
+
+#[test]
+fn detail_filter_fades_in_from_full_size() {
+    let Some(gpu) = gpu() else { return };
+    let source = text_like(420, 210);
+    let change = |ratio: f32| {
+        let output = [(420.0 / ratio).ceil() as u32, (210.0 / ratio).ceil() as u32];
+        let draw = |detail| Draw {
+            target: [0.0, 0.0, 420.0 / ratio, 210.0 / ratio],
+            detail,
+            ..full_frame_draw(&source, output)
+        };
+        let off = render(&gpu, &source, &draw(false));
+        let on = render(&gpu, &source, &draw(true));
+        let total: u64 = off
+            .iter()
+            .zip(&on)
+            .map(|(a, b)| a.abs_diff(*b) as u64)
+            .sum();
+        total as f64 / off.len() as f64
+    };
+    assert_eq!(change(1.0), 0.0);
+    let steps = [1.005, 1.02, 1.04, 1.06].map(change);
+    assert!(
+        steps.windows(2).all(|pair| pair[0] <= pair[1]),
+        "change should grow towards full strength: {steps:?}"
+    );
+    assert!(
+        steps[0] * 4.0 < steps[3],
+        "a near-1:1 shrink should barely change: {steps:?}"
     );
 }
