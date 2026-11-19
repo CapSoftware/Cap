@@ -36,6 +36,12 @@ final class CapUITests: XCTestCase {
         try? screenshot.pngRepresentation.write(to: url)
     }
 
+    /// The iPhone Duo draws its tabs in a side rail, which isn't a tab bar.
+    private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let bar = app.tabBars.buttons[label]
+        return bar.exists ? bar : app.buttons[label].firstMatch
+    }
+
     private func waitFor(_ element: XCUIElement, _ timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
         let found = element.waitForExistence(timeout: timeout)
         if !found { shot("FAIL-\(name.split(separator: " ").last?.dropLast() ?? "test")-line\(line)") }
@@ -230,7 +236,7 @@ final class CapUITests: XCTestCase {
             app.launchEnvironment["CAP_DEBUG_SESSION"] = "\(key):\(user)"
             app.launchEnvironment["CAP_DEBUG_STOREFRONT"] = storefront
             app.launch()
-            let tab = app.tabBars.buttons["Record"]
+            let tab = tabButton("Record", in: app)
             waitFor(tab, 20)
             let hittable = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: tab)
             wait(for: [hittable], timeout: 10)
@@ -246,7 +252,7 @@ final class CapUITests: XCTestCase {
 
     func testCaptureModes() {
         let app = launch()
-        let tab = app.tabBars.buttons["Record"]
+        let tab = tabButton("Record", in: app)
         waitFor(tab, 20)
         let hittable = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: tab)
         wait(for: [hittable], timeout: 10)
@@ -297,6 +303,29 @@ final class CapUITests: XCTestCase {
         more.tap()
         waitFor(open)
         XCTAssertFalse(limit.exists)
+    }
+
+    /// Photos runs the change block off the main thread, so a block isolated to the main actor stops the app here.
+    func testSaveToPhotos() {
+        // Starts from no decision, so an earlier denial can't stop the save before it reaches Photos.
+        XCUIApplication().resetAuthorizationStatus(for: .photos)
+        let app = launch(route: "cap:cap_london")
+        let more = app.buttons["More"].firstMatch
+        waitFor(more, 15)
+        more.tap()
+        let save = app.buttons["Save to Photos"].firstMatch
+        waitFor(save)
+        save.tap()
+        let saved = app.staticTexts["Saved to Photos"]
+        let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons.matching(NSPredicate(format: "label BEGINSWITH 'Allow'")).firstMatch
+        let deadline = Date().addingTimeInterval(30)
+        while !saved.exists, Date() < deadline {
+            XCTAssertNotEqual(app.state, .notRunning, "Cap stopped while saving to Photos")
+            if allow.exists { allow.tap() }
+        }
+        XCTAssertTrue(saved.exists, "Missing the Saved to Photos toast")
+        XCTAssertEqual(app.state, .runningForeground)
+        shot("93-saved-to-photos")
     }
 
     func testScopeBar() {
@@ -570,9 +599,9 @@ final class CapUITests: XCTestCase {
         _ = usageBatches(reset: true)
         let app = launch()
         waitFor(app.staticTexts["Walkthrough: the new Cap 0.6.2 editor"], 15)
-        app.tabBars.buttons["Analytics"].tap()
+        tabButton("Analytics", in: app).tap()
         waitFor(app.navigationBars["Analytics"])
-        app.tabBars.buttons["Settings"].tap()
+        tabButton("Settings", in: app).tap()
         waitFor(app.buttons["Notifications"].firstMatch)
         XCTAssertTrue(usageBatches().isEmpty, "nothing is sent while the visit is still going")
 

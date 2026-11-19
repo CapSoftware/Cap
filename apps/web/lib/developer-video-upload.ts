@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { developerVideos } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import { developerVideoIdForIdempotencyKey } from "@/lib/developer-ids";
 import {
 	copyDeveloperObject,
 	deleteDeveloperObjects,
@@ -17,6 +17,7 @@ import {
 	transcriptNameFromFile,
 } from "@/lib/developer-transcripts";
 import { admitDeveloperVideoUpload } from "@/lib/developer-video-charge";
+import { keyedDeveloperVideoId } from "@/lib/developer-video-ids";
 import {
 	createDeveloperPlaybackId,
 	DEVELOPER_VIDEO_DEFAULT_TIER,
@@ -104,9 +105,7 @@ export function developerVideoUploadKey(appId: string, videoId: string) {
 	return `${DEVELOPER_UPLOAD_PREFIX}${appId}/v-${videoId}`;
 }
 
-export function developerVideoIdForIdempotencyKey(appId: string, key: string) {
-	return developerIdFromKey("developer-video", appId, key);
-}
+export { developerVideoIdForIdempotencyKey };
 
 export function developerVideoRecordedSeconds(input: {
 	measuredSeconds: number | null;
@@ -226,7 +225,7 @@ export async function createDeveloperVideoUpload(
 	if (!admission.allowed) return refused(admission);
 
 	const id = input.idempotencyKey
-		? developerVideoIdForIdempotencyKey(appId, input.idempotencyKey)
+		? await keyedDeveloperVideoId(appId, input.idempotencyKey)
 		: nanoId();
 	const s3Key = `developer/${appId}/${id}/video`;
 

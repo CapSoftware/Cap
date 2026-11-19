@@ -1,6 +1,3 @@
-import { db } from "@cap/database";
-import { developerVideos } from "@cap/database/schema";
-import { and, count, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import {
 	MICRO_CREDITS_PER_DOLLAR,
@@ -8,13 +5,16 @@ import {
 	UPLOAD_ADMISSION_DAYS,
 } from "@/lib/developer-pricing";
 import { getSpeechUsage } from "@/lib/developer-transcript-usage";
-import { INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH } from "@/lib/infra-pricing";
+import { deliveryJson, getDeliveredUsage } from "@/lib/infra-delivery";
+import {
+	INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
+	INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+} from "@/lib/infra-pricing";
 import {
 	getInfraBilling,
 	infraBillingJson,
 	infraStorageJson,
 } from "@/lib/infra-standing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
 import { creditDollars } from "@/lib/infra-usage";
 import { withDeveloperSecretAuth } from "../../../utils";
 
@@ -28,45 +28,40 @@ export const app = new Hono<{
 app.get("/", async (c) => {
 	const appId = c.get("developerAppId");
 
-	const [[videoStats], billing, stored, credit] = await Promise.all([
-		db()
-			.select({
-				createdVideos: count(),
-				uploadedVideos: count(developerVideos.duration),
-			})
-			.from(developerVideos)
-			.where(
-				and(
-					eq(developerVideos.appId, appId),
-					isNull(developerVideos.deletedAt),
-				),
-			),
+	const [billing, credit, delivered] = await Promise.all([
 		getInfraBilling(appId),
-		getAppStorageUsage(appId),
 		getSpeechUsage(appId),
+		getDeliveredUsage(appId).catch((error) => {
+			console.error("[developer-usage] Delivery usage unavailable", error);
+			return null;
+		}),
 	]);
+	const { stored, storage } = billing;
 
 	const { balanceMicroCredits, ...speech } = credit;
 	const { standing, upload } = infraBillingJson(billing);
 
 	return c.json({
 		data: {
+			appId,
 			balanceMicroCredits,
 			balanceDollars: creditDollars(balanceMicroCredits),
 			totalVideos: stored.videoCount,
-			uploadingVideos: Math.max(
-				0,
-				(videoStats?.createdVideos ?? 0) - (videoStats?.uploadedVideos ?? 0),
-			),
+			uploadingVideos: storage.uploadingVideos,
 			totalDurationMinutes: stored.totalMinutes,
 			standing,
 			upload,
-			storage: infraStorageJson(stored),
+			storage: {
+				...infraStorageJson(storage),
+				storedMonthlyMicroCredits: Math.round(stored.monthlyMicroCredits),
+			},
 			...speech,
+			delivery: deliveryJson(delivered),
 			rates: {
 				microCreditsPerDollar: MICRO_CREDITS_PER_DOLLAR,
 				storageDollarsPer1000MinutesPerMonth:
 					INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH,
+				deliveryDollarsPer1000Minutes: INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES,
 				speechDollarsPerHour: SPEECH_DOLLARS_PER_HOUR,
 				uploadAdmissionDays: UPLOAD_ADMISSION_DAYS,
 			},

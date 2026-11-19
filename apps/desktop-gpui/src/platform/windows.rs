@@ -144,6 +144,10 @@ pub fn target_overlay_level() -> isize {
     1
 }
 
+pub fn recording_area_level() -> isize {
+    1
+}
+
 pub fn teleprompter_level() -> isize {
     1
 }
@@ -216,6 +220,10 @@ pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> b
         (style & bits == bits) == click_through
     }
 }
+
+pub fn set_draw_cursor() {}
+
+pub fn reset_cursor() {}
 
 pub fn restore_borderless_style(_native: &NativeWindow) {}
 
@@ -501,6 +509,8 @@ pub fn order_front_native(native: &NativeWindow) {
         );
     }
 }
+
+pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
 
 /// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
 /// after an overlay's own activation and loses to it.

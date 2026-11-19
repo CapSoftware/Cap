@@ -21,6 +21,10 @@ import {
 	Videos,
 	VideosPolicy,
 } from "@cap/web-backend";
+import {
+	getCustomThumbnailKey,
+	getCustomThumbnailVersion,
+} from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { type Organisation, Policy, Video } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -28,14 +32,17 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
+import { type EmbedOptions, parseEmbedOptions } from "@/lib/embed-options";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
 } from "@/lib/loom-deferred-processing";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
+import { getPlayerBrand } from "@/lib/player-brand";
 import * as EffectRuntime from "@/lib/server";
 import { getSharePageBranding } from "@/lib/share-branding";
-import { parseShareCallToAction } from "@/lib/share-call-to-action";
+import { resolveShareCallToAction } from "@/lib/share-call-to-action";
+import { getCustomThumbnailUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
@@ -61,6 +68,9 @@ export async function generateMetadata(
 						width: Option.getOrNull(video.width),
 						height: Option.getOrNull(video.height),
 						webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+						thumbnailVersion: getCustomThumbnailVersion(
+							Option.getOrNull(video.metadata),
+						),
 					}),
 					robots: "index, follow",
 				}),
@@ -104,18 +114,10 @@ export default async function EmbedVideoPage(
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
-	const autoplay = searchParams.autoplay === "true";
 	const minimal = searchParams.slack === "true";
 	// `?t=` mirrors the share page, so an embed snippet copied "at 1:23" opens
-	// there too. Repeated params arrive as an array; take the first.
-	const startTimeParam = Array.isArray(searchParams.t)
-		? searchParams.t[0]
-		: searchParams.t;
-	const parsedStartTime = Number.parseInt(startTimeParam ?? "", 10);
-	const startTime =
-		Number.isFinite(parsedStartTime) && parsedStartTime > 0
-			? parsedStartTime
-			: null;
+	// there too. Repeated params arrive as an array; the parser takes the first.
+	const embedOptions = parseEmbedOptions(searchParams);
 
 	return Effect.gen(function* () {
 		const videosPolicy = yield* VideosPolicy;
@@ -160,6 +162,7 @@ export default async function EmbedVideoPage(
 					organizationName: organizations.name,
 					organizationIconUrl: organizations.iconUrl,
 					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
+					organizationMetadata: organizations.metadata,
 					hasActiveUpload:
 						sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 							Boolean,
@@ -192,8 +195,7 @@ export default async function EmbedVideoPage(
 				{!data.needsPassword && (
 					<EmbedContent
 						video={data.video}
-						autoplay={autoplay}
-						startTime={startTime}
+						options={embedOptions}
 						minimal={minimal}
 					/>
 				)}
@@ -209,21 +211,22 @@ export default async function EmbedVideoPage(
 }
 
 async function EmbedContent({
-	video,
-	autoplay,
-	startTime,
+	video: { organizationMetadata, ...video },
+	options,
 	minimal,
 }: {
-	video: Omit<typeof videos.$inferSelect, "password"> & {
+	video: Omit<typeof videos.$inferSelect, "password" | "archivedAt"> & {
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
 		hasActiveUpload: boolean | undefined;
 		orgSettings?: (typeof organizations.$inferSelect)["settings"] | null;
 		organizationName: (typeof organizations.$inferSelect)["name"] | null;
 		organizationIconUrl: (typeof organizations.$inferSelect)["iconUrl"];
 		shareableLinkIconUrl: (typeof organizations.$inferSelect)["shareableLinkIconUrl"];
+		organizationMetadata:
+			| (typeof organizations.$inferSelect)["metadata"]
+			| null;
 	};
-	autoplay: boolean;
-	startTime: number | null;
+	options: EmbedOptions;
 	minimal: boolean;
 }) {
 	const [user, sharedSpaces, [videoOwner]] = await Promise.all([
@@ -358,63 +361,81 @@ async function EmbedContent({
 		);
 	}
 
-	const [commentsQuery, ownerImageUrl, branding] = await Promise.all([
-		db()
-			.select({
-				id: comments.id,
-				content: comments.content,
-				timestamp: comments.timestamp,
-				type: comments.type,
-				authorId: comments.authorId,
-				videoId: comments.videoId,
-				createdAt: comments.createdAt,
-				updatedAt: comments.updatedAt,
-				parentCommentId: comments.parentCommentId,
-				mediaKey: comments.mediaKey,
-				mediaDuration: comments.mediaDuration,
-				mediaMeta: comments.mediaMeta,
-				authorName: users.name,
-			})
-			.from(comments)
-			.leftJoin(users, eq(comments.authorId, users.id))
-			.where(eq(comments.videoId, video.id)),
-		Effect.gen(function* () {
-			const imageUploads = yield* ImageUploads;
-			return yield* Option.fromNullable(videoOwner?.image).pipe(
-				Option.map(imageUploads.resolveImageUrl),
-				Effect.transposeOption,
-				Effect.map(Option.getOrNull),
-			);
-		}).pipe(EffectRuntime.runPromise),
-		Effect.gen(function* () {
-			const brandingInput = {
-				owner: { isPro: ownerIsProUser },
-				orgSettings: video.orgSettings,
-				organizationName: video.organizationName,
-			};
-			const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
-				? video.organizationIconUrl
-				: video.shareableLinkIconUrl;
+	const customThumbnailKey = getCustomThumbnailKey(video);
+	const [commentsQuery, ownerImageUrl, branding, posterUrl] = await Promise.all(
+		[
+			db()
+				.select({
+					id: comments.id,
+					content: comments.content,
+					timestamp: comments.timestamp,
+					type: comments.type,
+					authorId: comments.authorId,
+					videoId: comments.videoId,
+					createdAt: comments.createdAt,
+					updatedAt: comments.updatedAt,
+					parentCommentId: comments.parentCommentId,
+					mediaKey: comments.mediaKey,
+					mediaDuration: comments.mediaDuration,
+					mediaMeta: comments.mediaMeta,
+					authorName: users.name,
+				})
+				.from(comments)
+				.leftJoin(users, eq(comments.authorId, users.id))
+				.where(eq(comments.videoId, video.id)),
+			Effect.gen(function* () {
+				const imageUploads = yield* ImageUploads;
+				return yield* Option.fromNullable(videoOwner?.image).pipe(
+					Option.map(imageUploads.resolveImageUrl),
+					Effect.transposeOption,
+					Effect.map(Option.getOrNull),
+				);
+			}).pipe(EffectRuntime.runPromise),
+			Effect.gen(function* () {
+				const brandingInput = {
+					owner: { isPro: ownerIsProUser },
+					orgSettings: video.orgSettings,
+					organizationName: video.organizationName,
+				};
+				const icon = video.orgSettings?.shareableLinkUseOrganizationIcon
+					? video.organizationIconUrl
+					: video.shareableLinkIconUrl;
 
-			if (!ownerIsProUser || !icon || minimal) {
-				return getSharePageBranding(brandingInput);
-			}
+				if (!ownerIsProUser || !icon || minimal || !options.showBranding) {
+					return getSharePageBranding(brandingInput);
+				}
 
-			const imageUploads = yield* ImageUploads;
-			const imageUrl = yield* imageUploads.resolveImageUrl(icon);
+				const imageUploads = yield* ImageUploads;
+				const imageUrl = yield* imageUploads.resolveImageUrl(icon);
 
-			return getSharePageBranding({
-				...brandingInput,
-				organizationIconUrl: imageUrl,
-				shareableLinkIconUrl: imageUrl,
-			});
-		}).pipe(EffectRuntime.runPromise),
-	]);
+				return getSharePageBranding({
+					...brandingInput,
+					organizationIconUrl: imageUrl,
+					shareableLinkIconUrl: imageUrl,
+				});
+			}).pipe(EffectRuntime.runPromise),
+			customThumbnailKey
+				? getCustomThumbnailUrl(
+						{ ...video, owner: { id: video.ownerId } },
+						customThumbnailKey,
+					)
+				: Promise.resolve(null),
+		],
+	);
+
+	const playerBrand = getPlayerBrand({
+		ownerIsPro: ownerIsProUser,
+		organizationMetadata,
+	});
+
+	const { orgSettings: _orgSettings, ...embedData } = video;
 
 	return (
 		<EmbedVideo
-			data={video}
-			branding={branding}
+			data={embedData}
+			branding={ownerIsProUser && !options.showBranding ? null : branding}
+			posterUrl={posterUrl}
+			playerBrand={playerBrand}
 			user={user}
 			comments={commentsQuery}
 			chapters={
@@ -422,9 +443,12 @@ async function EmbedContent({
 			}
 			ownerName={videoOwner?.name || null}
 			ownerImageUrl={ownerImageUrl}
-			autoplay={autoplay}
-			startTime={startTime}
+			autoplay={options.autoplay}
+			muted={options.muted}
+			startTime={options.startTime}
 			minimal={minimal}
+			showTitle={options.showTitle}
+			showOwner={options.showOwner}
 			defaultPlaybackSpeed={resolveDefaultPlaybackSpeed(
 				video.settings?.defaultPlaybackSpeed,
 				video.orgSettings?.defaultPlaybackSpeed,
@@ -433,7 +457,11 @@ async function EmbedContent({
 			showPlaybackStatusBadge={user?.id === video.ownerId}
 			callToAction={
 				ownerIsProUser && !minimal
-					? parseShareCallToAction(video.settings)
+					? resolveShareCallToAction({
+							videoSettings: video.settings,
+							organizationSettings: video.orgSettings,
+							videoCreatedAt: video.createdAt,
+						}).callToAction
 					: null
 			}
 		/>

@@ -4,12 +4,29 @@ import {
 	type DeveloperTranscriptStatus,
 	developerApps,
 	developerTranscripts,
+	developerVideos,
 	users,
 } from "@cap/database/schema";
 import { AI_GENERATION_LANGUAGE_CODES } from "@cap/web-domain";
-import { and, count, desc, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	gt,
+	gte,
+	isNotNull,
+	isNull,
+	lt,
+	or,
+	sql,
+} from "drizzle-orm";
 import { start } from "workflow/api";
-import { developerIdFromKey } from "@/lib/developer-ids";
+import {
+	developerIdFromKey,
+	isDeveloperIdempotencyKey,
+} from "@/lib/developer-ids";
 import { transcriptStartRefusal } from "@/lib/developer-transcript-billing";
 import {
 	isSpeechConfigured,
@@ -23,6 +40,8 @@ import {
 } from "@/lib/developer-transcript-storage";
 import {
 	publicTranscriptWords,
+	TRANSCRIPT_CAPTIONS_WRITTEN_KEY,
+	TRANSCRIPT_MAX_CONCURRENT,
 	TRANSCRIPT_MAX_METADATA_BYTES,
 	TRANSCRIPT_MAX_UPLOAD_BYTES,
 	TRANSCRIPT_MAX_URL_LENGTH,
@@ -30,9 +49,18 @@ import {
 	transcriptNameFromFile,
 	transcriptNameFromUrl,
 	transcriptObjectKeys,
+	transcriptPublicMetadata,
 	transcriptUploadExpiry,
 } from "@/lib/developer-transcripts";
+import {
+	captionLanguage,
+	findVideoForTranscript,
+	syncVideoCaptions,
+} from "@/lib/developer-video-captions";
 import { canUseInfra } from "@/lib/infra-access";
+import { scheduleAutoTopUp } from "@/lib/infra-auto-top-up";
+import { infraAddCreditsHint } from "@/lib/infra-routes";
+import type { InfraDbExecutor } from "@/lib/infra-standing";
 import {
 	assertPublicMediaUrl,
 	PublicMediaFetchError,
@@ -41,7 +69,7 @@ import { developerTranscribeWorkflow } from "@/workflows/developer-transcribe";
 
 export type TranscriptFailure = {
 	ok: false;
-	status: 400 | 402 | 403 | 404 | 409 | 503;
+	status: 400 | 402 | 403 | 404 | 409 | 429 | 503;
 	code: string;
 	message: string;
 	hint: string;
@@ -55,9 +83,6 @@ const fail = (
 	message: string,
 	hint: string,
 ): TranscriptFailure => ({ ok: false, status, code, message, hint });
-
-const ADD_CREDITS_HINT =
-	"Add credits to this app at https://cap.so/dashboard/infra, then retry.";
 
 const NOT_FOUND = fail(
 	404,
@@ -112,7 +137,8 @@ function replayedWithDifferent(
 		return "userId";
 	}
 	if (
-		canonicalJson(existing.metadata ?? null) !== canonicalJson(request.metadata)
+		canonicalJson(transcriptPublicMetadata(existing.metadata)) !==
+		canonicalJson(request.metadata)
 	) {
 		return "metadata";
 	}
@@ -140,6 +166,13 @@ const SPEECH_UNAVAILABLE = fail(
 	"Retry later. If the error persists, contact hello@cap.so.",
 );
 
+const TOO_MANY_TRANSCRIPTS = fail(
+	429,
+	"too_many_transcripts",
+	`This app already has ${TRANSCRIPT_MAX_CONCURRENT} transcripts queued or processing`,
+	"Wait for one to finish, then send the request again. Poll Get Transcript until its status is complete or error.",
+);
+
 const affectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
@@ -154,12 +187,7 @@ export function transcriptIdForIdempotencyKey(appId: string, key: string) {
 }
 
 export function isTranscriptIdempotencyKey(value: string | undefined | null) {
-	return (
-		typeof value === "string" &&
-		value.length >= 8 &&
-		value.length <= 128 &&
-		/^[A-Za-z0-9._-]+$/.test(value)
-	);
+	return isDeveloperIdempotencyKey(value);
 }
 
 export type TranscriptOptionsInput = {
@@ -219,7 +247,9 @@ export function validateTranscriptOptions(input: TranscriptOptionsInput):
 				"Send a JSON object smaller than 8KB.",
 			);
 		}
-		metadata = input.metadata as Record<string, unknown>;
+		const { [TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: _reserved, ...client } =
+			input.metadata as Record<string, unknown>;
+		metadata = client;
 	}
 	return {
 		ok: true,
@@ -261,35 +291,103 @@ async function findTranscript(appId: string, transcriptId: string) {
 
 const DISPATCH_RETRY_AFTER_MS = 2 * 60 * 1000;
 
+const runningInApp = (appId: string) =>
+	and(
+		eq(developerTranscripts.appId, appId),
+		or(
+			eq(developerTranscripts.status, "processing"),
+			and(
+				eq(developerTranscripts.status, "queued"),
+				isNull(developerTranscripts.deletedAt),
+			),
+		),
+	);
+
+async function withTranscriptSlot<T>(
+	appId: string,
+	transcriptId: string,
+	holdsSlot: (row: { status: DeveloperTranscriptStatus } | null) => boolean,
+	enqueue: (executor: InfraDbExecutor) => Promise<T>,
+): Promise<{ admitted: true; value: T } | { admitted: false }> {
+	return db().transaction(async (tx) => {
+		await tx
+			.select({ id: developerApps.id })
+			.from(developerApps)
+			.where(eq(developerApps.id, appId))
+			.for("update");
+		const [slot] = await tx
+			.select({
+				status: sql<DeveloperTranscriptStatus | null>`(${tx
+					.select({ status: developerTranscripts.status })
+					.from(developerTranscripts)
+					.where(
+						and(
+							eq(developerTranscripts.id, transcriptId),
+							eq(developerTranscripts.appId, appId),
+						),
+					)
+					.limit(1)})`,
+				running: sql<string | number | null>`(${tx
+					.select({ running: count() })
+					.from(developerTranscripts)
+					.where(runningInApp(appId))})`,
+			})
+			.from(developerApps)
+			.where(eq(developerApps.id, appId))
+			.limit(1);
+		const row = slot?.status ? { status: slot.status } : null;
+		const running = Number(slot?.running ?? 0) || 0;
+		if (!holdsSlot(row) && running >= TRANSCRIPT_MAX_CONCURRENT) {
+			return { admitted: false as const };
+		}
+		return { admitted: true as const, value: await enqueue(tx) };
+	});
+}
+
 async function dispatchTranscript(
 	transcriptId: string,
 	from: "uploading" | "queued",
 	sourceBytes?: number,
+	slotForAppId?: string,
 ) {
 	const now = new Date();
 	const runId = nanoId();
-	const claim = await db()
-		.update(developerTranscripts)
-		.set({
-			status: "queued",
-			runId,
-			startedAt: now,
-			...(sourceBytes !== undefined ? { sourceBytes } : {}),
-		})
-		.where(
-			and(
-				eq(developerTranscripts.id, transcriptId),
-				eq(developerTranscripts.status, from),
-				or(
-					isNull(developerTranscripts.startedAt),
-					lt(
-						developerTranscripts.startedAt,
-						new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+	const claimWith = (executor: InfraDbExecutor) =>
+		executor
+			.update(developerTranscripts)
+			.set({
+				status: "queued",
+				runId,
+				startedAt: now,
+				...(sourceBytes !== undefined ? { sourceBytes } : {}),
+			})
+			.where(
+				and(
+					eq(developerTranscripts.id, transcriptId),
+					eq(developerTranscripts.status, from),
+					or(
+						isNull(developerTranscripts.startedAt),
+						lt(
+							developerTranscripts.startedAt,
+							new Date(now.getTime() - DISPATCH_RETRY_AFTER_MS),
+						),
 					),
+					isNull(developerTranscripts.deletedAt),
 				),
-				isNull(developerTranscripts.deletedAt),
-			),
+			);
+	let claim: unknown;
+	if (slotForAppId) {
+		const slot = await withTranscriptSlot(
+			slotForAppId,
+			transcriptId,
+			(row) => row !== null && row.status !== from,
+			claimWith,
 		);
+		if (!slot.admitted) return "at_capacity" as const;
+		claim = slot.value;
+	} else {
+		claim = await claimWith(db());
+	}
 	if (affectedRows(claim) === 0) return "already_dispatched" as const;
 
 	const firstQueue = await db()
@@ -348,9 +446,9 @@ async function startGate(appId: string): Promise<TranscriptFailure | null> {
 	if (!(await appOwnerCanUseInfra(appId))) return NOT_AVAILABLE;
 	if (!isSpeechConfigured()) return SPEECH_UNAVAILABLE;
 	const refusal = await transcriptStartRefusal(appId);
-	return refusal
-		? fail(402, refusal.code, refusal.message, ADD_CREDITS_HINT)
-		: null;
+	if (!refusal) return null;
+	await scheduleAutoTopUp({ appId });
+	return fail(402, refusal.code, refusal.message, infraAddCreditsHint(appId));
 }
 
 export async function createTranscriptFromUrl(
@@ -418,26 +516,191 @@ export async function createTranscriptFromUrl(
 	const gate = await startGate(appId);
 	if (gate) return gate;
 
-	await db()
-		.insert(developerTranscripts)
-		.values({
-			id,
-			appId,
-			externalUserId: options.externalUserId,
-			name: options.name ?? transcriptNameFromUrl(url),
-			status: "queued",
-			queuedAt: new Date(),
-			sourceType: "url",
-			sourceUrl: url,
-			s3Key: transcriptObjectKeys(appId, id).source,
-			requestedLanguage: options.requestedLanguage,
-			metadata: options.metadata,
-		})
-		.onDuplicateKeyUpdate({ set: { id } });
+	const slot = await withTranscriptSlot(
+		appId,
+		id,
+		(row) => row !== null,
+		(executor) =>
+			executor
+				.insert(developerTranscripts)
+				.values({
+					id,
+					appId,
+					externalUserId: options.externalUserId,
+					name: options.name ?? transcriptNameFromUrl(url),
+					status: "queued",
+					queuedAt: new Date(),
+					sourceType: "url",
+					sourceUrl: url,
+					s3Key: transcriptObjectKeys(appId, id).source,
+					requestedLanguage: options.requestedLanguage,
+					metadata: options.metadata,
+				})
+				.onDuplicateKeyUpdate({ set: { id } }),
+	);
+	if (!slot.admitted) return TOO_MANY_TRANSCRIPTS;
 
 	const stored = await findTranscriptAnyState(appId, id);
 	if (!stored) return NOT_FOUND;
 	const conflict = differsFromRequest(stored);
+	if (conflict) return conflict;
+
+	const dispatched = await dispatchTranscript(id, "queued");
+	if (dispatched === "failed") {
+		await db()
+			.delete(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.id, id),
+					eq(developerTranscripts.appId, appId),
+					eq(developerTranscripts.status, "queued"),
+					isNull(developerTranscripts.startedAt),
+				),
+			);
+		return SPEECH_UNAVAILABLE;
+	}
+
+	const transcript = await findTranscript(appId, id);
+	if (!transcript) return NOT_FOUND;
+	return { ok: true, transcript };
+}
+
+const VIDEO_NOT_FOUND = fail(
+	404,
+	"video_not_found",
+	"Video not found",
+	"Check the video ID and that it belongs to this app.",
+);
+
+const TRANSCRIPT_MAX_VIDEO_ID_LENGTH = 64;
+
+async function findVideoUserId(appId: string, videoId: string) {
+	const [video] = await db()
+		.select({ externalUserId: developerVideos.externalUserId })
+		.from(developerVideos)
+		.where(
+			and(eq(developerVideos.id, videoId), eq(developerVideos.appId, appId)),
+		)
+		.limit(1);
+	return video?.externalUserId ?? null;
+}
+
+export async function createTranscriptFromVideo(
+	appId: string,
+	input: TranscriptOptionsInput & { videoId: string; idempotencyKey?: string },
+): Promise<{ ok: true; transcript: TranscriptRow } | TranscriptFailure> {
+	const options = validateTranscriptOptions(input);
+	if (!options.ok) return options;
+
+	const videoId = typeof input.videoId === "string" ? input.videoId.trim() : "";
+	if (videoId.length === 0 || videoId.length > TRANSCRIPT_MAX_VIDEO_ID_LENGTH) {
+		return fail(
+			400,
+			"invalid_video_id",
+			"The video ID is not valid",
+			"Send the id of a video in this app.",
+		);
+	}
+
+	const id = input.idempotencyKey
+		? transcriptIdForIdempotencyKey(appId, input.idempotencyKey)
+		: nanoId();
+
+	// A request without userId takes the video's. Transcripts made before that
+	// stored none, so a repeat without userId matches either.
+	const differsFromRequest = (
+		existing: TranscriptRow,
+		videoUserId: string | null,
+	) => {
+		if (existing.sourceType !== "video") return IDEMPOTENCY_CONFLICT;
+		if (existing.videoId !== videoId) return idempotencyMismatch("videoId");
+		const omittedUserIdMatches =
+			options.externalUserId === null &&
+			(existing.externalUserId === null ||
+				existing.externalUserId === videoUserId);
+		const different = replayedWithDifferent(existing, {
+			...options,
+			name: options.name ?? existing.name,
+			externalUserId: omittedUserIdMatches
+				? (existing.externalUserId ?? null)
+				: options.externalUserId,
+		});
+		if (different) return idempotencyMismatch(different);
+		return existing.deletedAt ? IDEMPOTENCY_KEY_RETIRED : null;
+	};
+
+	if (input.idempotencyKey) {
+		const existing = await findTranscriptAnyState(appId, id);
+		if (existing) {
+			const videoUserId =
+				options.externalUserId === null &&
+				existing.externalUserId !== null &&
+				existing.videoId === videoId
+					? await findVideoUserId(appId, videoId)
+					: null;
+			const conflict = differsFromRequest(existing, videoUserId);
+			if (conflict) return conflict;
+			if (existing.status === "queued") {
+				await dispatchTranscript(id, "queued");
+			}
+			return {
+				ok: true,
+				transcript: (await findTranscript(appId, id)) ?? existing,
+			};
+		}
+	}
+
+	const video = await findVideoForTranscript(appId, videoId);
+	if (video.state === "not_found") return VIDEO_NOT_FOUND;
+	if (video.state === "not_ready") {
+		return video.status === "ready" || video.status === "errored"
+			? fail(
+					409,
+					"video_not_ready",
+					video.status === "errored"
+						? "The video failed to process and has no file to transcribe"
+						: "The video has no stored file to transcribe",
+					"Upload the video again, then transcribe the new video.",
+				)
+			: fail(
+					409,
+					"video_not_ready",
+					"The video is not ready yet",
+					"Wait until the video status is ready, then send the request again.",
+				);
+	}
+
+	const gate = await startGate(appId);
+	if (gate) return gate;
+
+	const slot = await withTranscriptSlot(
+		appId,
+		id,
+		(row) => row !== null,
+		(executor) =>
+			executor
+				.insert(developerTranscripts)
+				.values({
+					id,
+					appId,
+					externalUserId: options.externalUserId ?? video.externalUserId,
+					name: options.name ?? video.name,
+					status: "queued",
+					queuedAt: new Date(),
+					sourceType: "video",
+					videoId,
+					requestedAt: new Date(),
+					s3Key: video.sourceKey,
+					requestedLanguage: options.requestedLanguage,
+					metadata: options.metadata,
+				})
+				.onDuplicateKeyUpdate({ set: { id } }),
+	);
+	if (!slot.admitted) return TOO_MANY_TRANSCRIPTS;
+
+	const stored = await findTranscriptAnyState(appId, id);
+	if (!stored) return NOT_FOUND;
+	const conflict = differsFromRequest(stored, video.externalUserId);
 	if (conflict) return conflict;
 
 	const dispatched = await dispatchTranscript(id, "queued");
@@ -631,7 +894,13 @@ export async function startTranscriptUpload(
 	const gate = await startGate(appId);
 	if (gate) return gate;
 
-	const dispatched = await dispatchTranscript(transcript.id, "uploading", size);
+	const dispatched = await dispatchTranscript(
+		transcript.id,
+		"uploading",
+		size,
+		appId,
+	);
+	if (dispatched === "at_capacity") return TOO_MANY_TRANSCRIPTS;
 	if (dispatched === "failed") return SPEECH_UNAVAILABLE;
 
 	return {
@@ -668,6 +937,8 @@ const summaryColumns = {
 	status: developerTranscripts.status,
 	sourceType: developerTranscripts.sourceType,
 	sourceUrl: developerTranscripts.sourceUrl,
+	videoId: developerTranscripts.videoId,
+	requestedAt: developerTranscripts.requestedAt,
 	s3Key: developerTranscripts.s3Key,
 	resultKey: developerTranscripts.resultKey,
 	sourceBytes: developerTranscripts.sourceBytes,
@@ -775,7 +1046,12 @@ export async function deleteTranscript(
 	transcriptId: string,
 ): Promise<{ ok: true } | TranscriptFailure> {
 	const transcript = await findTranscript(appId, transcriptId);
-	if (!transcript) return NOT_FOUND;
+	if (!transcript) {
+		const deleted = await findTranscriptAnyState(appId, transcriptId);
+		if (!deleted?.deletedAt) return NOT_FOUND;
+		await deleteTranscriptObjects(appId, deleted.id);
+		return { ok: true };
+	}
 
 	await db()
 		.update(developerTranscripts)
@@ -791,12 +1067,119 @@ export async function deleteTranscript(
 	return { ok: true };
 }
 
+async function syncDeletedTranscriptCaptions(
+	appId: string,
+	transcriptId: string,
+	known?: TranscriptRow | null,
+) {
+	const transcript =
+		known === undefined
+			? await findTranscriptAnyState(appId, transcriptId)
+			: known;
+	if (
+		!transcript?.deletedAt ||
+		!transcript.videoId ||
+		transcript.status !== "complete" ||
+		(transcript.wordCount ?? 0) === 0
+	) {
+		return;
+	}
+	await syncVideoCaptions({
+		appId,
+		videoId: transcript.videoId,
+		language: transcript.language,
+	});
+}
+
 export async function deleteTranscriptObjects(
 	appId: string,
 	transcriptId: string,
 ) {
-	const keys = transcriptObjectKeys(appId, transcriptId);
-	await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	const transcript = await findTranscriptAnyState(appId, transcriptId);
+	if (transcript?.status !== "processing") {
+		const keys = transcriptObjectKeys(appId, transcriptId);
+		await deleteDeveloperObjects([keys.source, keys.audio, keys.result]);
+	}
+	await syncDeletedTranscriptCaptions(appId, transcriptId, transcript);
+}
+
+const CAPTION_RECONCILE_WINDOW_MS = 3 * 60 * 60 * 1000;
+const CAPTION_RECONCILE_PAGE = 200;
+const CAPTION_RECONCILE_BUDGET_MS = 2 * 60 * 1000;
+
+export async function reconcileDeletedVideoCaptions(
+	now = new Date(),
+	budgetMs = CAPTION_RECONCILE_BUDGET_MS,
+) {
+	const stopAt = Date.now() + budgetMs;
+	const since = new Date(now.getTime() - CAPTION_RECONCILE_WINDOW_MS);
+	const seen = new Set<string>();
+	let after: { updatedAt: Date; id: string } | null = null;
+	let synced = 0;
+	let failed = 0;
+	let finished = false;
+
+	while (Date.now() < stopAt) {
+		const rows = await db()
+			.select({
+				id: developerTranscripts.id,
+				updatedAt: developerTranscripts.updatedAt,
+				appId: developerTranscripts.appId,
+				videoId: developerTranscripts.videoId,
+				language: developerTranscripts.language,
+			})
+			.from(developerTranscripts)
+			.where(
+				and(
+					eq(developerTranscripts.status, "complete"),
+					gte(developerTranscripts.updatedAt, since),
+					isNotNull(developerTranscripts.deletedAt),
+					isNotNull(developerTranscripts.videoId),
+					gt(developerTranscripts.wordCount, 0),
+					after
+						? or(
+								gt(developerTranscripts.updatedAt, after.updatedAt),
+								and(
+									eq(developerTranscripts.updatedAt, after.updatedAt),
+									gt(developerTranscripts.id, after.id),
+								),
+							)
+						: undefined,
+				),
+			)
+			.orderBy(
+				asc(developerTranscripts.updatedAt),
+				asc(developerTranscripts.id),
+			)
+			.limit(CAPTION_RECONCILE_PAGE);
+
+		for (const row of rows) {
+			after = { updatedAt: row.updatedAt, id: row.id };
+			if (!row.videoId) continue;
+			const group = `${row.appId}/${row.videoId}/${captionLanguage(row.language)}`;
+			if (seen.has(group)) continue;
+			seen.add(group);
+			try {
+				await syncVideoCaptions({
+					appId: row.appId,
+					videoId: row.videoId,
+					language: row.language,
+				});
+				synced++;
+			} catch (error) {
+				failed++;
+				console.error("[developer-transcripts] Caption reconcile failed", {
+					videoId: row.videoId,
+					error,
+				});
+			}
+		}
+		if (rows.length < CAPTION_RECONCILE_PAGE) {
+			finished = true;
+			break;
+		}
+	}
+	return { synced, failed, finished };
 }
 
 export async function expireStaleTranscripts(now = new Date()) {

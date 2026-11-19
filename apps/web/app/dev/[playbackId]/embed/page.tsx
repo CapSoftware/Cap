@@ -12,7 +12,7 @@ type Props = {
 };
 
 export async function generateMetadata({ params }: Props) {
-	return developerVideoMetadata((await params).playbackId);
+	return developerVideoMetadata((await params).playbackId, "embed");
 }
 
 export default async function DeveloperVideoEmbedPage({

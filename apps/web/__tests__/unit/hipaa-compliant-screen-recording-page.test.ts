@@ -55,13 +55,13 @@ describe("HipaaCompliantScreenRecordingPage component content", () => {
 		expect(componentSource.toLowerCase()).toContain("hipaa");
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("does not include a comparison table with other products", () => {
+		expect(componentSource).not.toContain("comparisonTable");
 	});
 
-	it("describes the license split in the comparison table", () => {
+	it("describes the license split", () => {
 		expect(componentSource).toContain(
-			'{ text: "Yes — AGPLv3 and MIT crates", status: "positive" }',
+			"most code under AGPLv3 and specified Rust crates under MIT",
 		);
 		expect(componentSource).not.toContain('{ text: "Yes — MIT"');
 	});
@@ -90,8 +90,10 @@ describe("HipaaCompliantScreenRecordingPage component content", () => {
 		expect(componentSource).toContain("badge");
 	});
 
-	it("references the loom-alternative internal link", () => {
-		expect(componentSource).toContain("/loom-alternative");
+	it("does not name other products", () => {
+		for (const product of ["Loom", "Zoom"]) {
+			expect(componentSource).not.toContain(product);
+		}
 	});
 
 	it("mentions PHI (protected health information)", () => {

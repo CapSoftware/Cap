@@ -6,6 +6,7 @@ type BuildEnv = Readonly<{
 	NEXT_PUBLIC_OPENPANEL_API_URL?: string;
 	NEXT_PUBLIC_WEB_URL: string;
 	NEXT_PUBLIC_DOCKER_BUILD?: string;
+	NEXT_PUBLIC_INFRA_FILM_URL?: string;
 }>;
 
 const CLIENT_PREFIX = "NEXT_PUBLIC_";
@@ -37,6 +38,7 @@ const create = (): BuildEnv => {
 		NEXT_PUBLIC_OPENPANEL_API_URL: process.env.NEXT_PUBLIC_OPENPANEL_API_URL,
 		NEXT_PUBLIC_WEB_URL: webUrl,
 		NEXT_PUBLIC_DOCKER_BUILD: process.env.NEXT_PUBLIC_DOCKER_BUILD,
+		NEXT_PUBLIC_INFRA_FILM_URL: process.env.NEXT_PUBLIC_INFRA_FILM_URL,
 	};
 
 	const browserWindow = (globalThis as { window?: object }).window;

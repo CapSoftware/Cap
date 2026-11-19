@@ -14,10 +14,14 @@ use crate::{
 
 const ABOUT: &str = "\
 Cap Infra is Cap's usage-billed video and speech API. A developer app holds its videos,
-transcripts, allowed domains, API keys and prepaid credits.
+transcripts, its allowed sites, API keys and prepaid credits.
+
+Only the sites added with `cap developers domains` can embed the app's player. With none
+added, any site can. Share links, HLS, MP4 and poster URLs stay open to everyone. To limit
+a browser upload to one origin, set corsOrigin when your server creates the upload.
 
 Amounts: 100,000 micro-credits are $1. Credit purchases are in cents, from 500 ($5) to
-100000 ($1,000). Durations are in seconds.
+1000000 ($10,000). Durations are in seconds.
 
 A typical job:
   cap developers list --json
@@ -51,7 +55,7 @@ enum DeveloperCommands {
     Update(DeveloperUpdateArgs),
     /// Delete an app and revoke its keys
     Delete(DeveloperDeleteArgs),
-    /// Add or remove the origins allowed to use an app's public key
+    /// Add or remove the sites that can embed an app's player
     Domains(DeveloperDomainsArgs),
     /// Rotate an app's API keys
     Keys(DeveloperKeysArgs),
@@ -149,9 +153,9 @@ struct DeveloperDomainsArgs {
 
 #[derive(Subcommand)]
 enum DeveloperDomainCommands {
-    /// Allow an origin, for example https://app.example.com
+    /// Allow a site to embed the player, for example https://app.example.com. Once one is added, only listed sites can
     Add(DeveloperDomainAddArgs),
-    /// Remove an allowed origin by its id or by the origin itself
+    /// Remove an allowed site by its id or by the origin itself
     Remove(DeveloperDomainRemoveArgs),
 }
 
@@ -159,7 +163,7 @@ enum DeveloperDomainCommands {
 struct DeveloperDomainAddArgs {
     /// App id from `cap developers list`
     app: String,
-    /// Origin to allow, for example https://app.example.com
+    /// Site to allow, for example https://app.example.com
     domain: String,
     /// Confirm without a prompt
     #[arg(long)]
@@ -248,7 +252,7 @@ enum DeveloperCreditCommands {
 struct DeveloperCreditPurchaseArgs {
     /// App id from `cap developers list`
     app: String,
-    /// Amount in cents, from 500 ($5) to 100000 ($1,000)
+    /// Amount in cents, from 500 ($5) to 1000000 ($10,000)
     #[arg(long)]
     amount_cents: u32,
     /// Print the checkout link without opening a browser

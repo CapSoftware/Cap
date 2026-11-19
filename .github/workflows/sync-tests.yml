@@ -12,6 +12,7 @@ name: A/V Sync Tests
 # Findings are published as a job-summary table and a JSON artifact per OS.
 
 on:
+  merge_group:
   workflow_dispatch:
   schedule:
     - cron: "0 5 * * *"
@@ -45,14 +46,67 @@ permissions:
   contents: read
 
 jobs:
+  # GitHub ignores paths filters in the merge queue, so the queue run applies
+  # this workflow's pull_request paths to the queued change itself.
+  scope:
+    name: Scope
+    if: github.event_name == 'merge_group'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.queue.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/sync-tests.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+
+  # Each runner's steps are split into parts that run side by side, so every
+  # step keeps its environment. One job per runner took about 25 minutes, most
+  # of it these steps one after another: the timestamp tests (5 to 12 min), the
+  # synthetic device matrix (3.5 min on every runner) and the Linux playback
+  # harness (7 to 10 min).
+  #
+  # macOS runs on Blacksmith: hosted macOS runs at most five jobs at once for
+  # the organisation, and two hosted parts queued 6.5 and 25 minutes (run
+  # 44154886695). Blacksmith Macs have no hardware video encoder, so the
+  # encoder crates also run on one hosted Mac, which has VideoToolbox's.
   sync-tests:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
+    name: sync-tests (${{ matrix.runner }}, ${{ matrix.parts }})
     strategy:
       fail-fast: false
       matrix:
-        runner:
-          - macos-latest
-          - windows-2022
-          - ubuntu-24.04
+        include:
+          - runner: blacksmith-6vcpu-macos-15
+            parts: timestamp
+          - runner: blacksmith-6vcpu-macos-15
+            parts: units,matrix
+          - runner: macos-latest
+            parts: encoders
+          - runner: windows-2022
+            parts: timestamp
+          - runner: windows-2022
+            parts: units
+          - runner: windows-2022
+            parts: matrix
+          - runner: ubuntu-24.04
+            parts: timestamp,units
+          - runner: ubuntu-24.04
+            parts: matrix
+          - runner: ubuntu-24.04
+            parts: playback
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -94,9 +148,11 @@ jobs:
         run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
 
       - name: RNNoise lifecycle regression tests
+        if: contains(format(',{0},', matrix.parts), ',units,')
         run: cargo test --locked -p cap-rnnoise --lib
 
       - name: Recording metadata and harness regression tests
+        if: contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
         run: |
           cargo test --locked -p cap-project --lib
@@ -104,7 +160,7 @@ jobs:
           python -B scripts/test-capbench.py
 
       - name: Compile recording process supervisor (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(format(',{0},', matrix.parts), ',units,')
         shell: pwsh
         run: Add-Type -Path scripts/recording-reliability-owned-process.cs
 
@@ -144,6 +200,7 @@ jobs:
           Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
 
       - name: Timestamp pipeline unit + property tests
+        if: contains(format(',{0},', matrix.parts), ',timestamp,')
         shell: bash
         run: |
           cargo test --locked -p cap-timestamp -p cap-enc-ffmpeg -p ffmpeg-hw-device
@@ -157,6 +214,7 @@ jobs:
           cargo test --locked -p cap-rendering --lib zoom_spring::tests::precompute_cost_is_bounded_for_long_projects -- --exact --nocapture --test-threads=1
 
       - name: Editor audio playback and export regressions
+        if: contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
         run: |
           cargo test --locked -p cap-audio --lib
@@ -167,6 +225,7 @@ jobs:
           cargo test --locked -p cap-editor --lib playback::tests::
 
       - name: Render farm engine
+        if: contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
         run: cargo test --locked -p cap-render-farm
 
@@ -174,6 +233,7 @@ jobs:
       # scenarios: pause/resume excision, stall-recovery bursts with
       # same-microsecond timestamps, segment assembly and A/V alignment.
       - name: Instant mode scenario harness
+        if: contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
         run: |
           cargo test --locked -p cap-recording --test instant_mode_scenarios
@@ -184,6 +244,7 @@ jobs:
       # once rotted into breaking every non-macOS test build via ungated
       # macOS-only imports.
       - name: Compile recording test harnesses
+        if: contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
         run: |
           cargo check --locked -p cap-recording --tests
@@ -191,8 +252,19 @@ jobs:
       # The AVFoundation encoder (studio camera/display on macOS) has its own
       # pts handling; its fps-matrix duration tests guard against re-timing
       # sources that deliver at a different rate than configured.
+      - name: VideoToolbox FFmpeg encoder tests (macOS)
+        if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
+        shell: bash
+        # One test at a time: tests opening VideoToolbox sessions in
+        # parallel exhaust the runner's sessions (-12903). The variable turns
+        # a missing zero-copy VideoToolbox encoder into a failure instead of
+        # a skip.
+        env:
+          CAP_REQUIRE_VIDEOTOOLBOX: "1"
+        run: cargo test --locked -p cap-enc-ffmpeg -- --test-threads=1
+
       - name: AVFoundation encoder tests (macOS)
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && contains(format(',{0},', matrix.parts), ',encoders,')
         shell: bash
         run: |
           cargo test --locked -p cap-enc-avfoundation
@@ -201,7 +273,7 @@ jobs:
       # a missing endpoint (driver install regression) into a hard failure
       # instead of a silent skip.
       - name: WASAPI loopback endpoint tests (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(format(',{0},', matrix.parts), ',units,')
         shell: bash
         env:
           CAP_REQUIRE_AUDIO_ENDPOINT: "1"
@@ -209,6 +281,7 @@ jobs:
           cargo test --locked -p cap-recording --test windows_loopback -- --nocapture
 
       - name: Synthetic device matrix
+        if: contains(format(',{0},', matrix.parts), ',matrix,')
         id: matrix
         continue-on-error: true
         shell: bash
@@ -234,13 +307,13 @@ jobs:
       # exercised here; the macOS AVAssetReader path is covered by running
       # `cap selftest playback` locally on real hardware.
       - name: Editor playback sync harness
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && contains(format(',{0},', matrix.parts), ',playback,')
         shell: bash
         run: |
           cargo run --locked -p cap -- --log-level info selftest playback --duration 30 --json
 
       - name: Report findings
-        if: always()
+        if: always() && contains(format(',{0},', matrix.parts), ',matrix,')
         shell: bash
         run: |
           REPORT="${{ github.workspace }}/sync-matrix-${{ matrix.runner }}.json"
@@ -271,7 +344,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload findings
-        if: always()
+        if: always() && contains(format(',{0},', matrix.parts), ',matrix,')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sync-matrix-${{ matrix.runner }}

@@ -17,14 +17,29 @@ export const INFRA_STORAGE_DOLLARS_PER_1000_MINUTES_PER_MONTH: Record<
 	"2160p": 2.8,
 };
 
-export const INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES: Record<
-	InfraResolutionTier,
-	number
-> = {
-	"1080p": 0.19,
-	"1440p": 0.3,
-	"2160p": 0.94,
-};
+export const INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES = 0.95;
+
+export const INFRA_DELIVERY_PRICE_UNIT = "per 1,000 delivered minutes";
+
+export const INFRA_DELIVERY_PRICE = `$${INFRA_DELIVERY_DOLLARS_PER_1000_MINUTES.toFixed(2)}`;
+
+export const INFRA_DELIVERY_BILLED_FROM = "2026-11-14";
+
+const billedFromDay = new Intl.DateTimeFormat("en-GB", {
+	day: "numeric",
+	month: "long",
+	year: "numeric",
+	timeZone: "UTC",
+});
+
+export const deliveryBilledFromText = (day: string) =>
+	`Delivery is billed from ${billedFromDay.format(new Date(`${day}T00:00:00Z`))}. Earlier days are not charged.`;
+
+export const INFRA_DELIVERY_BILLED_FROM_TEXT = deliveryBilledFromText(
+	INFRA_DELIVERY_BILLED_FROM,
+);
+
+export const INFRA_DELIVERY_PRICE_TEXT = `${INFRA_DELIVERY_PRICE} ${INFRA_DELIVERY_PRICE_UNIT}`;
 
 export const INFRA_SPEECH_DOLLARS_PER_HOUR = 0.1;
 

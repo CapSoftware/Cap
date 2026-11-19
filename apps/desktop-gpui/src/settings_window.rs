@@ -2925,6 +2925,14 @@ impl SettingsWindow {
                 .flex_shrink_0()
                 .rounded(px(4.))
                 .bg(theme.gray_10)
+                .when(row.item.audio_only, |this| {
+                    this.flex().items_center().justify_center().child(
+                        gpui::svg()
+                            .path("icons/microphone.svg")
+                            .size(px(18.))
+                            .text_color(theme.gray_1),
+                    )
+                })
                 .into_any_element(),
         };
 
@@ -3709,6 +3717,24 @@ impl SettingsWindow {
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.new_zoom_amount();
+        let keep_drawings = crate::live_draw::SUPPORTED.then(|| {
+            self.setting_row(
+                tr::settings::general::recording::keep_drawings::label(),
+                Some(tr::settings::general::recording::keep_drawings::description()),
+                self.toggle(
+                    "keep-drawings",
+                    tr::settings::general::recording::keep_drawings::label(),
+                    settings.keep_drawings,
+                    cx,
+                    |this, cx| {
+                        this.settings.keep_drawings = !this.settings.keep_drawings;
+                        let value = this.settings.keep_drawings;
+                        this.write_bool(store::KEEP_DRAWINGS_KEY, value, cx);
+                    },
+                )
+                .into_any_element(),
+            )
+        });
 
         self.section(
             tr::settings::general::recording::title(),
@@ -3787,10 +3813,7 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     // "After a Studio recording" lives on the Shortcuts page,
-                    // next to the shortcuts it shapes. There is no
-                    // post-capture overlay in this app, so a stored
-                    // `showOverlay` means "reshow the main window"
-                    // (`app_windows.rs`) and is labelled "Show Cap".
+                    // next to the shortcuts it shapes.
                     self.setting_row(
                         tr::settings::general::recording::post_deletion::label(),
                         Some(tr::settings::general::recording::post_deletion::description()),
@@ -3953,6 +3976,10 @@ impl SettingsWindow {
                             .into_any_element(),
                     ),
                 ])
+                .when_some(keep_drawings, |card, row| {
+                    card.child(ui::Card::settings_divider(&self.theme))
+                        .child(row)
+                })
                 .into_any_element(),
             ],
         )
@@ -5271,6 +5298,7 @@ mod tests {
             sharing: None,
             sort_time_millis: 0.,
             thumbnail: None,
+            audio_only: false,
         }
     }
 

@@ -59,6 +59,7 @@ on:
     - cron: "41 3 * * *"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
   push:
     branches:
       - ci/verify-ci
@@ -81,6 +82,7 @@ jobs:
       run: ${{ steps.scope.outputs.run }}
       runners: ${{ steps.scope.outputs.runners }}
       tier: ${{ steps.scope.outputs.tier }}
+      windows-shards: ${{ steps.scope.outputs.windows-shards }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,8 +96,12 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
           BEFORE: ${{ github.event.before }}
+          MQ_BASE: ${{ github.event.merge_group.base_sha }}
+          MQ_HEAD: ${{ github.event.merge_group.head_sha }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_RUNNERS: ${{ inputs.runners }}
+          INPUT_CASE: ${{ inputs.case_filter }}
+          INPUT_SOAK: ${{ inputs.soak_secs }}
           RUSTUP_TOOLCHAIN: stable
         run: |
           set -euo pipefail
@@ -117,6 +123,9 @@ jobs:
               if [[ "$EVENT" == pull_request ]]; then
                 gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$files"
                 max=3000
+              elif [[ "$EVENT" == merge_group ]]; then
+                python3 scripts/ci/merge_queue.py files --base "$MQ_BASE" --head "$MQ_HEAD" > "$files"
+                max=3000
               elif [[ "$BEFORE" =~ ^0+$ ]]; then
                 : > "$files"; echo Cargo.toml >> "$files"
                 max=300
@@ -134,10 +143,24 @@ jobs:
                 runners='["blacksmith-6vcpu-macos-26"]'; tier=fast
               fi ;;
           esac
+          # Windows records each case in real time, one after another (22 min
+          # for the full tier in one job). Cases split across hosted runners
+          # by the hash of their id (CAP_VERIFY_SHARD), so every case runs in
+          # exactly one shard; with these counts the longest shard is about
+          # the longest case (mp4-holds, 7 min). A case filter or soak runs in
+          # one job.
+          if [[ -n "${INPUT_CASE:-}" || -n "${INPUT_SOAK:-}" ]]; then
+            windows_shards='[1]'
+          elif [[ "$tier" == full ]]; then
+            windows_shards='[1,2,3,4,5]'
+          else
+            windows_shards='[1,2,3]'
+          fi
           {
             echo "run=$run"
             echo "runners=$runners"
             echo "tier=$tier"
+            echo "windows-shards=$windows_shards"
           } >> "$GITHUB_OUTPUT"
           if [[ "$run" == true ]]; then
             echo "real capture: $tier tier on $runners" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -356,12 +379,17 @@ jobs:
   # 38997642473, 38997747111). Hosted Windows has no audio endpoints, so the
   # stimulus stays silent and system audio is not recorded.
   real-capture-windows:
-    name: real-capture (windows-2022)
+    name: real-capture (windows-2022, ${{ matrix.shard }}/${{ strategy.job-total }})
     needs: scope
     if: needs.scope.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.scope.outputs.windows-shards) }}
     runs-on: windows-2022
     timeout-minutes: 60
     env:
+      CAP_VERIFY_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
       CAP_VERIFY_CAPTURE: display
       CAP_VERIFY_REQUIRE_CAPTURE: "1"
       CAP_VERIFY_TIER: ${{ needs.scope.outputs.tier }}
@@ -398,13 +426,13 @@ jobs:
       # Without the manifest the next restore cannot tell which sources the
       # cached build came from (scripts/verify/mtime.py).
       - name: Record sources of the cached build
-        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true'
         shell: bash
         run: |
           "$(command -v python3 || command -v python)" scripts/verify/mtime.py record target/ci-verify/verify-src-manifest.txt
 
       - name: Save build cache
-        if: github.event_name != 'pull_request' && steps.setup.outputs.build-cache-hit != 'true'
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && matrix.shard == 1 && steps.setup.outputs.build-cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -421,13 +449,13 @@ jobs:
       - name: Summary
         if: always()
         shell: bash
-        run: python scripts/verify/summary.py --title "real capture windows-2022 ${{ needs.scope.outputs.tier }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
+        run: python scripts/verify/summary.py --title "real capture windows-2022 ${{ needs.scope.outputs.tier }} shard ${{ matrix.shard }}/${{ strategy.job-total }}" "$CAP_VERIFY_REPORT_DIR" >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: verify-recording-windows-2022
+          name: verify-recording-windows-2022-${{ needs.scope.outputs.tier }}-${{ matrix.shard }}
           path: |
             ${{ github.workspace }}/verify-report
             ${{ github.workspace }}/verify-dump

@@ -4,6 +4,16 @@ vi.mock("@/lib/infra-access", () => ({
 	canUseInfra: () => true,
 }));
 
+const firstMonth = vi.hoisted(() => ({
+	atDelete: vi.fn(),
+	forDeletedApp: vi.fn(),
+}));
+
+vi.mock("@/lib/infra-storage-minimum", () => ({
+	settleFirstMonthAtDelete: firstMonth.atDelete,
+	settleFirstMonthsForDeletedApp: firstMonth.forDeletedApp,
+}));
+
 vi.mock("@cap/database", () => {
 	const mockDb = {
 		select: vi.fn(() => mockDb),
@@ -38,6 +48,11 @@ vi.mock("@cap/database/helpers", () => ({
 
 vi.mock("@cap/database/crypto", () => ({
 	encrypt: vi.fn(async (value: string) => `encrypted:${value}`),
+}));
+
+vi.mock("@/lib/infra-balance", async (original) => ({
+	...(await original<typeof import("@/lib/infra-balance")>()),
+	heldTranscriptMicroCredits: async () => 0,
 }));
 
 vi.mock("@cap/database/schema", () => ({
@@ -78,12 +93,28 @@ vi.mock("@cap/database/schema", () => ({
 	developerCreditTransactions: {},
 }));
 
+vi.mock("@/lib/developer-app-limits", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/lib/developer-app-limits")>()),
+	developerAppCreationLimited: async () => false,
+	developerKeyRotationLimited: async () => false,
+	reserveDeveloperAppSlot: async () => true,
+}));
+
 vi.mock("@/lib/developer-key-hash", () => ({
 	hashKey: vi.fn(() => Promise.resolve("mocked-hash-value")),
 }));
 
 vi.mock("next/cache", () => ({
 	revalidatePath: vi.fn(),
+}));
+
+const purge = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@vercel/functions", () => ({
+	dangerouslyDeleteByTag: purge,
+}));
+
+vi.mock("@/lib/developer-video-cancel", () => ({
+	cancelDeveloperVideoEncodes: vi.fn(async () => undefined),
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -95,7 +126,11 @@ vi.mock("drizzle-orm", () => ({
 
 import * as capDatabase from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 
+const mockCancelEncodes = cancelDeveloperVideoEncodes as ReturnType<
+	typeof vi.fn
+>;
 const mockGetCurrentUser = getCurrentUser as ReturnType<typeof vi.fn>;
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -289,6 +324,71 @@ describe("deleteDeveloperApp", () => {
 		const result = await deleteDeveloperApp("app-456");
 		expect(result).toEqual({ success: true });
 	});
+
+	it("settles the first month of the videos this delete stamped, after the delete", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		await deleteDeveloperApp("app-456");
+		const stamps = mockDb.set.mock.calls
+			.map(([values]) => (values as { deletedAt?: Date }).deletedAt)
+			.filter(Boolean);
+		expect(stamps).toHaveLength(2);
+		expect(stamps[0]?.getMilliseconds()).toBe(0);
+		expect(firstMonth.forDeletedApp).toHaveBeenCalledWith("app-456", stamps[0]);
+		expect(stamps[1]).toBe(stamps[0]);
+	});
+
+	it("cancels the app's encode jobs once the delete has committed", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		let committed = false;
+		mockDb.transaction.mockImplementationOnce(async (fn) => {
+			await fn(mockDb);
+			committed = true;
+		});
+		mockCancelEncodes.mockImplementationOnce(async () => {
+			expect(committed).toBe(true);
+		});
+
+		await deleteDeveloperApp("app-456");
+
+		const stamps = mockDb.set.mock.calls.map(
+			([values]) => values.deletedAt ?? values.revokedAt,
+		);
+		const deletedAt = stamps[0];
+		expect(deletedAt).toBeInstanceOf(Date);
+		expect(deletedAt.getTime() % 1000).toBe(0);
+		expect(stamps).toEqual([deletedAt, deletedAt, deletedAt]);
+		expect(mockCancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-456",
+			deletedAt,
+		});
+	});
+
+	it("cancels nothing for an app it could not find", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValue([]);
+		await expect(deleteDeveloperApp("app-456")).rejects.toThrow();
+		expect(mockCancelEncodes).not.toHaveBeenCalled();
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it("drops the cached playback of every video in the app once the delete has committed", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		let committed = false;
+		mockDb.transaction.mockImplementationOnce(async (fn) => {
+			await fn(mockDb);
+			committed = true;
+		});
+		purge.mockImplementationOnce(async () => {
+			expect(committed).toBe(true);
+		});
+
+		await deleteDeveloperApp("app-456");
+
+		expect(purge.mock.calls).toEqual([["infra-app-app-456"]]);
+	});
 });
 
 describe("updateDeveloperApp", () => {
@@ -447,6 +547,18 @@ describe("addDeveloperDomain", () => {
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
 		const result = await addDeveloperDomain("app-456", "http://localhost:3000");
 		expect(result).toEqual({ success: true, domain: "http://localhost:3000" });
+	});
+
+	it("refuses a plain http site, which cannot embed the player", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		const result = await addDeveloperDomain("app-456", "http://myshop.com");
+		expect(result).toEqual({
+			success: false,
+			message:
+				"Only https sites can embed your player. Enter one like https://myshop.com.",
+		});
+		expect(mockDb.insert).not.toHaveBeenCalled();
 	});
 
 	it("normalizes to lowercase", async () => {
@@ -608,10 +720,16 @@ describe("regenerateDeveloperKeys", () => {
 		);
 	});
 
+	const rotate = async () => {
+		const result = await regenerateDeveloperKeys("app-456");
+		if ("success" in result) throw new Error(result.message);
+		return result;
+	};
+
 	it("creates new public and secret keys", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await regenerateDeveloperKeys("app-456");
+		const result = await rotate();
 
 		expect(result.publicKey).toMatch(/^cpk_/);
 		expect(result.secretKey).toMatch(/^csk_/);
@@ -620,7 +738,7 @@ describe("regenerateDeveloperKeys", () => {
 	it("returns new publicKey and secretKey", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
-		const result = await regenerateDeveloperKeys("app-456");
+		const result = await rotate();
 
 		expect(result).toHaveProperty("publicKey");
 		expect(result).toHaveProperty("secretKey");
@@ -752,21 +870,82 @@ describe("deleteDeveloperVideo", () => {
 		);
 	});
 
-	it("soft deletes video", async () => {
+	it("soft deletes video and settles its first month after the delete", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
 		await deleteDeveloperVideo("app-456", "video-001");
 
 		expect(mockDb.update).toHaveBeenCalled();
 		expect(mockDb.set).toHaveBeenCalledWith(
 			expect.objectContaining({ deletedAt: expect.any(Date) }),
 		);
+		expect(firstMonth.atDelete).toHaveBeenCalledWith("video-001");
+	});
+
+	it("does not settle anything when the video was already deleted or is another app's", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 0 }] as never);
+		await deleteDeveloperVideo("app-456", "video-001");
+
+		expect(firstMonth.atDelete).not.toHaveBeenCalled();
+		expect(purge).not.toHaveBeenCalled();
+	});
+
+	it("drops the video's cached playback after the delete is written", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
+
+		await deleteDeveloperVideo("app-456", "video-001");
+
+		expect(purge.mock.calls).toEqual([["infra-video-video-001"]]);
+		const [deleteWrite] = mockDb.set.mock.invocationCallOrder;
+		const [purged] = purge.mock.invocationCallOrder;
+		expect(purged).toBeGreaterThan(deleteWrite ?? Infinity);
 	});
 
 	it("returns success true", async () => {
 		mockGetCurrentUser.mockResolvedValue(mockUser);
 		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
 		const result = await deleteDeveloperVideo("app-456", "video-001");
 		expect(result).toEqual({ success: true });
+	});
+
+	it("cancels the video's encode jobs after the delete is written", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValueOnce([mockApp]);
+		mockDb.where
+			.mockReturnValueOnce(mockDb)
+			.mockResolvedValueOnce([{ affectedRows: 1 }] as never);
+
+		await deleteDeveloperVideo("app-456", "video-001");
+
+		expect(mockCancelEncodes).toHaveBeenCalledExactlyOnceWith({
+			appId: "app-456",
+			videoId: "video-001",
+		});
+		const [deleteWrite] = mockDb.set.mock.invocationCallOrder;
+		const [cancel] = mockCancelEncodes.mock.invocationCallOrder;
+		expect(cancel).toBeGreaterThan(deleteWrite ?? Infinity);
+	});
+
+	it("cancels nothing when the caller does not own the app", async () => {
+		mockGetCurrentUser.mockResolvedValue(mockUser);
+		mockDb.limit.mockResolvedValue([]);
+		await expect(deleteDeveloperVideo("app-456", "video-001")).rejects.toThrow(
+			"App not found",
+		);
+		expect(mockCancelEncodes).not.toHaveBeenCalled();
 	});
 });

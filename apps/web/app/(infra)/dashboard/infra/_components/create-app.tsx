@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { createDeveloperApp } from "@/actions/developers/create-app";
+import { DEVELOPER_APP_NAME_MAX_LENGTH } from "@/lib/developer-app-rules";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { infraAppPath } from "@/lib/infra-routes";
 import { CopyTextButton, KeyRow } from "./copy";
@@ -140,7 +141,7 @@ export function AppNameForm({
 				<Input
 					id={nameId}
 					value={name}
-					maxLength={255}
+					maxLength={DEVELOPER_APP_NAME_MAX_LENGTH}
 					autoFocus={autoFocus}
 					autoComplete="off"
 					onChange={(e) => setName(e.target.value)}

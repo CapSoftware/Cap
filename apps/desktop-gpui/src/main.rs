@@ -6,7 +6,9 @@
 mod app_sounds;
 mod app_windows;
 mod assets;
+mod audio_project;
 mod auth;
+mod automation;
 mod blur_recovery;
 #[cfg(target_os = "macos")]
 mod camera_bench;
@@ -15,6 +17,7 @@ mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
 mod camera_loading;
+mod caption_export;
 mod camera_window;
 mod controls_window;
 mod crash_capture;
@@ -25,6 +28,7 @@ mod diagnostics;
 mod doodle;
 mod draw_bench;
 mod editor_audio;
+mod editor_audio_only;
 mod editor_bench;
 mod editor_canvas;
 mod editor_clips;
@@ -33,6 +37,8 @@ mod editor_crop;
 mod editor_edits;
 mod editor_export;
 mod editor_hover_bench;
+mod editor_latency;
+mod editor_latency_bench;
 #[cfg(target_os = "linux")]
 mod editor_modal;
 mod editor_panels;
@@ -53,6 +59,7 @@ mod import;
 mod installer;
 mod jpeg_thumbnail;
 mod library;
+mod live_draw;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
@@ -65,6 +72,7 @@ mod main_window;
 mod media_access;
 mod menus;
 mod mode_select_window;
+mod notifications;
 mod onboarding_audio;
 mod onboarding_doodles;
 mod onboarding_window;
@@ -86,6 +94,7 @@ mod presets;
 mod style_presets;
 mod project_save;
 mod recording;
+mod recordings_overlay;
 mod screenshot;
 mod screenshot_annotations;
 mod screenshot_crop;
@@ -99,6 +108,7 @@ mod sign_in;
 mod single_instance;
 #[cfg(debug_assertions)]
 mod snapshot;
+mod startup;
 mod store;
 mod target_overlay;
 mod target_thumbnails;
@@ -108,6 +118,7 @@ mod transcript;
 mod transcription;
 mod tray;
 mod ui;
+mod unused_media;
 mod updates;
 mod upload;
 mod foreign_window;
@@ -293,6 +304,10 @@ fn app_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() {
+    // A copy of Cap started to self-test a hardware H264 encoder runs only
+    // that test and exits, before logging, crash capture or single-instance.
+    cap_enc_ffmpeg::isolated_self_test::run_child_or_register_host();
+
     #[cfg(target_os = "linux")]
     if let Some(threads) = cap_utils::linux_runtime::llvmpipe_thread_count() {
         // Mesa counts host CPUs inside containers; apply the process limit before logging starts threads.
@@ -336,7 +351,7 @@ fn main() {
         std::process::exit(status);
     }
 
-    let _log_guard = init_logging();
+    startup::begin(init_logging());
     crash_capture::install(&diagnostics::logs_dir());
     #[cfg(target_os = "linux")]
     if let Some(wayland_display) = stale_wayland_display {
@@ -477,11 +492,10 @@ fn main() {
                     move |window, cx| cx.new(|cx| MainWindow::new(session, window, cx))
                 },
             )
-            .inspect_err(|error| tracing::error!("failed to open the main window: {error:#}"));
-        let Ok(window_handle) = window_handle else {
-            cx.quit();
-            return;
-        };
+            .unwrap_or_else(|error| {
+                startup::fail(format!("The main window could not be opened: {error:#}"))
+            });
+        startup::finished();
 
         cx.on_app_quit(|_| async {
             crash_capture::mark_clean_exit();
@@ -512,6 +526,7 @@ fn main() {
         app_windows::schedule_launch_render_warmup(cx);
         upload::queue::init(cx);
         upload::instant_cleanup::init(cx);
+        automation::init(cx);
 
         // The app menu (and with it ⌘W/⌘M/⌘Q) and the status-bar item. Both
         // reach into the window registry, so they come after it -- and the menu
@@ -775,19 +790,31 @@ fn main() {
             }
         }
 
-        // `CAP_GPUI_AUTO_HOTKEY=<store key>`: run a hotkey action's dispatch
-        // arm (e.g. `screenshotDisplay`) as if the OS shortcut fired.
-        if let Ok(action) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
-            && !action.is_empty()
+        // `CAP_GPUI_AUTO_OVERLAY_CARD=<path-to-.cap>`: show that recording's
+        // card in the recordings overlay, as the end of a Studio recording
+        // does, so a test can start an overlay action on a project that is
+        // also open in the editor.
+        if cfg!(debug_assertions)
+            && let Some(path) = std::env::var_os("CAP_GPUI_AUTO_OVERLAY_CARD")
         {
-            let action = action.clone();
+            crate::recordings_overlay::show_studio_recording(path.into(), cx);
+        }
+
+        // `CAP_GPUI_AUTO_HOTKEY=<store key>[,<store key>...]`: run hotkey
+        // actions' dispatch arms (e.g. `screenshotDisplay`) as if the OS
+        // shortcuts fired, two seconds apart.
+        if let Ok(actions) = std::env::var("CAP_GPUI_AUTO_HOTKEY")
+            && !actions.is_empty()
+        {
             cx.spawn(async move |cx| {
-                // Give enumeration and the first paint the same beat the
-                // other harness hooks give them.
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(2))
-                    .await;
-                cx.update(|cx| hotkeys::dispatch_for_harness(&action, cx));
+                for action in actions.split(',').map(str::trim) {
+                    // Give enumeration and the first paint the same beat the
+                    // other harness hooks give them.
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(2))
+                        .await;
+                    cx.update(|cx| hotkeys::dispatch_for_harness(action, cx));
+                }
             })
             .detach();
         }
@@ -805,6 +832,12 @@ fn main() {
                     "CAP_GPUI_AUTO_SCREENSHOT_EDITOR: no screenshot .cap to open"
                 ),
             }
+        }
+
+        // `CAP_GPUI_AUTO_IMPORT_AUDIO=<file>`: import a sound file as an
+        // audio-only project and open it, as the Import picker does.
+        if let Some(path) = std::env::var_os("CAP_GPUI_AUTO_IMPORT_AUDIO") {
+            import::import_audio_from_path(std::path::PathBuf::from(path), cx);
         }
 
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4` / `screenshot`: arm
@@ -843,6 +876,7 @@ fn main() {
         }
     });
     runtime.shutdown_background();
+    startup::flush_log();
 }
 
 #[cfg(all(

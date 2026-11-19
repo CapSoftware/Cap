@@ -35,11 +35,14 @@ const FORMATTED: &[&str] = &[
     "settings.sidebar.restart_to_update",
     "settings.shortcuts.saved",
     "settings.shortcuts.saved_moved",
+    "settings.shortcuts.conflict",
+    "settings.shortcuts.shared",
     "settings.cli.load_failed",
     "settings.cli.installs_command",
     "settings.cli.path_missing",
     "settings.transcription.count",
     "settings.feedback.diagnostic.confirm_body",
+    "settings.feedback.diagnostic.duration_option",
     "settings.changelog.version",
     "settings.integrations.managed_by",
     "settings.integrations.s3.guide_intro",
@@ -112,6 +115,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::recordings::failed(), "Recording failed"),
         (tr::settings::recordings::open_link(), "Open link"),
+        (tr::settings::recordings::save_audio(), "Save Audio"),
         (tr::settings::recordings::edit(), "Edit"),
         (tr::settings::recordings::retry_upload(), "Retry upload"),
         (
@@ -242,7 +246,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::options::post_studio::open_editor(),
             "Open editor",
         ),
-        (tr::settings::options::post_studio::show_cap(), "Show Cap"),
+        (
+            tr::settings::options::post_studio::show_overlay(),
+            "Show in overlay",
+        ),
         (
             tr::settings::options::post_studio::do_nothing(),
             "Do nothing",
@@ -363,12 +370,12 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Edit right away",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap(),
-            "Show Cap",
+            tr::settings::shortcuts::outcome::studio_show_overlay(),
+            "Show overlay",
         ),
         (
-            tr::settings::shortcuts::outcome::studio_show_cap_hint(),
-            "Back to the recorder",
+            tr::settings::shortcuts::outcome::studio_show_overlay_hint(),
+            "Copy, share or export",
         ),
         (
             tr::settings::shortcuts::outcome::studio_do_nothing(),
@@ -488,6 +495,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
         (tr::settings::shortcuts::label::add_marker(), "Add marker"),
+        (
+            tr::settings::shortcuts::label::toggle_drawing(),
+            "Draw on screen",
+        ),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),
@@ -519,9 +530,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Another app or the system already uses this shortcut. Click to choose a different one.",
         ),
         (tr::settings::shortcuts::type_shortcut(), "Type shortcut…"),
+        (tr::settings::shortcuts::not_set(), "Not set"),
+        (tr::settings::shortcuts::replace(), "Replace"),
         (
-            tr::settings::shortcuts::record_shortcut(),
-            "Record shortcut",
+            tr::settings::shortcuts::label::start_selected(),
+            "Start in selected mode",
         ),
         (tr::settings::cli::title(), "Command Line"),
         (
@@ -668,6 +681,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Which pipeline to test. Both runs the studio leg and then the instant one.",
         ),
         (
+            tr::settings::feedback::diagnostic::duration_label(),
+            "Test duration",
+        ),
+        (
+            tr::settings::feedback::diagnostic::duration_description(),
+            "Longer runs are more sensitive to slow drift.",
+        ),
+        (
             tr::settings::feedback::diagnostic::mic_label(),
             "Test microphone",
         ),
@@ -756,6 +777,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::license::key(), "License Key"),
         (tr::settings::license::expires(), "Expires"),
         (tr::settings::license::deactivate(), "Deactivate License"),
+        (tr::settings::license::deactivating(), "Deactivating..."),
+        (
+            tr::settings::license::deactivate_failed(),
+            "Couldn't deactivate your license. Check your connection and try again.",
+        ),
         (tr::settings::license::have_key(), "Have a license key?"),
         (tr::settings::license::placeholder(), "License key"),
         (tr::settings::license::activating(), "Activating..."),
@@ -934,7 +960,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::title(), "Automations"),
         (
             tr::settings::automations::description(),
-            "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet.",
+            "Rules are shared with the Cap CLI. Cap runs enabled rules automatically.",
         ),
         (tr::settings::automations::templates_title(), "Templates"),
         (
@@ -988,11 +1014,31 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::automations::delete(), "Delete"),
         (
             tr::settings::automations::dangerous(),
-            "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust.",
+            "This automation runs commands or sends network requests with your permissions. Only use values you trust.",
         ),
         (
             tr::settings::automations::compatibility_checked(),
-            "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run.",
+            "Compatibility checked: every action in this automation runs in Cap. No actions were run.",
+        ),
+        (
+            tr::settings::automations::action_unsupported(),
+            "Cap doesn't run this action yet, so it is skipped.",
+        ),
+        (
+            tr::settings::automations::delete_guarded(),
+            "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept.",
+        ),
+        (
+            tr::settings::automations::delete_needs_copy(),
+            "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step.",
+        ),
+        (
+            tr::settings::automations::notify_needs_setting(),
+            "Shows only while System notifications is on in General settings.",
+        ),
+        (
+            tr::settings::automations::compatibility_unsupported(),
+            "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run.",
         ),
         (
             tr::settings::automations::condition_never_matches(),
@@ -1504,6 +1550,14 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
         tr::settings::shortcuts::saved_moved(&keys, effect, from),
         moved
     );
+    assert_eq!(
+        tr::settings::shortcuts::conflict(from),
+        format!("Already used by {from}.")
+    );
+    assert_eq!(
+        tr::settings::shortcuts::shared(from),
+        format!("Same keys as {from}, so both run.")
+    );
 
     let error = "permission denied".to_string();
     assert_eq!(
@@ -1554,6 +1608,13 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
             crate::diagnostics::DEFAULT_DURATION_SECS
         )
     );
+
+    for seconds in crate::diagnostics::DURATION_CHOICES_SECS {
+        assert_eq!(
+            tr::settings::feedback::diagnostic::duration_option(*seconds),
+            format!("{seconds} seconds")
+        );
+    }
 
     let date = "8/17/2026".to_string();
     assert_eq!(

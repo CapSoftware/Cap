@@ -1,3 +1,5 @@
+import { isLocalOrigin } from "./infra-embed-ancestors";
+
 export type AllowedOrigin =
 	| { ok: true; origin: string }
 	| { ok: false; message: string };
@@ -55,4 +57,16 @@ export function normalizeAllowedOrigin(input: string): AllowedOrigin {
 	}
 
 	return { ok: true, origin: url.origin };
+}
+
+// The list decides which sites may frame the embed, and frame-ancestors only
+// honours https sites here, plus localhost for testing.
+export function normalizeEmbedOrigin(input: string): AllowedOrigin {
+	const allowed = normalizeAllowedOrigin(input);
+	if (!allowed.ok) return allowed;
+	const url = new URL(allowed.origin);
+	if (url.protocol === "https:" || isLocalOrigin(url)) return allowed;
+	return refuse(
+		"Only https sites can embed your player. Enter one like https://myshop.com.",
+	);
 }

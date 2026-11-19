@@ -80,6 +80,13 @@ describe("classifyHostLiteral", () => {
 		["[::ffff:a9fe:a9fe]", "reserved"],
 		["[64:ff9b::a9fe:a9fe]", "reserved"],
 		["[2002:a9fe:a9fe::1]", "reserved"],
+		["168.63.129.16", "reserved"],
+		["168.63.129.17", "public"],
+		["[::ffff:168.63.129.16]", "reserved"],
+		["[::ffff:0:a9fe:a9fe]", "reserved"],
+		["[::ffff:0:10.0.0.1]", "private"],
+		["[::ffff:0:127.0.0.1]", "private"],
+		["[::ffff:0:8.8.8.8]", "public"],
 	] as const)("%s is %s", (host, expected) => {
 		expect(classifyHostLiteral(host)).toBe(expected);
 	});

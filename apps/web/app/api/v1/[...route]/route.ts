@@ -73,7 +73,6 @@ import {
 	decodeAgentCursor,
 	encodeAgentCursor,
 	escapeAgentLikePattern,
-	isAgentHttpUrl,
 	normalizeAgentMetadata,
 	parseAgentDate,
 	parseAgentLimit,
@@ -130,7 +129,14 @@ import {
 	logCustomStorageAttempt,
 	reserveCustomStorageSave,
 } from "@/lib/custom-storage-policy";
-import { developerCreditsProductId } from "@/lib/developer-credits-product";
+import {
+	DEVELOPER_APP_LIMIT_MESSAGE,
+	developerAppCreationLimited,
+	developerAppLogoUrl,
+	developerAppName,
+	developerKeyRotationLimited,
+	reserveDeveloperAppSlot,
+} from "@/lib/developer-app-limits";
 import { developerIdFromKey } from "@/lib/developer-ids";
 import { hashKey } from "@/lib/developer-key-hash";
 import {
@@ -144,30 +150,53 @@ import {
 } from "@/lib/developer-transcript-store";
 import {
 	isTranscriptStatus,
+	TRANSCRIPT_BUSY_RETRY_SECONDS,
 	toAgentDeveloperTranscript,
 } from "@/lib/developer-transcripts";
 import { toAgentDeveloperVideo } from "@/lib/developer-video-api";
+import { cancelDeveloperVideoEncodes } from "@/lib/developer-video-cancel";
 import { redriveDeveloperVideoProcessing } from "@/lib/developer-video-start";
 import { developerVideoRedrive } from "@/lib/developer-video-state";
 import {
 	completeDeveloperVideoUpload,
 	createDeveloperVideoUpload,
 } from "@/lib/developer-video-upload";
-import { startAiGeneration } from "@/lib/generate-ai";
+import {
+	chargesProcessingRerun,
+	isAiGenerationRerun,
+	startAiGeneration,
+} from "@/lib/generate-ai";
 import { canUseInfra } from "@/lib/infra-access";
 import { autoTopUpSettingsError } from "@/lib/infra-auto-top-up";
-import { normalizeAllowedOrigin } from "@/lib/infra-domain";
+import {
+	CREDIT_CHECKOUT_METADATA_TYPE,
+	creditCheckoutSessionParams,
+} from "@/lib/infra-credit-checkout";
+import { normalizeEmbedOrigin } from "@/lib/infra-domain";
+import {
+	settleFirstMonthAtDelete,
+	settleFirstMonthsForDeletedApp,
+} from "@/lib/infra-storage-minimum";
+import {
+	TOP_UP_MAX_CENTS,
+	TOP_UP_MIN_CENTS,
+	TOP_UP_RANGE_TEXT,
+} from "@/lib/infra-top-up";
 import { COMPLETION_IN_PROGRESS } from "@/lib/infra-upload";
 import { resolveLoomDownload } from "@/lib/loom-csv-import";
 import { probeVideoViaMediaServer } from "@/lib/media-client";
 import { provisionOrganizationInvitee } from "@/lib/organization-provisioning";
-import { organizationSettingsKeepingLinkOverride } from "@/lib/organization-settings-write";
+import { organizationSettingsKeepingRowOwnedKeys } from "@/lib/organization-settings-write";
 import {
 	canChangeOrganizationMemberRole,
 	canRemoveOrganizationMember,
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { normalizePlaybackSpeed } from "@/lib/playback-speed";
+import {
+	PROCESSING_RETRY_WINDOW_MS,
+	processingRetryLimited,
+} from "@/lib/processing-retry-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import {
 	blockedS3EndpointMessage,
@@ -415,12 +444,12 @@ const temporarilyUnavailable = (
 		requestId,
 	});
 
-const rateLimited = (requestId: string) =>
+const rateLimited = (requestId: string, retryAfterMs = 60_000) =>
 	new Agent.AgentRateLimitedError({
 		message: "Too many requests. Try again later",
 		code: "RATE_LIMITED",
 		retryable: true,
-		retryAfterMs: 60_000,
+		retryAfterMs,
 		requestId,
 	});
 
@@ -459,6 +488,15 @@ const developerMediaFailure = (
 					...commonError(requestId, failure.message),
 					code: "CONFLICT",
 				});
+	}
+	if (failure.status === 429) {
+		return new Agent.AgentRateLimitedError({
+			message: `${failure.message}. Wait for one to finish, then retry.`,
+			code: "RATE_LIMITED",
+			retryable: true,
+			retryAfterMs: TRANSCRIPT_BUSY_RETRY_SECONDS * 1000,
+			requestId,
+		});
 	}
 	if (failure.status === 503) {
 		return temporarilyUnavailable(requestId, failure.message, 5_000);
@@ -1240,6 +1278,15 @@ const capabilityFailure = (
 			return forbidden(requestId);
 	}
 };
+
+const requestHeaders = Effect.gen(function* () {
+	const request = yield* HttpServerRequest.HttpServerRequest;
+	const headers = new Headers();
+	for (const [name, value] of Object.entries(request.headers)) {
+		headers.set(name, value);
+	}
+	return headers;
+});
 
 const requestIdempotencyKey = Effect.gen(function* () {
 	const request = yield* HttpServerRequest.HttpServerRequest;
@@ -3908,14 +3955,20 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireScope(principal, "developer:secrets", requestId);
-						const name = payload.name.trim();
-						if (name.length === 0 || name.length > 255) {
-							return yield* badRequest(
-								requestId,
-								"Developer app name is invalid",
-							);
-						}
+						const named = developerAppName(payload.name);
+						if (!named.ok) return yield* badRequest(requestId, named.message);
+						const name = named.name;
+						const headers = yield* requestHeaders;
 						const result = yield* runAgentMutation({
+							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										developerAppCreationLimited(principal.id, headers),
+									)
+								) {
+									return yield* rateLimited(requestId);
+								}
+							}),
 							principal,
 							operation: "create_developer_app",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -3925,6 +3978,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								DeveloperKeyOperationResult,
 							),
 							execute: async (tx) => {
+								if (!(await reserveDeveloperAppSlot(tx, principal.id))) {
+									return {
+										state: "conflict",
+										message: DEVELOPER_APP_LIMIT_MESSAGE,
+									};
+								}
 								const appId = nanoId();
 								const publicKeyId = nanoId();
 								const secretKeyId = nanoId();
@@ -3998,21 +4057,22 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								"At least one developer app field is required",
 							);
 						}
-						const name = payload.name?.trim();
-						const logoUrl =
-							payload.logoUrl === null ? null : payload.logoUrl?.trim();
-						if (
-							(name !== undefined &&
-								(name.length === 0 || name.length > 255)) ||
-							(logoUrl !== undefined &&
-								logoUrl !== null &&
-								(logoUrl.length > 1024 || !isAgentHttpUrl(logoUrl)))
-						) {
-							return yield* badRequest(
-								requestId,
-								"Developer app fields are invalid",
-							);
+						const named =
+							payload.name === undefined
+								? undefined
+								: developerAppName(payload.name);
+						if (named && !named.ok) {
+							return yield* badRequest(requestId, named.message);
 						}
+						const name = named?.name;
+						const logo =
+							payload.logoUrl === undefined
+								? undefined
+								: developerAppLogoUrl(payload.logoUrl);
+						if (logo && !logo.ok) {
+							return yield* badRequest(requestId, logo.message);
+						}
+						const logoUrl = logo?.logoUrl;
 						return yield* runAgentMutation({
 							principal,
 							operation: "update_developer_app",
@@ -4069,7 +4129,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
-						return yield* runAgentMutation({
+						let deletedAt: Date | null = null;
+						const response = yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_app",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4091,7 +4152,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!app) return { state: "not_found" };
-								const now = new Date();
+								const now = new Date(Math.floor(Date.now() / 1000) * 1000);
 								await tx
 									.update(Db.developerApiKeys)
 									.set({ revokedAt: now })
@@ -4105,6 +4166,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.update(Db.developerApps)
 									.set({ deletedAt: now, updatedAt: now })
 									.where(eq(Db.developerApps.id, path.appId));
+								await tx
+									.update(Db.developerVideos)
+									.set({ deletedAt: now, updatedAt: now })
+									.where(
+										and(
+											eq(Db.developerVideos.appId, path.appId),
+											isNull(Db.developerVideos.deletedAt),
+										),
+									);
+								deletedAt = now;
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -4117,6 +4188,19 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						if (deletedAt) {
+							const appDeletedAt = deletedAt;
+							yield* Effect.promise(() =>
+								settleFirstMonthsForDeletedApp(path.appId, appDeletedAt),
+							);
+							yield* Effect.promise(() =>
+								cancelDeveloperVideoEncodes({
+									appId: path.appId,
+									deletedAt: appDeletedAt,
+								}),
+							);
+						}
+						return response;
 					}),
 					requestId,
 				);
@@ -4128,7 +4212,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireAgentWrites(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
-						const allowed = normalizeAllowedOrigin(payload.domain);
+						const allowed = normalizeEmbedOrigin(payload.domain);
 						if (!allowed.ok) {
 							return yield* badRequest(requestId, allowed.message);
 						}
@@ -4252,7 +4336,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						yield* requireUserConfirmedRequest(requestId);
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:secrets", requestId);
+						const headers = yield* requestHeaders;
 						const result = yield* runAgentMutation({
+							admit: Effect.gen(function* () {
+								if (
+									yield* Effect.promise(() =>
+										developerKeyRotationLimited(principal.id, headers),
+									)
+								) {
+									return yield* rateLimited(requestId);
+								}
+							}),
 							principal,
 							operation: "rotate_developer_keys",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4460,12 +4554,12 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						}
 						if (
 							!Number.isSafeInteger(payload.amountCents) ||
-							payload.amountCents < 500 ||
-							payload.amountCents > 100_000
+							payload.amountCents < TOP_UP_MIN_CENTS ||
+							payload.amountCents > TOP_UP_MAX_CENTS
 						) {
 							return yield* badRequest(
 								requestId,
-								"Developer credit purchase must be between $5 and $1,000",
+								`Developer credit purchase must be from ${TOP_UP_RANGE_TEXT}`,
 							);
 						}
 						return yield* runAgentExternalMutation({
@@ -4482,6 +4576,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										db
 											.select({
 												id: Db.developerCreditAccounts.id,
+												appName: Db.developerApps.name,
 											})
 											.from(Db.developerApps)
 											.innerJoin(
@@ -4515,22 +4610,17 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									const session = yield* Effect.tryPromise(() =>
 										stripe().checkout.sessions.create(
 											{
-												customer: customerId,
-												line_items: [
-													{
-														price_data: {
-															currency: "usd",
-															product: developerCreditsProductId(),
-															unit_amount: payload.amountCents,
-														},
-														quantity: 1,
-													},
-												],
-												mode: "payment",
+												...creditCheckoutSessionParams({
+													customerId,
+													accountId: account.id,
+													appName: account.appName,
+													amountCents: payload.amountCents,
+													receiptEmail: principal.email,
+												}),
 												success_url: `${serverEnv().WEB_URL}/cli/complete?developerCredits=success`,
 												cancel_url: `${serverEnv().WEB_URL}/cli/complete?developerCredits=cancelled`,
 												metadata: {
-													type: "developer_credits",
+													type: CREDIT_CHECKOUT_METADATA_TYPE,
 													appId: path.appId,
 													accountId: account.id,
 													amountCents: String(payload.amountCents),
@@ -4568,7 +4658,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 						const principal = yield* Agent.AgentPrincipal;
 						yield* requireScope(principal, "developer:write", requestId);
 						yield* requireDeveloperAppOwner(principal, path.appId, requestId);
-						return yield* runAgentMutation({
+						let deleted = false;
+						const response = yield* runAgentMutation({
 							principal,
 							operation: "delete_developer_video",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -4601,6 +4692,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.update(Db.developerVideos)
 									.set({ deletedAt: now, updatedAt: now })
 									.where(eq(Db.developerVideos.id, path.videoId));
+								deleted = true;
 								return {
 									state: "success",
 									response: mutationResponse(
@@ -4613,6 +4705,16 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								};
 							},
 						});
+						yield* Effect.promise(() => settleFirstMonthAtDelete(path.videoId));
+						if (deleted) {
+							yield* Effect.promise(() =>
+								cancelDeveloperVideoEncodes({
+									appId: path.appId,
+									videoId: path.videoId,
+								}),
+							);
+						}
+						return response;
 					}),
 					requestId,
 				);
@@ -5350,7 +5452,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								await tx
 									.update(Db.organizations)
 									.set({
-										settings: organizationSettingsKeepingLinkOverride(next),
+										settings: organizationSettingsKeepingRowOwnedKeys(next),
 										updatedAt: now,
 									})
 									.where(eq(Db.organizations.id, path.organizationId));
@@ -7836,7 +7938,34 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 								);
 							}
 						}
+						// Reruns are judged from the video's current state. A new request is
+						// charged before the mutation, mirroring its conflict rules, so a
+						// refused request stores nothing. A replay of a saved request is not
+						// charged and never starts generation again on a failed video.
+						const metadata = normalizeAgentMetadata(row.metadata);
+						const chargesRerun = chargesProcessingRerun({
+							target: payload.target,
+							retry: payload.retry,
+							transcriptionStatus: row.transcriptionStatus,
+							metadata,
+						});
+						const headers = yield* requestHeaders;
+						let newRequest = false;
 						const state = yield* runAgentMutation({
+							admit: Effect.gen(function* () {
+								newRequest = true;
+								if (
+									chargesRerun &&
+									(yield* Effect.promise(() =>
+										processingRetryLimited(principal.id, headers),
+									))
+								) {
+									return yield* rateLimited(
+										requestId,
+										PROCESSING_RETRY_WINDOW_MS,
+									);
+								}
+							}),
 							principal,
 							operation: "process_cap",
 							idempotencyKey: yield* requestIdempotencyKey,
@@ -7934,7 +8063,10 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							if (!result.success) {
 								return yield* temporarilyUnavailable(requestId, result.message);
 							}
-						} else if (state.target !== "transcript") {
+						} else if (
+							state.target !== "transcript" &&
+							(newRequest || !isAiGenerationRerun(metadata))
+						) {
 							const result = yield* Effect.tryPromise(() =>
 								startAiGeneration(state.id, state.ownerId),
 							);

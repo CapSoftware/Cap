@@ -12,6 +12,21 @@ fn english_matches_the_literals_it_replaced() {
     let app_name = crate::menus::APP_NAME;
     let pairs: &[(&str, String)] = &[
         (tr::common::add(), "Add".into()),
+        (tr::editor::audio_only::add_visuals(), "Add Visuals".into()),
+        (
+            tr::editor::audio_only::body(),
+            "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video.".into(),
+        ),
+        (tr::editor::audio_only::export_audio(), "Export Audio".into()),
+        (tr::editor::audio_only::show_visuals(), "Show visuals".into()),
+        (tr::editor::audio_only::size_large(), "Large".into()),
+        (tr::editor::audio_only::size_medium(), "Medium".into()),
+        (tr::editor::audio_only::size_small(), "Small".into()),
+        (tr::editor::audio_only::style_bars(), "Bars".into()),
+        (tr::editor::audio_only::style_circle(), "Circle".into()),
+        (tr::editor::audio_only::style_wave(), "Wave".into()),
+        (tr::editor::audio_only::title(), "Audio only".into()),
+        (tr::editor::audio_only::visuals(), "Visuals".into()),
         (tr::common::cancel(), "Cancel".into()),
         (tr::common::ok(), "OK".into()),
         (tr::common::reset(), "Reset".into()),
@@ -296,6 +311,16 @@ fn english_matches_the_literals_it_replaced() {
         (
             tr::settings::general::recording::marker_sound::label(),
             "Play a sound for markers".into(),
+        ),
+        (
+            tr::settings::general::recording::keep_drawings::label(),
+            "Keep drawings on screen".into(),
+        ),
+        (
+            tr::settings::general::recording::keep_drawings::description(),
+            "Drawings stay until you clear them. When off, each one fades a few seconds \
+                             after you draw it."
+                .into(),
         ),
         (
             tr::settings::general::recording::marker_sound::description(),

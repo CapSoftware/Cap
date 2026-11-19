@@ -4,6 +4,11 @@ import { isValidStripePlanPriceId, stripe } from "@cap/utils";
 import type { NextRequest } from "next/server";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import { checkoutPath, planForPriceId } from "@/lib/checkout/plans";
+import {
+	createWithPromotion,
+	findPromotionCodeId,
+	promotionParams,
+} from "@/lib/checkout/promotion";
 import { guestReferralParams } from "@/lib/checkout/referral";
 import { parseCheckoutQuantity } from "@/lib/checkout-quantity";
 import { getCheckoutRedirectUrls } from "@/lib/mobile-checkout";
@@ -12,7 +17,7 @@ import { trackServerEvent } from "@/lib/server-analytics";
 
 export async function POST(request: NextRequest) {
 	console.log("Starting guest checkout process");
-	const { priceId, quantity, platform, hosted } = await request.json();
+	const { priceId, quantity, platform, hosted, promo } = await request.json();
 	const checkoutPlatform = platform === "mobile" ? "mobile" : "web";
 
 	console.log("Received guest checkout request:", { priceId, quantity });
@@ -43,7 +48,7 @@ export async function POST(request: NextRequest) {
 		customCheckoutEnabled()
 	) {
 		return Response.json(
-			{ url: checkoutPath({ plan, seats: safeQuantity }) },
+			{ url: checkoutPath({ plan, seats: safeQuantity, promo }) },
 			{ status: 200 },
 		);
 	}
@@ -65,18 +70,24 @@ export async function POST(request: NextRequest) {
 			checkoutPlatform,
 			serverEnv().WEB_URL,
 		);
-		const checkoutSession = await stripe().checkout.sessions.create({
-			line_items: [{ price: priceId, quantity: safeQuantity }],
-			mode: "subscription",
-			success_url: redirects.successUrl,
-			cancel_url: redirects.cancelUrl,
-			allow_promotion_codes: true,
-			...guestReferralParams(request.cookies.get(DUB_CLICK_ID_COOKIE)?.value),
-			metadata: {
-				platform: checkoutPlatform,
-				guestCheckout: "true",
-			},
-		});
+		const checkoutSession = await createWithPromotion(
+			await findPromotionCodeId(promo),
+			(promotionCodeId) =>
+				stripe().checkout.sessions.create({
+					line_items: [{ price: priceId, quantity: safeQuantity }],
+					mode: "subscription",
+					success_url: redirects.successUrl,
+					cancel_url: redirects.cancelUrl,
+					...promotionParams(promotionCodeId),
+					...guestReferralParams(
+						request.cookies.get(DUB_CLICK_ID_COOKIE)?.value,
+					),
+					metadata: {
+						platform: checkoutPlatform,
+						guestCheckout: "true",
+					},
+				}),
+		);
 
 		if (checkoutSession.url) {
 			console.log("Successfully created guest checkout session");

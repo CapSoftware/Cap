@@ -9,7 +9,10 @@ import {
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { sweepStaleDeveloperUploads } from "@/lib/developer-transcript-storage";
-import { expireStaleTranscripts } from "@/lib/developer-transcript-store";
+import {
+	expireStaleTranscripts,
+	reconcileDeletedVideoCaptions,
+} from "@/lib/developer-transcript-store";
 import { apiToHandler } from "@/lib/server";
 
 class Api extends HttpApi.make("DeveloperTranscriptsCleanupApi").add(
@@ -20,6 +23,8 @@ class Api extends HttpApi.make("DeveloperTranscriptsCleanupApi").add(
 					expired: Schema.Number,
 					redispatched: Schema.Number,
 					swept: Schema.Number,
+					captionsSynced: Schema.Number,
+					captionsFailed: Schema.Number,
 				}),
 			)
 			.addError(HttpApiError.Unauthorized)
@@ -46,7 +51,14 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					return yield* Effect.tryPromise(async () => {
 						const { expired, redispatched } = await expireStaleTranscripts();
 						const { deleted } = await sweepStaleDeveloperUploads(new Date());
-						return { expired, redispatched, swept: deleted };
+						const captions = await reconcileDeletedVideoCaptions();
+						return {
+							expired,
+							redispatched,
+							swept: deleted,
+							captionsSynced: captions.synced,
+							captionsFailed: captions.failed,
+						};
 					}).pipe(
 						Effect.tapError((error) =>
 							Effect.sync(() =>

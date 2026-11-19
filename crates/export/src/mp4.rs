@@ -220,6 +220,7 @@ impl Mp4ExportSettings {
         options: turbo::TurboOptions,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         let mut base = base.0;
         let on_progress = Arc::new(Mutex::new(on_progress));
         let user_cancellation = base
@@ -274,6 +275,7 @@ impl Mp4ExportSettings {
         base: ExporterBase,
         on_progress: impl FnMut(u32) -> bool + Send + 'static,
     ) -> Result<PathBuf, String> {
+        let _export_activity = cap_rendering::ExportActivity::begin();
         use cap_utils::operation_diagnostics::{Field, observe};
         observe(
             "export_mp4",
@@ -805,6 +807,7 @@ impl Mp4ExportSettings {
                 .iter()
                 .map(|s| RenderSegment {
                     cursor: s.cursor.clone(),
+                    hover_changes: s.hover_changes.clone(),
                     keyboard: s.keyboard.clone(),
                     decoders: s.decoders.clone(),
                     render_display: true,
@@ -1074,7 +1077,7 @@ fn nv12_from_rendered_frame(frame: Nv12RenderedFrame) -> ExportFrame {
 /// the stream stays gapless and strictly monotonic. The caller advances the
 /// cursor to `pts + samples`. Shared with the tests so they exercise this exact
 /// arithmetic rather than a re-implementation.
-fn audio_frame_budget(
+pub(crate) fn audio_frame_budget(
     frame_number: u64,
     sample_rate: u64,
     fps: u64,

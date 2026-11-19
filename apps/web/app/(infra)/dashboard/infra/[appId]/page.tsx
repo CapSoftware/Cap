@@ -1,8 +1,11 @@
 import clsx from "clsx";
 import Link from "next/link";
+import {
+	firstCreditOffersAddCredits,
+	lowBalanceText,
+} from "@/lib/infra-credit-prompts";
 import { infraAppPath } from "@/lib/infra-routes";
 import { getInfraBilling } from "@/lib/infra-standing";
-import { getAppStorageUsage } from "@/lib/infra-storage";
 import {
 	formatCharge,
 	formatCredits,
@@ -28,6 +31,7 @@ import { UploadDrop } from "../_components/upload-drop";
 import { LiveVideoStatus, WatchVideos } from "../_components/video-live";
 import {
 	getDeveloperAppVideos,
+	getInfraApiKeys,
 	getInfraProCredit,
 	getInfraStorageChargesSince,
 	infraPageMetadata,
@@ -56,20 +60,29 @@ export default async function InfraOverviewPage({
 	const { app } = await requireInfraApp(appId);
 	const monthStart = utcMonthStart(new Date());
 
-	const [usage, monthStorageCharges, recentVideos, proCredit, billing] =
+	const [monthStorageCharges, recentVideos, proCredit, billing, apiKeys] =
 		await Promise.all([
-			getAppStorageUsage(app.id),
 			app.creditAccount
 				? getInfraStorageChargesSince(app.creditAccount.id, monthStart)
 				: Promise.resolve(0),
 			getDeveloperAppVideos(app.id, { limit: 6 }),
 			getInfraProCredit(),
 			getInfraBilling(app.id),
+			getInfraApiKeys(app.id),
 		]);
 
+	const usage = billing.stored;
 	const balance = app.creditAccount?.balanceMicroCredits ?? 0;
-	const secretKey = app.apiKeys.find((k) => k.keyType === "secret");
+	const secretKey = apiKeys.find((k) => k.keyType === "secret");
 	const empty = recentVideos.length === 0;
+	const lowBalance = lowBalanceText({
+		hasAccount: !!app.creditAccount,
+		standing: billing.standing.state,
+		monthlyStorageMicroCredits: billing.stored.monthlyMicroCredits,
+		balanceMicroCredits: billing.admission.balanceMicroCredits,
+		requiredMicroCredits: billing.admission.requiredMicroCredits,
+		shortfallMicroCredits: billing.admission.shortfallMicroCredits,
+	});
 
 	return (
 		<>
@@ -93,6 +106,21 @@ export default async function InfraOverviewPage({
 				shortfallMicroCredits={billing.admission.shortfallMicroCredits}
 				action
 			/>
+
+			{lowBalance && (
+				<p
+					role="status"
+					className="m-0 max-w-[620px] text-pretty text-[13.5px] leading-[1.55] text-[rgba(232,236,244,0.58)]"
+				>
+					{lowBalance}{" "}
+					<Link
+						href={infraAppPath(app.id, "billing")}
+						className={clsx(TEXT_LINK, "text-[#E8ECF4]")}
+					>
+						Go to Billing
+					</Link>
+				</p>
+			)}
 
 			<Figures>
 				<Figure label="Credit balance" value={formatCredits(balance)} lead />
@@ -122,7 +150,14 @@ export default async function InfraOverviewPage({
 								the links that play it on your site.
 							</p>
 						</div>
-						<UploadDrop />
+						<UploadDrop
+							creditsLink={
+								!firstCreditOffersAddCredits({
+									balanceMicroCredits: balance,
+									proCreditStatus: proCredit.status,
+								})
+							}
+						/>
 						<FirstCredit
 							appId={app.id}
 							balanceMicroCredits={balance}

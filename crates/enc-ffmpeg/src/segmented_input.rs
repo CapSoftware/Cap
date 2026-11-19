@@ -425,9 +425,7 @@ impl SegmentedInput {
         }
         let input = unsafe { ffmpeg::format::context::Input::wrap(context) };
         let mut opened = Self { input, io };
-        let found = unsafe {
-            ffmpeg::ffi::avformat_find_stream_info(opened.input.as_mut_ptr(), ptr::null_mut())
-        };
+        let found = unsafe { crate::decode_limit::find_stream_info(opened.input.as_mut_ptr()) };
         opened.io.reader.check_interrupt();
         if let Some(error) = opened.io.reader.failure.take() {
             return Err(error.into());

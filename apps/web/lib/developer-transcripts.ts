@@ -4,6 +4,50 @@ import type {
 } from "@cap/database/schema";
 import { MICRO_CREDITS_PER_DOLLAR } from "@/lib/developer-pricing";
 
+// Cap's own key in a transcript's metadata, set once the video captions built
+// from it are in storage. It records whether the client's metadata was null,
+// so the client reads back exactly what it sent. Never shown to or taken from
+// a client.
+export const TRANSCRIPT_CAPTIONS_WRITTEN_KEY = "__capCaptionsWritten";
+
+type CaptionsWritten = { at: string; metadataWasNull: boolean };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function transcriptCaptionsWritten(
+	metadata: unknown,
+): CaptionsWritten | null {
+	if (!isRecord(metadata)) return null;
+	const marker = metadata[TRANSCRIPT_CAPTIONS_WRITTEN_KEY];
+	return isRecord(marker) && typeof marker.at === "string"
+		? { at: marker.at, metadataWasNull: marker.metadataWasNull === true }
+		: null;
+}
+
+export function withCaptionsWritten(
+	metadata: unknown,
+	at: Date,
+): Record<string, unknown> {
+	const client = transcriptPublicMetadata(metadata);
+	return {
+		...(client ?? {}),
+		[TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: {
+			at: at.toISOString(),
+			metadataWasNull: client === null,
+		},
+	};
+}
+
+export function transcriptPublicMetadata(
+	metadata: unknown,
+): Record<string, unknown> | null {
+	if (!isRecord(metadata)) return (metadata ?? null) as never;
+	if (!(TRANSCRIPT_CAPTIONS_WRITTEN_KEY in metadata)) return metadata;
+	const { [TRANSCRIPT_CAPTIONS_WRITTEN_KEY]: marker, ...client } = metadata;
+	return isRecord(marker) && marker.metadataWasNull === true ? null : client;
+}
+
 export const TRANSCRIPT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
 export const TRANSCRIPT_MAX_URL_BYTES = 2 * 1024 * 1024 * 1024;
 export const TRANSCRIPT_MAX_SPOOLED_URL_BYTES = 400 * 1024 * 1024;
@@ -14,6 +58,8 @@ export const TRANSCRIPT_UPLOAD_URL_TTL_SECONDS = 60 * 60;
 export const TRANSCRIPT_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60 * 1000;
 export const TRANSCRIPT_MAX_URL_LENGTH = 2_048;
 export const TRANSCRIPT_MAX_METADATA_BYTES = 8_192;
+export const TRANSCRIPT_MAX_CONCURRENT = 20;
+export const TRANSCRIPT_BUSY_RETRY_SECONDS = 15;
 
 export const TRANSCRIPT_STATUSES = [
 	"uploading",
@@ -165,7 +211,10 @@ export function serializeTranscript(
 		source:
 			row.sourceType === "url"
 				? { type: "url" as const, url: publicSourceUrl(row.sourceUrl) }
-				: { type: "upload" as const, url: null },
+				: row.sourceType === "video"
+					? { type: "video" as const, url: null }
+					: { type: "upload" as const, url: null },
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,
@@ -182,7 +231,7 @@ export function serializeTranscript(
 					}
 				: null,
 		userId: row.externalUserId,
-		metadata: row.metadata ?? null,
+		metadata: transcriptPublicMetadata(row.metadata),
 		createdAt: row.createdAt.toISOString(),
 		updatedAt: lastUpdate(row).toISOString(),
 		completedAt: iso(row.completedAt),
@@ -199,6 +248,7 @@ export function toAgentDeveloperTranscript(row: TranscriptSummaryRow) {
 		name: row.name,
 		sourceType: row.sourceType,
 		sourceUrl: publicSourceUrl(row.sourceUrl),
+		videoId: row.videoId ?? null,
 		durationSeconds: row.durationSeconds,
 		language: row.language,
 		wordCount: row.wordCount,

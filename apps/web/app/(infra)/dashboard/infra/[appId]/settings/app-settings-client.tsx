@@ -2,10 +2,11 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperApp } from "@/actions/developers/delete-app";
 import { updateDeveloperApp } from "@/actions/developers/update-app";
+import { DEVELOPER_APP_NAME_MAX_LENGTH } from "@/lib/developer-app-rules";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { INFRA_BASE_PATH } from "@/lib/infra-routes";
 import { formatCredits } from "@/lib/infra-usage";
@@ -24,12 +25,14 @@ export function AppSettingsClient({
 	environment: initialEnvironment,
 	balanceMicroCredits,
 	videoCount,
+	domains,
 }: {
 	appId: string;
 	name: string;
 	environment: Environment;
 	balanceMicroCredits: number;
 	videoCount: number;
+	domains: ReactNode;
 }) {
 	const router = useRouter();
 	const nameId = useId();
@@ -89,7 +92,7 @@ export function AppSettingsClient({
 							<Input
 								id={nameId}
 								value={name}
-								maxLength={255}
+								maxLength={DEVELOPER_APP_NAME_MAX_LENGTH}
 								onChange={(e) => setName(e.target.value)}
 								className="max-w-[420px]"
 							/>
@@ -105,6 +108,8 @@ export function AppSettingsClient({
 						</Button>
 					</form>
 				</Split>
+
+				{domains}
 
 				<Split
 					title="Delete app"
@@ -137,7 +142,7 @@ export function AppSettingsClient({
 						) : (
 							"This app has no credit left to lose."
 						)}{" "}
-						This cannot be undone here.
+						This cannot be undone.
 					</>
 				}
 				confirmLabel="Delete app"

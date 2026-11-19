@@ -1,3 +1,4 @@
+import { developerVideoTakenDownSql } from "@cap/database/developer-video-takedown";
 import * as Db from "@cap/database/schema";
 import {
 	type Folder,
@@ -7,7 +8,7 @@ import {
 	type User,
 	type Video,
 } from "@cap/web-domain";
-import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import { Database } from "./Database.ts";
 
@@ -29,6 +30,7 @@ const developerVideoColumns = {
 	renditions: Db.developerVideos.renditions,
 	transcriptionStatus: Db.developerVideos.transcriptionStatus,
 	processing: Db.developerVideos.processing,
+	takenDown: developerVideoTakenDownSql(),
 	createdAt: Db.developerVideos.createdAt,
 	updatedAt: Db.developerVideos.updatedAt,
 };
@@ -649,7 +651,15 @@ export class AgentManagement extends Effect.Service<AgentManagement>()(
 											Db.developerDailyStorageSnapshots.totalDurationMinutes,
 									})
 									.from(Db.developerDailyStorageSnapshots)
-									.where(eq(Db.developerDailyStorageSnapshots.appId, appId))
+									.where(
+										and(
+											eq(Db.developerDailyStorageSnapshots.appId, appId),
+											gt(
+												Db.developerDailyStorageSnapshots.totalDurationMinutes,
+												0,
+											),
+										),
+									)
 									.orderBy(desc(Db.developerDailyStorageSnapshots.snapshotDate))
 									.limit(1),
 							]),

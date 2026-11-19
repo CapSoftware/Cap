@@ -7,8 +7,13 @@ import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import { developerApiKeys, developerApps } from "@cap/database/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	DEVELOPER_KEY_ROTATION_RATE_MESSAGE,
+	developerKeyRotationLimited,
+} from "@/lib/developer-app-limits";
 import { hashKey } from "@/lib/developer-key-hash";
 import { canUseInfra } from "@/lib/infra-access";
+import { actionFailure } from "@/lib/infra-action-result";
 
 export async function regenerateDeveloperKeys(appId: string) {
 	const user = await getCurrentUser();
@@ -27,6 +32,10 @@ export async function regenerateDeveloperKeys(appId: string) {
 		.limit(1);
 
 	if (!app) throw new Error("App not found");
+
+	if (await developerKeyRotationLimited(user.id)) {
+		return actionFailure(DEVELOPER_KEY_ROTATION_RATE_MESSAGE);
+	}
 
 	const publicKeyRaw = `cpk_${nanoIdLong()}`;
 	const secretKeyRaw = `csk_${nanoIdLong()}`;

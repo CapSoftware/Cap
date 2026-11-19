@@ -11,7 +11,15 @@ import { buildEnv, serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { type NextRequest, NextResponse, userAgent } from "next/server";
-import { agentMarkdownResponse } from "@/lib/agent-markdown";
+import {
+	agentMarkdownResponse,
+	DOCS_MARKDOWN_ROUTE,
+	docsMarkdownSlug,
+	INFRA_MARKDOWN_ROUTE,
+	isInfraMarkdownRequest,
+} from "@/lib/agent-markdown";
+import { restrictEmbedFraming } from "@/lib/developer-embed-origins";
+import { embedPlaybackId } from "@/lib/infra-embed-ancestors";
 import { INFRA_PATH_HEADER, isInfraPathname } from "@/lib/infra-routes";
 import { getShareIframeRedirectUrl } from "@/lib/share-iframe-navigation";
 
@@ -145,7 +153,11 @@ export async function proxy(request: NextRequest) {
 		return rememberReferralClick(request, setFrameHeaders(NextResponse.next()));
 	}
 
-	const response = await route(request);
+	const routed = await route(request);
+	const embedId = embedPlaybackId(path);
+	const response = embedId
+		? await restrictEmbedFraming(embedId, routed)
+		: routed;
 	if (path.startsWith(DEVELOPER_VIDEO_PREFIX)) return response;
 	return rememberReferralClick(
 		request,
@@ -211,6 +223,22 @@ async function route(request: NextRequest) {
 	}
 
 	if (mainOrigins.some((d) => url.origin.startsWith(d))) {
+		const docsSlug =
+			request.method === "GET" || request.method === "HEAD"
+				? docsMarkdownSlug(path, request.headers.get("accept"))
+				: null;
+		if (docsSlug) {
+			return NextResponse.rewrite(
+				new URL(`${DOCS_MARKDOWN_ROUTE}/${docsSlug}`, url.origin),
+			);
+		}
+		if (
+			(request.method === "GET" || request.method === "HEAD") &&
+			isInfraMarkdownRequest(path, request.headers.get("accept"))
+		) {
+			return NextResponse.rewrite(new URL(INFRA_MARKDOWN_ROUTE, url.origin));
+		}
+
 		const markdown = await agentMarkdownResponse(request, { isPublicAsset });
 		if (!markdown) return serve(request);
 		return new NextResponse(markdown.body, {

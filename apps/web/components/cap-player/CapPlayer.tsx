@@ -9,6 +9,16 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	activeCueText,
+	type CapPlayerCaption,
+	initialCaptions,
+	loadCaptionsFile,
+	releaseCaptionsFiles,
+	sameCaptionsKey,
+	toggledCaptions,
+} from "./captions";
+import { connectMessages, qualityKey } from "./messages";
 import styles from "./player.module.css";
 import {
 	type Attachment,
@@ -19,6 +29,7 @@ import {
 	resolutionLabel,
 } from "./source";
 
+export type { CapPlayerCaption } from "./captions";
 export { resolutionLabel } from "./source";
 
 export type CapPlayerControl =
@@ -26,6 +37,7 @@ export type CapPlayerControl =
 	| "time"
 	| "speed"
 	| "quality"
+	| "captions"
 	| "pip"
 	| "fullscreen";
 
@@ -39,9 +51,13 @@ export interface CapPlayerProps {
 	loop?: boolean;
 	controls?: boolean;
 	startAt?: number;
+	captions?: readonly CapPlayerCaption[];
+	showCaptions?: boolean;
 	focusOnMount?: boolean;
 	accentColor?: string;
 	hideControls?: readonly CapPlayerControl[];
+	keyboard?: boolean;
+	events?: boolean;
 	speeds?: readonly number[];
 	className?: string;
 	style?: CSSProperties;
@@ -57,12 +73,19 @@ const VOLUME_STEP = 0.05;
 const VOLUME_KEY = "cap-player-volume";
 const DEFAULT_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const MENU_CLEARANCE = 64;
-const MENU_MIN_HEIGHT = 76;
+const SHEET_INSET = 6;
+const START_CLEARANCE = 4;
 const HOVER_INTENT_MS = 100;
 const PLAYS = '[data-action="toggle"], [data-action="surface"]';
 const NO_CONTROLS: readonly CapPlayerControl[] = [];
+const NO_CAPTIONS: readonly CapPlayerCaption[] = [];
+const CAPTIONS_OFF = -1;
 
-type MenuName = "speed" | "quality";
+type MenuName = "speed" | "quality" | "captions";
+
+type NativeViewVideo = HTMLVideoElement & {
+	webkitDisplayingFullscreen?: boolean;
+};
 
 export const clock = (seconds: number) => {
 	const whole = Math.max(0, Math.floor(seconds));
@@ -115,6 +138,13 @@ const PlayIcon = () => (
 	</Icon>
 );
 
+const ReplayIcon = () => (
+	<Icon>
+		<path d="M2.8 8a5.2 5.2 0 1 0 1.6-3.7" {...STROKE} strokeWidth={1.6} />
+		<path d="M4.4 1.6v2.8h2.8" {...STROKE} strokeWidth={1.6} />
+	</Icon>
+);
+
 const PauseIcon = () => (
 	<Icon>
 		<rect x="3.5" y="2.5" width="3.2" height="11" rx="0.8" />
@@ -160,6 +190,16 @@ const PipIcon = () => (
 	</Icon>
 );
 
+const CaptionsIcon = () => (
+	<Icon>
+		<rect x="1.8" y="3" width="12.4" height="10" rx="2" {...STROKE} />
+		<path
+			d="M7.1 6.7a1.9 1.9 0 1 0 0 2.6m4.6-2.6a1.9 1.9 0 1 0 0 2.6"
+			{...STROKE}
+		/>
+	</Icon>
+);
+
 const CheckIcon = () => (
 	<Icon>
 		<path d="m3.5 8.4 3 3 6-6.6" {...STROKE} strokeWidth={1.5} />
@@ -172,6 +212,33 @@ interface MenuItem {
 	hint?: string;
 	checked: boolean;
 }
+
+// A list taller than the room above the bar becomes a sheet over the player,
+// so a short phone player shows every row instead of a small scroll box. The
+// sheet is only as tall as its rows, centred, and scrolls from the top when
+// even the whole player is too short. It is placed again whenever the player
+// changes size, since it is positioned in pixels from the open player.
+const placeMenu = (menu: HTMLElement) => {
+	const player = menu.closest<HTMLElement>("[data-idle]");
+	if (!player) return;
+	const anchor = menu.offsetParent;
+	delete menu.dataset.sheet;
+	for (const name of ["left", "top", "width", "height"] as const) {
+		menu.style[name] = "";
+	}
+	const room = player.clientHeight - MENU_CLEARANCE;
+	menu.style.maxHeight = `${room}px`;
+	if (menu.scrollHeight <= room || !anchor) return;
+	const box = player.getBoundingClientRect();
+	const from = anchor.getBoundingClientRect();
+	menu.dataset.sheet = "true";
+	menu.style.maxHeight = "none";
+	menu.style.width = `${box.width - SHEET_INSET * 2}px`;
+	const height = Math.min(menu.scrollHeight, box.height - SHEET_INSET * 2);
+	menu.style.height = `${height}px`;
+	menu.style.left = `${box.left - from.left + SHEET_INSET}px`;
+	menu.style.top = `${box.top - from.top + (box.height - height) / 2}px`;
+};
 
 const Menu = ({
 	label,
@@ -189,16 +256,17 @@ const Menu = ({
 	useLayoutEffect(() => {
 		const menu = ref.current;
 		if (!menu) return;
-		const player = menu.closest<HTMLElement>("[data-idle]");
-		if (player) {
-			const room = player.clientHeight - MENU_CLEARANCE;
-			menu.style.maxHeight = `${Math.max(MENU_MIN_HEIGHT, room)}px`;
-		}
+		placeMenu(menu);
 		const first =
 			menu.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
 			menu.querySelector<HTMLButtonElement>("button");
 		first?.focus({ preventScroll: true });
 		first?.scrollIntoView({ block: "nearest" });
+		const player = menu.closest<HTMLElement>("[data-idle]");
+		if (!player || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => placeMenu(menu));
+		observer.observe(player);
+		return () => observer.disconnect();
 	}, []);
 
 	const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -255,9 +323,13 @@ export const CapPlayer = ({
 	loop = false,
 	controls = true,
 	startAt = 0,
+	captions: givenCaptions = NO_CAPTIONS,
+	showCaptions = false,
 	focusOnMount = false,
 	accentColor,
 	hideControls = NO_CONTROLS,
+	keyboard = true,
+	events = false,
 	speeds = DEFAULT_SPEEDS,
 	className,
 	style,
@@ -275,16 +347,60 @@ export const CapPlayer = ({
 	const timeRef = useRef<HTMLSpanElement>(null);
 	const playRef = useRef<HTMLButtonElement>(null);
 	const coverRef = useRef<HTMLButtonElement>(null);
+	const startRef = useRef<HTMLButtonElement>(null);
+	const replayRef = useRef<HTMLButtonElement>(null);
 	const volumeRef = useRef<HTMLDivElement>(null);
 	const volumeFillRef = useRef<HTMLDivElement>(null);
 	const attachmentRef = useRef<Attachment | null>(null);
 	const menuDismissedAt = useRef(-1);
 	const levelsRef = useRef<readonly CapPlayerLevel[]>([]);
-	const live = useRef({ onFirstPlay, onEnded, speeds });
-	live.current = { onFirstPlay, onEnded, speeds };
+	const captionTracks = useRef(new Map<string, HTMLTrackElement>());
+	const captionFiles = useRef(new Map<string, Promise<string>>());
+	// A page that refreshes its data hands over a new list with the same
+	// captions. Keeping the old list then leaves the captions on screen alone.
+	const captionsKey = sameCaptionsKey(givenCaptions);
+	const keptCaptions = useRef({ key: captionsKey, list: givenCaptions });
+	if (keptCaptions.current.key !== captionsKey) {
+		keptCaptions.current = { key: captionsKey, list: givenCaptions };
+	}
+	const captions = keptCaptions.current.list;
+
+	const [unavailable, setUnavailable] = useState<readonly string[]>([]);
+	const [captionsOn, setCaptionsOn] = useState(() =>
+		initialCaptions(captions, showCaptions),
+	);
+	const [cue, setCue] = useState("");
+	const rememberedCaptions = useRef(captionsOn);
+	const offered = captions.filter(
+		(caption) => !unavailable.includes(caption.language),
+	);
+	const toggleCaptions = () => {
+		if (offered.length === 0) return false;
+		const next = toggledCaptions(
+			captionsOn,
+			rememberedCaptions.current,
+			offered,
+		);
+		if (next !== null) rememberedCaptions.current = next;
+		setCaptionsOn(next);
+		return true;
+	};
+
+	const live = useRef({
+		onFirstPlay,
+		onEnded,
+		speeds,
+		toggleCaptions,
+		keyboard,
+		fullscreen: !hideControls.includes("fullscreen"),
+		setQuality: (_quality: string): void => undefined,
+	});
+	const messages = useRef<ReturnType<typeof connectMessages> | null>(null);
+	const pendingQuality = useRef<string | null>(null);
 
 	const [playing, setPlaying] = useState(false);
 	const [started, setStarted] = useState(autoPlay);
+	const [ended, setEnded] = useState(false);
 	const [sound, setSound] = useState<"muted" | "low" | "high">(
 		startMuted ? "muted" : "high",
 	);
@@ -347,6 +463,100 @@ export const CapPlayer = ({
 	useLayoutEffect(() => {
 		if (showsVolume) videoRef.current?.dispatchEvent(new Event("volumechange"));
 	}, [showsVolume]);
+
+	useEffect(() => {
+		const files = captionFiles.current;
+		const tracks = captionTracks.current;
+		return () => {
+			for (const element of tracks.values()) element.remove();
+			tracks.clear();
+			releaseCaptionsFiles(files);
+		};
+	}, []);
+
+	useEffect(() => {
+		const video = videoRef.current as NativeViewVideo | null;
+		const caption = captions.find((entry) => entry.language === captionsOn);
+		for (const [language, element] of captionTracks.current) {
+			if (language !== caption?.language && element.track) {
+				element.track.mode = "disabled";
+			}
+		}
+		setCue("");
+		if (captionsOn !== null && !caption) {
+			setCaptionsOn(null);
+			return;
+		}
+		if (!video || !caption) return;
+
+		let cancelled = false;
+		let detach: () => void = () => undefined;
+		// The player draws the cues itself so they match it and clear the
+		// control bar. Picture in picture and the video's own full screen on
+		// iPhone cannot show anything the page draws, so there the browser
+		// shows them instead.
+		const nativeView = () =>
+			document.pictureInPictureElement === video ||
+			video.webkitDisplayingFullscreen === true;
+		loadCaptionsFile(captionFiles.current, caption.url).then(
+			(src) => {
+				if (cancelled) return;
+				// The track element is made only once its file is here. Chrome
+				// keeps a track that was ever shown without a source in its error
+				// state, even after a source is set.
+				const kept = captionTracks.current.get(caption.language);
+				const element =
+					kept?.getAttribute("src") === src
+						? kept
+						: document.createElement("track");
+				if (element !== kept) {
+					kept?.remove();
+					element.kind = "captions";
+					element.srclang = caption.language;
+					element.label = caption.label;
+					element.src = src;
+					video.append(element);
+					captionTracks.current.set(caption.language, element);
+				}
+				const track = element.track;
+				if (!track) return;
+				const paint = () =>
+					setCue(nativeView() ? "" : activeCueText(track.activeCues));
+				const place = () => {
+					track.mode = nativeView() ? "showing" : "hidden";
+					paint();
+				};
+				const viewEvents = [
+					"enterpictureinpicture",
+					"leavepictureinpicture",
+					"webkitbeginfullscreen",
+					"webkitendfullscreen",
+				];
+				// A track that finishes loading while the video is paused has
+				// active cues but fires no cuechange until the time moves.
+				track.addEventListener("cuechange", paint);
+				element.addEventListener("load", paint);
+				for (const name of viewEvents) video.addEventListener(name, place);
+				detach = () => {
+					track.removeEventListener("cuechange", paint);
+					element.removeEventListener("load", paint);
+					for (const name of viewEvents) {
+						video.removeEventListener(name, place);
+					}
+				};
+				place();
+			},
+			() => {
+				if (cancelled) return;
+				setUnavailable((languages) => [...languages, caption.language]);
+				setCaptionsOn(null);
+			},
+		);
+		return () => {
+			cancelled = true;
+			detach();
+		};
+	}, [captions, captionsOn]);
 
 	useEffect(() => {
 		if (!menu) return;
@@ -499,6 +709,7 @@ export const CapPlayer = ({
 				void document.exitFullscreen();
 				return;
 			}
+			if (!live.current.fullscreen) return;
 			if (root.requestFullscreen) {
 				void root.requestFullscreen().catch(() => undefined);
 				return;
@@ -516,6 +727,7 @@ export const CapPlayer = ({
 
 		const onPlay = () => {
 			setPlaying(true);
+			setEnded(false);
 			startLoop();
 			wake();
 			if (!hasStarted) {
@@ -531,6 +743,7 @@ export const CapPlayer = ({
 		};
 		const onEnded = () => {
 			root.dataset.idle = "false";
+			setEnded(true);
 			live.current.onEnded?.();
 		};
 		const onVolume = () => {
@@ -555,6 +768,7 @@ export const CapPlayer = ({
 				)?.label ?? resolutionLabel(video.videoWidth, video.videoHeight),
 			);
 		const onRate = () => setSpeed(video.playbackRate);
+		const onLeaveEnd = () => setEnded(false);
 		const onWaiting = () => setWaiting(true);
 		const onReady = () => setWaiting(false);
 		const onFullscreen = () =>
@@ -643,15 +857,18 @@ export const CapPlayer = ({
 		};
 
 		const onKey = (event: KeyboardEvent) => {
+			if (!live.current.keyboard) return;
 			if (event.metaKey || event.ctrlKey || event.altKey) return;
 			const target = event.target instanceof Element ? event.target : null;
 			if (target?.closest('[role="menu"]')) return;
+			if (target?.closest("input, textarea, select, [contenteditable]")) return;
 			const onButton = target instanceof HTMLButtonElement;
 			const onVolumeSlider = target !== null && target === volumeRef.current;
 			const key = event.key.toLowerCase();
 			const level = video.muted ? 0 : video.volume;
 			if (key === " " || key === "k") {
 				if (key === " " && onButton) return;
+				keepKeys();
 				toggle();
 			} else if (key === "arrowleft" || key === "arrowright") {
 				const direction = key === "arrowleft" ? -1 : 1;
@@ -679,6 +896,8 @@ export const CapPlayer = ({
 				stepSpeed(1);
 			} else if (key === "<") {
 				stepSpeed(-1);
+			} else if (key === "c") {
+				if (!live.current.toggleCaptions()) return;
 			} else {
 				return;
 			}
@@ -714,11 +933,28 @@ export const CapPlayer = ({
 			}
 		};
 
+		// The keys are heard on the root. A click on the picture or the big
+		// play or replay button leaves focus on the page body in Chrome and
+		// WebKit (both unmount once playing), so the root takes it instead.
+		const keepKeys = () => {
+			const active = document.activeElement;
+			if (
+				active &&
+				root.contains(active) &&
+				active !== startRef.current &&
+				active !== replayRef.current
+			) {
+				return;
+			}
+			root.focus({ preventScroll: true });
+		};
+
 		const onAction = (event: Event) => {
 			const target = event.target;
 			if (!(target instanceof Element)) return;
 			const action =
 				target.closest<HTMLElement>("[data-action]")?.dataset.action;
+			if (action === "surface" || action === "toggle") keepKeys();
 			if (action === "surface") {
 				if (tapClosedMenu || (pointerType === "touch" && tapWasIdle)) return;
 				toggle();
@@ -737,6 +973,8 @@ export const CapPlayer = ({
 			["pause", onPause],
 			["emptied", onPause],
 			["ended", onEnded],
+			["seeking", onLeaveEnd],
+			["emptied", onLeaveEnd],
 			["volumechange", onVolume],
 			["ratechange", onRate],
 			["resize", onResize],
@@ -797,6 +1035,24 @@ export const CapPlayer = ({
 		) {
 			onPip();
 		}
+		// A short player, such as a wide video at phone width, has no room for
+		// the big play button above the bar. Until the first play it shows the
+		// button alone, so a tap on it cannot land on the seek bar beneath.
+		const fitStart = () => {
+			const start = startRef.current;
+			root.dataset.crowded = String(
+				start !== null &&
+					start.getBoundingClientRect().bottom + START_CLEARANCE >
+						track.getBoundingClientRect().top,
+			);
+		};
+		const sizeObserver =
+			typeof ResizeObserver === "undefined"
+				? null
+				: new ResizeObserver(fitStart);
+		sizeObserver?.observe(root);
+		fitStart();
+
 		onVolume();
 		onResize();
 		onRate();
@@ -804,6 +1060,7 @@ export const CapPlayer = ({
 		if (!video.paused) onPlay();
 
 		return () => {
+			sizeObserver?.disconnect();
 			cancelAnimationFrame(frame);
 			window.clearTimeout(idleTimer);
 			window.clearTimeout(waitTimer);
@@ -844,21 +1101,39 @@ export const CapPlayer = ({
 		closeMenu("speed");
 	};
 
-	const pickQuality = (value: number) => {
+	const applyQuality = (value: number) => {
 		attachmentRef.current?.setLevel(value);
 		setPicked(value);
-		closeMenu("quality");
 		onQualityChange?.({
 			auto: value === AUTO_LEVEL,
 			label: levels.find((level) => level.index === value)?.label ?? resolution,
 		});
 	};
 
+	const pickQuality = (value: number) => {
+		applyQuality(value);
+		closeMenu("quality");
+	};
+
+	const setQualityByName = (name: string) => {
+		if (levels.length === 0) {
+			pendingQuality.current = name;
+			return;
+		}
+		pendingQuality.current = null;
+		const value =
+			name === "auto"
+				? AUTO_LEVEL
+				: levels.find((level) => qualityKey(level.label) === qualityKey(name))
+						?.index;
+		if (value !== undefined && value !== picked) applyQuality(value);
+	};
+
 	const qualityItems: MenuItem[] = [
 		{
 			value: AUTO_LEVEL,
 			label: "Auto",
-			hint: picked === AUTO_LEVEL ? resolution : undefined,
+			hint: picked === AUTO_LEVEL && started ? resolution : undefined,
 			checked: picked === AUTO_LEVEL,
 		},
 		...levels.map((level) => ({
@@ -874,9 +1149,93 @@ export const CapPlayer = ({
 		checked: value === speed,
 	}));
 
+	const captionItems: MenuItem[] = [
+		{ value: CAPTIONS_OFF, label: "Off", checked: captionsOn === null },
+		...offered.map((caption, index) => ({
+			value: index,
+			label: caption.label,
+			checked: caption.language === captionsOn,
+		})),
+	];
+
+	const pickCaptions = (value: number) => {
+		const language = offered[value]?.language ?? null;
+		if (language !== null) rememberedCaptions.current = language;
+		setCaptionsOn(language);
+		closeMenu("captions");
+	};
+
+	const captionsLabel =
+		offered.find((caption) => caption.language === captionsOn)?.label ?? "off";
+
 	const canPickQuality = levels.length > 1;
 	const pickedLabel = levels.find((level) => level.index === picked)?.label;
 	const quality = pickedLabel ?? resolution;
+	const autoQuality = picked === AUTO_LEVEL;
+	// Before play, Auto shows the rendition held for the first frame, which
+	// can be the smallest one while the line is measured. The bar says Auto
+	// until there is a picture worth naming.
+	// A pick lands at the next segment on a slow line, so until then the bar
+	// names the rendition on screen rather than the one asked for.
+	const switching =
+		started &&
+		pickedLabel !== undefined &&
+		resolution !== "" &&
+		resolution !== pickedLabel;
+	const qualityShown =
+		autoQuality && !started ? "Auto" : switching ? resolution : quality;
+	const qualityAria = autoQuality
+		? started
+			? `auto, ${quality}`
+			: "auto"
+		: switching
+			? `${quality}, switching from ${resolution}`
+			: quality;
+
+	live.current = {
+		onFirstPlay,
+		onEnded,
+		speeds,
+		toggleCaptions,
+		keyboard,
+		fullscreen: shows("fullscreen"),
+		setQuality: setQualityByName,
+	};
+
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!events || !video || window.parent === window) return;
+		const connection = connectMessages(window, video, {
+			setQuality: (name) => live.current.setQuality(name),
+			seekDuringSwitch: (time) =>
+				attachmentRef.current?.seekDuringSwitch(time) ?? false,
+			heldTime: () => attachmentRef.current?.heldTime() ?? null,
+			takeSwitchPlay: () => attachmentRef.current?.takeSwitchPlay() ?? false,
+		});
+		messages.current = connection;
+		return () => {
+			messages.current = null;
+			connection.stop();
+		};
+	}, [events]);
+
+	useEffect(() => {
+		const pending = pendingQuality.current;
+		if (pending !== null && levels.length > 0) live.current.setQuality(pending);
+	}, [levels]);
+
+	useEffect(() => {
+		if (quality) {
+			messages.current?.send("qualitychange", {
+				quality,
+				auto: autoQuality,
+			});
+		}
+	}, [quality, autoQuality]);
+
+	useEffect(() => {
+		if (failed) messages.current?.send("error", { code: "media" });
+	}, [failed]);
 
 	return (
 		<div
@@ -895,6 +1254,7 @@ export const CapPlayer = ({
 			data-idle="false"
 			data-waiting="false"
 			data-menu={menu ?? undefined}
+			tabIndex={-1}
 		>
 			<video
 				ref={videoRef}
@@ -908,6 +1268,11 @@ export const CapPlayer = ({
 			>
 				<track kind="captions" />
 			</video>
+			{cue ? (
+				<div className={styles.captions}>
+					<span className={styles.cue}>{cue}</span>
+				</div>
+			) : null}
 			<div className={styles.spinner} aria-hidden="true" />
 			{failed ? (
 				<p className={styles.failed} role="alert">
@@ -927,6 +1292,7 @@ export const CapPlayer = ({
 			)}
 			{!controls || started || failed ? null : (
 				<button
+					ref={startRef}
 					type="button"
 					className={styles.start}
 					data-action="toggle"
@@ -936,6 +1302,17 @@ export const CapPlayer = ({
 					<PlayIcon />
 				</button>
 			)}
+			{controls && started && ended && !failed ? (
+				<button
+					ref={replayRef}
+					type="button"
+					className={`${styles.start} ${styles.replay}`}
+					data-action="toggle"
+					aria-label="Replay"
+				>
+					<ReplayIcon />
+				</button>
+			) : null}
 			<div className={styles.chrome}>
 				<div
 					ref={trackRef}
@@ -1028,10 +1405,10 @@ export const CapPlayer = ({
 									className={`${styles.control} ${styles.text}`}
 									aria-haspopup="menu"
 									aria-expanded={menu === "quality"}
-									aria-label={`Quality, ${picked === AUTO_LEVEL ? "auto, " : ""}${quality}`}
+									aria-label={`Quality, ${qualityAria}`}
 									onClick={() => setMenu(menu === "quality" ? null : "quality")}
 								>
-									{quality}
+									{qualityShown}
 								</button>
 								{menu === "quality" ? (
 									<Menu
@@ -1045,6 +1422,40 @@ export const CapPlayer = ({
 						) : (
 							<span className={styles.quality}>{resolution}</span>
 						)
+					) : null}
+					{shows("captions") && offered.length === 1 ? (
+						<button
+							type="button"
+							className={styles.control}
+							aria-pressed={captionsOn !== null}
+							aria-label="Captions"
+							onClick={toggleCaptions}
+						>
+							<CaptionsIcon />
+						</button>
+					) : null}
+					{shows("captions") && offered.length > 1 ? (
+						<div className={styles.anchor} data-menu-anchor="captions">
+							<button
+								type="button"
+								className={styles.control}
+								aria-haspopup="menu"
+								aria-expanded={menu === "captions"}
+								aria-label={`Captions, ${captionsLabel}`}
+								data-on={captionsOn !== null}
+								onClick={() => setMenu(menu === "captions" ? null : "captions")}
+							>
+								<CaptionsIcon />
+							</button>
+							{menu === "captions" ? (
+								<Menu
+									label="Captions"
+									items={captionItems}
+									onPick={pickCaptions}
+									onClose={() => closeMenu("captions")}
+								/>
+							) : null}
+						</div>
 					) : null}
 					{shows("pip") && pip.supported ? (
 						<button

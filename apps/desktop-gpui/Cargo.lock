@@ -1398,6 +1398,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-automation"
+version = "0.1.0"
+dependencies = [
+ "cap-project",
+ "serde",
+ "serde_json",
+ "specta",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-camera"
 version = "0.1.0"
 dependencies = [
@@ -1544,6 +1559,7 @@ dependencies = [
  "block2 0.6.2",
  "bytes",
  "cap-audio",
+ "cap-automation",
  "cap-camera",
  "cap-camera-effects",
  "cap-cli-install",
@@ -1585,6 +1601,7 @@ dependencies = [
  "libc",
  "lyon_tessellation",
  "minisign-verify",
+ "notify-rust",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-core-graphics",
@@ -1597,6 +1614,7 @@ dependencies = [
  "resvg 0.45.1",
  "rfd",
  "rodio",
+ "same-file",
  "sanitize-filename",
  "scap-targets",
  "semver",
@@ -1612,6 +1630,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "trash",
  "tray-icon",
  "unicode-segmentation",
  "wayland-client",
@@ -1670,6 +1689,7 @@ dependencies = [
 name = "cap-enc-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-enc-mediafoundation",
  "cap-frame-converter",
  "cap-media-info",
  "ffmpeg-next",
@@ -3627,7 +3647,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8762,7 +8782,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9537,7 +9557,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11135,10 +11155,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11699,6 +11719,24 @@ checksum = "1ad61aed86bc3faea4300c7aee358b4c6d0c8d6ccc36524c96e4c92ccf26e77e"
 dependencies = [
  "num-integer",
  "strength_reduce",
+]
+
+[[package]]
+name = "trash"
+version = "5.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be89b3fe156965d29ac4f8522f3a640c655affdd9f21cb4f36857f0c92c00317"
+dependencies = [
+ "chrono",
+ "libc",
+ "log",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "once_cell",
+ "percent-encoding",
+ "scopeguard",
+ "urlencoding",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -12907,7 +12945,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

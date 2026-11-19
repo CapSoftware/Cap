@@ -2,6 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { basename } from "node:path";
 import { spawn as bunSpawn } from "bun";
 import {
+	DECODER_WHITELIST,
 	getSafeDemuxerWhitelist,
 	isTrustedLocalPlaylist,
 	MAX_DECODE_PIXELS,
@@ -49,6 +50,10 @@ function hardenFfmpegArgs(cmd: readonly string[]): string[] {
 				!isTrustedLocalPlaylist(input)
 			)
 				group.push("-format_whitelist", getSafeDemuxerWhitelist());
+			// An input option: it reaches the decoders of this input and the
+			// ones the demuxer opens while it reads the stream parameters.
+			if (!group.includes("-codec_whitelist"))
+				group.push("-codec_whitelist", DECODER_WHITELIST);
 		}
 		out.push(...group, "-i", input);
 		group = [];
@@ -77,6 +82,8 @@ function hardenFfprobeArgs(cmd: readonly string[]): string[] {
 		!args.some(isTrustedLocalPlaylist)
 	)
 		extra.push("-format_whitelist", getSafeDemuxerWhitelist());
+	if (!args.includes("-codec_whitelist"))
+		extra.push("-codec_whitelist", DECODER_WHITELIST);
 	return [cmd[0] as string, ...extra, ...args];
 }
 

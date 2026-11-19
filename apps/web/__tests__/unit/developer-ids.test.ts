@@ -8,7 +8,12 @@ vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ WEB_URL: "https://cap.test" }),
 }));
 
-import { developerIdFromKey, randomDeveloperId } from "@/lib/developer-ids";
+import { nanoId, nanoIdLength } from "@cap/database/helpers";
+import {
+	developerIdFromKey,
+	legacyDeveloperVideoIdForIdempotencyKey,
+	randomDeveloperId,
+} from "@/lib/developer-ids";
 import { transcriptIdForIdempotencyKey } from "@/lib/developer-transcript-store";
 import {
 	createDeveloperEncodeId,
@@ -27,7 +32,7 @@ const keys = Array.from({ length: 4_000 }, (_, index) => `key-${index}`);
 describe("developer ids", () => {
 	it.each([
 		["developer-transcript", transcriptIdForIdempotencyKey],
-		["developer-video", developerVideoIdForIdempotencyKey],
+		["developer-video", legacyDeveloperVideoIdForIdempotencyKey],
 	] as const)("%s ids never begin with a dash", (kind, idFor) => {
 		const dashed = keys.filter((key) =>
 			legacyId(kind, "app-1", key).startsWith("-"),
@@ -40,6 +45,49 @@ describe("developer ids", () => {
 		}
 		for (const key of dashed) {
 			expect(idFor("app-1", key)).not.toBe(legacyId(kind, "app-1", key));
+		}
+	});
+
+	it("gives a keyed video an id of the same alphabet and length as any other video", () => {
+		const characters = (ids: string[]) => new Set(ids.join("")).size;
+		const random = Array.from({ length: keys.length }, () => nanoId());
+		const keyed = keys.map((key) =>
+			developerVideoIdForIdempotencyKey("app-1", key),
+		);
+		const randomAlphabet = new Set(random.join(""));
+
+		for (const id of keyed) {
+			expect(id).toHaveLength(nanoIdLength);
+			for (const character of id) {
+				expect(randomAlphabet.has(character)).toBe(true);
+			}
+		}
+		expect(characters(keyed)).toBe(32);
+		expect(characters(random)).toBe(32);
+		expect(new Set(keyed).size).toBe(keys.length);
+	});
+
+	it("gives a key the same video id every time, separately per app", () => {
+		for (const key of keys.slice(0, 200)) {
+			const id = developerVideoIdForIdempotencyKey("app-1", key);
+			expect(developerVideoIdForIdempotencyKey("app-1", key)).toBe(id);
+			expect(developerVideoIdForIdempotencyKey("app-2", key)).not.toBe(id);
+			expect(legacyDeveloperVideoIdForIdempotencyKey("app-1", key)).not.toBe(
+				id,
+			);
+		}
+		expect(
+			developerVideoIdForIdempotencyKey("app-1", "retry-upload-0001"),
+		).toBe("kktezv96c0155px");
+	});
+
+	it("keeps the old id for a key whose video was created before", () => {
+		for (const key of keys) {
+			const legacy = legacyId("developer-video", "app-1", key);
+			if (legacy.startsWith("-")) continue;
+			expect(legacyDeveloperVideoIdForIdempotencyKey("app-1", key)).toBe(
+				legacy,
+			);
 		}
 	});
 

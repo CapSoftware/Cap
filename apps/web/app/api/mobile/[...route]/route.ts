@@ -4,7 +4,7 @@ import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
-	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "@cap/database/auth/domain-utils";
 import {
 	decrypt,
@@ -32,6 +32,7 @@ import {
 	VideosPolicy,
 	VideosRepo,
 } from "@cap/web-backend";
+import { getCustomThumbnailKey } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
 import {
 	Comment,
@@ -82,6 +83,7 @@ import {
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { toStoredUploadContentType } from "@/lib/media-processing-policy";
 import { mobileUserAgent, prepareMobileEvents } from "@/lib/mobile-events";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
@@ -96,6 +98,7 @@ import { acceptsClientEvents, sendClientEvents } from "@/lib/server-analytics";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 import { canUserDownloadVideo } from "@/lib/video-download-permissions";
 import {
 	restoreVideoToOriginalAsUser,
@@ -464,7 +467,12 @@ const getMobileThumbnailUrl = Effect.fn("Mobile.getThumbnailUrl")(function* (
 
 	const [video] = maybeVideo.value;
 	const [bucket] = yield* storage.getAccessForVideo(video);
-	const publishedThumbnail = getPublishedRecordingThumbnailKey(video);
+	const publishedThumbnail =
+		getCustomThumbnailKey({
+			id: video.id,
+			ownerId: video.ownerId,
+			metadata: Option.getOrNull(video.metadata),
+		}) ?? getPublishedRecordingThumbnailKey(video);
 	if (publishedThumbnail) {
 		return yield* bucket.getSignedObjectUrl(publishedThumbnail);
 	}
@@ -566,7 +574,8 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
+	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -618,10 +627,10 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
 	const code = rawCode.trim();
 
-	if (!emailPattern.test(email) || !emailCodePattern.test(code)) {
+	if (!email || !emailPattern.test(email) || !emailCodePattern.test(code)) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
@@ -795,7 +804,7 @@ const updateNotificationPreferences = Effect.fn(
 			db
 				.update(Db.users)
 				.set({
-					preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
+					preferences: sql`JSON_SET(${userPreferencesObject()}, '$.notifications', JSON_MERGE_PATCH(CAST(${JSON.stringify(defaults)} AS JSON), IF(JSON_TYPE(JSON_EXTRACT(${Db.users.preferences}, '$.notifications')) = 'OBJECT', JSON_EXTRACT(${Db.users.preferences}, '$.notifications'), JSON_OBJECT()), CAST(${JSON.stringify(patch)} AS JSON)))`,
 				})
 				.where(eq(Db.users.id, user.id)),
 		);
@@ -919,7 +928,7 @@ const blockMobileUser = Effect.fn("Mobile.blockUser")(function* (
 				await tx
 					.update(Db.users)
 					.set({
-						preferences: sql`JSON_SET(COALESCE(${Db.users.preferences}, JSON_OBJECT()), '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
+						preferences: sql`JSON_SET(${userPreferencesObject()}, '$.blockedUserIds', CAST(${JSON.stringify(blockedUserIds)} AS JSON))`,
 					})
 					.where(eq(Db.users.id, user.id));
 			}
@@ -3419,11 +3428,12 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		},
 	);
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
+	const storedContentType = toStoredUploadContentType(input.contentType);
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
-		contentType: input.contentType,
+		contentType: storedContentType,
 		method: "put",
 		fields: {
-			"Content-Type": input.contentType,
+			"Content-Type": storedContentType,
 			"x-amz-meta-userid": user.id,
 			"x-amz-meta-source": "cap-mobile-ios",
 		},

@@ -1,3 +1,5 @@
+import { EmbedNotFound } from "./_components/EmbedError";
+
 export default function DeveloperVideoNotFound() {
 	return (
 		<div className="grid min-h-dvh place-items-center px-5 text-center">
@@ -9,6 +11,7 @@ export default function DeveloperVideoNotFound() {
 					This video does not exist or has been deleted.
 				</p>
 			</div>
+			<EmbedNotFound />
 		</div>
 	);
 }
