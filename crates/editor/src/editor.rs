@@ -18,6 +18,7 @@ pub enum RendererMessage {
         width: u32,
         height: u32,
     },
+    ForgetLastFrame,
     RenderThumbnail {
         input: RendererTransitionInput,
         finished: oneshot::Sender<Result<RenderedFrame, String>>,
@@ -268,6 +269,10 @@ impl Renderer {
                         Self::prepare_output_size(&telemetry, &mut frame_renderer, width, height);
                         continue;
                     }
+                    Some(RendererMessage::ForgetLastFrame) => {
+                        layers.reset_frame_state();
+                        continue;
+                    }
                     Some(RendererMessage::RenderThumbnail { input, finished }) => {
                         let result = frame_renderer
                             .render_immediate(
@@ -350,6 +355,7 @@ impl Renderer {
                     RendererMessage::PrepareOutputSize { width, height } => {
                         Self::prepare_output_size(&telemetry, &mut frame_renderer, width, height);
                     }
+                    RendererMessage::ForgetLastFrame => layers.reset_frame_state(),
                     RendererMessage::RenderFrame {
                         segment_frames,
                         uniforms,
@@ -620,6 +626,12 @@ impl RendererHandle {
         let _ = self
             .tx
             .try_send(RendererMessage::PrepareOutputSize { width, height });
+    }
+
+    /// Makes the next frame upload its video even at the recording time of
+    /// the last one, for a frame decoded from another file.
+    pub async fn forget_last_frame(&self) {
+        let _ = self.tx.send(RendererMessage::ForgetLastFrame).await;
     }
 
     pub fn render_frame(

@@ -795,16 +795,21 @@ pub enum VideoDecoderMessage {
 }
 
 /// The source's Y'CbCr matrix from its colour tag, for decoders that do not
-/// see FFmpeg frames (Media Foundation). BT.601 when the file cannot be read.
+/// see FFmpeg frames (Media Foundation), and whether its chroma is 4:2:0.
+/// BT.601 and unknown chroma when the file cannot be read.
 #[cfg(target_os = "windows")]
-pub(crate) fn probe_yuv_matrix(path: &std::path::Path) -> YuvMatrix {
+pub(crate) fn probe_yuv_layout(path: &std::path::Path) -> (YuvMatrix, Option<bool>) {
     ::ffmpeg::format::input(path)
         .ok()
         .and_then(|input| {
             let stream = input.streams().best(::ffmpeg::media::Type::Video)?;
             let context = ::ffmpeg::codec::Context::from_parameters(stream.parameters()).ok()?;
-            Some(YuvMatrix::from_color_space(
-                context.decoder().video().ok()?.color_space(),
+            let video = context.decoder().video().ok()?;
+            Some((
+                YuvMatrix::from_color_space(video.color_space()),
+                cap_video_decode::ffmpeg::chroma_is_420(video.format(), unsafe {
+                    &*stream.parameters().as_ptr()
+                }),
             ))
         })
         .unwrap_or_default()
@@ -939,6 +944,11 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
     (fps as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
         .round() as u32
 }
+
+/// The largest frame, in pixels, that takes the full-chroma conversion and
+/// that an import keeps unconverted: the media server's decode limit, which
+/// fits 8K in either orientation. Larger frames convert as they always have.
+pub const FULL_CHROMA_MAX_PIXELS: usize = 40_000_000;
 
 pub const FRAME_CACHE_SIZE: usize = 90;
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
@@ -3470,6 +3480,7 @@ mod managed_worker_tests {
         let ordinary = RecordingSegmentDecoders {
             screen: display.with_max_fallback_distance(crate::SCREEN_MAX_FALLBACK_DISTANCE),
             camera: Some(camera.with_max_fallback_distance(crate::CAMERA_MAX_FALLBACK_DISTANCE)),
+            source_video: None,
             segment_offset: 10.25,
             transition_readers: None,
         };

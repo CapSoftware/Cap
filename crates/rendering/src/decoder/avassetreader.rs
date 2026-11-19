@@ -681,8 +681,14 @@ impl AVAssetReaderDecoder {
             if let Some((width, height)) = cap_video_decode::scripted::dimensions(&path) {
                 return Ok((width, height, YuvMatrix::default()));
             }
-            if let Some(dimensions) = crate::project_recordings::header_video_metadata(&path) {
-                return Ok(dimensions);
+            // The reader hands back 4:2:0, so a source with fuller chroma (an
+            // import that kept a 4:4:4 stream) goes to the FFmpeg decoder.
+            let full_chroma = || "Source chroma is not 4:2:0".to_string();
+            if let Some(video) = crate::project_recordings::header_video_metadata(&path) {
+                if video.chroma_is_420 == Some(false) {
+                    return Err(full_chroma());
+                }
+                return Ok((video.width, video.height, video.matrix));
             }
             let input = format::input(&path).map_err(|error| error.to_string())?;
             let stream = input
@@ -694,6 +700,12 @@ impl AVAssetReaderDecoder {
                 .map_err(|error| error.to_string())?;
             if video.width() == 0 || video.height() == 0 {
                 return Err("Invalid video dimensions".to_string());
+            }
+            if cap_video_decode::ffmpeg::chroma_is_420(video.format(), unsafe {
+                &*stream.parameters().as_ptr()
+            }) == Some(false)
+            {
+                return Err(full_chroma());
             }
             Ok((
                 video.width(),
