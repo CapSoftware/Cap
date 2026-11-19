@@ -101,7 +101,11 @@ fn simplify(samples: &[TrackSample]) -> Vec<TrackSample> {
         .collect()
 }
 
-fn sensitive_segment(track: &SensitiveTrack, lane: u32) -> Option<MaskSegment> {
+fn sensitive_segment(
+    track: &SensitiveTrack,
+    (start, end): (f64, f64),
+    lane: u32,
+) -> Option<MaskSegment> {
     let samples = simplify(&track.samples);
     let first = samples.first()?;
     let center = |rect: &Rect| {
@@ -112,8 +116,8 @@ fn sensitive_segment(track: &SensitiveTrack, lane: u32) -> Option<MaskSegment> {
     let keyed = samples.len() > 1;
     let contract = mask_effect_contract();
     Some(MaskSegment {
-        start: track.start,
-        end: track.end,
+        start,
+        end,
         track: lane,
         enabled: true,
         mask_type: MaskKind::Sensitive,
@@ -131,7 +135,7 @@ fn sensitive_segment(track: &SensitiveTrack, lane: u32) -> Option<MaskSegment> {
                     .map(|sample| {
                         let c = center(&sample.rect);
                         MaskVectorKeyframe {
-                            time: sample.time - track.start,
+                            time: sample.time - start,
                             x: c.x,
                             y: c.y,
                         }
@@ -146,7 +150,7 @@ fn sensitive_segment(track: &SensitiveTrack, lane: u32) -> Option<MaskSegment> {
                     .map(|sample| {
                         let s = size(&sample.rect);
                         MaskVectorKeyframe {
-                            time: sample.time - track.start,
+                            time: sample.time - start,
                             x: s.x,
                             y: s.y,
                         }
@@ -160,37 +164,46 @@ fn sensitive_segment(track: &SensitiveTrack, lane: u32) -> Option<MaskSegment> {
     })
 }
 
-pub fn mask_segments(tracks: &[SensitiveTrack], existing: &[MaskSegment]) -> Vec<MaskSegment> {
-    let first_lane = existing
+pub fn mask_segments(
+    tracks: &[SensitiveTrack],
+    existing: &[MaskSegment],
+    duration: f64,
+) -> Vec<MaskSegment> {
+    let mut lanes: Vec<Vec<(f64, f64)>> = Vec::new();
+    for segment in existing {
+        let lane = segment.track as usize;
+        if lanes.len() <= lane {
+            lanes.resize(lane + 1, Vec::new());
+        }
+        lanes[lane].push((segment.start, segment.end));
+    }
+    let mut ordered: Vec<(&SensitiveTrack, (f64, f64))> = tracks
         .iter()
-        .map(|segment| segment.track + 1)
-        .max()
-        .unwrap_or(0);
-    let mut lane_ends: Vec<f64> = Vec::new();
-    let mut segments = Vec::new();
-    let mut ordered: Vec<&SensitiveTrack> = tracks
-        .iter()
-        .filter(|track| track.end > track.start)
-        .filter(|track| {
+        .map(|track| (track, (track.start.max(0.0), track.end.min(duration))))
+        .filter(|(_, (start, end))| end > start)
+        .filter(|(track, _)| {
             !track
                 .samples
                 .iter()
                 .all(|sample| covered_by(existing, sample))
         })
         .collect();
-    ordered.sort_by(|a, b| a.start.total_cmp(&b.start));
-    for track in ordered {
-        let lane = match lane_ends.iter().position(|end| *end <= track.start) {
-            Some(lane) => {
-                lane_ends[lane] = track.end;
-                lane
-            }
+    ordered.sort_by(|a, b| a.1.0.total_cmp(&b.1.0));
+    let mut segments = Vec::new();
+    for (track, (start, end)) in ordered {
+        let free = |lane: &Vec<(f64, f64)>| {
+            lane.iter()
+                .all(|(taken_start, taken_end)| *taken_end <= start || *taken_start >= end)
+        };
+        let lane = match lanes.iter().position(free) {
+            Some(lane) => lane,
             None => {
-                lane_ends.push(track.end);
-                lane_ends.len() - 1
+                lanes.push(Vec::new());
+                lanes.len() - 1
             }
         };
-        segments.extend(sensitive_segment(track, first_lane + lane as u32));
+        lanes[lane].push((start, end));
+        segments.extend(sensitive_segment(track, (start, end), lane as u32));
     }
     segments
 }
@@ -222,7 +235,7 @@ mod tests {
                 (t, Rect::new(0.2, y, 0.5, y + 0.03))
             })
             .collect();
-        let segments = mask_segments(&[track(0.95, 3.05, samples.clone())], &[]);
+        let segments = mask_segments(&[track(0.95, 3.05, samples.clone())], &[], 10.0);
         assert_eq!(segments.len(), 1);
         let mask = &segments[0];
         assert!(matches!(mask.mask_type, MaskKind::Sensitive));
@@ -242,22 +255,46 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_tracks_take_separate_lanes_after_existing_masks() {
+    fn generated_masks_fill_free_lanes_before_adding_new_ones() {
         let rect = Rect::new(0.1, 0.1, 0.2, 0.12);
-        let existing = vec![MaskSegment {
-            track: 1,
-            ..sensitive_segment(&track(20.0, 21.0, vec![(20.0, rect)]), 0).unwrap()
-        }];
+        let elsewhere = Rect::new(0.6, 0.6, 0.7, 0.62);
+        let manual = |lane: u32, start: f64, end: f64| MaskSegment {
+            track: lane,
+            ..sensitive_segment(
+                &track(start, end, vec![(start, elsewhere)]),
+                (start, end),
+                lane,
+            )
+            .unwrap()
+        };
+        let existing = vec![manual(0, 0.0, 1.5), manual(1, 20.0, 21.0)];
         let segments = mask_segments(
             &[
                 track(0.0, 2.0, vec![(0.0, rect)]),
                 track(1.0, 3.0, vec![(1.0, rect)]),
                 track(2.5, 4.0, vec![(2.5, rect)]),
+                track(3.5, 5.0, vec![(3.5, rect)]),
             ],
             &existing,
+            10.0,
         );
         let lanes: Vec<u32> = segments.iter().map(|segment| segment.track).collect();
-        assert_eq!(lanes, vec![2, 3, 2]);
+        assert_eq!(lanes, vec![1, 2, 0, 1]);
+    }
+
+    #[test]
+    fn masks_end_with_the_recording() {
+        let rect = Rect::new(0.1, 0.1, 0.2, 0.12);
+        let segments = mask_segments(
+            &[
+                track(25.0, 26.0667, vec![(25.0, rect), (26.0667, rect)]),
+                track(26.04, 26.1, vec![(26.04, rect)]),
+            ],
+            &[],
+            26.0333,
+        );
+        assert_eq!(segments.len(), 1);
+        assert_eq!((segments[0].start, segments[0].end), (25.0, 26.0333));
     }
 
     #[test]
@@ -266,15 +303,17 @@ mod tests {
         let existing = mask_segments(
             &[track(0.0, 5.0, vec![(0.0, rect.expanded(0.01, 0.01))])],
             &[],
+            10.0,
         );
         let again = mask_segments(
             &[track(1.0, 2.0, vec![(1.0, rect), (2.0, rect)])],
             &existing,
+            10.0,
         );
         assert!(again.is_empty());
         let elsewhere = Rect::new(0.6, 0.6, 0.7, 0.63);
         assert_eq!(
-            mask_segments(&[track(1.0, 2.0, vec![(1.0, elsewhere)])], &existing).len(),
+            mask_segments(&[track(1.0, 2.0, vec![(1.0, elsewhere)])], &existing, 10.0).len(),
             1
         );
     }

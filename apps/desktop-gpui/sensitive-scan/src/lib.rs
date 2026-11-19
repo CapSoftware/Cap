@@ -11,4 +11,4 @@ pub use classify::{SensitiveKind, SensitiveMatch, find_sensitive};
 pub use frame::{LumaFrame, Rect};
 pub use masks::{mask_rect_at, mask_segments};
 pub use ocr::{DETECTION_MODEL, MODELS, ModelFile, RECOGNITION_MODEL, ReadLine, TextReader};
-pub use scan::{Detection, ScanSettings, Scanner, SensitiveTrack, TrackSample, detect};
+pub use scan::{Detection, ScanSettings, Scanner, SensitiveTrack, TrackSample, detect, in_motion};

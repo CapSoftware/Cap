@@ -37,6 +37,12 @@ pub(crate) struct Similarity {
 }
 
 impl Similarity {
+    pub const IDENTITY: Self = Self {
+        scale: 1.0,
+        tx: 0.0,
+        ty: 0.0,
+    };
+
     pub fn fit(pairs: &[CenterMove]) -> Option<Self> {
         let median = |mut values: Vec<f32>| -> Option<f32> {
             values.sort_by(f32::total_cmp);
@@ -463,6 +469,81 @@ fn fit_matches(matches: &[PatchMatch]) -> Option<(Similarity, usize)> {
     Some((Similarity::fit(&pairs)?, inliers.len()))
 }
 
+const TILE: u32 = 16;
+const TILE_CHANGE: f32 = 12.0;
+const TILE_CONTENT: u8 = 24;
+const TILE_OFFSETS: [(f32, f32); 1] = [(0.0, 0.0)];
+
+pub(crate) struct TileChange {
+    pub changed: Vec<Rect>,
+    pub content: usize,
+}
+
+pub(crate) fn changed_tiles(
+    prev: &LumaFrame,
+    next: &LumaFrame,
+    motions: &[Similarity],
+) -> TileChange {
+    let backs: Vec<Similarity> = motions.iter().map(|motion| motion.inverse()).collect();
+    let (max_x, max_y) = ((prev.width - 1) as f32, (prev.height - 1) as f32);
+    let mut changed = Vec::new();
+    let mut content = 0;
+    for tile_y in 0..next.height / TILE {
+        for tile_x in 0..next.width / TILE {
+            let (x0, y0) = (tile_x * TILE, tile_y * TILE);
+            let points: Vec<(f32, f32, u8)> = (y0..y0 + TILE)
+                .step_by(2)
+                .flat_map(|y| {
+                    (x0..x0 + TILE).step_by(2).map(move |x| {
+                        (
+                            x as f32,
+                            y as f32,
+                            next.pixels[(y * next.width + x) as usize],
+                        )
+                    })
+                })
+                .collect();
+            let low = points.iter().map(|point| point.2).min().unwrap_or(0);
+            let high = points.iter().map(|point| point.2).max().unwrap_or(0);
+            let mut best: Option<f32> = None;
+            'search: for back in &backs {
+                for (ox, oy) in TILE_OFFSETS {
+                    let mut total = 0u32;
+                    for &(x, y, target) in &points {
+                        let sx = back.scale * x + back.tx + ox;
+                        let sy = back.scale * y + back.ty + oy;
+                        if !(0.0..=max_x).contains(&sx) || !(0.0..=max_y).contains(&sy) {
+                            continue 'search;
+                        }
+                        total += u32::from(prev.sample(sx, sy).abs_diff(target));
+                    }
+                    let mean = total as f32 / points.len() as f32;
+                    best = Some(best.map_or(mean, |best| best.min(mean)));
+                    if mean <= TILE_CHANGE {
+                        break 'search;
+                    }
+                }
+            }
+            let Some(best) = best else {
+                continue;
+            };
+            if high - low < TILE_CONTENT {
+                continue;
+            }
+            content += 1;
+            if best > TILE_CHANGE {
+                changed.push(Rect::new(
+                    x0 as f32,
+                    y0 as f32,
+                    (x0 + TILE) as f32,
+                    (y0 + TILE) as f32,
+                ));
+            }
+        }
+    }
+    TileChange { changed, content }
+}
+
 pub(crate) fn global_motion(
     prev: &LumaFrame,
     next: &LumaFrame,
@@ -472,13 +553,8 @@ pub(crate) fn global_motion(
     if patches.len() < MIN_INLIERS {
         return None;
     }
-    let identity = Similarity {
-        scale: 1.0,
-        tx: 0.0,
-        ty: 0.0,
-    };
     let mut best: Option<(Similarity, usize)> = None;
-    let mut candidates = vec![guess.unwrap_or(identity), identity];
+    let mut candidates = vec![guess.unwrap_or(Similarity::IDENTITY), Similarity::IDENTITY];
     for candidate in 0.. {
         let Some(&start) = candidates.get(candidate) else {
             break;
@@ -579,6 +655,29 @@ mod tests {
         assert!((motion.scale - 1.08).abs() < 0.02, "{motion:?}");
         let blank = LumaFrame::new(640, 360, vec![245; 640 * 360]);
         assert!(global_motion(&first, &blank, None).is_none());
+    }
+
+    #[test]
+    fn tiles_change_where_content_is_replaced_but_not_where_it_scrolls() {
+        let (canvas, _) = page();
+        let first = canvas.view(0.0, 200.0, 640, 360, 1.0, 245);
+        let scrolled = canvas.view(0.0, 260.0, 640, 360, 1.0, 245);
+        let motion = global_motion(&first, &scrolled, None).unwrap();
+        let scroll = changed_tiles(&first, &scrolled, &[motion]);
+        assert!(scroll.content > 100, "{}", scroll.content);
+        assert!(
+            scroll.changed.len() * 20 <= scroll.content,
+            "{}",
+            scroll.changed.len()
+        );
+        let replaced = canvas.view(0.0, 900.0, 640, 360, 1.0, 245);
+        let cut = changed_tiles(&first, &replaced, &[Similarity::IDENTITY]);
+        assert!(
+            cut.changed.len() * 2 >= cut.content,
+            "{} of {}",
+            cut.changed.len(),
+            cut.content
+        );
     }
 
     #[test]

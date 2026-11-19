@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use cap_sensitive_scan::synthetic::{Canvas, PROSE, sans, view_rect};
 use cap_sensitive_scan::{
-    LumaFrame, Rect, ScanSettings, Scanner, SensitiveKind, TextReader, detect, mask_rect_at,
-    mask_segments,
+    LumaFrame, Rect, ScanSettings, Scanner, SensitiveKind, TextReader, detect, in_motion,
+    mask_rect_at, mask_segments,
 };
 
 const WIDTH: u32 = 1920;
@@ -253,6 +253,13 @@ fn wheel_scroll(t: f64) -> f32 {
     ((t / 0.25).floor() as f32 * 120.0) % 4800.0
 }
 
+fn fast_flick(t: f64) -> f32 {
+    let phase = t % 2.5;
+    let base = ((t / 2.5).floor() as f32 * 1100.0) % 4400.0;
+    let throw = (phase / 0.4).min(1.0);
+    base + (1.0 - (1.0 - throw).powi(3)) as f32 * 1100.0
+}
+
 fn still(_: f64) -> f32 {
     1200.0
 }
@@ -353,9 +360,16 @@ fn run(
 
     let mut scanner = Scanner::new(reader, settings.clone());
     let mut scan_time = Duration::ZERO;
+    let mut previous: Option<(f64, LumaFrame)> = None;
     for (index, time) in settings.sample_times(seconds).into_iter().enumerate() {
         let frame: LumaFrame = frame_at(time);
         let started = Instant::now();
+        if let Some((before, earlier)) = &previous
+            && in_motion(earlier, &frame)
+        {
+            let middle = (before + time) / 2.0;
+            scanner.push_frame(middle, &frame_at(middle))?;
+        }
         scanner.push_frame(time, &frame)?;
         scan_time += started.elapsed();
         if index % ACCURACY_EVERY == ACCURACY_EVERY / 2 {
@@ -383,11 +397,12 @@ fn run(
                 })
                 .count();
         }
+        previous = Some((time, frame));
     }
     let ocr_frames = scanner.ocr_frames() + 1;
     let started = Instant::now();
     let tracks = scanner.finish()?;
-    let masks = mask_segments(&tracks, &[]);
+    let masks = mask_segments(&tracks, &[], seconds);
     scan_time += started.elapsed();
     totals.scan += scan_time;
     totals.seconds += seconds;
@@ -475,6 +490,14 @@ fn main() -> anyhow::Result<()> {
             size: 15.0,
             zoom: no_zoom,
             scroll: wheel_scroll,
+        },
+        Scenario {
+            name: "light, fast flick",
+            background: 248,
+            ink: 30,
+            size: 16.0,
+            zoom: no_zoom,
+            scroll: fast_flick,
         },
         Scenario {
             name: "light, zoom",

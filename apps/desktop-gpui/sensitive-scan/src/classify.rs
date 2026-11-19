@@ -52,6 +52,8 @@ const KNOWN_SECRET_PREFIXES: &[(&str, usize)] = &[
     ("AIza", 20),
 ];
 
+const LONG_PASSPHRASE: usize = 12;
+
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[A-Za-z0-9._%+\-]+ ?@ ?[A-Za-z0-9\-]+(?: ?\. ?[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}")
         .expect("email pattern")
@@ -90,6 +92,14 @@ static PEM_HEADER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").expect("pem pattern"));
 
 pub fn find_sensitive(text: &str, phrases: &[String]) -> Vec<SensitiveMatch> {
+    let text: &str = &text
+        .chars()
+        .map(|c| match c {
+            '\u{3000}' => ' ',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        })
+        .collect::<String>();
     let offsets = CharOffsets::new(text);
     let mut found: Vec<SensitiveMatch> = Vec::new();
     let mut push = |kind: SensitiveKind, start: usize, end: usize| {
@@ -132,7 +142,7 @@ pub fn find_sensitive(text: &str, phrases: &[String]) -> Vec<SensitiveMatch> {
         let token = m.as_str().trim_end_matches(['.', ',']);
         let start = m.start() + secret_prefix_offset(token);
         let token = &text[start..m.start() + token.len()];
-        if is_secret(token, labelled(&LABEL, text, start)) {
+        if is_secret(token, label_before(&LABEL, text, start)) {
             push(SensitiveKind::Secret, start, start + token.len());
         }
     }
@@ -145,7 +155,7 @@ pub fn find_sensitive(text: &str, phrases: &[String]) -> Vec<SensitiveMatch> {
             .map(char::len_utf8)
             .sum();
         let value = text[value_start..value_start + value_len].trim_end_matches(['.', ',', ';']);
-        if value.chars().count() >= 6 && !is_plain_word(value) {
+        if value.chars().count() >= 6 && labelled_secret(label.as_str(), value) {
             push(
                 SensitiveKind::Secret,
                 value_start,
@@ -191,8 +201,25 @@ fn standalone(text: &str, start: usize, end: usize, after_letters: bool) -> bool
     !joined(before) && !after_joined
 }
 
+fn label_before<'t>(label: &Regex, text: &'t str, byte: usize) -> Option<&'t str> {
+    label
+        .find_iter(&text[..byte])
+        .find(|m| m.end() == byte)
+        .map(|m| m.as_str())
+}
+
 fn labelled(label: &Regex, text: &str, byte: usize) -> bool {
-    label.find_iter(&text[..byte]).any(|m| m.end() == byte)
+    label_before(label, text, byte).is_some()
+}
+
+fn labelled_secret(label: &str, value: &str) -> bool {
+    if !is_plain_word(value) {
+        return true;
+    }
+    let separated = label.contains([':', '=']);
+    let identifier = label.contains('_') || !label.chars().any(char::is_lowercase);
+    label.trim_end().ends_with('=')
+        || separated && (identifier || value.chars().count() >= LONG_PASSPHRASE)
 }
 
 fn is_email(candidate: &str) -> bool {
@@ -257,7 +284,8 @@ fn is_card_number(candidate: &str, labelled: bool) -> bool {
         .map(str::len)
         .collect();
     let grouped_like_a_card = groups.len() == 1 || groups.iter().all(|len| (3..=6).contains(len));
-    let loosely_grouped = groups[..groups.len() - 1].iter().all(|len| len % 4 == 0);
+    let loosely_grouped = groups[..groups.len() - 1].iter().all(|len| len % 4 == 0)
+        || matches!(groups.as_slice(), [4, 6, 5] | [4, 6, 4]);
     luhn_valid(&digits) && loosely_grouped || grouped_like_a_card && labelled
 }
 
@@ -316,7 +344,7 @@ fn is_plain_word(token: &str) -> bool {
         .all(|c| c.is_alphabetic() || c == '-' || c == '\'')
 }
 
-fn is_secret(token: &str, labelled: bool) -> bool {
+fn is_secret(token: &str, label: Option<&str>) -> bool {
     if let Some((_, min_rest)) = KNOWN_SECRET_PREFIXES.iter().find(|(prefix, min_rest)| {
         token.starts_with(prefix) && token.len() >= prefix.len() + min_rest
     }) {
@@ -328,8 +356,8 @@ fn is_secret(token: &str, labelled: bool) -> bool {
         return true;
     }
 
-    if labelled {
-        return !is_plain_word(token);
+    if let Some(label) = label {
+        return labelled_secret(label, token);
     }
 
     if token.len() < 20 || token.contains("://") || token.contains("..") || is_hex_like(token) {
@@ -472,6 +500,12 @@ mod tests {
     }
 
     #[test]
+    fn fullwidth_punctuation_from_ocr_is_read_as_ascii() {
+        assert_hidden("(415）555-0132", "(415）555-0132", SensitiveKind::Phone);
+        assert_hidden("ops＠example.com", "ops＠example.com", SensitiveKind::Email);
+    }
+
+    #[test]
     fn version_numbers_dates_and_addresses_are_not_phones() {
         for text in [
             "Cap v0.6.3 and 2.14.0-beta.1 released",
@@ -509,6 +543,18 @@ mod tests {
         );
         assert_clean("Order 4242 4242 4242 4241 shipped");
         assert_clean("Tracking 1111111111111111");
+    }
+
+    #[test]
+    fn amex_and_diners_grouping_needs_no_label() {
+        for card in ["3782 822463 10005", "3782-822463-10005", "3056 930902 5904"] {
+            assert_hidden(
+                &format!("Paid with {card} today"),
+                card,
+                SensitiveKind::CardNumber,
+            );
+        }
+        assert_clean("Reference 3782 822463 10006 attached");
     }
 
     #[test]
@@ -582,6 +628,32 @@ mod tests {
         );
         assert_clean("Reset your password: click here");
         assert_clean("The token is valid");
+    }
+
+    #[test]
+    fn alphabetic_passwords_in_assignments_are_secrets() {
+        for (text, secret) in [
+            (
+                "PASSWORD=correcthorsebatterystaple",
+                "correcthorsebatterystaple",
+            ),
+            ("db_password: sunshine", "sunshine"),
+            ("password = trustno", "trustno"),
+            (
+                "password: correct-horse-battery-staple",
+                "correct-horse-battery-staple",
+            ),
+            ("Password: correcthorsebattery", "correcthorsebattery"),
+        ] {
+            assert_hidden(text, secret, SensitiveKind::Secret);
+        }
+        for text in [
+            "Password: required for every account",
+            "Use bearer authentication for the API",
+            "Your password: forgotten links expire",
+        ] {
+            assert_clean(text);
+        }
     }
 
     #[test]

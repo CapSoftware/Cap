@@ -1,7 +1,7 @@
 use crate::classify::{SensitiveKind, find_sensitive};
 use crate::frame::{LumaFrame, Rect};
 use crate::ocr::{ReadLine, TextReader};
-use crate::track::{Motion, Similarity, follow, global_motion, plausible};
+use crate::track::{Motion, Similarity, changed_tiles, follow, global_motion, plausible};
 
 #[derive(Clone, Debug)]
 pub struct ScanSettings {
@@ -118,6 +118,7 @@ struct ActiveTrack {
     seen_before: Option<f64>,
     missed_reads: u32,
     coasting: u32,
+    replaced: bool,
 }
 
 struct WindowFrame {
@@ -125,6 +126,7 @@ struct WindowFrame {
     last: f64,
     frame: LumaFrame,
     arrival: Option<Similarity>,
+    after_cut: bool,
 }
 
 const MATCH_IOU: f32 = 0.3;
@@ -133,8 +135,17 @@ const CHANGE_LEVEL: f32 = 1.5;
 const SHARED_MOTIONS: usize = 4;
 const SETTLE_TIME: f64 = 0.3;
 const EDGE_VISIBLE: f32 = 0.95;
-const MAX_COASTING: u32 = 8;
+const MAX_COASTING: u32 = 2;
 const ROW_GAP: f32 = 10.0;
+const MIN_CHANGED_TILES: usize = 4;
+const CUT_SHARE: f32 = 0.2;
+const REPLACED_SHARE: f32 = 0.3;
+const MIN_CUT_GAP: f64 = 0.25;
+const TRAVEL_SHARE: f32 = 0.5;
+const MARGIN: f32 = 0.3;
+const GLOBAL_SNAP: f32 = 3.0;
+const MOTION_WIDTH: u32 = 240;
+const EDGE_SNAP: f32 = 4.0;
 
 fn difference(a: &LumaFrame, b: &LumaFrame) -> f32 {
     if (a.width, a.height) != (b.width, b.height) {
@@ -150,6 +161,36 @@ fn difference(a: &LumaFrame, b: &LumaFrame) -> f32 {
     total as f32 / (a.pixels.len() / 7).max(1) as f32
 }
 
+pub fn in_motion(prev: &LumaFrame, next: &LumaFrame) -> bool {
+    changed(
+        &prev.downscaled(MOTION_WIDTH),
+        &next.downscaled(MOTION_WIDTH),
+    )
+}
+
+fn changed(a: &LumaFrame, b: &LumaFrame) -> bool {
+    (a.width, a.height) != (b.width, b.height)
+        || changed_tiles(a, b, &[Similarity::IDENTITY]).changed.len() >= MIN_CHANGED_TILES
+}
+
+fn covered_share(rect: Rect, tiles: &[Rect]) -> f32 {
+    let area = rect.area();
+    if area <= 0.0 {
+        return 0.0;
+    }
+    tiles
+        .iter()
+        .map(|tile| tile.intersection(&rect).area())
+        .sum::<f32>()
+        / area
+}
+
+fn agrees(motion: Motion, expected: Motion, tolerance: f32) -> bool {
+    (motion.dx - expected.dx).abs() <= tolerance
+        && (motion.dy - expected.dy).abs() <= tolerance
+        && (motion.scale - expected.scale).abs() < 0.01
+}
+
 fn leaving_view(rect: Rect, bounds: Rect) -> bool {
     let visible = rect.intersection(&bounds).area();
     visible > 0.0 && visible < rect.area() * EDGE_VISIBLE
@@ -161,6 +202,8 @@ pub struct Scanner<'a> {
     scale: Option<(f32, f32, f32, f32)>,
     last_read: Option<(f64, LumaFrame)>,
     still_since: f64,
+    travel: f32,
+    force_read: bool,
     ocr_frames: usize,
     window: Vec<WindowFrame>,
     arrival: Option<Similarity>,
@@ -177,6 +220,8 @@ impl<'a> Scanner<'a> {
             scale: None,
             last_read: None,
             still_since: 0.0,
+            travel: 0.0,
+            force_read: false,
             ocr_frames: 0,
             window: Vec::new(),
             arrival: None,
@@ -190,8 +235,13 @@ impl<'a> Scanner<'a> {
         self.ocr_frames
     }
 
-    fn follow_tracks(&mut self, time: f64, prev: &LumaFrame, small: &LumaFrame) -> bool {
-        let global = global_motion(prev, small, self.arrival);
+    fn follow_tracks(
+        &mut self,
+        time: f64,
+        prev: &LumaFrame,
+        small: &LumaFrame,
+        global: Option<Similarity>,
+    ) -> bool {
         let had_tracks = !self.active.is_empty();
         let mut shared: Vec<Motion> = Vec::new();
         let mut pairs = Vec::new();
@@ -205,7 +255,22 @@ impl<'a> Scanner<'a> {
                 .chain(global.map(|global| global.motion_for(rect)))
                 .chain(shared.iter().copied())
                 .collect();
-            match follow(prev, small, rect, &guesses) {
+            let expected = global.map(|global| global.motion_for(rect));
+            let followed = follow(prev, small, rect, &guesses)
+                .map(|(moved, motion)| match expected {
+                    Some(expected) if agrees(motion, expected, GLOBAL_SNAP) => (
+                        rect.moved(expected.dx, expected.dy, expected.scale),
+                        expected,
+                    ),
+                    _ => (moved, motion),
+                })
+                .filter(|(_, motion)| {
+                    expected.is_none_or(|expected| {
+                        agrees(*motion, expected, rect.height())
+                            || agrees(*motion, Motion::default(), rect.height())
+                    })
+                });
+            match followed {
                 Some((moved, motion)) => {
                     if shared.len() < SHARED_MOTIONS
                         && !shared.iter().any(|known| {
@@ -265,11 +330,11 @@ impl<'a> Scanner<'a> {
         let Some(entry) = self.window.last() else {
             return Ok(());
         };
-        let changed = self
+        if self
             .last_read
             .as_ref()
-            .is_none_or(|(_, read)| difference(read, &entry.frame) > CHANGE_LEVEL);
-        if !changed {
+            .is_some_and(|(_, read)| !changed(read, &entry.frame))
+        {
             return Ok(());
         }
         let (sx, sy, _, _) = self.scale.unwrap_or((1.0, 1.0, 1.0, 1.0));
@@ -301,10 +366,46 @@ impl<'a> Scanner<'a> {
         let moving = previous
             .as_ref()
             .is_none_or(|previous| difference(previous, &small) > CHANGE_LEVEL);
+        let changed_now = previous
+            .as_ref()
+            .is_none_or(|previous| changed(previous, &small));
+        let mut after_cut = false;
 
         match previous.as_ref() {
             Some(prev) if moving => {
-                if self.follow_tracks(time, prev, &small) {
+                let global = global_motion(prev, &small, self.arrival);
+                let tiles = changed_tiles(
+                    prev,
+                    &small,
+                    &[global.unwrap_or(Similarity::IDENTITY), Similarity::IDENTITY],
+                );
+                after_cut = global.is_none()
+                    || tiles.changed.len() as f32 >= tiles.content as f32 * CUT_SHARE;
+                if after_cut {
+                    let read_recently = self
+                        .last_read
+                        .as_ref()
+                        .is_some_and(|(read_at, _)| time - read_at < MIN_CUT_GAP);
+                    if !read_recently {
+                        self.read_unread(time)?;
+                    }
+                    let motion = global.unwrap_or(Similarity::IDENTITY);
+                    for track in &mut self.active {
+                        track.replaced = track.samples.last().is_some_and(|(_, rect)| {
+                            let step = motion.motion_for(*rect);
+                            let moved = rect.moved(step.dx, step.dy, step.scale);
+                            covered_share(moved, &tiles.changed) >= REPLACED_SHARE
+                        });
+                    }
+                    self.force_read = true;
+                }
+                if let Some(global) = global {
+                    let motion = global.motion_for(small.bounds());
+                    self.travel += motion.dx.abs()
+                        + motion.dy.abs()
+                        + (motion.scale - 1.0).abs() * small.height as f32;
+                }
+                if self.follow_tracks(time, prev, &small, global) {
                     self.read_unread(time)?;
                 }
             }
@@ -319,15 +420,17 @@ impl<'a> Scanner<'a> {
             }
         }
 
-        if moving {
+        if changed_now {
             self.still_since = time;
         }
         let due = match &self.last_read {
             None => true,
             Some((read_at, read_frame)) => {
-                difference(read_frame, &small) > CHANGE_LEVEL
-                    && (time - self.still_since >= SETTLE_TIME
-                        || time - read_at >= self.settings.max_ocr_interval)
+                self.force_read
+                    || (changed(read_frame, &small)
+                        && (time - self.still_since >= SETTLE_TIME
+                            || time - read_at >= self.settings.max_ocr_interval
+                            || self.travel >= small.height as f32 * TRAVEL_SHARE))
             }
         };
         let arrival = self.arrival;
@@ -337,18 +440,21 @@ impl<'a> Scanner<'a> {
             self.apply_detections(time, &small, arrival, detections, sx, sy);
             self.window.clear();
             self.last_read = Some((time, small.clone()));
+            self.travel = 0.0;
+            self.force_read = false;
             self.unread = None;
         } else {
             self.unread = Some((time, frame.clone()));
         }
 
         match self.window.last_mut() {
-            Some(previous) if !moving && !due => previous.last = time,
+            Some(previous) if !changed_now && !due => previous.last = time,
             _ => self.window.push(WindowFrame {
                 first: time,
                 last: time,
                 frame: small,
                 arrival: if due { None } else { arrival },
+                after_cut,
             }),
         }
         Ok(())
@@ -378,7 +484,12 @@ impl<'a> Scanner<'a> {
                 matched[index] = true;
                 let track = &mut self.active[index];
                 if let Some(last) = track.samples.last_mut() {
-                    last.1 = last.1.union(&rect);
+                    last.1 = Rect::new(
+                        last.1.x0.min(rect.x0),
+                        rect.y0,
+                        last.1.x1.max(rect.x1),
+                        rect.y1,
+                    );
                 }
                 track.missed_reads = 0;
                 continue;
@@ -401,6 +512,7 @@ impl<'a> Scanner<'a> {
                 seen_before: None,
                 missed_reads: 0,
                 coasting: 0,
+                replaced: false,
             };
             self.backtrack(&mut track, small, arrival);
             matched.push(true);
@@ -409,6 +521,10 @@ impl<'a> Scanner<'a> {
 
         let mut still_active = Vec::with_capacity(self.active.len());
         for (index, mut track) in std::mem::take(&mut self.active).into_iter().enumerate() {
+            if std::mem::take(&mut track.replaced) && !matched[index] {
+                self.end_track(track, Some(time));
+                continue;
+            }
             if !matched[index] {
                 track.missed_reads += 1;
                 if track.missed_reads > MAX_MISSED_READS {
@@ -449,6 +565,9 @@ impl<'a> Scanner<'a> {
             motion = step;
             later = &entry.frame;
             later_arrival = entry.arrival;
+            if entry.after_cut {
+                break;
+            }
         }
         track.first_motion = motion.reversed();
         earlier_samples.reverse();
@@ -457,7 +576,7 @@ impl<'a> Scanner<'a> {
     }
 
     fn end_track(&mut self, track: ActiveTrack, lost_at: Option<f64>) {
-        let Some((_, _, width, height)) = self.scale else {
+        let Some((_, _, frame_width, frame_height)) = self.scale else {
             return;
         };
         let step = 1.0 / self.settings.sample_fps;
@@ -476,15 +595,41 @@ impl<'a> Scanner<'a> {
         if end > last_time {
             samples.push((end, after.union(&last_rect)));
         }
-        let swept: Vec<(f64, Rect)> = (0..samples.len())
-            .map(|index| {
-                let (time, own) = samples[index];
-                let margin = own.height() * 0.3 + 2.0;
-                let rect = samples[index.saturating_sub(1)..(index + 2).min(samples.len())]
-                    .iter()
-                    .fold(own, |swept, (_, rect)| swept.union(rect))
-                    .expanded(margin, margin);
-                (time, rect)
+        let pad = |rect: Rect| {
+            let height = rect.height();
+            let padded = rect.expanded(height * MARGIN + 2.0, height * MARGIN + 2.0);
+            Rect::new(
+                if padded.x0 <= EDGE_SNAP {
+                    -1.0
+                } else {
+                    padded.x0
+                },
+                if padded.y0 <= EDGE_SNAP {
+                    -1.0
+                } else {
+                    padded.y0
+                },
+                if padded.x1 >= frame_width - EDGE_SNAP {
+                    frame_width + 1.0
+                } else {
+                    padded.x1
+                },
+                if padded.y1 >= frame_height - EDGE_SNAP {
+                    frame_height + 1.0
+                } else {
+                    padded.y1
+                },
+            )
+        };
+        let swept: Vec<(f64, Rect)> = samples
+            .iter()
+            .enumerate()
+            .map(|(index, &(time, own))| {
+                let near = &samples[index.saturating_sub(1)..(index + 2).min(samples.len())];
+                (
+                    time,
+                    pad(near.iter().fold(own, |rect, (_, other)| rect.union(other))),
+                )
             })
             .collect();
 
@@ -498,7 +643,7 @@ impl<'a> Scanner<'a> {
                 .map(|(time, rect)| TrackSample {
                     time,
                     rect: rect
-                        .scaled(1.0 / width, 1.0 / height)
+                        .scaled(1.0 / frame_width, 1.0 / frame_height)
                         .intersection(&Rect::new(0.0, 0.0, 1.0, 1.0)),
                 })
                 .collect(),
@@ -516,5 +661,36 @@ impl<'a> Scanner<'a> {
         let mut finished = self.finished;
         finished.sort_by(|a, b| a.start.total_cmp(&b.start));
         Ok(finished)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::synthetic::{Canvas, PROSE, sans};
+
+    #[test]
+    fn scrolling_is_motion_and_a_still_page_is_not() {
+        let font = sans();
+        let mut canvas = Canvas::new(640, 1200, 245);
+        for line in 0..50 {
+            canvas.text(
+                &font,
+                13.0,
+                24.0,
+                20.0 + line as f32 * 22.0,
+                PROSE[line % PROSE.len()],
+                40,
+            );
+        }
+        let first = canvas.view(0.0, 100.0, 640, 360, 1.0, 245);
+        assert!(!in_motion(
+            &first,
+            &canvas.view(0.0, 100.0, 640, 360, 1.0, 245)
+        ));
+        assert!(in_motion(
+            &first,
+            &canvas.view(0.0, 112.0, 640, 360, 1.0, 245)
+        ));
     }
 }
