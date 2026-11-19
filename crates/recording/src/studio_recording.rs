@@ -868,6 +868,9 @@ struct ResumeAttempt {
     scope: crate::output_pipeline::PipelineBuildScope,
     directory: PathBuf,
     result: Arc<std::sync::Mutex<Option<Result<Pipeline, ResumeBuildError>>>>,
+    /// The segment is built on a copy of the factory, so the camera input it
+    /// made comes back here for the actor's factory to adopt on commit.
+    camera_input: Arc<std::sync::Mutex<Option<StudioCameraInput>>>,
     finished: ResumeCompletion,
     ready: ResumeCompletion,
     reply: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
@@ -998,6 +1001,7 @@ impl Message<ResumeFinished> for Actor {
                     && attempt.scope.commit()
                 {
                     let index = *next_index;
+                    self.segment_factory.live_camera = attempt.camera_input.lock().unwrap().take();
                     self.segment_factory.commit_next(&mut pipeline);
                     self.markers.segment_started(
                         index,
@@ -1086,6 +1090,7 @@ impl Message<Resume> for Actor {
         let scope = self.lifetime.lifecycle.0.scope.child_transaction();
         let lifetime_completion = self.lifetime.lifecycle.0.scope.task_completion();
         let result = Arc::new(std::sync::Mutex::new(None));
+        let camera_input = Arc::new(std::sync::Mutex::new(None));
         let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
         let (reply, ready) = tokio::sync::oneshot::channel();
         let attempt = ResumeAttempt {
@@ -1093,6 +1098,7 @@ impl Message<Resume> for Actor {
             scope: scope.clone(),
             directory: directory.clone(),
             result: result.clone(),
+            camera_input: camera_input.clone(),
             finished: async move {
                 finished_rx
                     .await
@@ -1133,6 +1139,7 @@ impl Message<Resume> for Actor {
                     quiescent: false,
                 })
             });
+            *camera_input.lock().unwrap() = factory.live_camera.take();
             *result.lock().unwrap() = Some(prepared);
             let _ = finished_tx.send(());
             let _ = notify_after_capture_publication(
@@ -1334,14 +1341,63 @@ impl Message<SetCameraFeed> for Actor {
         }
         match self.state.as_ref() {
             Some(ActorState::Recording { .. }) => {
-                bail!("Pause the recording before changing camera input")
+                let (Some(camera_feed), Some(input)) = (
+                    msg.camera_feed,
+                    self.segment_factory
+                        .live_camera
+                        .clone()
+                        .filter(|input| input.is_released()),
+                ) else {
+                    bail!("Pause the recording before changing camera input")
+                };
+                input.attach(camera_feed.clone()).await?;
+                self.segment_factory.set_camera_feed(Some(camera_feed));
+                Ok(())
             }
             Some(ActorState::Paused { .. }) => {
-                self.segment_factory.set_camera_feed(msg.camera_feed);
+                self.segment_factory
+                    .set_next_segment_camera(msg.camera_feed);
                 Ok(())
             }
             None => Err(anyhow!("Recording no longer active")),
         }
+    }
+}
+
+struct ReleaseCameraForSwitch;
+
+impl Message<ReleaseCameraForSwitch> for Actor {
+    type Reply = anyhow::Result<()>;
+
+    async fn handle(
+        &mut self,
+        _: ReleaseCameraForSwitch,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        #[cfg(target_os = "linux")]
+        if self.resume_attempt.is_some() || self.resume_cleanup_error.is_some() {
+            bail!("Recording resume or its cleanup is still pending");
+        }
+        // The Media Foundation camera encoder takes only the size and pixel
+        // format it was opened with, so Windows switches cameras at a
+        // segment boundary.
+        if cfg!(windows) {
+            bail!("Switching the camera within a segment is not supported here");
+        }
+        let Some(ActorState::Recording { pipeline, .. }) = self.state.as_ref() else {
+            bail!("The recording is not running");
+        };
+        if pipeline.camera.is_none() {
+            bail!("The running segment has no camera track");
+        }
+        let input = self
+            .segment_factory
+            .live_camera
+            .clone()
+            .ok_or_else(|| anyhow!("The running segment has no camera track"))?;
+        input.release().await?;
+        self.segment_factory.set_camera_feed(None);
+        Ok(())
     }
 }
 
@@ -1358,10 +1414,7 @@ impl Message<AddExcludedWindows> for Actor {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         match self.state.as_ref() {
-            Some(ActorState::Recording { .. }) => {
-                bail!("Pause the recording before changing excluded windows")
-            }
-            Some(ActorState::Paused { .. }) => {
+            Some(ActorState::Recording { .. } | ActorState::Paused { .. }) => {
                 self.segment_factory.add_excluded_windows(msg.0);
                 Ok(())
             }
@@ -2343,6 +2396,14 @@ impl ActorHandle {
         camera_feed: Option<Arc<CameraFeedLock>>,
     ) -> anyhow::Result<()> {
         Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
+    }
+
+    /// Gives the running segment's camera up for a switch while the segment
+    /// keeps recording: the camera track stays open without frames until
+    /// `set_camera_feed` hands it the next camera. Fails, changing nothing,
+    /// where the segment cannot switch in place; pause to switch there.
+    pub async fn release_camera_for_switch(&self) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(ReleaseCameraForSwitch).await?)
     }
 
     #[cfg(target_os = "macos")]
@@ -3348,7 +3409,15 @@ struct SegmentPipelineFactory {
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
     encoder_preferences: crate::capture_pipeline::EncoderPreferences,
+    /// The camera input of the segment built last, which a camera switch
+    /// moves to another camera while that segment records.
+    live_camera: Option<StudioCameraInput>,
 }
+
+#[cfg(target_os = "linux")]
+type StudioCameraInput = sources::CameraTrackInput<crate::ffmpeg::FFmpegVideoFrame>;
+#[cfg(not(target_os = "linux"))]
+type StudioCameraInput = sources::CameraTrackInput<crate::output_pipeline::NativeCameraFrame>;
 
 impl SegmentPipelineFactory {
     #[allow(clippy::too_many_arguments)]
@@ -3380,6 +3449,7 @@ impl SegmentPipelineFactory {
             completion_tx,
             #[cfg(windows)]
             encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
+            live_camera: None,
         }
     }
 
@@ -3400,6 +3470,7 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
+        let camera_input = self.next_camera_input();
         #[cfg(test)]
         if let Some(prepare) = &self.prepare_override {
             return prepare(cursors, next_cursors_id).await;
@@ -3410,6 +3481,7 @@ impl SegmentPipelineFactory {
             &self.cursors_dir,
             self.index,
             self.segment_base_inputs(),
+            camera_input,
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
@@ -3438,6 +3510,7 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
+        let camera_input = self.next_camera_input();
         let startup = async {
             #[cfg(test)]
             if let Some(prepare) = &self.prepare_override {
@@ -3448,6 +3521,7 @@ impl SegmentPipelineFactory {
                 &self.cursors_dir,
                 self.index,
                 self.segment_base_inputs(),
+                camera_input,
                 cursors,
                 next_cursors_id,
                 self.custom_cursor_capture,
@@ -3502,6 +3576,23 @@ impl SegmentPipelineFactory {
 
     pub fn set_camera_feed(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
         self.base_inputs.camera_feed = camera_feed;
+    }
+
+    /// The camera the next segment records. The stopped segment's input
+    /// still holds its camera's lock, so it goes too, or the app could not
+    /// open another camera on the same feed.
+    pub fn set_next_segment_camera(&mut self, camera_feed: Option<Arc<CameraFeedLock>>) {
+        self.live_camera = None;
+        self.set_camera_feed(camera_feed);
+    }
+
+    fn next_camera_input(&mut self) -> Option<StudioCameraInput> {
+        self.live_camera = self
+            .base_inputs
+            .camera_feed
+            .clone()
+            .map(sources::CameraTrackInput::new);
+        self.live_camera.clone()
     }
 
     #[cfg(target_os = "macos")]
@@ -3576,6 +3667,7 @@ async fn create_segment_pipeline(
     cursors_dir: &Path,
     index: u32,
     base_inputs: RecordingBaseInputs,
+    camera_input: Option<StudioCameraInput>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
@@ -3660,7 +3752,7 @@ async fn create_segment_pipeline(
             } else {
                 OutputPipeline::builder(screen_output_path.clone())
             }
-            .with_video::<sources::Camera>(camera_feed)
+            .with_video::<sources::Camera>(sources::CameraTrackInput::new(camera_feed))
             .with_timestamps(start_time)
             .with_start_gate(start_gate.clone());
 
@@ -3700,7 +3792,9 @@ async fn create_segment_pipeline(
 
             #[cfg(target_os = "macos")]
             let screen = OutputPipeline::builder(screen_output_path.clone())
-                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_video::<sources::NativeCamera>(sources::CameraTrackInput::new(
+                    camera_feed.clone(),
+                ))
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig::default())
@@ -3710,7 +3804,9 @@ async fn create_segment_pipeline(
 
             #[cfg(windows)]
             let screen = OutputPipeline::builder(screen_output_path.clone())
-                .with_video::<sources::NativeCamera>(camera_feed.clone())
+                .with_video::<sources::NativeCamera>(sources::CameraTrackInput::new(
+                    camera_feed.clone(),
+                ))
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
@@ -3800,11 +3896,11 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "macos")]
     let camera = if camera_only || audio_only {
         None
-    } else if let Some(camera_feed) = base_inputs.camera_feed {
+    } else if let Some(camera_input) = camera_input {
         let pipeline = if segment_fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<MacOSFragmentedM4SCameraMuxer>(MacOSFragmentedM4SCameraMuxerConfig {
@@ -3815,7 +3911,7 @@ async fn create_segment_pipeline(
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<AVFoundationCameraMuxer>(AVFoundationCameraMuxerConfig {
@@ -3833,11 +3929,11 @@ async fn create_segment_pipeline(
     #[cfg(windows)]
     let camera = if camera_only || audio_only {
         None
-    } else if let Some(camera_feed) = base_inputs.camera_feed {
+    } else if let Some(camera_input) = camera_input {
         let pipeline = if segment_fragmented {
             let fragments_dir = dir.join("camera");
             OutputPipeline::builder(fragments_dir)
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsFragmentedM4SCameraMuxer>(WindowsFragmentedM4SCameraMuxerConfig {
@@ -3848,7 +3944,7 @@ async fn create_segment_pipeline(
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
-                .with_video::<sources::NativeCamera>(camera_feed)
+                .with_video::<sources::NativeCamera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<WindowsCameraMuxer>(WindowsCameraMuxerConfig {
@@ -3866,10 +3962,10 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "linux")]
     let camera = if camera_only || audio_only {
         None
-    } else if let Some(camera_feed) = base_inputs.camera_feed {
+    } else if let Some(camera_input) = camera_input {
         let pipeline = if segment_fragmented {
             OutputPipeline::builder(dir.join("camera"))
-                .with_video::<sources::Camera>(camera_feed)
+                .with_video::<sources::Camera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::SegmentedVideoMuxer>(
@@ -3884,7 +3980,7 @@ async fn create_segment_pipeline(
                 .await
         } else {
             OutputPipeline::builder(dir.join("camera.mp4"))
-                .with_video::<sources::Camera>(camera_feed)
+                .with_video::<sources::Camera>(camera_input)
                 .with_timestamps(start_time)
                 .with_start_gate(start_gate.clone())
                 .build::<crate::ffmpeg::Mp4Muxer>(())
@@ -5006,6 +5102,45 @@ mod tests {
         assert_eq!(replay.result.err().expect("cached unconfirmed stop"), error);
     }
 
+    /// A camera switch while paused hands the next segment another camera.
+    /// The stopped segment's camera input must let go of the old camera's
+    /// lock, or the app cannot open the new camera on the shared feed.
+    #[tokio::test]
+    async fn a_paused_camera_change_unlocks_the_stopped_segments_camera() {
+        let camera =
+            crate::feeds::camera::synthetic::SyntheticCamera::spawn("camera", test_video_info());
+        let dir = tempfile::tempdir().unwrap();
+        let (completion_tx, _completion_rx) = watch::channel(None);
+        let mut factory = SegmentPipelineFactory::new(
+            dir.path().join("content/segments"),
+            dir.path().join("content/cursors"),
+            RecordingBaseInputs {
+                capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
+                window_only: false,
+                capture_system_audio: false,
+                mic_feed: None,
+                camera_feed: Some(Arc::new(camera.lock().await.unwrap())),
+                start_gate: None,
+                #[cfg(target_os = "macos")]
+                shareable_content: None,
+                #[cfg(target_os = "macos")]
+                excluded_windows: Vec::new(),
+            },
+            false,
+            false,
+            false,
+            false,
+            30,
+            crate::StudioQuality::Balanced,
+            completion_tx,
+        );
+        drop(factory.next_camera_input());
+        factory.set_camera_feed(None);
+        assert!(camera.lock().await.is_err(), "the segment's input holds it");
+        factory.set_next_segment_camera(None);
+        assert!(camera.lock().await.is_ok());
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     mod failed_resume_tests {
         use super::*;
@@ -5390,6 +5525,14 @@ mod tests {
         }
 
         fn paused_resume_actor(path: &Path, prepare: ResumeTestFactory) -> ActorHandle {
+            paused_resume_actor_with_camera(path, prepare, None)
+        }
+
+        fn paused_resume_actor_with_camera(
+            path: &Path,
+            prepare: ResumeTestFactory,
+            camera_feed: Option<Arc<CameraFeedLock>>,
+        ) -> ActorHandle {
             let (completion_tx, completion_rx) = watch::channel(None);
             let target = screen_capture::ScreenCaptureTarget::CameraOnly;
             let mut factory = SegmentPipelineFactory::new(
@@ -5400,7 +5543,7 @@ mod tests {
                     window_only: false,
                     capture_system_audio: false,
                     mic_feed: None,
-                    camera_feed: None,
+                    camera_feed,
                     start_gate: None,
                     #[cfg(target_os = "macos")]
                     shareable_content: None,
@@ -5898,6 +6041,82 @@ mod tests {
                 drop(self.sender.take());
                 async { Ok(()) }.boxed()
             }
+        }
+
+        struct LiveCameraSnapshot;
+
+        impl Message<LiveCameraSnapshot> for Actor {
+            type Reply = Option<bool>;
+
+            async fn handle(
+                &mut self,
+                _: LiveCameraSnapshot,
+                _: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                self.segment_factory
+                    .live_camera
+                    .as_ref()
+                    .map(|input| input.lock().is_some())
+            }
+        }
+
+        /// Resume builds the segment on a copy of the factory. The camera
+        /// input that segment records through must reach the actor's factory,
+        /// or the next camera switch cannot find it and pauses instead.
+        #[tokio::test]
+        async fn a_resumed_segment_keeps_its_camera_switchable() {
+            let directory = tempfile::tempdir().unwrap();
+            let camera = crate::feeds::camera::synthetic::SyntheticCamera::spawn(
+                "camera",
+                test_video_info(),
+            );
+            let stop = Arc::new(std::sync::Mutex::new(None));
+            let next_path = directory
+                .path()
+                .join("content/segments/segment-1/display.mp4");
+            let handle = paused_resume_actor_with_camera(
+                directory.path(),
+                Arc::new(move |_, _| {
+                    let stop = stop.clone();
+                    let next_path = next_path.clone();
+                    async move {
+                        let start_time = Timestamps::now();
+                        let screen = OutputPipeline::builder(next_path)
+                            .with_video::<ResumeVideo>(stop)
+                            .with_timestamps(start_time)
+                            .build::<SuccessfulVideoMuxer>(())
+                            .await?;
+                        Ok(Pipeline {
+                            start_time,
+                            start_gate: None,
+                            screen,
+                            microphone: None,
+                            camera: None,
+                            system_audio: None,
+                            cursor: None,
+                            track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+                            watcher_task: None,
+                            stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                            system_audio_required: false,
+                        })
+                    }
+                    .boxed()
+                }),
+                Some(Arc::new(camera.lock().await.unwrap())),
+            );
+            assert_eq!(
+                handle.actor_ref.ask(LiveCameraSnapshot).await.unwrap(),
+                None
+            );
+            handle.resume().await.unwrap();
+            assert_eq!(
+                handle.actor_ref.ask(LiveCameraSnapshot).await.unwrap(),
+                Some(true)
+            );
+            tokio::time::timeout(Duration::from_secs(3), handle.stop())
+                .await
+                .unwrap()
+                .unwrap();
         }
 
         #[tokio::test]
