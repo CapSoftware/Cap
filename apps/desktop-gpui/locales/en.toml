@@ -2556,6 +2556,10 @@ retry_copy = "Retry Copy"
 reuploaded = "Your latest edit is ready at the same link"
 uploaded = "Your Cap has been uploaded successfully"
 
+[editor.export.enhance]
+description = "Sharpens zoomed-in and low-contrast screen content. Exports can take longer."
+title = "Enhance quality"
+
 [editor.export.estimate]
 gigabytes = "~{value} GB"
 gigabytes_range = "~{lower}–{upper} GB"
@@ -3292,7 +3296,11 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
+compare = "Compare"
+compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
+enhance = "Enhance"
+enhance_tooltip = "Show the paused frame enhanced"
 play_pause = "Play/Pause video"
 speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"

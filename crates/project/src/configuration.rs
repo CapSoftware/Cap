@@ -1060,6 +1060,42 @@ impl Default for ScreenMovementSpring {
     }
 }
 
+/// Export and paused-preview enhancement of the screen recording: debanding
+/// and an edge-aware upscale of magnified content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenEnhancement {
+    pub enabled: bool,
+    pub strength: f32,
+}
+
+impl ScreenEnhancement {
+    pub const DEFAULT_STRENGTH: f32 = 0.5;
+
+    pub const fn on() -> Self {
+        Self {
+            enabled: true,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+
+    pub fn effective_strength(&self) -> f32 {
+        if self.enabled && self.strength.is_finite() {
+            self.strength.clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Default for ScreenEnhancement {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            strength: Self::DEFAULT_STRENGTH,
+        }
+    }
+}
+
 impl ScreenMovementSpring {
     /// How far ahead of its segment an early zoom starts moving.
     pub const EARLY_START_SECS: f64 = 0.35;
@@ -3140,6 +3176,10 @@ pub struct ProjectConfiguration {
     pub screen_motion_blur: f32,
     #[serde(default)]
     pub screen_movement_spring: ScreenMovementSpring,
+    /// Set for one render by the export page's option or the editor's preview
+    /// toggle; never read from or written to a project file.
+    #[serde(skip)]
+    pub screen_enhancement: ScreenEnhancement,
     /// Per-layer cinematic color grades. Field-level default keeps old
     /// project files (and old saved presets) deserializing to the identity
     /// grade.
@@ -3174,6 +3214,10 @@ pub struct ProjectConfiguration {
     /// [`crate::auto_zoom::AUTO_ZOOM_VERSION`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub auto_zoom_version: u32,
+    /// Only new projects carry it, and the editor's first open clears it, so
+    /// saved projects can never have zooms generated over them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_zoom_pending: bool,
     #[serde(
         default,
         deserialize_with = "markers::deserialize_markers",
@@ -3236,11 +3280,13 @@ impl Default for ProjectConfiguration {
             hidden_text_segments: Default::default(),
             screen_motion_blur: Self::default_screen_motion_blur(),
             screen_movement_spring: Default::default(),
+            screen_enhancement: Default::default(),
             color_correction: Default::default(),
             clip_alignment_version: CLIP_ALIGNMENT_VERSION,
             text_size_version: TEXT_SIZE_VERSION,
             text_anim_version: TEXT_ANIM_VERSION,
             auto_zoom_version: 0,
+            auto_zoom_pending: false,
             markers: Vec::new(),
             audio_visuals: None,
         }
@@ -3331,6 +3377,7 @@ impl ProjectConfiguration {
         });
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
         config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
+        config.auto_zoom_pending = true;
         config
     }
 
@@ -3359,6 +3406,7 @@ impl ProjectConfiguration {
         preset.text_size_version = self.text_size_version;
         preset.text_anim_version = self.text_anim_version;
         preset.auto_zoom_version = self.auto_zoom_version;
+        preset.auto_zoom_pending = self.auto_zoom_pending;
         preset.overlay_order = self.overlay_order.clone();
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
@@ -3840,6 +3888,26 @@ mod tests {
     }
 
     #[test]
+    fn only_new_projects_wait_for_their_first_auto_zoom() {
+        assert!(ProjectConfiguration::for_new_project().auto_zoom_pending);
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert!(!saved.auto_zoom_pending);
+        assert!(
+            serde_json::to_value(&saved)
+                .unwrap()
+                .get("autoZoomPending")
+                .is_none()
+        );
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["autoZoomPending"], true);
+        assert!(
+            !saved
+                .with_preset(ProjectConfiguration::for_new_project())
+                .auto_zoom_pending
+        );
+    }
+
+    #[test]
     fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
         assert!(ProjectConfiguration::default().cursor.interaction_anchors);
         assert!(ProjectConfiguration::default().cursor.hover_anchors);
@@ -3914,6 +3982,30 @@ mod tests {
     }
 
     #[test]
+    fn screen_enhancement_is_never_saved_or_loaded_with_the_project() {
+        let config = ProjectConfiguration {
+            screen_enhancement: ScreenEnhancement::on(),
+            ..ProjectConfiguration::default()
+        };
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written.get("screenEnhancement").is_none());
+        assert_eq!(
+            written,
+            serde_json::to_value(ProjectConfiguration::default()).unwrap()
+        );
+
+        let mut saved = written;
+        saved["screenEnhancement"] = serde_json::json!({"enabled": true, "strength": 1.0});
+        let loaded: ProjectConfiguration = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.screen_enhancement, ScreenEnhancement::default());
+        assert!(
+            !ProjectConfiguration::for_new_project()
+                .screen_enhancement
+                .enabled
+        );
+    }
+
+    #[test]
     fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
         let fresh = ProjectConfiguration::for_new_project();
         assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
@@ -3934,6 +4026,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("autoZoomVersion");
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("autoZoomPending");
         assert_eq!(framing_reset, default);
     }
 

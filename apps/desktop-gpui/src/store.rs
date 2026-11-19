@@ -162,6 +162,8 @@ pub struct ExportPrefs {
     pub fps_from_source: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_format: Option<String>,
+    #[serde(default)]
+    pub enhance_quality: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -1017,9 +1019,8 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 ///
 /// The defaults are `createDefaultGeneralSettings()` plus the per-row `??`
 /// fallbacks in `general.tsx` -- i.e. what the shipping page *shows* for a key
-/// that is not in the file. Two of them disagree with the Rust struct's own
-/// `#[serde(default)]`: `autoZoomOnClicks` (Rust `default_true`, the page
-/// false) and `enableNativeCameraPreview`. The page is the authority here
+/// that is not in the file. `enableNativeCameraPreview` disagrees with the
+/// Rust struct's own `#[serde(default)]`; the page is the authority here
 /// because this is a page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
@@ -1080,6 +1081,9 @@ pub struct GeneralSettings {
     /// How fast the editor preview plays. Preview only: export and the
     /// project never see it. Anything but one of the offered steps reads as 1x.
     pub editor_preview_speed: cap_editor::PreviewSpeed,
+    /// Whether the editor's paused preview shows the enhanced frame. Preview
+    /// only: exports use the export page's own option.
+    pub editor_preview_enhance: bool,
     /// The Experimental page's two toggles. Both default false the way the
     /// page shows them (`!!settings.enableNativeCameraPreview` /
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
@@ -1097,6 +1101,7 @@ pub struct GeneralSettings {
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
 pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
+pub const EDITOR_PREVIEW_ENHANCE_KEY: &str = "editorPreviewEnhance";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
 pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
@@ -1520,7 +1525,7 @@ impl GeneralSettings {
             // is how the setting was re-defaulted without inheriting the old
             // key's values.
             custom_cursor_capture: bool_at(general, "custom_cursor_capture2", true),
-            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", false),
+            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", true),
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
@@ -1553,6 +1558,7 @@ impl GeneralSettings {
                 .and_then(Value::as_f64)
                 .and_then(cap_editor::PreviewSpeed::from_f64)
                 .unwrap_or_default(),
+            editor_preview_enhance: bool_at(general, EDITOR_PREVIEW_ENHANCE_KEY, false),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(
@@ -3317,6 +3323,7 @@ mod tests {
         assert_eq!(settings.instant_mode_max_resolution, 1920);
         assert_eq!(GeneralSettings::default().new_zoom_amount(), 2.0);
         assert_eq!(GeneralSettings::default().zoom_amount_for(0), 1.5);
+        assert!(GeneralSettings::default().auto_zoom_on_clicks);
         assert_eq!(settings.zoom_amount_for(0), 2.5);
     }
 
