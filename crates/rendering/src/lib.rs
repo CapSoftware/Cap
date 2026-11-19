@@ -7503,6 +7503,7 @@ mod next_index_tests {
         RecordingSegmentDecoders {
             screen: AsyncVideoDecoderHandle::for_test(sender, 16, 16).with_test_fps(FPS),
             camera: None,
+            source_video: None,
             segment_offset: 0.0,
             transition_readers: None,
         }
