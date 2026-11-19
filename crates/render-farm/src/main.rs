@@ -127,6 +127,7 @@ async fn handle(op: Op) -> Result<Value> {
 
 fn init_engine() -> Result<()> {
     ffmpeg::init()?;
+    cap_enc_ffmpeg::decode_limit::limit_decode_pixels(project::DECODE_MAX_PIXELS);
     Ok(())
 }
 

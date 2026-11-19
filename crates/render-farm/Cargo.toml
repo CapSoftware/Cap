@@ -14,6 +14,7 @@ cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
 cap-editor = { path = "../editor" }
 cap-export = { path = "../export" }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 
 anyhow.workspace = true
 base64 = "0.22.1"
