@@ -57,6 +57,7 @@ cap-enc-ffmpeg = { path = "../../crates/enc-ffmpeg" }
 cap-timestamp = { path = "../../crates/timestamp" }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
+cap-automation = { path = "../../crates/automation" }
 # The cursor style picker draws the same SVG assets the renderer composites.
 # gpui's `svg()` keeps only a glyph's alpha, so the two-tone cursor art has to
 # be rasterised instead: `resvg` at the pin cap-rendering already builds, into
@@ -94,6 +95,7 @@ cap-export = { path = "../../crates/export" }
 # workspace pins, and cap-recording already builds it, so this is an import,
 # not an extra dependency tree.
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
+notify-rust = "4.18"
 # Camera preview frames and Recents thumbnails both become gpui `RenderImage`s,
 # and the frame container type must match gpui's image crate version exactly
 # (`image = "0.25.1"` in the zed fork's workspace) or `Frame` would be two
@@ -119,7 +121,7 @@ sys-locale = "0.3"
 # lockfile through gpui, so this makes an existing build unit direct.
 unicode-segmentation = "1"
 # spawn_blocking for finalize; the runtime itself comes from gpui_tokio.
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 # The crate 0.6.0's global-shortcut plugin wrapped, at the same pin: stored
 # bindings are W3C `KeyboardEvent.code` strings and this owns the platform
 # mapping (Carbon RegisterEventHotKey on macOS).
@@ -135,6 +137,10 @@ chrono = "0.4"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
+# Moves media of clips removed from a project to the OS trash, so the user
+# can still recover it. Its platform deps (objc2 0.6, windows 0.62) are
+# already in the tree.
+trash = "=5.2.9"
 semver = "1"
 base64 = "0.22"
 minisign-verify = "0.2.4"
@@ -207,6 +213,7 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
+same-file = "1.0.6"
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

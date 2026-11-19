@@ -5,6 +5,11 @@ import {
 	DEVELOPER_VIDEO_MP4_FILE,
 	DEVELOPER_VIDEO_POSTER_FILE,
 } from "./developer-video-plan";
+import { slicedHlsPlayback } from "./developer-video-slices";
+import {
+	developerVideoIsTakenDown,
+	developerVideoPublicMetadata,
+} from "./developer-video-takedown";
 
 type DeveloperVideoRow = typeof developerVideos.$inferSelect;
 
@@ -14,18 +19,94 @@ export interface DeveloperVideoOutputs {
 	poster: boolean;
 }
 
+// A row read in full carries its metadata. A list that does not load
+// metadata selects the takedown flag on its own instead.
+type TakedownSource = { metadata: unknown } | { takenDown: boolean };
+
+type PlayableFields = Pick<
+	DeveloperVideoRow,
+	"status" | "playbackId" | "processing"
+> &
+	TakedownSource;
+
+export function developerVideoTakenDown(video: TakedownSource): boolean {
+	return "takenDown" in video
+		? video.takenDown
+		: developerVideoIsTakenDown(video);
+}
+
 export function developerVideoOutputs(
-	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
+	video: PlayableFields,
 ): DeveloperVideoOutputs {
 	const processing = video.processing;
-	if (video.status !== "ready" || !video.playbackId || !processing) {
+	if (
+		video.status !== "ready" ||
+		!video.playbackId ||
+		!processing ||
+		developerVideoTakenDown(video)
+	) {
 		return { hls: false, mp4: false, poster: false };
 	}
 	return {
-		hls: processing.hls.state === "complete",
+		hls:
+			processing.hls.state === "complete" ||
+			slicedHlsPlayback(processing) !== null,
 		mp4: processing.mp4.state === "complete",
 		poster: processing.poster !== null,
 	};
+}
+
+export type DeveloperVideoOutputState =
+	| "processing"
+	| "ready"
+	| "failed"
+	| "none";
+
+export interface DeveloperVideoOutputStates {
+	hls: DeveloperVideoOutputState;
+	mp4: DeveloperVideoOutputState;
+}
+
+// A null hlsUrl or mp4Url alone cannot say whether that output is still being
+// encoded or will never exist. "ready" matches a non-null URL exactly, except
+// on a video Cap took down: its URLs are null while takenDown is true, and its
+// outputs keep saying what was encoded, so a restore needs no new encode and a
+// client is not told to keep waiting. A part waiting for a busy encoder to
+// retry is still "processing". "none" is only for videos uploaded before
+// encoding existed, which never get these outputs.
+export function developerVideoOutputStates(
+	video: Pick<
+		DeveloperVideoRow,
+		"status" | "playbackId" | "processing" | "duration" | "width"
+	>,
+): DeveloperVideoOutputStates {
+	const outputs = developerVideoOutputs({ ...video, takenDown: false });
+	const processing = video.processing;
+	const state = (part: "hls" | "mp4"): DeveloperVideoOutputState => {
+		if (outputs[part]) return "ready";
+		if (video.status === "errored") return "failed";
+		if (!processing) {
+			return video.playbackId === null && developerVideoIsReady(video)
+				? "none"
+				: "processing";
+		}
+		return processing[part].state === "failed" ? "failed" : "processing";
+	};
+	return { hls: state("hls"), mp4: state("mp4") };
+}
+
+// A failed video reports only a length that processing measured. Before that,
+// the stored duration came from the upload: the length the client declared,
+// held to what the file's size allows, or a measurement taken at upload. A
+// video processing refused or never reached reports none, so a client never
+// reads a length for a file that may not be a video at all.
+export function developerVideoReportedDuration(
+	video: Pick<DeveloperVideoRow, "status" | "processing" | "duration">,
+): number | null {
+	if (video.status === "errored" && video.processing?.probe?.duration == null) {
+		return null;
+	}
+	return video.duration;
 }
 
 export function developerPlaybackBaseUrl(): string {
@@ -34,9 +115,11 @@ export function developerPlaybackBaseUrl(): string {
 	return base.replace(/\/+$/, "");
 }
 
-export function developerVideoPlaybackUrls(
-	video: Pick<DeveloperVideoRow, "status" | "playbackId" | "processing">,
-): { hlsUrl: string | null; mp4Url: string | null; posterUrl: string | null } {
+export function developerVideoPlaybackUrls(video: PlayableFields): {
+	hlsUrl: string | null;
+	mp4Url: string | null;
+	posterUrl: string | null;
+} {
 	const outputs = developerVideoOutputs(video);
 	const base = `${developerPlaybackBaseUrl()}/${video.playbackId}`;
 	return {
@@ -73,7 +156,7 @@ export type AgentDeveloperVideoRow = Pick<
 	| "processing"
 	| "createdAt"
 	| "updatedAt"
->;
+> & { takenDown: boolean };
 
 export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 	const status = developerVideoIsReady(video) ? "ready" : video.status;
@@ -85,13 +168,14 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 		status,
 		errorReason: status === "errored" ? video.errorReason : null,
 		playbackId: video.playbackId,
-		durationSeconds: video.duration,
+		durationSeconds: developerVideoReportedDuration(video),
 		width: video.width,
 		height: video.height,
 		fps: video.fps,
 		maxResolutionTier: video.maxResolutionTier,
 		renditions: video.renditions ?? [],
 		transcriptionStatus: video.transcriptionStatus,
+		takenDown: video.takenDown === true,
 		...developerVideoPlaybackUrls(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
@@ -104,14 +188,20 @@ export function toAgentDeveloperVideo(video: AgentDeveloperVideoRow) {
 export function serializeDeveloperVideo(video: DeveloperVideoRow) {
 	const {
 		processing: _processing,
+		storagePaidUntil: _storagePaidUntil,
 		filesDeletedAt: _filesDeletedAt,
 		s3Key: _s3Key,
 		...fields
 	} = video;
 	return {
 		...fields,
+		metadata: developerVideoPublicMetadata(video.metadata),
+		duration: developerVideoReportedDuration(video),
+		durationSeconds: developerVideoReportedDuration(video),
 		renditions: video.renditions ?? [],
+		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
+		outputs: developerVideoOutputStates(video),
 		...(video.playbackId
 			? developerVideoPageUrls(video.playbackId)
 			: { shareUrl: null, embedUrl: null }),
@@ -136,7 +226,8 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 	return {
 		id: video.id,
 		externalUserId: video.externalUserId,
-		duration: video.duration,
+		duration: developerVideoReportedDuration(video),
+		durationSeconds: developerVideoReportedDuration(video),
 		width: video.width,
 		height: video.height,
 		transcriptionStatus: video.transcriptionStatus,
@@ -145,6 +236,8 @@ export function serializeDeveloperVideoStatus(video: DeveloperVideoRow) {
 		errorReason: video.errorReason,
 		playbackId: video.playbackId,
 		renditions: video.renditions ?? [],
+		takenDown: developerVideoIsTakenDown(video),
 		...developerVideoPlaybackUrls(video),
+		outputs: developerVideoOutputStates(video),
 	};
 }

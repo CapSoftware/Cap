@@ -149,9 +149,9 @@ describe("exporting the ledger as CSV", () => {
 		const lines = (await response.text()).trimEnd().split("\r\n");
 		expect(lines).toEqual([
 			"id,time_utc,type,note,reference_type,reference_id,amount_usd,amount_micro_credits,balance_usd,balance_micro_credits",
-			"a3,2026-11-12T14:05:09Z,Transcription,,developer_transcript,transcript-a3,-0.00033,-33,24.99934,2499934",
-			"a2,2026-11-12T14:05:09Z,Transcription,,developer_transcript,transcript-a2,-0.00033,-33,24.99967,2499967",
-			"a1,2026-11-12T14:05:09Z,Top-up,,stripe_payment_intent,pi_3TestPayment,25.00,2500000,25.00,2500000",
+			"a3,2026-11-12T14:05:09Z,Transcription,,Transcript,transcript-a3,-0.00033,-33,24.99934,2499934",
+			"a2,2026-11-12T14:05:09Z,Transcription,,Transcript,transcript-a2,-0.00033,-33,24.99967,2499967",
+			"a1,2026-11-12T14:05:09Z,Top-up,,Payment,pi_3TestPayment,25.00,2500000,25.00,2500000",
 		]);
 		expect(mocks.read).toEqual(["app-a"]);
 	});

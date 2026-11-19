@@ -1,4 +1,5 @@
 export const API_DOCS_URL = "https://cap.so/docs/api/rest-api";
+export const WEBHOOK_DOCS_URL = "https://cap.so/docs/api/webhooks";
 export const OPENAPI_SPEC_PATH = "/openapi.json";
 
 export type ApiErrorBody = {
@@ -18,7 +19,7 @@ export const apiErrorBody = (
 	code,
 	message,
 	hint,
-	docs: API_DOCS_URL,
+	docs: code.includes("webhook") ? WEBHOOK_DOCS_URL : API_DOCS_URL,
 });
 
 export const apiNotFoundBody = (pathname: string) =>

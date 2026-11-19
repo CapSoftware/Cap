@@ -38,6 +38,22 @@ export async function claimTranscriptRun(transcriptId: string, runId: string) {
 	);
 }
 
+export async function runOwnedState(
+	transcriptId: string,
+	runId: string,
+): Promise<"complete" | "ended" | "processing" | null> {
+	const row = await loadRun(transcriptId);
+	if (!row || row.runId !== runId) return null;
+	if (row.status === "complete") return "complete";
+	if (row.status === "processing") return "processing";
+	return row.status === "error" ? "ended" : null;
+}
+
+export async function transcriptAwaitsSpeech(transcriptId: string) {
+	const row = await loadRun(transcriptId);
+	return row !== null && !row.deletedAt && row.status === "processing";
+}
+
 export async function failTranscriptRun(
 	transcriptId: string,
 	runId: string,

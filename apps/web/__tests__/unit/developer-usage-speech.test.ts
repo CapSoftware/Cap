@@ -148,7 +148,7 @@ describe("speech usage for an app", () => {
 		});
 	});
 
-	it("reports credit held by running transcripts and what is left available", async () => {
+	it("reports credit held by running transcripts, deleted ones included, and what is left available", async () => {
 		seed("running-a", {
 			status: "processing",
 			reservedMicroCredits: 40_000,
@@ -169,9 +169,9 @@ describe("speech usage for an app", () => {
 
 		const usage = await getSpeechUsage("app-1", NOW);
 
-		expect(usage.heldMicroCredits).toBe(45_000);
+		expect(usage.heldMicroCredits).toBe(85_000);
 		expect(usage.balanceMicroCredits).toBe(949_286);
-		expect(usage.availableMicroCredits).toBe(949_286 - 45_000);
+		expect(usage.availableMicroCredits).toBe(949_286 - 85_000);
 		expect(usage.speech.microCredits).toBe(0);
 	});
 

@@ -199,6 +199,12 @@ struct ListeningHotkey {
     action: &'static str,
     modifiers: gpui::Modifiers,
     error: Option<fn() -> &'static str>,
+    conflict: Option<ShortcutConflict>,
+}
+
+struct ShortcutConflict {
+    hotkey: Hotkey,
+    owner: &'static str,
 }
 
 struct SavedShortcut {
@@ -331,6 +337,7 @@ pub(crate) struct PagesState {
     diagnostic: DiagnosticStatus,
     diagnostic_mode: diagnostics::SyncMode,
     diagnostic_mic: bool,
+    diagnostic_duration_secs: u64,
     /// Set for the length of a run; the Cancel button flips it and the runner's
     /// watchdog kills the self-test subprocess. It stays readable after Cancel
     /// so the run's later stages can still see it.
@@ -434,6 +441,7 @@ impl PagesState {
             diagnostic: DiagnosticStatus::Idle,
             diagnostic_mode: diagnostics::SyncMode::Both,
             diagnostic_mic: false,
+            diagnostic_duration_secs: diagnostics::DEFAULT_DURATION_SECS,
             diagnostic_cancel: None,
             diagnostic_cancelling: false,
             diagnostic_payload: None,
@@ -931,7 +939,8 @@ impl SettingsWindow {
 
 const SCREENSHOT_SHORTCUTS: [&str; 3] = ["screenshotArea", "screenshotWindow", "screenshotDisplay"];
 
-const RECORDING_SHORTCUTS: [&str; 7] = [
+const RECORDING_SHORTCUTS: [&str; 8] = [
+    "startRecording",
     "startStudioRecording",
     "startInstantRecording",
     "openRecordingPickerArea",
@@ -941,7 +950,18 @@ const RECORDING_SHORTCUTS: [&str; 7] = [
     "cycleRecordingMode",
 ];
 
-const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
+#[cfg(target_os = "macos")]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
+    "stopRecording",
+    "togglePauseRecording",
+    "restartRecording",
+    store::RECORDING_MARKER_HOTKEY,
+    store::DRAW_HOTKEY,
+];
+
+/// Drawing on screen is macOS only, so its shortcut is too.
+#[cfg(not(target_os = "macos"))]
+const WHILE_RECORDING_SHORTCUTS: &[&str] = &[
     "stopRecording",
     "togglePauseRecording",
     "restartRecording",
@@ -949,6 +969,45 @@ const WHILE_RECORDING_SHORTCUTS: [&str; 4] = [
 ];
 
 const SHORTCUT_SAVED_NOTICE: std::time::Duration = std::time::Duration::from_secs(6);
+
+fn page_shortcuts() -> impl Iterator<Item = &'static str> {
+    SCREENSHOT_SHORTCUTS
+        .iter()
+        .chain(RECORDING_SHORTCUTS.iter())
+        .chain(WHILE_RECORDING_SHORTCUTS.iter())
+        .copied()
+}
+
+fn shortcut_owners(
+    bindings: &Map<String, Value>,
+    hotkey: &Hotkey,
+    action: &str,
+) -> Vec<&'static str> {
+    page_shortcuts()
+        .filter(|other| *other != action)
+        .filter(|other| {
+            bindings
+                .get(*other)
+                .and_then(store::hotkey_from_value)
+                .as_ref()
+                == Some(hotkey)
+        })
+        .collect()
+}
+
+fn assign_shortcut(
+    bindings: &mut Map<String, Value>,
+    action: &'static str,
+    hotkey: &Hotkey,
+) -> Option<&'static str> {
+    let owners = shortcut_owners(bindings, hotkey, action);
+    for owner in &owners {
+        bindings.remove(*owner);
+    }
+    let value = serde_json::to_value(hotkey).unwrap_or(Value::Null);
+    bindings.insert(action.to_string(), value);
+    owners.first().copied()
+}
 
 #[derive(Clone, Copy)]
 struct OutcomeOption {
@@ -1004,9 +1063,9 @@ const STUDIO_OUTCOMES: [(store::PostStudioBehaviour, OutcomeOption); 3] = [
     (
         store::PostStudioBehaviour::ShowOverlay,
         OutcomeOption {
-            icon: "icons/app-window.svg",
-            label: tr::settings::shortcuts::outcome::studio_show_cap,
-            hint: tr::settings::shortcuts::outcome::studio_show_cap_hint,
+            icon: "icons/layers.svg",
+            label: tr::settings::shortcuts::outcome::studio_show_overlay,
+            hint: tr::settings::shortcuts::outcome::studio_show_overlay_hint,
         },
     ),
     (
@@ -1090,6 +1149,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "screenshotArea" => tr::settings::shortcuts::label::screenshot_area(),
         "screenshotWindow" => tr::settings::shortcuts::label::screenshot_window(),
         "screenshotDisplay" => tr::settings::shortcuts::label::screenshot_display(),
+        "startRecording" => tr::settings::shortcuts::label::start_selected(),
         "startStudioRecording" => tr::settings::shortcuts::label::start_studio(),
         "startInstantRecording" => tr::settings::shortcuts::label::start_instant(),
         "openRecordingPickerArea" => tr::settings::shortcuts::label::record_area(),
@@ -1101,6 +1161,7 @@ fn shortcut_label(action: &str) -> &'static str {
         "togglePauseRecording" => tr::settings::shortcuts::label::pause(),
         "restartRecording" => tr::settings::shortcuts::label::restart(),
         store::RECORDING_MARKER_HOTKEY => tr::settings::shortcuts::label::add_marker(),
+        store::DRAW_HOTKEY => tr::settings::shortcuts::label::toggle_drawing(),
         _ => tr::settings::shortcuts::label::fallback(),
     }
 }
@@ -1125,7 +1186,7 @@ fn shortcut_effect(
     mode: crate::main_window::Mode,
 ) -> Option<ShortcutEffect> {
     use crate::main_window::Mode;
-    use store::{PostScreenshotBehaviour as Shot, PostStudioBehaviour as Studio};
+    use store::PostScreenshotBehaviour as Shot;
 
     let shot = settings.post_screenshot_behaviour;
     let effect = match action {
@@ -1184,31 +1245,16 @@ fn shortcut_effect(
                 sentence: tr::settings::shortcuts::sentence::screenshot_display_save,
             },
         },
-        "startStudioRecording" => match settings.post_studio_recording_behaviour {
-            Studio::OpenEditor => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::studio_open_editor,
-                sentence: tr::settings::shortcuts::sentence::studio_open_editor,
-            },
-            Studio::ShowOverlay | Studio::DoNothing => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::studio,
-                sentence: tr::settings::shortcuts::sentence::studio,
-            },
+        "startStudioRecording" => studio_start_effect(settings),
+        "startInstantRecording" => instant_start_effect(settings),
+        "startRecording" => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::start_selected,
+            sentence: tr::settings::shortcuts::sentence::start_selected,
         },
-        "startInstantRecording" => {
-            if settings.disable_auto_open_links {
-                ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::instant_copy,
-                    sentence: tr::settings::shortcuts::sentence::instant_copy,
-                }
-            } else {
-                ShortcutEffect {
-                    phrase: tr::settings::shortcuts::effect::instant_copy_and_open,
-                    sentence: tr::settings::shortcuts::sentence::instant_copy_and_open,
-                }
-            }
-        }
+        // `Mode::for_recording`: a "Record …" shortcut records in Studio when
+        // the saved mode is Screenshot.
         "openRecordingPickerArea" => match mode {
-            Mode::Studio => ShortcutEffect {
+            Mode::Studio | Mode::Screenshot => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_area_studio,
                 sentence: tr::settings::shortcuts::sentence::picker_area_studio,
             },
@@ -1216,13 +1262,9 @@ fn shortcut_effect(
                 phrase: tr::settings::shortcuts::effect::picker_area_instant,
                 sentence: tr::settings::shortcuts::sentence::picker_area_instant,
             },
-            Mode::Screenshot => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::picker_area_screenshot,
-                sentence: tr::settings::shortcuts::sentence::picker_area_screenshot,
-            },
         },
         "openRecordingPickerWindow" => match mode {
-            Mode::Studio => ShortcutEffect {
+            Mode::Studio | Mode::Screenshot => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_window_studio,
                 sentence: tr::settings::shortcuts::sentence::picker_window_studio,
             },
@@ -1230,23 +1272,15 @@ fn shortcut_effect(
                 phrase: tr::settings::shortcuts::effect::picker_window_instant,
                 sentence: tr::settings::shortcuts::sentence::picker_window_instant,
             },
-            Mode::Screenshot => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::picker_window_screenshot,
-                sentence: tr::settings::shortcuts::sentence::picker_window_screenshot,
-            },
         },
         "openRecordingPickerDisplay" => match mode {
-            Mode::Studio => ShortcutEffect {
+            Mode::Studio | Mode::Screenshot => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_display_studio,
                 sentence: tr::settings::shortcuts::sentence::picker_display_studio,
             },
             Mode::Instant => ShortcutEffect {
                 phrase: tr::settings::shortcuts::effect::picker_display_instant,
                 sentence: tr::settings::shortcuts::sentence::picker_display_instant,
-            },
-            Mode::Screenshot => ShortcutEffect {
-                phrase: tr::settings::shortcuts::effect::picker_display_screenshot,
-                sentence: tr::settings::shortcuts::sentence::picker_display_screenshot,
             },
         },
         "openRecordingPicker" => ShortcutEffect {
@@ -1273,9 +1307,42 @@ fn shortcut_effect(
             phrase: tr::settings::shortcuts::effect::add_marker,
             sentence: tr::settings::shortcuts::sentence::add_marker,
         },
+        store::DRAW_HOTKEY => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::toggle_drawing,
+            sentence: tr::settings::shortcuts::sentence::toggle_drawing,
+        },
         _ => return None,
     };
     Some(effect)
+}
+
+fn studio_start_effect(settings: &store::GeneralSettings) -> ShortcutEffect {
+    match settings.post_studio_recording_behaviour {
+        store::PostStudioBehaviour::OpenEditor => ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::studio_open_editor,
+            sentence: tr::settings::shortcuts::sentence::studio_open_editor,
+        },
+        store::PostStudioBehaviour::ShowOverlay | store::PostStudioBehaviour::DoNothing => {
+            ShortcutEffect {
+                phrase: tr::settings::shortcuts::effect::studio,
+                sentence: tr::settings::shortcuts::sentence::studio,
+            }
+        }
+    }
+}
+
+fn instant_start_effect(settings: &store::GeneralSettings) -> ShortcutEffect {
+    if settings.disable_auto_open_links {
+        ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::instant_copy,
+            sentence: tr::settings::shortcuts::sentence::instant_copy,
+        }
+    } else {
+        ShortcutEffect {
+            phrase: tr::settings::shortcuts::effect::instant_copy_and_open,
+            sentence: tr::settings::shortcuts::sentence::instant_copy_and_open,
+        }
+    }
 }
 
 fn description_follows_outcome(action: &str) -> bool {
@@ -1504,6 +1571,7 @@ impl SettingsWindow {
             action,
             modifiers: window.modifiers(),
             error: None,
+            conflict: None,
         });
         // Keys must reach the root's on_key_down, not a focused field.
         self.focus_root(window, cx);
@@ -1560,6 +1628,10 @@ impl SettingsWindow {
             self.shortcuts_cancel(cx);
             return true;
         }
+        if bare && keystroke.key == "enter" && listening.conflict.is_some() {
+            self.shortcuts_replace(cx);
+            return true;
+        }
         if bare && matches!(keystroke.key.as_str(), "backspace" | "delete") {
             self.pages.listening = None;
             self.pages.hotkeys.remove(action);
@@ -1577,6 +1649,7 @@ impl SettingsWindow {
             .filter(|code| global_hotkey::hotkey::Code::from_str(code).is_ok())
         else {
             listening.error = Some(UNSUPPORTED_KEY);
+            listening.conflict = None;
             cx.notify();
             return true;
         };
@@ -1589,24 +1662,37 @@ impl SettingsWindow {
         };
         if shortcut_needs_modifier(&hotkey) {
             listening.error = Some(NEEDS_MODIFIER);
+            listening.conflict = None;
             cx.notify();
             return true;
         }
 
-        let mut moved_from = None;
-        for other in SCREENSHOT_SHORTCUTS
-            .iter()
-            .chain(RECORDING_SHORTCUTS.iter())
-            .chain(WHILE_RECORDING_SHORTCUTS.iter())
+        if let Some(owner) = shortcut_owners(&self.pages.hotkeys, &hotkey, action)
+            .first()
+            .copied()
         {
-            if *other != action && self.shortcut_binding(other).as_ref() == Some(&hotkey) {
-                self.pages.hotkeys.remove(*other);
-                moved_from.get_or_insert(*other);
-            }
+            listening.error = None;
+            listening.conflict = Some(ShortcutConflict { hotkey, owner });
+            cx.notify();
+            return true;
         }
+        self.shortcuts_save(action, hotkey, cx);
+        true
+    }
 
-        let value = serde_json::to_value(&hotkey).unwrap_or(Value::Null);
-        self.pages.hotkeys.insert(action.to_string(), value);
+    fn shortcuts_replace(&mut self, cx: &mut Context<Self>) {
+        let Some(listening) = self.pages.listening.as_mut() else {
+            return;
+        };
+        let action = listening.action;
+        let Some(conflict) = listening.conflict.take() else {
+            return;
+        };
+        self.shortcuts_save(action, conflict.hotkey, cx);
+    }
+
+    fn shortcuts_save(&mut self, action: &'static str, hotkey: Hotkey, cx: &mut Context<Self>) {
+        let moved_from = assign_shortcut(&mut self.pages.hotkeys, action, &hotkey);
         self.pages.listening = None;
         self.shortcuts_commit(cx);
         self.pages.shortcut_saved = Some(SavedShortcut { action, moved_from });
@@ -1625,7 +1711,6 @@ impl SettingsWindow {
             })
             .ok();
         }));
-        true
     }
 
     /// Persist the map and swap the OS registrations. Deferred because the
@@ -1774,7 +1859,7 @@ impl SettingsWindow {
             ),
         ];
 
-        let while_recording = rows_for(&WHILE_RECORDING_SHORTCUTS, cx);
+        let while_recording = rows_for(WHILE_RECORDING_SHORTCUTS, cx);
 
         let listening_any = self.pages.listening.is_some();
         let card = |id: &'static str, rows: Vec<gpui::AnyElement>, cx: &mut Context<Self>| {
@@ -1989,9 +2074,14 @@ impl SettingsWindow {
                 None,
             )
         } else if let Some(listening) = listening {
-            match listening.error {
-                Some(error) => (error().into(), red, None),
-                None => (
+            match (listening.error, &listening.conflict) {
+                (Some(error), _) => (error().into(), red, None),
+                (None, Some(conflict)) => (
+                    tr::settings::shortcuts::conflict(shortcut_label(conflict.owner)),
+                    amber,
+                    None,
+                ),
+                (None, None) => (
                     tr::settings::shortcuts::recording_hint().into(),
                     theme.settings_muted(),
                     None,
@@ -1999,6 +2089,21 @@ impl SettingsWindow {
             }
         } else if unavailable && binding.is_some() {
             (tr::settings::shortcuts::unavailable().into(), amber, None)
+        } else if let Some(shared) =
+            binding
+                .as_ref()
+                .filter(|_| saved.is_none())
+                .and_then(|binding| {
+                    shortcut_owners(&self.pages.hotkeys, binding, action)
+                        .first()
+                        .copied()
+                })
+        {
+            (
+                tr::settings::shortcuts::shared(shortcut_label(shared)),
+                amber,
+                None,
+            )
         } else if let (Some(saved), Some(binding)) = (saved, binding.as_ref()) {
             let keys = hotkey_inline_text(binding);
             let phrase = effect.map_or("", |effect| (effect.phrase)());
@@ -2024,6 +2129,20 @@ impl SettingsWindow {
         let group: SharedString = format!("shortcut-row-{action}").into();
 
         let field = self.render_shortcut_field(action, binding.as_ref(), listening, cx);
+        let replace = listening
+            .filter(|listening| listening.conflict.is_some())
+            .map(|_| {
+                div()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(self.button(
+                        SharedString::from(format!("shortcut-replace-{action}")),
+                        (ui::ButtonVariant::Gray, None),
+                        tr::settings::shortcuts::replace(),
+                        false,
+                        cx,
+                        |this, _window, cx| this.shortcuts_replace(cx),
+                    ))
+            });
         let clear = div()
             .id(SharedString::from(format!("shortcut-clear-{action}")))
             .flex()
@@ -2113,7 +2232,11 @@ impl SettingsWindow {
                     .justify_end()
                     .gap(px(4.))
                     .flex_shrink_0()
-                    .child(clear)
+                    .when_some(replace, |this, replace| this.gap(px(8.)).child(replace))
+                    .when(
+                        listening.is_none_or(|listening| listening.conflict.is_none()),
+                        |this| this.child(clear),
+                    )
                     .child(field),
             )
             .into_any_element()
@@ -2143,6 +2266,21 @@ impl SettingsWindow {
             .cursor_pointer();
 
         let field = match (listening, binding) {
+            (
+                Some(ListeningHotkey {
+                    conflict: Some(conflict),
+                    ..
+                }),
+                _,
+            ) => base
+                .border_color(theme.settings_text())
+                .bg(theme.settings_card_bg())
+                .children(
+                    hotkey_display_keys(&conflict.hotkey)
+                        .iter()
+                        .map(|key| shortcut_key_cap(&theme, key)),
+                )
+                .into_any_element(),
             (Some(listening), _) => {
                 let held = held_modifier_keys(listening.modifiers);
                 let mut field = base
@@ -2191,7 +2329,7 @@ impl SettingsWindow {
                         .px(px(4.))
                         .text_size(px(12.))
                         .text_color(theme.settings_muted())
-                        .child(tr::settings::shortcuts::record_shortcut()),
+                        .child(tr::settings::shortcuts::not_set()),
                 )
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -2971,7 +3109,7 @@ impl SettingsWindow {
         // A stray click costs a couple of minutes of hijacked screen and loud
         // beeps, so it is confirmed the way the Tauri app confirms it.
         let message =
-            tr::settings::feedback::diagnostic::confirm_body(diagnostics::DEFAULT_DURATION_SECS);
+            tr::settings::feedback::diagnostic::confirm_body(self.pages.diagnostic_duration_secs);
         cx.spawn_in(window, async move |this, cx| {
             if !crate::platform::confirm_dialog(
                 tr::settings::feedback::diagnostic::confirm_title(),
@@ -3005,7 +3143,7 @@ impl SettingsWindow {
         let options = diagnostics::SyncTestOptions {
             mode: self.pages.diagnostic_mode,
             microphone: self.pages.diagnostic_mic,
-            duration_secs: diagnostics::DEFAULT_DURATION_SECS,
+            duration_secs: self.pages.diagnostic_duration_secs,
         };
         let cancel = Arc::new(AtomicBool::new(false));
         self.pages.diagnostic_cancel = Some(cancel.clone());
@@ -3195,16 +3333,14 @@ impl SettingsWindow {
             let (log, report, diagnostics_json) = cx
                 .background_executor()
                 .spawn(async move {
-                    let log = diagnostics::log_tail();
                     match payload {
                         Some(payload) => (
-                            log,
+                            diagnostics::log_tail(),
                             Some(payload.report_json),
                             Some(payload.diagnostics_json),
                         ),
                         None => {
-                            let diagnostics_json =
-                                serde_json::to_string(&diagnostics::collect_log_diagnostics()).ok();
+                            let (log, diagnostics_json) = diagnostics::log_upload_payload();
                             (log, None, diagnostics_json)
                         }
                     }
@@ -3302,11 +3438,38 @@ impl SettingsWindow {
             }
         }));
 
+        let duration = self.pages.diagnostic_duration_secs;
+        let duration_control = ui::SegmentedControl::settings(
+            &theme,
+            "diagnostic-duration",
+            diagnostics::DURATION_CHOICES_SECS
+                .iter()
+                .map(|seconds| {
+                    ui::SegmentOption::new(
+                        tr::settings::feedback::diagnostic::duration_option(*seconds),
+                        *seconds == duration,
+                    )
+                    .disabled(running)
+                })
+                .collect(),
+        )
+        .on_select(cx.listener(|this, index: &usize, _window, cx| {
+            if let Some(seconds) = ui::option_at(diagnostics::DURATION_CHOICES_SECS, *index) {
+                this.pages.diagnostic_duration_secs = seconds;
+                cx.notify();
+            }
+        }));
+
         let options = self.rows(vec![
             self.setting_row(
                 tr::settings::feedback::diagnostic::mode_label(),
                 Some(tr::settings::feedback::diagnostic::mode_description()),
                 mode_control.into_any_element(),
+            ),
+            self.setting_row(
+                tr::settings::feedback::diagnostic::duration_label(),
+                Some(tr::settings::feedback::diagnostic::duration_description()),
+                duration_control.into_any_element(),
             ),
             self.setting_row(
                 tr::settings::feedback::diagnostic::mic_label(),
@@ -4007,6 +4170,71 @@ fn markdown_paragraphs(content: &str) -> Vec<MarkdownParagraph> {
 /// `licenseApiClient`'s fixed base (`utils/web-api.ts:54-57`).
 const LICENSE_API_BASE: &str = "https://l.cap.so/api";
 
+const LICENSE_RELEASE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// App-wide rather than per page: the release outlives the Settings window and
+/// page switches, and a second release started meanwhile could free an
+/// activation made after the first one finished.
+static LICENSE_RELEASE_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// [`LICENSE_API_BASE`]. Debug builds also accept `CAP_GPUI_LICENSE_API_URL`
+/// so they can talk to a local license server; release builds always use the
+/// real one.
+fn license_api_base() -> String {
+    #[cfg(debug_assertions)]
+    if let Some(url) = std::env::var("CAP_GPUI_LICENSE_API_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+    {
+        return url;
+    }
+    LICENSE_API_BASE.to_string()
+}
+
+/// Only a 200 counts: the server answers 200 whenever nothing is held for this
+/// installation any more, while a license server deployed before the route
+/// existed answers 404 and still holds the activation.
+async fn release_commercial_license(
+    base: String,
+    license_key: String,
+    instance_id: String,
+    timeout: Duration,
+) -> Result<(), String> {
+    match http_json(
+        reqwest::Method::POST,
+        format!("{base}/commercial/release"),
+        Vec::new(),
+        vec![("licensekey", license_key), ("instanceid", instance_id)],
+        None,
+        HttpBody::Json(json!({})),
+        Some(timeout),
+    )
+    .await
+    {
+        Ok((200, _)) => Ok(()),
+        Ok((status, body)) => Err(format!("status {status}: {body}")),
+        Err(error) => Err(error.text()),
+    }
+}
+
+fn finish_license_release(
+    released_key: &str,
+    result: Result<(), String>,
+) -> Result<(), &'static str> {
+    if let Err(error) = result {
+        tracing::warn!(%error, "releasing the commercial license failed");
+        return Err(tr::settings::license::deactivate_failed());
+    }
+    let still_stored =
+        store::commercial_license().is_some_and(|stored| stored.license_key == released_key);
+    if still_stored && !store::set_commercial_license(None) {
+        tracing::warn!("clearing the commercial license failed");
+        return Err(tr::settings::license::save_failed());
+    }
+    Ok(())
+}
+
 impl SettingsWindow {
     /// `activateCommercialLicense`: key and instance id go as headers, and a
     /// 200 writes `general_settings.commercialLicense` in the exact shape
@@ -4025,7 +4253,7 @@ impl SettingsWindow {
         self.pages.license_error = None;
         cx.notify();
 
-        let url = format!("{LICENSE_API_BASE}/commercial/activate");
+        let url = format!("{}/commercial/activate", license_api_base());
         let header_key = key.clone();
         self.spawn_tokio(
             window,
@@ -4073,6 +4301,50 @@ impl SettingsWindow {
                 }
             },
         );
+    }
+
+    /// Clearing only the local copy left the server bound to this
+    /// installation, so activating the key anywhere else was refused.
+    fn license_deactivate(&mut self, cx: &mut Context<Self>) {
+        if LICENSE_RELEASE_PENDING.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(license) = store::commercial_license() else {
+            return;
+        };
+        let Some(instance_id) = store::instance_id_or_create() else {
+            self.pages.license_error = Some(tr::settings::license::no_instance().to_string());
+            cx.notify();
+            return;
+        };
+        LICENSE_RELEASE_PENDING.store(true, Ordering::Release);
+        self.pages.license_error = None;
+        cx.notify();
+
+        let key = license.license_key;
+        let release = gpui_tokio::Tokio::spawn(
+            cx,
+            release_commercial_license(
+                license_api_base(),
+                key.clone(),
+                instance_id,
+                LICENSE_RELEASE_TIMEOUT,
+            ),
+        );
+        // Not tied to the window: a release the server accepted must still
+        // clear the stored license when Settings was closed meanwhile.
+        cx.spawn(async move |this, cx| {
+            let result = release.await.unwrap_or_else(|error| Err(error.to_string()));
+            let outcome = finish_license_release(&key, result);
+            LICENSE_RELEASE_PENDING.store(false, Ordering::Release);
+            this.update(cx, |this, cx| {
+                this.pages.license_error = outcome.err().map(str::to_string);
+                cx.notify();
+            })
+            .ok();
+            cx.update(|cx| cx.refresh_windows());
+        })
+        .detach();
     }
 
     pub(crate) fn render_license(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
@@ -4230,11 +4502,8 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = self.theme;
-        let expiry = license.expiry_date.map(|ms| {
-            chrono::DateTime::from_timestamp_millis(ms as i64)
-                .map(|date| date.format("%-m/%-d/%Y").to_string())
-                .unwrap_or_else(|| ms.to_string())
-        });
+        let deactivating = LICENSE_RELEASE_PENDING.load(Ordering::Acquire);
+        let expiry = license_expiry_label(license.expiry_date);
 
         div()
             .flex()
@@ -4301,20 +4570,34 @@ impl SettingsWindow {
                         )
                     })
                     .child(div().h(px(1.)).w_full().bg(theme.settings_border()))
-                    .child(div().flex().flex_col().items_center().child(self.button(
-                        "license-deactivate",
-                        (ui::ButtonVariant::Destructive, None),
-                        tr::settings::license::deactivate(),
-                        false,
-                        cx,
-                        |this, _window, cx| {
-                            if !store::set_commercial_license(None) {
-                                tracing::warn!("clearing the commercial license failed");
-                            }
-                            this.pages.license_error = None;
-                            cx.notify();
-                        },
-                    ))),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .child(self.button(
+                                "license-deactivate",
+                                (ui::ButtonVariant::Destructive, None),
+                                if deactivating {
+                                    tr::settings::license::deactivating()
+                                } else {
+                                    tr::settings::license::deactivate()
+                                },
+                                deactivating,
+                                cx,
+                                |this, _window, cx| this.license_deactivate(cx),
+                            ))
+                            .when_some(self.pages.license_error.clone(), |this, error| {
+                                this.child(
+                                    div()
+                                        .mt(px(8.))
+                                        .text_size(px(13.))
+                                        .text_center()
+                                        .text_color(Hsla::from(theme.red_9))
+                                        .child(error),
+                                )
+                            }),
+                    ),
             )
             .into_any_element()
     }
@@ -6145,6 +6428,26 @@ fn action_applies_to_trigger(kind: ActionType, trigger: Trigger) -> bool {
     required.iter().any(|field| provided.contains(field))
 }
 
+fn action_note(kind: ActionType, previous: Option<&Action>) -> Option<(&'static str, bool)> {
+    match kind {
+        ActionType::RecognizeTextToClipboard => {
+            Some((tr::settings::automations::action_unsupported(), true))
+        }
+        ActionType::Notify => Some((tr::settings::automations::notify_needs_setting(), false)),
+        ActionType::DeleteLocalFiles => Some(match previous {
+            Some(Action::Export {
+                destination: ExportDestination::CustomPath { .. },
+                ..
+            })
+            | Some(Action::SaveToLocation { .. }) => {
+                (tr::settings::automations::delete_guarded(), false)
+            }
+            _ => (tr::settings::automations::delete_needs_copy(), true),
+        }),
+        _ => None,
+    }
+}
+
 /// `DANGEROUS_ACTIONS`.
 fn action_is_dangerous(kind: ActionType) -> bool {
     matches!(kind, ActionType::RunCommand | ActionType::Webhook)
@@ -7221,6 +7524,15 @@ impl SettingsWindow {
             .iter()
             .any(|action| action_is_dangerous(action_type_of(action)));
         let compatibility_checked = self.pages.compatibility_checks.contains(&rule.id);
+        let compatibility_message = if rule
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::RecognizeTextToClipboard))
+        {
+            tr::settings::automations::compatibility_unsupported()
+        } else {
+            tr::settings::automations::compatibility_checked()
+        };
         if let Some(editor) = &self.pages.rule_editor {
             for (field, input) in &editor.fields {
                 if let Some(placeholder) = translated_placeholder(*field, rule) {
@@ -7445,7 +7757,7 @@ impl SettingsWindow {
                         .text_size(px(12.))
                         .line_height(px(18.))
                         .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::compatibility_checked()),
+                        .child(compatibility_message),
                 )
             })
             .child(footer)
@@ -7674,6 +7986,14 @@ impl SettingsWindow {
             ));
 
         let params = self.render_action_params(rule, index, action, cx);
+        let previous = index
+            .checked_sub(1)
+            .and_then(|previous| self.rule_at(rule)?.actions.get(previous));
+        let note = if !applies {
+            Some((tr::settings::automations::action_no_effect(), true))
+        } else {
+            action_note(kind, previous)
+        };
 
         div()
             .flex()
@@ -7686,12 +8006,19 @@ impl SettingsWindow {
             .bg(theme.settings_card_bg())
             .child(header)
             .children(params)
-            .when(!applies, |this| {
+            .when_some(note, |this, (note, warning)| {
                 this.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.amber_11))
-                        .child(tr::settings::automations::action_no_effect()),
+                        .line_height(px(16.))
+                        .map(|line| {
+                            if warning {
+                                line.text_color(Hsla::from(theme.amber_11))
+                            } else {
+                                line.text_color(theme.settings_muted())
+                            }
+                        })
+                        .child(note),
                 )
             })
             .into_any_element()
@@ -8247,9 +8574,56 @@ async fn http_json(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// The license server stores lifetime keys with its "never renews" date,
+/// `new Date("2038-01-19 03:14:07")` (the 32-bit `time_t` limit) parsed in the
+/// server's own time zone, and returns it as `expiryDate`. Within a day of that
+/// instant is a lifetime key, which has no expiry to show.
+const LIFETIME_LICENSE_EXPIRY_MS: i64 = 2_147_483_647_000;
+const LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn license_expiry_label(expiry_ms: Option<f64>) -> Option<String> {
+    let ms = expiry_ms?;
+    if ((ms as i64) - LIFETIME_LICENSE_EXPIRY_MS).abs() <= LIFETIME_LICENSE_EXPIRY_TOLERANCE_MS {
+        return None;
+    }
+    Some(
+        chrono::DateTime::from_timestamp_millis(ms as i64)
+            .map(|date| date.format("%-m/%-d/%Y").to_string())
+            .unwrap_or_else(|| ms.to_string()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifetime_license_has_no_expiry_label() {
+        assert_eq!(license_expiry_label(Some(2_147_483_647_000.)), None);
+        let hour = 60. * 60. * 1000.;
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. + 8. * hour)),
+            None
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 14. * hour)),
+            None
+        );
+    }
+
+    #[test]
+    fn yearly_license_keeps_its_expiry_label() {
+        assert_eq!(license_expiry_label(None), None);
+        assert_eq!(
+            license_expiry_label(Some(1_826_323_200_000.)).as_deref(),
+            Some("11/16/2027")
+        );
+        assert_eq!(
+            license_expiry_label(Some(2_147_483_647_000. - 3. * 24. * 60. * 60. * 1000.))
+                .as_deref(),
+            Some("1/16/2038")
+        );
+    }
 
     fn hotkey(code: &str, meta: bool, ctrl: bool, alt: bool, shift: bool) -> Hotkey {
         Hotkey {
@@ -8297,7 +8671,7 @@ mod tests {
             .chain(WHILE_RECORDING_SHORTCUTS.iter())
             .copied()
             .collect();
-        assert_eq!(shown.len(), 14);
+        assert_eq!(shown.len(), 15 + usize::from(crate::live_draw::SUPPORTED));
         let settings = store::GeneralSettings::default();
         for action in &shown {
             assert_eq!(shown.iter().filter(|other| *other == action).count(), 1);
@@ -8448,9 +8822,10 @@ mod tests {
             }
         };
         let picker = match mode {
-            crate::main_window::Mode::Studio => "record it in Studio mode",
+            crate::main_window::Mode::Studio | crate::main_window::Mode::Screenshot => {
+                "record it in Studio mode"
+            }
             crate::main_window::Mode::Instant => "record it in Instant mode",
-            crate::main_window::Mode::Screenshot => "take a screenshot of it",
         };
         let studio_stop = match settings.post_studio_recording_behaviour {
             store::PostStudioBehaviour::OpenEditor => ", then open the editor when you stop",
@@ -8475,6 +8850,9 @@ mod tests {
             "startInstantRecording" => {
                 format!("record your selected screen or window in Instant mode{instant_stop}")
             }
+            "startRecording" => {
+                "start a recording or screenshot in the mode selected in Cap".into()
+            }
             "openRecordingPickerArea" => format!("select an area, then {picker}"),
             "openRecordingPickerWindow" => format!("choose a window, then {picker}"),
             "openRecordingPickerDisplay" => format!("choose a display, then {picker}"),
@@ -8484,7 +8862,103 @@ mod tests {
             "togglePauseRecording" => "pause the current recording, or resume it".into(),
             "restartRecording" => "throw away the current take and start again".into(),
             "addRecordingMarker" => "mark this moment in a Studio recording".into(),
+            "toggleDrawing" => "start or stop drawing on screen while recording".into(),
             _ => String::new(),
+        }
+    }
+
+    /// Keys another shortcut already has wait for Replace; nothing moves
+    /// until then, and Replace takes them off every other shortcut.
+    #[test]
+    fn a_used_combo_names_its_owner_and_moves_only_on_replace() {
+        let mut bindings = Map::new();
+        let keys = hotkey("KeyR", true, false, false, true);
+        let other = hotkey("KeyS", true, false, false, true);
+        bindings.insert(
+            "openRecordingPickerArea".into(),
+            serde_json::to_value(&keys).unwrap(),
+        );
+        bindings.insert(
+            "screenshotArea".into(),
+            serde_json::to_value(&other).unwrap(),
+        );
+
+        assert_eq!(
+            shortcut_owners(&bindings, &keys, "startStudioRecording"),
+            vec!["openRecordingPickerArea"]
+        );
+        assert!(shortcut_owners(&bindings, &keys, "openRecordingPickerArea").is_empty());
+        assert!(
+            shortcut_owners(
+                &bindings,
+                &hotkey("KeyR", false, true, false, true),
+                "startStudioRecording"
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            assign_shortcut(&mut bindings, "startStudioRecording", &keys),
+            Some("openRecordingPickerArea")
+        );
+        assert!(!bindings.contains_key("openRecordingPickerArea"));
+        assert_eq!(
+            bindings
+                .get("startStudioRecording")
+                .and_then(store::hotkey_from_value),
+            Some(keys.clone())
+        );
+        assert_eq!(
+            bindings
+                .get("screenshotArea")
+                .and_then(store::hotkey_from_value),
+            Some(other)
+        );
+        assert_eq!(
+            assign_shortcut(&mut bindings, "startStudioRecording", &keys),
+            None
+        );
+    }
+
+    /// Two shortcuts on one combo from an older store both keep firing, so
+    /// each row names the other; Replace clears every copy.
+    #[test]
+    fn a_combo_shared_from_an_older_store_is_flagged_on_both_rows() {
+        let mut bindings = Map::new();
+        let keys = hotkey("F5", false, false, false, false);
+        for action in ["stopRecording", "restartRecording"] {
+            bindings.insert(action.into(), serde_json::to_value(&keys).unwrap());
+        }
+        assert_eq!(
+            shortcut_owners(&bindings, &keys, "stopRecording"),
+            vec!["restartRecording"]
+        );
+        assert_eq!(
+            shortcut_owners(&bindings, &keys, "restartRecording"),
+            vec!["stopRecording"]
+        );
+        assert_eq!(
+            assign_shortcut(&mut bindings, "togglePauseRecording", &keys),
+            Some("stopRecording")
+        );
+        assert_eq!(bindings.len(), 1);
+    }
+
+    /// "Start in selected mode" sits right above Start Studio recording, so
+    /// it says what sets it apart instead of repeating that row.
+    #[test]
+    fn the_selected_mode_start_names_the_selected_mode() {
+        use crate::main_window::Mode;
+        let settings = store::GeneralSettings::default();
+        for mode in [Mode::Studio, Mode::Instant, Mode::Screenshot] {
+            assert_eq!(
+                sentence("startRecording", &settings, mode),
+                "Start a recording or screenshot in the mode selected in Cap."
+            );
+            assert_ne!(
+                sentence("startRecording", &settings, mode),
+                sentence("startStudioRecording", &settings, mode)
+            );
         }
     }
 
@@ -8528,7 +9002,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked.len(), 31, "every effect message is reachable");
+        assert_eq!(
+            checked.len(),
+            29 + usize::from(crate::live_draw::SUPPORTED),
+            "every effect message is reachable"
+        );
         assert!(shortcut_effect("nope", &settings, Mode::Studio).is_none());
     }
 
@@ -8818,5 +9296,177 @@ mod tests {
         let b = (TEMPLATES[0].build)();
         assert_ne!(a.id, b.id);
         assert!(a.enabled && a.conditions.is_empty());
+    }
+
+    /// A one-request stand-in for the license server: answers with
+    /// `response` (or never, when it is `None`) and hands back the request it
+    /// read.
+    fn license_server(response: Option<String>) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/api", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            // The client's JSON body is `{}`, the last bytes it sends.
+            loop {
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                request.extend_from_slice(&buffer[..read]);
+                if read == 0 || request.ends_with(b"{}") {
+                    break;
+                }
+            }
+            match response {
+                Some(response) => stream.write_all(response.as_bytes()).unwrap(),
+                // Hold the connection open past the client's timeout.
+                None => std::thread::park_timeout(Duration::from_millis(1500)),
+            }
+            String::from_utf8(request).unwrap()
+        });
+        (base, handle)
+    }
+
+    fn release(base: String, timeout: Duration) -> Result<(), String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(release_commercial_license(
+                base,
+                "KEY-123".into(),
+                "instance-abc".into(),
+                timeout,
+            ))
+    }
+
+    fn http_response(status: &str, content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// Deactivate frees the activation with the same key and instance id
+    /// headers activation sent, so the server matches this installation.
+    #[test]
+    fn license_release_sends_the_activation_identity() {
+        let response = http_response("200 OK", "application/json", r#"{"released":true}"#);
+        let (base, server) = license_server(Some(response));
+        assert_eq!(release(base, Duration::from_secs(5)), Ok(()));
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(
+            request.starts_with("post /api/commercial/release "),
+            "{request}"
+        );
+        assert!(request.contains("\r\nlicensekey: key-123\r\n"), "{request}");
+        assert!(
+            request.contains("\r\ninstanceid: instance-abc\r\n"),
+            "{request}"
+        );
+    }
+
+    /// The server answers 200 whenever nothing is held here any more, which
+    /// is also how a second click or an already freed key reads.
+    #[test]
+    fn license_release_treats_nothing_held_as_released() {
+        let response = http_response("200 OK", "application/json", r#"{"released":false}"#);
+        let (base, server) = license_server(Some(response));
+        assert_eq!(release(base, Duration::from_secs(5)), Ok(()));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn license_release_fails_on_any_other_answer() {
+        for response in [
+            http_response(
+                "500 Internal Server Error",
+                "application/json",
+                r#"{"message":"boom"}"#,
+            ),
+            http_response(
+                "403 Forbidden",
+                "application/json",
+                r#"{"message":"License expired"}"#,
+            ),
+            // A license server deployed before the route existed.
+            http_response("404 Not Found", "text/plain", "404 Not Found"),
+        ] {
+            let (base, server) = license_server(Some(response));
+            assert!(release(base, Duration::from_secs(5)).is_err());
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn license_release_fails_offline_and_on_timeout() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}/api", closed.local_addr().unwrap());
+        drop(closed);
+        assert!(release(base, Duration::from_secs(5)).is_err());
+
+        let (base, server) = license_server(None);
+        let started = std::time::Instant::now();
+        assert!(release(base, Duration::from_millis(300)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        server.join().unwrap();
+    }
+
+    fn with_licensed_store(test: impl FnOnce()) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("store.json");
+        std::fs::write(
+            &path,
+            r#"{ "general_settings": { "instanceId": "instance-abc", "commercialLicense": { "licenseKey": "KEY-123", "expiryDate": null, "refresh": 1.0, "activatedOn": 2.0 } } }"#,
+        )
+        .unwrap();
+        store::set_test_tauri_store_path(Some(path));
+        test();
+        store::set_test_tauri_store_path(None);
+    }
+
+    /// A failed release (offline, timeout, server error) keeps the license on
+    /// this installation, since the server still holds it.
+    #[test]
+    fn failed_license_release_keeps_the_license() {
+        with_licensed_store(|| {
+            assert_eq!(
+                finish_license_release("KEY-123", Err("offline".into())),
+                Err(tr::settings::license::deactivate_failed())
+            );
+            assert_eq!(
+                store::commercial_license().map(|license| license.license_key),
+                Some("KEY-123".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn released_license_is_cleared_locally() {
+        with_licensed_store(|| {
+            assert_eq!(finish_license_release("KEY-123", Ok(())), Ok(()));
+            assert_eq!(store::commercial_license(), None);
+            // The installation keeps its id for the next activation.
+            assert_eq!(
+                store::instance_id_or_create().as_deref(),
+                Some("instance-abc")
+            );
+        });
+    }
+
+    /// A key activated while the release was in flight is not the one that
+    /// was freed, so it stays.
+    #[test]
+    fn release_does_not_clear_a_different_key() {
+        with_licensed_store(|| {
+            assert_eq!(finish_license_release("OLD-KEY", Ok(())), Ok(()));
+            assert_eq!(
+                store::commercial_license().map(|license| license.license_key),
+                Some("KEY-123".to_string())
+            );
+        });
     }
 }

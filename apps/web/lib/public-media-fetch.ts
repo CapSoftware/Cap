@@ -92,13 +92,22 @@ export type PublicMediaGuards = {
 	request?: (url: string, init: RequestInit) => Promise<Response>;
 };
 
+export const HTTPS_REQUIRED_MESSAGE = "The URL must start with https://";
+
 export async function assertPublicMediaUrl(
 	value: string,
 	isBlocked: (url: string) => Promise<boolean> = isBlockedS3Endpoint,
+	options: { httpsOnly?: boolean } = {},
 ) {
 	const problem = publicMediaUrlProblem(value);
 	if (problem) {
 		throw new PublicMediaFetchError(problem, PROBLEM_MESSAGES[problem]);
+	}
+	if (options.httpsOnly && new URL(value).protocol !== "https:") {
+		throw new PublicMediaFetchError(
+			"unsupported_scheme",
+			HTTPS_REQUIRED_MESSAGE,
+		);
 	}
 	if (await isBlocked(value)) {
 		throw new PublicMediaFetchError(
@@ -114,6 +123,7 @@ export async function fetchPublicMedia(
 		maxBytes: number;
 		signal?: AbortSignal;
 		maxRedirects?: number;
+		httpsOnly?: boolean;
 	} & PublicMediaGuards,
 ): Promise<{
 	response: Response;
@@ -125,7 +135,9 @@ export async function fetchPublicMedia(
 	const maxRedirects = options.maxRedirects ?? PUBLIC_MEDIA_MAX_REDIRECTS;
 	let current = url;
 	for (let hop = 0; ; hop++) {
-		await assertPublicMediaUrl(current, isBlocked);
+		await assertPublicMediaUrl(current, isBlocked, {
+			httpsOnly: options.httpsOnly,
+		});
 		const response = await request(current, {
 			method: "GET",
 			headers: {

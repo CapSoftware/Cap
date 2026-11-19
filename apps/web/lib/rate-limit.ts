@@ -1,5 +1,6 @@
 import { checkRateLimit } from "@vercel/firewall";
 import { headers as nextHeaders } from "next/headers";
+import { DEVELOPER_AUTH_FAILURES_PER_MINUTE } from "@/lib/developer-rate-limits";
 
 const FIREWALL_FORWARDED_HEADER_NAMES = [
 	"host",
@@ -180,6 +181,8 @@ export const RATE_LIMIT_IDS = {
 	TRANSLATE_TRANSCRIPT: "rl_translate_transcript",
 	/** Anonymous support-chat messages (Groq + Supermemory cost). Suggested: 20 / 1m per IP. */
 	MESSENGER_MESSAGE: "rl_messenger_message",
+	/** Support-chat update polls. An open chat polls at most every 3 s, slower when idle. Suggested: 120 / 1m per IP. */
+	MESSENGER_POLL: "rl_messenger_poll",
 	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 120 / 1m per IP. */
 	ANALYTICS_TRACK: "rl_analytics_track",
 	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 20 / 10m per IP. */
@@ -207,6 +210,14 @@ export const RATE_LIMIT_IDS = {
 	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
 	/** Comments, replies and reactions per author. Suggested: 60 / 1m per key (user). */
 	COMMENT_CREATE: "rl_comment_create",
+	/** Comment media upload starts per viewer. Suggested: 60 / 1h per key (user). */
+	COMMENT_MEDIA_UPLOAD: "rl_comment_media_upload",
+	/** Transcription and AI generation retries per user, from the share page and the agent API. Suggested: 30 / 1h per key (user). */
+	PROCESSING_RETRY: "rl_processing_retry",
+	/** Organizations created from the dashboard per user. Suggested: 20 / 1h per key (user). */
+	ORGANIZATION_CREATE: "rl_organization_create",
+	/** Spaces created from the dashboard per user. Suggested: 300 / 1h per key (user). */
+	SPACE_CREATE: "rl_space_create",
 	/** Video edit saves and restores per user: each one re-encodes the video and regenerates AI output. Suggested: 30 / 1h per key (user). */
 	VIDEO_EDIT: "rl_video_edit",
 	/** Share-page downloads by viewers who are not members. Suggested: 30 / 1m per IP. */
@@ -215,10 +226,18 @@ export const RATE_LIMIT_IDS = {
 	MOBILE_EVENTS: "rl_mobile_events",
 	/** Code attempts on Cap Infra credit checkout (guessing guard). Suggested: 10 / 10m per key (user). */
 	INFRA_CREDIT_CODE: "rl_infra_credit_code",
-	/** Developer REST API requests per secret key. 60 / 1m per key (hash of the credential). */
+	/** Developer apps created from the console and the agent API. Suggested: 10 / 1h per key (user). */
+	DEVELOPER_APP_CREATE: "rl_developer_app_create",
+	/** Developer key rotations from the console and the agent API. Suggested: 10 / 1h per key (user). */
+	DEVELOPER_KEY_ROTATE: "rl_developer_key_rotate",
+	/** Developer REST API requests per secret key. 300 / 1m per key (hash of the credential). */
 	DEVELOPER_API_KEY: "rl_developer_api_key",
 	/** Developer SDK upload requests per upload token. 1200 / 1m per key (hash of the credential). */
 	DEVELOPER_UPLOAD_TOKEN: "rl_developer_upload_token",
+	/** Developer REST API requests per account, across all of its keys. 1200 / 1m per key (owner id). */
+	DEVELOPER_API_OWNER: "rl_developer_api_owner",
+	/** Developer API requests whose key or upload token was not accepted. 300 / 1m per IP. */
+	DEVELOPER_AUTH_FAILURE: "rl_developer_auth_failure",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -235,6 +254,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MESSENGER_POLL]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },
@@ -265,10 +285,32 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: 1,
 		windowMs: 60 * MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.COMMENT_MEDIA_UPLOAD]: {
+		limit: 60,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.PROCESSING_RETRY]: { limit: 30, windowMs: 60 * MINUTE_MS },
+	[RATE_LIMIT_IDS.ORGANIZATION_CREATE]: {
+		limit: 20,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.SPACE_CREATE]: { limit: 300, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIDEO_EDIT]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.VIEWER_DOWNLOAD]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MOBILE_EVENTS]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.INFRA_CREDIT_CODE]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.DEVELOPER_APP_CREATE]: {
+		limit: 10,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.DEVELOPER_KEY_ROTATE]: {
+		limit: 10,
+		windowMs: 60 * MINUTE_MS,
+	},
+	[RATE_LIMIT_IDS.DEVELOPER_AUTH_FAILURE]: {
+		limit: DEVELOPER_AUTH_FAILURES_PER_MINUTE,
+		windowMs: MINUTE_MS,
+	},
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

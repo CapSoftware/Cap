@@ -13,13 +13,14 @@ export function VideoStatus({
 }) {
 	const working = state === "processing" || state === "uploading";
 	const unfinished = state === "unfinished";
+	const takenDown = state === "taken_down";
 	return (
 		<span
 			className={clsx(
 				"inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] leading-none",
 				state === "ready" && "text-[#E8ECF4]",
 				state === "failed" && "text-[#F2A199]",
-				(working || unfinished) && "text-[rgba(232,236,244,0.58)]",
+				(working || unfinished || takenDown) && "text-[rgba(232,236,244,0.58)]",
 				className,
 			)}
 		>
@@ -33,6 +34,7 @@ export function VideoStatus({
 					working &&
 						"animate-pulse bg-[rgba(232,236,244,0.7)] motion-reduce:animate-none",
 					unfinished && "shadow-[inset_0_0_0_1px_rgba(232,236,244,0.5)]",
+					takenDown && "bg-[rgba(232,236,244,0.45)]",
 				)}
 			/>
 			{INFRA_VIDEO_DISPLAY_LABELS[state]}

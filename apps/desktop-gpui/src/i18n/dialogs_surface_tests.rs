@@ -8,6 +8,7 @@ pub(super) fn is_dialogs_surface_key(key: &str) -> bool {
         "import.",
         "overlay.",
         "permission.",
+        "recordings_overlay.",
         "screenshot_editor.",
         "transcription.",
         "upload.",
@@ -36,6 +37,7 @@ const FORMATTED: &[&str] = &[
     "dialog.clipboard.copy_image",
     "dialog.clipboard.unavailable_error",
     "dialog.file.failed",
+    "import.audio_failed",
     "import.image_failed",
     "import.video_failed",
     "import.progress.converting",
@@ -56,6 +58,7 @@ const FORMATTED: &[&str] = &[
     "transcription.download.file_progress",
     "transcription.download.progress",
     "dialog.quit.canceled",
+    "dialog.startup.failed",
     "dialog.update.already_getting",
     "dialog.update.available",
     "dialog.update.check_failed",
@@ -284,6 +287,14 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Cap could not confirm that the file dialog closed. Close any remaining file dialog and restart Cap before trying again.",
         ),
         (
+            tr::dialog::capture::source_lost(),
+            "Cap stopped recording because what it was capturing went away, for example the display went to sleep or the window closed. Everything recorded up to then was saved.",
+        ),
+        (
+            tr::dialog::capture::source_lost_title(),
+            "Recording stopped",
+        ),
+        (
             tr::dialog::storage::stopped_kept(),
             "Recording stopped because storage is low. Your recording files were kept. Free up space, then recover the recording below.",
         ),
@@ -315,6 +326,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (tr::import::filter::image(), "Image Files"),
         (tr::import::filter::media(), "Media Files"),
         (tr::import::filter::video(), "Video Files"),
+        (tr::import::filter::audio(), "Audio Files"),
         (tr::import::progress::analyzing(), "Analyzing video file..."),
         (tr::import::progress::complete(), "Import complete!"),
         (tr::import::progress::image(), "Importing image..."),
@@ -433,6 +445,23 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             tr::overlay::camera_only::description(),
             "Record using only your camera and microphone",
         ),
+        (
+            tr::overlay::audio_only::description(),
+            "Record your microphone and your computer's sound, without the screen or camera",
+        ),
+        (
+            tr::overlay::audio_only::meter_hint(),
+            "Say something to check your level",
+        ),
+        (
+            tr::overlay::audio_only::system_audio_only(),
+            "Recording system audio only",
+        ),
+        (
+            tr::overlay::audio_only::choose_source(),
+            "Choose a microphone or turn on system audio",
+        ),
+        (tr::overlay::audio_only::system_audio(), "System audio"),
         (
             tr::overlay::camera_only::select_camera(),
             "Please select a camera",
@@ -836,6 +865,16 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "The Recommended and High Accuracy models only transcribe English and 24 other European languages. Download the Small or Medium model to caption this language",
         ),
         (tr::dialog::quit::still_open(), "Cap is still open"),
+        (tr::dialog::startup::failed_title(), "Cap couldn't start"),
+        (tr::dialog::startup::quit_and_reopen(), "Quit and Reopen"),
+        (
+            tr::dialog::startup::unresponsive(),
+            "Cap is already running but isn't responding. Quit that copy and open Cap again?",
+        ),
+        (
+            tr::dialog::startup::unresponsive_title(),
+            "Cap isn't responding",
+        ),
         (
             tr::dialog::quit::files_kept(),
             "Everything recorded so far stays in the recording's folder.",
@@ -868,6 +907,82 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         (
             tr::dialog::update::package_not_installed(),
             "The package wasn't installed. Approve the system prompt, or install it from Cap.so/download.",
+        ),
+        (tr::recordings_overlay::close(), "Close"),
+        (tr::recordings_overlay::copy(), "Copy to clipboard"),
+        (tr::recordings_overlay::copy_link(), "Copy shareable link"),
+        (
+            tr::recordings_overlay::create_link(),
+            "Create shareable link",
+        ),
+        (tr::recordings_overlay::edit(), "Edit"),
+        (tr::recordings_overlay::export(), "Export"),
+        (tr::recordings_overlay::open(), "Open"),
+        (tr::recordings_overlay::retry(), "Retry"),
+        (
+            tr::recordings_overlay::progress::choose_image(),
+            "Choose where to save the image",
+        ),
+        (
+            tr::recordings_overlay::progress::choose_video(),
+            "Choose where to export the video",
+        ),
+        (
+            tr::recordings_overlay::progress::copied(),
+            "Copied to clipboard",
+        ),
+        (
+            tr::recordings_overlay::progress::copy_failed(),
+            "Couldn't copy",
+        ),
+        (
+            tr::recordings_overlay::progress::copying(),
+            "Copying to clipboard",
+        ),
+        (
+            tr::recordings_overlay::progress::creating_link(),
+            "Creating shareable link",
+        ),
+        (
+            tr::recordings_overlay::progress::failed_hint(),
+            "Something went wrong. Try again.",
+        ),
+        (
+            tr::recordings_overlay::progress::link_copied(),
+            "Shareable link copied",
+        ),
+        (tr::recordings_overlay::progress::preparing(), "Preparing"),
+        (
+            tr::recordings_overlay::progress::rendering_video(),
+            "Rendering video",
+        ),
+        (
+            tr::recordings_overlay::progress::save_failed(),
+            "Couldn't save",
+        ),
+        (
+            tr::recordings_overlay::progress::saved_image(),
+            "Image saved",
+        ),
+        (
+            tr::recordings_overlay::progress::saved_video(),
+            "Video saved",
+        ),
+        (
+            tr::recordings_overlay::progress::saving_image(),
+            "Saving image",
+        ),
+        (
+            tr::recordings_overlay::progress::saving_video(),
+            "Saving video",
+        ),
+        (
+            tr::recordings_overlay::progress::share_failed(),
+            "Couldn't create the link",
+        ),
+        (
+            tr::recordings_overlay::progress::share_failed_hint(),
+            "Check your connection and try again.",
         ),
     ];
     for (translated, literal) in pairs {
@@ -949,6 +1064,7 @@ fn assembled_dialog_messages_match_the_code_they_replaced() {
     for (media, formatted) in [
         ("video", tr::import::video_failed(message)),
         ("image", tr::import::image_failed(message)),
+        ("audio", tr::import::audio_failed(message)),
     ] {
         assert_eq!(formatted, format!("Failed to import {media}: {message}"));
     }
@@ -1176,6 +1292,10 @@ fn update_and_quit_messages_format_like_the_code_they_replaced() {
         (
             tr::dialog::update::failed(error),
             format!("{error}\n\nYou can always download the latest version from Cap.so/download."),
+        ),
+        (
+            tr::dialog::startup::failed(error, "C:\\logs"),
+            format!("{error}\n\nDetails were saved in C:\\logs."),
         ),
     ];
     for (translated, literal) in pairs {

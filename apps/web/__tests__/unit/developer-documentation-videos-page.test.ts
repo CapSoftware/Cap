@@ -55,14 +55,17 @@ describe("DeveloperDocumentationVideosPage component content", () => {
 		expect(componentSource.toLowerCase()).toContain("developer documentation");
 	});
 
-	it("includes comparison table", () => {
-		expect(componentSource).toContain("comparisonTable");
+	it("does not compare Cap with other named products", () => {
+		expect(componentSource).not.toContain("comparisonTable");
+		expect(componentSource).not.toContain("for Technical Walkthroughs");
+		expect(componentSource).not.toContain("Cap vs Loom");
+		expect(componentSource).not.toContain("compares to other tools");
+		expect(componentSource).not.toContain(
+			"What is the best screen recorder for developer documentation?",
+		);
 	});
 
-	it("describes the license split in the comparison table", () => {
-		expect(componentSource).toContain(
-			'{ text: "Yes — AGPLv3 and MIT crates", status: "positive" }',
-		);
+	it("does not describe Cap as MIT only", () => {
 		expect(componentSource).not.toContain('{ text: "Yes — MIT"');
 	});
 
@@ -141,23 +144,18 @@ describe("DeveloperDocumentationVideosPage FAQ schema", () => {
 				"Yes. Cap supports password protection on individual recordings and expiry dates on share links.",
 		},
 		{
-			question: "What is the best screen recorder for developer documentation?",
-			answer:
-				"Cap is the best screen recorder for developer documentation because it combines 4K recording quality, instant shareable links, AI-generated transcripts, and self-hosted storage.",
-		},
-		{
 			question: "Does Cap work for recording API demos and SDK walkthroughs?",
 			answer:
 				"Yes. Cap is designed exactly for this use case. Record your terminal, IDE, browser, API client.",
 		},
 	];
 
-	it("produces valid FAQPage schema with 8 questions", () => {
+	it("produces valid FAQPage schema with 7 questions", () => {
 		const schema = createFAQSchema(faqs);
 
 		expect(schema["@context"]).toBe("https://schema.org");
 		expect(schema["@type"]).toBe("FAQPage");
-		expect(schema.mainEntity).toHaveLength(8);
+		expect(schema.mainEntity).toHaveLength(7);
 	});
 
 	it("maps each FAQ to a Question entity with acceptedAnswer", () => {
@@ -178,7 +176,7 @@ describe("DeveloperDocumentationVideosPage FAQ schema", () => {
 		expect(() => JSON.stringify(schema)).not.toThrow();
 		const parsed = JSON.parse(JSON.stringify(schema));
 		expect(parsed["@type"]).toBe("FAQPage");
-		expect(parsed.mainEntity).toHaveLength(8);
+		expect(parsed.mainEntity).toHaveLength(7);
 	});
 });
 

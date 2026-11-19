@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-	BUSY_COMPLETE_ATTEMPTS,
 	COMPLETION_IN_PROGRESS,
 	completeRetryPlan,
 	isDefinitiveRejection,
 	partBytesFor,
 	presignBatch,
 	retryAfterMs,
+	STALE_UPLOAD_CLAIM_MS,
 	startsLikeAnImageOrDocument,
 } from "@/lib/infra-upload";
 
@@ -93,31 +93,40 @@ describe("a completion another request is already running", () => {
 		expect(isDefinitiveRejection(500, null)).toBe(false);
 	});
 
-	it("is retried more times, at a steady pace", () => {
-		expect(completeRetryPlan(1, COMPLETION_IN_PROGRESS, 3)).toEqual({
-			retry: true,
-			waitMs: 3000,
+	const busy = (busyWaitedMs: number, retryAfter: string | null = "5") =>
+		completeRetryPlan({
+			attempt: 1,
+			code: COMPLETION_IN_PROGRESS,
+			attempts: 3,
+			retryAfter,
+			busyWaitedMs,
 		});
-		expect(
-			completeRetryPlan(BUSY_COMPLETE_ATTEMPTS - 1, COMPLETION_IN_PROGRESS, 3)
-				.retry,
-		).toBe(true);
-		expect(
-			completeRetryPlan(BUSY_COMPLETE_ATTEMPTS, COMPLETION_IN_PROGRESS, 3)
-				.retry,
-		).toBe(false);
+
+	it("waits as long as the server's Retry-After asks", () => {
+		expect(busy(0)).toEqual({ retry: true, waitMs: 5_000, busy: true });
+		expect(busy(0, "30").waitMs).toBe(30_000);
+		expect(busy(0, null).waitMs).toBe(5_000);
+	});
+
+	it("keeps waiting for as long as the server can hold a completion", () => {
+		expect(busy(60_000).retry).toBe(true);
+		expect(busy(STALE_UPLOAD_CLAIM_MS).retry).toBe(true);
+		expect(busy(STALE_UPLOAD_CLAIM_MS + 55_000).retry).toBe(true);
+		expect(busy(STALE_UPLOAD_CLAIM_MS + 55_001).retry).toBe(false);
 	});
 
 	it("keeps the usual plan for a lost response", () => {
-		expect(completeRetryPlan(1, null, 3)).toEqual({
-			retry: true,
-			waitMs: 1500,
-		});
-		expect(completeRetryPlan(2, null, 3)).toEqual({
-			retry: true,
-			waitMs: 3000,
-		});
-		expect(completeRetryPlan(3, null, 3).retry).toBe(false);
+		const lost = (attempt: number) =>
+			completeRetryPlan({
+				attempt,
+				code: null,
+				attempts: 3,
+				retryAfter: null,
+				busyWaitedMs: 0,
+			});
+		expect(lost(1)).toEqual({ retry: true, waitMs: 1500, busy: false });
+		expect(lost(2)).toEqual({ retry: true, waitMs: 3000, busy: false });
+		expect(lost(3).retry).toBe(false);
 	});
 });
 

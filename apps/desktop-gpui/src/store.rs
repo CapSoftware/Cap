@@ -154,6 +154,16 @@ pub struct ExportPrefs {
     pub turbo: bool,
     #[serde(default)]
     pub gif_quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_tracks: Option<Vec<String>>,
+    #[serde(default)]
+    pub resolution_from_source: bool,
+    #[serde(default)]
+    pub fps_from_source: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_format: Option<String>,
+    #[serde(default)]
+    pub enhance_quality: bool,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.
@@ -454,6 +464,18 @@ pub fn notification_sounds_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Read once per stroke, so it goes through the cached store too.
+pub fn keep_drawings() -> bool {
+    cached_store(&tauri_store_path())
+        .and_then(|store| {
+            store
+                .get(GENERAL_SETTINGS)
+                .and_then(Value::as_object)
+                .map(|settings| bool_at(settings, KEEP_DRAWINGS_KEY, false))
+        })
+        .unwrap_or(false)
+}
+
 /// Write one key of one section, preserving every other byte of meaning in
 /// the file.
 ///
@@ -479,6 +501,20 @@ pub fn set_store_setting(section: &str, key: &str, value: Value) -> bool {
             .as_object_mut()
             .expect("just replaced any non-object with an object")
             .insert(key.to_string(), value);
+        true
+    })
+}
+
+pub fn set_editor_preview_quality(quality: EditorPreviewQuality) -> bool {
+    update_store_section(GENERAL_SETTINGS, |general| {
+        general.insert(
+            "editorPreviewQuality".to_string(),
+            Value::from(quality.as_json()),
+        );
+        general.insert(
+            EDITOR_PREVIEW_QUALITY_CHOSEN_KEY.to_string(),
+            Value::Bool(true),
+        );
         true
     })
 }
@@ -532,6 +568,52 @@ fn update_store(mutate: impl FnOnce(&mut Map<String, Value>) -> bool) -> bool {
     let written = write_store(&path, &Value::Object(store));
     store_cache().remove(&path);
     written
+}
+
+/// A store that reads but does not parse as a JSON object (zero-filled after a
+/// power loss, truncated by a crash) refuses every write, so onboarding could
+/// never save its progress and stayed on "Could not save onboarding progress"
+/// forever. While it does not parse, its onboarding flags, auth and presets are
+/// already invisible to Cap, so its bytes are kept beside it and the progress
+/// is saved to a fresh store. A store that could not be read at all is left
+/// alone.
+fn set_aside_unparseable_store(path: &Path) -> bool {
+    let _guard = STORE_UPDATE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return false;
+    }
+    if matches!(
+        serde_json::from_slice::<Value>(&bytes),
+        Ok(Value::Object(_))
+    ) {
+        return false;
+    }
+    let stamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".unreadable-{stamp}"));
+    let kept = path.with_file_name(name);
+    match std::fs::rename(path, &kept) {
+        Ok(()) => {
+            store_cache().remove(path);
+            tracing::error!(
+                kept = %kept.display(),
+                "the settings store did not parse; kept it aside and started a new one"
+            );
+            true
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not set aside the unparseable settings store");
+            false
+        }
+    }
 }
 
 /// Pretty JSON, two-space indent, no trailing newline -- byte-shape identical
@@ -747,7 +829,7 @@ settings_enum! {
     /// `PostStudioRecordingBehaviour`.
     PostStudioBehaviour {
         OpenEditor = "openEditor", tr::settings::options::post_studio::open_editor();
-        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_cap();
+        ShowOverlay = "showOverlay", tr::settings::options::post_studio::show_overlay();
         DoNothing = "doNothing", tr::settings::options::post_studio::do_nothing();
     }
     default = OpenEditor
@@ -819,7 +901,49 @@ impl EditorPreviewQuality {
             Self::Quarter => 0.25,
         }
     }
+
+    /// Every earlier build wrote the whole settings object, so a stored `half`
+    /// without [`EDITOR_PREVIEW_QUALITY_CHOSEN_KEY`] is the old default, not a
+    /// choice. Full and Quarter were only ever picked by hand.
+    fn from_general(general: &Map<String, Value>) -> Self {
+        let stored = general
+            .get("editorPreviewQuality")
+            .and_then(Value::as_str)
+            .and_then(Self::from_json);
+        match stored {
+            Some(quality)
+                if quality != Self::Half
+                    || bool_at(general, EDITOR_PREVIEW_QUALITY_CHOSEN_KEY, false) =>
+            {
+                quality
+            }
+            _ => Self::for_this_machine(),
+        }
+    }
+
+    /// Full on Apple Silicon, where the GPU draws it at no measurable cost,
+    /// and Half elsewhere until Full is measured there. A renderer that fell
+    /// back to (or was forced onto) a software adapter reads back every frame
+    /// on the CPU, so it stays on Half too.
+    pub fn for_this_machine() -> Self {
+        let software = SOFTWARE_RENDERING.load(std::sync::atomic::Ordering::Acquire)
+            || cap_rendering::force_software_wgpu_adapter();
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) && !software {
+            Self::Full
+        } else {
+            Self::Half
+        }
+    }
+
+    /// Called with the shared render device's adapter, or `true` when no
+    /// hardware device could be made.
+    pub fn note_rendering_adapter(software: bool) {
+        SOFTWARE_RENDERING.store(software, std::sync::atomic::Ordering::Release);
+    }
 }
+
+static SOFTWARE_RENDERING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// One entry of `general_settings.excludedWindows` (`WindowExclusion`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -951,9 +1075,8 @@ pub const DEFAULT_PROJECT_NAME_TEMPLATE: &str = "{target_name} ({target_kind}) {
 ///
 /// The defaults are `createDefaultGeneralSettings()` plus the per-row `??`
 /// fallbacks in `general.tsx` -- i.e. what the shipping page *shows* for a key
-/// that is not in the file. Two of them disagree with the Rust struct's own
-/// `#[serde(default)]`: `autoZoomOnClicks` (Rust `default_true`, the page
-/// false) and `enableNativeCameraPreview`. The page is the authority here
+/// that is not in the file. `enableNativeCameraPreview` disagrees with the
+/// Rust struct's own `#[serde(default)]`; the page is the authority here
 /// because this is a page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneralSettings {
@@ -994,6 +1117,9 @@ pub struct GeneralSettings {
     /// during a Studio recording. Off by default, because a microphone or
     /// system audio capture can record the cue.
     pub recording_marker_sound: bool,
+    /// GPUI-only `keepDrawingsOnScreen`: strokes drawn on screen while
+    /// recording stay until cleared instead of fading out.
+    pub keep_drawings: bool,
     pub max_fps: u32,
     pub recordings_path: Option<String>,
     /// Custom folders the library has been pointed at before. Not rendered by
@@ -1011,6 +1137,9 @@ pub struct GeneralSettings {
     /// How fast the editor preview plays. Preview only: export and the
     /// project never see it. Anything but one of the offered steps reads as 1x.
     pub editor_preview_speed: cap_editor::PreviewSpeed,
+    /// Whether the editor's paused preview shows the enhanced frame. Preview
+    /// only: exports use the export page's own option.
+    pub editor_preview_enhance: bool,
     /// The Experimental page's two toggles. Both default false the way the
     /// page shows them (`!!settings.enableNativeCameraPreview` /
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
@@ -1028,8 +1157,11 @@ pub struct GeneralSettings {
 
 pub const SHOW_MAIN_WINDOW_AFTER_INSTANT_KEY: &str = "showMainWindowAfterInstantRecording";
 pub const EDITOR_PREVIEW_SPEED_KEY: &str = "editorPreviewSpeed";
+pub const EDITOR_PREVIEW_QUALITY_CHOSEN_KEY: &str = "editorPreviewQualityChosen";
+pub const EDITOR_PREVIEW_ENHANCE_KEY: &str = "editorPreviewEnhance";
 
 pub const RECORDING_MARKER_SOUND_KEY: &str = "recordingMarkerSound";
+pub const KEEP_DRAWINGS_KEY: &str = "keepDrawingsOnScreen";
 
 /// Read on every marker press, so it goes through the cached store rather
 /// than a full [`GeneralSettings::load`].
@@ -1334,7 +1466,13 @@ pub fn has_completed_startup() -> bool {
 }
 
 pub fn set_has_completed_startup(value: bool) -> bool {
-    set_store_setting(GENERAL_SETTINGS, "hasCompletedStartup", Value::Bool(value))
+    set_onboarding_progress("hasCompletedStartup", value)
+}
+
+fn set_onboarding_progress(key: &str, value: bool) -> bool {
+    set_store_setting(GENERAL_SETTINGS, key, Value::Bool(value))
+        || (set_aside_unparseable_store(&tauri_store_path())
+            && set_store_setting(GENERAL_SETTINGS, key, Value::Bool(value)))
 }
 
 pub fn has_completed_onboarding() -> bool {
@@ -1345,11 +1483,7 @@ pub fn has_completed_onboarding() -> bool {
 }
 
 pub fn set_has_completed_onboarding(value: bool) -> bool {
-    set_store_setting(
-        GENERAL_SETTINGS,
-        "hasCompletedOnboarding",
-        Value::Bool(value),
-    )
+    set_onboarding_progress("hasCompletedOnboarding", value)
 }
 
 /// `should_show_onboarding` (`lib.rs:463-477`): first-run flags or missing
@@ -1379,10 +1513,23 @@ impl GeneralSettings {
         }
     }
 
-    /// `defaultZoomAmount ?? 1.5`: what the settings slider shows and what a
-    /// zoom segment drawn on the timeline starts at (`TL/ZoomTrack.tsx:226`).
+    /// What the settings slider shows: the chosen amount, else the amount
+    /// new projects start their zooms at.
     pub fn new_zoom_amount(&self) -> f32 {
-        self.default_zoom_amount.unwrap_or(1.5)
+        self.zoom_amount_for(cap_project::auto_zoom::AUTO_ZOOM_VERSION)
+    }
+
+    /// What a drawn or generated zoom starts at in a project on the given
+    /// auto zoom rules. Projects from before the rules changed keep 1.5x
+    /// when no amount was chosen.
+    pub fn zoom_amount_for(&self, auto_zoom_version: u32) -> f32 {
+        self.default_zoom_amount.unwrap_or(
+            if auto_zoom_version >= cap_project::auto_zoom::AUTO_ZOOM_VERSION {
+                cap_project::auto_zoom::DEFAULT_AUTO_ZOOM_AMOUNT as f32
+            } else {
+                1.5
+            },
+        )
     }
 
     pub fn load() -> Self {
@@ -1435,11 +1582,12 @@ impl GeneralSettings {
             // is how the setting was re-defaulted without inheriting the old
             // key's values.
             custom_cursor_capture: bool_at(general, "custom_cursor_capture2", true),
-            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", false),
+            auto_zoom_on_clicks: bool_at(general, "autoZoomOnClicks", true),
             default_zoom_amount: opt_f32_at(general, "defaultZoomAmount"),
             capture_keyboard_events: bool_at(general, "captureKeyboardEvents", true),
             macbook_notch_overlay: bool_at(general, "macbookNotchOverlay", false),
             recording_marker_sound: bool_at(general, RECORDING_MARKER_SOUND_KEY, false),
+            keep_drawings: bool_at(general, KEEP_DRAWINGS_KEY, false),
             max_fps: u32_at(general, "maxFps", 60),
             recordings_path: opt_string_at(general, "recordingsPath"),
             previous_recordings_paths: strings_at(general, "previousRecordingsPaths"),
@@ -1461,12 +1609,13 @@ impl GeneralSettings {
             update_download_policy: enum_at(general, "updateDownloadPolicy"),
             server_url: string_at(general, "serverUrl", DEFAULT_SERVER_URL),
             enable_telemetry: bool_at(general, "enableTelemetry", true),
-            editor_preview_quality: enum_at(general, "editorPreviewQuality"),
+            editor_preview_quality: EditorPreviewQuality::from_general(general),
             editor_preview_speed: general
                 .get(EDITOR_PREVIEW_SPEED_KEY)
                 .and_then(Value::as_f64)
                 .and_then(cap_editor::PreviewSpeed::from_f64)
                 .unwrap_or_default(),
+            editor_preview_enhance: bool_at(general, EDITOR_PREVIEW_ENHANCE_KEY, false),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
             confirm_without_microphone: bool_at(
@@ -1629,29 +1778,55 @@ pub fn default_recording_marker_hotkey() -> Hotkey {
 /// unless the user already bound it, or bound something else to the default
 /// combo. Later launches leave the map alone.
 pub fn seed_recording_marker_hotkey() {
-    if store_section(HOTKEYS)
-        .get(RECORDING_MARKER_HOTKEY_SEEDED)
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
+    seed_default_hotkey(
+        RECORDING_MARKER_HOTKEY,
+        RECORDING_MARKER_HOTKEY_SEEDED,
+        default_recording_marker_hotkey(),
+    );
+}
+
+pub const DRAW_HOTKEY: &str = "toggleDrawing";
+
+const DRAW_HOTKEY_SEEDED: &str = "toggleDrawingSeeded";
+
+/// ⌃⌘D is the system's look-up shortcut, so drawing takes ⌃⌘P (pen).
+pub fn default_draw_hotkey() -> Hotkey {
+    Hotkey {
+        code: "KeyP".into(),
+        meta: true,
+        ctrl: true,
+        alt: false,
+        shift: false,
+    }
+}
+
+/// The drawing shortcut's default, offered once the same way as the
+/// marker's. Only where drawing on screen is offered.
+pub fn seed_draw_hotkey() {
+    if crate::live_draw::SUPPORTED {
+        seed_default_hotkey(DRAW_HOTKEY, DRAW_HOTKEY_SEEDED, default_draw_hotkey());
+    }
+}
+
+fn seed_default_hotkey(key: &str, seeded: &str, default: Hotkey) {
+    if store_section(HOTKEYS).get(seeded).and_then(Value::as_bool) == Some(true) {
         return;
     }
     let mut map = hotkeys_raw();
-    let default = default_recording_marker_hotkey();
     let taken = map
         .values()
         .filter_map(hotkey_from_value)
         .any(|hotkey| hotkey == default);
-    if !map.contains_key(RECORDING_MARKER_HOTKEY) && !taken {
+    if !map.contains_key(key) && !taken {
         let Ok(value) = serde_json::to_value(&default) else {
             return;
         };
-        map.insert(RECORDING_MARKER_HOTKEY.into(), value);
+        map.insert(key.into(), value);
         if !set_hotkeys_raw(&map) {
             return;
         }
     }
-    set_store_setting(HOTKEYS, RECORDING_MARKER_HOTKEY_SEEDED, Value::Bool(true));
+    set_store_setting(HOTKEYS, seeded, Value::Bool(true));
 }
 
 // -- Transcription hints --------------------------------------------------------
@@ -2118,6 +2293,10 @@ pub fn automations() -> AutomationsStore {
     }
 }
 
+pub fn automations_value() -> Option<Value> {
+    cached_store(&tauri_store_path()).and_then(|store| store.get(AUTOMATIONS).cloned())
+}
+
 /// `set_automations` (`automation.rs:834-837`): `store.set("automations",
 /// json!(store))` -- the key replaced wholesale, unlike the per-key
 /// [`set_store_setting`] writes.
@@ -2304,7 +2483,11 @@ mod tests {
         std::fs::write(&store.path, "{ not json").unwrap();
         backdate(&store.path, seconds_ago(30));
         assert!(!has_completed_startup());
-        assert!(!set_has_completed_onboarding(true));
+        assert!(!set_store_setting(
+            GENERAL_SETTINGS,
+            "hideDockIcon",
+            Value::Bool(true)
+        ));
         std::fs::remove_file(&store.path).unwrap();
         assert!(!has_completed_startup());
         assert!(store_section(GENERAL_SETTINGS).is_empty());
@@ -3064,6 +3247,67 @@ mod tests {
         }
     }
 
+    /// A zero-filled store (NTFS after a power loss) or one cut off mid-object
+    /// blocked onboarding forever. Onboarding sets the unreadable bytes aside
+    /// and saves its progress; every other writer still refuses.
+    #[test]
+    fn onboarding_progress_sets_aside_an_unparseable_store() {
+        for contents in [
+            "\0\0\0\0\0\0\0\0",
+            "{ this is not json",
+            r#"{"auth":"token""#,
+            "null",
+            "[]",
+        ] {
+            let store = TempStore::new("unparseable-onboarding", Some(contents));
+            assert!(!set_store_setting(
+                GENERAL_SETTINGS,
+                "hideDockIcon",
+                Value::Bool(true)
+            ));
+            assert_eq!(std::fs::read_to_string(&store.path).unwrap(), contents);
+            assert!(!has_completed_startup());
+
+            assert!(set_has_completed_startup(true));
+            assert!(set_has_completed_onboarding(true));
+            assert!(has_completed_startup());
+            assert!(has_completed_onboarding());
+            assert_eq!(
+                store.read(),
+                serde_json::json!({
+                    "general_settings": {
+                        "hasCompletedStartup": true,
+                        "hasCompletedOnboarding": true
+                    }
+                })
+            );
+
+            let directory = store.path.parent().unwrap();
+            let prefix = format!(
+                "{}.unreadable-",
+                store.path.file_name().unwrap().to_string_lossy()
+            );
+            let kept = std::fs::read_dir(directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>();
+            assert_eq!(kept.len(), 1, "{kept:?}");
+            assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), contents);
+            std::fs::remove_file(&kept[0]).unwrap();
+        }
+    }
+
+    #[test]
+    fn onboarding_progress_leaves_an_unreadable_store_alone() {
+        let store = TempStore::new("unreadable-onboarding", None);
+        std::fs::create_dir_all(&store.path).unwrap();
+        assert!(!set_has_completed_startup(true));
+        assert!(store.path.is_dir());
+        std::fs::remove_dir(&store.path).unwrap();
+    }
+
     #[test]
     fn onboarding_progress_recovers_an_empty_store() {
         for contents in ["", " \t\r\n"] {
@@ -3134,7 +3378,10 @@ mod tests {
         assert!(settings.confirm_without_microphone);
         assert!(settings.studio_sound_by_default);
         assert_eq!(settings.instant_mode_max_resolution, 1920);
-        assert_eq!(GeneralSettings::default().new_zoom_amount(), 1.5);
+        assert_eq!(GeneralSettings::default().new_zoom_amount(), 2.0);
+        assert_eq!(GeneralSettings::default().zoom_amount_for(0), 1.5);
+        assert!(GeneralSettings::default().auto_zoom_on_clicks);
+        assert_eq!(settings.zoom_amount_for(0), 2.5);
     }
 
     /// The teleprompter's own section: defaults when absent, and a per-key
@@ -3346,6 +3593,51 @@ mod tests {
     }
 
     #[test]
+    fn the_draw_shortcut_default_is_offered_once_and_never_over_a_combo_in_use() {
+        let store = TempStore::new("draw-seed", Some(r#"{ "hotkeys": { "hotkeys": {} } }"#));
+        seed_draw_hotkey();
+        if !crate::live_draw::SUPPORTED {
+            assert!(!hotkeys_raw().contains_key(DRAW_HOTKEY));
+            return;
+        }
+        assert_eq!(
+            hotkey_from_value(&hotkeys_raw()[DRAW_HOTKEY]),
+            Some(default_draw_hotkey())
+        );
+        assert_eq!(store.read()["hotkeys"][DRAW_HOTKEY_SEEDED], true);
+        let mut cleared = hotkeys_raw();
+        cleared.remove(DRAW_HOTKEY);
+        assert!(set_hotkeys_raw(&cleared));
+        seed_draw_hotkey();
+        assert!(!hotkeys_raw().contains_key(DRAW_HOTKEY));
+        drop(store);
+
+        let default = serde_json::to_string(&default_draw_hotkey()).unwrap();
+        let _taken = TempStore::new(
+            "draw-seed-taken",
+            Some(&format!(
+                r#"{{ "hotkeys": {{ "hotkeys": {{ "stopRecording": {default} }} }} }}"#
+            )),
+        );
+        seed_draw_hotkey();
+        assert!(!hotkeys_raw().contains_key(DRAW_HOTKEY));
+    }
+
+    #[test]
+    fn drawings_fade_unless_kept() {
+        let _store = TempStore::new("keep-drawings", Some(r#"{ "general_settings": {} }"#));
+        assert!(!keep_drawings());
+        assert!(!GeneralSettings::load().keep_drawings);
+        assert!(set_store_setting(
+            GENERAL_SETTINGS,
+            KEEP_DRAWINGS_KEY,
+            Value::Bool(true)
+        ));
+        assert!(keep_drawings());
+        assert!(GeneralSettings::load().keep_drawings);
+    }
+
+    #[test]
     fn the_marker_sound_is_off_until_turned_on() {
         let _store = TempStore::new("marker-sound", Some(r#"{ "general_settings": {} }"#));
         assert!(!recording_marker_sound_enabled());
@@ -3506,6 +3798,65 @@ mod tests {
     }
 
     #[test]
+    fn editor_preview_quality_defaults_per_machine_until_chosen() {
+        let read = |quality: Option<&str>, chosen: Option<bool>| {
+            let mut general = Map::new();
+            if let Some(quality) = quality {
+                general.insert("editorPreviewQuality".to_string(), Value::from(quality));
+            }
+            if let Some(chosen) = chosen {
+                general.insert(
+                    EDITOR_PREVIEW_QUALITY_CHOSEN_KEY.to_string(),
+                    Value::from(chosen),
+                );
+            }
+            GeneralSettings::from_sections(&general, &Map::new(), &Map::new())
+                .editor_preview_quality
+        };
+        let machine = EditorPreviewQuality::for_this_machine();
+        if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+            && !cap_rendering::force_software_wgpu_adapter()
+        {
+            assert_eq!(machine, EditorPreviewQuality::Full);
+        }
+        if cfg!(target_os = "linux") {
+            assert_eq!(machine, EditorPreviewQuality::Half);
+        }
+        assert_eq!(read(None, None), machine);
+        assert_eq!(read(Some("half"), None), machine);
+        assert_eq!(read(Some("half"), Some(false)), machine);
+        assert_eq!(read(Some("bogus"), Some(true)), machine);
+        assert_eq!(read(Some("half"), Some(true)), EditorPreviewQuality::Half);
+        assert_eq!(read(Some("full"), None), EditorPreviewQuality::Full);
+        assert_eq!(read(Some("quarter"), None), EditorPreviewQuality::Quarter);
+        assert_eq!(read(Some("full"), Some(true)), EditorPreviewQuality::Full);
+    }
+
+    #[test]
+    fn choosing_half_keeps_it_over_the_machine_default() {
+        let store = TempStore::new(
+            "preview-quality",
+            Some(r#"{ "general_settings": { "editorPreviewQuality": "half", "theme": "dark" } }"#),
+        );
+        assert_eq!(
+            GeneralSettings::load().editor_preview_quality,
+            EditorPreviewQuality::for_this_machine()
+        );
+        assert!(set_editor_preview_quality(EditorPreviewQuality::Half));
+        let written = store.read();
+        assert_eq!(written["general_settings"]["editorPreviewQuality"], "half");
+        assert_eq!(
+            written["general_settings"][EDITOR_PREVIEW_QUALITY_CHOSEN_KEY],
+            true
+        );
+        assert_eq!(written["general_settings"]["theme"], "dark");
+        assert_eq!(
+            GeneralSettings::load().editor_preview_quality,
+            EditorPreviewQuality::Half
+        );
+    }
+
+    #[test]
     fn editor_preview_speed_reads_offered_steps_and_falls_back_to_normal() {
         let read = |value: Option<Value>| {
             let mut general = Map::new();
@@ -3547,6 +3898,59 @@ mod tests {
         general.insert("excludedWindows".to_string(), Value::Array(Vec::new()));
         let cleared = GeneralSettings::from_sections(&general, &Map::new(), &Map::new());
         assert!(cleared.excluded_windows.is_empty());
+    }
+
+    /// 0.6.0 (Tauri) wrote the whole `general_settings` object with
+    /// `"showOverlay"` for its overlay; 0.6.1 to 0.6.3 wrote only this key,
+    /// with the same value, for the option labelled "Show Cap". Both read
+    /// back as the overlay, labelled as the Tauri app labelled it, and the
+    /// value written for it stays one 0.6.0 can read after a downgrade.
+    #[test]
+    fn post_studio_overlay_reads_tauri_and_gpui_stores() {
+        let tauri: Map<String, Value> = serde_json::from_str(
+            r#"{
+                "uploadIndividualFiles": false,
+                "hideDockIcon": false,
+                "autoCreateShareableLink": false,
+                "enableNotifications": true,
+                "disableAutoOpenLinks": false,
+                "hasCompletedStartup": true,
+                "theme": "system",
+                "recordingCountdown": 3,
+                "mainWindowRecordingStartBehaviour": "close",
+                "postStudioRecordingBehaviour": "showOverlay",
+                "postDeletionBehaviour": "doNothing"
+            }"#,
+        )
+        .unwrap();
+        let gpui: Map<String, Value> =
+            serde_json::from_str(r#"{ "postStudioRecordingBehaviour": "showOverlay" }"#).unwrap();
+        for general in [&tauri, &gpui] {
+            let settings = GeneralSettings::from_sections(general, &Map::new(), &Map::new());
+            assert_eq!(
+                settings.post_studio_recording_behaviour,
+                PostStudioBehaviour::ShowOverlay
+            );
+        }
+        assert_eq!(PostStudioBehaviour::ShowOverlay.as_json(), "showOverlay");
+        assert_eq!(PostStudioBehaviour::ShowOverlay.label(), "Show in overlay");
+        assert_eq!(
+            PostStudioBehaviour::from_json("showOverlay"),
+            Some(PostStudioBehaviour::ShowOverlay)
+        );
+
+        let unknown: Map<String, Value> =
+            serde_json::from_str(r#"{ "postStudioRecordingBehaviour": "showCap" }"#).unwrap();
+        assert_eq!(
+            GeneralSettings::from_sections(&unknown, &Map::new(), &Map::new())
+                .post_studio_recording_behaviour,
+            PostStudioBehaviour::OpenEditor
+        );
+        assert_eq!(
+            GeneralSettings::from_sections(&Map::new(), &Map::new(), &Map::new())
+                .post_studio_recording_behaviour,
+            PostStudioBehaviour::OpenEditor
+        );
     }
 
     /// A store written before `showMainWindowAfterInstantRecording` keeps

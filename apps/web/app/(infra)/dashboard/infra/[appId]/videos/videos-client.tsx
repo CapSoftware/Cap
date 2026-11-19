@@ -9,7 +9,7 @@ import { useId, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { deleteDeveloperVideo } from "@/actions/developers/delete-video";
 import { infraAppPath } from "@/lib/infra-routes";
-import { formatDuration } from "@/lib/infra-usage";
+import { formatDurationOrDash } from "@/lib/infra-usage";
 import {
 	INFRA_VIDEO_PAGE_MAX,
 	type InfraVideoListItem,
@@ -19,10 +19,12 @@ import { CopyButton } from "../../_components/copy";
 import { ConfirmDialog } from "../../_components/dialog";
 import {
 	Button,
+	CARD_ROWS,
 	Empty,
 	FOCUS,
 	Input,
 	MONO,
+	PANEL,
 	PageHeader,
 	TD,
 	TH,
@@ -154,8 +156,14 @@ export function VideosClient({
 					</Empty>
 				</div>
 			) : (
-				<div className="relative -mx-1 overflow-x-auto px-1">
-					<table className="w-full border-collapse border-t border-[rgba(222,230,246,0.08)]">
+				<div
+					className={clsx(
+						PANEL,
+						CARD_ROWS,
+						"relative overflow-x-auto px-5 py-1",
+					)}
+				>
+					<table className="w-full border-collapse">
 						<thead>
 							<tr className={TR}>
 								<th className={TH}>Name</th>
@@ -212,7 +220,7 @@ export function VideosClient({
 												"hidden text-right text-[13px] tabular-nums sm:table-cell",
 											)}
 										>
-											{formatDuration(video.duration) ?? NONE}
+											{formatDurationOrDash(video.duration)}
 										</td>
 										<td className={clsx(TD, "hidden md:table-cell")}>
 											{dateFormat.format(new Date(video.createdAt))}

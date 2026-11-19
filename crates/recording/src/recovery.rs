@@ -278,6 +278,56 @@ impl RecoveryManager {
         Self::remux_with_preparing(&completed.project_path, Some(job))
     }
 
+    /// Whether a fragmented Studio recording holds footage that reading its
+    /// track directories directly (the editor reads `init.mp4` and the
+    /// top-level `segment_*.m4s`) would leave out: the restart groups a
+    /// respawned display muxer wrote under `display/respawn-*`, or a pending
+    /// `segment_*.m4s.tmp` that recovery rescues. Such a recording has to go
+    /// through recovery, which joins all of it.
+    pub fn has_media_beyond_direct_read(project_path: &Path, meta: &StudioRecordingMeta) -> bool {
+        let StudioRecordingMeta::MultipleSegments { inner } = meta else {
+            return false;
+        };
+        let pending = |dir: &Path| {
+            fragment_entries(dir).any(|(path, name)| {
+                fragment_index_with_suffix(&name, ".m4s.tmp").is_some()
+                    && is_salvageable_pending(dir, &path, true)
+            })
+        };
+        inner.segments.iter().any(|segment| {
+            let display = segment.display.path.to_path(project_path);
+            let restarted = display.is_dir()
+                && Self::respawn_directories(&display)
+                    .iter()
+                    .any(|(_, respawn)| {
+                        fragment_entries(respawn).any(|(_, name)| {
+                            fragment_index_with_suffix(&name, ".m4s").is_some()
+                                || fragment_index_with_suffix(&name, ".m4s.tmp").is_some()
+                        })
+                    });
+            restarted
+                || std::iter::once(display)
+                    .chain(
+                        segment
+                            .camera
+                            .as_ref()
+                            .map(|camera| camera.path.to_path(project_path)),
+                    )
+                    .any(|dir| dir.is_dir() && pending(&dir))
+        })
+    }
+
+    /// Settles any recovery an earlier run left part way: an interrupted
+    /// publication rolls back to the original layout, and original media an
+    /// older build left in a `.recovery-*` backup moves back into the
+    /// project. Call before deciding how to open a recording.
+    pub fn restore_interrupted_recovery(project_path: &Path) -> Result<(), RecoveryError> {
+        if !project_path.join("recording-meta.json").is_file() {
+            return Ok(());
+        }
+        RecoveryLock::acquire(project_path).map(drop)
+    }
+
     pub fn remux_if_needed(project_path: &Path) -> Result<bool, RecoveryError> {
         Self::remux_with_preparing(project_path, None)
     }
@@ -306,14 +356,16 @@ impl RecoveryManager {
             return Ok(false);
         }
 
-        // Without a preparing editor nothing reads the originals once they are
-        // published, so the backup goes with the stop instead of doubling the
-        // recording's size on disk for good -- unless it holds a legacy
-        // omitted track, which publication leaves out and only the backup
-        // keeps.
-        let unread = preparing.is_none()
-            && legacy_omitted_tracks(&incomplete.meta, project_path)
-                .is_ok_and(|tracks| tracks.is_empty());
+        // Unless a preparing editor was handed the originals, nothing reads
+        // them once they are published, so the backup goes with the stop
+        // instead of doubling the recording's size on disk for good -- unless
+        // it holds a legacy omitted track, which publication leaves out and
+        // only the backup keeps. A preparing job that declined (a stopped
+        // config with markers, for one) never shares the lease, so the lease
+        // can't retire the backup and this is the only path that does.
+        let keeps_no_omitted_track = legacy_omitted_tracks(&incomplete.meta, project_path)
+            .is_ok_and(|tracks| tracks.is_empty());
+        let preparing_identity = preparing.as_ref().map(|job| job.identity().clone());
         let published_workspace = std::cell::RefCell::new(None);
         Self::finalize_with_publication(
             &incomplete,
@@ -328,6 +380,8 @@ impl RecoveryManager {
             RecoveryLock::acquire,
             preparing,
         )?;
+        let unread = keeps_no_omitted_track
+            && !preparing_identity.is_some_and(|identity| identity.publication_succeeded());
         if unread && let Some(workspace) = published_workspace.into_inner() {
             let retired = RecoveryLock::acquire(project_path)
                 .and_then(|_lock| retirement::retire_unread_originals(project_path, &workspace));
@@ -401,6 +455,9 @@ impl RecoveryManager {
 
         let mut recoverable_segments = Vec::new();
         let mut total_duration = Duration::ZERO;
+        let audio_only = meta
+            .studio_meta()
+            .is_some_and(StudioRecordingMeta::is_audio_only);
 
         let mut segment_dirs: Vec<_> = std::fs::read_dir(&segments_dir)
             .ok()?
@@ -423,6 +480,10 @@ impl RecoveryManager {
                 .strip_prefix("segment-")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0);
+
+            if audio_only {
+                Self::restore_audio_only_standin(&segment_path);
+            }
 
             let display_info = Self::segment_track_fragments(&segment_path, "display", true);
             let display_fragments = display_info.fragments;
@@ -481,6 +542,27 @@ impl RecoveryManager {
             recoverable_segments,
             estimated_duration: total_duration,
         })
+    }
+
+    /// An audio-only segment's display stand-in is written when the segment
+    /// finishes, so a recording that was killed has none. It is rebuilt here
+    /// as long as the audio the segment kept.
+    fn restore_audio_only_standin(segment_path: &Path) {
+        let standin = segment_path.join("display.mp4");
+        if standin.is_file() {
+            return;
+        }
+        let duration = ["audio-input", "system_audio"]
+            .iter()
+            .filter_map(|track| Self::find_audio_fragments(&segment_path.join(track)))
+            .filter_map(|fragments| Self::estimate_fragments_duration(&fragments))
+            .max();
+        let Some(duration) = duration else {
+            return;
+        };
+        if let Err(error) = crate::sources::standin_for_span(&standin, duration) {
+            warn!(%error, segment = %segment_path.display(), "Could not rebuild the audio-only display track");
+        }
     }
 
     fn find_studio_fragments_with_init(dir: &Path) -> FragmentsInfo {
@@ -1470,13 +1552,34 @@ impl RecoveryManager {
                 return Err(error);
             }
         };
-        if let Some(source) = &preparing_source {
-            publish_recovery_with_source(project, &workspace, source)?;
-            if let Some(job) = &mut preparing {
-                job.mark_publication_succeeded();
-            }
+        let published = if let Some(source) = &preparing_source {
+            publish_recovery_with_source(project, &workspace, source)
         } else {
-            publish(project, &workspace)?;
+            publish(project, &workspace)
+        };
+        if let Err(error) = published {
+            // A publication that rolled back cleanly finished its journal and
+            // left the originals in place, so the workspace only holds the
+            // staged copy. One that could not roll back keeps its journal and
+            // workspace for the next lock to reconcile.
+            if !project
+                .join(RECOVERY_PUBLICATION)
+                .try_exists()
+                .unwrap_or(true)
+                && !workspace
+                    .join("original-segments")
+                    .try_exists()
+                    .unwrap_or(true)
+                && let Err(cleanup) = std::fs::remove_dir_all(&workspace)
+            {
+                warn!(path = %workspace.display(), error = %cleanup, "Could not remove recovery workspace after a rolled back publication");
+            }
+            return Err(error);
+        }
+        if preparing_source.is_some()
+            && let Some(job) = &mut preparing
+        {
+            job.mark_publication_succeeded();
         }
         debug!(
             elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
@@ -2815,6 +2918,7 @@ impl RecoveryManager {
                         None
                     },
                     display_notch: original_segment.and_then(|s| s.display_notch),
+                    cursor_shape_version: original_segment.and_then(|s| s.cursor_shape_version),
                 }
             })
             .collect();
@@ -2826,6 +2930,14 @@ impl RecoveryManager {
                 segments,
                 cursors: existing_cursors,
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: recording
+                    .meta
+                    .studio_meta()
+                    .map_or(0, StudioRecordingMeta::cursor_shape_version),
+                audio_only: recording
+                    .meta
+                    .studio_meta()
+                    .is_some_and(StudioRecordingMeta::is_audio_only),
             },
         })
     }
@@ -2887,7 +2999,7 @@ impl RecoveryManager {
             Ok(config) => config,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => ProjectConfiguration {
                 markers: Self::recovered_markers(recording, inner, &timeline_segments),
-                ..Default::default()
+                ..ProjectConfiguration::for_new_project()
             },
             Err(error) => return Err(error.into()),
         };
@@ -4193,6 +4305,7 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
     let bytes = match read_recovery_publication(&project.join(RECOVERY_PUBLICATION)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            restore_unpublished_originals(project)?;
             if !project.join("content/segments").try_exists()?
                 && RecordingMeta::load_for_project(project)
                     .ok()
@@ -4305,18 +4418,266 @@ fn reconcile_recovery_publication(project: &Path) -> Result<(), RecoveryError> {
             }
             Err(error) => return Err(error.into()),
         }
-        std::fs::rename(workspace.join("original-segments"), destination)?;
+        rename_recovery_path(&workspace.join("original-segments"), &destination)?;
         if recovery_publication_state_for_version(project, version)? != receipt.original {
             return Err(RecoveryError::Validation(
                 "Restored publication state changed; evidence retained".into(),
             ));
         }
-    } else if !before_move && !installed_segments && !committed {
+    } else if installed_segments && !committed {
+        // The metadata replace is the commit point, so recovered segments
+        // installed under the original metadata are an uncommitted
+        // publication: the editor would look for the original fragment
+        // directories and find the rebuilt files instead. Roll it back to the
+        // original layout. Each step leaves a state this reconciliation
+        // accepts, so a crash part way through resumes here.
+        // The staged config is gone once publication installed it. Its bytes
+        // can equal the original's, so whether it was installed is read from
+        // the files, not from the digests.
+        let config = project.join("project-config.json");
+        if !workspace.join("staged/project-config.json").try_exists()? {
+            let backup_config = workspace.join("original-project-config.json");
+            if receipt.original.config.is_some() {
+                if backup_config.try_exists()? {
+                    rename_recovery_path(&backup_config, &config)?;
+                }
+            } else if config.try_exists()? {
+                std::fs::remove_file(&config)?;
+            }
+        }
+        let staged_segments = workspace.join("staged/content/segments");
+        match staged_segments.symlink_metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(RecoveryError::Validation(
+                    "Conflicting recovery publication state; all files retained".into(),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+        rename_recovery_path(&project.join("content/segments"), &staged_segments)?;
+        return reconcile_recovery_publication(project);
+    } else if !before_move && !committed {
         return Err(RecoveryError::Validation(
             "Conflicting recovery publication state; all files retained".into(),
         ));
     }
     finish_recovery_publication(project, &workspace, &bytes)
+}
+
+/// Older builds accepted a publication that installed the recovered segments
+/// but never replaced the metadata, then finished its journal. The project's
+/// metadata still describes the original fragments, which sit in a
+/// `.recovery-*/original-segments` backup, so the editor cannot open it. When
+/// exactly one backup belongs to the current metadata (byte for byte, or
+/// differing only in a status a later scan marked) and the project lacks any of
+/// its files, the original layout is put back. Nothing is deleted: whatever
+/// the project held moves into that workspace as `displaced-segments`. Every
+/// step leaves a state this function still recognises, so a crash part way
+/// through resumes on the next lock.
+fn restore_unpublished_originals(project: &Path) -> Result<bool, RecoveryError> {
+    let Ok(current_meta) = std::fs::read(project.join("recording-meta.json")) else {
+        return Ok(false);
+    };
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(project)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name
+            .strip_prefix(".recovery-")
+            .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+        {
+            continue;
+        }
+        let workspace = entry.path();
+        let backup = workspace.join("original-segments");
+        let is_plain_dir = |path: &Path| {
+            path.symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir() && reject_recovery_link(&metadata).is_ok())
+        };
+        if !is_plain_dir(&workspace) || !is_plain_dir(&backup) {
+            continue;
+        }
+        let Ok(original_meta) = std::fs::read(workspace.join("original-recording-meta.json"))
+        else {
+            continue;
+        };
+        let Some(media) = unpublished_backup_media(&current_meta, &original_meta, &backup) else {
+            continue;
+        };
+        candidates.push((media, workspace, original_meta));
+    }
+    candidates.sort_by_key(|(media, _, _)| std::cmp::Reverse(*media));
+    let (workspace, original_meta) = match candidates.as_slice() {
+        [] => return Ok(false),
+        [(_, workspace, meta)] => (workspace.clone(), meta.clone()),
+        [(best, workspace, meta), (next, _, _), ..] if best > next => {
+            (workspace.clone(), meta.clone())
+        }
+        _ => {
+            return Err(RecoveryError::Validation(
+                "Several recovery backups match this recording; all files retained".into(),
+            ));
+        }
+    };
+    // Every rename below goes through these directories, so a link or
+    // junction could carry the restore outside the recording.
+    for path in [project.join("content"), project.join("content/segments")] {
+        match path.symlink_metadata() {
+            Ok(metadata) => {
+                reject_recovery_link(&metadata)?;
+                if !metadata.is_dir() {
+                    return Err(RecoveryError::Validation(
+                        "Recording content is not a directory; all files retained".into(),
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let backup = workspace.join("original-segments");
+    let segments = project.join("content/segments");
+    if backup_files_present(&backup, &segments)? {
+        return Ok(false);
+    }
+    warn!(project = %project.display(), workspace = %workspace.display(), "Restoring original media an interrupted recovery left in its backup");
+    if current_meta != original_meta {
+        let temporary = project.join(format!(".recording-meta-{}.json", uuid::Uuid::new_v4()));
+        {
+            use std::io::Write;
+            // Windows only flushes a file through a handle that can write it.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(&original_meta)?;
+            file.sync_all()?;
+        }
+        if let Err(error) = rename_recovery_path(&temporary, &project.join("recording-meta.json")) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.into());
+        }
+    }
+    let backup_config = workspace.join("original-project-config.json");
+    if !workspace.join("staged/project-config.json").try_exists()? && backup_config.is_file() {
+        rename_recovery_path(&backup_config, &project.join("project-config.json"))?;
+    }
+    if segments.symlink_metadata().is_ok() {
+        let displaced = (0..)
+            .map(|index| match index {
+                0 => workspace.join("displaced-segments"),
+                index => workspace.join(format!("displaced-segments-{index}")),
+            })
+            .find(|path| path.symlink_metadata().is_err())
+            .ok_or_else(|| RecoveryError::Validation("No free displaced segments name".into()))?;
+        rename_recovery_path(&segments, &displaced)?;
+    }
+    std::fs::create_dir_all(project.join("content"))?;
+    rename_recovery_path(&backup, &segments)?;
+    Ok(true)
+}
+
+/// How many media files `backup` holds for the display tracks the original
+/// metadata names, when that metadata is the one the project still carries.
+fn unpublished_backup_media(current: &[u8], original: &[u8], backup: &Path) -> Option<usize> {
+    let mut current: serde_json::Value = serde_json::from_slice(current).ok()?;
+    let mut original: serde_json::Value = serde_json::from_slice(original).ok()?;
+    let display_paths = original
+        .get("segments")
+        .and_then(serde_json::Value::as_array)
+        .map(|segments| {
+            segments
+                .iter()
+                .map(|segment| segment.pointer("/display/path"))
+                .collect::<Vec<_>>()
+        })
+        .or_else(|| Some(vec![original.pointer("/display/path")]))?
+        .into_iter()
+        .map(|path| path.and_then(serde_json::Value::as_str).map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    if current != original {
+        // A scan that found no media marks the project failed; that status is
+        // the only change it makes.
+        let failed = current
+            .pointer("/status/status")
+            .is_some_and(|status| status == "Failed");
+        let (Some(current), Some(original)) = (current.as_object_mut(), original.as_object_mut())
+        else {
+            return None;
+        };
+        current.remove("status");
+        original.remove("status");
+        if !failed || current != original {
+            return None;
+        }
+    }
+    let mut media = 0;
+    for path in display_paths {
+        let relative = Path::new(&path.replace('\\', "/"))
+            .strip_prefix("content/segments")
+            .ok()?
+            .to_path_buf();
+        if relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return None;
+        }
+        let track = backup.join(relative);
+        let metadata = track.symlink_metadata().ok()?;
+        let count = if metadata.is_file() {
+            usize::from(metadata.len() > 0)
+        } else if metadata.is_dir() {
+            std::fs::read_dir(&track)
+                .ok()?
+                .flatten()
+                .filter(|entry| {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    name.ends_with(".m4s")
+                        || name.ends_with(".m4s.tmp")
+                        || name.starts_with("respawn-")
+                })
+                .count()
+        } else {
+            0
+        };
+        if count == 0 {
+            return None;
+        }
+        media += count;
+    }
+    Some(media)
+}
+
+/// Whether every file in `backup` is also in `segments` at the same relative
+/// path and size, so restoring the backup would add nothing.
+fn backup_files_present(backup: &Path, segments: &Path) -> Result<bool, RecoveryError> {
+    if segments.symlink_metadata().is_err() {
+        return Ok(false);
+    }
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative) = pending.pop() {
+        for entry in std::fs::read_dir(backup.join(&relative))? {
+            let entry = entry?;
+            let relative = relative.join(entry.file_name());
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                pending.push(relative);
+            } else if !segments
+                .join(&relative)
+                .symlink_metadata()
+                .is_ok_and(|present| present.is_file() && present.len() == metadata.len())
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn publish_recovery(project: &Path, workspace: &Path) -> Result<(), RecoveryError> {
@@ -4349,7 +4710,33 @@ fn rename_recovery_path_with_source(
     }
 }
 
+/// Antivirus, the search indexer and cloud sync briefly hold files that
+/// recovery just wrote, and Windows refuses to rename a file, or a directory
+/// holding one, while another handle is open. Publication and its rollback
+/// retry those refusals for a few seconds so a scan does not strand a project
+/// between its original and recovered layouts.
 fn rename_recovery_path(source: &Path, destination: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        const ERROR_ACCESS_DENIED: i32 = 5;
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        const ERROR_LOCK_VIOLATION: i32 = 33;
+        let started = std::time::Instant::now();
+        loop {
+            match std::fs::rename(source, destination) {
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+                    ) && started.elapsed() < Duration::from_secs(5) =>
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                result => return result,
+            }
+        }
+    }
+    #[cfg(not(windows))]
     std::fs::rename(source, destination)
 }
 
@@ -4898,9 +5285,12 @@ mod clean_studio_snapshot_tests {
                         cursor: None,
                         keyboard: None,
                         display_notch: None,
+                        cursor_shape_version: None,
                     }],
                     cursors: Cursors::default(),
                     status: Some(status),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         }
@@ -5959,6 +6349,52 @@ mod clean_studio_snapshot_tests {
     }
 
     #[test]
+    fn a_stop_whose_preparing_editor_declines_retires_the_original_media_backup() {
+        use super::preparing_observer::PreparingStudioTestTransition;
+        use crate::studio_recording::CleanStoppedStudio;
+
+        let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
+        let project = directory.path();
+        let mut completed = completed_preparing_fixture(project);
+        let mut configuration = ProjectConfiguration::load(project).unwrap();
+        configuration.markers = vec![cap_project::TimelineMarker::new(0, 0.5)];
+        configuration.write(project).unwrap();
+        completed.clean_stopped = CleanStoppedStudio::for_test(
+            RecordingMeta::load_for_project(project).unwrap(),
+            configuration,
+        );
+        let (job, observer) = PreparingStudioJob::claim(&completed, 11).unwrap();
+        let transitions = job.test_transitions();
+
+        assert!(RecoveryManager::remux_stopped_with_preparing(&completed, job).unwrap());
+
+        assert_eq!(
+            *transitions.lock().unwrap(),
+            vec![
+                PreparingStudioTestTransition::Unavailable(
+                    "Edited or legacy configuration requires ordinary loading".into(),
+                ),
+                PreparingStudioTestTransition::Ended,
+            ]
+        );
+        assert!(!observer.publication_succeeded());
+        let workspaces: Vec<_> = fs::read_dir(project)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(".recovery-")
+            })
+            .collect();
+        assert_eq!(workspaces.len(), 1);
+        assert!(!workspaces[0].join("original-segments").exists());
+        assert!(probe_video_can_decode(&project.join(OUTPUT)).unwrap());
+        assert!(RecoveryLock::acquire(project).is_ok());
+    }
+
+    #[test]
     fn studio_finalization_keeps_the_recorded_display_fps() {
         let directory = playable_studio_project(StudioRecordingStatus::NeedsRemux);
         let project = directory.path();
@@ -6937,6 +7373,7 @@ mod empty_orphan_segment_tests {
                 cursor: None,
                 keyboard: None,
                 display_notch: None,
+                cursor_shape_version: None,
             })
             .collect();
 
@@ -6951,6 +7388,8 @@ mod empty_orphan_segment_tests {
                     segments,
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -7364,6 +7803,8 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -7588,7 +8029,8 @@ mod transactional_recovery_tests {
             let _lock = RecoveryLock::acquire(&project).unwrap();
             assert!(!project.join(RECOVERY_PUBLICATION).exists());
             assert!(workspace.join(RECOVERY_PUBLICATION_RECEIPT).is_file());
-            if after <= 1 {
+            // Replacing the metadata commits; anything short of it rolls back.
+            if after <= 3 {
                 assert_eq!(recovery_snapshot(&project).unwrap(), original);
             } else {
                 assert_eq!(
@@ -7630,19 +8072,20 @@ mod transactional_recovery_tests {
     }
 
     #[test]
-    fn relaunch_after_segments_install_retains_canonical_data_and_original_status() {
+    fn relaunch_after_segments_install_rolls_back_to_the_original_layout() {
         for after in [2, 3] {
             let (temporary, project, workspace) = scannable_publication_fixture();
-            let original_meta = std::fs::read(project.join("recording-meta.json")).unwrap();
+            let original = recovery_snapshot(&project).unwrap();
             interrupt_publication(&project, &workspace, after);
-            let before_scan = recovery_snapshot(&project).unwrap();
             assert_eq!(RecoveryManager::find_incomplete(temporary.path()).len(), 1);
-            assert_eq!(recovery_snapshot(&project).unwrap(), before_scan);
-            assert_eq!(
-                std::fs::read(project.join("recording-meta.json")).unwrap(),
-                original_meta
+            assert_eq!(recovery_snapshot(&project).unwrap(), original);
+            assert!(!workspace.join("original-segments").exists());
+            assert!(
+                workspace
+                    .join("staged/content/segments/display.mp4")
+                    .is_file()
             );
-            assert!(workspace.join("original-segments/raw.m4s").is_file());
+            assert!(!project.join(RECOVERY_PUBLICATION).exists());
             assert!(workspace.join(RECOVERY_PUBLICATION_RECEIPT).is_file());
         }
     }
@@ -7676,11 +8119,29 @@ mod transactional_recovery_tests {
             std::fs::remove_file(project.join("project-config.json")).unwrap();
             interrupt_publication(&project, &workspace, after);
             let _lock = RecoveryLock::acquire(&project).unwrap();
-            assert_eq!(project.join("project-config.json").exists(), after == 3);
+            assert!(!project.join("project-config.json").exists());
             assert_eq!(
                 std::fs::read(project.join("recording-meta.json")).unwrap(),
                 b"original status"
             );
+        }
+    }
+
+    #[test]
+    fn interrupted_publication_with_an_identical_staged_config_rolls_back() {
+        for after in 1..=3 {
+            let (_temporary, project, workspace) = publication_fixture();
+            std::fs::write(
+                workspace.join("staged/project-config.json"),
+                b"original config",
+            )
+            .unwrap();
+            let original = recovery_snapshot(&project).unwrap();
+            interrupt_publication(&project, &workspace, after);
+            let _lock = RecoveryLock::acquire(&project).unwrap();
+            assert_eq!(recovery_snapshot(&project).unwrap(), original, "{after}");
+            assert!(!project.join(RECOVERY_PUBLICATION).exists());
+            assert!(!workspace.join("original-segments").exists());
         }
     }
 
@@ -8045,6 +8506,8 @@ mod transactional_recovery_tests {
                     segments: Vec::new(),
                     cursors: Cursors::default(),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
         };
@@ -8500,6 +8963,9 @@ mod transactional_recovery_tests {
 
 #[cfg(test)]
 mod preparing_canonical_probe;
+
+#[cfg(test)]
+mod needs_remux_tests;
 
 #[cfg(test)]
 mod timed_fragment_tests {

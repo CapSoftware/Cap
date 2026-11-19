@@ -18,6 +18,11 @@ use crate::app_sounds::AppSound;
 use crate::i18n::tr;
 use crate::recording::{self, ActiveRecording, StartConfig};
 
+mod input_switch;
+mod input_watch;
+pub use input_switch::{InputKind, InputRequest};
+pub use input_watch::DisconnectedInputs;
+
 /// `Idle -> Starting -> Recording -> Stopping -> Idle`; pause is a flag on
 /// `Recording`, matching the `recording`/`paused` variants of the Tauri bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -420,6 +425,8 @@ pub struct RecordingSession {
     pub error: Option<String>,
     pub storage_warning: bool,
     pub storage_notice: Option<String>,
+    /// The last recording stopped because what it captured went away.
+    pub capture_source_lost: bool,
     stopped_for_low_storage: bool,
     stopped_elapsed: Option<Duration>,
     /// The config of the live (or last) recording, kept for restart.
@@ -435,6 +442,7 @@ pub struct RecordingSession {
     /// Taken by the phase observer to honour `postStudioRecordingBehaviour`
     /// (`openEditor` by default) the way the Tauri app does.
     pub finished_studio: Option<std::path::PathBuf>,
+    pub studio_behaviour: Option<crate::store::PostStudioBehaviour>,
     /// An instant recording stopped cleanly and its share link was handed
     /// out. Taken by the phase observer, which brings the main window back
     /// only for the "Show Cap" Instant outcome.
@@ -480,6 +488,8 @@ pub struct RecordingSession {
     /// When the last marker went in, for the controls bar's acknowledgement.
     marker_added_at: Option<Instant>,
     pub paused_for_sleep: bool,
+    input_switch: input_switch::InputSwitchState,
+    input_watch: input_watch::InputWatchState,
     #[cfg(target_os = "linux")]
     instant_attempt: Option<recording::InstantAttempt>,
     #[cfg(target_os = "linux")]
@@ -504,12 +514,14 @@ impl RecordingSession {
             error: None,
             storage_warning: false,
             storage_notice: None,
+            capture_source_lost: false,
             stopped_for_low_storage: false,
             stopped_elapsed: None,
             last_config: None,
             controls_open: false,
             mic_muted: false,
             finished_studio: None,
+            studio_behaviour: None,
             finished_instant: false,
             deleted_recording: false,
             preparing_studio_editor: None,
@@ -532,6 +544,8 @@ impl RecordingSession {
             marker_count: 0,
             marker_added_at: None,
             paused_for_sleep: false,
+            input_switch: input_switch::InputSwitchState::default(),
+            input_watch: input_watch::InputWatchState::default(),
             #[cfg(target_os = "linux")]
             instant_attempt: None,
             #[cfg(target_os = "linux")]
@@ -550,6 +564,11 @@ impl RecordingSession {
 
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<SessionGlobal>().0.clone()
+    }
+
+    pub fn try_global(cx: &App) -> Option<Entity<Self>> {
+        cx.try_global::<SessionGlobal>()
+            .map(|session| session.0.clone())
     }
 
     /// True while a recording is in flight. Tolerates the global not being
@@ -598,7 +617,10 @@ impl RecordingSession {
     }
 
     pub fn pause_unavailable(&self) -> bool {
-        self.pause_pending() || self.pause_uncertain() || self.pipeline_failed
+        self.pause_pending()
+            || self.pause_uncertain()
+            || self.pipeline_failed
+            || self.input_switch_pending().is_some()
     }
 
     /// The live (or last) recording's mode -- the bar exposes mic mute for
@@ -606,6 +628,12 @@ impl RecordingSession {
     /// where muted spans would silently bake zeros in).
     pub fn mode(&self) -> Option<crate::recording::RecordingMode> {
         self.last_config.as_ref().map(|config| config.mode)
+    }
+
+    pub fn capture_target(
+        &self,
+    ) -> Option<&cap_recording::sources::screen_capture::ScreenCaptureTarget> {
+        self.last_config.as_ref().map(|config| &config.target)
     }
 
     /// Studio recordings take markers while they capture or sit paused.
@@ -674,6 +702,13 @@ impl RecordingSession {
         self.active
             .as_ref()
             .is_some_and(|active| active.mic_mute.is_some())
+    }
+
+    /// Whether the live recording started with a camera.
+    pub fn started_with_camera(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(ActiveRecording::started_with_camera)
     }
 
     /// Flip the recording-scoped mic mute. No-op without a live mic.
@@ -785,6 +820,7 @@ impl RecordingSession {
         self.error = None;
         self.storage_warning = false;
         self.storage_notice = None;
+        self.capture_source_lost = false;
         self.stopped_for_low_storage = false;
         self.stopped_elapsed = None;
         self.last_config = Some(config.clone());
@@ -1034,7 +1070,9 @@ impl RecordingSession {
         let project_dir = active.project_dir.clone();
         let done = active.done_fut();
         self.active = Some(active);
+        self.input_switch = input_switch::InputSwitchState::default();
         self.phase = Phase::Recording { paused: false };
+        crate::automation::recording_started(&project_dir);
         // A fresh mic lock always starts unmuted.
         self.mic_muted = false;
         self.started_at = Some(Instant::now());
@@ -1046,6 +1084,7 @@ impl RecordingSession {
         }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
+        self.start_input_watch(cx);
         #[cfg(target_os = "linux")]
         if self.stop_requested {
             self.stop(cx);
@@ -1090,7 +1129,9 @@ impl RecordingSession {
         let generation = self.recording_generation;
         let task = gpui_tokio::Tokio::spawn(cx, done);
         self.failure_monitor = Some(cx.spawn(async move |this, cx| {
-            let error = match task.await {
+            let outcome = task.await;
+            let source_lost = capture_ended_cleanly(&outcome);
+            let error = match outcome {
                 Ok(Ok(())) => "Recording ended unexpectedly.".to_string(),
                 Ok(Err(error)) => error.to_string(),
                 Err(error) => format!("Recording completion task failed: {error}"),
@@ -1099,6 +1140,13 @@ impl RecordingSession {
                 if !recording_failure_is_current(this.phase, this.recording_generation, generation)
                     || this.active.is_none()
                 {
+                    return;
+                }
+                if source_lost {
+                    tracing::warn!("capture source went away; stopping and saving the recording");
+                    this.capture_source_lost = true;
+                    this.stop(cx);
+                    cx.notify();
                     return;
                 }
                 tracing::error!(%error, "recording pipeline failed");
@@ -1244,6 +1292,18 @@ impl RecordingSession {
             return;
         };
         let instant_share_url = active.instant_share_url().map(ToString::to_string);
+        let instant_video_id = active.instant_video_id().map(ToString::to_string);
+        let instant_rules_hold = instant_share_url
+            .as_ref()
+            .and_then(|_| crate::automation::hold_instant_rules(&active.project_dir));
+        let studio_behaviour = (self.mode() == Some(recording::RecordingMode::Studio)).then(|| {
+            crate::automation::studio_editor_behaviour(
+                &active.project_dir,
+                self.elapsed(),
+                crate::store::GeneralSettings::load().post_studio_recording_behaviour,
+            )
+        });
+        self.studio_behaviour = studio_behaviour;
         #[cfg(target_os = "linux")]
         let stop_owner = RecordingOwner {
             generation: self.recording_generation,
@@ -1291,8 +1351,7 @@ impl RecordingSession {
             low_storage,
             recording_failed,
             self.editor_recording_target.is_some(),
-            crate::store::GeneralSettings::load().post_studio_recording_behaviour
-                == crate::store::PostStudioBehaviour::OpenEditor,
+            self.studio_behaviour == Some(crate::store::PostStudioBehaviour::OpenEditor),
         ) {
             let (publisher, finalization) = recording::StudioFinalization::channel(
                 studio_project_path.clone(),
@@ -1451,7 +1510,8 @@ impl RecordingSession {
                             this.storage_notice = Some(tr::dialog::storage::stopped_saved().into());
                         }
                         if this.mode() == Some(crate::recording::RecordingMode::Studio) && !low_storage {
-                            this.finished_studio = Some(project_dir);
+                            this.finished_studio = Some(project_dir.clone());
+                            crate::automation::studio_recording_finished(project_dir);
                         } else if let Some(link) = instant_share_url {
                             if defer_share_until_success
                                 && !low_storage
@@ -1461,16 +1521,26 @@ impl RecordingSession {
                                 cx.open_url(&format!("{link}{separator}recordingStopped=1"));
                             }
                             this.finished_instant = !low_storage;
+                            if !low_storage {
+                                crate::automation::instant_recording_finished(
+                                    project_dir,
+                                    Some(link.clone()),
+                                    instant_video_id,
+                                    instant_rules_hold,
+                                );
+                            }
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(link));
                         }
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to stop cleanly: {error:#}");
+                        this.capture_source_lost = false;
                         this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some(format!("{error:#}"));
                     }
                     Err(join_error) => {
                         tracing::error!("recording stop task died: {join_error}");
+                        this.capture_source_lost = false;
                         this.storage_notice = low_storage.then(|| tr::dialog::storage::stopped_kept().into());
                         this.error = Some("Stop task failed.".into());
                     }
@@ -1494,7 +1564,7 @@ impl RecordingSession {
         let Some(active) = self.active.as_ref() else {
             return;
         };
-        if self.pipeline_failed {
+        if self.pipeline_failed || self.input_switch_pending().is_some() {
             return;
         }
         let Some((ticket, registration)) =
@@ -1599,7 +1669,8 @@ impl RecordingSession {
     /// straight away instead, because its pause keeps capture running.
     pub fn sleep_should_wait(&self) -> bool {
         self.phase == Phase::Stopping
-            || (self.pause_pending() && self.mode() != Some(recording::RecordingMode::Instant))
+            || ((self.pause_pending() || self.input_switch_pending().is_some())
+                && self.mode() != Some(recording::RecordingMode::Instant))
     }
 
     pub fn woke_from_sleep(&mut self, cx: &mut Context<Self>) {
@@ -2175,6 +2246,16 @@ fn sleep_action(
         }
         _ => SleepAction::None,
     }
+}
+
+/// On macOS a pipeline only finishes cleanly before Stop when ScreenCaptureKit
+/// lost what it was capturing: the display slept or went away, the window
+/// closed, or sharing was stopped from the menu bar. Everything captured so far
+/// is intact, so the recording is stopped and saved instead of failed.
+fn capture_ended_cleanly<E>(
+    outcome: &Result<Result<(), cap_recording::PipelineDoneError>, E>,
+) -> bool {
+    cfg!(target_os = "macos") && matches!(outcome, Ok(Ok(())))
 }
 
 fn recording_failure_is_current(phase: Phase, current: u64, completed: u64) -> bool {
@@ -2774,6 +2855,16 @@ mod instant_terminal_tests {
 #[cfg(test)]
 mod recording_failure_tests {
     use super::*;
+
+    /// A capture that lost its source ends cleanly before Stop; it is stopped
+    /// and saved rather than treated as a failure (#3578).
+    #[test]
+    fn a_capture_that_ends_cleanly_before_stop_is_saved_not_failed() {
+        let ended: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Ok(Ok(()));
+        assert_eq!(capture_ended_cleanly(&ended), cfg!(target_os = "macos"));
+        let task_died: Result<Result<(), cap_recording::PipelineDoneError>, ()> = Err(());
+        assert!(!capture_ended_cleanly(&task_died));
+    }
 
     #[test]
     fn only_current_recording_failure_can_request_stop() {

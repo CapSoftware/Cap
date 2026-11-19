@@ -56,7 +56,7 @@ export async function processDeveloperVideoWorkflow(
 	const { videoId, encodeId } = payload;
 
 	try {
-		const deadline = Date.now() + PROCESSING_DEADLINE_MS;
+		let deadline = Date.now() + PROCESSING_DEADLINE_MS;
 
 		for (let unclear = 0; ; ) {
 			const prepared = await prepareVideo(videoId, encodeId);
@@ -103,6 +103,17 @@ export async function processDeveloperVideoWorkflow(
 				Promise.all(silent.map((part) => checkPart(videoId, encodeId, part))),
 			]);
 			const busy = dispatched.includes("busy");
+			// Every worker answering busy while nothing of this video is encoding
+			// is a wait for room, not processing time. The deadline starts over, so
+			// a long line of other encodes does not time this video out.
+			if (
+				dispatched.length > 0 &&
+				dispatched.every((answer) => answer === "busy") &&
+				silent.length === 0 &&
+				!waiting
+			) {
+				deadline = Date.now() + PROCESSING_DEADLINE_MS;
+			}
 			await sleep(
 				`${busy ? RETRY_SECONDS : Math.min(MAX_POLL_SECONDS, 2 + poll * 2)}s`,
 			);

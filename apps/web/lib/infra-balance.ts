@@ -3,7 +3,7 @@ import {
 	developerCreditAccounts,
 	developerTranscripts,
 } from "@cap/database/schema";
-import { and, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { InfraDbExecutor } from "@/lib/infra-standing";
 
 export async function lockInfraAccount(
@@ -17,7 +17,9 @@ export async function lockInfraAccount(
 		.for("update");
 }
 
-const heldTranscriptsQuery = (
+export const AVAILABLE_AFTER_FIELD = "availableAfterMicroCredits";
+
+export const heldTranscriptsQuery = (
 	executor: Pick<InfraDbExecutor, "select">,
 	appId: string,
 	exceptTranscriptId: string | null,
@@ -33,7 +35,6 @@ const heldTranscriptsQuery = (
 			and(
 				eq(developerTranscripts.appId, appId),
 				eq(developerTranscripts.status, "processing"),
-				isNull(developerTranscripts.deletedAt),
 				exceptTranscriptId
 					? ne(developerTranscripts.id, exceptTranscriptId)
 					: undefined,
@@ -56,9 +57,14 @@ export async function heldTranscriptMicroCredits(
 export async function readBalanceAndHolds(
 	appId: string,
 	executor: Pick<InfraDbExecutor, "select"> = db(),
-): Promise<{ balanceMicroCredits: number; heldMicroCredits: number } | null> {
+): Promise<{
+	id: string;
+	balanceMicroCredits: number;
+	heldMicroCredits: number;
+} | null> {
 	const [row] = await executor
 		.select({
+			id: developerCreditAccounts.id,
 			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
 			heldMicroCredits: sql<
 				string | number | null
@@ -69,6 +75,7 @@ export async function readBalanceAndHolds(
 		.limit(1);
 	return row
 		? {
+				id: row.id,
 				balanceMicroCredits: row.balanceMicroCredits,
 				heldMicroCredits: Number(row.heldMicroCredits ?? 0) || 0,
 			}
@@ -79,16 +86,24 @@ export async function availableBalance(
 	appId: string,
 	executor: InfraDbExecutor = db(),
 ): Promise<number | null> {
-	const [account] = await executor
-		.select({
-			balanceMicroCredits: developerCreditAccounts.balanceMicroCredits,
-		})
-		.from(developerCreditAccounts)
-		.where(eq(developerCreditAccounts.appId, appId))
-		.limit(1);
-	if (!account) return null;
-	return (
-		account.balanceMicroCredits -
-		(await heldTranscriptMicroCredits(executor, appId))
-	);
+	const account = await readBalanceAndHolds(appId, executor);
+	return account
+		? account.balanceMicroCredits - account.heldMicroCredits
+		: null;
 }
+
+export const heldTranscriptsByApp = (
+	executor: Pick<InfraDbExecutor, "select">,
+) =>
+	executor
+		.select({
+			appId: developerTranscripts.appId,
+			heldMicroCredits:
+				sql<number>`COALESCE(SUM(${developerTranscripts.reservedMicroCredits}), 0)`.as(
+					"heldMicroCredits",
+				),
+		})
+		.from(developerTranscripts)
+		.where(eq(developerTranscripts.status, "processing"))
+		.groupBy(developerTranscripts.appId)
+		.as("held");

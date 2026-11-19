@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -11,6 +12,10 @@ import {
 	sendMessengerUserMessage,
 } from "@/actions/messenger";
 import { MESSENGER_SUGGESTED_PROMPTS } from "@/lib/messenger/constants";
+import {
+	MESSENGER_HIDDEN_POLL_MS,
+	useMessengerPoll,
+} from "@/lib/messenger/use-messenger-poll";
 
 interface ConversationSummary {
 	id: string;
@@ -288,8 +293,6 @@ function HomeView({
 	);
 }
 
-const WIDGET_POLL_MS = 3000;
-
 function playNotificationSound() {
 	try {
 		const ctx = new AudioContext();
@@ -414,27 +417,13 @@ function ChatView({
 		userScrolledRef.current = distanceFromBottom > 80;
 	}, []);
 
-	useEffect(() => {
-		let active = true;
-		let pollVersion = 0;
-		let appliedPollVersion = 0;
-		const interval = setInterval(async () => {
-			if (isSendingRef.current) return;
-			const requestVersion = ++pollVersion;
-			const messageVersion = messageVersionRef.current;
-			const data = await fetchMessengerConversation(
-				initialConversation.id,
-			).catch(() => null);
-			if (
-				!active ||
-				!data ||
-				isSendingRef.current ||
-				requestVersion <= appliedPollVersion ||
-				messageVersion !== messageVersionRef.current
-			)
-				return;
-			appliedPollVersion = requestVersion;
-
+	const resetPollBackoff = useMessengerPoll({
+		conversation,
+		messages,
+		hiddenPollMs: MESSENGER_HIDDEN_POLL_MS,
+		isSendingRef,
+		messageVersionRef,
+		onSnapshot: (data) => {
 			const newAgentCount = data.messages.filter(
 				(m) => m.role === "agent" || m.role === "admin",
 			).length;
@@ -453,12 +442,8 @@ function ChatView({
 					playNotificationSound();
 				}
 			}
-		}, WIDGET_POLL_MS);
-		return () => {
-			active = false;
-			clearInterval(interval);
-		};
-	}, [initialConversation.id]);
+		},
+	});
 
 	const sendMessage = (text: string) => {
 		if (!text || isPending) return;
@@ -495,6 +480,7 @@ function ChatView({
 			setMessages(data.messages);
 			setConversation(data.conversation);
 			isSendingRef.current = false;
+			resetPollBackoff();
 		});
 	};
 
@@ -640,6 +626,9 @@ export function MessengerWidget() {
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatKey, setChatKey] = useState(0);
 	const panelRef = useRef<HTMLDivElement>(null);
+	const pathname = usePathname() ?? "";
+	const onDashboard =
+		pathname === "/dashboard" || pathname.startsWith("/dashboard/");
 
 	const isOpen = view !== "closed";
 
@@ -839,6 +828,12 @@ export function MessengerWidget() {
 				}
 				.messenger-markdown a { color: var(--msngr-link); }
 				.messenger-markdown a:hover { color: var(--msngr-link-hover); }
+				@media (max-width: 1023.98px) {
+					.cap-messenger-panel-dashboard {
+						bottom: 152px;
+						height: min(760px, calc(100dvh - 172px));
+					}
+				}
 				@media (max-width: 480px) {
 					.cap-messenger-panel {
 						width: 100vw;
@@ -853,7 +848,7 @@ export function MessengerWidget() {
 			{isOpen && (
 				<div
 					ref={panelRef}
-					className={`cap-messenger-panel flex flex-col overflow-hidden rounded-2xl bg-gray-1 transition-all duration-200 ease-out ${
+					className={`cap-messenger-panel ${onDashboard ? "cap-messenger-panel-dashboard " : ""}flex flex-col overflow-hidden rounded-2xl bg-gray-1 transition-all duration-200 ease-out ${
 						isAnimating
 							? "opacity-100 translate-y-0 scale-100"
 							: "opacity-0 translate-y-3 scale-[0.97]"
@@ -910,7 +905,7 @@ export function MessengerWidget() {
 			<button
 				type="button"
 				onClick={togglePanel}
-				className={`fixed bottom-5 right-5 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-gray-12 text-gray-1 transition-all duration-200 hover:scale-105 active:scale-95 ${isOpen ? "max-[480px]:hidden" : ""}`}
+				className={`fixed bottom-5 right-5 z-[9999] flex h-14 w-14 items-center justify-center rounded-full bg-gray-12 text-gray-1 transition-all duration-200 hover:scale-105 active:scale-95 ${onDashboard ? "max-lg:bottom-[84px]" : ""} ${isOpen ? "max-[480px]:hidden" : ""}`}
 				style={{
 					boxShadow:
 						"0 4px 14px rgba(0, 0, 0, 0.25), 0 2px 4px rgba(0, 0, 0, 0.1)",

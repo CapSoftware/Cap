@@ -208,6 +208,10 @@ fps_30 = { text = "30 FPS", max_px = 180, size = 12 }
 fps_60 = { text = "60 FPS (Recommended)", max_px = 180, size = 12 }
 label = "Max capture framerate"
 
+[settings.general.recording.keep_drawings]
+description = "Drawings stay until you clear them. When off, each one fades a few seconds after you draw it."
+label = "Keep drawings on screen"
+
 [settings.general.recording.marker_sound]
 description = "Plays a short sound when you add a marker during a Studio recording. Your microphone or system audio can pick it up."
 label = "Play a sound for markers"
@@ -302,6 +306,7 @@ open_link = "Open link"
 retry_upload = "Retry upload"
 show_all = "Show all"
 title = "Recordings"
+save_audio = "Save Audio"
 
 [settings.recordings.empty]
 all = "No recordings"
@@ -369,7 +374,7 @@ screen_region = { text = "Screen region", max_px = 180, size = 12 }
 [settings.options.post_studio]
 do_nothing = "Do nothing"
 open_editor = "Open editor"
-show_cap = "Show Cap"
+show_overlay = "Show in overlay"
 
 [settings.options.post_screenshot]
 copy = "Copy to clipboard"
@@ -392,16 +397,19 @@ cancelling_description = "For screenshots and recordings started from a shortcut
 cancelling_title = "Cancelling"
 closing_editor_description = "For the screenshot editor and the video editor."
 closing_editor_title = "Closing the editor"
+conflict = { text = "Already used by {shortcut}.", context = "{shortcut} is the label of the shortcut that already uses the keys just pressed, such as Record an area. A Replace button sits next to it." }
 needs_modifier_macos = "Include ⌘, ⌃ or ⌥ so the shortcut doesn't get in the way of typing."
 needs_modifier_other = "Include Ctrl, Alt or Win so the shortcut doesn't get in the way of typing."
-record_shortcut = "Record shortcut"
+not_set = "Not set"
 recording_description = "Start a recording without opening Cap first."
 recording_hint = "Press the keys you want to use. Esc cancels, Delete removes it."
 recording_title = "Recording"
+replace = { text = "Replace", context = "Button: moves the keys just pressed from the other shortcut to this one." }
 saved = { text = "Saved. Press {keys} in any app to {effect}.", context = "{keys} is the shortcut, such as ⌘⇧4. {effect} is one of the settings.shortcuts.effect messages and completes the sentence." }
 saved_moved = { text = "Saved. Press {keys} in any app to {effect}. Removed from {shortcut}.", context = "Like settings.shortcuts.saved; {shortcut} is the label of the shortcut that used these keys before, such as Record an area." }
 screenshots_description = "Shortcuts work from any app. Click one to change it."
 screenshots_title = "Screenshots"
+shared = { text = "Same keys as {shortcut}, so both run.", context = "{shortcut} is the label of another shortcut bound to the same keys, such as Record an area." }
 type_shortcut = "Type shortcut…"
 unavailable = "Another app or the system already uses this shortcut. Click to choose a different one."
 unsupported_key = "That key can't be used in a shortcut. Try a letter, number or F-key."
@@ -453,8 +461,8 @@ screenshot_open_editor_hint = "Annotate first"
 studio_do_nothing = "Do nothing"
 studio_open_editor = "Open editor"
 studio_open_editor_hint = "Edit right away"
-studio_show_cap = "Show Cap"
-studio_show_cap_hint = "Back to the recorder"
+studio_show_overlay = "Show overlay"
+studio_show_overlay_hint = "Copy, share or export"
 
 [settings.shortcuts.label]
 add_marker = "Add marker"
@@ -470,8 +478,10 @@ screenshot_area = "Screenshot an area"
 screenshot_display = "Screenshot the display"
 screenshot_window = "Screenshot a window"
 start_instant = "Start Instant recording"
+start_selected = "Start in selected mode"
 start_studio = "Start Studio recording"
 stop = "Stop recording"
+toggle_drawing = "Draw on screen"
 
 [settings.shortcuts.effect]
 add_marker = "mark this moment in a Studio recording"
@@ -481,13 +491,10 @@ instant_copy_and_open = "record your selected screen or window in Instant mode, 
 open_picker = "open Cap so you can choose what to record"
 pause = "pause the current recording, or resume it"
 picker_area_instant = "select an area, then record it in Instant mode"
-picker_area_screenshot = "select an area, then take a screenshot of it"
 picker_area_studio = "select an area, then record it in Studio mode"
 picker_display_instant = "choose a display, then record it in Instant mode"
-picker_display_screenshot = "choose a display, then take a screenshot of it"
 picker_display_studio = "choose a display, then record it in Studio mode"
 picker_window_instant = "choose a window, then record it in Instant mode"
-picker_window_screenshot = "choose a window, then take a screenshot of it"
 picker_window_studio = "choose a window, then record it in Studio mode"
 restart = "throw away the current take and start again"
 screenshot_area_copy = "select an area and copy it to your clipboard"
@@ -502,9 +509,11 @@ screenshot_window_copy = "capture the window under your pointer and copy it to y
 screenshot_window_copy_and_open_editor = "capture the window under your pointer and copy it and open the editor"
 screenshot_window_open_editor = "capture the window under your pointer and open it in the editor"
 screenshot_window_save = "capture the window under your pointer and save it to your library without opening anything"
+start_selected = "start a recording or screenshot in the mode selected in Cap"
 stop = "stop the current recording"
 studio = "record your selected screen or window in Studio mode"
 studio_open_editor = "record your selected screen or window in Studio mode, then open the editor when you stop"
+toggle_drawing = "start or stop drawing on screen while recording"
 
 [settings.shortcuts.sentence]
 add_marker = "Mark this moment in a Studio recording."
@@ -514,13 +523,10 @@ instant_copy_and_open = "Record your selected screen or window in Instant mode, 
 open_picker = "Open Cap so you can choose what to record."
 pause = "Pause the current recording, or resume it."
 picker_area_instant = "Select an area, then record it in Instant mode."
-picker_area_screenshot = "Select an area, then take a screenshot of it."
 picker_area_studio = "Select an area, then record it in Studio mode."
 picker_display_instant = "Choose a display, then record it in Instant mode."
-picker_display_screenshot = "Choose a display, then take a screenshot of it."
 picker_display_studio = "Choose a display, then record it in Studio mode."
 picker_window_instant = "Choose a window, then record it in Instant mode."
-picker_window_screenshot = "Choose a window, then take a screenshot of it."
 picker_window_studio = "Choose a window, then record it in Studio mode."
 restart = "Throw away the current take and start again."
 screenshot_area_copy = "Select an area and copy it to your clipboard."
@@ -535,9 +541,11 @@ screenshot_window_copy = "Capture the window under your pointer and copy it to y
 screenshot_window_copy_and_open_editor = "Capture the window under your pointer and copy it and open the editor."
 screenshot_window_open_editor = "Capture the window under your pointer and open it in the editor."
 screenshot_window_save = "Capture the window under your pointer and save it to your library without opening anything."
+start_selected = "Start a recording or screenshot in the mode selected in Cap."
 stop = "Stop the current recording."
 studio = "Record your selected screen or window in Studio mode."
 studio_open_editor = "Record your selected screen or window in Studio mode, then open the editor when you stop."
+toggle_drawing = "Start or stop drawing on screen while recording."
 
 [settings.cli]
 command = "Command"
@@ -606,6 +614,9 @@ uploading = "Uploading..."
 confirm_body = { text = "Cap will take over your screen with a flashing pattern and play loud beeps for about {seconds} seconds per pipeline. Take your headphones off, leave the volume audible, and leave the machine alone until it finishes.", context = "{seconds} is a whole number of seconds." }
 confirm_title = "Run diagnostic?"
 description = "Records a short flashing/beeping test pattern, measures how far the picture and sound drift apart, and snapshots your displays, cameras, microphones, disk space and recording settings. Nothing is sent anywhere until you choose to send it."
+duration_description = "Longer runs are more sensitive to slow drift."
+duration_label = "Test duration"
+duration_option = { text = "{seconds} seconds", context = "Segment in a three-way control in the settings window; {seconds} is 20, 40 or 60." }
 mic_description = "Also record your microphone and check that it hears the beeps in time. Needs speakers the mic can actually hear."
 mic_label = "Test microphone"
 mode_description = "Which pipeline to test. Both runs the studio leg and then the instant one."
@@ -646,6 +657,8 @@ activating = "Activating..."
 active_title = "Desktop license"
 checking = "Checking…"
 deactivate = "Deactivate License"
+deactivate_failed = "Couldn't deactivate your license. Check your connection and try again."
+deactivating = "Deactivating..."
 description = "Your Cap plan and desktop license, in one place."
 desktop_description = "Your desktop license covers commercial recording and editing. Cap Pro adds cloud sharing and collaboration features."
 desktop_name = "Desktop License"
@@ -742,17 +755,22 @@ working_for = { text = "Google Drive connection is working for {email}", context
 
 [settings.automations]
 action_no_effect = "This action has no effect for the selected trigger."
+action_unsupported = "Cap doesn't run this action yet, so it is skipped."
 add_action = "Add action"
 add_condition = "Add condition"
 auto_name_empty = { text = "{trigger} automation", context = "{trigger} is a settings.automations.trigger.*.noun." }
 browse = "Browse"
 check_compatibility = "Check compatibility"
-compatibility_checked = "Compatibility checked: this automation doesn't run in Cap yet. Saved rules remain available to the Cap CLI. No actions were run."
+compatibility_checked = "Compatibility checked: every action in this automation runs in Cap. No actions were run."
+compatibility_unsupported = "Compatibility checked: text recognition doesn't run in Cap yet and will be skipped. The other actions run. No actions were run."
 condition_never_matches = "This condition never matches for the selected trigger."
 copy_link = "Copy link to clipboard"
-dangerous = "In the Cap CLI, this automation runs commands or sends network requests with your permissions. Only use values you trust."
+dangerous = "This automation runs commands or sends network requests with your permissions. Only use values you trust."
 delete = "Delete"
-description = "Rules are shared with the Cap CLI. Cap saves these rules but does not run automations yet."
+delete_guarded = "Deletes the recording only once the step above succeeds and its file is checked, and keeps the editor closed so it can. Otherwise everything is kept."
+delete_needs_copy = "Nothing will be deleted. Put an Export with profile to a folder you choose, or a Save to location, right above this step."
+notify_needs_setting = "Shows only while System notifications is on in General settings."
+description = "Rules are shared with the Cap CLI. Cap runs enabled rules automatically."
 empty_description = "Pick a template below to get started in one click, or build your own from scratch."
 empty_title = "No automations yet"
 enabled = "Enabled"
@@ -1029,6 +1047,7 @@ off = { text = "Off", max_px = 130, size = 11 }
 on = { text = "On", max_px = 130, size = 11 }
 
 [main.error]
+audio_only_needs_audio = "Audio only recording needs a microphone or system audio."
 camera_only_needs_camera = "Camera-only recording requires a selected camera."
 copy = "Copy error"
 devices_not_ready = "Recording devices are not ready. Open the recorder and try again."
@@ -1137,8 +1156,9 @@ record_anyway = "Record anyway"
 title = "Low storage"
 
 [main.target]
-area = { text = "Area", max_px = 140, size = 12 }
-camera_only = { text = "Camera Only", max_px = 140, size = 12 }
+area = { text = "Area", max_px = 84, size = 12 }
+audio_only = { text = "Audio Only", max_px = 84, size = 12 }
+camera_only = { text = "Camera Only", max_px = 84, size = 12 }
 choose_display = "Choose a display"
 choose_window = "Choose a window"
 display = { text = "Display", max_px = 100, size = 12 }
@@ -1148,6 +1168,35 @@ no_matching_displays = "No matching displays"
 no_matching_windows = "No matching windows"
 no_windows = "No windows found"
 window = { text = "Window", max_px = 100, size = 12 }
+
+[recordings_overlay]
+close = "Close"
+copy = "Copy to clipboard"
+copy_link = "Copy shareable link"
+create_link = "Create shareable link"
+edit = "Edit"
+export = "Export"
+open = "Open"
+retry = "Retry"
+
+[recordings_overlay.progress]
+choose_image = "Choose where to save the image"
+choose_video = "Choose where to export the video"
+copied = "Copied to clipboard"
+copy_failed = "Couldn't copy"
+copying = "Copying to clipboard"
+creating_link = "Creating shareable link"
+failed_hint = "Something went wrong. Try again."
+link_copied = "Shareable link copied"
+preparing = "Preparing"
+rendering_video = "Rendering video"
+save_failed = "Couldn't save"
+saved_image = "Image saved"
+saved_video = "Video saved"
+saving_image = "Saving image"
+saving_video = "Saving video"
+share_failed = "Couldn't create the link"
+share_failed_hint = "Check your connection and try again."
 
 [controls]
 disk_full_resume = "Not enough disk space to resume. Free up space and try again, or press Stop to save."
@@ -1177,8 +1226,31 @@ resuming = { text = "Resuming…", max_px = 73, size = 14 }
 saving = { text = "Saving…", max_px = 73, size = 14 }
 starting = { text = "Starting", max_px = 73, size = 14 }
 
+[controls.disconnected]
+camera = "Camera disconnected. Recording continues without camera overlay."
+microphone = "Microphone disconnected. Silence will be used until it reconnects."
+
 [controls.marker]
 add = "Add marker"
+
+[controls.draw]
+arrow = "Arrow, ⇧ snaps to 45°"
+clear = "Clear all"
+highlighter = "Highlighter, ⇧ for a straight line"
+pen = "Pen, ⇧ for a straight line"
+rectangle = "Rectangle, ⇧ for a square"
+start = "Draw on screen"
+stop = "Stop drawing"
+undo = "Undo"
+window_unavailable = "Drawing works in display and area recordings"
+
+[controls.settings]
+locked = "Can't change in this recording"
+not_in_recording = "Not in this recording"
+open = "Recording settings"
+show_camera_preview = "Show camera preview"
+switch_failed = "Couldn't switch to {device}. The recording continues."
+switching = "Switching…"
 
 [camera]
 waiting_title = "Waiting for camera access"
@@ -1194,6 +1266,8 @@ mirror_title = "Mirror unavailable"
 [camera.issue]
 access_message = "Click to allow Cap to use your camera in System Settings."
 access_title = "Camera access needed"
+disconnected_message = "The selected camera stopped sending video."
+disconnected_title = "Camera disconnected"
 generic = "The selected camera could not be started. Choose another camera or reconnect this one."
 invalid_format = "This camera did not report a usable capture format."
 not_found = "This camera is no longer available. Check that it is connected and allowed by system permissions."
@@ -1407,6 +1481,8 @@ devices_changed_before_start = "Selected devices changed before recording starte
 shortcut_conflict = "Ctrl+Shift+F9 is assigned to another Cap action. Change that shortcut before recording."
 shortcut_description = { text = "Start or stop this Cap recording", context = "Shown by the Linux desktop when it asks the user to approve a global shortcut." }
 shortcut_hint = { text = "Press and release {shortcut} to start. Use the same shortcut to stop. This temporary shortcut does not change your settings.", context = "{shortcut} is a key combination such as Ctrl+Shift+F9." }
+source_lost = "Cap stopped recording because what it was capturing went away, for example the display went to sleep or the window closed. Everything recorded up to then was saved."
+source_lost_title = "Recording stopped"
 tray_stop_hint = "Activate the Cap Stop tray icon to start. Activate the same icon again to stop. Recording will not start until you use that control."
 window_unavailable = "The selected window is no longer available. Select it again."
 
@@ -1464,12 +1540,14 @@ placeholder = "Paste or type your script…"
 words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in words per minute; {wpm} is a number such as 150." }
 
 [import]
+audio_failed = { text = "Failed to import audio: {error}", context = "{error} is a technical error message, usually in English." }
 error_title = "Import Error"
 image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
 unsupported = "Unsupported media file."
 video_failed = { text = "Failed to import video: {error}", context = "{error} is a technical error message, usually in English." }
 
 [import.filter]
+audio = { text = "Audio Files", context = "File type name in the file picker's filter list." }
 image = { text = "Image Files", context = "File type name in the file picker's filter list." }
 media = { text = "Media Files", context = "File type name in the file picker's filter list." }
 video = { text = "Video Files", context = "File type name in the file picker's filter list." }
@@ -1511,6 +1589,13 @@ unlock_title = "Unlock area"
 unlock_body = "Let the area be moved, resized or drawn again."
 locked_title = "Area locked"
 locked_body = "Click to unlock it, so it can be moved, resized or drawn again."
+
+[overlay.audio_only]
+choose_source = "Choose a microphone or turn on system audio"
+description = "Record your microphone and your computer's sound, without the screen or camera"
+meter_hint = "Say something to check your level"
+system_audio = "System audio"
+system_audio_only = "Recording system audio only"
 
 [overlay.camera_only]
 description = "Record using only your camera and microphone"
@@ -1769,6 +1854,20 @@ change_hint = "Pick a different track for this segment"
 change_title = "Change audio"
 done = "Done"
 import = "Import file"
+
+[editor.audio_only]
+add_visuals = "Add Visuals"
+body = "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video."
+export_audio = "Export Audio"
+show_visuals = "Show visuals"
+size_large = "Large"
+size_medium = "Medium"
+size_small = "Small"
+style_bars = "Bars"
+style_circle = "Circle"
+style_wave = "Wave"
+title = "Audio only"
+visuals = "Visuals"
 
 [editor.color]
 apply_to_cursor = "Apply to cursor"
@@ -2184,6 +2283,7 @@ manual_help = "Manual zoom stays on a fixed spot you pick below."
 mixed = "Mixed"
 mode = "Zoom Mode"
 positions_mixed = "Segments zoom into different spots. Drag to move them all to the same one."
+start_early = "Start zooms early"
 title = { text = "Zoom {number}", context = "{number} is the segment's position on the track, starting at 1." }
 
 [editor.side_panel]
@@ -2288,6 +2388,7 @@ background_blur = "Background Blur"
 custom_position = "Custom screen position (dragged on canvas)"
 motion_blur = "Motion Blur"
 padding = "Padding"
+padding_style = "Padding Style"
 rounded_corners = "Rounded Corners"
 title = "Layout"
 
@@ -2366,11 +2467,13 @@ mp4_filter = { text = "MP4 Video", context = "File type filter name in the file 
 prepare_controls_failed = "Could not prepare the recording controls: {error}"
 record = { text = "Record", context = "Button that records a new clip into this project." }
 record_new = "Record a new clip"
+removed_media = { text = "{name} (removed clips)", context = "Name of the folder moved to the system Trash that holds the media of clips deleted from a recording; {name} is the recording name." }
 save_before_recording_failed = "Could not save the current project before recording: {error}"
 split = { text = "Split {number}", context = "Default name of a later piece cut from the same clip; {number} starts at 1." }
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Audio only recordings and video clips cannot be combined in one project"
 cancelled = "Import cancelled"
 cannot_decode = "Cannot decode video {path}: {error}"
 in_use = "Cannot import while this recording is in use: {error}"
@@ -2411,6 +2514,15 @@ upgrade_message = "This feature requires an upgraded plan"
 upgrade_title = "Upgrade required"
 upload_failed = "Failed to upload recording"
 
+[editor.export.audio]
+cta = "Export Audio"
+exported = "Audio exported"
+exporting = "Exporting audio"
+file_type = "File type"
+format = { text = "Audio", context = "Export format: the sound alone as one MP3 or WAV file." }
+mp3_description = "Small and plays everywhere. 192 kb/s stereo."
+wav_description = "Lossless 16-bit, 48 kHz. Best for further editing."
+
 [editor.export.advanced]
 bits_per_pixel = "Bits per pixel"
 cursor_only = "Export cursor only"
@@ -2443,6 +2555,10 @@ open_link = "Open link"
 retry_copy = "Retry Copy"
 reuploaded = "Your latest edit is ready at the same link"
 uploaded = "Your Cap has been uploaded successfully"
+
+[editor.export.enhance]
+description = "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer."
+title = "Enhance quality"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -2498,6 +2614,7 @@ format = "Format"
 frame_rate = "Frame rate"
 quality = "Quality"
 resolution = "Resolution"
+tracks = "Tracks"
 
 [editor.export.stats]
 calculating = "Calculating…"
@@ -2509,6 +2626,25 @@ output_value = { text = "{width}×{height} · {fps} fps", context = "Output size
 refining_size = "Refining size…"
 refining_time = "Refining time…"
 unavailable = "Unavailable"
+
+[editor.export.tracks]
+aligned = "Tracks follow your cuts and speed, so they line up in any video editor. Video comes out clean, without background or effects."
+audio_detail = "WAV · 48 kHz"
+camera = "Camera"
+choose_one = "Choose at least one track to export."
+cta = "Export Tracks"
+exported = "Tracks exported"
+exporting = "Exporting tracks"
+file_count = { one = "{count} file", other = "{count} files", context = "How many files a tracks export writes." }
+file_only = "Tracks are saved as separate files in a folder."
+files = "Files"
+format = { text = "Tracks", context = "Export format: separate screen, camera and audio files." }
+microphone = "Microphone"
+open_folder = "Open Folder"
+screen = "Screen"
+studio_only = "Separate tracks are only recorded in Studio Mode."
+system_audio = "System audio"
+video_detail = { text = "MP4 · {width}×{height}", context = "Video track file type and size, for example MP4 · 1920×1080." }
 
 [editor.export.turbo]
 title = "Turbo export"
@@ -2635,6 +2771,7 @@ model_downloaded = "{model} model downloaded"
 model_label = "Model"
 model_updated = "Recommended model updated"
 model_updated_description = "We recommend the new version. It is more accurate and catches short recordings the old one missed."
+new_caption = "New caption"
 position = "Position"
 refining_word_timings = "Refining word timings…"
 regenerate = "Regenerate Captions"
@@ -2711,6 +2848,7 @@ rounded = "Rounded"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+follow_hover = "Follow Hover Highlights"
 friction = "Friction"
 hide_when_idle = "Hide When Idle"
 inactivity_delay = "Inactivity Delay"
@@ -2764,6 +2902,10 @@ timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
 uppercase = "Uppercase"
+
+[editor.tabs.padding]
+even = "Even"
+proportional = "Proportional"
 
 [editor.tabs.position]
 bottom_center = "Bottom Center"
@@ -2910,13 +3052,20 @@ video = { text = "Video", context = "Timeline gutter label of the recording's vi
 zoom = "Zoom"
 
 [editor.transcript]
+add_caption = "Add caption at playhead"
+captions_save_failed = { text = "Could not save the captions: {error}", context = "{error} is a technical message that stays in English." }
+captions_saved = "Captions saved"
 cleanup = "Clean up"
 cleanup_tooltip = "Remove filler words and shorten pauses"
 delete_matches = "Delete all"
 delete_matches_tooltip = "Cut every match from the video"
+download_captions = "Download captions"
+download_srt = { text = "SubRip (.srt)", context = "Menu item that saves captions as an SRT subtitle file. SubRip is a format name; keep it." }
+download_vtt = { text = "WebVTT (.vtt)", context = "Menu item that saves captions as a WebVTT subtitle file. WebVTT is a format name; keep it." }
+edit_hint = "Enter to save, Esc to cancel, Tab for the next word"
 empty_description = "Transcribe this recording on this computer, then edit the video by editing its text."
 empty_title = "No transcript yet"
-hint = "Click a word to jump to it. Select words and press Delete to cut them from the video."
+hint = "Click a word to jump to it, double-click to fix it. Select words and press Delete to cut them from the video."
 next_match = "Next match"
 no_audio = "This recording has no audio to transcribe."
 no_speech = "No speech found in this recording"
@@ -2969,6 +3118,7 @@ audio_segment_changed = "This audio segment changed. Select it and choose a repl
 crop = "Crop"
 crop_tooltip = "Crop Video"
 no_room_for_3d_shot = "No room for another 3D shot"
+no_room_for_caption = "No room for another caption here"
 redo = "Redo"
 save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
 undo = "Undo"
@@ -3146,7 +3296,11 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
+compare = "Compare"
+compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
+enhance = "Enhance"
+enhance_tooltip = "Show the paused frame enhanced"
 play_pause = "Play/Pause video"
 speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"
@@ -3205,6 +3359,13 @@ pending = "Quit canceled because recording shutdown is still pending. Cap will s
 quit_anyway = "Quit Anyway"
 still_open = "Cap is still open"
 unconfirmed = "Quit canceled because recording shutdown could not be confirmed. Cap will stay open. Use Stop, then try Quit again."
+
+[dialog.startup]
+failed = { text = "{error}\n\nDetails were saved in {folder}.", context = "{error} is a technical reason, usually in English. {folder} is a folder path." }
+failed_title = "Cap couldn't start"
+quit_and_reopen = { text = "Quit and Reopen", context = "Button: quit the copy of Cap that is not responding and start a new one." }
+unresponsive = "Cap is already running but isn't responding. Quit that copy and open Cap again?"
+unresponsive_title = "Cap isn't responding"
 
 [dialog.update]
 already_getting = { text = "Cap is already getting version {version} ready.", context = "{version} is a version number such as 0.6.2." }
@@ -3280,6 +3441,7 @@ changed_after = "The local recording changed after upload; it has been preserved
 already_queued = "This recording is already queued for upload"
 paused = "Upload paused; the local recording is preserved"
 worker_failed = "The upload worker failed; the local recording is preserved"
+deleted_on_web = "This recording was deleted on the web; the local recording is preserved"
 empty = "The saved recording is empty"
 no_resumable_state = "This recording has no resumable upload state"
 verification_failed = { text = "Recording verification failed: {status}", context = "{status} is a technical status, usually in English." }

@@ -1095,6 +1095,10 @@ impl ScreenshotEditorWindow {
             }
         })
         .detach();
+        // Every shortcut (Cmd+C included) is a key listener on the root div,
+        // and with nothing focused gpui dispatches keys to the root view only,
+        // so the editor ignored the keyboard until something in it was clicked.
+        window.focus(&this.focus, cx);
 
         this
     }
@@ -2323,7 +2327,8 @@ impl ScreenshotEditorWindow {
             let content_type = encoded.content_type();
             let bytes = encoded.into_bytes();
             let upload = gpui_tokio::Tokio::spawn(cx, async move {
-                crate::upload::upload_rendered_screenshot(bytes, content_type, existing_id).await
+                crate::upload::upload_rendered_screenshot(bytes, content_type, existing_id, None)
+                    .await
             });
             let outcome = match upload.await {
                 Ok(outcome) => outcome,
@@ -2372,6 +2377,10 @@ impl ScreenshotEditorWindow {
             //    flow's success -- a failure here surfaces as the error, and
             //    the sharing meta on disk stays what it was.
             let link = uploaded.link.clone();
+            let completed = (
+                meta.project_path.clone(),
+                (uploaded.link.clone(), uploaded.id.clone()),
+            );
             meta.sharing = Some(cap_project::SharingMeta {
                 id: uploaded.id,
                 link: uploaded.link,
@@ -2385,6 +2394,11 @@ impl ScreenshotEditorWindow {
                 })
                 .await;
 
+            if saved.is_ok() {
+                let (project, share) = completed;
+                let image = bundle_image_path(&project);
+                crate::automation::upload_completed(&project, image, Some(share));
+            }
             this.update_in(cx, |this, window, cx| match saved {
                 Ok(()) => this.finish_share_success(toast, link, window, cx),
                 Err(error) => this.finish_share_error(toast, error, window, cx),
@@ -5568,6 +5582,32 @@ mod tests {
                     median(&mut result.render_ms),
                 );
             }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    mod open_focus {
+        use super::*;
+
+        #[gpui::test]
+        fn shortcuts_work_before_the_window_is_clicked(cx: &mut gpui::TestAppContext) {
+            let project = tempfile::tempdir().unwrap();
+            let (export_tx, _export_rx) = tokio::sync::mpsc::channel(1);
+            let (editor, cx) = cx.add_window_view(|window, cx| {
+                ScreenshotEditorWindow::new(project.path().into(), window, cx)
+            });
+            editor.update(cx, |editor, _| editor.export_tx = Some(export_tx));
+
+            cx.simulate_keystrokes("p");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.active_popover == Some(Popover::Padding));
+            });
+
+            cx.simulate_keystrokes("cmd-c");
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.exporting);
+                assert!(editor.export_status == ExportStatus::Rendering);
+            });
         }
     }
 

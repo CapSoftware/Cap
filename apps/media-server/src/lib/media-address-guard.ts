@@ -11,11 +11,19 @@ const MAX_ADDRESSES_TRIED = 4;
 // which is where cloud metadata lives, unspecified, multicast) never are.
 export type HostAddressClass = "public" | "private" | "reserved";
 
-function classifyIpv4(a: number, b: number, c: number): HostAddressClass {
+// 168.63.129.16 sits in public address space but is the fixed address every
+// Azure virtual machine reaches its platform services on.
+function classifyIpv4(
+	a: number,
+	b: number,
+	c: number,
+	d: number,
+): HostAddressClass {
 	if (
 		a === 0 ||
 		(a === 169 && b === 254) ||
 		(a === 192 && b === 0 && c === 0) ||
+		(a === 168 && b === 63 && c === 129 && d === 16) ||
 		a >= 224
 	) {
 		return "reserved";
@@ -76,7 +84,11 @@ function classifyIpv6(groups: number[]): HostAddressClass {
 		number,
 	];
 	const embeddedIpv4 = (high: number, low: number) =>
-		classifyIpv4(high >> 8, high & 0xff, low >> 8);
+		classifyIpv4(high >> 8, high & 0xff, low >> 8, low & 0xff);
+	// IPv4-translated addresses (::ffff:0:a.b.c.d) lead to the IPv4 address
+	// they carry, like the mapped form does.
+	if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0xffff && g5 === 0)
+		return embeddedIpv4(g6, g7);
 	if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0) {
 		if (g5 === 0xffff) return embeddedIpv4(g6, g7);
 		if (g5 === 0) {
@@ -118,7 +130,14 @@ function normalizeHost(hostname: string): string {
 export function classifyHostLiteral(hostname: string): HostAddressClass | null {
 	const host = normalizeHost(hostname);
 	const v4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-	if (v4) return classifyIpv4(Number(v4[1]), Number(v4[2]), Number(v4[3]));
+	if (v4) {
+		return classifyIpv4(
+			Number(v4[1]),
+			Number(v4[2]),
+			Number(v4[3]),
+			Number(v4[4]),
+		);
+	}
 	const groups = ipv6Groups(host);
 	return groups ? classifyIpv6(groups) : null;
 }

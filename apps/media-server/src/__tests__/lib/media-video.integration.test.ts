@@ -1944,6 +1944,67 @@ describe("DASH segment expansion", () => {
 		expect(performance.now() - startedAt).toBeLessThan(5_000);
 	});
 
+	describe("audio-only manifests", () => {
+		const audioOnly =
+			'<MPD type="static" mediaPresentationDuration="PT0.000S"><Period id="0"><AdaptationSet id="0" contentType="audio"><Representation id="0" bandwidth="128000" codecs="opus" mimeType="audio/webm"><SegmentTemplate timescale="1000000" initialization="a-init.webm" media="a-$Number$.webm" startNumber="0"><SegmentTimeline><S t="0" d="4020000"/><S t="4020000" d="1320000"/></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>';
+		const url = "https://cdn.example/audio/manifest.mpd?Policy=p";
+
+		test("are refused unless the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				await expect(materializeMpdAsHlsPlaylist(url, dir)).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+				const path = await materializeStreamingInput(url, dir);
+				expect(path.endsWith(".mpd")).toBe(true);
+			});
+		});
+
+		test("become a single audio variant when the caller opts in", async () => {
+			await withManifest(audioOnly, async (dir) => {
+				const master = readFileSync(
+					await materializeStreamingInput(url, dir, undefined, undefined, {
+						allowAudioOnly: true,
+					}),
+					"utf8",
+				);
+				expect(master).not.toContain("#EXT-X-MEDIA");
+				const variants = master
+					.split("\n")
+					.filter((line) => line.startsWith("#EXT-X-STREAM-INF:"));
+				expect(variants).toEqual([
+					'#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS="opus"',
+				]);
+				const playlist = readFileSync(
+					master.trim().split("\n").at(-1) ?? "",
+					"utf8",
+				);
+				expect(playlist).toContain(
+					'#EXT-X-MAP:URI="https://cdn.example/audio/a-init.webm?Policy=p"',
+				);
+				expect(playlist).toContain("#EXTINF:4.020000,");
+				expect(playlist).toContain(
+					"https://cdn.example/audio/a-1.webm?Policy=p",
+				);
+			});
+		});
+
+		test("are not inferred when the video uses an unsupported segment layout", async () => {
+			const unsupportedVideo = audioOnly.replace(
+				"</Period>",
+				'<AdaptationSet id="1" contentType="video"><Representation id="1" bandwidth="1500000" codecs="vp9" mimeType="video/webm" width="1280" height="720"><SegmentList><Initialization sourceURL="v-init.webm"/><SegmentURL media="v-0.webm"/></SegmentList></Representation></AdaptationSet></Period>',
+			);
+			await withManifest(unsupportedVideo, async (dir) => {
+				await expect(
+					materializeMpdAsHlsPlaylist(url, dir, undefined, {
+						allowAudioOnly: true,
+					}),
+				).rejects.toThrow(
+					"DASH manifest did not contain a supported video track",
+				);
+			});
+		});
+	});
+
 	test.each([
 		["a repeat count", "PT1S", '<S t="0" d="1" r="1000000000"/>'],
 		[

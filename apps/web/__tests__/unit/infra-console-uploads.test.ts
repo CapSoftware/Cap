@@ -1,7 +1,18 @@
 // @vitest-environment jsdom
 
-import { createElement, type FunctionComponent, type ReactNode } from "react";
+import {
+	act,
+	createElement,
+	type FunctionComponent,
+	type ReactNode,
+} from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	fileTooLargeMessage,
+	MAX_UPLOAD_BYTES,
+	MAX_UPLOAD_DURATION_SECS,
+	VIDEO_TOO_LONG_MESSAGE,
+} from "@/lib/infra-upload";
 import type { InfraVideoListItem } from "@/lib/infra-video-view";
 import {
 	button,
@@ -154,6 +165,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	vi.useRealTimers();
 	await stage.close();
 });
 
@@ -225,6 +237,65 @@ describe("a video uploaded from the console", () => {
 		expect(stage.seen.filter((frame) => FAILURE_TEXT.test(frame))).toEqual([]);
 	});
 
+	it("waits out a completion another request holds, then finishes", async () => {
+		const answerApi = globalThis.fetch as unknown as (
+			url: string,
+			init: { body: string },
+		) => Promise<Response>;
+		const firstAnswer = deferred<void>();
+		let completeCalls = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string, init: { body: string }) => {
+				if (!url.endsWith("/complete")) return answerApi(url, init);
+				apiCalls.push("complete");
+				completeCalls++;
+				if (completeCalls === 1) await firstAnswer.promise;
+				if (Date.now() < busyUntil) {
+					return new Response(
+						JSON.stringify({
+							error: "Another request is completing this upload.",
+							code: "completion_in_progress",
+						}),
+						{ status: 409, headers: { "Retry-After": "5" } },
+					);
+				}
+				return new Response(JSON.stringify({ success: true }), {
+					status: 200,
+				});
+			}),
+		);
+		let busyUntil = Number.POSITIVE_INFINITY;
+		await show([video("old", "ready")]);
+
+		await chooseFiles([file("talk.mp4")]);
+		await until(() => completeCalls === 1, "the completion call");
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		busyUntil = Date.now() + 60_000;
+		firstAnswer.resolve();
+		for (let waited = 0; waited < 60_000; waited += 5_000) {
+			await act(() => vi.advanceTimersByTimeAsync(5_000));
+			if (waited === 5_000) {
+				expect(text()).toContain(
+					"Still finishing, this can take a few minutes",
+				);
+			}
+		}
+		await act(() => vi.advanceTimersByTimeAsync(5_000));
+		vi.useRealTimers();
+		await until(
+			() => mocks.toast.success.mock.calls.length === 1,
+			"the uploaded toast",
+		);
+
+		expect(mocks.toast.success).toHaveBeenCalledWith("Uploaded talk.mp4");
+		expect(completeCalls).toBe(13);
+		expect(apiCalls).not.toContain("abort");
+		expect(mocks.deleteVideo).not.toHaveBeenCalled();
+		expect(text()).not.toMatch(/not confirmed|Still finishing/);
+	});
+
 	it("still calls an upload this tab did not send unfinished, and offers to remove it", async () => {
 		await show([video("left-behind", "uploading"), video("old", "ready")]);
 
@@ -254,6 +325,35 @@ describe("a file the console cannot upload", () => {
 		expect(document.querySelector("[role=alert]")?.textContent).toContain(
 			"That file is empty.",
 		);
+	});
+
+	it("refuses a file over the upload limit before creating a video", async () => {
+		await show([video("old", "ready")]);
+		const huge = file("huge.mp4");
+		Object.defineProperty(huge, "size", { value: MAX_UPLOAD_BYTES + 1 });
+
+		await chooseFiles([huge]);
+		await until(
+			() => text().includes(fileTooLargeMessage()),
+			"the size message",
+		);
+
+		expect(apiCalls).toEqual([]);
+		expect(mocks.deleteVideo).not.toHaveBeenCalled();
+	});
+
+	it("refuses a video over the length limit before creating a video", async () => {
+		stubVideoProbe({ duration: MAX_UPLOAD_DURATION_SECS + 1 });
+		await show([video("old", "ready")]);
+
+		await chooseFiles([file("long.mp4")]);
+		await until(
+			() => text().includes(VIDEO_TOO_LONG_MESSAGE),
+			"the length message",
+		);
+
+		expect(apiCalls).toEqual([]);
+		expect(mocks.deleteVideo).not.toHaveBeenCalled();
 	});
 });
 

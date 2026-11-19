@@ -101,22 +101,53 @@ const actions: [string, () => Promise<unknown>][] = [
 				"video-1",
 			),
 	],
+	[
+		"add a webhook endpoint",
+		async () =>
+			(await import("@/actions/developers/webhooks")).createInfraWebhook(
+				"app-1",
+				{ url: "https://example.com/hook", events: ["video.ready"] },
+			),
+	],
+	[
+		"turn a webhook endpoint off",
+		async () =>
+			(await import("@/actions/developers/webhooks")).setInfraWebhookEnabled(
+				"app-1",
+				"hook-1",
+				false,
+			),
+	],
+	[
+		"rotate a webhook secret",
+		async () =>
+			(await import("@/actions/developers/webhooks")).rotateInfraWebhookSecret(
+				"app-1",
+				"hook-1",
+			),
+	],
+	[
+		"send a webhook test",
+		async () =>
+			(await import("@/actions/developers/webhooks")).sendInfraWebhookTest(
+				"app-1",
+				"hook-1",
+			),
+	],
+	[
+		"delete a webhook endpoint",
+		async () =>
+			(await import("@/actions/developers/webhooks")).deleteInfraWebhook(
+				"app-1",
+				"hook-1",
+			),
+	],
 ];
 
-describe("Cap Infra console actions and the preview list", () => {
+describe("Cap Infra console actions and sign-in", () => {
 	beforeEach(() => {
 		mocks.touched = [];
 	});
-
-	it.each(actions)(
-		"does not let an account outside the preview %s",
-		async (_name, run) => {
-			mocks.user = { id: "user-1", email: "someone@example.com" };
-
-			await expect(run()).rejects.toThrow("Unauthorized");
-			expect(mocks.touched).toEqual([]);
-		},
-	);
 
 	it.each(actions)(
 		"does not let a signed-out visitor %s",
@@ -129,9 +160,9 @@ describe("Cap Infra console actions and the preview list", () => {
 	);
 
 	it.each(actions)(
-		"lets an account on the preview list through to %s",
+		"lets any signed-in account through to %s",
 		async (_name, run) => {
-			mocks.user = { id: "user-1", email: "richie@cap.so" };
+			mocks.user = { id: "user-1", email: "someone@example.com" };
 
 			const outcome = await run().then(
 				() => "returned",

@@ -420,9 +420,51 @@ export async function readMediaServerVideoJob(
 	}
 }
 
+export type MediaServerJobCancel =
+	| "cancelled"
+	| "finished"
+	| "missing"
+	| "failed";
+
+const JOB_CANCEL_TIMEOUT_MS = 5_000;
+
+export async function cancelMediaServerVideoJob(
+	jobId: string,
+): Promise<MediaServerJobCancel> {
+	try {
+		const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+		const response = await fetch(
+			`${mediaServerUrl}/video/process/${encodeURIComponent(jobId)}/cancel`,
+			{
+				method: "POST",
+				headers: {
+					"x-media-server-secret": mediaServerSecret,
+					Accept: "application/json",
+				},
+				signal: AbortSignal.timeout(JOB_CANCEL_TIMEOUT_MS),
+				redirect: "error",
+			},
+		);
+		const body: unknown = await response.json().catch(() => null);
+		if (response.ok) return "cancelled";
+		const code =
+			body && typeof body === "object" && "code" in body
+				? body.code
+				: undefined;
+		if (response.status === 400 && code === "INVALID_STATE") {
+			return "finished";
+		}
+		if (response.status === 404 && code === "NOT_FOUND") return "missing";
+		return "failed";
+	} catch {
+		return "failed";
+	}
+}
+
 export type MediaServerProbeAttempt =
 	| { status: "ok"; metadata: MediaServerProbeResult }
 	| { status: "unreachable" }
+	| { status: "timed_out" }
 	| { status: "rejected"; message: string; unusable: boolean };
 
 export async function tryProbeVideoViaMediaServer(
@@ -442,6 +484,18 @@ export async function tryProbeVideoViaMediaServer(
 		return { status: "unreachable" };
 	}
 
+	// The media server answers 504 with code TIMEOUT when it gave up reading
+	// this file. That says something about the file, so it is not retried as if
+	// the server were away. A 504 from anything in front of it still is.
+	if (response.status === 504) {
+		const body: unknown = await response.json().catch(() => null);
+		return body &&
+			typeof body === "object" &&
+			"code" in body &&
+			body.code === "TIMEOUT"
+			? { status: "timed_out" }
+			: { status: "unreachable" };
+	}
 	if (isRetryableStatus(response.status, DEFAULT_RETRYABLE_STATUSES)) {
 		await response.body?.cancel().catch(() => {});
 		return { status: "unreachable" };

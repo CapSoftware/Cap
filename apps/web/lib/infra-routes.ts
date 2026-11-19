@@ -9,6 +9,7 @@ export const INFRA_SECTIONS = [
 	{ slug: "usage", name: "Usage" },
 	{ slug: "billing", name: "Billing" },
 	{ slug: "keys", name: "API keys" },
+	{ slug: "webhooks", name: "Webhooks" },
 	{ slug: "settings", name: "Settings" },
 ] as const;
 
@@ -51,6 +52,14 @@ export function infraAppPath(appId: string, section: InfraSection = "") {
 	const base = `${INFRA_BASE_PATH}/${encodeURIComponent(appId)}`;
 	return section ? `${base}/${section}` : base;
 }
+
+const INFRA_CONSOLE_ORIGIN = "https://cap.so";
+
+export const infraBillingUrl = (appId: string) =>
+	`${INFRA_CONSOLE_ORIGIN}${infraAppPath(appId, "billing")}`;
+
+export const infraAddCreditsHint = (appId: string) =>
+	`Add credits to this app at ${infraBillingUrl(appId)}, then retry.`;
 
 export function parseInfraPathname(pathname: string): {
 	appId: string | null;

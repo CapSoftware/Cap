@@ -24,8 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode, transcription_ranges_cover, transcription_source_ranges,
+    KeyboardData, KeyboardSettings, PaddingMode, ProjectConfiguration, RecordingMeta,
+    ShadowConfiguration, StereoMode, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -77,6 +77,14 @@ pub const CAMERA_BLUR_MODES: &[(BackgroundBlurMode, Label)] = &[
 pub const CORNER_STYLES: [(CornerStyle, Label); 2] = [
     (CornerStyle::Squircle, tr::editor::tabs::corner::squircle),
     (CornerStyle::Rounded, tr::editor::tabs::corner::rounded),
+];
+
+pub const PADDING_MODES: [(PaddingMode, Label); 2] = [
+    (PaddingMode::Even, tr::editor::tabs::padding::even),
+    (
+        PaddingMode::Proportional,
+        tr::editor::tabs::padding::proportional,
+    ),
 ];
 
 /// `STEREO_MODES` (`:375-379`).
@@ -780,6 +788,7 @@ fn with_keyboard_settings(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMenu {
     BackgroundCornerStyle,
+    BackgroundPaddingMode,
     CameraBlur,
     CameraShape,
     CameraCornerStyle,
@@ -822,6 +831,12 @@ impl EditorWindow {
                 .iter()
                 .map(|(style, label)| {
                     ui::MenuItem::new(label(), *style == project.background.rounding_type)
+                })
+                .collect(),
+            SidebarMenu::BackgroundPaddingMode => PADDING_MODES
+                .iter()
+                .map(|(mode, label)| {
+                    ui::MenuItem::new(label(), *mode == project.background.padding_mode)
                 })
                 .collect(),
             SidebarMenu::CameraBlur => CAMERA_BLUR_MODES
@@ -1005,6 +1020,12 @@ impl EditorWindow {
                     project.background.rounding_type = style;
                     true
                 });
+            }
+            SidebarMenu::BackgroundPaddingMode => {
+                let Some((mode, _)) = PADDING_MODES.get(index) else {
+                    return;
+                };
+                self.set_padding_mode(*mode, window, cx);
             }
             SidebarMenu::CameraBlur => {
                 let Some((mode, _)) = CAMERA_BLUR_MODES.get(index) else {
@@ -2298,6 +2319,29 @@ impl EditorWindow {
                             .into_any_element(),
                     )),
             );
+
+        if smooth {
+            let hover = cursor.interaction_anchors && cursor.hover_anchors;
+            body = body.child(
+                ui::Field::inline(&theme, tr::editor::tabs::cursor::follow_hover()).value(
+                    ui::Toggle::plain(&theme, "cursor-hover-anchors", hover)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = {
+                                let cursor = &this.style_control_project().cursor;
+                                !(cursor.interaction_anchors && cursor.hover_anchors)
+                            };
+                            this.edit_project("cursor-hover-anchors", window, cx, move |p| {
+                                p.cursor.hover_anchors = next;
+                                if next {
+                                    p.cursor.interaction_anchors = true;
+                                }
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
+            );
+        }
 
         // An explicit family forces the SVG assets, so the toggle would be
         // showing a setting the renderer is already overriding.
@@ -3975,7 +4019,7 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(Hsla::from(theme.editor.text_2))
-                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip)))
+                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip + 1)))
                                 .into_any_element()
                         }))
                         .children(auto.then(|| {

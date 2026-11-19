@@ -99,7 +99,7 @@ export default function StatsChart({
 	);
 
 	return (
-		<section className="overflow-hidden w-full rounded-2xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-4">
+		<section className="overflow-hidden w-full rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.04)] bg-gray-1 border-gray-3">
 			<div
 				className={clsx(
 					"grid gap-px border-b bg-gray-3 border-gray-3",

@@ -2,9 +2,6 @@
 
 import {
 	Button,
-	Card,
-	CardDescription,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogFooter,
@@ -19,6 +16,11 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { ApiKeyDisplay } from "../../../_components/ApiKeyDisplay";
+import {
+	SettingsCard,
+	SettingsRow,
+	SettingsSection,
+} from "../../organization/_components/settings-ui";
 import {
 	type CliApiKeySummary,
 	createCliApiKey,
@@ -108,43 +110,55 @@ export const CliApiKeys = ({
 	});
 
 	return (
-		<Card className="flex flex-col gap-4 mt-6">
-			<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-				<div className="space-y-1">
-					<CardTitle>Cap CLI access</CardTitle>
-					<CardDescription>
-						API keys authenticate the Cap CLI in environments without a browser,
-						such as CI runners and remote sandboxes. Keys created by{" "}
-						<code>cap auth login</code> also appear here.
-					</CardDescription>
-				</div>
-				<Button
-					type="button"
-					size="sm"
-					variant="dark"
-					icon={<KeyRound className="size-4" />}
-					onClick={() => setCreateOpen(true)}
-				>
-					Create API key
-				</Button>
-			</div>
-			{loadFailed && (
-				<div className="rounded-xl border border-red-4 bg-red-2 px-4 py-3 text-sm text-red-11">
-					Your API keys could not be loaded. Refresh the page to try again.
-					Existing keys are still active and can be revoked once the list loads.
-				</div>
-			)}
-			{keys.length > 0 && (
-				<div className="flex flex-col divide-y divide-gray-3 rounded-xl border border-gray-4">
-					{keys.map((key) => {
-						const expired = new Date(key.expiresAt).getTime() <= Date.now();
-						return (
-							<div
-								className="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center md:justify-between"
-								key={key.id}
-							>
+		<SettingsSection title="Cap CLI access">
+			<SettingsCard>
+				<SettingsRow
+					title="API keys"
+					description={
+						<>
+							API keys authenticate the Cap CLI in environments without a
+							browser, such as CI runners and remote sandboxes. Keys created by{" "}
+							<code className="px-1 py-0.5 text-xs rounded bg-gray-3">
+								cap auth login
+							</code>{" "}
+							also appear here.
+						</>
+					}
+					control={
+						<Button
+							type="button"
+							size="sm"
+							variant="dark"
+							className="px-4 h-9"
+							icon={<KeyRound className="size-3.5" />}
+							onClick={() => setCreateOpen(true)}
+						>
+							Create API key
+						</Button>
+					}
+				/>
+				{loadFailed && (
+					<div className="px-4 py-3.5 sm:px-5">
+						<div className="px-3 py-2.5 text-sm rounded-lg border border-red-4 bg-red-2 text-red-11">
+							Your API keys could not be loaded. Refresh the page to try again.
+							Existing keys are still active and can be revoked once the list
+							loads.
+						</div>
+					</div>
+				)}
+				{keys.map((key) => {
+					const expired = new Date(key.expiresAt).getTime() <= Date.now();
+					return (
+						<div
+							className="flex flex-col gap-2 px-4 py-3 sm:px-5 md:flex-row md:items-center md:justify-between"
+							key={key.id}
+						>
+							<div className="flex gap-3 items-center min-w-0">
+								<div className="flex justify-center items-center rounded-lg size-8 shrink-0 bg-gray-3">
+									<KeyRound className="size-3.5 text-gray-10" />
+								</div>
 								<div className="min-w-0">
-									<p className="truncate text-sm font-medium text-gray-12">
+									<p className="text-sm font-medium truncate text-gray-12">
 										{key.name}
 									</p>
 									<p className="text-xs text-gray-10">
@@ -159,20 +173,21 @@ export const CliApiKeys = ({
 											: `expires ${formatDate(key.expiresAt)}`}
 									</p>
 								</div>
-								<Button
-									type="button"
-									size="xs"
-									variant="destructive"
-									icon={<Trash2 className="size-3.5" />}
-									onClick={() => setRevokeTarget(key)}
-								>
-									Revoke
-								</Button>
 							</div>
-						);
-					})}
-				</div>
-			)}
+							<Button
+								type="button"
+								size="xs"
+								variant="secondary"
+								className="px-3 h-8 text-red-500 hover:text-red-600"
+								icon={<Trash2 className="size-3.5" />}
+								onClick={() => setRevokeTarget(key)}
+							>
+								Revoke
+							</Button>
+						</div>
+					);
+				})}
+			</SettingsCard>
 
 			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
 				<DialogContent>
@@ -317,6 +332,6 @@ export const CliApiKeys = ({
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
-		</Card>
+		</SettingsSection>
 	);
 };

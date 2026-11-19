@@ -365,6 +365,34 @@ describe("share comments rendering", () => {
 		expect(container.querySelector("#comment-saved")).toBeNull();
 	});
 
+	it("offers delete only once your comment is saved, and says so when deleting fails", async () => {
+		comments = [
+			...discussion(1),
+			{ ...comment("pending", "root-0"), sending: true },
+		];
+		await render();
+		expect(row("pending").querySelector('[title="Delete comment"]')).toBeNull();
+
+		mocks.remove.mockRejectedValueOnce(new Error("Offline"));
+		mocks.showError.mockReset();
+		setComments.mockReset();
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.spyOn(window, "confirm").mockReturnValue(true);
+		await click(
+			row("reply-0").querySelector('[title="Delete comment"] button'),
+		);
+
+		expect(mocks.remove).toHaveBeenCalledWith({
+			commentId: "reply-0",
+			parentId: "root-0",
+			videoId: "video",
+		});
+		expect(mocks.showError).toHaveBeenCalledExactlyOnceWith(
+			"Couldn't delete the comment. Please try again.",
+		);
+		expect(setComments).not.toHaveBeenCalled();
+	});
+
 	it.each(["comment", "reply"] as const)(
 		"keeps a failed %s draft for retry and clears it only after saving",
 		async (kind) => {
