@@ -1373,10 +1373,34 @@ pub enum SegmentDetail {
     /// `TL/KeyboardTrack.tsx:168-266`.
     Keyboard {
         text: SharedString,
-        /// The keys the overlay draws, as their labels, and whether each is
-        /// a modifier: what the segment shows as small keycaps.
-        keys: Arc<[(SharedString, bool)]>,
+        /// Typed words, which read as text; a shortcut or a lone special key
+        /// reads as keys.
+        typed: bool,
+        /// The keys the overlay draws: what a shortcut shows as small
+        /// keycaps.
+        keys: Arc<[TimelineKey]>,
     },
+}
+
+/// One key a keyboard segment shows on the timeline, and the width its
+/// keycap takes, worked out once when the timeline is built so drawing a
+/// segment only adds widths.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelineKey {
+    pub label: SharedString,
+    pub modifier: bool,
+    pub width: f32,
+}
+
+impl TimelineKey {
+    fn new(label: SharedString, modifier: bool) -> Self {
+        let width = key_chip_width(&label);
+        Self {
+            label,
+            modifier,
+            width,
+        }
+    }
 }
 
 impl SegmentDetail {
@@ -1647,6 +1671,7 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.display_text.clone())
                     },
+                    typed: is_typed_text(segment),
                     keys: keycaps::keycaps_for(&segment.display_text, key_style)
                         .into_iter()
                         .map(|cap| {
@@ -1657,7 +1682,7 @@ impl TimelineModel {
                                 (true, Some(word)) => SharedString::from(word),
                                 (true, None) => SharedString::new_static("\u{2423}"),
                             };
-                            (label, cap.modifier)
+                            TimelineKey::new(label, cap.modifier)
                         })
                         .collect(),
                 },
@@ -3167,7 +3192,9 @@ fn render_segment(
     // visible bar, half-overhanging each edge. A *compact* handle carries no
     // `group-hover` class over there, so it stays visible with the pointer on
     // it (`TL/Track.tsx:250`).
-    let compact = (width as f64) < 40.;
+    // A key press is often a sliver; its handles wait for the pointer, so a
+    // run of presses reads as keys rather than a fence of bars.
+    let compact = (width as f64) < 40. && kind != TrackKind::Keyboard;
     let handle_opacity = if compact {
         0.55
     } else if hovered {
@@ -3804,6 +3831,9 @@ fn render_label(
     center_x: f64,
     kind: TrackKind,
 ) -> impl IntoElement {
+    if let SegmentDetail::Keyboard { text, typed, keys } = &segment.detail {
+        return render_key_label(theme, color, text, *typed, keys, visible_width, center_x);
+    }
     let compact_at = match kind {
         TrackKind::Caption | TrackKind::Keyboard | TrackKind::Audio => {
             SEGMENT_LABEL_COMPACT_TIGHT_PX
@@ -3887,31 +3917,34 @@ fn label_secondary(theme: &Theme, color: Hsla) -> gpui::Div {
         .text_color(seg_muted(theme, color))
 }
 
-/// One key on a keyboard segment: a small white keycap on the segment's
-/// colour, its lit top and lower lip drawn as insets. Modifiers sit a step
-/// quieter than the key they modify.
-fn key_chip(label: &SharedString, modifier: bool) -> gpui::Div {
+/// One key on a keyboard segment: a small physical key in a deeper shade
+/// of the segment, lit along its top and standing on a darker lip, with its
+/// legend in white. It is exactly as wide as [`key_chip_width`] says, so the
+/// keys laid out by [`fit_key_label`] never overrun the segment. Modifiers
+/// sit a step quieter than the key they modify.
+fn key_chip(theme: &Theme, color: Hsla, key: &TimelineKey) -> gpui::Div {
+    let face = theme.editor.badge_fill(gpui::Rgba::from(color));
     div()
         .flex_none()
-        .min_w(px(18.))
-        .h(px(19.))
-        .px(px(5.))
+        .w(px(key.width))
+        .h(px(KEY_CHIP_HEIGHT))
+        .px(px(KEY_CHIP_PAD_X))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(5.))
-        .bg(gpui::hsla(0., 0., 1., if modifier { 0.16 } else { 0.24 }))
+        .rounded(px(4.5))
+        .bg(Hsla::from(face))
         .shadow(vec![
             gpui::BoxShadow {
-                color: gpui::hsla(0., 0., 1., 0.28),
+                color: gpui::hsla(0., 0., 1., 0.16),
                 offset: gpui::point(px(0.), px(1.)),
                 blur_radius: px(0.),
                 spread_radius: px(0.),
                 inset: true,
             },
             gpui::BoxShadow {
-                color: gpui::hsla(0., 0., 0., 0.22),
-                offset: gpui::point(px(0.), px(-1.5)),
+                color: gpui::hsla(0., 0., 0., 0.3),
+                offset: gpui::point(px(0.), px(-2.)),
                 blur_radius: px(0.),
                 spread_radius: px(0.),
                 inset: true,
@@ -3919,9 +3952,204 @@ fn key_chip(label: &SharedString, modifier: bool) -> gpui::Div {
         ])
         .text_size(px(11.))
         .line_height(px(13.))
-        .text_color(gpui::hsla(0., 0., 1., 0.95))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(gpui::hsla(
+            0.,
+            0.,
+            1.,
+            if key.modifier { 0.82 } else { 0.98 },
+        ))
         .truncate()
-        .child(label.clone())
+        .child(key.label.clone())
+}
+
+/// Whether a key segment is typed words: not a shortcut, and with at least
+/// one character that is not a key symbol, so a lone Shift or Return reads
+/// as its key. The shortcut test matches the overlay's own.
+fn is_typed_text(segment: &cap_project::KeyboardTrackSegment) -> bool {
+    !is_shortcut(segment) && segment.display_text.chars().any(|c| !is_key_symbol(c))
+}
+
+fn is_key_symbol(c: char) -> bool {
+    matches!(
+        c,
+        '⌘' | '⌥'
+            | '⇧'
+            | '⌃'
+            | '⇪'
+            | '⏎'
+            | '↵'
+            | '⇥'
+            | '⌫'
+            | '⌦'
+            | '⎋'
+            | '⇱'
+            | '⇲'
+            | '⇞'
+            | '⇟'
+            | '↑'
+            | '↓'
+            | '←'
+            | '→'
+            | '␣'
+    )
+}
+
+/// A shortcut, as the overlay tells one from typing: it holds ⌃, ⌥ or ⌘,
+/// or one key struck again and again, unless each strike typed one more of
+/// the same character.
+fn is_shortcut(segment: &cap_project::KeyboardTrackSegment) -> bool {
+    if segment.display_text.contains(['⌃', '⌥', '⌘']) {
+        return true;
+    }
+    let repeated = segment.keys.len() > 1
+        && segment
+            .keys
+            .iter()
+            .all(|key| key.key == segment.keys[0].key);
+    if !repeated {
+        return false;
+    }
+    let mut chars = segment.display_text.chars();
+    let first = chars.next();
+    let typed = segment.display_text.chars().count() == segment.keys.len()
+        && chars.all(|c| Some(c) == first);
+    !typed
+}
+
+/// How far a keyboard segment's label stays in from each edge: clear of the
+/// trim handle's bar, which sits 5 to 8 px inside the edge.
+const KEY_LABEL_INSET: f32 = 10.;
+const KEY_CHIP_HEIGHT: f32 = 18.;
+const KEY_CHIP_PAD_X: f32 = 5.;
+const KEY_CHIP_MIN_WIDTH: f32 = 18.;
+const KEY_CHIP_GAP: f32 = 3.;
+/// The narrowest box typed words show in: a letter and an ellipsis.
+const KEY_TEXT_MIN_WIDTH: f32 = 16.;
+/// The narrowest box the keyboard glyph shows in.
+const KEY_GLYPH_MIN_WIDTH: f32 = 12.;
+
+/// The width of one key's keycap at the timeline's 11 px legend, from its
+/// characters, erring wide so the legend fits the cap it is given.
+fn key_chip_width(label: &str) -> f32 {
+    let ink: f32 = label
+        .chars()
+        .map(|c| match c {
+            ' ' => 3.5,
+            c if c.is_ascii_uppercase() || c.is_ascii_digit() => 7.4,
+            c if c.is_ascii_lowercase() => 6.4,
+            c if c.is_ascii() => 4.8,
+            // Key symbols and anything outside ASCII.
+            _ => 10.5,
+        })
+        .sum();
+    (ink + KEY_CHIP_PAD_X * 2.).max(KEY_CHIP_MIN_WIDTH)
+}
+
+/// The width of the quiet `+N` that stands for keys left out.
+fn more_keys_width(more: usize) -> f32 {
+    let digits = more.checked_ilog10().unwrap_or(0) + 1;
+    7. + 6.6 * digits as f32
+}
+
+/// What a keyboard segment shows in `width` pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyLabel {
+    /// The first `n` keys, and a count of the rest when some are left out.
+    Keys {
+        shown: usize,
+        more: usize,
+    },
+    /// The typed words, cut short with an ellipsis if they must be.
+    Text,
+    Glyph,
+    Nothing,
+}
+
+/// Whole keys only: as many of a shortcut's keys as fit, with a `+N` for
+/// the rest, and failing that the keyboard glyph. Typed words show as text.
+fn fit_key_label(typed: bool, keys: &[TimelineKey], width: f32) -> KeyLabel {
+    let fallback = if width >= KEY_GLYPH_MIN_WIDTH {
+        KeyLabel::Glyph
+    } else {
+        KeyLabel::Nothing
+    };
+    if typed || keys.is_empty() {
+        return if width >= KEY_TEXT_MIN_WIDTH {
+            KeyLabel::Text
+        } else {
+            fallback
+        };
+    }
+    // `row[n]` is the width of the first `n` keys and the gaps between them.
+    let row = |n: usize| -> f32 {
+        keys[..n].iter().map(|key| key.width).sum::<f32>()
+            + KEY_CHIP_GAP * n.saturating_sub(1) as f32
+    };
+    if row(keys.len()) <= width {
+        return KeyLabel::Keys {
+            shown: keys.len(),
+            more: 0,
+        };
+    }
+    (1..keys.len())
+        .rev()
+        .find(|&shown| row(shown) + KEY_CHIP_GAP + more_keys_width(keys.len() - shown) <= width)
+        .map_or(fallback, |shown| KeyLabel::Keys {
+            shown,
+            more: keys.len() - shown,
+        })
+}
+
+/// A keyboard segment's label: its keys or words, centred in the box left
+/// between the trim handles.
+fn render_key_label(
+    theme: &Theme,
+    color: Hsla,
+    text: &SharedString,
+    typed: bool,
+    keys: &[TimelineKey],
+    visible_width: f64,
+    center_x: f64,
+) -> gpui::Div {
+    let width = (visible_width as f32 - KEY_LABEL_INSET * 2.).max(0.);
+    let body = match fit_key_label(typed, keys, width) {
+        KeyLabel::Keys { shown, more } => label_row()
+            .gap(px(KEY_CHIP_GAP))
+            .children(keys[..shown].iter().map(|key| key_chip(theme, color, key)))
+            .when(more > 0, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .line_height(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(with_alpha(seg_label(theme, color), 0.78))
+                        .child(SharedString::from(format!("+{more}"))),
+                )
+            })
+            .into_any_element(),
+        KeyLabel::Text => label_row()
+            .child(label_primary(theme, color).child(text.clone()))
+            .into_any_element(),
+        KeyLabel::Glyph => label_glyph(theme, color, "icons/keyboard.svg", 12.),
+        KeyLabel::Nothing => return div(),
+    };
+    div().child(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(
+                center_x as f32 - visible_width as f32 / 2. + KEY_LABEL_INSET
+            ))
+            .w(px(width))
+            .flex()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .child(body),
+    )
 }
 
 fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> AnyElement {
@@ -4190,29 +4418,8 @@ fn label_body(
             .into_any_element(),
         (SegmentDetail::Caption { .. }, LabelTier::Glyph) => return None,
 
-        // -- Keyboard (`TL/KeyboardTrack.tsx:166-173, 260-268`) -----------
-        (SegmentDetail::Keyboard { keys, .. }, LabelTier::Full | LabelTier::Compact)
-            if !keys.is_empty() =>
-        {
-            label_row()
-                .gap(px(3.))
-                .children(
-                    keys.iter()
-                        .map(|(label, modifier)| key_chip(label, *modifier)),
-                )
-                .into_any_element()
-        }
-        (SegmentDetail::Keyboard { text, .. }, LabelTier::Full | LabelTier::Compact) => label_row()
-            .child(
-                label_primary(theme, color)
-                    .font_family("monospace")
-                    .child(text.clone()),
-            )
-            .into_any_element(),
-        (SegmentDetail::Keyboard { .. }, LabelTier::Glyph) => label_primary(theme, color)
-            .font_family("monospace")
-            .child("\u{2328}")
-            .into_any_element(),
+        // Key presses fit their own label: see `render_key_label`.
+        (SegmentDetail::Keyboard { .. }, _) => return None,
     })
 }
 
@@ -4821,6 +5028,7 @@ mod tests {
             lane: 0,
             detail: SegmentDetail::Keyboard {
                 text: SharedString::new_static("a"),
+                typed: true,
                 keys: Arc::from(Vec::new()),
             },
         };
@@ -4838,6 +5046,121 @@ mod tests {
     }
 
     // -- Labels -------------------------------------------------------------
+
+    fn timeline_keys(labels: &[&'static str]) -> Vec<TimelineKey> {
+        labels
+            .iter()
+            .map(|label| TimelineKey::new(SharedString::new_static(label), false))
+            .collect()
+    }
+
+    /// A shortcut shows every key it has room for, whole, then a count of
+    /// the keys left out, then the keyboard glyph, then nothing.
+    #[test]
+    fn key_segments_show_whole_keys_and_count_the_rest() {
+        let keys = timeline_keys(&["⌘", "⇧", "P"]);
+        let all = keys.iter().map(|key| key.width).sum::<f32>() + KEY_CHIP_GAP * 2.;
+        assert_eq!(
+            fit_key_label(false, &keys, all),
+            KeyLabel::Keys { shown: 3, more: 0 }
+        );
+        let two_and_more = keys[0].width + keys[1].width + KEY_CHIP_GAP * 2. + more_keys_width(1);
+        assert!(two_and_more < all);
+        assert_eq!(
+            fit_key_label(false, &keys, all - 1.),
+            KeyLabel::Keys { shown: 2, more: 1 }
+        );
+        assert_eq!(
+            fit_key_label(false, &keys, two_and_more - 1.),
+            KeyLabel::Keys { shown: 1, more: 2 }
+        );
+        let one_and_more = keys[0].width + KEY_CHIP_GAP + more_keys_width(2);
+        assert_eq!(
+            fit_key_label(false, &keys, one_and_more),
+            KeyLabel::Keys { shown: 1, more: 2 }
+        );
+        assert_eq!(
+            fit_key_label(false, &keys, one_and_more - 1.),
+            KeyLabel::Glyph
+        );
+        assert_eq!(
+            fit_key_label(false, &keys, KEY_GLYPH_MIN_WIDTH - 1.),
+            KeyLabel::Nothing
+        );
+        // Whatever the width, the keys shown and the count fit inside it.
+        for width in 0..200 {
+            let width = width as f32;
+            if let KeyLabel::Keys { shown, more } = fit_key_label(false, &keys, width) {
+                let used = keys[..shown].iter().map(|key| key.width).sum::<f32>()
+                    + KEY_CHIP_GAP * (shown - 1) as f32
+                    + if more > 0 {
+                        KEY_CHIP_GAP + more_keys_width(more)
+                    } else {
+                        0.
+                    };
+                assert!(used <= width, "{width}: {used}");
+                assert_eq!(shown + more, keys.len());
+            }
+        }
+    }
+
+    /// Typed words read as text down to a letter and an ellipsis.
+    #[test]
+    fn typed_key_segments_read_as_words() {
+        let keys = timeline_keys(&["hello"]);
+        assert_eq!(fit_key_label(true, &keys, 200.), KeyLabel::Text);
+        assert_eq!(
+            fit_key_label(true, &keys, KEY_TEXT_MIN_WIDTH),
+            KeyLabel::Text
+        );
+        assert_eq!(
+            fit_key_label(true, &keys, KEY_TEXT_MIN_WIDTH - 1.),
+            KeyLabel::Glyph
+        );
+        assert_eq!(fit_key_label(false, &[], 40.), KeyLabel::Text);
+    }
+
+    /// A key's cap grows with its legend and never shrinks below a square.
+    #[test]
+    fn key_chips_size_to_their_legend() {
+        assert_eq!(key_chip_width("P"), KEY_CHIP_MIN_WIDTH);
+        assert!(key_chip_width("⌘") >= KEY_CHIP_MIN_WIDTH);
+        assert!(key_chip_width("Backspace") > key_chip_width("Tab"));
+        assert!(key_chip_width("Shift") > KEY_CHIP_MIN_WIDTH);
+        assert_eq!(more_keys_width(9), more_keys_width(1));
+        assert!(more_keys_width(10) > more_keys_width(9));
+    }
+
+    /// Words are typed text; a shortcut, or a special key alone, is keys.
+    #[test]
+    fn key_segments_tell_typing_from_shortcuts() {
+        let segment = |text: &str, keys: &[&str]| cap_project::KeyboardTrackSegment {
+            display_text: text.to_string(),
+            keys: keys
+                .iter()
+                .map(|key| cap_project::KeyPressDisplay {
+                    key: key.to_string(),
+                    time_offset: 0.,
+                })
+                .collect(),
+            id: String::new(),
+            start: 0.,
+            end: 1.,
+            fade_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+            uppercase_override: None,
+        };
+        assert!(is_typed_text(&segment("hello", &["h", "e", "l", "l", "o"])));
+        assert!(is_typed_text(&segment("⌫e", &["Backspace", "e"])));
+        assert!(is_typed_text(&segment("aa", &["a", "a"])));
+        assert!(!is_typed_text(&segment("⌘C", &["Meta", "c"])));
+        assert!(!is_typed_text(&segment("⇧", &["Shift"])));
+        assert!(!is_typed_text(&segment("⏎", &["Enter"])));
+        assert!(!is_typed_text(&segment("⎋", &["Escape", "Escape"])));
+    }
 
     /// `useSegmentVisibleBox`: a segment wider than the viewport has its true
     /// centre off screen, so the label anchors to the middle of the *visible*
