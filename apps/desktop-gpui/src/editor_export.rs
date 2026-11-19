@@ -2186,7 +2186,7 @@ impl EditorWindow {
                 div().flex().flex_row().justify_center().child(
                     div()
                         .h(px(STATS_HEIGHT))
-                        .min_w(px(520.))
+                        .min_w(px(540.))
                         .flex()
                         .flex_row()
                         .rounded(px(10.))
@@ -2677,6 +2677,7 @@ impl EditorWindow {
                     .collect(),
             )
             .stretch()
+            .item_padding(px(6.), px(0.))
             .item_height(px(30.))
             .on_select(cx.listener(|this, index: &usize, window, cx| {
                 let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
@@ -3386,6 +3387,8 @@ impl EditorWindow {
                             )
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .text_size(px(11.5))
                                     .line_height(px(15.))
                                     .text_color(Hsla::from(editor.text_2))
@@ -3997,7 +4000,7 @@ fn export_stat(
         .min_w_0()
         .flex_col()
         .justify_center()
-        .px(px(16.))
+        .px(px(12.))
         .gap(px(1.))
         .when(divided, |this| {
             this.border_l_1().border_color(Hsla::from(editor.line))
@@ -4012,10 +4015,10 @@ fn export_stat(
         )
         .child(match value {
             Some(value) => div()
-                .text_size(px(12.5))
+                .text_size(px(12.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(Hsla::from(editor.text_1))
-                .whitespace_nowrap()
+                .truncate()
                 .child(value)
                 .into_any_element(),
             None => div()
