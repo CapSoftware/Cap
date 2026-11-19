@@ -2806,6 +2806,7 @@ pub enum FieldKey {
     /// why they are the one key whose value comes from outside
     /// `project.timeline`.
     Crop(crate::editor_crop::CropField),
+    SensitivePhrase,
 }
 
 impl FieldKey {
@@ -2842,11 +2843,15 @@ impl EditorWindow {
             return;
         }
         let input = cx.new(|cx| {
-            if key.multi_line() {
+            let mut input = if key.multi_line() {
                 ui::TextInputState::multi_line(window, cx)
             } else {
                 ui::TextInputState::single_line(window, cx)
+            };
+            if key == FieldKey::SensitivePhrase {
+                input.set_placeholder(tr::editor::panel::mask::scan_phrase_placeholder());
             }
+            input
         });
         self.push_text_subscription(cx.subscribe_in(
             &input,
@@ -3029,6 +3034,16 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if key == FieldKey::SensitivePhrase {
+            if matches!(event, ui::TextInputEvent::Confirmed)
+                && let Some(input) = self.field(key).cloned()
+            {
+                let phrase = input.read(cx).text().to_string();
+                self.add_sensitive_phrase(&phrase, cx);
+                input.update(cx, |input, cx| input.set_text("", cx));
+            }
+            return;
+        }
         match event {
             ui::TextInputEvent::Changed => {
                 self.begin_field_edit(key);
@@ -4275,14 +4290,27 @@ impl EditorWindow {
                 cx,
                 |this, index, cx| this.render_audio_panel(index, cx),
             ),
-            TrackKind::Mask => self.stacked_panel(
-                "mask",
-                "mask",
-                Some(crate::style_presets::PresetKind::Mask),
-                count(timeline.mask_segments.len()),
-                cx,
-                |this, index, cx| this.render_mask_panel(index, cx),
-            ),
+            TrackKind::Mask => {
+                let indices = count(timeline.mask_segments.len());
+                let mut column = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.))
+                    .child(self.panel_header("mask", "mask", indices.len(), cx))
+                    .child(self.panel_card(self.render_sensitive_scan(cx)))
+                    .children((!indices.is_empty()).then(|| {
+                        self.render_style_presets_bar(
+                            crate::style_presets::PresetKind::Mask,
+                            &indices,
+                            cx,
+                        )
+                    }));
+                for index in indices {
+                    let content = self.render_mask_panel(index, cx);
+                    column = column.child(self.panel_card(content));
+                }
+                column.into_any_element()
+            }
             TrackKind::Shape => self.stacked_panel(
                 "shape",
                 "shape",
@@ -8434,6 +8462,7 @@ impl EditorWindow {
                             fields.push(FieldKey::KeyboardEnd(index));
                         }
                     }
+                    TrackKind::Mask => fields.push(FieldKey::SensitivePhrase),
                     _ => {}
                 }
             }

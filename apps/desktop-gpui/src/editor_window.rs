@@ -1568,6 +1568,8 @@ pub struct EditorWindow {
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
     pub(crate) audio_levels: Option<Arc<cap_rendering::AudioLevels>>,
+    pub(crate) sensitive_scan: Option<crate::editor_sensitive_scan::SensitiveScanJob>,
+    pub(crate) sensitive_phrases: Vec<String>,
     /// Held from the window opening until it gives up its engine, so the
     /// library refuses to delete the project from under an open editor.
     open_project: Option<crate::library::ProjectOpenInEditor>,
@@ -2378,6 +2380,8 @@ impl EditorWindow {
             frame_layout: None,
             instance: None,
             audio_levels: None,
+            sensitive_scan: None,
+            sensitive_phrases: Vec::new(),
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
