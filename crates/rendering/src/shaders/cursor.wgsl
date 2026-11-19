@@ -64,14 +64,27 @@ fn cursor_velocity_uv() -> vec2<f32> {
     return raw_velocity_uv * min(1.0, MAX_CURSOR_BLUR_UV / raw_vel_len);
 }
 
+// An offset on the frame (output px, y down) in the sprite's own UV, through
+// the inverse of the vertex transform, so the screen's blur keeps its
+// direction however the cursor tilts.
+fn px_to_sprite_uv(offset: vec2<f32>) -> vec2<f32> {
+    let size = max(uniforms.position_size.zw, vec2<f32>(1.0));
+    let angle = clamp(uniforms.rotation_params.z, -MAX_ROTATION_RADIANS, MAX_ROTATION_RADIANS)
+        + uniforms.rotation_params.y;
+    let s = sin(angle);
+    let c = cos(angle);
+    return vec2<f32>(
+        c * offset.x / size.x - s * offset.y / size.y,
+        s * offset.x / size.x + c * offset.y / size.y
+    );
+}
+
 // The screen's directional smear in sprite UV; zero unless it is moving.
 fn screen_move_uv() -> vec2<f32> {
-    let cursor_size = uniforms.position_size.zw;
-    if (uniforms.screen_blur.x < 0.5 || uniforms.screen_blur.x >= 1.5
-        || cursor_size.x <= 0.0 || cursor_size.y <= 0.0) {
+    if (uniforms.screen_blur.x < 0.5 || uniforms.screen_blur.x >= 1.5) {
         return vec2<f32>(0.0, 0.0);
     }
-    return uniforms.screen_blur.yz / cursor_size;
+    return px_to_sprite_uv(uniforms.screen_blur.yz);
 }
 
 fn rotate_point(p: vec2<f32>, center: vec2<f32>, angle: f32) -> vec2<f32> {
@@ -99,7 +112,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     // screen's smear can carry it.
     let blur_uv = cursor_velocity_uv();
     let screen_uv = screen_move_uv();
-    let reach_uv = uniforms.screen_reach.x / max(cursor_size, vec2<f32>(1.0));
+    // Rotation mixes the axes, so a zoom's reach widens both by the larger.
+    let reach_uv = vec2<f32>(uniforms.screen_reach.x / max(min(cursor_size.x, cursor_size.y), 1.0));
     let uv_min = min(vec2<f32>(0.0), -blur_uv) + min(vec2<f32>(0.0), -screen_uv) - reach_uv;
     let uv_max = vec2<f32>(1.0) + max(vec2<f32>(0.0), -blur_uv)
         + max(vec2<f32>(0.0), -screen_uv) + reach_uv;
@@ -221,6 +235,56 @@ fn apply_color_grade(color: vec4<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * color.a, color.a);
 }
 
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let velocity_uv = cursor_velocity_uv();
+    let opacity = uniforms.motion_vector_strength.w;
+    let p = input.position.xy;
+    let mode = uniforms.screen_blur.x;
+
+    // The cursor rides inside the screen, so the screen's blur lands on it
+    // too, over the cursor's own: a pan smears it along the pan, a zoom
+    // pulls it toward the zoom centre. Each of the screen's taps is clipped
+    // to the card where that tap lands, as the screen's own content is.
+    var color = vec4<f32>(0.0);
+    if (mode < 0.5) {
+        color = own_blurred(input.uv, velocity_uv) * screen_bounds_mask(p);
+    } else if (mode < 1.5) {
+        let smear_px = uniforms.screen_blur.yz;
+        color = own_blurred(input.uv, velocity_uv) * screen_bounds_mask(p) * 2.0;
+        for (var i = 1; i < 20; i = i + 1) {
+            let offset_px = smear_px * (f32(i) / 20.0);
+            color += own_blurred(input.uv + px_to_sprite_uv(offset_px), velocity_uv)
+                * screen_bounds_mask(p + offset_px);
+        }
+        color /= 21.0;
+    } else {
+        let card = uniforms.screen_card;
+        let card_size = max(card.zw, vec2<f32>(1.0));
+        let dir = uniforms.screen_blur.yz - (p - card.xy) / card_size;
+        let dist = length(dir);
+        let amount = min(uniforms.screen_blur.w, 1.0);
+        if (dist < 1e-4 || amount < 1e-4) {
+            color = own_blurred(input.uv, velocity_uv) * screen_bounds_mask(p);
+        } else {
+            let ray_px = dir / dist * min(dist * amount, MAX_ZOOM_RAY_UV) * card_size;
+            let dither = interleaved_noise(p);
+            var weight_sum = 0.0;
+            for (var i = 0; i < 13; i = i + 1) {
+                let percent = (f32(i) + dither) / 13.0;
+                let weight = 4.0 * (percent - percent * percent);
+                let offset_px = ray_px * percent;
+                color += own_blurred(input.uv + px_to_sprite_uv(offset_px), velocity_uv)
+                    * screen_bounds_mask(p + offset_px) * weight;
+                weight_sum += weight;
+            }
+            color /= max(weight_sum, 1e-4);
+        }
+    }
+
+    return apply_color_grade(color * opacity, p);
+}
+
 // Same ceiling as the display's radial blur (composite-video-frame.wgsl).
 const MAX_ZOOM_RAY_UV: f32 = 0.10;
 
@@ -243,48 +307,3 @@ fn own_blurred(uv: vec2<f32>, velocity_uv: vec2<f32>) -> vec4<f32> {
     return color / 21.0;
 }
 
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let velocity_uv = cursor_velocity_uv();
-    let opacity = uniforms.motion_vector_strength.w * screen_bounds_mask(input.position.xy);
-    let cursor_size = max(uniforms.position_size.zw, vec2<f32>(1.0));
-    let mode = uniforms.screen_blur.x;
-
-    // The cursor rides inside the screen, so the screen's blur lands on it
-    // too, over the cursor's own: a pan smears it along the pan, a zoom
-    // pulls it toward the zoom centre.
-    var color = vec4<f32>(0.0);
-    if (mode < 0.5) {
-        color = own_blurred(input.uv, velocity_uv);
-    } else if (mode < 1.5) {
-        let screen_uv = screen_move_uv();
-        color = own_blurred(input.uv, velocity_uv) * 2.0;
-        for (var i = 1; i < 20; i = i + 1) {
-            color += own_blurred(input.uv + screen_uv * (f32(i) / 20.0), velocity_uv);
-        }
-        color /= 21.0;
-    } else {
-        let card = uniforms.screen_card;
-        let card_size = max(card.zw, vec2<f32>(1.0));
-        let p = input.position.xy;
-        let dir = uniforms.screen_blur.yz - (p - card.xy) / card_size;
-        let dist = length(dir);
-        let amount = min(uniforms.screen_blur.w, 1.0);
-        if (dist < 1e-4 || amount < 1e-4) {
-            color = own_blurred(input.uv, velocity_uv);
-        } else {
-            let ray_px = dir / dist * min(dist * amount, MAX_ZOOM_RAY_UV) * card_size;
-            let dither = interleaved_noise(p);
-            var weight_sum = 0.0;
-            for (var i = 0; i < 13; i = i + 1) {
-                let percent = (f32(i) + dither) / 13.0;
-                let weight = 4.0 * (percent - percent * percent);
-                color += own_blurred(input.uv + ray_px * percent / cursor_size, velocity_uv) * weight;
-                weight_sum += weight;
-            }
-            color /= max(weight_sum, 1e-4);
-        }
-    }
-
-    return apply_color_grade(color * opacity, input.position.xy);
-}
