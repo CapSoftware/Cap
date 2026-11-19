@@ -46,6 +46,7 @@ async fn fixture(screen: XY<u32>) -> Fixture {
             project_styles: ProjectStyleCache::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
+            audio_levels: Default::default(),
         },
         screen,
     }
