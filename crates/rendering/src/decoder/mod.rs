@@ -945,6 +945,11 @@ pub fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
         .round() as u32
 }
 
+/// The largest frame, in pixels, that takes the full-chroma conversion and
+/// that an import keeps unconverted: the media server's decode limit, which
+/// fits 8K in either orientation. Larger frames convert as they always have.
+pub const FULL_CHROMA_MAX_PIXELS: usize = 40_000_000;
+
 pub const FRAME_CACHE_SIZE: usize = 90;
 const DEFAULT_MAX_FALLBACK_DISTANCE: u32 = 90;
 

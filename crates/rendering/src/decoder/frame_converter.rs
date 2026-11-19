@@ -15,7 +15,7 @@ pub(crate) struct PlanePool {
 }
 
 const MAX_SPARE_PACKED_PLANES: usize = 2;
-const MAX_SPARE_PLANE_BYTES: usize = cap_video_decode::ffmpeg::MAX_DECODE_PIXELS as usize * 4;
+const MAX_SPARE_PLANE_BYTES: usize = super::FULL_CHROMA_MAX_PIXELS * 4;
 
 impl PlanePool {
     pub(crate) fn new() -> Self {
@@ -117,6 +117,7 @@ impl FrameConverter {
         // swscale's exact 4:4:4 path took more time than decoding the frame.
         if frame.format() == format::Pixel::YUV444P
             && frame.color_range() != ffmpeg::color::Range::JPEG
+            && within_full_chroma_limit(frame.width(), frame.height())
         {
             let (width, height) = (frame.width() as usize, frame.height() as usize);
             let mut output = self.planes.take(width * height * 4);
@@ -180,13 +181,9 @@ impl FrameConverter {
             // FAST_BILINEAR makes swscale skip work on chroma it treats as
             // subsampled, which blurs and shifts full-resolution chroma
             // (a 4:4:4 import drops from 53.9 to 35.8 dB against its source).
-            // BILINEAR converts it exactly; other layouts keep the flags they
-            // always had.
-            let flags = if format_has_full_chroma(input_format) {
-                software::scaling::Flags::BILINEAR
-            } else {
-                software::scaling::Flags::FAST_BILINEAR
-            };
+            // BILINEAR converts it exactly; other layouts, and frames above
+            // the full-chroma limit, keep the flags they always had.
+            let flags = scaler_flags(input_format, width, height);
             let mut context = software::scaling::Context::get(
                 input_format,
                 width,
@@ -215,6 +212,18 @@ impl FrameConverter {
         if self.rgba_frame.width() != width || self.rgba_frame.height() != height {
             self.rgba_frame = frame::Video::new(format::Pixel::RGBA, width, height);
         }
+    }
+}
+
+fn within_full_chroma_limit(width: u32, height: u32) -> bool {
+    width as usize * height as usize <= super::FULL_CHROMA_MAX_PIXELS
+}
+
+fn scaler_flags(input_format: format::Pixel, width: u32, height: u32) -> software::scaling::Flags {
+    if format_has_full_chroma(input_format) && within_full_chroma_limit(width, height) {
+        software::scaling::Flags::BILINEAR
+    } else {
+        software::scaling::Flags::FAST_BILINEAR
     }
 }
 
@@ -458,6 +467,37 @@ mod tests {
         let taken = pool.take(200);
         assert!(taken.capacity() >= 200);
         assert_eq!(pool.spare_count(), 1);
+    }
+
+    #[test]
+    fn full_chroma_frames_above_the_limit_convert_as_before() {
+        ffmpeg::init().unwrap();
+        use software::scaling::Flags;
+        assert_eq!(
+            scaler_flags(format::Pixel::YUV444P, 8000, 5000),
+            Flags::BILINEAR
+        );
+        assert_eq!(
+            scaler_flags(format::Pixel::YUV444P, 8002, 5000),
+            Flags::FAST_BILINEAR
+        );
+        assert_eq!(
+            scaler_flags(format::Pixel::YUV420P, 8000, 5000),
+            Flags::FAST_BILINEAR
+        );
+        for ((width, height), fast_path) in [((8000, 5000), true), ((8002, 5000), false)] {
+            let mut converter = FrameConverter::new();
+            let mut source = frame::Video::new(format::Pixel::YUV444P, width, height);
+            source.set_color_range(ffmpeg::color::Range::MPEG);
+            for plane in 0..3 {
+                source
+                    .data_mut(plane)
+                    .fill(if plane == 0 { 120 } else { 128 });
+            }
+            let rgba = converter.convert(&mut source);
+            assert_eq!(rgba.len(), width as usize * height as usize * 4);
+            assert_eq!(converter.scaler.is_none(), fast_path, "{width}x{height}");
+        }
     }
 
     #[test]
