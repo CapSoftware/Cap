@@ -24,7 +24,7 @@ pub(crate) fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input
 }
 
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn header_video_metadata(path: &Path) -> Option<(u32, u32, crate::cpu_yuv::YuvMatrix)> {
+pub(crate) fn header_video_metadata(path: &Path) -> Option<HeaderVideoMetadata> {
     let mut input = open_headers(path)?;
     let stream = input.streams().best(ffmpeg::media::Type::Video)?;
     let stream_index = stream.index();
@@ -40,6 +40,7 @@ pub(crate) fn header_video_metadata(path: &Path) -> Option<(u32, u32, crate::cpu
         return None;
     }
 
+    let chroma_is_420 = cap_video_decode::ffmpeg::chroma_is_420(video.format(), raw_parameters);
     let mut color_space = video.color_space();
     if color_space == ffmpeg::util::color::Space::Unspecified
         && matches!(
@@ -51,11 +52,21 @@ pub(crate) fn header_video_metadata(path: &Path) -> Option<(u32, u32, crate::cpu
             first_packet_color_space(&mut input, stream_index, &mut video).unwrap_or(color_space);
     }
 
-    Some((
-        video.width(),
-        video.height(),
-        crate::cpu_yuv::YuvMatrix::from_color_space(color_space),
-    ))
+    Some(HeaderVideoMetadata {
+        width: video.width(),
+        height: video.height(),
+        matrix: crate::cpu_yuv::YuvMatrix::from_color_space(color_space),
+        chroma_is_420,
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct HeaderVideoMetadata {
+    pub width: u32,
+    pub height: u32,
+    pub matrix: crate::cpu_yuv::YuvMatrix,
+    pub chroma_is_420: Option<bool>,
 }
 
 /// Without a `colr` atom the header leaves the matrix unspecified even when the
@@ -882,7 +893,7 @@ mod ordinary_media_access_tests {
         write_test_video(&mpeg4_path, ffmpeg::codec::Id::MPEG4);
 
         assert_eq!(
-            header_video_metadata(&h264_path).map(|(width, height, _)| (width, height)),
+            header_video_metadata(&h264_path).map(|video| (video.width, video.height)),
             Some((64, 48))
         );
         assert_eq!(header_video_metadata(&mpeg4_path), None);
@@ -945,11 +956,13 @@ mod ordinary_media_access_tests {
                 "{name} full probe"
             );
 
+            let video = header_video_metadata(&path).unwrap();
             assert_eq!(
-                header_video_metadata(&path),
-                Some((64, 48, expected)),
+                (video.width, video.height, video.matrix),
+                (64, 48, expected),
                 "{name}"
             );
+            assert_eq!(video.chroma_is_420, Some(true), "{name}");
         }
     }
 
