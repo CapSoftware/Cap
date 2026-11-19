@@ -10,7 +10,8 @@ use std::{
 };
 
 use cap_editor::{
-    AudioRenderer, ExportAudioPreparation, ExportAudioRenderer, audio_segment_from_decoded,
+    AudioRenderer, ExportAudioPreparation, ExportAudioRenderer, InputSounds,
+    audio_segment_from_decoded,
 };
 use cap_enc_ffmpeg::mp3::Mp3Encoder;
 use cap_project::ProjectConfiguration;
@@ -167,7 +168,8 @@ pub async fn export_audio(
         AudioSource::Streaming(Box::new(
             preparation
                 .finish(&segments)
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| error.to_string())?
+                .with_input_sounds(InputSounds::for_segments(&project, &segments)),
         ))
     } else {
         let segments =
@@ -193,7 +195,9 @@ pub async fn export_audio(
             ));
         }
         let music = cap_editor::load_music_tracks_uncached(&project, &recording_meta.project_path);
-        let mut renderer = AudioRenderer::new(audio_segments).with_music(music);
+        let mut renderer = AudioRenderer::new(audio_segments)
+            .with_music(music)
+            .with_input_sounds(InputSounds::for_segments(&project, &segments));
         renderer.set_playhead(0.0, &project);
         AudioSource::Renderer(Box::new(renderer))
     };
