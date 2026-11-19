@@ -38,7 +38,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use cap_project::{
@@ -46,10 +46,10 @@ use cap_project::{
     DisplayNotch, NotchConfiguration, PaddingMode, ProjectConfiguration, ShadowConfiguration,
 };
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseDownEvent, MouseMoveEvent, ParentElement, Pixels, RenderImage, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window, canvas, div, img,
-    linear_color_stop, linear_gradient, prelude::FluentBuilder, px, svg,
+    AnyElement, Bounds, Context, FontWeight, Hsla, InteractiveElement, IntoElement, MouseDownEvent,
+    MouseMoveEvent, ParentElement, Pixels, RenderImage, SharedString, StatefulInteractiveElement,
+    Styled, StyledImage, Window, canvas, div, img, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder, px, svg,
 };
 
 use crate::{
