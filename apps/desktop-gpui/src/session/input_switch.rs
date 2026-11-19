@@ -1,6 +1,8 @@
 //! Switching the microphone or camera while a recording runs.
 //!
-//! Studio records each input as its own track per segment, so a switch cuts
+//! Studio records each input as its own track per segment. A camera switch
+//! moves the running segment's camera track to the new camera, so the screen
+//! and microphone record straight through it. Any other Studio switch cuts
 //! the segment: pause, hand the actor the new device's lock, resume. The
 //! time in between is counted as paused, so the bar's timer matches what
 //! was recorded. Instant has one continuous audio track: the new microphone
@@ -382,15 +384,31 @@ impl RecordingSession {
             return;
         }
         let was_paused = self.is_paused();
-        if !was_paused && self.paused_since.is_none() {
-            let now = Instant::now();
-            self.paused_since = Some(now);
-            self.input_switch.timer_frozen_at = Some(now);
+        let in_place = !was_paused
+            && switches_camera_in_place(&request, &previous)
+            && self.input_switch.already_selected(InputKind::Camera)
+            && camera_stays_off_screen(cx);
+        if !in_place {
+            self.freeze_timer_for_switch(was_paused);
         }
         let requested = request.clone();
         cx.spawn(async move |this, cx| {
-            let outcome =
-                studio_switch(&this, cx, handle, request, previous, was_paused, generation).await;
+            let swapped = if in_place {
+                studio_camera_swap(&this, cx, &handle, &request, &previous, generation).await
+            } else {
+                None
+            };
+            let outcome = match swapped {
+                Some(outcome) => outcome,
+                None => {
+                    if in_place {
+                        this.update(cx, |this, _| this.freeze_timer_for_switch(was_paused))
+                            .ok();
+                    }
+                    studio_switch(&this, cx, handle, request, previous, was_paused, generation)
+                        .await
+                }
+            };
             this.update(cx, |this, cx| {
                 if generation != this.recording_generation {
                     return;
@@ -423,6 +441,16 @@ impl RecordingSession {
             .ok();
         })
         .detach();
+    }
+
+    /// A switch that pauses the recording stops the bar's timer for as long
+    /// as it runs, so the timer matches what was recorded.
+    fn freeze_timer_for_switch(&mut self, was_paused: bool) {
+        if !was_paused && self.paused_since.is_none() {
+            let now = Instant::now();
+            self.paused_since = Some(now);
+            self.input_switch.timer_frozen_at = Some(now);
+        }
     }
 
     /// Restart reuses the config the recording started with, so a switched
@@ -460,6 +488,21 @@ impl RecordingSession {
 /// its recording ended while it ran.
 fn switch_is_current(phase: Phase, current: u64, generation: u64) -> bool {
     generation == current && matches!(phase, Phase::Recording { .. })
+}
+
+/// A camera to camera switch keeps the segment recording. Turning the camera
+/// on or off changes which tracks the segment has, so that cuts it.
+fn switches_camera_in_place(request: &InputRequest, previous: &InputRequest) -> bool {
+    matches!(
+        (request, previous),
+        (InputRequest::Camera(Some(_)), InputRequest::Camera(Some(_)))
+    )
+}
+
+/// The bubble is left out of the screen capture a segment starts with, so a
+/// segment that keeps recording through a switch must not get a new one.
+fn camera_stays_off_screen(cx: &gpui::App) -> bool {
+    cfg!(not(target_os = "macos")) || crate::app_windows::camera_window_open(cx)
 }
 
 /// Points the preview at `selection` and brings the bubble back for a camera.
@@ -526,32 +569,10 @@ async fn studio_switch(
         }
     };
     if detached && current(cx) {
-        match attach_selection(this, cx, &handle, &request).await {
-            Ok(()) => {
-                attached = true;
-                holds_selection = Some(true);
-            }
-            Err(attach_error) => {
-                tracing::warn!(
-                    device = %request.device_label(),
-                    "studio input switch failed, restoring the previous input: {attach_error:#}"
-                );
-                error = Some(tr::controls::settings::switch_failed(
-                    &request.device_label(),
-                ));
-                holds_selection = Some(false);
-                if current(cx) {
-                    match attach_selection(this, cx, &handle, &previous).await {
-                        Ok(()) => holds_selection = Some(true),
-                        Err(restore_error) => {
-                            tracing::error!(
-                                "restoring the previous input failed: {restore_error:#}"
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        let attach = attach_or_restore(this, cx, &handle, &request, &previous, generation).await;
+        attached = attach.attached;
+        holds_selection = Some(attach.holds_selection);
+        error = error.or(attach.error);
     }
 
     if was_paused || !current(cx) {
@@ -592,8 +613,100 @@ async fn studio_switch(
     }
 }
 
-/// Points the app's feed at `request` and hands the paused Studio actor its
-/// lock. `None` leaves the input off for the next segments.
+/// Moves the running segment's camera track to the requested camera without
+/// pausing, so the screen and microphone never stop. `None`, with nothing
+/// changed, when the segment cannot switch in place.
+async fn studio_camera_swap(
+    this: &WeakEntity<RecordingSession>,
+    cx: &mut AsyncApp,
+    handle: &cap_recording::studio_recording::ActorHandle,
+    request: &InputRequest,
+    previous: &InputRequest,
+    generation: u64,
+) -> Option<StudioSwitchOutcome> {
+    let release = handle.clone();
+    if let Err(error) =
+        gpui_tokio::Tokio::spawn_result(
+            cx,
+            async move { release.release_camera_for_switch().await },
+        )
+        .await
+    {
+        tracing::info!("switching the camera at a segment boundary: {error:#}");
+        return None;
+    }
+    let mut outcome = StudioSwitchOutcome {
+        error: None,
+        paused: Some(false),
+        detached: true,
+        attached: false,
+        holds_selection: None,
+    };
+    let current = this
+        .read_with(cx, |session, _| session.still_switching(generation))
+        .unwrap_or(false);
+    if current {
+        let attach = attach_or_restore(this, cx, handle, request, previous, generation).await;
+        outcome.error = attach.error;
+        outcome.attached = attach.attached;
+        outcome.holds_selection = Some(attach.holds_selection);
+    }
+    Some(outcome)
+}
+
+struct AttachOutcome {
+    error: Option<String>,
+    attached: bool,
+    holds_selection: bool,
+}
+
+async fn attach_or_restore(
+    this: &WeakEntity<RecordingSession>,
+    cx: &mut AsyncApp,
+    handle: &cap_recording::studio_recording::ActorHandle,
+    request: &InputRequest,
+    previous: &InputRequest,
+    generation: u64,
+) -> AttachOutcome {
+    let attach_error = match attach_selection(this, cx, handle, request).await {
+        Ok(()) => {
+            return AttachOutcome {
+                error: None,
+                attached: true,
+                holds_selection: true,
+            };
+        }
+        Err(error) => error,
+    };
+    tracing::warn!(
+        device = %request.device_label(),
+        "studio input switch failed, restoring the previous input: {attach_error:#}"
+    );
+    let mut outcome = AttachOutcome {
+        error: Some(tr::controls::settings::switch_failed(
+            &request.device_label(),
+        )),
+        attached: false,
+        holds_selection: false,
+    };
+    let current = this
+        .read_with(cx, |session, _| session.still_switching(generation))
+        .unwrap_or(false);
+    if current {
+        match attach_selection(this, cx, handle, previous).await {
+            Ok(()) => outcome.holds_selection = true,
+            Err(restore_error) => {
+                tracing::error!("restoring the previous input failed: {restore_error:#}");
+            }
+        }
+    }
+    outcome
+}
+
+/// Points the app's feed at `request` and hands the Studio actor its lock:
+/// a paused actor records it from the next segment, a camera track released
+/// for an in-place switch from now. `None` leaves the input off for the next
+/// segments.
 async fn attach_selection(
     this: &WeakEntity<RecordingSession>,
     cx: &mut AsyncApp,
