@@ -625,6 +625,17 @@ impl ExportUi {
         true
     }
 
+    /// Enhance, kept with the rest of the export settings.
+    pub(crate) fn set_enhance_quality(&mut self, on: bool) {
+        self.enhance_quality = on;
+        self.persist();
+    }
+
+    /// [`Self::set_enhance_quality`] with no export page open.
+    pub(crate) fn save_enhance_quality(on: bool) {
+        Self::load().set_enhance_quality(on);
+    }
+
     fn persist(&mut self) {
         self.remember_video_format();
         let prefs = self.preferences();
@@ -911,6 +922,8 @@ impl EditorWindow {
             self.toggle_play_from_crop(cx);
         }
         let mut ui = ExportUi::load();
+        // The editor's Enhance switch is the export's.
+        ui.enhance_quality = self.preview_enhance;
         ui.source = self.export_source();
         if let Ok(meta) = RecordingMeta::load_for_project(&self.project_path) {
             self.sharing = meta.sharing;
@@ -3784,10 +3797,8 @@ impl EditorWindow {
             tr::editor::export::enhance::description(),
             ui.enhance_quality,
             cx.listener(|this, _, window, cx| {
-                if let Some(ui) = this.export.as_mut() {
-                    ui.enhance_quality = !ui.enhance_quality;
-                    ui.persist();
-                }
+                let on = !this.export.as_ref().is_some_and(|ui| ui.enhance_quality);
+                this.set_enhance(on, window, cx);
                 this.refresh_export_preview(window, cx);
                 cx.notify();
             }),

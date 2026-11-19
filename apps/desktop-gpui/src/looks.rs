@@ -6,9 +6,9 @@
 //! timeline, camera, audio and everything else in the project as it is.
 
 use cap_project::{
-    BackgroundSource, BorderConfiguration, CornerStyle, CursorAnimationStyle, FrameConfiguration,
-    FrameStyle, FrameTheme, KeyboardData, KeyboardSettings, PaddingMode, ProjectConfiguration,
-    ScreenMovementSpring, ShadowConfiguration,
+    AnimatedGradientConfig, BackgroundSource, BorderConfiguration, CornerStyle,
+    CursorAnimationStyle, CursorType, FrameConfiguration, FrameStyle, FrameTheme, KeyboardData,
+    KeyboardSettings, PaddingMode, ProjectConfiguration, ScreenMovementSpring, ShadowConfiguration,
 };
 
 use crate::i18n::tr;
@@ -23,6 +23,39 @@ pub enum LookBackground {
         angle: u16,
     },
     Color([u16; 3]),
+    /// An animated background from the built-in templates, by name.
+    Animated(&'static str),
+}
+
+/// The cursor shapes a look draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookCursorStyle {
+    Recorded,
+    MacOS,
+    Tahoe,
+    Windows,
+}
+
+impl LookCursorStyle {
+    pub fn cursor_type(self) -> CursorType {
+        match self {
+            Self::Recorded => CursorType::Auto,
+            Self::MacOS => CursorType::MacOS,
+            Self::Tahoe => CursorType::MacOSTahoe,
+            Self::Windows => CursorType::Windows,
+        }
+    }
+}
+
+/// How a look draws the cursor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LookCursor {
+    pub style: LookCursorStyle,
+    /// Percent of the recorded size.
+    pub size: u32,
+    pub ripple: bool,
+    /// Motion blur on the cursor and the screen, 0 to 1.
+    pub motion_blur: f32,
 }
 
 /// The key-press keys a look uses; `None` style keeps the platform's own.
@@ -48,6 +81,7 @@ pub struct Look {
     pub frame: Option<(FrameStyle, FrameTheme)>,
     pub zoom: ScreenMovementSpring,
     pub cursor: CursorAnimationStyle,
+    pub pointer: LookCursor,
     pub keys: LookKeys,
     /// The caption preset the look sets when the project has captions.
     pub captions: &'static str,
@@ -62,10 +96,10 @@ pub static LOOKS: [Look; 8] = [
         id: "smooth-demo",
         name: tr::editor::window::looks::smooth_demo,
         description: tr::editor::window::looks::smooth_demo_description,
-        background: LookBackground::Wallpaper("macOS/sonoma-clouds"),
-        padding: 12.0,
-        rounding: 9.0,
-        shadow: (45.0, 0.0, 55.0, 60.0),
+        background: LookBackground::Animated("Cool Candy"),
+        padding: 14.0,
+        rounding: 11.0,
+        shadow: (50.0, 0.0, 55.0, 60.0),
         border: None,
         frame: None,
         zoom: ScreenMovementSpring {
@@ -75,6 +109,12 @@ pub static LOOKS: [Look; 8] = [
             start_zooms_early: true,
         },
         cursor: CursorAnimationStyle::Smooth,
+        pointer: LookCursor {
+            style: LookCursorStyle::MacOS,
+            size: 150,
+            ripple: true,
+            motion_blur: 1.0,
+        },
         keys: LookKeys {
             style: Some("macos"),
             theme: "dark",
@@ -94,6 +134,12 @@ pub static LOOKS: [Look; 8] = [
         frame: Some((FrameStyle::MacOS, FrameTheme::Light)),
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
+        pointer: LookCursor {
+            style: LookCursorStyle::Tahoe,
+            size: 120,
+            ripple: false,
+            motion_blur: 0.6,
+        },
         keys: LookKeys {
             style: Some("macos"),
             theme: "light",
@@ -106,13 +152,19 @@ pub static LOOKS: [Look; 8] = [
         name: tr::editor::window::looks::midnight,
         description: tr::editor::window::looks::midnight_description,
         background: LookBackground::Wallpaper("dark/3"),
-        padding: 9.0,
-        rounding: 8.0,
-        shadow: (65.0, 10.0, 70.0, 60.0),
+        padding: 16.0,
+        rounding: 14.0,
+        shadow: (75.0, 10.0, 75.0, 70.0),
         border: Some((1.5, 14.0)),
         frame: None,
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
+        pointer: LookCursor {
+            style: LookCursorStyle::MacOS,
+            size: 130,
+            ripple: true,
+            motion_blur: 1.0,
+        },
         keys: LookKeys {
             style: Some("macos"),
             theme: "dark",
@@ -125,13 +177,19 @@ pub static LOOKS: [Look; 8] = [
         name: tr::editor::window::looks::minimal,
         description: tr::editor::window::looks::minimal_description,
         background: LookBackground::Color([245, 245, 247]),
-        padding: 6.0,
-        rounding: 4.0,
-        shadow: (18.0, 0.0, 30.0, 30.0),
+        padding: 3.0,
+        rounding: 2.0,
+        shadow: (12.0, 0.0, 25.0, 20.0),
         border: None,
         frame: None,
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
+        pointer: LookCursor {
+            style: LookCursorStyle::Recorded,
+            size: 100,
+            ripple: false,
+            motion_blur: 0.3,
+        },
         keys: LookKeys {
             style: None,
             theme: "light",
@@ -143,14 +201,10 @@ pub static LOOKS: [Look; 8] = [
         id: "launch-day",
         name: tr::editor::window::looks::launch_day,
         description: tr::editor::window::looks::launch_day_description,
-        background: LookBackground::Gradient {
-            from: [255, 95, 109],
-            to: [255, 195, 113],
-            angle: 135,
-        },
-        padding: 11.0,
-        rounding: 12.0,
-        shadow: (60.0, 8.0, 60.0, 60.0),
+        background: LookBackground::Animated("Good Energy"),
+        padding: 18.0,
+        rounding: 16.0,
+        shadow: (70.0, 8.0, 65.0, 70.0),
         border: None,
         frame: None,
         zoom: ScreenMovementSpring {
@@ -160,6 +214,12 @@ pub static LOOKS: [Look; 8] = [
             start_zooms_early: false,
         },
         cursor: CursorAnimationStyle::Fast,
+        pointer: LookCursor {
+            style: LookCursorStyle::MacOS,
+            size: 170,
+            ripple: true,
+            motion_blur: 1.0,
+        },
         keys: LookKeys {
             style: Some("macos"),
             theme: "dark",
@@ -184,6 +244,12 @@ pub static LOOKS: [Look; 8] = [
             start_zooms_early: true,
         },
         cursor: CursorAnimationStyle::Slow,
+        pointer: LookCursor {
+            style: LookCursorStyle::MacOS,
+            size: 200,
+            ripple: true,
+            motion_blur: 0.5,
+        },
         keys: LookKeys {
             style: None,
             theme: "light",
@@ -207,6 +273,12 @@ pub static LOOKS: [Look; 8] = [
         frame: Some((FrameStyle::Browser, FrameTheme::Light)),
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
+        pointer: LookCursor {
+            style: LookCursorStyle::Tahoe,
+            size: 120,
+            ripple: true,
+            motion_blur: 0.8,
+        },
         keys: LookKeys {
             style: None,
             theme: "light",
@@ -223,13 +295,19 @@ pub static LOOKS: [Look; 8] = [
             to: [206, 193, 160],
             angle: 145,
         },
-        padding: 10.0,
-        rounding: 5.0,
+        padding: 12.0,
+        rounding: 4.0,
         shadow: (35.0, 0.0, 45.0, 35.0),
         border: None,
         frame: None,
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
+        pointer: LookCursor {
+            style: LookCursorStyle::Windows,
+            size: 130,
+            ripple: false,
+            motion_blur: 0.6,
+        },
         keys: LookKeys {
             style: Some("mechanical"),
             theme: "retro",
@@ -266,6 +344,11 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
         LookBackground::Color(value) => {
             background.source = BackgroundSource::Color { value, alpha: 255 };
         }
+        LookBackground::Animated(name) => {
+            if let Some(config) = animated_background(name) {
+                background.source = BackgroundSource::AnimatedGradient { config };
+            }
+        }
     }
     background.blur = 0.0;
     background.padding = look.padding;
@@ -299,6 +382,13 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
 
     next.screen_movement_spring = look.zoom;
 
+    next.cursor
+        .set_cursor_type(look.pointer.style.cursor_type());
+    next.cursor.size = look.pointer.size;
+    next.cursor.ripple.enabled = look.pointer.ripple;
+    // One slider drives both blurs in the editor.
+    next.cursor.motion_blur = look.pointer.motion_blur;
+    next.screen_motion_blur = look.pointer.motion_blur;
     next.cursor.animation_style = look.cursor;
     if let Some(preset) = look.cursor.preset() {
         next.cursor.tension = preset.tension;
@@ -325,6 +415,15 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
     next
 }
 
+/// A built-in animated background, by its template name.
+pub fn animated_background(name: &str) -> Option<AnimatedGradientConfig> {
+    cap_project::animated_gradient_catalog()
+        .templates
+        .into_iter()
+        .find(|template| template.name == name)
+        .map(|template| template.config)
+}
+
 /// Which look the project is wearing: the one whose styling it still has
 /// in every part a look sets.
 pub fn current_look(project: &ProjectConfiguration) -> Option<&'static str> {
@@ -341,9 +440,14 @@ fn look_settings(project: &ProjectConfiguration) -> serde_json::Value {
         "zoom": project.screen_movement_spring,
         "cursor": [
             serde_json::to_value(project.cursor.animation_style).ok(),
-            project.cursor.tension,
-            project.cursor.mass,
-            project.cursor.friction,
+            serde_json::to_value(project.cursor.cursor_type()).ok(),
+            serde_json::json!(project.cursor.tension),
+            serde_json::json!(project.cursor.mass),
+            serde_json::json!(project.cursor.friction),
+            serde_json::json!(project.cursor.size),
+            serde_json::json!(project.cursor.ripple.enabled),
+            serde_json::json!(project.cursor.motion_blur),
+            serde_json::json!(project.screen_motion_blur),
         ],
         "keys": project.keyboard.as_ref().map(|keyboard| {
             (keyboard.settings.style.clone(), keyboard.settings.theme.clone())
@@ -371,12 +475,16 @@ mod tests {
     #[test]
     fn every_look_names_a_wallpaper_and_caption_preset_that_exist() {
         for look in &LOOKS {
-            if let LookBackground::Wallpaper(id) = look.background {
-                assert!(
+            match look.background {
+                LookBackground::Wallpaper(id) => assert!(
                     crate::editor_sidebar::WALLPAPER_NAMES.contains(&id),
                     "{}: {id}",
                     look.id
-                );
+                ),
+                LookBackground::Animated(name) => {
+                    assert!(animated_background(name).is_some(), "{}: {name}", look.id)
+                }
+                _ => {}
             }
             assert!(
                 crate::editor_tabs::CAPTION_PRESETS
@@ -396,10 +504,10 @@ mod tests {
         project.cursor.size = 140;
         let look = LOOKS.iter().find(|look| look.id == "launch-day").unwrap();
         let next = apply_look(look, &project);
-        assert_eq!(next.background.padding, 11.0);
+        assert_eq!(next.background.padding, 18.0);
         assert!(matches!(
             next.background.source,
-            BackgroundSource::Gradient { angle: 135, .. }
+            BackgroundSource::AnimatedGradient { .. }
         ));
         assert_eq!(next.screen_movement_spring.stiffness, 280.0);
         assert!(matches!(
@@ -407,9 +515,12 @@ mod tests {
             CursorAnimationStyle::Fast
         ));
         assert_eq!(next.keyboard.as_ref().unwrap().settings.style, "macos");
-        // Untouched: the camera, the cursor's size, whether keys show.
+        // The cursor is part of the look: its style, size and ripple.
+        assert_eq!(next.cursor.cursor_type(), &CursorType::MacOS);
+        assert_eq!(next.cursor.size, 170);
+        assert!(next.cursor.ripple.enabled);
+        // Untouched: the camera and whether keys show.
         assert_eq!(next.camera.size, 33.0);
-        assert_eq!(next.cursor.size, 140);
         assert!(!next.keyboard.as_ref().unwrap().settings.enabled);
         assert_eq!(current_look(&next), Some("launch-day"));
         assert_eq!(current_look(&project), None);
@@ -437,5 +548,25 @@ mod tests {
             FrameConfiguration::active_style(bare.background.frame.as_ref()),
             FrameStyle::None
         );
+    }
+}
+
+#[cfg(test)]
+mod distinct_tests {
+    use super::*;
+
+    /// Every look reads differently at a glance: no two share their
+    /// background, framing and cursor all at once.
+    #[test]
+    fn no_two_looks_look_alike() {
+        for (index, a) in LOOKS.iter().enumerate() {
+            for b in &LOOKS[index + 1..] {
+                let same = a.background == b.background
+                    && a.padding == b.padding
+                    && a.rounding == b.rounding
+                    && a.pointer == b.pointer;
+                assert!(!same, "{} and {}", a.id, b.id);
+            }
+        }
     }
 }

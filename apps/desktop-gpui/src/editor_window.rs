@@ -241,6 +241,78 @@ const POPOVER_WINDOW_INSET: f32 = 8.;
 /// A look in miniature: its background, the recording as a rounded card at
 /// the look's padding with its shadow and frame, and its keys in the
 /// corner.
+/// Every setting a look changes, as (icon, label) chips, worded with the
+/// sidebar's own names for them.
+fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
+    use crate::looks::{LookBackground, LookCursorStyle};
+    use cap_project::FrameStyle;
+    let mut changes = Vec::new();
+    use crate::i18n::tr::editor::sidebar::{layout, source};
+    changes.push(match look.background {
+        LookBackground::Wallpaper(_) => ("icons/image.svg", source::wallpaper().to_string()),
+        LookBackground::Gradient { .. } => ("icons/palette.svg", source::gradient().to_string()),
+        LookBackground::Color(_) => ("icons/palette.svg", source::color().to_string()),
+        LookBackground::Animated(name) => {
+            ("icons/square-play.svg", format!("{} · {name}", source::animated()))
+        }
+    });
+    changes.push(("icons/padding.svg", format!("{} {}%", layout::padding(), look.padding)));
+    changes.push((
+        "icons/corners.svg",
+        format!("{} {}%", layout::rounded_corners(), look.rounding),
+    ));
+    if look.shadow.0 > 0.0 {
+        changes.push((
+            "icons/shadow.svg",
+            format!("{} {}%", tr::editor::sidebar::shadow::title(), look.shadow.0),
+        ));
+    }
+    if look.border.is_some() {
+        changes.push(("icons/square.svg", tr::editor::sidebar::border::title().to_string()));
+    }
+    if let Some((style, _)) = look.frame {
+        let name = match style {
+            FrameStyle::Browser => tr::editor::window::frame::browser().to_string(),
+            FrameStyle::MacOS => "macOS".to_string(),
+            _ => tr::editor::window::frame::heading().to_string(),
+        };
+        changes.push(("icons/app-window.svg", name));
+    }
+    let cursor = match look.pointer.style {
+        LookCursorStyle::MacOS => "macOS".to_string(),
+        LookCursorStyle::Tahoe => "Tahoe".to_string(),
+        LookCursorStyle::Windows => "Windows".to_string(),
+        LookCursorStyle::Recorded => tr::editor::sidebar::cursor::default().to_string(),
+    };
+    changes.push((
+        "icons/mouse-pointer-2.svg",
+        format!("{cursor} {}%", look.pointer.size),
+    ));
+    if look.pointer.ripple {
+        changes.push((
+            "icons/circle.svg",
+            tr::editor::sidebar::cursor::click_ripple().to_string(),
+        ));
+    }
+    changes.push((
+        "icons/bg-blur.svg",
+        format!(
+            "{} {}%",
+            tr::editor::sidebar::layout::motion_blur(),
+            (look.pointer.motion_blur * 100.0).round() as i32
+        ),
+    ));
+    if let Some(style) = look.keys.style {
+        let name = match style {
+            "mechanical" => tr::editor::tabs::keyboard::style_mechanical().to_string(),
+            "macos" => "macOS".to_string(),
+            other => other.to_string(),
+        };
+        changes.push(("icons/keyboard.svg", name));
+    }
+    changes
+}
+
 fn look_preview(
     theme: &crate::theme::Theme,
     look: &crate::looks::Look,
@@ -370,6 +442,16 @@ fn look_preview(
                 gpui::linear_color_stop(rgb(to), 1.),
             )),
             (LookBackground::Color(color), _) => this.bg(rgb(color)),
+            (LookBackground::Animated(name), _) => {
+                match crate::looks::animated_background(name).map(|config| config.color_stops) {
+                    Some(stops) if stops.len() >= 2 => this.bg(gpui::linear_gradient(
+                        135.,
+                        gpui::linear_color_stop(rgb(stops[0].color), 0.),
+                        gpui::linear_color_stop(rgb(stops[stops.len() - 1].color), 1.),
+                    )),
+                    _ => this.bg(Hsla::from(theme.editor.ctl_active)),
+                }
+            }
             _ => this.bg(Hsla::from(theme.editor.ctl_active)),
         })
         .child(window)
@@ -1964,7 +2046,7 @@ pub struct EditorWindow {
     preview_speed: cap_editor::PreviewSpeed,
     /// The transport's Enhance toggle: the paused preview shows the enhanced
     /// frame. Never saved with the project.
-    preview_enhance: bool,
+    pub(crate) preview_enhance: bool,
     /// Compare is held down: the paused preview shows the original.
     preview_comparing: bool,
     pub(crate) tracks: TrackLanes,
@@ -2000,6 +2082,9 @@ pub struct EditorWindow {
     /// of its three dialogs is up. The dialog closes the menu when it opens,
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
+    /// The look shown on the video while its card is hovered, and the
+    /// project to put back when the pointer leaves.
+    look_preview: Option<(usize, ProjectConfiguration)>,
     preset_dialog: Option<PresetDialog>,
     style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
@@ -2650,7 +2735,10 @@ impl EditorWindow {
             shape_clipboard: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             preview_speed: crate::store::GeneralSettings::load().editor_preview_speed,
-            preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance,
+            // Enhance was once two switches, one for the paused preview and
+            // one for exports; either being on turns the one switch on.
+            preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance
+                || crate::editor_export::ExportUi::load().enhance_quality,
             preview_comparing: false,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
@@ -2673,6 +2761,7 @@ impl EditorWindow {
             initial_timeline_rows: None,
             timeline_resize: None,
             presets_menu: None,
+            look_preview: None,
             preset_dialog: None,
             style_presets: style_preset_ui::StylePresetsState::load(),
             caption_sync_signature: None,
@@ -4637,6 +4726,7 @@ impl EditorWindow {
                 || self.preset_dialog.is_some()
                 || self.style_presets.menu_open())
         {
+            self.end_look_preview(cx);
             self.presets_menu = None;
             self.preset_dialog = None;
             self.style_presets.close_menu();
@@ -8836,14 +8926,24 @@ impl EditorWindow {
     }
 
     fn toggle_preview_enhance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.preview_enhance = !self.preview_enhance;
+        self.set_enhance(!self.preview_enhance, window, cx);
+    }
+
+    /// Enhance is one setting: the export and the paused preview follow it
+    /// together, from the toolbar or the export page.
+    pub(crate) fn set_enhance(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_enhance = on;
         self.preview_comparing = false;
         if !crate::store::set_store_setting(
             crate::store::GENERAL_SETTINGS,
             crate::store::EDITOR_PREVIEW_ENHANCE_KEY,
-            serde_json::json!(self.preview_enhance),
+            serde_json::json!(on),
         ) {
-            tracing::warn!("failed to persist the preview enhance toggle");
+            tracing::warn!("failed to persist the enhance toggle");
+        }
+        match self.export.as_mut() {
+            Some(export) => export.set_enhance_quality(on),
+            None => crate::editor_export::ExportUi::save_enhance_quality(on),
         }
         self.publish_project();
         cx.notify();
@@ -9045,9 +9145,39 @@ impl EditorWindow {
         let Some(look) = crate::looks::LOOKS.get(index) else {
             return;
         };
+        self.end_look_preview(cx);
         let next = crate::looks::apply_look(look, &self.project);
         tracing::info!(look = look.id, "look applied");
         self.apply_project_preset(next, window, cx);
+    }
+
+    /// Shows look `index` on the video while its card is hovered, without
+    /// saving it or adding an undo step.
+    fn preview_look(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(look) = crate::looks::LOOKS.get(index) else {
+            return;
+        };
+        if self.look_preview.as_ref().is_some_and(|(shown, _)| *shown == index) {
+            return;
+        }
+        let saved = match self.look_preview.take() {
+            Some((_, saved)) => saved,
+            None => self.project.clone(),
+        };
+        self.project = crate::looks::apply_look(look, &saved);
+        self.look_preview = Some((index, saved));
+        self.publish_project();
+        cx.notify();
+    }
+
+    /// Puts the project back as it was before a look was previewed.
+    pub(crate) fn end_look_preview(&mut self, cx: &mut Context<Self>) {
+        let Some((_, saved)) = self.look_preview.take() else {
+            return;
+        };
+        self.project = saved;
+        self.publish_project();
+        cx.notify();
     }
 
     /// The looks gallery atop the presets menu: four across, each a small
@@ -9062,7 +9192,6 @@ impl EditorWindow {
             .map(|(index, look)| {
                 let selected = current == Some(look.id);
                 let image = menu.look_images.get(index).cloned().flatten();
-                let description = (look.description)();
                 div()
                     .id(SharedString::from(format!("look-{}", look.id)))
                     .flex_1()
@@ -9074,7 +9203,17 @@ impl EditorWindow {
                     .rounded(px(12.))
                     .cursor_pointer()
                     .hover(move |style| style.bg(Hsla::from(editor.ctl)))
-                    .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, description).view(cx))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                        if *hovered {
+                            this.preview_look(index, cx);
+                        } else if this
+                            .look_preview
+                            .as_ref()
+                            .is_some_and(|(shown, _)| *shown == index)
+                        {
+                            this.end_look_preview(cx);
+                        }
+                    }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.apply_look_at(index, window, cx);
                     }))
@@ -9122,12 +9261,105 @@ impl EditorWindow {
                     .child(tr::editor::window::looks::title()),
             )
             .children(rows)
+            .child(self.render_look_details(current))
             .into_any_element()
     }
+
+    /// Under the gallery: the hovered look (or the one the project wears),
+    /// what it is for, and every setting it changes, so a look's effect is
+    /// clear before it is applied. The video behind shows it live.
+    fn render_look_details(&self, current: Option<&'static str>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let look = self
+            .look_preview
+            .as_ref()
+            .and_then(|(index, _)| crate::looks::LOOKS.get(*index))
+            .or_else(|| {
+                current.and_then(|id| crate::looks::LOOKS.iter().find(|look| look.id == id))
+            });
+        let body = div()
+            .mx(px(4.))
+            .mt(px(4.))
+            .p(px(10.))
+            .rounded(px(10.))
+            .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
+            .flex()
+            .flex_col()
+            .gap(px(6.));
+        let Some(look) = look else {
+            return body
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(editor.text_2))
+                        .child(tr::editor::window::looks::preview_hint()),
+                )
+                .into_any_element();
+        };
+        let chip = |icon: &'static str, label: String| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(5.))
+                .h(px(22.))
+                .px(px(8.))
+                .rounded(px(7.))
+                .bg(Hsla::from(editor.ctl_active))
+                .text_size(px(11.5))
+                .text_color(Hsla::from(editor.text_1))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(12.))
+                        .text_color(Hsla::from(editor.text_2)),
+                )
+                .child(label)
+        };
+        body.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(Hsla::from(editor.text_1))
+                        .child((look.name)()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(editor.text_2))
+                        .child((look.description)()),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(5.))
+                .children(
+                    look_changes(look)
+                        .into_iter()
+                        .map(|(icon, label)| chip(icon, label)),
+                ),
+        )
+        .into_any_element()
+    }
+
 
     /// Apply row `index`: the preset's config with the current timeline and
     /// clips kept -- one undo entry, like any other config edit.
     fn apply_preset_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_look_preview(cx);
         let Some(menu) = self.presets_menu.as_ref() else {
             return;
         };
@@ -9165,6 +9397,7 @@ impl EditorWindow {
     /// The built-in Default row: Cap's own look, with this project's timeline
     /// and clips kept.
     fn apply_default_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_look_preview(cx);
         let next = crate::presets::default_project_config(&self.project);
         self.apply_project_preset(next, window, cx);
     }
@@ -9221,6 +9454,7 @@ impl EditorWindow {
             _ => String::new(),
         };
         // The dropdown closes when its dialog opens, as Kobalte's does.
+        self.end_look_preview(cx);
         self.presets_menu = None;
         self.preset_dialog = Some(dialog);
         if !matches!(dialog, PresetDialog::Delete { .. }) {
@@ -9946,6 +10180,15 @@ impl EditorWindow {
     ) {
         if spec == "type-keys" {
             self.open_key_prompt(0.0, window, cx);
+            return;
+        }
+        // `looks[:<index>]`: the Presets menu, previewing that look.
+        if let Some(look) = spec.strip_prefix("looks") {
+            let viewport = window.viewport_size();
+            self.open_presets_menu(point(viewport.width - px(120.), px(40.)), window, cx);
+            if let Ok(index) = look.trim_start_matches(':').parse::<usize>() {
+                self.preview_look(index, cx);
+            }
             return;
         }
         self.open_add_track(window, cx);
@@ -11331,6 +11574,7 @@ impl EditorWindow {
                         .size_full()
                         .occlude()
                         .on_click(cx.listener(|this, _, _window, cx| {
+                            this.end_look_preview(cx);
                             this.presets_menu = None;
                             cx.notify();
                         })),
@@ -12292,6 +12536,7 @@ impl EditorWindow {
                     .items_center()
                     .flex_none()
                     .gap(px(8.))
+                    .child(self.render_preview_enhance(!narrow, cx))
                     .child(
                         div()
                             .text_size(px(12.))
@@ -12671,7 +12916,6 @@ impl EditorWindow {
                                 )
                             })),
                     )
-                    .child(self.render_preview_enhance(player_width >= 920., cx)),
             )
             .child(
                 div()
@@ -12825,25 +13069,46 @@ impl EditorWindow {
     fn render_preview_enhance(&self, labels: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let ready = self.project_ready();
-        let enhance = ui::Button::plain(
-            &theme,
-            "transport-enhance",
-            if self.preview_enhance {
-                ui::ButtonVariant::Primary
-            } else {
-                ui::ButtonVariant::Gray
-            },
-            ui::ButtonSize::Sm,
-        )
-        .icon("icons/scan-text.svg")
-        .when(labels, |button| {
-            button.label(tr::editor::window::transport::enhance())
-        })
-        .radius(px(7.))
-        .disabled(!ready)
-        .on_click(cx.listener(|this, _, window, cx| {
-            this.toggle_preview_enhance(window, cx);
-        }));
+        let editor = theme.editor;
+        let on = self.preview_enhance;
+        // One switch for the video: the export is enhanced, and so is the
+        // paused frame here, so what you see is what you get.
+        let enhance = div()
+            .id("transport-enhance")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(7.))
+            .h(px(28.))
+            .pl(px(9.))
+            .pr(px(5.))
+            .rounded(px(9.))
+            .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(Hsla::from(if on { editor.text_1 } else { editor.text_2 }))
+            .when(ready, |this| {
+                this.cursor_pointer()
+                    .hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_preview_enhance(window, cx);
+                    }))
+            })
+            .child(
+                svg()
+                    .path("icons/scan-text.svg")
+                    .size(px(14.))
+                    .text_color(Hsla::from(if on { editor.accent } else { editor.text_2 })),
+            )
+            .when(labels, |this| {
+                this.child(tr::editor::window::transport::enhance())
+            })
+            .child(
+                ui::Toggle::plain(&theme, "transport-enhance-switch", on)
+                    .size(ui::ToggleSize::Mini)
+                    .disabled(&theme, !ready),
+            );
         let comparing = self.preview_comparing;
         let can_compare = ready && !self.playing;
         div()

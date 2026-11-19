@@ -260,7 +260,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::window::looks::smooth_demo(), "Smooth Demo"),
         (
             tr::editor::window::looks::smooth_demo_description(),
-            "Soft clouds, gentle zooms and a calm cursor.",
+            "A drifting color field, gentle zooms and a big, calm cursor.",
+        ),
+        (
+            tr::editor::window::looks::preview_hint(),
+            "Hover a look to see it on your video.",
         ),
         (tr::editor::window::looks::title(), "Looks"),
         (tr::editor::window::looks::tutorial(), "Tutorial"),
@@ -1425,7 +1429,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::window::transport::enhance(), "Enhance"),
         (
             tr::editor::window::transport::enhance_tooltip(),
-            "Show the paused frame enhanced",
+            "Sharpens text and fine detail in your export. Pause to see it here.",
         ),
         (tr::editor::window::transport::compare(), "Compare"),
         (
