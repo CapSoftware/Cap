@@ -178,7 +178,8 @@ pub struct ManualKeyRun {
 /// per word typed out letter by letter (`words`), or a key per keystroke
 /// (`keys`), each held a beat before the next, the last held to be read.
 pub fn manual_key_runs(text: &str, split: &str) -> Vec<ManualKeyRun> {
-    const WORD_HOLD: f64 = 0.32;
+    // Long enough for its letters to come together on one key and be read.
+    const WORD_HOLD: f64 = 0.85;
     const KEY_HOLD: f64 = 0.16;
     let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃'));
     let pieces: Vec<String> = match split {

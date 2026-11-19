@@ -459,11 +459,23 @@ pub fn keycaps_for(text: &str, style: KeycapStyle) -> Vec<Keycap> {
     caps
 }
 
+/// Marks the letters of a word still being typed: each one after it shows
+/// as a key of its own until the word comes together on one long key.
+pub const LETTER_BREAK: char = '\u{2063}';
+
 /// The keys typed text stands for: the text as long keys from its first
-/// letter, with Shift folded into capitals and special keys between.
+/// letter, with Shift folded into capitals and special keys between. Letters
+/// after a [`LETTER_BREAK`] are each their own key, as they were struck.
 pub fn typed_keycaps(text: &str, style: KeycapStyle) -> Vec<Keycap> {
     let mut caps = Vec::new();
-    push_typed(&mut caps, text, style);
+    let mut parts = text.split(LETTER_BREAK);
+    push_typed(&mut caps, parts.next().unwrap_or_default(), style);
+    for letter in parts.flat_map(str::chars) {
+        if letter == ' ' || letter == '␣' {
+            continue;
+        }
+        caps.push(single_cap(letter, style));
+    }
     caps
 }
 

@@ -536,15 +536,6 @@ impl KeyboardLayer {
                     active.segment.start + offset / 1000.0
                 });
             let since_press = current_time - first_key;
-            // What the keys showed just before the latest key went down, when
-            // that key changed them (a typed letter, a key added).
-            let before_strike = (struck > first_key + 1e-6)
-                .then(|| case(build_visible_text(active.segment, struck - 1e-4)))
-                .filter(|before| *before != visible_text);
-            // The same shortcut struck again changes nothing on screen: the
-            // keys dip once for it instead.
-            let repeat =
-                before_strike.is_none() && is_shortcut(active.segment) && struck > first_key + 1e-6;
             // With typing shown, what is not a shortcut is typed text, from
             // its first letter on.
             let typed = |segment: &cap_project::KeyboardTrackSegment| {
@@ -552,12 +543,66 @@ impl KeyboardLayer {
                 (settings.show_typing || cap_project::is_manual_keyboard_segment(segment))
                     && !is_shortcut(segment)
             };
-            let change = match before_strike {
-                Some(before) if since_press >= (KEYCAP_MOVE + KEYCAP_ENTER) * pace => KeyChange {
-                    from: Some((before, typed(active.segment))),
-                    by_identity: false,
-                    since: current_time - struck,
+            // Typed into the composer, a word arrives a letter at a time, each
+            // on its own key, and comes together on one key a beat after the
+            // last letter (or as soon as a space ends it).
+            let lettered = |segment: &cap_project::KeyboardTrackSegment, at: f64, text: String| {
+                if typed(segment)
+                    && cap_project::is_manual_keyboard_segment(segment)
+                    && at - last_struck_at(segment, at) < LETTER_MERGE_AFTER
+                {
+                    as_letters(&text)
+                } else {
+                    text
+                }
+            };
+            let visible_text = lettered(active.segment, current_time, visible_text);
+            // What the keys showed just before the latest key went down, when
+            // that key changed them (a typed letter, a key added).
+            let before_strike = (struck > first_key + 1e-6)
+                .then(|| {
+                    lettered(
+                        active.segment,
+                        struck - 1e-4,
+                        case(build_visible_text(active.segment, struck - 1e-4)),
+                    )
+                })
+                .filter(|before| *before != visible_text);
+            // The letters as they stood when the word came together.
+            let merged_from = (current_time >= struck + LETTER_MERGE_AFTER
+                && cap_project::is_manual_keyboard_segment(active.segment)
+                && typed(active.segment))
+            .then(|| {
+                lettered(
+                    active.segment,
+                    struck + 1e-4,
+                    case(build_visible_text(active.segment, struck + 1e-4)),
+                )
+            })
+            .filter(|letters| *letters != visible_text);
+            // The same shortcut struck again changes nothing on screen: the
+            // keys dip once for it instead.
+            let repeat =
+                before_strike.is_none() && is_shortcut(active.segment) && struck > first_key + 1e-6;
+            let letters_up = visible_text.contains(keycaps::LETTER_BREAK);
+            let change = match (merged_from, before_strike) {
+                (Some(letters), _) => KeyChange {
+                    from: Some((letters, true)),
+                    by_identity: true,
+                    since: current_time - struck - LETTER_MERGE_AFTER,
+                    merge: true,
                 },
+                (None, Some(before)) if since_press >= (KEYCAP_MOVE + KEYCAP_ENTER) * pace => {
+                    // A space ends the word being typed: its letters come
+                    // together at once.
+                    let merge = before.contains(keycaps::LETTER_BREAK) && !letters_up;
+                    KeyChange {
+                        from: Some((before, typed(active.segment))),
+                        by_identity: merge,
+                        since: current_time - struck,
+                        merge,
+                    }
+                }
                 // Keys appearing, or taking over from the keys before them as
                 // those last stood.
                 _ => KeyChange {
@@ -571,6 +616,7 @@ impl KeyboardLayer {
                         .filter(|(text, _)| !text.is_empty()),
                     by_identity: true,
                     since: since_press,
+                    merge: false,
                 },
             };
             // Keys that hand straight over to the next keys stay up through
@@ -590,11 +636,12 @@ impl KeyboardLayer {
                     leaving,
                     pace,
                     fade: segment_fade,
-                    since_struck: if repeat {
+                    since_struck: if repeat || letters_up {
                         current_time - struck
                     } else {
                         f64::INFINITY
                     },
+                    press_newest: letters_up,
                     position,
                     margin,
                 },
@@ -849,8 +896,11 @@ struct KeycapFrame<'a> {
     /// How long the animations run, 1 at the default fade.
     pace: f64,
     fade: f64,
-    /// Seconds since a repeat of the same shortcut went down.
+    /// Seconds since a repeat of the same shortcut went down, or the newest
+    /// letter of a word being typed.
     since_struck: f64,
+    /// Only the newest key dips: a letter just struck.
+    press_newest: bool,
     position: KeyboardPosition,
     margin: f32,
 }
@@ -876,6 +926,9 @@ struct KeyChange {
     /// growing).
     by_identity: bool,
     since: f64,
+    /// The letters of a word coming together on one key: they glide into
+    /// it as it grows out of them.
+    merge: bool,
 }
 
 /// Where one key is drawn this frame: its place, width, how far below its
@@ -1018,6 +1071,11 @@ fn key_motions(
                 }
             })
             .collect();
+    if change.merge
+        && let Some(merged) = merge_motions(to, from, &matches, change.since, pace)
+    {
+        return merged;
+    }
     let gone = ease_out_cubic(progress(change.since, KEYCAP_EXIT * pace)) as f32;
     let leaving = from
         .1
@@ -1038,6 +1096,100 @@ fn key_motions(
         })
         .collect();
     (current, leaving)
+}
+
+/// The letters of a word coming together on the word's key: they glide in
+/// and narrow into the part of the key their letters fill, fading as they
+/// meet, while the key grows out of the span they covered. `None` when the
+/// change is not letters joining a word.
+/// Every key's motion this frame: the keys showing, then the ones leaving,
+/// each with its place in the row they left.
+type KeyMotions = (Vec<KeyMotion>, Vec<(usize, KeyMotion)>);
+
+fn merge_motions(
+    to: (&[Keycap], &[(f32, f32)]),
+    from: (&[Keycap], &[(f32, f32)]),
+    matches: &[Option<usize>],
+    since: f64,
+    pace: f64,
+) -> Option<KeyMotions> {
+    let word = to.0.len().checked_sub(1)?;
+    let (word_x, word_width) = to.1[word];
+    let letters: Vec<usize> = (0..from.0.len())
+        .filter(|at| !matches.contains(&Some(*at)) && from.0[*at].kind == KeycapKind::Square)
+        .collect();
+    if letters.is_empty() || to.0[word].kind != KeycapKind::Wide {
+        return None;
+    }
+    let joined = ease_in_out_cubic(progress(since, LETTER_MERGE * pace)) as f32;
+    // The letters fill the end of the word's key, as many characters of it
+    // as they are.
+    let characters = to.0[word].label.chars().count().max(letters.len()) as f32;
+    let share = letters.len() as f32 / characters;
+    let region_x = word_x + word_width * (1.0 - share);
+    let slot = word_width * share / letters.len() as f32;
+    let span_left = letters
+        .iter()
+        .map(|at| from.1[*at].0)
+        .fold(f32::INFINITY, f32::min);
+    let span_right = letters
+        .iter()
+        .map(|at| from.1[*at].0 + from.1[*at].1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let mix = |a: f32, b: f32| a + (b - a) * joined;
+    let current =
+        to.1.iter()
+            .zip(matches)
+            .enumerate()
+            .map(|(index, (&(x, width), found))| match found {
+                // A word typed before it, carried along as the key grows.
+                Some(at) => {
+                    let (old_x, old_width) = from.1[*at];
+                    KeyMotion {
+                        x: mix(old_x, x),
+                        width: mix(old_width, width),
+                        drop: 0.0,
+                        opacity: 1.0,
+                    }
+                }
+                // The word's key grows out of the letters' span.
+                None if index == word && region_x <= word_x + 1e-3 => KeyMotion {
+                    x: mix(span_left, x),
+                    width: mix(span_right - span_left, width),
+                    drop: 0.0,
+                    opacity: smoothstep(0.35, 0.8, joined),
+                },
+                None => KeyMotion {
+                    x,
+                    width,
+                    drop: 0.0,
+                    opacity: smoothstep(0.35, 0.8, joined),
+                },
+            })
+            .collect();
+    let leaving = letters
+        .iter()
+        .enumerate()
+        .filter(|_| joined < 1.0)
+        .map(|(order, &at)| {
+            let (x, width) = from.1[at];
+            (
+                at,
+                KeyMotion {
+                    x: mix(x, region_x + slot * order as f32),
+                    width: mix(width, slot),
+                    drop: 0.0,
+                    opacity: 1.0 - smoothstep(0.25, 0.6, joined),
+                },
+            )
+        })
+        .collect();
+    Some((current, leaving))
+}
+
+fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+    let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 impl KeyboardLayer {
@@ -1260,6 +1412,7 @@ impl KeyboardLayer {
                     from: None,
                     by_identity: frame.change.by_identity,
                     since: frame.change.since - before,
+                    merge: frame.change.merge,
                 },
                 frame.pace,
                 cap_height,
@@ -1340,7 +1493,16 @@ impl KeyboardLayer {
                 side_b: palette.side[1],
                 border: palette.border,
                 highlight: palette.highlight,
-                shape: [radius, depth, inset, press],
+                shape: [
+                    radius,
+                    depth,
+                    inset,
+                    if frame.press_newest && index + 1 != drawn.len() {
+                        0.0
+                    } else {
+                        press
+                    },
+                ],
                 finish: [geometry.dish, palette.grain, palette.gloss, opacity],
                 motion: [travel[0], travel[1], geometry.sculpt, 0.0],
             };
@@ -1506,6 +1668,30 @@ impl KeyboardLayer {
 
 /// When the segment's latest key went down, in timeline seconds: the start,
 /// or the last typed key at or before `current_time`.
+/// How long the letters of a word stay apart after the last one is struck,
+/// before they come together on one key.
+const LETTER_MERGE_AFTER: f64 = 0.32;
+/// How long they take to come together.
+const LETTER_MERGE: f64 = 0.24;
+
+/// `text` with the word at its end, still being typed, split into its
+/// letters, each to be its own key.
+fn as_letters(text: &str) -> String {
+    let start = text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace() || *c == '␣')
+        .map_or(0, |(at, c)| at + c.len_utf8());
+    let (head, word) = text.split_at(start);
+    let mut out = String::with_capacity(text.len() + word.len() * 3);
+    out.push_str(head);
+    for letter in word.chars() {
+        out.push(keycaps::LETTER_BREAK);
+        out.push(letter);
+    }
+    out
+}
+
 fn last_struck_at(segment: &cap_project::KeyboardTrackSegment, current_time: f64) -> f64 {
     let elapsed_ms = (current_time - segment.start) * 1000.0;
     segment
@@ -1751,10 +1937,63 @@ fn calculate_keyboard_bounce(current_time: f64, start: f64, end: f64, fade_durat
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardPosition, MIN_OVERLAY_GAP, build_visible_text, find_active_keyboard_segment,
-        resolve_background_top, resolve_keyboard_position,
+        KeyChange, KeyboardPosition, KeycapKind, MIN_OVERLAY_GAP, as_letters, build_visible_text,
+        find_active_keyboard_segment, key_motions, resolve_background_top,
+        resolve_keyboard_position,
     };
     use crate::layers::{CaptionOverlayLayout, CaptionPosition};
+
+    #[test]
+    fn a_word_being_typed_shows_its_letters_and_then_comes_together() {
+        assert_eq!(
+            as_letters("hello wo"),
+            format!("hello {b}w{b}o", b = crate::layers::keycaps::LETTER_BREAK)
+        );
+        assert_eq!(as_letters("hello "), "hello ");
+        let letters = crate::layers::keycaps::typed_keycaps(
+            &as_letters("we"),
+            crate::layers::keycaps::KeycapStyle::MacOs,
+        );
+        assert_eq!(
+            letters
+                .iter()
+                .map(|cap| cap.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["W", "E"]
+        );
+        assert!(letters.iter().all(|cap| cap.kind == KeycapKind::Square));
+        let word =
+            crate::layers::keycaps::typed_keycaps("we", crate::layers::keycaps::KeycapStyle::MacOs);
+        // The letters glide into the word's key and fade, as it grows out of
+        // the span they covered.
+        let change = |since| KeyChange {
+            from: None,
+            by_identity: true,
+            since,
+            merge: true,
+        };
+        let from_rest = [(100.0, 50.0), (160.0, 50.0)];
+        let to_rest = [(110.0, 90.0)];
+        let (start, leaving) = key_motions(
+            (&word, &to_rest),
+            (&letters, &from_rest),
+            &change(0.0),
+            1.0,
+            50.0,
+        );
+        assert_eq!(leaving.len(), 2);
+        assert!((start[0].x - 100.0).abs() < 1e-3 && (start[0].width - 110.0).abs() < 1e-3);
+        assert!(start[0].opacity < 0.05 && leaving[0].1.opacity > 0.95);
+        let (end, leaving) = key_motions(
+            (&word, &to_rest),
+            (&letters, &from_rest),
+            &change(1.0),
+            1.0,
+            50.0,
+        );
+        assert!(leaving.is_empty());
+        assert_eq!((end[0].x, end[0].width, end[0].opacity), (110.0, 90.0, 1.0));
+    }
 
     #[test]
     fn a_shortcut_handing_over_keeps_its_shared_keys_and_brings_new_ones_in_turn() {
@@ -1772,6 +2011,7 @@ mod tests {
                     from: Some(("⌘C".into(), false)),
                     by_identity: true,
                     since,
+                    merge: false,
                 },
                 1.0,
                 100.0,
@@ -1811,6 +2051,7 @@ mod tests {
                 from: Some(("⌘C".into(), false)),
                 by_identity: true,
                 since: 0.0,
+                merge: false,
             },
             0.0,
             100.0,
@@ -1832,6 +2073,7 @@ mod tests {
                 from: Some(("he".into(), true)),
                 by_identity: false,
                 since: 0.0,
+                merge: false,
             },
             1.0,
             100.0,
