@@ -2949,6 +2949,7 @@ impl EditorWindow {
 
     pub(crate) fn render_keyboard_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        let blank = self.summary().is_some_and(|summary| summary.blank);
         let settings = keyboard_settings(&self.project);
         let enabled = settings.enabled;
         let has_segments = self
@@ -3049,7 +3050,7 @@ impl EditorWindow {
                 )
             })
             .child(
-                ui::Field::inline(&theme, tr::editor::tabs::keyboard::position())
+                ui::Field::section(&theme, tr::editor::tabs::keyboard::position())
                     .value_text(position_label)
                     .child(self.render_key_position_picker(&settings.position, cx)),
             )
@@ -3200,28 +3201,32 @@ impl EditorWindow {
                         ),
                 ),
             )
-            .child(
-                div().pt(px(8.)).child(
-                    ui::Button::plain(
-                        &theme,
-                        "keyboard-generate",
-                        ui::ButtonVariant::Primary,
-                        ui::ButtonSize::Md,
-                    )
-                    .label(if self.generating_keyboard {
-                        tr::editor::tabs::keyboard::generating()
-                    } else if has_segments {
-                        tr::editor::tabs::keyboard::regenerate()
-                    } else {
-                        tr::editor::tabs::keyboard::generate()
-                    })
-                    .full_width()
-                    .disabled(self.generating_keyboard || self.project.timeline.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.generate_keyboard_segments_clicked(window, cx);
-                    })),
-                ),
-            )
+            // A blank project has no recording to take key presses from;
+            // its keys come from the composer and the track.
+            .when(!blank, |this| {
+                this.child(
+                    div().pt(px(8.)).child(
+                        ui::Button::plain(
+                            &theme,
+                            "keyboard-generate",
+                            ui::ButtonVariant::Primary,
+                            ui::ButtonSize::Md,
+                        )
+                        .label(if self.generating_keyboard {
+                            tr::editor::tabs::keyboard::generating()
+                        } else if has_segments {
+                            tr::editor::tabs::keyboard::regenerate()
+                        } else {
+                            tr::editor::tabs::keyboard::generate()
+                        })
+                        .full_width()
+                        .disabled(self.generating_keyboard || self.project.timeline.is_none())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.generate_keyboard_segments_clicked(window, cx);
+                        })),
+                    ),
+                )
+            })
             .children(self.keyboard_generation_message.as_ref().map(|message| {
                 div()
                     .text_size(px(12.))
@@ -3229,7 +3234,7 @@ impl EditorWindow {
                     .child(message.clone())
                     .into_any_element()
             }))
-            .children((!has_segments).then(|| {
+            .children((!has_segments && !blank).then(|| {
                 div()
                     .py(px(16.))
                     .flex()
@@ -3284,8 +3289,8 @@ impl EditorWindow {
     /// Where the keys sit, picked on a little frame: nine spots, the chosen
     /// one holding a key, so the choice reads as the video will.
     fn render_key_position_picker(&self, current: &str, cx: &mut Context<Self>) -> AnyElement {
-        const FRAME_WIDTH: f32 = 136.;
-        const FRAME_HEIGHT: f32 = 76.5;
+        // The frame, at the video's own shape, as wide as the panel.
+        const FRAME_HEIGHT: f32 = 132.;
         let theme = self.theme;
         let editor = theme.editor;
         // An older project's "above captions" sits where bottom-center does.
@@ -3361,11 +3366,12 @@ impl EditorWindow {
                 }))
         });
         div()
-            .w(px(FRAME_WIDTH))
+            .w_full()
             .h(px(FRAME_HEIGHT))
+            .p(px(4.))
             .flex()
             .flex_col()
-            .rounded(px(9.))
+            .rounded(px(10.))
             .bg(Hsla::from(editor.ctl))
             .shadow(editor.trough_ring())
             .children(rows)

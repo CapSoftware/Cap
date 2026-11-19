@@ -557,6 +557,8 @@ pub struct ProjectSummary {
     /// The platform the recording was made on, whose keyboard an older
     /// project's keys follow, as the renderer draws them.
     pub platform: Option<cap_project::Platform>,
+    /// Started empty rather than recorded: no key presses to generate from.
+    pub blank: bool,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -689,6 +691,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
 
     Ok(ProjectSummary {
         platform: meta.platform.clone(),
+        blank: studio.is_blank(),
         recordings: recordings.clone(),
         pretty_name: meta.pretty_name.clone(),
         timeline,
@@ -16925,6 +16928,7 @@ mod tests {
                     editor.set_summary(
                         ProjectSummary {
                             platform: None,
+                            blank: false,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
@@ -17074,6 +17078,7 @@ mod tests {
                     editor.set_summary(
                         ProjectSummary {
                             platform: None,
+                            blank: false,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
