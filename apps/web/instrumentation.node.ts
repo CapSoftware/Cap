@@ -58,6 +58,7 @@ export function isLegacyCapPublicPolicyStatement(
 	if (!statement || typeof statement !== "object") return false;
 	const s = statement as Record<string, unknown>;
 	if (s.Effect !== "Allow") return false;
+	if (s.Condition !== undefined && s.Condition !== null) return false;
 
 	const isWildcardPrincipal =
 		s.Principal === "*" ||

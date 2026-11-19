@@ -98,6 +98,19 @@ describe("isLegacyCapPublicPolicyStatement", () => {
 		};
 		expect(isLegacyCapPublicPolicyStatement(statement, "cap")).toBe(false);
 	});
+
+	it("rejects statements with Condition (custom access rule)", () => {
+		const statement = {
+			Effect: "Allow",
+			Principal: "*",
+			Action: ["s3:GetObject"],
+			Resource: ["arn:aws:s3:::cap/*"],
+			Condition: {
+				StringEquals: { "aws:sourceVpce": "vpce-1a2b3c4d" },
+			},
+		};
+		expect(isLegacyCapPublicPolicyStatement(statement, "cap")).toBe(false);
+	});
 });
 
 describe("cleanupLegacyBucketPolicy", () => {
