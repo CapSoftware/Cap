@@ -751,7 +751,6 @@ impl KeyboardLayer {
         self.has_content
     }
 
-
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
         if !self.has_content {
             return;
