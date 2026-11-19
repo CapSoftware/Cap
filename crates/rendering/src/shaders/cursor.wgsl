@@ -295,7 +295,7 @@ fn interleaved_noise(p: vec2<f32>) -> f32 {
 }
 
 // The cursor's own directional smear: 21 taps along [0, 0.95 v], the first
-// counted twice, as the reference directional filter samples.
+// counted twice, the same kernel as the display's.
 fn own_blurred(uv: vec2<f32>, velocity_uv: vec2<f32>) -> vec4<f32> {
     if (length(velocity_uv) < 0.005) {
         return sample_cursor(uv);

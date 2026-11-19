@@ -365,9 +365,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
         }
 
-        // 21 taps along [0, 0.95 v], the pixel's own tap counted twice: the
-        // reference directional filter (kernel 21, offset -|v|/2) samples
-        // t = 0, 0, 1/20 ... 19/20 and divides by 21.
+        // 21 taps along [0, 0.95 v], the pixel's own tap counted twice:
+        // t = 0, 0, 1/20 ... 19/20, divided by 21. The streak trails the
+        // motion by just under a frame.
         var accum = vec3<f32>(0.0);
         var alpha_sum = 0.0;
         let k = 20.0;
