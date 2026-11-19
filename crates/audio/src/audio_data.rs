@@ -4,7 +4,12 @@ use ffmpeg::{
     frame::Audio as FFAudio,
     software::resampling,
 };
-use std::{ops::Range, path::Path};
+use std::{
+    ffi::{c_int, c_void},
+    ops::Range,
+    path::Path,
+    ptr::{self, NonNull},
+};
 
 use crate::cast_bytes_to_f32_slice;
 
@@ -239,6 +244,18 @@ impl AudioData {
             channels: target_channels,
             source_start_sample,
             covered_source_end_sample,
+        })
+    }
+
+    /// Decodes a small audio file held in memory, such as a bundled asset.
+    pub fn from_memory(bytes: &[u8]) -> Result<Self, String> {
+        let mut input = MemoryInput::open(bytes)?;
+        let (samples, channels) = decode_all(input.input()?)?;
+        Ok(AudioData {
+            samples,
+            channels,
+            source_start_sample: 0,
+            covered_source_end_sample: usize::MAX,
         })
     }
 
@@ -500,10 +517,203 @@ fn append_resampled_frame(samples: &mut Vec<f32>, frame: &FFAudio) -> Result<(),
     Ok(())
 }
 
+fn decode_all(input_ctx: &mut ffmpeg::format::context::Input) -> Result<(Vec<f32>, u16), String> {
+    let input_stream = input_ctx
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .ok_or_else(|| "No Stream".to_string())?;
+    let index = input_stream.index();
+    let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
+        .and_then(|context| context.decoder().audio())
+        .map_err(|e| format!("Decoder / {e}"))?;
+    let source_channels = decoder.channels().max(1);
+    if decoder.channel_layout().is_empty() {
+        decoder.set_channel_layout(ChannelLayout::default(source_channels as i32));
+    }
+    decoder.set_packet_time_base(input_stream.time_base());
+    let channels = target_channels_for_source(source_channels);
+    let mut resampler = resampling::Context::get_with(
+        decoder.format(),
+        decoder.channel_layout(),
+        decoder.rate(),
+        AudioData::SAMPLE_FORMAT,
+        ChannelLayout::default(channels as i32),
+        AudioData::SAMPLE_RATE,
+        high_quality_resampler_options(),
+    )
+    .map_err(|e| format!("Resampler / {e}"))?;
+    let mut frame = FFAudio::empty();
+    let mut output = ResamplerOutput::new();
+    let mut samples = Vec::new();
+    for (stream, packet) in input_ctx.packets() {
+        if stream.index() != index {
+            continue;
+        }
+        decoder
+            .send_packet(&packet)
+            .map_err(|e| format!("Send Packet / {e}"))?;
+        while decoder.receive_frame(&mut frame).is_ok() {
+            run_resampler(&mut resampler, &frame, &mut output, &mut samples)?;
+        }
+    }
+    decoder.send_eof().map_err(|e| format!("Send EOF / {e}"))?;
+    while decoder.receive_frame(&mut frame).is_ok() {
+        run_resampler(&mut resampler, &frame, &mut output, &mut samples)?;
+    }
+    flush_resampler(&mut resampler, &mut output, &mut samples)?;
+    Ok((samples, channels))
+}
+
+struct MemoryReader<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+unsafe extern "C" fn read_memory(opaque: *mut c_void, buffer: *mut u8, size: c_int) -> c_int {
+    let reader = unsafe { &mut *opaque.cast::<MemoryReader>() };
+    let remaining = reader.bytes.len().saturating_sub(reader.position);
+    if remaining == 0 {
+        return ffmpeg::ffi::AVERROR_EOF;
+    }
+    let count = remaining.min(usize::try_from(size).unwrap_or(0));
+    unsafe {
+        ptr::copy_nonoverlapping(reader.bytes.as_ptr().add(reader.position), buffer, count);
+    }
+    reader.position += count;
+    count as c_int
+}
+
+unsafe extern "C" fn seek_memory(opaque: *mut c_void, offset: i64, whence: c_int) -> i64 {
+    let reader = unsafe { &mut *opaque.cast::<MemoryReader>() };
+    let len = reader.bytes.len() as i64;
+    let target = match whence & !ffmpeg::ffi::AVSEEK_FORCE {
+        ffmpeg::ffi::AVSEEK_SIZE => return len,
+        ffmpeg::ffi::SEEK_SET => offset,
+        ffmpeg::ffi::SEEK_CUR => reader.position as i64 + offset,
+        ffmpeg::ffi::SEEK_END => len + offset,
+        _ => return i64::from(ffmpeg::ffi::AVERROR(ffmpeg::ffi::EINVAL)),
+    };
+    if !(0..=len).contains(&target) {
+        return i64::from(ffmpeg::ffi::AVERROR(ffmpeg::ffi::EINVAL));
+    }
+    reader.position = target as usize;
+    target
+}
+
+/// A demuxer reading from a byte slice through custom FFmpeg I/O. The input
+/// is closed before the I/O context and the reader it points at are freed.
+struct MemoryInput<'a> {
+    input: Option<ffmpeg::format::context::Input>,
+    io: NonNull<ffmpeg::ffi::AVIOContext>,
+    _reader: Box<MemoryReader<'a>>,
+}
+
+impl<'a> MemoryInput<'a> {
+    fn open(bytes: &'a [u8]) -> Result<Self, String> {
+        const BUFFER_SIZE: usize = 16 * 1024;
+        let mut reader = Box::new(MemoryReader { bytes, position: 0 });
+        let buffer = unsafe { ffmpeg::ffi::av_malloc(BUFFER_SIZE) }.cast::<u8>();
+        if buffer.is_null() {
+            return Err("Out of memory".into());
+        }
+        let io = unsafe {
+            ffmpeg::ffi::avio_alloc_context(
+                buffer,
+                BUFFER_SIZE as c_int,
+                0,
+                ptr::from_mut(reader.as_mut()).cast(),
+                Some(read_memory),
+                None,
+                Some(seek_memory),
+            )
+        };
+        let Some(io) = NonNull::new(io) else {
+            unsafe { ffmpeg::ffi::av_free(buffer.cast()) };
+            return Err("Out of memory".into());
+        };
+        let mut opened = Self {
+            input: None,
+            io,
+            _reader: reader,
+        };
+        let mut context = unsafe { ffmpeg::ffi::avformat_alloc_context() };
+        if context.is_null() {
+            return Err("Out of memory".into());
+        }
+        unsafe {
+            (*context).pb = opened.io.as_ptr();
+            (*context).flags |= ffmpeg::ffi::AVFMT_FLAG_CUSTOM_IO;
+            let result = ffmpeg::ffi::avformat_open_input(
+                &mut context,
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+            );
+            if result < 0 {
+                return Err(format!("Input Open / {}", ffmpeg::Error::from(result)));
+            }
+            let found = ffmpeg::ffi::avformat_find_stream_info(context, ptr::null_mut());
+            opened.input = Some(ffmpeg::format::context::Input::wrap(context));
+            if found < 0 {
+                return Err(format!("Stream Info / {}", ffmpeg::Error::from(found)));
+            }
+        }
+        Ok(opened)
+    }
+
+    fn input(&mut self) -> Result<&mut ffmpeg::format::context::Input, String> {
+        self.input
+            .as_mut()
+            .ok_or_else(|| "Input not open".to_string())
+    }
+}
+
+impl Drop for MemoryInput<'_> {
+    fn drop(&mut self) {
+        drop(self.input.take());
+        let mut io = self.io.as_ptr();
+        unsafe {
+            ffmpeg::ffi::av_free((*io).buffer.cast());
+            (*io).buffer = ptr::null_mut();
+            ffmpeg::ffi::avio_context_free(&mut io);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn decodes_audio_held_in_memory_like_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tone.ogg");
+        let status = std::process::Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.5",
+            ])
+            .args(["-ac", "1", "-c:a", "libopus", "-b:a", "64k"])
+            .arg(&path)
+            .status();
+        if !status.is_ok_and(|status| status.success()) {
+            eprintln!("ffmpeg CLI with libopus unavailable, skipping");
+            return;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let from_memory = AudioData::from_memory(&bytes).unwrap();
+        let from_file = AudioData::from_file(&path).unwrap();
+        assert_eq!(from_memory.channels(), 1);
+        assert_eq!(from_memory.samples(), from_file.samples());
+        assert!((from_memory.sample_count() as i64 - 24_000).abs() < 480);
+        assert!(AudioData::from_memory(b"not audio").is_err());
+        let _ = AudioData::from_memory(&bytes[..bytes.len() / 3]);
+    }
 
     #[cfg(unix)]
     struct CommaDecimalThreadLocale {
