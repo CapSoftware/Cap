@@ -174,14 +174,15 @@ fn source_at_the_pixel_limit_is_accepted() {
     assert_eq!(probed["total_frames"], 1);
 }
 
-/// The engine encodes frames read back to system memory, which is how it
-/// runs on the farm's Linux workers and on Linux CI.
+/// The engine encodes frames read back to system memory only on Linux. 8K
+/// UHD is the largest frame the renderer converts without downscaling it
+/// first (`yuv_converter.rs`).
 #[cfg(target_os = "linux")]
 #[test]
-fn source_at_the_pixel_limit_still_renders() {
+fn large_source_under_the_limit_still_renders() {
     init();
     let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
-    let project = project("at-limit.mp4");
+    let project = project("8k-uhd.mp4");
     let runtime = runtime();
 
     let probed = runtime
