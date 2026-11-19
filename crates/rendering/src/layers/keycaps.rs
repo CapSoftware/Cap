@@ -24,7 +24,7 @@ pub const OVERLAY_TEXT_FONT: &str = "Inter";
 pub fn keycap_font(style: KeycapStyle, theme: KeycapTheme) -> (&'static str, u16) {
     match (theme, style) {
         (KeycapTheme::Retro, _) => ("IBM Plex Sans", 500),
-        (_, KeycapStyle::Mechanical) => ("Inter Keycaps", 500),
+        (_, KeycapStyle::Mechanical(_)) => ("Inter Keycaps", 500),
         (_, KeycapStyle::Windows) => ("Selawik", 400),
         (_, KeycapStyle::Linux) => ("Ubuntu", 500),
         _ => ("Inter Keycaps", 500),
@@ -65,27 +65,62 @@ pub fn symbol_runs(text: &str) -> Vec<(&str, bool)> {
     runs
 }
 
+/// The platform whose legends a key prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyLegends {
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl KeyLegends {
+    /// The legends of the platform a recording was made on, or of this
+    /// machine when that is unknown. Renderers pass the recording's own, so
+    /// a project draws the same keys wherever it is exported.
+    pub fn of(platform: Option<&cap_project::Platform>) -> Self {
+        match platform {
+            Some(cap_project::Platform::MacOS) => Self::Mac,
+            Some(cap_project::Platform::Windows) => Self::Windows,
+            Some(cap_project::Platform::Linux) => Self::Linux,
+            None if cfg!(target_os = "macos") => Self::Mac,
+            None if cfg!(target_os = "windows") => Self::Windows,
+            None => Self::Linux,
+        }
+    }
+}
+
 /// Which keyboard the keys are drawn from. `Classic` is the single rounded
 /// label the overlay has always drawn; `Mechanical` is a desk keyboard's
-/// tall, sculpted caps, printed for the platform it runs on.
+/// tall, sculpted caps, printed for the platform it was recorded on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeycapStyle {
     Classic,
     MacOs,
     Windows,
     Linux,
-    Mechanical,
+    Mechanical(KeyLegends),
 }
 
 impl KeycapStyle {
+    /// The style for a setting, printing a mechanical keyboard's legends for
+    /// this machine. See [`KeycapStyle::from_setting_for`].
     pub fn from_setting(style: &str) -> Self {
+        Self::from_setting_for(style, None)
+    }
+
+    /// The style for a setting on a recording made on `platform`.
+    pub fn from_setting_for(style: &str, platform: Option<&cap_project::Platform>) -> Self {
         match style {
             "macos" => Self::MacOs,
             "windows" => Self::Windows,
             "linux" => Self::Linux,
-            "mechanical" => Self::Mechanical,
+            "mechanical" => Self::Mechanical(KeyLegends::of(platform)),
             _ => Self::Classic,
         }
+    }
+
+    pub fn is_mechanical(self) -> bool {
+        matches!(self, Self::Mechanical(_))
     }
 
     /// Whether keys print Apple's legends: a symbol over its word in the
@@ -95,15 +130,14 @@ impl KeycapStyle {
         match self {
             Self::MacOs | Self::Classic => true,
             Self::Windows | Self::Linux => false,
-            Self::Mechanical => cfg!(target_os = "macos"),
+            Self::Mechanical(legends) => legends == KeyLegends::Mac,
         }
     }
 
     /// The word a PC prints on the key Apple calls command.
     fn meta_word(self) -> &'static str {
         match self {
-            Self::Linux => "Super",
-            Self::Mechanical if cfg!(target_os = "linux") => "Super",
+            Self::Linux | Self::Mechanical(KeyLegends::Linux) => "Super",
             _ => "Win",
         }
     }
@@ -139,7 +173,7 @@ impl KeycapStyle {
             // A tall, cylinder-dished cap seen from the front: a deep front
             // wall, narrow tapered sides and a sliver of back wall, each lit
             // as it faces the light.
-            Self::Mechanical => KeycapGeometry {
+            Self::Mechanical(_) => KeycapGeometry {
                 radius: 0.11,
                 depth: 0.21,
                 inset: 0.1,
@@ -182,7 +216,7 @@ impl KeycapTheme {
     /// plastic throughout, except on the retro theme, which sets its
     /// modifiers and named keys apart in grey as every retro keyboard does.
     pub fn palette_for(self, style: KeycapStyle, cap: &Keycap) -> KeycapPalette {
-        if style == KeycapStyle::Mechanical {
+        if style.is_mechanical() {
             self.mechanical_palette(cap.modifier || cap.kind == KeycapKind::Named)
         } else {
             self.palette(cap.modifier)
@@ -837,7 +871,7 @@ mod tests {
     #[test]
     fn a_mechanical_keyboard_is_a_tall_sculpted_set() {
         let mechanical = KeycapStyle::from_setting("mechanical");
-        assert_eq!(mechanical, KeycapStyle::Mechanical);
+        assert!(mechanical.is_mechanical());
         let geometry = mechanical.geometry();
         assert_eq!(geometry.sculpt, 1.0);
         assert!(geometry.depth > KeycapStyle::Linux.geometry().depth);
@@ -870,16 +904,21 @@ mod tests {
                 theme.palette(false)
             );
         }
-        // It prints the legends of the platform it is plugged into.
-        assert_eq!(mechanical.mac_legends(), cfg!(target_os = "macos"));
-        let command = &keycaps_for("⌘c", mechanical)[0];
-        if cfg!(target_os = "macos") {
-            assert_eq!(command.label, "⌘");
-        } else if cfg!(target_os = "linux") {
-            assert_eq!(command.label, "Super");
-        } else {
-            assert_eq!(command.label, "Win");
+        // It prints the legends of the platform the recording was made on,
+        // whatever machine draws it.
+        for (platform, command_label) in [
+            (cap_project::Platform::MacOS, "⌘"),
+            (cap_project::Platform::Windows, "Win"),
+            (cap_project::Platform::Linux, "Super"),
+        ] {
+            let style = KeycapStyle::from_setting_for("mechanical", Some(&platform));
+            assert_eq!(keycaps_for("⌘c", style)[0].label, command_label);
+            assert_eq!(
+                style.mac_legends(),
+                matches!(platform, cap_project::Platform::MacOS)
+            );
         }
+        assert_eq!(mechanical.mac_legends(), cfg!(target_os = "macos"));
         assert_eq!(
             keycap_font(mechanical, KeycapTheme::Dark).0,
             KEY_SYMBOL_FONT

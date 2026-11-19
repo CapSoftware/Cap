@@ -494,7 +494,18 @@ impl KeyboardLayer {
         let (font_family, weight) =
             super::captions::overlay_face(&settings.font, settings.font_weight);
 
-        let style = KeycapStyle::from_setting(settings.effective_style());
+        // Keys are drawn for the platform the recording was made on, so a
+        // project looks the same wherever it is exported. A key coloured on
+        // its own keeps an older project on its styled label.
+        let platform = constants.recording_meta.platform.as_ref();
+        let styled_keys = settings.style == "auto"
+            && timeline.keyboard_segments.iter().any(|segment| {
+                segment.color_override.is_some() || segment.background_color_override.is_some()
+            });
+        let style = KeycapStyle::from_setting_for(
+            settings.effective_style_for(platform, styled_keys),
+            platform,
+        );
         if style != KeycapStyle::Classic {
             let case = |text: String| {
                 if should_uppercase {
@@ -1167,16 +1178,17 @@ impl KeyboardLayer {
             sizes.iter().map(|size| size.2).sum::<f32>()
                 + keycaps::cap_gap(cap_height) * sizes.len().saturating_sub(1) as f32
         };
+        // The row is measured at full size in slots of its own, so a row
+        // that has to shrink keeps both its measured and its drawn labels
+        // shaped from one frame to the next.
         let mut cap_height = frame.font_size * KEYCAP_HEIGHT_PER_SIZE;
-        let mut sizes = Vec::new();
-        for _ in 0..2 {
-            sizes = self.layout_keycap_row(&caps, cap_height, frame.style, face, 0);
-            let total = row_width(&sizes, cap_height);
-            if total <= available {
-                break;
-            }
+        let measured =
+            self.layout_keycap_row(&caps, cap_height, frame.style, face, MAX_KEYCAPS * 4);
+        let total = row_width(&measured, cap_height);
+        if total > available {
             cap_height *= available / total;
         }
+        let sizes = self.layout_keycap_row(&caps, cap_height, frame.style, face, 0);
         let from_sizes = if from_caps.is_empty() {
             Vec::new()
         } else {

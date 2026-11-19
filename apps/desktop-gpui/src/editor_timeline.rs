@@ -1658,6 +1658,11 @@ impl TimelineModel {
             .map(|keyboard| KeycapStyle::from_setting(keyboard.settings.effective_style()))
             .filter(|style| *style != KeycapStyle::Classic)
             .unwrap_or(KeycapStyle::MacOs);
+        // As the overlay decides: with typing hidden, a lone key is a key.
+        let show_typing = config.keyboard.as_ref().map_or_else(
+            || cap_project::KeyboardSettings::default().show_typing,
+            |keyboard| keyboard.settings.show_typing,
+        );
         let keyboard = timeline
             .keyboard_segments
             .iter()
@@ -1671,7 +1676,7 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.display_text.clone())
                     },
-                    typed: is_typed_text(segment),
+                    typed: show_typing && is_typed_text(segment),
                     keys: keycaps::keycaps_for(&segment.display_text, key_style)
                         .into_iter()
                         .map(|cap| {

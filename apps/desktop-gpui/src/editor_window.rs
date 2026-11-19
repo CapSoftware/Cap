@@ -238,9 +238,6 @@ const PRESET_SUBMENU_WIDTH: f32 = 208.;
 const PRESET_SUBMENU_HEIGHT: f32 = 5. * 32. + 4. * 2. + 8.;
 const POPOVER_WINDOW_INSET: f32 = 8.;
 
-/// The per-preset submenu sits beside the menu, aligned with the row that
-/// summoned it: to the right when it fits, otherwise flipped to the left, and
-/// never past the window's bottom edge.
 /// A look in miniature: its background, the recording as a rounded card at
 /// the look's padding with its shadow and frame, and its keys in the
 /// corner.
@@ -391,6 +388,9 @@ fn look_preview(
         )
 }
 
+/// The per-preset submenu sits beside the menu, aligned with the row that
+/// summoned it: to the right when it fits, otherwise flipped to the left, and
+/// never past the window's bottom edge.
 fn preset_submenu_origin(
     menu_origin: gpui::Point<Pixels>,
     click: gpui::Point<Pixels>,
@@ -554,6 +554,9 @@ pub struct ProjectSummary {
     /// stored it in `recording-meta.json`: the rate it captured at, where the
     /// probed rate in `recordings` is the track's average.
     pub recorded_fps: Vec<(u32, Option<u32>)>,
+    /// The platform the recording was made on, whose keyboard an older
+    /// project's keys follow, as the renderer draws them.
+    pub platform: Option<cap_project::Platform>,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -680,6 +683,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     let duration = timeline.total_duration;
 
     Ok(ProjectSummary {
+        platform: meta.platform.clone(),
         recordings: recordings.clone(),
         pretty_name: meta.pretty_name.clone(),
         timeline,
@@ -16771,6 +16775,7 @@ mod tests {
                     .unwrap();
                     editor.set_summary(
                         ProjectSummary {
+                            platform: None,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
@@ -16919,6 +16924,7 @@ mod tests {
                     .unwrap();
                     editor.set_summary(
                         ProjectSummary {
+                            platform: None,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),

@@ -296,7 +296,14 @@ pub(crate) fn apply_caption_preset_settings(
     preset: &CaptionPreset,
 ) {
     settings.preset = preset.id.to_string();
-    settings.font = preset.font.to_string();
+    // A font the user picked themselves stays; only a preset's own face is
+    // swapped for the new preset's.
+    if CAPTION_PRESETS
+        .iter()
+        .any(|other| other.font == settings.font)
+    {
+        settings.font = preset.font.to_string();
+    }
     settings.font_weight = preset.font_weight;
     settings.size = preset.size;
     settings.color = preset.color.to_string();
@@ -383,7 +390,7 @@ pub(crate) fn key_chip_sized(
     let HEIGHT = height;
     let geometry = style.geometry();
     let depth = (geometry.depth * HEIGHT).max(2.);
-    if style == cap_rendering::keycaps::KeycapStyle::Mechanical {
+    if style.is_mechanical() {
         return mechanical_chip(theme.mechanical_palette(modifier), label, HEIGHT, depth);
     }
     let palette = theme.palette(modifier);
@@ -1506,6 +1513,20 @@ impl EditorWindow {
         self.set_keyboard_setting_inner(true, reason, window, cx, change);
     }
 
+    /// The keycap style the renderer draws for `settings`: an older project's
+    /// `auto` resolves for the platform it was recorded on, and stays on its
+    /// label when any key was coloured on its own.
+    pub(crate) fn effective_key_style<'a>(&self, settings: &'a KeyboardSettings) -> &'a str {
+        let platform = self.summary().and_then(|summary| summary.platform.as_ref());
+        let styled_keys = settings.style == "auto"
+            && self.project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.keyboard_segments.iter().any(|segment| {
+                    segment.color_override.is_some() || segment.background_color_override.is_some()
+                })
+            });
+        settings.effective_style_for(platform, styled_keys)
+    }
+
     fn set_keyboard_setting_inner(
         &mut self,
         rebuild_timeline: bool,
@@ -1514,7 +1535,20 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut KeyboardSettings),
     ) {
-        let apply = |project: &mut ProjectConfiguration| with_keyboard_settings(project, change);
+        // The first edit settles an older project's `auto` style on what it
+        // draws now, so editing its label (say, back to the default colours)
+        // can never flip it to keys mid-edit.
+        let settled = keyboard_settings(&self.project);
+        let settled =
+            (settled.style == "auto").then(|| self.effective_key_style(&settled).to_string());
+        let apply = |project: &mut ProjectConfiguration| {
+            with_keyboard_settings(project, |settings| {
+                if let Some(style) = settled {
+                    settings.style = style;
+                }
+                change(settings);
+            })
+        };
         if rebuild_timeline {
             self.edit_project(reason, window, cx, apply);
         } else {
@@ -2782,8 +2816,11 @@ impl EditorWindow {
     ) -> impl IntoElement {
         use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
         let theme = self.theme;
-        let effective = settings.effective_style().to_string();
-        let style = KeycapStyle::from_setting(&effective);
+        let effective = self.effective_key_style(settings).to_string();
+        let style = KeycapStyle::from_setting_for(
+            &effective,
+            self.summary().and_then(|summary| summary.platform.as_ref()),
+        );
         let key_theme = KeycapTheme::from_setting(&settings.theme);
         let tile_for = |&(value, label, keys): &(&'static str, fn() -> &'static str, &[&str])| {
             let tile_style = KeycapStyle::from_setting(value);
@@ -2917,7 +2954,7 @@ impl EditorWindow {
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or(tr::editor::tabs::weight::normal(), |(_, label)| label());
 
-        let classic = settings.effective_style() == "classic";
+        let classic = self.effective_key_style(&settings) == "classic";
 
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
