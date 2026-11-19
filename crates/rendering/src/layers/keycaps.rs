@@ -178,9 +178,9 @@ impl KeycapTheme {
         }
     }
 
-    /// The paint for `cap` on a `style` keyboard. A mechanical set paints
-    /// its modifiers and named keys apart from its letters, as two-tone
-    /// sets do.
+    /// The paint for `cap` on a `style` keyboard. A mechanical set is one
+    /// plastic throughout, except on the retro theme, which sets its
+    /// modifiers and named keys apart in grey as every retro keyboard does.
     pub fn palette_for(self, style: KeycapStyle, cap: &Keycap) -> KeycapPalette {
         if style == KeycapStyle::Mechanical {
             self.mechanical_palette(cap.modifier || cap.kind == KeycapKind::Named)
@@ -193,8 +193,8 @@ impl KeycapTheme {
     /// so their colours sit close to it and the light does the shaping.
     pub fn mechanical_palette(self, modifier: bool) -> KeycapPalette {
         match (self, modifier) {
-            // White letters and light grey modifiers.
-            (Self::Light, false) => KeycapPalette {
+            // Every key in one white plastic.
+            (Self::Light, _) => KeycapPalette {
                 top: [hex(0xf7f6f3), hex(0xeeece7)],
                 side: [hex(0xe3e1db), hex(0xc4c1b9)],
                 border: rgba(0x2a2824, 0.18),
@@ -205,19 +205,8 @@ impl KeycapTheme {
                 grain: 0.014,
                 gloss: 0.03,
             },
-            (Self::Light, true) => KeycapPalette {
-                top: [hex(0xd9d9d6), hex(0xcfcfcb)],
-                side: [hex(0xc3c3bf), hex(0xa4a4a0)],
-                border: rgba(0x2a2824, 0.2),
-                highlight: rgba(0xffffff, 0.75),
-                label: hex(0x262628),
-                legend: hex(0x3c3c3f),
-                shadow: 0.42,
-                grain: 0.014,
-                gloss: 0.025,
-            },
-            // Charcoal letters and near-black modifiers, pale print.
-            (Self::Dark, false) => KeycapPalette {
+            // Every key in one charcoal plastic, with pale print.
+            (Self::Dark, _) => KeycapPalette {
                 top: [hex(0x45464b), hex(0x3c3d42)],
                 side: [hex(0x38393e), hex(0x232427)],
                 border: rgba(0x000000, 0.45),
@@ -227,17 +216,6 @@ impl KeycapTheme {
                 shadow: 0.5,
                 grain: 0.01,
                 gloss: 0.03,
-            },
-            (Self::Dark, true) => KeycapPalette {
-                top: [hex(0x2e2f33), hex(0x27282b)],
-                side: [hex(0x242528), hex(0x161618)],
-                border: rgba(0x000000, 0.5),
-                highlight: rgba(0xffffff, 0.12),
-                label: hex(0xe6e6e9),
-                legend: hex(0xcfcfd3),
-                shadow: 0.5,
-                grain: 0.01,
-                gloss: 0.025,
             },
             (Self::Retro, false) => KeycapPalette {
                 top: [hex(0xf0e9d6), hex(0xe4dbc3)],
@@ -857,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mechanical_keyboard_is_a_tall_sculpted_two_tone_set() {
+    fn a_mechanical_keyboard_is_a_tall_sculpted_set() {
         let mechanical = KeycapStyle::from_setting("mechanical");
         assert_eq!(mechanical, KeycapStyle::Mechanical);
         let geometry = mechanical.geometry();
@@ -866,8 +844,8 @@ mod tests {
         for style in [KeycapStyle::MacOs, KeycapStyle::Windows, KeycapStyle::Linux] {
             assert_eq!(style.geometry().sculpt, 0.0, "{style:?}");
         }
-        // Modifiers and named keys take the darker plastic; letters and the
-        // space bar the lighter.
+        // One plastic on light and dark; retro sets its modifiers and named
+        // keys apart in grey.
         let letter = &keycaps_for("a", mechanical)[0];
         let named = &keycaps_for("⏎", mechanical)[0];
         let shift = &keycaps_for("⇧⌘a", mechanical)
@@ -876,7 +854,11 @@ mod tests {
             .unwrap();
         for theme in [KeycapTheme::Light, KeycapTheme::Dark, KeycapTheme::Retro] {
             let letters = theme.palette_for(mechanical, letter);
-            assert_ne!(letters, theme.palette_for(mechanical, named), "{theme:?}");
+            assert_eq!(
+                letters == theme.palette_for(mechanical, named),
+                theme != KeycapTheme::Retro,
+                "{theme:?}"
+            );
             assert_eq!(
                 theme.palette_for(mechanical, named),
                 theme.palette_for(mechanical, shift),
