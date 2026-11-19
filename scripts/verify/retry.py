@@ -76,8 +76,8 @@ def listener_key_collision(report, pid, exe):
     but an integer key from a process-wide counter that starts at
     pid * 1,000,000 (plus 10,000 per earlier table) and grows by one per
     registration. CoreFoundation traps (brk) when the observer equals the
-    address of one of its own sentinels in the shared cache (around 8.5e9
-    on the arm64 Macs seen). So a process whose pid times a million lands just below
+    address of its kCFNotificationAnyObserver string in the shared cache
+    (around 8.5e9 on the arm64 Macs seen). So a process whose pid times a million lands just below
     that address traps once it has made enough registrations: about 30 per
     AVAssetReader start, about 180,000 in the FULL tier AVFoundation seek
     storm. The evidence is exact: the trapping frame, its caller, and an
