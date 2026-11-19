@@ -289,6 +289,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Press Enter to show it at the playhead, then type the next.",
         ),
         (tr::editor::tabs::keyboard::add_keys(), "Add"),
+        (
+            tr::editor::tabs::keyboard::type_keys_as_text(),
+            "This will be typed out. Shortcuts look like cmd+shift+p.",
+        ),
         (tr::editor::tabs::keyboard::theme_light(), "Light"),
         (tr::editor::tabs::keyboard::theme_dark(), "Dark"),
         (tr::editor::tabs::keyboard::theme_retro(), "Retro"),
@@ -871,6 +875,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::position::manual(), "Manual"),
         (tr::editor::tabs::position::top_center(), "Top Center"),
         (tr::editor::tabs::position::top_left(), "Top Left"),
+        (tr::editor::tabs::position::middle_left(), "Middle Left"),
+        (tr::editor::tabs::position::center(), "Center"),
+        (tr::editor::tabs::position::middle_right(), "Middle Right"),
         (tr::editor::tabs::position::top_right(), "Top Right"),
         (
             tr::editor::tabs::sync::auto_description(),

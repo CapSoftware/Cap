@@ -67,6 +67,10 @@ pub enum KeyboardPosition {
     BottomLeft,
     BottomCenter,
     BottomRight,
+    /// The middle of the frame, for a video that is all about its keys.
+    MiddleLeft,
+    Center,
+    MiddleRight,
 }
 
 impl KeyboardPosition {
@@ -78,6 +82,9 @@ impl KeyboardPosition {
             "bottom-left" => Self::BottomLeft,
             "bottom-right" => Self::BottomRight,
             "bottom-center" | "bottom" => Self::BottomCenter,
+            "middle-left" => Self::MiddleLeft,
+            "center" | "middle-center" => Self::Center,
+            "middle-right" => Self::MiddleRight,
             _ => Self::AboveCaptions,
         }
     }
@@ -86,6 +93,7 @@ impl KeyboardPosition {
         match self {
             Self::TopLeft | Self::TopCenter | Self::TopRight => 0.08,
             Self::AboveCaptions => 0.75,
+            Self::MiddleLeft | Self::Center | Self::MiddleRight => 0.5,
             Self::BottomLeft | Self::BottomCenter | Self::BottomRight => 0.85,
         }
     }
@@ -647,8 +655,12 @@ impl KeyboardLayer {
         let resolved_position = resolve_keyboard_position(position, caption_layout);
 
         let background_left = match resolved_position {
-            KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => margin,
-            KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
+            KeyboardPosition::TopLeft
+            | KeyboardPosition::MiddleLeft
+            | KeyboardPosition::BottomLeft => margin,
+            KeyboardPosition::TopRight
+            | KeyboardPosition::MiddleRight
+            | KeyboardPosition::BottomRight => {
                 (width as f32 - margin - box_width).max(0.0)
             }
             _ => ((width as f32 - box_width) / 2.0).max(0.0),
@@ -1206,8 +1218,12 @@ impl KeyboardLayer {
             let squeeze = (available / total.max(1.0)).min(1.0);
             let total = total * squeeze;
             let left = match resolved_position {
-                KeyboardPosition::TopLeft | KeyboardPosition::BottomLeft => frame.margin,
-                KeyboardPosition::TopRight | KeyboardPosition::BottomRight => {
+                KeyboardPosition::TopLeft
+                | KeyboardPosition::MiddleLeft
+                | KeyboardPosition::BottomLeft => frame.margin,
+                KeyboardPosition::TopRight
+                | KeyboardPosition::MiddleRight
+                | KeyboardPosition::BottomRight => {
                     (width as f32 - frame.margin - total).max(0.0)
                 }
                 _ => ((width as f32 - total) / 2.0).max(0.0),

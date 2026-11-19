@@ -151,10 +151,14 @@ pub const TEXT_WEIGHTS: [(u32, Label); 3] = [
 ];
 
 /// `KEYBOARD_POSITION_OPTIONS` (`text-style.tsx:28-35`).
-pub const KEYBOARD_POSITIONS: [(&str, Label); 6] = [
+/// Where the keys can sit, row by row as the position picker lays them out.
+pub const KEYBOARD_POSITIONS: [(&str, Label); 9] = [
     ("top-left", tr::editor::tabs::position::top_left),
     ("top-center", tr::editor::tabs::position::top_center),
     ("top-right", tr::editor::tabs::position::top_right),
+    ("middle-left", tr::editor::tabs::position::middle_left),
+    ("center", tr::editor::tabs::position::center),
+    ("middle-right", tr::editor::tabs::position::middle_right),
     ("bottom-left", tr::editor::tabs::position::bottom_left),
     ("bottom-center", tr::editor::tabs::position::bottom_center),
     ("bottom-right", tr::editor::tabs::position::bottom_right),
@@ -3045,14 +3049,9 @@ impl EditorWindow {
                 )
             })
             .child(
-                ui::Field::inline(&theme, tr::editor::tabs::keyboard::position()).child(
-                    self.menu_select(
-                        SidebarMenu::KeyboardPosition,
-                        "keyboard-position",
-                        position_label,
-                        cx,
-                    ),
-                ),
+                ui::Field::inline(&theme, tr::editor::tabs::keyboard::position())
+                    .value_text(position_label)
+                    .child(self.render_key_position_picker(&settings.position, cx)),
             )
             .when(
                 classic && settings.font != cap_rendering::keycaps::OVERLAY_TEXT_FONT,
@@ -3282,6 +3281,97 @@ impl EditorWindow {
             .into_any_element()
     }
 
+    /// Where the keys sit, picked on a little frame: nine spots, the chosen
+    /// one holding a key, so the choice reads as the video will.
+    fn render_key_position_picker(&self, current: &str, cx: &mut Context<Self>) -> AnyElement {
+        const FRAME_WIDTH: f32 = 136.;
+        const FRAME_HEIGHT: f32 = 76.5;
+        let theme = self.theme;
+        let editor = theme.editor;
+        // An older project's "above captions" sits where bottom-center does.
+        let current = match current {
+            "top" => "top-center",
+            "bottom" | "above-captions" => "bottom-center",
+            "middle-center" => "center",
+            other => other,
+        };
+        let rows = KEYBOARD_POSITIONS.chunks(3).map(|row| {
+            div()
+                .flex()
+                .flex_1()
+                .flex_row()
+                .children(row.iter().map(|&(value, label)| {
+                    let selected = value == current;
+                    let align = |this: gpui::Div| match value.rsplit('-').next() {
+                        Some("left") => this.justify_start(),
+                        Some("right") => this.justify_end(),
+                        _ => this.justify_center(),
+                    };
+                    let vertical = |this: gpui::Div| match value.split('-').next() {
+                        Some("top") => this.items_start(),
+                        Some("bottom") => this.items_end(),
+                        _ => this.items_center(),
+                    };
+                    vertical(align(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .p(px(7.))
+                            .cursor_pointer()
+                            .group(value),
+                    ))
+                    .id(SharedString::from(format!("keyboard-position-{value}")))
+                    .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label()).view(cx))
+                    .child(if selected {
+                        // The chosen spot holds a key, as the frame will.
+                        div()
+                            .h(px(12.))
+                            .w(px(22.))
+                            .rounded(px(3.))
+                            .bg(Hsla::from(editor.accent))
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::hsla(0., 0., 0., 0.35),
+                                offset: gpui::point(px(0.), px(1.5)),
+                                blur_radius: px(0.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                            .into_any_element()
+                    } else {
+                        div()
+                            .size(px(5.))
+                            .rounded_full()
+                            .bg(Hsla::from(editor.text_3))
+                            .opacity(0.45)
+                            .group_hover(value, |style| style.opacity(1.))
+                            .into_any_element()
+                    })
+                    .when(!selected, |this| {
+                        let value = value.to_string();
+                        this.on_click(cx.listener(move |this, _, window, cx| {
+                            let value = value.clone();
+                            this.set_keyboard_setting(
+                                "keyboard-position",
+                                window,
+                                cx,
+                                move |settings| settings.position = value,
+                            );
+                        }))
+                    })
+                }))
+        });
+        div()
+            .w(px(FRAME_WIDTH))
+            .h(px(FRAME_HEIGHT))
+            .flex()
+            .flex_col()
+            .rounded(px(9.))
+            .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
+            .children(rows)
+            .into_any_element()
+    }
+
     /// Type a sentence or a shortcut and press Enter: it shows at the
     /// playhead, sized to be typed and read, and the playhead moves on so
     /// the next entry follows. The fastest way to put keys on a video made
@@ -3294,8 +3384,56 @@ impl EditorWindow {
         else {
             return div().into_any_element();
         };
-        let has_text = !input.read(cx).text().trim().is_empty();
+        let typed = input.read(cx).text().to_string();
+        let has_text = !typed.trim().is_empty();
         let add_input = input.clone();
+        // What Enter will add, drawn as it will show: a shortcut as its keys,
+        // anything else typed out on one long key.
+        let preview = has_text.then(|| {
+            use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
+            let settings = keyboard_settings(&self.project);
+            let effective = self.effective_key_style(&settings).to_string();
+            let style = match KeycapStyle::from_setting(&effective) {
+                KeycapStyle::Classic => KeycapStyle::MacOs,
+                style => style,
+            };
+            let theme_keys = KeycapTheme::from_setting(&settings.theme);
+            let text = cap_project::manual_key_text(&typed);
+            let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃' | '⇧'))
+                && text.chars().count() <= 6;
+            let labels: Vec<String> = if shortcut {
+                cap_rendering::keycaps::keycaps_for(&text, style)
+                    .into_iter()
+                    .map(|cap| match (cap.label.is_empty(), cap.legend) {
+                        (false, _) => cap.label,
+                        (true, Some(word)) => word,
+                        (true, None) => "\u{2423}".to_string(),
+                    })
+                    .collect()
+            } else {
+                let mut shown: String = text.chars().take(28).collect();
+                if text.chars().count() > 28 {
+                    shown.push('\u{2026}');
+                }
+                vec![shown]
+            };
+            let keys: Vec<&str> = labels.iter().map(String::as_str).collect();
+            // A `+` that did not make a shortcut is most likely a typo in one.
+            let looks_like_shortcut = !shortcut && typed.contains('+');
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(key_preview(style, theme_keys, &keys))
+                .when(looks_like_shortcut, |this| {
+                    this.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(theme.gray_10))
+                            .child(tr::editor::tabs::keyboard::type_keys_as_text()),
+                    )
+                })
+        });
         ui::Field::section(&theme, tr::editor::tabs::keyboard::type_keys())
             .child(
                 div()
@@ -3340,12 +3478,15 @@ impl EditorWindow {
                                 )),
                             ),
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
-                            .child(tr::editor::tabs::keyboard::type_keys_hint()),
-                    ),
+                    .map(|this| match preview {
+                        Some(preview) => this.child(preview),
+                        None => this.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_10))
+                                .child(tr::editor::tabs::keyboard::type_keys_hint()),
+                        ),
+                    }),
             )
             .into_any_element()
     }
@@ -4998,7 +5139,8 @@ mod tests {
         assert_eq!(CAPTION_PRESETS[1].id, "classic");
         assert_eq!(CAPTION_PRESETS[3].highlight_style, "pill");
         assert_eq!(CAPTION_POSITIONS[0].0, "manual");
-        assert_eq!(KEYBOARD_POSITIONS.len(), 6);
+        assert_eq!(KEYBOARD_POSITIONS.len(), 9);
+        assert_eq!(KEYBOARD_POSITIONS[4].0, "center");
         assert_eq!(FONT_OPTIONS.len(), 4);
         for font in FONT_OPTIONS {
             assert_eq!(font_option_label(font).as_ref(), font);
