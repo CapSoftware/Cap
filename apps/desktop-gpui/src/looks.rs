@@ -231,7 +231,7 @@ pub static LOOKS: [Look; 8] = [
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
         keys: LookKeys {
-            style: Some("linux"),
+            style: Some("mechanical"),
             theme: "retro",
         },
         captions: "classic",

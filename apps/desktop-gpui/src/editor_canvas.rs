@@ -483,15 +483,19 @@ pub fn caption_nudge_center(
 
 /// The caption font size a corner drag asks for: the box grows about its
 /// centre, so the pointer's travel counts twice, and the size scales with the
-/// average of the two sides' growth. `start_px` is the box in canvas pixels.
+/// average of the two sides' growth. A box pinned to the left or right margin
+/// (`edge_pinned`) grows sideways from that edge only, so there the travel
+/// counts once across. `start_px` is the box in canvas pixels.
 pub fn caption_resize_size(
     start_size: u32,
     start_px: (f64, f64),
     delta: (f64, f64),
     dir: (i8, i8),
+    edge_pinned: bool,
 ) -> u32 {
     let (w, h) = (start_px.0.max(1.), start_px.1.max(1.));
-    let grow_w = (w + 2. * f64::from(dir.0) * delta.0) / w;
+    let across = if edge_pinned { 1. } else { 2. };
+    let grow_w = (w + across * f64::from(dir.0) * delta.0) / w;
     let grow_h = (h + 2. * f64::from(dir.1) * delta.1) / h;
     let factor = ((grow_w + grow_h) / 2.).max(0.05);
     (f64::from(start_size) * factor)
@@ -1147,11 +1151,18 @@ impl EditorWindow {
                     self.write_overlay_rect(element, rect, cx);
                 }
                 CanvasSelection::Captions => {
+                    let edge_pinned = self.project.captions.as_ref().is_some_and(|captions| {
+                        matches!(
+                            captions.settings.position.as_str(),
+                            "top-left" | "bottom-left" | "top-right" | "bottom-right"
+                        )
+                    });
                     let next = caption_resize_size(
                         caption_size,
                         (start.w * size.0, start.h * size.1),
                         delta,
                         (dir_x, dir_y),
+                        edge_pinned,
                     );
                     self.write_caption_size(next, cx);
                 }
@@ -2833,8 +2844,10 @@ mod tests {
             w: 0.2,
             h: 0.1,
         };
-        let mut project = cap_project::ProjectConfiguration::default();
-        project.captions = Some(cap_project::CaptionsData::default());
+        let mut project = cap_project::ProjectConfiguration {
+            captions: Some(cap_project::CaptionsData::default()),
+            ..Default::default()
+        };
         project.captions.as_mut().unwrap().settings.position = "bottom-center".into();
         assert!(switch_captions_to_manual(&mut project, 1., drawn));
         let settings = &project.captions.as_ref().unwrap().settings;
@@ -2897,21 +2910,28 @@ mod tests {
         // Dragging the bottom-right corner out by a quarter of each side
         // grows the box by half, as it grows about its centre: 40 becomes 60.
         assert_eq!(
-            caption_resize_size(40, (400., 40.), (100., 10.), (1, 1)),
+            caption_resize_size(40, (400., 40.), (100., 10.), (1, 1), false),
             60
         );
         // The top-left corner pulled inward shrinks it.
         assert_eq!(
-            caption_resize_size(40, (400., 40.), (100., 10.), (-1, -1)),
+            caption_resize_size(40, (400., 40.), (100., 10.), (-1, -1), false),
             20
         );
         assert_eq!(
-            caption_resize_size(40, (400., 40.), (-400., -40.), (1, 1)),
+            caption_resize_size(40, (400., 40.), (-400., -40.), (1, 1), false),
             12
         );
         assert_eq!(
-            caption_resize_size(90, (400., 40.), (400., 40.), (1, 1)),
+            caption_resize_size(90, (400., 40.), (400., 40.), (1, 1), false),
             100
+        );
+        // Pinned to the left margin, the box widens from that edge only:
+        // its width grows by a quarter, its height (about its centre) by
+        // half, so 40 becomes 55, where an unpinned box would reach 60.
+        assert_eq!(
+            caption_resize_size(40, (400., 40.), (100., 10.), (1, 1), true),
+            55
         );
     }
 

@@ -3160,15 +3160,25 @@ impl EditorWindow {
                         event.touch_phase != gpui::TouchPhase::Started
                             && now.duration_since(*at) < WHEEL_GESTURE_GAP
                     });
+                    // A notched wheel that ran the row to its end hands the
+                    // rest of its spin to the panel, rather than stalling
+                    // there until the wheel pauses.
+                    let x = f32::from(row_offset.x);
+                    let row_can_move = |dx: f32| (dx > 0. && x < 0.) || (dx < 0. && x > -row_max);
+                    let held = held.filter(|(axis, _)| {
+                        smooth
+                            || *axis != WheelAxis::Row
+                            || row_can_move(wheel_step(WheelAxis::Row, delta))
+                    });
                     let axis = match held {
                         Some((axis, _)) => axis,
                         None => {
-                            let x = f32::from(row_offset.x);
-                            let Some(axis) =
-                                latch_wheel_axis(delta, smooth, event.modifiers.shift, |dx| {
-                                    (dx > 0. && x < 0.) || (dx < 0. && x > -row_max)
-                                })
-                            else {
+                            let Some(axis) = latch_wheel_axis(
+                                delta,
+                                smooth,
+                                event.modifiers.shift,
+                                row_can_move,
+                            ) else {
                                 return;
                             };
                             axis

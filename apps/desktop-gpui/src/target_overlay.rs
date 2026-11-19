@@ -3459,7 +3459,9 @@ impl OverlayWindow {
                             .rounded_full()
                             .bg(gpui::hsla(0., 0., 0., 0.55))
                             .text_size(px(12.))
-                            .text_color(self.theme.gray_11)
+                            // The capsule is dark in both themes, so its ink
+                            // is light in both.
+                            .text_color(gpui::hsla(0., 0., 0.86, 1.))
                             .child(caption),
                     ),
             )

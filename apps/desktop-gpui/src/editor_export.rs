@@ -4739,7 +4739,18 @@ fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
         ui.resolution = source_resolution(ui.source.size, resolutions, largest);
     }
     if !fps_options.contains(&ui.fps) {
-        ui.fps = if ui.format == ExportFormatKind::Gif {
+        // A GIF rate this version no longer offers keeps the nearest one
+        // (a saved 25 stays smooth at 30), ties going to the lower rate. A
+        // rate past what GIFs offer, such as 60 carried over from MP4, takes
+        // the light default.
+        let gif_max = fps_options.iter().copied().max().unwrap_or(15);
+        ui.fps = if ui.format == ExportFormatKind::Gif && ui.fps <= gif_max {
+            fps_options
+                .iter()
+                .copied()
+                .min_by_key(|option| (option.abs_diff(ui.fps), *option))
+                .unwrap_or(15)
+        } else if ui.format == ExportFormatKind::Gif {
             15
         } else {
             30
@@ -5265,6 +5276,13 @@ mod tests {
         ui.fps = 60;
         normalize_export_options(&mut ui, false);
         assert_eq!((ui.resolution, ui.fps), (ExportResolution::P1080, 15));
+
+        // A GIF rate saved by an older version keeps the nearest one offered.
+        for (saved, kept) in [(25, 30), (20, 15), (5, 10)] {
+            ui.fps = saved;
+            normalize_export_options(&mut ui, false);
+            assert_eq!(ui.fps, kept, "{saved}");
+        }
     }
 
     #[test]
