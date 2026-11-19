@@ -197,16 +197,16 @@ describe("transcribe query", () => {
 	});
 
 	it("takes a speaker session and clip number for meeting clips", () => {
-		expect(
-			parseTranscribeQuery({ session: "doc_8f2:mic", seq: "12" }),
-		).toEqual({
-			ok: true,
-			data: {
-				language: "auto",
-				keywords: [],
-				speakers: { session: "doc_8f2:mic", seq: 12 },
+		expect(parseTranscribeQuery({ session: "doc_8f2:mic", seq: "12" })).toEqual(
+			{
+				ok: true,
+				data: {
+					language: "auto",
+					keywords: [],
+					speakers: { session: "doc_8f2:mic", seq: 12 },
+				},
 			},
-		});
+		);
 		expect(parseTranscribeQuery({ session: "doc_8f2:system" })).toMatchObject({
 			ok: true,
 			data: { speakers: { session: "doc_8f2:system", seq: 0 } },

@@ -563,14 +563,29 @@ describe("POST /transcribe", () => {
 			language_code: "en",
 			words: [
 				{ text: "Hi", start: 100, end: 300, confidence: 0.9, speaker: "A" },
-				{ text: "there.", start: 320, end: 700, confidence: 0.9, speaker: null },
+				{
+					text: "there.",
+					start: 320,
+					end: 700,
+					confidence: 0.9,
+					speaker: null,
+				},
 			],
 		});
-		const response = await transcribe(wav(16_000), "?session=doc_1:system&seq=4");
+		const response = await transcribe(
+			wav(16_000),
+			"?session=doc_1:system&seq=4",
+		);
 		expect(response.status).toBe(200);
 		expect((await response.json()).words).toEqual([
 			{ text: "Hi", startMs: 100, endMs: 300, confidence: 0.9, speaker: "A" },
-			{ text: "there.", startMs: 320, endMs: 700, confidence: 0.9, speaker: null },
+			{
+				text: "there.",
+				startMs: 320,
+				endMs: 700,
+				confidence: 0.9,
+				speaker: null,
+			},
 		]);
 		const params = mocks.submit.mock.calls[0]?.[0] as Record<string, unknown>;
 		expect(params).toMatchObject({ speaker_labels: true, cap_speaker_seq: 4 });
@@ -580,7 +595,13 @@ describe("POST /transcribe", () => {
 
 	it("sends no speaker fields without a session", async () => {
 		signIn();
-		mocks.submit.mockResolvedValue({ id: "tr_n", status: "completed", text: "", language_code: "en", words: [] });
+		mocks.submit.mockResolvedValue({
+			id: "tr_n",
+			status: "completed",
+			text: "",
+			language_code: "en",
+			words: [],
+		});
 		await transcribe(wav(16_000));
 		const params = mocks.submit.mock.calls[0]?.[0] as Record<string, unknown>;
 		expect(params).not.toHaveProperty("speaker_labels");
