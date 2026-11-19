@@ -32,10 +32,11 @@ pub const VIDEO_IMPORT_EXTENSIONS: &[&str] =
     &["mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv"];
 pub const IMAGE_IMPORT_EXTENSIONS: &[&str] =
     &["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
+pub const AUDIO_IMPORT_EXTENSIONS: &[&str] = &["mp3", "wav", "m4a", "aac", "ogg", "opus", "flac"];
 /// The tray's combined "Media Files" filter (`src-tauri/src/tray.rs:845-851`).
 const MEDIA_IMPORT_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "wmv", "m4v", "flv", "png", "jpg", "jpeg", "webp", "gif",
-    "bmp", "tif", "tiff",
+    "bmp", "tif", "tiff", "mp3", "wav", "m4a", "aac", "ogg", "opus", "flac",
 ];
 pub(crate) const OVERLAY_IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
@@ -67,6 +68,10 @@ pub fn is_supported_video_import_path(path: &Path) -> bool {
 
 pub fn is_supported_image_import_path(path: &Path) -> bool {
     path.is_file() && has_supported_extension(path, IMAGE_IMPORT_EXTENSIONS)
+}
+
+pub fn is_supported_audio_import_path(path: &Path) -> bool {
+    path.is_file() && has_supported_extension(path, AUDIO_IMPORT_EXTENSIONS)
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +150,7 @@ fn imported_video_meta(
                 cursors: Cursors::default(),
                 status: Some(status),
                 cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
+                audio_only: false,
             },
         })),
         upload: None,
@@ -263,7 +269,7 @@ fn apply_progress(update: ImportProgress, cx: &mut App) {
 /// The refresh seam a finished import rides: the Recents carousel, the
 /// settings Recordings page and the tray's Previous submenu
 /// (`refresh_library_after_delete`), and the open library panel.
-fn refresh_libraries(cx: &mut App) {
+pub(crate) fn refresh_libraries(cx: &mut App) {
     if !cx.has_global::<crate::app_windows::AppWindows>() {
         return;
     }
@@ -332,6 +338,7 @@ pub fn pick_and_import_media(cx: &mut App) {
                 (tr::import::filter::media(), MEDIA_IMPORT_EXTENSIONS),
                 (tr::import::filter::video(), VIDEO_IMPORT_EXTENSIONS),
                 (tr::import::filter::image(), IMAGE_IMPORT_EXTENSIONS),
+                (tr::import::filter::audio(), AUDIO_IMPORT_EXTENSIONS),
             ],
             cx,
         )
@@ -343,6 +350,8 @@ pub fn pick_and_import_media(cx: &mut App) {
             cx.update(|cx| import_video_from_path(path, cx));
         } else if is_supported_image_import_path(&path) {
             cx.update(|cx| import_image_from_path(path, cx));
+        } else if is_supported_audio_import_path(&path) {
+            cx.update(|cx| import_audio_from_path(path, cx));
         } else {
             tracing::error!(path = %path.display(), "unsupported media import path");
             show_error_dialog(tr::import::unsupported().to_string());
@@ -356,6 +365,19 @@ pub fn pick_and_import_media(cx: &mut App) {
 pub fn import_video_from_path(source_path: PathBuf, cx: &mut App) {
     tracing::info!(source = %source_path.display(), "starting video import");
     spawn_import(cx, move |tx| run_video_import(&source_path, &tx));
+}
+
+pub fn import_audio_from_path(source_path: PathBuf, cx: &mut App) {
+    tracing::info!(source = %source_path.display(), "starting audio import");
+    let pretty_name = generate_project_name(&source_path, "Imported Audio");
+    crate::audio_project::open_audio_in_editor(
+        cap_export::audio_project::AudioProjectSources {
+            microphone: Some(source_path),
+            system_audio: None,
+        },
+        pretty_name,
+        cx,
+    );
 }
 
 /// `start_image_import`: decodes on a worker thread and writes a screenshot
@@ -465,7 +487,10 @@ fn show_import_error(kind: ImportKind, message: &str) {
     });
 }
 
-fn show_error_dialog(description: String) {
+pub(crate) fn show_error_dialog(description: String) {
+    if cfg!(test) {
+        return;
+    }
     let _ = rfd::MessageDialog::new()
         .set_title(tr::import::error_title())
         .set_description(description)

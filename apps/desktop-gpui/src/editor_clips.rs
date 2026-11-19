@@ -1614,6 +1614,12 @@ impl EditorWindow {
             return;
         }
         if source.is_file() && has_allowed_extension(&source.to_string_lossy(), &["mp4"]) {
+            if self.is_audio_only() {
+                let error = tr::editor::clips::error::audio_only_mix();
+                cx.spawn(async move |_, _| show_import_error(error))
+                    .detach();
+                return;
+            }
             self.import_mp4(source, window, cx);
             return;
         }
@@ -2491,6 +2497,7 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                 cursors: Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
                 cursor_shape_version: 0,
+                audio_only: false,
             },
         };
     }
@@ -3396,6 +3403,14 @@ pub(crate) fn append_cap_project_to_editor(
         StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux => {}
     }
 
+    let target_audio_only = RecordingMeta::load_for_project(target_project_path)
+        .ok()
+        .and_then(|meta| meta.studio_meta().map(StudioRecordingMeta::is_audio_only))
+        .unwrap_or(false);
+    if source_studio_meta.is_audio_only() != target_audio_only {
+        return Err(tr::editor::clips::error::audio_only_mix().to_string());
+    }
+
     let source_segments = studio_segments_for_import(source_studio_meta);
     if source_segments.is_empty() {
         return Err(tr::editor::clips::error::source_empty().to_string());
@@ -3716,6 +3731,7 @@ mod tests {
                             cursors: Cursors::default(),
                             status: Some(StudioRecordingStatus::Complete),
                             cursor_shape_version: 0,
+                            audio_only: false,
                         },
                     },
                 )),

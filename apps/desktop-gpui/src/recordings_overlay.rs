@@ -222,6 +222,8 @@ struct Entry {
     thumbnail: Option<PathBuf>,
     details: Option<Details>,
     shared: bool,
+    /// Sound only: no thumbnail, and no share link, since links play video.
+    audio_only: bool,
     state: ActionState,
     cancel: Arc<AtomicBool>,
     task: Option<Task<()>>,
@@ -686,17 +688,21 @@ impl Overlay {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let thumbnail = match kind {
-            MediaKind::Recording => recording_thumbnail(&path),
-            MediaKind::Screenshot => Some(path.clone()),
-        };
         let bundle = match kind {
             MediaKind::Recording => path.clone(),
             MediaKind::Screenshot => path.parent().map(Path::to_path_buf).unwrap_or_default(),
         };
-        let shared = RecordingMeta::load_for_project(&bundle)
-            .ok()
-            .is_some_and(|meta| meta.sharing.is_some());
+        let meta = RecordingMeta::load_for_project(&bundle).ok();
+        let shared = meta.as_ref().is_some_and(|meta| meta.sharing.is_some());
+        let audio_only = meta
+            .as_ref()
+            .and_then(RecordingMeta::studio_meta)
+            .is_some_and(cap_project::StudioRecordingMeta::is_audio_only);
+        let thumbnail = match kind {
+            MediaKind::Recording if audio_only => None,
+            MediaKind::Recording => recording_thumbnail(&path),
+            MediaKind::Screenshot => Some(path.clone()),
+        };
         self.entries.insert(
             0,
             Entry {
@@ -706,6 +712,7 @@ impl Overlay {
                 thumbnail,
                 details: None,
                 shared,
+                audio_only,
                 state: ActionState::Idle,
                 cancel: Arc::new(AtomicBool::new(false)),
                 task: None,
@@ -1495,6 +1502,14 @@ impl OverlayView {
                 .inset_0()
                 .rounded(px(CARD_INNER_RADIUS))
                 .bg(theme.gray_5)
+                .when(entry.audio_only, |this| {
+                    this.flex().items_center().justify_center().child(
+                        svg()
+                            .path("icons/microphone.svg")
+                            .size(px(28.))
+                            .text_color(theme.gray_11),
+                    )
+                })
                 .into_any_element(),
         };
 
@@ -1552,12 +1567,9 @@ impl OverlayView {
                         )
                     }),
             )
-            .child(
-                div()
-                    .absolute()
-                    .bottom(px(10.))
-                    .right(px(10.))
-                    .child(self.action_button(
+            .when(!entry.audio_only, |this| {
+                this.child(div().absolute().bottom(px(10.)).right(px(10.)).child(
+                    self.action_button(
                         ("overlay-share", id),
                         "icons/upload-arrow.svg",
                         if has_link {
@@ -1566,8 +1578,9 @@ impl OverlayView {
                             tr::recordings_overlay::create_link()
                         },
                         cx.listener(move |this, _, _, cx| this.share(id, cx)),
-                    )),
-            )
+                    ),
+                ))
+            })
             .child(
                 div()
                     .absolute()

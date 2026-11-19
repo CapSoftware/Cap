@@ -513,6 +513,13 @@ pub enum StudioRecordingMeta {
 }
 
 impl StudioRecordingMeta {
+    pub fn is_audio_only(&self) -> bool {
+        match self {
+            StudioRecordingMeta::SingleSegment { .. } => false,
+            StudioRecordingMeta::MultipleSegments { inner } => inner.audio_only,
+        }
+    }
+
     /// Notch captured with this recording. Every segment shares one display, so
     /// the first segment speaks for all of them. `None` for recordings made
     /// before Cap started capturing this, and for every non-macOS recording.
@@ -708,6 +715,11 @@ pub struct MultipleSegments {
     pub status: Option<StudioRecordingStatus>,
     #[serde(default, skip_serializing_if = "is_legacy_cursor_shape_version")]
     pub cursor_shape_version: u32,
+    /// Recorded from the microphone and system audio alone. Each segment's
+    /// display track is a small black placeholder that keeps the timeline,
+    /// recovery and the editor on their usual paths; it is never shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio_only: bool,
 }
 
 fn is_legacy_cursor_shape_version(version: &u32) -> bool {
@@ -1770,6 +1782,7 @@ mod ordinary_media_access_tests {
                 cursors: Cursors::default(),
                 status,
                 cursor_shape_version: 0,
+                audio_only: false,
             },
         }
     }
