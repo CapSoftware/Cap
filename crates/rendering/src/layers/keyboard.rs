@@ -660,9 +660,7 @@ impl KeyboardLayer {
             | KeyboardPosition::BottomLeft => margin,
             KeyboardPosition::TopRight
             | KeyboardPosition::MiddleRight
-            | KeyboardPosition::BottomRight => {
-                (width as f32 - margin - box_width).max(0.0)
-            }
+            | KeyboardPosition::BottomRight => (width as f32 - margin - box_width).max(0.0),
             _ => ((width as f32 - box_width) / 2.0).max(0.0),
         };
 
@@ -1223,9 +1221,7 @@ impl KeyboardLayer {
                 | KeyboardPosition::BottomLeft => frame.margin,
                 KeyboardPosition::TopRight
                 | KeyboardPosition::MiddleRight
-                | KeyboardPosition::BottomRight => {
-                    (width as f32 - frame.margin - total).max(0.0)
-                }
+                | KeyboardPosition::BottomRight => (width as f32 - frame.margin - total).max(0.0),
                 _ => ((width as f32 - total) / 2.0).max(0.0),
             };
             let mut x = left;
