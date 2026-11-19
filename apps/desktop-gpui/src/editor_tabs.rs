@@ -1073,7 +1073,6 @@ pub enum SidebarMenu {
     CaptionAnimation,
     CaptionWeight,
     KeyboardFont,
-    KeyboardPosition,
     KeyboardWeight,
     /// The segment panels' own selects carry their segment index.
     ///
@@ -1187,10 +1186,6 @@ impl EditorWindow {
             SidebarMenu::KeyboardFont => FONT_OPTIONS
                 .iter()
                 .map(|font| ui::MenuItem::new(font_option_label(font), *font == keyboard.font))
-                .collect(),
-            SidebarMenu::KeyboardPosition => KEYBOARD_POSITIONS
-                .iter()
-                .map(|(value, label)| ui::MenuItem::new(label(), *value == keyboard.position))
                 .collect(),
             SidebarMenu::KeyboardWeight => TEXT_WEIGHTS
                 .iter()
@@ -1437,15 +1432,6 @@ impl EditorWindow {
                 let font = font.to_string();
                 self.set_keyboard_setting("keyboard-font", window, cx, move |settings| {
                     settings.font = font
-                });
-            }
-            SidebarMenu::KeyboardPosition => {
-                let Some((value, _)) = KEYBOARD_POSITIONS.get(index) else {
-                    return;
-                };
-                let value = value.to_string();
-                self.set_keyboard_setting("keyboard-position", window, cx, move |settings| {
-                    settings.position = value
                 });
             }
             SidebarMenu::KeyboardWeight => {

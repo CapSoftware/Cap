@@ -14013,7 +14013,6 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::CaptionAnimation
         | SidebarMenu::CaptionWeight
         | SidebarMenu::KeyboardFont
-        | SidebarMenu::KeyboardPosition
         | SidebarMenu::KeyboardWeight => false,
     });
     if indexed {
@@ -16808,7 +16807,6 @@ mod tests {
             SidebarMenu::CaptionAnimation,
             SidebarMenu::CaptionWeight,
             SidebarMenu::KeyboardFont,
-            SidebarMenu::KeyboardPosition,
             SidebarMenu::KeyboardWeight,
         ] {
             let mut menu = open_sidebar_menu_for_test(kind);
