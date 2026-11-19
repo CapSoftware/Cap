@@ -29,6 +29,11 @@ impl Default for HwDecoderCapabilities {
 
 static HW_CAPABILITIES: OnceLock<HwDecoderCapabilities> = OnceLock::new();
 
+/// The largest frame, in pixels, a decoder opens or decodes, so a video's
+/// declared size cannot make it allocate without bound. 8K fits in either
+/// orientation, with room for the block padding decoders add.
+pub const MAX_DECODE_PIXELS: u64 = 40_000_000;
+
 #[cfg(target_os = "windows")]
 fn query_d3d11_video_decoder_capabilities() -> HwDecoderCapabilities {
     use windows::{
@@ -472,12 +477,20 @@ impl FFmpegDecoder {
             )
         };
 
+        if u64::from(width) * u64::from(height) > MAX_DECODE_PIXELS {
+            return Err(format!(
+                "video is {width}x{height}, above the {MAX_DECODE_PIXELS} pixel limit for decoded frames"
+            ));
+        }
+
         // avcodec_open2, which `.video()` calls, reads the thread settings, so
         // software threading must be configured on the unopened decoder.
         let open = |software_threading: bool| -> Result<avcodec::decoder::Video, String> {
             let mut decoder = avcodec::Context::from_parameters(input_stream.parameters())
                 .map_err(|e| format!("decoder context / {e}"))?
                 .decoder();
+            // A stream can carry larger frames than it declares.
+            unsafe { (*decoder.as_mut_ptr()).max_pixels = MAX_DECODE_PIXELS as i64 };
             if software_threading {
                 configure_software_threading(&mut decoder, width, height);
             }
@@ -1149,5 +1162,70 @@ mod tests {
         assert!(open_fragmented_input(directory.path()).is_err());
         std::fs::create_dir(directory.path().join("segment_001.m4s")).unwrap();
         assert!(open_fragmented_input(directory.path()).is_err());
+    }
+
+    /// One flat full-chroma frame. MJPEG keeps the file and the encoder small
+    /// at sizes x264 would need hundreds of megabytes for.
+    fn write_full_chroma_still(path: &Path, width: u32, height: u32) {
+        ffmpeg::init().unwrap();
+        let codec = avcodec::encoder::find(avcodec::Id::MJPEG).unwrap();
+        let mut output = avformat::output(&path).unwrap();
+        let mut encoder = avcodec::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        encoder.set_width(width);
+        encoder.set_height(height);
+        encoder.set_format(avformat::Pixel::YUVJ444P);
+        encoder.set_time_base((1, 30));
+        let mut encoder = encoder.open_as(codec).unwrap();
+        let mut stream = output.add_stream(codec).unwrap();
+        stream.set_parameters(&encoder);
+        output.write_header().unwrap();
+        let stream_time_base = output.stream(0).unwrap().time_base();
+        let mut frame = avframe::Video::new(avformat::Pixel::YUVJ444P, width, height);
+        for plane in 0..3 {
+            frame
+                .data_mut(plane)
+                .fill(if plane == 0 { 90 } else { 128 });
+        }
+        frame.set_pts(Some(0));
+        encoder.send_frame(&frame).unwrap();
+        encoder.send_eof().unwrap();
+        let mut packet = ffmpeg::Packet::empty();
+        while encoder.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(0);
+            packet.rescale_ts((1, 30), stream_time_base);
+            packet.write_interleaved(&mut output).unwrap();
+        }
+        output.write_trailer().unwrap();
+    }
+
+    #[test]
+    fn the_pixel_limit_covers_8k_in_either_orientation() {
+        for (width, height) in [(7680_u32, 4320_u32), (8192, 4320), (4320, 8192)] {
+            assert!(u64::from(width) * u64::from(height) <= MAX_DECODE_PIXELS);
+        }
+    }
+
+    #[test]
+    fn video_above_the_pixel_limit_is_refused_before_decoding() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("oversized.mkv");
+        write_full_chroma_still(&path, 8002, 5000);
+        let error = FFmpegDecoder::new(&path, None)
+            .err()
+            .expect("a video above the pixel limit should not open");
+        assert!(error.contains("8002x5000"), "{error}");
+    }
+
+    #[test]
+    fn video_at_the_pixel_limit_still_decodes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("at-limit.mkv");
+        write_full_chroma_still(&path, 8000, 5000);
+        let mut decoder = FFmpegDecoder::new(&path, None).unwrap();
+        let frame = decoder.frames().next().unwrap().unwrap();
+        assert_eq!((frame.width(), frame.height()), (8000, 5000));
     }
 }
