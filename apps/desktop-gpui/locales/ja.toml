@@ -3238,6 +3238,11 @@ save_failed = "{path}の録画タイトルを保存できませんでした：{e
 clear_all = "すべて消去"
 delete = "削除"
 
+[editor.window.track_rename]
+title = "トラック名を変更"
+placeholder = "トラック名"
+confirm = "名前を変更"
+
 [editor.window.transition]
 title = "トランジション"
 add = "トランジションを追加"

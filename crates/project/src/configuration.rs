@@ -3224,6 +3224,8 @@ pub struct ProjectConfiguration {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub markers: Vec<TimelineMarker>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub track_names: std::collections::BTreeMap<String, String>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -3286,6 +3288,7 @@ impl Default for ProjectConfiguration {
             auto_zoom_version: 0,
             auto_zoom_pending: false,
             markers: Vec::new(),
+            track_names: Default::default(),
         }
     }
 }

@@ -3238,6 +3238,11 @@ save_failed = "Impossible d'enregistrer le titre de l'enregistrement pour {path}
 clear_all = "Tout effacer"
 delete = "Supprimer"
 
+[editor.window.track_rename]
+title = "Renommer la piste"
+placeholder = "Nom de la piste"
+confirm = "Renommer"
+
 [editor.window.transition]
 title = "Transition"
 add = "Ajouter une transition"
