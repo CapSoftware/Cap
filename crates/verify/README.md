@@ -163,7 +163,7 @@ blessed failure is a bug that the suite keeps checking.
   and cached; workspace crates are not optimised. A platform with
   `shards > 1` in `suites.json` uploads a nextest archive, and shard jobs run
   partitions of it.
-- **No retries, except for a proven machine stall.** Every test process
+- **No retries, except for a proven machine stall or OS bug.** Every test process
   runs a starvation sentinel (`crates/verify/src/sentinel.rs`): a
   high-priority thread that sleeps 2 ms and records how late it wakes, plus
   the process CPU time over wall time. Each case record carries that series
@@ -172,7 +172,13 @@ blessed failure is a bug that the suite keeps checking.
   process. Only wall-clock failures are excused by it: a real-time playback
   case that delivered too few frames becomes `inconclusive`, and a test
   killed at its timeout, by wgpu's 6.3 s queue drain or by a lost GPU device is
-  retryable when its sentinel log shows the gap. `scripts/verify/retry.py` reruns those tests
+  retryable when its sentinel log shows the gap. One OS bug is retried on
+  exact evidence too: on macOS, CoreMedia passes integer listener keys
+  (pid * 1,000,000 plus a counter) to CoreFoundation as observer pointers,
+  and CoreFoundation traps when a key equals one of its sentinel addresses.
+  A test that dies of SIGTRAP is retryable when its crash report shows that
+  trap with a key of its own pid; the retry runs under another pid.
+  `scripts/verify/retry.py` reruns those tests
   once with `CAP_VERIFY_RETRY=1`; a case that is inconclusive again fails as
   `environment`, and the job passes only if every failure was retryable and
   every retry passed. Content, frame identity, timestamps and sync never
