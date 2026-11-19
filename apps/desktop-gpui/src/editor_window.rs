@@ -5404,6 +5404,7 @@ impl EditorWindow {
             });
             if selection.is_some() {
                 self.clear_marker_selection();
+                self.key_prompt = None;
                 if self.audio_import_pending != Some(self.audio_picker_generation) {
                     self.audio_picker = None;
                     self.audio_picker_request = None;

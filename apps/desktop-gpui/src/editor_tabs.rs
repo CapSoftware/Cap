@@ -3522,6 +3522,10 @@ impl EditorWindow {
     pub(crate) fn open_key_prompt(&mut self, at: f64, window: &mut Window, cx: &mut Context<Self>) {
         self.set_selection(None, cx);
         self.audio_picker = None;
+        // The panel draws in the sidebar, which only Style shows.
+        if self.panel_tab() != crate::editor_side_panel::PanelTab::Style {
+            self.set_panel_tab(crate::editor_side_panel::PanelTab::Style, window, cx);
+        }
         self.key_prompt = Some(at);
         self.ensure_field(crate::editor_panels::FieldKey::KeyComposer, window, cx);
         if let Some(input) = self

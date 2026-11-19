@@ -1436,8 +1436,10 @@ impl KeyboardLayer {
                 );
                 // While text types out, its newest letter rises into place
                 // beside the ones already set, fading in as it comes.
+                // It rises at the keys' own pace: not at all with no fade.
+                let rise_for = LETTER_RISE * frame.pace;
                 let rising = frame.fresh.filter(|age| {
-                    *age < LETTER_RISE && index + 1 == drawn.len() && cap.kind == KeycapKind::Wide
+                    *age < rise_for && index + 1 == drawn.len() && cap.kind == KeycapKind::Wide
                 });
                 if let Some(age) = rising {
                     let split = cap.label.char_indices().last().map_or(0, |(at, _)| at);
@@ -1471,11 +1473,9 @@ impl KeyboardLayer {
                         face.1,
                     );
                     let rise = |age: f64| {
-                        (1.0 - ease_out_cubic(progress(age, LETTER_RISE))) as f32
-                            * label.size
-                            * 0.45
+                        (1.0 - ease_out_cubic(progress(age, rise_for))) as f32 * label.size * 0.45
                     };
-                    let shown = ease_out_cubic(progress(age, LETTER_RISE * 0.7)) as f32;
+                    let shown = ease_out_cubic(progress(age, rise_for * 0.7)) as f32;
                     let mut ink_color = palette.label;
                     ink_color[3] *= shown;
                     let shutter = KEYCAP_SHUTTER * frame.pace.min(1.0);

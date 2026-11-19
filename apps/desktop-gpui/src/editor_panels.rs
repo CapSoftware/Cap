@@ -3044,11 +3044,6 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         if key == FieldKey::KeyComposer {
-            // Enter adds what was typed and clears the box for the next
-            // entry, keeping it focused; Escape clears it.
-            let Some(input) = self.field(key).cloned() else {
-                return;
-            };
             match event {
                 // A script can run over lines, so Enter is a new line and
                 // the panel's Add button adds it; Escape closes the panel.
