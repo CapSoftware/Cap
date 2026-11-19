@@ -7522,6 +7522,10 @@ pub(crate) fn camera_window_id(cx: &mut App) -> Option<scap_targets::WindowId> {
     camera_window_number(cx).and_then(|number| number.to_string().parse().ok())
 }
 
+pub(crate) fn camera_window_open(cx: &App) -> bool {
+    cx.global::<AppWindows>().camera.is_some()
+}
+
 pub(crate) fn camera_preview_shown(cx: &App) -> bool {
     let windows = cx.global::<AppWindows>();
     windows.camera.is_some() && !windows.camera_preview_hidden

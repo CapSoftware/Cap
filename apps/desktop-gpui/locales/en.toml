@@ -2561,7 +2561,7 @@ reuploaded = "Your latest edit is ready at the same link"
 uploaded = "Your Cap has been uploaded successfully"
 
 [editor.export.enhance]
-description = "Sharpens zoomed-in and low-contrast screen content. Exports can take longer."
+description = "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer."
 title = "Enhance quality"
 
 [editor.export.estimate]
