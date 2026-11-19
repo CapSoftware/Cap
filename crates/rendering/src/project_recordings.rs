@@ -282,8 +282,8 @@ impl Audio {
             return Ok(audio);
         }
 
-        let input =
-            ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {e}"))?;
+        let input = cap_enc_ffmpeg::decode_limit::open_input(path)
+            .map_err(|e| format!("Failed to open audio: {e}"))?;
         Self::from_input(&input, start_time)
     }
 
