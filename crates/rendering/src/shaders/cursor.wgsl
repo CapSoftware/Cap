@@ -16,6 +16,15 @@ struct Uniforms {
     color_adjust_b: vec4<f32>,
     // (grain amount, grain seed, grade-active flag, unused).
     grain_params: vec4<f32>,
+    // The screen's motion blur this frame, which the cursor rides inside:
+    // (mode 0 none / 1 move / 2 zoom, then for move the smear in output px,
+    // for zoom the centre in card UV and the zoom amount).
+    screen_blur: vec4<f32>,
+    // The display card in output px (x, y, width, height).
+    screen_card: vec4<f32>,
+    // (how far the screen's zoom blur can carry the sprite, in output px,
+    // unused x3).
+    screen_reach: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -55,6 +64,16 @@ fn cursor_velocity_uv() -> vec2<f32> {
     return raw_velocity_uv * min(1.0, MAX_CURSOR_BLUR_UV / raw_vel_len);
 }
 
+// The screen's directional smear in sprite UV; zero unless it is moving.
+fn screen_move_uv() -> vec2<f32> {
+    let cursor_size = uniforms.position_size.zw;
+    if (uniforms.screen_blur.x < 0.5 || uniforms.screen_blur.x >= 1.5
+        || cursor_size.x <= 0.0 || cursor_size.y <= 0.0) {
+        return vec2<f32>(0.0, 0.0);
+    }
+    return uniforms.screen_blur.yz / cursor_size;
+}
+
 fn rotate_point(p: vec2<f32>, center: vec2<f32>, angle: f32) -> vec2<f32> {
     let cos_a = cos(angle);
     let sin_a = sin(angle);
@@ -74,13 +93,18 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
         vec2<f32>(1.0, 1.0)
     );
 
-    let blur_uv = cursor_velocity_uv();
-    let uv_min = min(vec2<f32>(0.0, 0.0), -blur_uv);
-    let uv_max = max(vec2<f32>(1.0, 1.0), vec2<f32>(1.0, 1.0) - blur_uv);
-    let local_uv = uv_min + (uv_max - uv_min) * corners[vertex_index];
-    let pos = vec2<f32>(local_uv.x, -local_uv.y);
     let screen_pos = uniforms.position_size.xy;
     let cursor_size = uniforms.position_size.zw;
+    // The quad covers the sprite plus everywhere its own smear and the
+    // screen's smear can carry it.
+    let blur_uv = cursor_velocity_uv();
+    let screen_uv = screen_move_uv();
+    let reach_uv = uniforms.screen_reach.x / max(cursor_size, vec2<f32>(1.0));
+    let uv_min = min(vec2<f32>(0.0), -blur_uv) + min(vec2<f32>(0.0), -screen_uv) - reach_uv;
+    let uv_max = vec2<f32>(1.0) + max(vec2<f32>(0.0), -blur_uv)
+        + max(vec2<f32>(0.0), -screen_uv) + reach_uv;
+    let local_uv = uv_min + (uv_max - uv_min) * corners[vertex_index];
+    let pos = vec2<f32>(local_uv.x, -local_uv.y);
 
     let base_rotation = uniforms.rotation_params.y;
     let x_movement_tilt = uniforms.rotation_params.z;
@@ -197,32 +221,70 @@ fn apply_color_grade(color: vec4<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * color.a, color.a);
 }
 
+// Same ceiling as the display's radial blur (composite-video-frame.wgsl).
+const MAX_ZOOM_RAY_UV: f32 = 0.10;
+
+// Same per-pixel phase as the display's radial blur, so the cursor's taps
+// line up with the screen's around it.
+fn interleaved_noise(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+// The cursor's own directional smear: 21 taps along [0, 0.95 v], the first
+// counted twice, as the reference directional filter samples.
+fn own_blurred(uv: vec2<f32>, velocity_uv: vec2<f32>) -> vec4<f32> {
+    if (length(velocity_uv) < 0.005) {
+        return sample_cursor(uv);
+    }
+    var color = sample_cursor(uv) * 2.0;
+    for (var i = 1; i < 20; i = i + 1) {
+        color += sample_cursor(uv + velocity_uv * (f32(i) / 20.0));
+    }
+    return color / 21.0;
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let velocity_uv = cursor_velocity_uv();
-    let blur_strength = uniforms.motion_vector_strength.z;
     let opacity = uniforms.motion_vector_strength.w * screen_bounds_mask(input.position.xy);
-    let base_color = sample_cursor(input.uv);
+    let cursor_size = max(uniforms.position_size.zw, vec2<f32>(1.0));
+    let mode = uniforms.screen_blur.x;
 
-    if (length(velocity_uv) < 0.005 || blur_strength < 0.001) {
-        return apply_color_grade(base_color * opacity, input.position.xy);
+    // The cursor rides inside the screen, so the screen's blur lands on it
+    // too, over the cursor's own: a pan smears it along the pan, a zoom
+    // pulls it toward the zoom centre.
+    var color = vec4<f32>(0.0);
+    if (mode < 0.5) {
+        color = own_blurred(input.uv, velocity_uv);
+    } else if (mode < 1.5) {
+        let screen_uv = screen_move_uv();
+        color = own_blurred(input.uv, velocity_uv) * 2.0;
+        for (var i = 1; i < 20; i = i + 1) {
+            color += own_blurred(input.uv + screen_uv * (f32(i) / 20.0), velocity_uv);
+        }
+        color /= 21.0;
+    } else {
+        let card = uniforms.screen_card;
+        let card_size = max(card.zw, vec2<f32>(1.0));
+        let p = input.position.xy;
+        let dir = uniforms.screen_blur.yz - (p - card.xy) / card_size;
+        let dist = length(dir);
+        let amount = min(uniforms.screen_blur.w, 1.0);
+        if (dist < 1e-4 || amount < 1e-4) {
+            color = own_blurred(input.uv, velocity_uv);
+        } else {
+            let ray_px = dir / dist * min(dist * amount, MAX_ZOOM_RAY_UV) * card_size;
+            let dither = interleaved_noise(p);
+            var weight_sum = 0.0;
+            for (var i = 0; i < 13; i = i + 1) {
+                let percent = (f32(i) + dither) / 13.0;
+                let weight = 4.0 * (percent - percent * percent);
+                color += own_blurred(input.uv + ray_px * percent / cursor_size, velocity_uv) * weight;
+                weight_sum += weight;
+            }
+            color /= max(weight_sum, 1e-4);
+        }
     }
 
-    // 21-tap box along the motion vector, output fully blurred: the amount
-    // scales the smear LENGTH (baked into velocity_uv on the CPU side), never
-    // a crossfade with the sharp sprite — a sharp copy over a smear reads as
-    // ghosting. Transparent taps shorten the effective alpha, which is what
-    // stretches and fades the sprite along fast motion.
-    let kernel_size = 21.0;
-    let k = kernel_size - 1.0;
-    var color = base_color;
-
-    for (var i = 1; i <= 20; i = i + 1) {
-        let bias = velocity_uv * (f32(i) / k);
-        let sample_uv = input.uv + bias;
-        color += sample_cursor(sample_uv);
-    }
-
-    color /= kernel_size;
     return apply_color_grade(color * opacity, input.position.xy);
 }

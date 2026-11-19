@@ -365,18 +365,20 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
         }
 
-        // 21-tap box along [0, +v]: matches the reference directional filter
-        // (kernel 21 with offset -|v|/2, which anchors the span at the pixel).
+        // 21 taps along [0, 0.95 v], the pixel's own tap counted twice: the
+        // reference directional filter (kernel 21, offset -|v|/2) samples
+        // t = 0, 0, 1/20 ... 19/20 and divides by 21.
         var accum = vec3<f32>(0.0);
         var alpha_sum = 0.0;
         let k = 20.0;
 
-        for (var i = 0; i <= 20; i = i + 1) {
+        for (var i = 0; i < 20; i = i + 1) {
             let sample_uv = target_uv + velocity_uv * (f32(i) / k);
             var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
             tap = apply_rounded_corners(tap, sample_uv);
-            accum += tap.rgb * tap.a;
-            alpha_sum += tap.a;
+            let weight = select(1.0, 2.0, i == 0);
+            accum += tap.rgb * tap.a * weight;
+            alpha_sum += tap.a * weight;
         }
 
         let out_alpha = (alpha_sum / 21.0) * uniforms.opacity;

@@ -24,6 +24,8 @@ const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
 /// it at 60fps).
 const CURSOR_VECTOR_CAP: f32 = 480.0;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
+/// Below a pixel of travel per frame the smear is the identity.
+const CURSOR_ACTIVATION_PX: f32 = 1.0;
 const CURSOR_MULTIPLIER: f32 = 1.0;
 /// Upper bound on amount * (fps/60). Generous: it must not clip the fps
 /// normalization at high frame rates (120fps needs 2x to keep the real-time
@@ -474,7 +476,10 @@ impl CursorLayer {
         let fps_scale = fps / CURSOR_BASELINE_FPS;
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
-        let child_motion = uniforms
+        // How far the cursor moved on the frame since the previous frame:
+        // its own travel over the screen plus however far the screen carried
+        // it (a pan, a zoom).
+        let frame_motion = uniforms
             .prev_cursor
             .as_ref()
             .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
@@ -483,14 +488,23 @@ impl CursorLayer {
                     .display
                     .source_uv_to_target(interpolated_cursor.position.coord);
                 let previous = uniforms.display.source_uv_to_target(prev.position.coord);
-                (current - previous).map(|value| value as f32)
+                let own = (current - previous).map(|value| value as f32);
+                let carried = uniforms.display_motion.map_or(XY::new(0.0, 0.0), |motion| {
+                    motion.carried(previous.map(|value| value as f32))
+                });
+                own + carried
             })
             .unwrap_or_else(|| XY::new(0.0, 0.0));
 
         let combined_motion_px = if cursor_strength <= f32::EPSILON {
             XY::new(0.0, 0.0)
         } else {
-            child_motion
+            cursor_own_motion(
+                frame_motion,
+                uniforms
+                    .display_motion
+                    .map_or(XY::new(0.0, 0.0), |motion| motion.size_delta),
+            )
         };
 
         // Length-based semantics: smear length = per-frame travel x amount,
@@ -611,6 +625,9 @@ impl CursorLayer {
             cursor_opacity,
         );
 
+        let (screen_blur, screen_card, screen_reach) =
+            screen_blur_over_cursor(&uniforms.display, position_size);
+
         let cursor_grade = if uniforms.project.color_correction.grade_cursor {
             uniforms.screen_color_grade
         } else {
@@ -647,6 +664,9 @@ impl CursorLayer {
             color_adjust_a: cursor_grade.color_adjust_a,
             color_adjust_b: cursor_grade.color_adjust_b,
             grain_params: cursor_grade.grain_params,
+            screen_blur,
+            screen_card,
+            screen_reach: [screen_reach, 0.0, 0.0, 0.0],
         };
 
         constants.queue.write_buffer(
@@ -763,6 +783,82 @@ fn finite_positive_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
+/// The motion the cursor's own blur follows. The cursor rides in a
+/// screen-sized box at its position, so the box's centre moves with the
+/// cursor plus half the screen's change in size; when the size change is the
+/// larger, the frame is a zoom, and the screen's zoom blur is the cursor's
+/// only blur. Under a pixel is none.
+fn cursor_own_motion(frame_motion: XY<f32>, screen_size_delta: XY<f32>) -> XY<f32> {
+    let length = |v: XY<f32>| (v.x * v.x + v.y * v.y).sqrt();
+    let centre_motion = frame_motion + screen_size_delta * 0.5;
+    if length(screen_size_delta) > length(centre_motion)
+        || length(centre_motion) < CURSOR_ACTIVATION_PX
+    {
+        XY::new(0.0, 0.0)
+    } else {
+        centre_motion
+    }
+}
+
+/// Same ceiling as the display's radial blur (composite-video-frame.wgsl).
+const MAX_ZOOM_RAY_UV: f32 = 0.10;
+
+/// The screen's blur this frame, for the cursor that rides inside it, as
+/// `cursor.wgsl` reads it: the mode and its parameters, the card in output
+/// px, and how far a zoom blur can carry the sprite (output px). Mirrors the
+/// gates in `composite-video-frame.wgsl`.
+fn screen_blur_over_cursor(
+    display: &crate::composite_frame::CompositeVideoFrameUniforms,
+    sprite: [f32; 4],
+) -> ([f32; 4], [f32; 4], f32) {
+    let card = [
+        display.target_bounds[0],
+        display.target_bounds[1],
+        display.target_size[0].max(1.0),
+        display.target_size[1].max(1.0),
+    ];
+    let [mode, strength, zoom_amount, _] = display.motion_blur_params;
+    if mode < 0.5 || strength < 0.001 {
+        return ([0.0; 4], card, 0.0);
+    }
+    if mode < 1.5 {
+        let [x, y] = display.motion_blur_vector;
+        if (x * x + y * y).sqrt() < 1e-5 {
+            return ([0.0; 4], card, 0.0);
+        }
+        return ([1.0, x * card[2], y * card[3], 0.0], card, 0.0);
+    }
+    let amount = zoom_amount.min(1.0);
+    if amount < 1e-4 {
+        return ([0.0; 4], card, 0.0);
+    }
+    let [center_x, center_y] = display.motion_blur_zoom_center;
+    // The longest ray from the sprite's corners, with room to spare.
+    let reach = [
+        (sprite[0], sprite[1]),
+        (sprite[0] + sprite[2], sprite[1]),
+        (sprite[0], sprite[1] + sprite[3]),
+        (sprite[0] + sprite[2], sprite[1] + sprite[3]),
+    ]
+    .into_iter()
+    .map(|(x, y)| {
+        let dx = center_x - (x - card[0]) / card[2];
+        let dy = center_y - (y - card[1]) / card[3];
+        let distance = (dx * dx + dy * dy).sqrt();
+        if distance < 1e-4 {
+            return 0.0;
+        }
+        let ray = (distance * amount).min(MAX_ZOOM_RAY_UV) / distance;
+        ((dx * ray * card[2]).powi(2) + (dy * ray * card[3]).powi(2)).sqrt()
+    })
+    .fold(0.0f32, f32::max);
+    (
+        [2.0, center_x, center_y, zoom_amount],
+        card,
+        reach * 1.25 + 2.0,
+    )
+}
+
 fn cursor_blur_vector(motion: XY<f32>, strength: f32) -> XY<f32> {
     clamp_cursor_vector(motion * strength)
 }
@@ -789,6 +885,10 @@ pub struct CursorUniforms {
     color_adjust_a: [f32; 4],
     color_adjust_b: [f32; 4],
     grain_params: [f32; 4],
+    /// The screen's blur this frame (see `cursor.wgsl`).
+    screen_blur: [f32; 4],
+    screen_card: [f32; 4],
+    screen_reach: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(
@@ -1141,6 +1241,75 @@ impl CursorTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pan_smears_the_cursor_with_the_screen() {
+        // The cursor holds still on a screen panning 30px right: it moves
+        // 30px on the frame, so it smears 30px like the screen under it.
+        assert_eq!(
+            cursor_own_motion(XY::new(30.0, 0.0), XY::new(0.0, 0.0)),
+            XY::new(30.0, 0.0)
+        );
+        // Its own travel adds to the pan's.
+        assert_eq!(
+            cursor_own_motion(XY::new(30.0, 12.0), XY::new(0.0, 0.0)),
+            XY::new(30.0, 12.0)
+        );
+        // Under a pixel is no smear.
+        assert_eq!(
+            cursor_own_motion(XY::new(0.6, 0.0), XY::new(0.0, 0.0)),
+            XY::new(0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn a_zoom_leaves_the_cursor_to_the_screens_zoom_blur() {
+        // The screen grows faster than the cursor's box moves: a zoom, so
+        // the cursor has no smear of its own.
+        assert_eq!(
+            cursor_own_motion(XY::new(4.0, 3.0), XY::new(80.0, 45.0)),
+            XY::new(0.0, 0.0)
+        );
+        // A fast flick through a slow zoom is a move, measured at the box's
+        // centre (half the size change added).
+        assert_eq!(
+            cursor_own_motion(XY::new(120.0, 0.0), XY::new(8.0, 4.0)),
+            XY::new(124.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn the_screen_blur_reaches_the_cursor_in_output_pixels() {
+        let mut display = crate::composite_frame::CompositeVideoFrameUniforms {
+            target_bounds: [100.0, 50.0, 1100.0, 550.0],
+            target_size: [1000.0, 500.0],
+            ..bytemuck::Zeroable::zeroed()
+        };
+        let sprite = [600.0, 300.0, 40.0, 40.0];
+
+        // No screen blur.
+        assert_eq!(screen_blur_over_cursor(&display, sprite).0, [0.0; 4]);
+
+        // A pan of 0.02 x 0.01 of the card is 20 x 5 px.
+        display.motion_blur_params = [1.0, 1.0, 0.0, 0.0];
+        display.motion_blur_vector = [0.02, 0.01];
+        let (blur, card, reach) = screen_blur_over_cursor(&display, sprite);
+        assert_eq!(blur, [1.0, 20.0, 5.0, 0.0]);
+        assert_eq!(card, [100.0, 50.0, 1000.0, 500.0]);
+        assert_eq!(reach, 0.0);
+
+        // A zoom about the card's centre reaches the sprite by its rays.
+        display.motion_blur_params = [2.0, 1.0, 0.04, 0.0];
+        display.motion_blur_zoom_center = [0.5, 0.5];
+        let (blur, _, reach) = screen_blur_over_cursor(&display, sprite);
+        assert_eq!(blur, [2.0, 0.5, 0.5, 0.04]);
+        // The farthest corner, (640, 340), is (40, 40) px from the centre
+        // (600, 300): its ray is 0.04 of that, 2.26 px, padded.
+        assert!(
+            (reach - (2.0f32.sqrt() * 40.0 * 0.04 * 1.25 + 2.0)).abs() < 1e-3,
+            "{reach}"
+        );
+    }
 
     fn alpha_coverage(level: &CursorMipLevel) -> f64 {
         let alpha_sum: u64 = level
