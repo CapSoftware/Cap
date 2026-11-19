@@ -3208,6 +3208,26 @@ no_segments = "La grabación no tiene segmentos. Puede que primero haya que recu
 not_found = "¡No se encontró la ruta de vídeo {path}!"
 not_studio = "Solo se pueden editar grabaciones Studio"
 
+[editor.window.looks]
+launch_day = "Día de lanzamiento"
+launch_day_description = "Un degradado vivo, zooms ágiles y subtítulos llamativos."
+mac_native = "Mac nativo"
+mac_native_description = "Una ventana de macOS sobre Tahoe con teclas blancas de Mac."
+midnight = "Medianoche"
+midnight_description = "Un fondo oscuro y profundo con un borde nítido."
+minimal = "Minimalista"
+minimal_description = "Un lienzo blanco roto, tranquilo y sin nada más."
+retro_desk = "Escritorio retro"
+retro_desk_description = "Beige cálido y teclas mecánicas robustas."
+saved = "Tus preajustes"
+smooth_demo = "Demo suave"
+smooth_demo_description = "Nubes suaves, zooms delicados y un cursor tranquilo."
+title = "Estilos"
+tutorial = "Tutorial"
+tutorial_description = "Zooms lentos y estables, y teclas que cualquiera puede seguir."
+web_product = "Producto web"
+web_product_description = "Una ventana de navegador para demos de webs y apps."
+
 [editor.window.presets]
 apply = "Aplicar"
 create = "Crear"

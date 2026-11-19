@@ -211,7 +211,7 @@ impl EditorVerticalLayout {
     }
 }
 
-const PRESETS_MENU_WIDTH: f32 = 288.;
+const PRESETS_MENU_WIDTH: f32 = 520.;
 const PRESET_SUBMENU_WIDTH: f32 = 208.;
 const PRESET_SUBMENU_HEIGHT: f32 = 5. * 32. + 4. * 2. + 8.;
 const POPOVER_WINDOW_INSET: f32 = 8.;
@@ -219,6 +219,156 @@ const POPOVER_WINDOW_INSET: f32 = 8.;
 /// The per-preset submenu sits beside the menu, aligned with the row that
 /// summoned it: to the right when it fits, otherwise flipped to the left, and
 /// never past the window's bottom edge.
+/// A look in miniature: its background, the recording as a rounded card at
+/// the look's padding with its shadow and frame, and its keys in the
+/// corner.
+fn look_preview(
+    theme: &crate::theme::Theme,
+    look: &crate::looks::Look,
+    image: Option<Arc<gpui::RenderImage>>,
+    selected: bool,
+) -> gpui::Div {
+    use crate::looks::LookBackground;
+    use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
+    use gpui::StyledImage as _;
+    const HEIGHT: f32 = 72.;
+    let rgb = |c: [u16; 3]| -> Hsla {
+        gpui::Rgba {
+            r: c[0] as f32 / 255.,
+            g: c[1] as f32 / 255.,
+            b: c[2] as f32 / 255.,
+            a: 1.,
+        }
+        .into()
+    };
+    let pad = (look.padding as f32 * 1.05).clamp(5., 16.);
+    let radius = (look.rounding as f32 * 0.55).clamp(2., 8.);
+    let (app, line) = if look.dark_app {
+        (gpui::rgb(0x1d1d21), gpui::hsla(0., 0., 1., 0.14))
+    } else {
+        (gpui::rgb(0xffffff), gpui::hsla(0., 0., 0., 0.08))
+    };
+    let frame = look.frame.map(|(style, _)| style);
+    let window =
+        div()
+            .absolute()
+            .left(px(pad))
+            .right(px(pad))
+            .top(px(pad * 0.8))
+            .bottom(px(pad * 0.8))
+            .rounded(px(radius))
+            .bg(app)
+            .overflow_hidden()
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., (look.shadow.0 / 100.) * 0.55),
+                offset: gpui::point(px(0.), px(3.)),
+                blur_radius: px(10.),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .when_some(look.border, |this, _| {
+                this.border_1().border_color(gpui::hsla(0., 0., 1., 0.35))
+            })
+            .flex()
+            .flex_col()
+            .when(
+                matches!(
+                    frame,
+                    Some(cap_project::FrameStyle::MacOS | cap_project::FrameStyle::Browser)
+                ),
+                |this| {
+                    this.child(
+                        div()
+                            .h(px(8.))
+                            .flex_none()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(2.))
+                            .px(px(4.))
+                            .bg(gpui::rgb(0xececee))
+                            .children([0xff5f57_u32, 0xfebc2e, 0x28c840].map(|color| {
+                                div().size(px(3.)).rounded_full().bg(gpui::rgb(color))
+                            }))
+                            .when(frame == Some(cap_project::FrameStyle::Browser), |bar| {
+                                bar.child(
+                                    div()
+                                        .ml(px(6.))
+                                        .h(px(4.))
+                                        .w(px(26.))
+                                        .rounded(px(2.))
+                                        .bg(gpui::rgb(0xffffff)),
+                                )
+                            }),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .p(px(5.))
+                    .child(div().h(px(3.)).w(px(28.)).rounded(px(2.)).bg(line))
+                    .child(div().h(px(3.)).w(px(40.)).rounded(px(2.)).bg(line))
+                    .child(div().h(px(3.)).w(px(22.)).rounded(px(2.)).bg(line)),
+            );
+    let style = KeycapStyle::from_str(&look.keys.style.map_or_else(
+        cap_project::KeyboardSettings::platform_style,
+        str::to_string,
+    ));
+    let key_theme = KeycapTheme::from_str(look.keys.theme);
+    let keys = div()
+        .absolute()
+        .right(px(5.))
+        .bottom(px(4.))
+        .flex()
+        .flex_row()
+        .items_end()
+        .gap(px(2.))
+        .child(crate::editor_tabs::key_chip_sized(
+            style, key_theme, "⌘", true, 14.,
+        ))
+        .child(crate::editor_tabs::key_chip_sized(
+            style, key_theme, "K", false, 14.,
+        ));
+    div()
+        .relative()
+        .h(px(HEIGHT))
+        .w_full()
+        .rounded(px(9.))
+        .overflow_hidden()
+        .map(|this| match (look.background, image) {
+            (LookBackground::Wallpaper(_), Some(image)) => this.child(
+                gpui::img(image)
+                    .absolute()
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
+            ),
+            (LookBackground::Gradient { from, to, angle }, _) => this.bg(gpui::linear_gradient(
+                angle as f32,
+                gpui::linear_color_stop(rgb(from), 0.),
+                gpui::linear_color_stop(rgb(to), 1.),
+            )),
+            (LookBackground::Color(color), _) => this.bg(rgb(color)),
+            _ => this.bg(Hsla::from(theme.editor.ctl_active)),
+        })
+        .child(window)
+        .child(keys)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(9.))
+                .border_1()
+                .border_color(gpui::hsla(0., 0., 0., 0.08))
+                .when(selected, |this| {
+                    this.border_2()
+                        .border_color(Hsla::from(theme.editor.accent))
+                }),
+        )
+}
+
 fn preset_submenu_origin(
     menu_origin: gpui::Point<Pixels>,
     click: gpui::Point<Pixels>,
@@ -1736,6 +1886,8 @@ struct PresetsMenu {
     /// An open per-preset submenu: which row, and where it was summoned.
     submenu: Option<(PresetRow, gpui::Point<Pixels>)>,
     scroll: gpui::ScrollHandle,
+    /// Each look's wallpaper thumbnail, decoded when the menu opens.
+    look_images: Vec<Option<Arc<gpui::RenderImage>>>,
 }
 
 /// A row of the presets menu: the built-in Default, or a saved preset.
@@ -8289,16 +8441,111 @@ impl EditorWindow {
         let viewport = window.viewport_size();
         // `gutter={8}`, opening downward from the header trigger; `w-72`.
         let x = f32::from(anchor.x)
-            .min(f32::from(viewport.width) - 288. - 12.)
+            .min(f32::from(viewport.width) - PRESETS_MENU_WIDTH - 12.)
             .max(12.);
         let y = f32::from(anchor.y) + 8.;
+        let look_images = crate::looks::LOOKS
+            .iter()
+            .map(|look| match look.background {
+                crate::looks::LookBackground::Wallpaper(id) => {
+                    crate::editor_sidebar::decode_wallpaper_thumbnail(id)
+                }
+                _ => None,
+            })
+            .collect();
         self.presets_menu = Some(PresetsMenu {
             origin: point(px(x), px(y)),
             store: crate::presets::PresetsStore::load(),
             submenu: None,
             scroll: gpui::ScrollHandle::new(),
+            look_images,
         });
         cx.notify();
+    }
+
+    /// A built-in look: its styling over the project, one undo entry.
+    fn apply_look_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(look) = crate::looks::LOOKS.get(index) else {
+            return;
+        };
+        let next = crate::looks::apply_look(look, &self.project);
+        tracing::info!(look = look.id, "look applied");
+        self.apply_project_preset(next, window, cx);
+    }
+
+    /// The looks gallery atop the presets menu: four across, each a small
+    /// picture of the look, its name, and its one line on hover.
+    fn render_looks_gallery(&self, menu: &PresetsMenu, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let current = crate::looks::current_look(&self.project);
+        let cards: Vec<gpui::AnyElement> = crate::looks::LOOKS
+            .iter()
+            .enumerate()
+            .map(|(index, look)| {
+                let selected = current == Some(look.id);
+                let image = menu.look_images.get(index).cloned().flatten();
+                let description = (look.description)();
+                div()
+                    .id(SharedString::from(format!("look-{}", look.id)))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.))
+                    .p(px(4.))
+                    .rounded(px(12.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(Hsla::from(editor.ctl)))
+                    .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, description).view(cx))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.apply_look_at(index, window, cx);
+                    }))
+                    .child(look_preview(&theme, look, image, selected))
+                    .child(
+                        div()
+                            .px(px(2.))
+                            .text_size(px(12.5))
+                            .line_height(px(15.))
+                            .text_color(Hsla::from(if selected {
+                                editor.text_1
+                            } else {
+                                editor.text_2
+                            }))
+                            .truncate()
+                            .child((look.name)()),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let mut rows = Vec::new();
+        let mut cards = cards.into_iter();
+        loop {
+            let row: Vec<_> = cards.by_ref().take(4).collect();
+            if row.is_empty() {
+                break;
+            }
+            rows.push(div().flex().flex_row().gap(px(4.)).children(row));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .px(px(8.))
+            .pt(px(10.))
+            .pb(px(8.))
+            .border_b_1()
+            .border_color(Hsla::from(editor.line))
+            .child(
+                div()
+                    .px(px(6.))
+                    .pb(px(4.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(tr::editor::window::looks::title()),
+            )
+            .children(rows)
+            .into_any_element()
     }
 
     /// Apply row `index`: the preset's config with the current timeline and
@@ -10516,6 +10763,15 @@ impl EditorWindow {
                         .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .overflow_hidden()
+                        .child(self.render_looks_gallery(menu, cx))
+                        .child(
+                            div()
+                                .px(px(14.))
+                                .pt(px(4.))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.editor.text_2))
+                                .child(tr::editor::window::looks::saved()),
+                        )
                         .child(
                             div()
                                 .id("presets-list")
@@ -14940,6 +15196,7 @@ mod tests {
                     store: store.clone(),
                     submenu: None,
                     scroll: gpui::ScrollHandle::new(),
+                    look_images: Vec::new(),
                 });
             });
             let mut samples = Vec::new();

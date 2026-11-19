@@ -224,6 +224,48 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::done::link_copied(), "Link copied"),
         (tr::editor::export::done::open_file(), "Open File"),
         (tr::editor::export::done::copy_file(), "Copy to Clipboard"),
+        (tr::editor::window::looks::launch_day(), "Launch Day"),
+        (
+            tr::editor::window::looks::launch_day_description(),
+            "A vivid gradient, snappy zooms and bold captions.",
+        ),
+        (tr::editor::window::looks::mac_native(), "Mac Native"),
+        (
+            tr::editor::window::looks::mac_native_description(),
+            "A macOS window on Tahoe with white Mac keys.",
+        ),
+        (tr::editor::window::looks::midnight(), "Midnight"),
+        (
+            tr::editor::window::looks::midnight_description(),
+            "A deep, dark backdrop with a crisp edge.",
+        ),
+        (tr::editor::window::looks::minimal(), "Minimal"),
+        (
+            tr::editor::window::looks::minimal_description(),
+            "A quiet off-white canvas and nothing extra.",
+        ),
+        (tr::editor::window::looks::retro_desk(), "Retro Desk"),
+        (
+            tr::editor::window::looks::retro_desk_description(),
+            "Warm beige and chunky mechanical keys.",
+        ),
+        (tr::editor::window::looks::saved(), "Your Presets"),
+        (tr::editor::window::looks::smooth_demo(), "Smooth Demo"),
+        (
+            tr::editor::window::looks::smooth_demo_description(),
+            "Soft clouds, gentle zooms and a calm cursor.",
+        ),
+        (tr::editor::window::looks::title(), "Looks"),
+        (tr::editor::window::looks::tutorial(), "Tutorial"),
+        (
+            tr::editor::window::looks::tutorial_description(),
+            "Slow, steady zooms and keys anyone can follow.",
+        ),
+        (tr::editor::window::looks::web_product(), "Web Product"),
+        (
+            tr::editor::window::looks::web_product_description(),
+            "A browser window for site and app demos.",
+        ),
         (tr::editor::tabs::keyboard::key_style(), "Key Style"),
         (tr::editor::tabs::keyboard::key_theme(), "Key Theme"),
         (tr::editor::tabs::keyboard::style_classic(), "Classic"),

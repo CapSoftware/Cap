@@ -284,6 +284,27 @@ pub struct CaptionPreset {
     pub fade_duration: f32,
 }
 
+/// Writes a caption preset's styling into `settings`.
+pub(crate) fn apply_caption_preset_settings(
+    settings: &mut CaptionSettings,
+    preset: &CaptionPreset,
+) {
+    settings.preset = preset.id.to_string();
+    settings.font_weight = preset.font_weight;
+    settings.size = preset.size;
+    settings.color = preset.color.to_string();
+    settings.background_color = preset.background_color.to_string();
+    settings.background_opacity = preset.background_opacity;
+    settings.outline = preset.outline;
+    settings.outline_color = preset.outline_color.to_string();
+    settings.highlight_color = preset.highlight_color.to_string();
+    settings.active_word_highlight = preset.active_word_highlight;
+    settings.highlight_style = preset.highlight_style.to_string();
+    settings.animation = preset.animation.to_string();
+    settings.uppercase = preset.uppercase;
+    settings.fade_duration = preset.fade_duration;
+}
+
 /// The key styles, each with the keys its tile shows.
 static KEY_STYLES: [(&str, fn() -> &'static str, &[&str]); 4] = [
     (
@@ -326,20 +347,31 @@ fn rgba(color: [f32; 4]) -> Hsla {
 
 /// A small key, painted like the renderer paints it: the gradient top, the
 /// side as a solid lip under it, a fine border and a soft shadow.
-fn key_chip(
+pub(crate) fn key_chip(
     style: cap_rendering::keycaps::KeycapStyle,
     theme: cap_rendering::keycaps::KeycapTheme,
     label: &str,
     modifier: bool,
 ) -> gpui::Div {
-    const HEIGHT: f32 = 24.;
+    key_chip_sized(style, theme, label, modifier, 24.)
+}
+
+pub(crate) fn key_chip_sized(
+    style: cap_rendering::keycaps::KeycapStyle,
+    theme: cap_rendering::keycaps::KeycapTheme,
+    label: &str,
+    modifier: bool,
+    height: f32,
+) -> gpui::Div {
+    #[allow(non_snake_case)]
+    let HEIGHT = height;
     let palette = theme.palette(modifier);
     let geometry = style.geometry();
     let depth = (geometry.depth * HEIGHT).max(2.);
     div()
         .h(px(HEIGHT - depth))
         .min_w(px(HEIGHT - depth))
-        .px(px(6.))
+        .px(px(HEIGHT * 0.25))
         .mb(px(depth))
         .flex()
         .items_center()
@@ -368,7 +400,9 @@ fn key_chip(
                 inset: false,
             },
         ])
-        .text_size(px(if label.chars().count() > 1 { 9.5 } else { 11. }))
+        .text_size(px(
+            HEIGHT * if label.chars().count() > 1 { 0.4 } else { 0.46 }
+        ))
         .text_color(rgba(palette.label))
         .child(label.to_string())
 }
@@ -3859,21 +3893,7 @@ impl EditorWindow {
             let Some(captions) = project.captions.as_mut() else {
                 return false;
             };
-            let settings = &mut captions.settings;
-            settings.preset = preset.id.to_string();
-            settings.font_weight = preset.font_weight;
-            settings.size = preset.size;
-            settings.color = preset.color.to_string();
-            settings.background_color = preset.background_color.to_string();
-            settings.background_opacity = preset.background_opacity;
-            settings.outline = preset.outline;
-            settings.outline_color = preset.outline_color.to_string();
-            settings.highlight_color = preset.highlight_color.to_string();
-            settings.active_word_highlight = preset.active_word_highlight;
-            settings.highlight_style = preset.highlight_style.to_string();
-            settings.animation = preset.animation.to_string();
-            settings.uppercase = preset.uppercase;
-            settings.fade_duration = preset.fade_duration;
+            apply_caption_preset_settings(&mut captions.settings, preset);
             true
         });
     }

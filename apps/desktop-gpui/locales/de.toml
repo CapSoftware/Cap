@@ -3208,6 +3208,26 @@ no_segments = "Die Aufnahme hat keine Segmente. Möglicherweise muss sie zuerst 
 not_found = "Videopfad {path} nicht gefunden!"
 not_studio = "Nur Studio-Aufnahmen können bearbeitet werden"
 
+[editor.window.looks]
+launch_day = "Launch-Tag"
+launch_day_description = "Ein kräftiger Verlauf, schnelle Zooms und auffällige Untertitel."
+mac_native = "Mac pur"
+mac_native_description = "Ein macOS-Fenster auf Tahoe mit weißen Mac-Tasten."
+midnight = "Mitternacht"
+midnight_description = "Ein tiefer, dunkler Hintergrund mit klarer Kante."
+minimal = "Minimal"
+minimal_description = "Eine ruhige, cremeweiße Fläche und nichts weiter."
+retro_desk = "Retro-Schreibtisch"
+retro_desk_description = "Warmes Beige und kräftige mechanische Tasten."
+saved = "Ihre Vorlagen"
+smooth_demo = "Sanfte Demo"
+smooth_demo_description = "Weiche Wolken, sanfte Zooms und ein ruhiger Cursor."
+title = "Looks"
+tutorial = "Tutorial"
+tutorial_description = "Langsame, ruhige Zooms und Tasten, denen jeder folgen kann."
+web_product = "Webprodukt"
+web_product_description = "Ein Browserfenster für Website- und App-Demos."
+
 [editor.window.presets]
 apply = "Anwenden"
 create = "Erstellen"

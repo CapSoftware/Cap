@@ -16,8 +16,8 @@ mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
 mod camera_loading;
-mod caption_export;
 mod camera_window;
+mod caption_export;
 mod controls_window;
 mod crash_capture;
 mod deeplink;
@@ -45,19 +45,21 @@ mod editor_shapes;
 mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
-mod editor_voice_eq;
 mod editor_timeline;
+mod editor_voice_eq;
 mod editor_window;
 mod encoder_recovery;
 mod feeds;
 mod focus_border;
+mod foreign_window;
+#[cfg(debug_assertions)]
+mod glass_probe;
 mod hotkeys;
 mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
 mod library;
-mod live_draw;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
@@ -66,6 +68,8 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
+mod live_draw;
+mod looks;
 mod main_window;
 mod media_access;
 mod menus;
@@ -81,15 +85,12 @@ mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
 #[cfg(debug_assertions)]
-mod glass_probe;
-#[cfg(debug_assertions)]
 mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
 mod power;
 mod presets;
-mod style_presets;
 mod project_save;
 mod recording;
 mod recordings_overlay;
@@ -108,6 +109,7 @@ mod single_instance;
 mod snapshot;
 mod startup;
 mod store;
+mod style_presets;
 mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
@@ -118,7 +120,6 @@ mod tray;
 mod ui;
 mod updates;
 mod upload;
-mod foreign_window;
 mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -966,7 +967,9 @@ mod logging_tests {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+                .with_filter(tracing_subscriber::EnvFilter::new(
+                    super::DEFAULT_LOG_FILTER,
+                )),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
@@ -975,9 +978,15 @@ mod logging_tests {
             tracing::info!(target: "cap_gpui::session", "recording started");
         });
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(
+            !logged.contains("Failed to populate properties cache"),
+            "{logged}"
+        );
         assert!(logged.contains("a zbus error still shows"), "{logged}");
-        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(
+            logged.contains("other zbus warnings still show"),
+            "{logged}"
+        );
         assert!(logged.contains("recording started"), "{logged}");
     }
 

@@ -3208,6 +3208,26 @@ no_segments = "L'enregistrement n'a aucun segment. Il faut peut-être d'abord le
 not_found = "Chemin vidéo {path} introuvable !"
 not_studio = "Seuls les enregistrements Studio peuvent être modifiés"
 
+[editor.window.looks]
+launch_day = "Jour de lancement"
+launch_day_description = "Un dégradé éclatant, des zooms vifs et des sous-titres marquants."
+mac_native = "Mac natif"
+mac_native_description = "Une fenêtre macOS sur Tahoe avec des touches Mac blanches."
+midnight = "Minuit"
+midnight_description = "Un fond sombre et profond au contour net."
+minimal = "Minimal"
+minimal_description = "Une toile blanc cassé, calme, sans rien de plus."
+retro_desk = "Bureau rétro"
+retro_desk_description = "Un beige chaleureux et de grosses touches mécaniques."
+saved = "Vos préréglages"
+smooth_demo = "Démo fluide"
+smooth_demo_description = "Des nuages doux, des zooms délicats et un curseur posé."
+title = "Styles"
+tutorial = "Tutoriel"
+tutorial_description = "Des zooms lents et réguliers, et des touches faciles à suivre."
+web_product = "Produit web"
+web_product_description = "Une fenêtre de navigateur pour les démos de sites et d'apps."
+
 [editor.window.presets]
 apply = "Appliquer"
 create = "Créer"

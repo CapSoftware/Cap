@@ -3208,6 +3208,26 @@ no_segments = "रिकॉर्डिंग में कोई सेगम�
 not_found = "वीडियो पाथ {path} नहीं मिला!"
 not_studio = "Studio के अलावा दूसरी रिकॉर्डिंग एडिट नहीं की जा सकतीं"
 
+[editor.window.looks]
+launch_day = "लॉन्च डे"
+launch_day_description = "चटक ग्रेडिएंट, तेज़ ज़ूम और बोल्ड कैप्शन।"
+mac_native = "मैक नेटिव"
+mac_native_description = "Tahoe पर macOS विंडो, सफ़ेद Mac कीज़ के साथ।"
+midnight = "मिडनाइट"
+midnight_description = "गहरा, डार्क बैकड्रॉप और साफ़ किनारा।"
+minimal = "मिनिमल"
+minimal_description = "शांत ऑफ़-व्हाइट कैनवस, और कुछ नहीं।"
+retro_desk = "रेट्रो डेस्क"
+retro_desk_description = "गर्म बेज रंग और मोटी मैकेनिकल कीज़।"
+saved = "आपके प्रीसेट"
+smooth_demo = "स्मूद डेमो"
+smooth_demo_description = "मुलायम बादल, हल्के ज़ूम और शांत कर्सर।"
+title = "लुक्स"
+tutorial = "ट्यूटोरियल"
+tutorial_description = "धीमे, स्थिर ज़ूम और ऐसी कीज़ जिन्हें हर कोई समझ सके।"
+web_product = "वेब प्रोडक्ट"
+web_product_description = "साइट और ऐप डेमो के लिए ब्राउज़र विंडो।"
+
 [editor.window.presets]
 apply = "लागू करें"
 create = "बनाएँ"

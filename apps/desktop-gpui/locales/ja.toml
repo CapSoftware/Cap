@@ -3208,6 +3208,26 @@ no_segments = "録画にセグメントがありません。先に復元が必�
 not_found = "動画のパス{path}が見つかりません！"
 not_studio = "Studio以外の録画は編集できません"
 
+[editor.window.looks]
+launch_day = "ローンチデー"
+launch_day_description = "鮮やかなグラデーション、きびきびしたズーム、目立つ字幕。"
+mac_native = "Macネイティブ"
+mac_native_description = "Tahoe上のmacOSウインドウと白いMacのキー。"
+midnight = "ミッドナイト"
+midnight_description = "深く暗い背景に、くっきりした縁取り。"
+minimal = "ミニマル"
+minimal_description = "静かなオフホワイトのキャンバスだけ。"
+retro_desk = "レトロデスク"
+retro_desk_description = "温かみのあるベージュと厚みのあるメカニカルキー。"
+saved = "保存したプリセット"
+smooth_demo = "スムーズデモ"
+smooth_demo_description = "やわらかな雲、穏やかなズーム、落ち着いたカーソル。"
+title = "ルック"
+tutorial = "チュートリアル"
+tutorial_description = "ゆっくり安定したズームと、誰でも追えるキー表示。"
+web_product = "Webプロダクト"
+web_product_description = "サイトやアプリのデモ向けのブラウザウインドウ。"
+
 [editor.window.presets]
 apply = "適用"
 create = "作成"
