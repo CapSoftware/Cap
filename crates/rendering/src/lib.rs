@@ -21,6 +21,7 @@ use futures::future::OptionFuture;
 use layers::{
     BackgroundLayer, BlurLayer, Camera3DBlurKind, Camera3DLayer, CameraLayer, ClickRippleLayer,
     ColorGradeLayer, CursorLayer, DisplayLayer, FrameLayer, MaskLayer, NotchLayer, NotchUniforms,
+    ShapeLayer,
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -28,9 +29,13 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use tokio::sync::mpsc;
 
+pub mod audio_visualizer;
 pub mod camera3d;
 pub mod composite_frame;
 mod coord;
@@ -56,6 +61,10 @@ mod project_recordings;
 mod readiness;
 mod recorded_cursor_assets;
 mod scene;
+pub mod screen_enhance;
+#[cfg(test)]
+mod screen_enhance_render_tests;
+mod screen_upscale_net;
 mod segment_timing;
 mod shape;
 pub mod spring_mass_damper;
@@ -90,6 +99,7 @@ pub use managed_segment::{
 use overlay_layers::OverlayLayers;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings, Video};
 pub use recorded_cursor_assets::{FrozenCursorAssetError, FrozenRecordedCursorAssets};
+pub use screen_enhance::{RenderQuality, ScreenEnhanceFrame};
 pub use transition::{
     TransitionComposite, TransitionDip, TransitionLayer, TransitionWipe, ease_in_out_cubic,
 };
@@ -222,6 +232,7 @@ mod font_family_tests {
     }
 }
 
+pub use audio_visualizer::AudioLevels;
 use camera3d::{Camera3DFrame, interpolate_camera3d};
 pub use cursor_interpolation::{
     CursorAnchors, CursorEventOrder, HoverChanges, PrecomputedCursorTimeline,
@@ -540,6 +551,7 @@ pub struct PreparedMask {
 enum FrameFetch {
     Playback,
     PlaybackInitial,
+    Still,
     Export { initial: bool },
 }
 
@@ -551,7 +563,7 @@ impl FrameFetch {
     ) -> Result<Option<DecodedFrame>, decoder::DecodeStalled> {
         match self {
             Self::Playback => Ok(decoder.get_frame(time).await),
-            Self::PlaybackInitial => Ok(decoder.get_frame_initial(time).await),
+            Self::PlaybackInitial | Self::Still => Ok(decoder.get_frame_initial(time).await),
             Self::Export { initial } => decoder.get_frame_for_export(time, initial).await,
         }
     }
@@ -561,8 +573,66 @@ impl FrameFetch {
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
     camera: Option<AsyncVideoDecoderHandle>,
+    source_video: Option<Arc<SourceVideo>>,
     pub segment_offset: f64,
     transition_readers: Option<Arc<TransitionSideDecoders>>,
+}
+
+/// The file an import keeps next to `display.mp4` when the source has
+/// chroma a re-encode would subsample. `display.mp4` stays the re-encode, so
+/// playback, scrubbing and export read it as before; the settled editor frame
+/// reads this one.
+pub fn source_video_path(display: &Path) -> PathBuf {
+    display.with_file_name("display-source.mp4")
+}
+
+/// The screen reader for a segment's kept source video, opened on first use
+/// so a session that only plays, scrubs or exports never pays for it.
+struct SourceVideo {
+    source: DecoderSource,
+    force_ffmpeg: bool,
+    decoder: tokio::sync::OnceCell<Option<AsyncVideoDecoderHandle>>,
+}
+
+impl SourceVideo {
+    fn find(display: &DecoderSource, force_ffmpeg: bool) -> Option<Arc<Self>> {
+        if display.path.file_name() != Some(std::ffi::OsStr::new("display.mp4")) {
+            return None;
+        }
+        let path = source_video_path(&display.path);
+        path.is_file().then(|| {
+            Arc::new(Self {
+                source: DecoderSource {
+                    path,
+                    ..display.clone()
+                },
+                force_ffmpeg,
+                decoder: tokio::sync::OnceCell::new(),
+            })
+        })
+    }
+
+    fn reopened(&self) -> Arc<Self> {
+        Arc::new(Self {
+            source: self.source.clone(),
+            force_ffmpeg: self.force_ffmpeg,
+            decoder: tokio::sync::OnceCell::new(),
+        })
+    }
+
+    async fn decoder(&self) -> Option<&AsyncVideoDecoderHandle> {
+        self.decoder
+            .get_or_init(|| async {
+                spawn_screen_decoder(self.source.clone(), self.force_ffmpeg)
+                    .await
+                    .inspect_err(|error| {
+                        tracing::warn!(%error, "Kept source video failed to open; using display");
+                    })
+                    .ok()
+            })
+            .await
+            .as_ref()
+    }
 }
 
 /// A second set of readers for this clip, opened on first use, for the
@@ -687,6 +757,7 @@ impl RecordingSegmentDecoders {
         Ok(Self {
             screen,
             camera,
+            source_video: SourceVideo::find(&screen_source, force_ffmpeg),
             segment_offset: latest_start_time.unwrap_or(0.0),
             transition_readers: Some(Arc::new(TransitionSideDecoders {
                 screen: screen_source,
@@ -706,7 +777,7 @@ impl RecordingSegmentDecoders {
         };
         let screen_shared = serves_two_positions(&self.screen);
         let camera_shared = self.camera.as_ref().is_none_or(serves_two_positions);
-        if screen_shared && camera_shared {
+        if screen_shared && camera_shared && self.source_video.is_none() {
             return self;
         }
         let decoders = side
@@ -733,6 +804,7 @@ impl RecordingSegmentDecoders {
                     Ok((screen, camera)) => Some(RecordingSegmentDecoders {
                         screen,
                         camera,
+                        source_video: self.source_video.as_ref().map(|video| video.reopened()),
                         segment_offset: self.segment_offset,
                         transition_readers: None,
                     }),
@@ -785,6 +857,32 @@ impl RecordingSegmentDecoders {
         .await
         .ok()
         .flatten()
+    }
+
+    /// A frame the editor shows once the playhead has settled: read from the
+    /// kept source video when the segment has one, otherwise the same as
+    /// [`Self::get_frames_initial`].
+    pub async fn get_frames_still(
+        &self,
+        segment_time: f32,
+        needs_camera: bool,
+        needs_display: bool,
+        offsets: ClipOffsets,
+    ) -> Option<DecodedSegmentFrames> {
+        self.fetch_frames(
+            segment_time,
+            needs_camera,
+            needs_display,
+            offsets,
+            FrameFetch::Still,
+        )
+        .await
+        .ok()
+        .flatten()
+    }
+
+    pub fn has_source_video(&self) -> bool {
+        self.source_video.is_some()
     }
 
     /// Offline export variant: screen and camera requests wait past their
@@ -848,15 +946,20 @@ impl RecordingSegmentDecoders {
         let camera = needs_camera.then_some(self.camera.as_ref()).flatten();
 
         if needs_display {
+            let screen_decoder = match (&self.source_video, fetch) {
+                (Some(video), FrameFetch::Still) => video.decoder().await.unwrap_or(&self.screen),
+                _ => &self.screen,
+            };
             let (screen, camera) = tokio::join!(
-                fetch.frame(&self.screen, segment_time),
+                fetch.frame(screen_decoder, segment_time),
                 OptionFuture::from(camera.map(|d| fetch.frame(d, camera_request_time)))
             );
 
             let camera_frame = camera.transpose()?.flatten();
             let screen = screen?;
 
-            if screen.is_none() && fetch != FrameFetch::PlaybackInitial {
+            if screen.is_none() && !matches!(fetch, FrameFetch::PlaybackInitial | FrameFetch::Still)
+            {
                 tracing::warn!(segment_time, "screen decoder returned no frame");
             }
 
@@ -1257,7 +1360,8 @@ pub async fn render_video_to_channel(
                 duration,
                 zoom_timeline,
                 precomputed_cursor,
-            );
+            )
+            .with_quality(RenderQuality::Export);
 
             let mut next_prefetch_meta: Option<(u32, f64, usize)> = None;
             let prefetch_future = if let Some(next_frame_number) = next_frame
@@ -1858,7 +1962,8 @@ pub async fn render_video_to_channel_nv12(
                 duration,
                 zoom_timeline,
                 precomputed_cursor,
-            );
+            )
+            .with_quality(RenderQuality::Export);
 
             let mut next_prefetch_meta: Option<(u32, f64, usize)> = None;
             let prefetch_future = if let Some(next_frame_number) = next_frame
@@ -2451,7 +2556,8 @@ async fn render_transition_rgba(
         context.duration,
         &context.outgoing_zoom_timelines[outgoing_clip_index],
         &context.precomputed_cursor_timelines[outgoing_clip_index],
-    );
+    )
+    .with_quality(RenderQuality::Export);
 
     frame_renderer
         .render_transition(
@@ -2510,7 +2616,8 @@ async fn render_transition_nv12_export(
         context.duration,
         &context.outgoing_zoom_timelines[outgoing_clip_index],
         &context.precomputed_cursor_timelines[outgoing_clip_index],
-    );
+    )
+    .with_quality(RenderQuality::Export);
 
     frame_renderer
         .render_transition_nv12(
@@ -2712,6 +2819,9 @@ pub struct RenderVideoConstants {
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
     project_styles: ProjectStyleCache,
+    /// Loudness envelope an audio-only recording's visualiser draws from. Set
+    /// once it is computed; until then the visualiser rests flat.
+    audio_levels: std::sync::RwLock<Option<Arc<AudioLevels>>>,
 }
 
 /// Instance, adapter and device the way every renderer creates them. A
@@ -2916,6 +3026,23 @@ pub struct SharedWgpuDevice {
 }
 
 impl RenderVideoConstants {
+    pub fn is_audio_only(&self) -> bool {
+        self.meta.is_audio_only()
+    }
+
+    pub fn set_audio_levels(&self, levels: Option<Arc<AudioLevels>>) {
+        if let Ok(mut current) = self.audio_levels.write() {
+            *current = levels;
+        }
+    }
+
+    pub fn audio_levels(&self) -> Option<Arc<AudioLevels>> {
+        self.audio_levels
+            .read()
+            .ok()
+            .and_then(|levels| levels.clone())
+    }
+
     pub fn with_frozen_recorded_cursors(mut self, assets: FrozenRecordedCursorAssets) -> Self {
         self.frozen_recorded_cursors = Some(assets);
         self
@@ -2963,6 +3090,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            audio_levels: Default::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         })
@@ -2994,6 +3122,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            audio_levels: Default::default(),
             is_software_adapter: shared.is_software_adapter,
             adapter_name,
         }
@@ -3056,6 +3185,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            audio_levels: Default::default(),
             is_software_adapter,
             adapter_name,
         })
@@ -3280,12 +3410,17 @@ pub struct ProjectUniforms {
     /// Shape-track marks for this frame, drawn in output-frame space like
     /// text: zoom, crop, scenes and the 3D camera never move them.
     pub shapes: Vec<PreparedShape>,
+    pub audio_visualizer: Vec<PreparedShape>,
     /// Effective 3D camera state for this frame; `None` when the frame is
     /// outside every 3d segment (the warp and blur passes are skipped).
     pub camera3d: Option<Camera3DFrame>,
     /// The 2D zoom re-expressed as an on-screen card magnification while a 3D
     /// pose is active (the display itself renders unzoomed into the card).
     pub camera3d_zoom: Option<camera3d::Camera3DScreenZoom>,
+    /// The screen's enhancement for this frame, used only when `quality`
+    /// enhances.
+    pub screen_enhance: ScreenEnhanceFrame,
+    pub quality: RenderQuality,
 }
 
 fn cursor_time_for_interpolation(time: f32, stop_time: Option<f32>) -> f32 {
@@ -3814,6 +3949,17 @@ pub(crate) struct DisplayLayout {
 }
 
 impl ProjectUniforms {
+    pub fn with_quality(mut self, quality: RenderQuality) -> Self {
+        self.quality = quality;
+        self
+    }
+
+    /// Software adapters keep the plain frame: on one the network costs ten
+    /// times the rest of the frame.
+    pub(crate) fn display_enhancement(&self, software_adapter: bool) -> Option<ScreenEnhanceFrame> {
+        (self.quality.enhances() && !software_adapter).then_some(self.screen_enhance)
+    }
+
     /// 0..1 multiplier for recording-anchored overlays (captions, keyboard).
     /// A Fullscreen takeover hides the recording and pauses its clock, so the
     /// overlays fade with the display — they would otherwise hang frozen over
@@ -4728,11 +4874,17 @@ impl ProjectUniforms {
         };
         let motion_prev_zoom = zoom_timeline.sample(motion_prev_frame_time);
 
-        let scene = InterpolatedScene::new(SceneSegmentsCursor::new(timeline_time, scene_segments));
-        let prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+        let mut scene =
+            InterpolatedScene::new(SceneSegmentsCursor::new(timeline_time, scene_segments));
+        let mut prev_scene = InterpolatedScene::new(SceneSegmentsCursor::new(
             f64::from(frame_number.saturating_sub(1)) / f64::from(fps.max(1)),
             scene_segments,
         ));
+        let audio_only = constants.is_audio_only();
+        if audio_only {
+            scene.screen_opacity = 0.0;
+            prev_scene.screen_opacity = 0.0;
+        }
 
         let camera3d = project.timeline.as_ref().and_then(|timeline| {
             interpolate_camera3d(
@@ -4893,6 +5045,7 @@ impl ProjectUniforms {
         let (
             display,
             display_motion_parent,
+            display_slowest_motion_px,
             frame_chrome,
             display_outer_bounds,
             notch,
@@ -4967,6 +5120,19 @@ impl ProjectUniforms {
             };
             let descriptor = display_motion.descriptor;
             let display_parent_motion_px = display_motion.parent_movement_px;
+            let display_slowest_motion_px = if has_previous && !zoom_snapped_in_window {
+                screen_enhance::slowest_pixel_motion(
+                    [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
+                    [
+                        prev_start.x as f32,
+                        prev_start.y as f32,
+                        prev_end.x as f32,
+                        prev_end.y as f32,
+                    ],
+                ) / motion_frame_span
+            } else {
+                0.0
+            };
 
             // Morph the screen toward its split-screen half (and its
             // aspect-matched crop) by the scene's split factor; the normal
@@ -5157,6 +5323,8 @@ impl ProjectUniforms {
                         color_adjust_a: [0.0; 4],
                         color_adjust_b: [0.0; 4],
                         grain_params: [0.0; 4],
+                        enhance_region: [0.0; 4],
+                        enhance_params: [0.0; 4],
                     },
                     style: frame.style,
                     theme: frame.theme,
@@ -5226,6 +5394,8 @@ impl ProjectUniforms {
                             color_adjust_a: [0.0; 4],
                             color_adjust_b: [0.0; 4],
                             grain_params: [0.0; 4],
+                            enhance_region: [0.0; 4],
+                            enhance_params: [0.0; 4],
                         },
                         raster_size: [unzoomed.full_size[0] as f64, unzoomed.full_size[1] as f64],
                         source_crop: placement.source_crop,
@@ -5286,8 +5456,11 @@ impl ProjectUniforms {
                     color_adjust_a: screen_color_grade.color_adjust_a,
                     color_adjust_b: screen_color_grade.color_adjust_b,
                     grain_params: screen_color_grade.grain_params,
+                    enhance_region: [0.0; 4],
+                    enhance_params: [0.0; 4],
                 },
                 display_parent_motion_px,
+                display_slowest_motion_px,
                 frame_chrome,
                 display_outer_bounds,
                 notch,
@@ -5303,6 +5476,16 @@ impl ProjectUniforms {
         };
 
         let display = display.for_source_frame(source_size);
+        let screen_enhance = if options.preserve_screen_alpha {
+            ScreenEnhanceFrame::NONE
+        } else {
+            ScreenEnhanceFrame::resolve(
+                project.screen_enhancement.effective_strength(),
+                display_slowest_motion_px,
+                screen_motion_blur,
+                screen_enhance::magnification(&display),
+            )
+        };
         let display_outer_bounds = if frame_chrome.is_none() {
             display.target_bounds
         } else {
@@ -5515,6 +5698,8 @@ impl ProjectUniforms {
                     color_adjust_a: camera_color_grade.color_adjust_a,
                     color_adjust_b: camera_color_grade.color_adjust_b,
                     grain_params: camera_color_grade.grain_params,
+                    enhance_region: [0.0; 4],
+                    enhance_params: [0.0; 4],
                 }
             });
 
@@ -5641,6 +5826,8 @@ impl ProjectUniforms {
                     color_adjust_a: camera_color_grade.color_adjust_a,
                     color_adjust_b: camera_color_grade.color_adjust_b,
                     grain_params: camera_color_grade.grain_params,
+                    enhance_region: [0.0; 4],
+                    enhance_params: [0.0; 4],
                 }
             });
         let cutout_uniforms = |mut uniforms: CompositeVideoFrameUniforms| {
@@ -5692,6 +5879,23 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
+        let audio_visualizer = match (audio_only, project.audio_visuals.as_ref()) {
+            (true, Some(visuals)) if visuals.enabled => {
+                let levels = constants.audio_levels().unwrap_or_default();
+                let clip = project
+                    .get_segment_time(timeline_time)
+                    .map_or(0, |(_, segment)| segment.recording_clip as usize);
+                audio_visualizer::visualizer_shapes(
+                    visuals,
+                    &levels,
+                    clip,
+                    f64::from(segment_frames.recording_time),
+                    output_size,
+                )
+            }
+            _ => Vec::new(),
+        };
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -5721,9 +5925,12 @@ impl ProjectUniforms {
             masks,
             texts,
             shapes,
+            audio_visualizer,
             camera3d,
             camera3d_zoom,
             screen_color_grade,
+            screen_enhance,
+            quality: RenderQuality::Playback,
         }
     }
 }
@@ -7055,6 +7262,7 @@ mod style_image_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            audio_levels: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: false,
         };
@@ -7249,6 +7457,147 @@ mod style_image_tests {
     }
 }
 
+/// The next-index check (`decoder::request_next_frame`) as a decoder handle
+/// and an export see it: samples captured 0.75 of a frame after each grid
+/// line, read 0.98 of a frame into each cell.
+#[cfg(test)]
+mod next_index_tests {
+    use super::*;
+    use std::{collections::BTreeSet, time::Duration};
+
+    const FPS: u32 = 60;
+
+    fn sample_secs(index: u32) -> f64 {
+        (f64::from(index) - 0.25) / f64::from(FPS)
+    }
+
+    /// Answers each request with the sample filed under its grid index
+    /// (identified by its first byte), presented at `sample_secs`, and never
+    /// answers the indices in `stalled`. Polls on the paused clock so only an
+    /// unanswered request lets time run out.
+    fn decoder(stalled: &[u32]) -> RecordingSegmentDecoders {
+        let (sender, receiver) = std::sync::mpsc::channel::<decoder::VideoDecoderMessage>();
+        let stalled: BTreeSet<u32> = stalled.iter().copied().collect();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                match receiver.try_recv() {
+                    Ok(decoder::VideoDecoderMessage::GetFrame(time, _, reply)) => {
+                        let index = decoder::request_frame(time, FPS);
+                        if stalled.contains(&index) {
+                            held.push(reply);
+                            continue;
+                        }
+                        let _ = reply.send(
+                            DecodedFrame::new(vec![index as u8; 16 * 16 * 4], 16, 16)
+                                .with_presentation_secs(sample_secs(index)),
+                        );
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                }
+            }
+        });
+        RecordingSegmentDecoders {
+            screen: AsyncVideoDecoderHandle::for_test(sender, 16, 16).with_test_fps(FPS),
+            camera: None,
+            source_video: None,
+            segment_offset: 0.0,
+            transition_readers: None,
+        }
+    }
+
+    fn shown(frames: &DecodedSegmentFrames) -> u8 {
+        frames.screen_frame.as_ref().expect("screen frame").data()[0]
+    }
+
+    /// 0.98 of a frame into the cell before grid index 11.
+    const OFF_GRID: f32 = 10.98 / FPS as f32;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sample_captured_before_the_request_is_shown() {
+        let decoders = decoder(&[]);
+        let offsets = cap_project::ClipOffsets::default();
+        let frames = decoders
+            .get_frames_for_export(OFF_GRID, false, true, offsets, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shown(&frames),
+            11,
+            "sample 11 is captured at 10.75, before 10.98"
+        );
+        let frames = decoders
+            .get_frames_for_export(10.0 / FPS as f32, false, true, offsets, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shown(&frames), 10);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sample_captured_after_the_request_is_not_shown() {
+        let decoders = decoder(&[]);
+        let frames = decoders
+            .get_frames_for_export(10.6 / FPS as f32, false, true, Default::default(), false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shown(&frames),
+            10,
+            "sample 11 is captured at 10.75, after 10.6"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_next_index_fails_the_export_like_a_stalled_grid_index() {
+        for (stalled, time) in [(11, OFF_GRID), (10, OFF_GRID), (10, 10.0 / FPS as f32)] {
+            let decoders = decoder(&[stalled]);
+            let result = decode_segment_frames_with_retry(
+                &decoders,
+                f64::from(time),
+                false,
+                true,
+                Default::default(),
+                10,
+                false,
+                FPS,
+            )
+            .await;
+            match result {
+                Err(RenderingError::FrameDecodeStalled {
+                    frame_number,
+                    waited_secs,
+                }) => {
+                    assert_eq!(frame_number, 10);
+                    assert!(waited_secs >= decoder::EXPORT_STALL_LIMIT.as_secs());
+                }
+                other => panic!(
+                    "stalled index {stalled} at {time}: {:?}",
+                    other.map(|frames| frames.map(|frames| shown(&frames)))
+                ),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn playback_shows_the_grid_sample_when_the_next_index_misses_its_deadline() {
+        let decoders = decoder(&[11]);
+        let started = tokio::time::Instant::now();
+        let frames = decoders
+            .get_frames(OFF_GRID, false, true, Default::default())
+            .await
+            .unwrap();
+        assert_eq!(shown(&frames), 10);
+        // The lookahead waits a quarter second, not the frame deadline.
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+}
+
 /// Offline export under load: a decode or GPU readback that misses its
 /// playback deadline must not change which frames are written or their order.
 #[cfg(test)]
@@ -7311,6 +7660,7 @@ mod export_order_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            audio_levels: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter: is_software_adapter || software_path,
         })
@@ -7371,6 +7721,7 @@ mod export_order_tests {
             decoders: RecordingSegmentDecoders {
                 screen,
                 camera: None,
+                source_video: None,
                 segment_offset: 0.0,
                 transition_readers: None,
             },
@@ -7649,6 +8000,7 @@ mod nv12_flush_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            audio_levels: Default::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
             is_software_adapter,
         })
@@ -8724,6 +9076,7 @@ pub struct RendererLayers {
     camera_only: CameraLayer,
     mask: MaskLayer,
     overlays: Option<OverlayLayers>,
+    audio_visualizer: Option<ShapeLayer>,
     camera3d: Camera3DLayer,
     camera_blur_processor: Option<cap_camera_effects::BlurProcessor>,
     camera_blur_init_failed: bool,
@@ -8853,6 +9206,7 @@ impl RendererLayers {
                 }),
                 mask: join_layer(mask),
                 overlays: join_layer(overlays),
+                audio_visualizer: None,
                 camera3d: join_layer(camera3d),
                 camera_blur_processor: None,
                 camera_blur_init_failed: false,
@@ -8864,6 +9218,26 @@ impl RendererLayers {
         });
         layers_phase.finish("returned");
         layers
+    }
+
+    /// The visualiser gets its own shape layer, made the first time a frame
+    /// has one, so every other recording renders exactly as before.
+    fn prepare_audio_visualizer(
+        &mut self,
+        constants: &RenderVideoConstants,
+        uniforms: &ProjectUniforms,
+    ) {
+        if uniforms.audio_visualizer.is_empty() && self.audio_visualizer.is_none() {
+            return;
+        }
+        self.audio_visualizer
+            .get_or_insert_with(|| ShapeLayer::new(&constants.device))
+            .prepare(
+                &constants.device,
+                &constants.queue,
+                uniforms.output_size,
+                &uniforms.audio_visualizer,
+            );
     }
 
     fn validate_overlay_uniforms(&self, uniforms: &ProjectUniforms) -> Result<(), RenderingError> {
@@ -9067,6 +9441,8 @@ impl RendererLayers {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
+            self.display
+                .set_enhancement(uniforms.display_enhancement(constants.is_software_adapter));
             self.display.prepare(
                 &constants.device,
                 &constants.queue,
@@ -9125,6 +9501,8 @@ impl RendererLayers {
         if let Some(mode) = uniforms.camera_background_effect_mode() {
             self.run_shared_camera_blur(&constants.device, &constants.queue, mode);
         }
+
+        self.prepare_audio_visualizer(constants, uniforms);
 
         if let Some(overlays) = &mut self.overlays {
             overlays.images.prepare(constants, uniforms).await;
@@ -9225,6 +9603,8 @@ impl RendererLayers {
             self.frame.prepare(constants, uniforms);
             self.notch
                 .prepare(&constants.device, &constants.queue, uniforms.notch);
+            self.display
+                .set_enhancement(uniforms.display_enhancement(constants.is_software_adapter));
             let display_ready = self.display.prepare_with_encoder(
                 &constants.device,
                 &constants.queue,
@@ -9304,6 +9684,8 @@ impl RendererLayers {
             );
         }
         timings.camera_blur_prepare_duration = start.elapsed();
+
+        self.prepare_audio_visualizer(constants, uniforms);
 
         if let Some(overlays) = &mut self.overlays {
             let start = Instant::now();
@@ -9451,6 +9833,7 @@ impl RendererLayers {
         if parts.content {
             if render_display {
                 self.display.copy_to_texture(encoder);
+                self.display.encode_enhancement(device, queue, encoder);
             }
             self.camera.copy_to_texture(encoder);
             self.camera_only.copy_to_texture(encoder);
@@ -9625,6 +10008,14 @@ impl RendererLayers {
         // Mac, but before masks and text, which are editor annotations.
         if should_render_screen && self.notch.has_content() {
             self.notch.render(passes.pass(content_view!(), load));
+        }
+
+        if let Some(visualizer) = self
+            .audio_visualizer
+            .as_ref()
+            .filter(|visualizer| visualizer.has_content())
+        {
+            visualizer.render(passes.pass(content_view!(), load));
         }
 
         // Render camera-only layer when transitioning with CameraOnly mode
@@ -12248,5 +12639,101 @@ mod dx12_compiler_fallback_tests {
         let (instance, kept) = dx12_instance_with_fxc_fallback(compiler);
         assert!(matches!(kept, wgpu::Dx12Compiler::DynamicDxc { .. }));
         assert!(!instance.enumerate_adapters(wgpu::Backends::DX12).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod source_video_tests {
+    use super::*;
+
+    fn constant_decoder(level: u8) -> AsyncVideoDecoderHandle {
+        let (sender, receiver) = std::sync::mpsc::channel::<decoder::VideoDecoderMessage>();
+        std::thread::spawn(move || {
+            while let Ok(decoder::VideoDecoderMessage::GetFrame(_, _, reply)) = receiver.recv() {
+                let _ = reply.send(DecodedFrame::new(vec![level; 4 * 4 * 4], 4, 4));
+            }
+        });
+        AsyncVideoDecoderHandle::for_test(sender, 4, 4)
+    }
+
+    fn segment(kept_source: bool) -> RecordingSegmentDecoders {
+        RecordingSegmentDecoders {
+            screen: constant_decoder(10),
+            camera: None,
+            source_video: kept_source.then(|| {
+                Arc::new(SourceVideo {
+                    source: DecoderSource {
+                        path: PathBuf::from("display-source.mp4"),
+                        fps: 30,
+                        offset: 0.0,
+                    },
+                    force_ffmpeg: false,
+                    decoder: tokio::sync::OnceCell::new_with(Some(Some(constant_decoder(200)))),
+                })
+            }),
+            segment_offset: 0.0,
+            transition_readers: None,
+        }
+    }
+
+    fn level(frames: Option<DecodedSegmentFrames>) -> u8 {
+        frames.unwrap().screen_frame.unwrap().data()[0]
+    }
+
+    #[tokio::test]
+    async fn only_settled_frames_read_the_kept_source() {
+        let segment = segment(true);
+        let offsets = ClipOffsets::default();
+        assert_eq!(
+            level(segment.get_frames(0.5, false, true, offsets).await),
+            10
+        );
+        assert_eq!(
+            level(segment.get_frames_initial(0.5, false, true, offsets).await),
+            10
+        );
+        assert_eq!(
+            level(segment.get_frames_still(0.5, false, true, offsets).await),
+            200
+        );
+        let exported = segment
+            .get_frames_for_export(0.5, false, true, offsets, true)
+            .await
+            .unwrap();
+        assert_eq!(level(exported), 10);
+    }
+
+    #[tokio::test]
+    async fn without_a_kept_source_every_fetch_reads_display() {
+        let segment = segment(false);
+        let offsets = ClipOffsets::default();
+        assert!(!segment.has_source_video());
+        assert_eq!(
+            level(segment.get_frames_still(0.5, false, true, offsets).await),
+            10
+        );
+        let exported = segment
+            .get_frames_for_export(0.5, false, true, offsets, true)
+            .await
+            .unwrap();
+        assert_eq!(level(exported), 10);
+    }
+
+    #[test]
+    fn the_kept_source_is_found_only_next_to_display() {
+        let directory = tempfile::tempdir().unwrap();
+        let display = DecoderSource {
+            path: directory.path().join("display.mp4"),
+            fps: 30,
+            offset: 0.0,
+        };
+        assert!(SourceVideo::find(&display, false).is_none());
+        std::fs::write(source_video_path(&display.path), b"").unwrap();
+        assert!(SourceVideo::find(&display, false).is_some());
+        let camera = DecoderSource {
+            path: directory.path().join("camera.mp4"),
+            ..display
+        };
+        assert!(SourceVideo::find(&camera, false).is_none());
     }
 }

@@ -65,6 +65,7 @@ fn row(root: &str) -> RecordingRow {
             sort_time_millis: 0.,
             thumbnail: None,
             thumbnail_version: None,
+            audio_only: false,
         },
         thumbnail: None,
         thumbnail_stale: false,

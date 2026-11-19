@@ -1269,6 +1269,15 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
                     tracing::debug!("engine stopped without a pause request");
                     applied_playing = false;
                     let _ = driver.engine_stopped.try_send(());
+                    let resolution = driver
+                        .desired
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .resolution;
+                    let instance = instance.clone();
+                    tokio::spawn(async move {
+                        rerender_paused_frame_enhanced(&instance, resolution).await;
+                    });
                 }
                 continue;
             }
@@ -1294,6 +1303,13 @@ pub async fn run_transport(instance: Arc<EditorInstance>, driver: TransportDrive
             };
             if let Some(handle) = handle {
                 handle.stop();
+            }
+            if !seeking {
+                let instance = instance.clone();
+                let resolution = want.resolution;
+                tokio::spawn(async move {
+                    rerender_paused_frame_enhanced(&instance, resolution).await;
+                });
             }
         }
 
@@ -1551,6 +1567,7 @@ pub struct EditorWindow {
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
     pub(crate) instance: Option<Arc<EditorInstance>>,
+    pub(crate) audio_levels: Option<Arc<cap_rendering::AudioLevels>>,
     /// Held from the window opening until it gives up its engine, so the
     /// library refuses to delete the project from under an open editor.
     open_project: Option<crate::library::ProjectOpenInEditor>,
@@ -1588,7 +1605,7 @@ pub struct EditorWindow {
 
     // -- Timeline -----------------------------------------------------------
     /// Every track the strip draws.
-    timeline: TimelineModel,
+    pub(crate) timeline: TimelineModel,
     /// The viewport, the hover ghost and the hovered track.
     pub(crate) view: TimelineView,
     playback_follow: timeline::PlaybackFollow,
@@ -1767,6 +1784,11 @@ pub struct EditorWindow {
 
     preview_quality: crate::store::EditorPreviewQuality,
     preview_speed: cap_editor::PreviewSpeed,
+    /// The transport's Enhance toggle: the paused preview shows the enhanced
+    /// frame. Never saved with the project.
+    preview_enhance: bool,
+    /// Compare is held down: the paused preview shows the original.
+    preview_comparing: bool,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
@@ -2355,6 +2377,7 @@ impl EditorWindow {
             timeline_view,
             frame_layout: None,
             instance: None,
+            audio_levels: None,
             focus: cx.focus_handle(),
             playing: false,
             playhead: 0.0,
@@ -2442,6 +2465,8 @@ impl EditorWindow {
             shape_clipboard: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             preview_speed: crate::store::GeneralSettings::load().editor_preview_speed,
+            preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance,
+            preview_comparing: false,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             text_menu: None,
@@ -2666,6 +2691,7 @@ impl EditorWindow {
     ) {
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
+        self.refresh_audio_levels();
         cx.notify();
         window.refresh();
     }
@@ -3145,7 +3171,9 @@ impl EditorWindow {
         let Some(instance) = &self.instance else {
             return;
         };
-        instance.project_config.0.send(self.project.clone()).ok();
+        let mut config = self.project.clone();
+        config.screen_enhancement = self.preview_screen_enhancement();
+        instance.project_config.0.send(config).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
             request_frame(
@@ -3570,7 +3598,22 @@ impl EditorWindow {
             self.ordinary_handoff_frame = None;
         }
         instance.set_preview_speed(self.preview_speed);
+        // A restored Enhance toggle reaches the renderer before its first
+        // frame, not only once something publishes the project.
+        let enhancement = self.preview_screen_enhancement();
+        instance
+            .project_config
+            .0
+            .send_modify(|config| config.screen_enhancement = enhancement);
         self.instance = Some(instance);
+    }
+
+    fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
+        if self.preview_enhance && !self.preview_comparing {
+            cap_project::ScreenEnhancement::on()
+        } else {
+            cap_project::ScreenEnhancement::default()
+        }
     }
 
     pub(crate) fn hold_project(&mut self, project: crate::library::ProjectOpenInEditor) {
@@ -3607,6 +3650,9 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The render device exists by now, so a software fallback has been
+        // noted and an unchosen default can step down to Half.
+        self.preview_quality = crate::store::GeneralSettings::load().editor_preview_quality;
         transport.set_resolution(self.preview_resolution());
         self.transport = Some(transport);
         self.stats = Some(stats);
@@ -3760,6 +3806,8 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
+        // Compare only applies to a paused frame, so playing ends it.
+        self.set_preview_comparing(false, cx);
         let Some(transport) = &self.transport else {
             return;
         };
@@ -4794,11 +4842,11 @@ impl EditorWindow {
     /// Redraw the paused frame once at the canvas's device-pixel size.
     ///
     /// Playback and paused interactions keep rendering at the saved preview
-    /// quality, so their cost does not change. With the default Half quality
-    /// that frame is smaller than a Retina canvas and gets magnified, so once
-    /// the preview has been still for `delay` (a pause, the end of a scrub or
-    /// an edit, a resize) the same frame is rendered again at the canvas size.
-    /// Full and Quarter are explicit choices and are drawn as chosen.
+    /// quality, so their cost does not change. Half and Full frames are
+    /// smaller than a large Retina canvas and get magnified, so once the
+    /// preview has been still for `delay` (a pause, the end of a scrub or an
+    /// edit, a resize) the same frame is rendered again at the canvas size.
+    /// Quarter is an explicit choice for speed and is drawn as chosen.
     pub(crate) fn schedule_sharp_preview(
         &mut self,
         delay: Duration,
@@ -4808,7 +4856,7 @@ impl EditorWindow {
         if self.playing {
             return SharpPreview::Playing;
         }
-        if self.preview_quality != crate::store::EditorPreviewQuality::Half {
+        if self.preview_quality == crate::store::EditorPreviewQuality::Quarter {
             return SharpPreview::ChosenQuality;
         }
         if self.preparing_presentation.is_some()
@@ -6780,6 +6828,62 @@ impl EditorWindow {
         }
     }
 
+    /// Generated zooms become the first history entry rather than an undo
+    /// step, so undo cannot strip them from a recording that opened with them.
+    pub(crate) fn apply_pending_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project.auto_zoom_pending {
+            return;
+        }
+        let path = self.project_path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let clicks = cx
+                .background_executor()
+                .spawn(async move { load_recording_clicks(&path) })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.land_pending_auto_zoom(&clicks, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn land_pending_auto_zoom(
+        &mut self,
+        clicks: &[Vec<cap_project::CursorClickEvent>],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project.auto_zoom_pending || !self.project_ready() {
+            return;
+        }
+        let untouched = self.history.is_untouched();
+        let settings = crate::store::GeneralSettings::load();
+        let amount = f64::from(settings.zoom_amount_for(self.project.auto_zoom_version));
+        let generated = edits::settle_pending_auto_zoom(
+            &mut self.project,
+            clicks,
+            !untouched,
+            settings.auto_zoom_on_clicks,
+            amount,
+        );
+        if generated {
+            self.history = ProjectHistory::new(self.project.clone());
+        } else {
+            self.history
+                .amend_all(|entry| entry.auto_zoom_pending = false);
+        }
+        if generated {
+            self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
+            self.rebuild_timeline();
+            self.publish_project();
+            self.note_edit("auto-zoom-on-open", Some(TrackKind::Zoom));
+        }
+        self.schedule_save(window, cx);
+        cx.notify();
+        window.refresh();
+    }
+
     /// `handleGenerateZoomSegments` (`TL/ZoomTrack.tsx:84-93`): read the
     /// recorded clicks off the bundle, run the auto-zoom pass, and land the
     /// result as the zoom track.
@@ -8381,6 +8485,32 @@ impl EditorWindow {
         cx.notify();
     }
 
+    fn toggle_preview_enhance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_enhance = !self.preview_enhance;
+        self.preview_comparing = false;
+        if !crate::store::set_store_setting(
+            crate::store::GENERAL_SETTINGS,
+            crate::store::EDITOR_PREVIEW_ENHANCE_KEY,
+            serde_json::json!(self.preview_enhance),
+        ) {
+            tracing::warn!("failed to persist the preview enhance toggle");
+        }
+        self.publish_project();
+        cx.notify();
+        window.refresh();
+    }
+
+    /// Holding Compare shows the original paused frame; letting go shows the
+    /// enhanced one again.
+    fn set_preview_comparing(&mut self, comparing: bool, cx: &mut Context<Self>) {
+        if self.preview_comparing == comparing {
+            return;
+        }
+        self.preview_comparing = comparing;
+        self.publish_project();
+        cx.notify();
+    }
+
     fn has_open_menu(&self) -> bool {
         self.sidebar.menu.is_some()
             || self.toolbar_menu.is_some()
@@ -8412,6 +8542,9 @@ impl EditorWindow {
         quality: crate::store::EditorPreviewQuality,
         cx: &mut Context<Self>,
     ) {
+        if !crate::store::set_editor_preview_quality(quality) {
+            tracing::warn!("failed to persist preview quality");
+        }
         if quality == self.preview_quality {
             return;
         }
@@ -8421,14 +8554,6 @@ impl EditorWindow {
         let resolution = self.preview_resolution();
         if let Some(transport) = &self.transport {
             transport.set_resolution(resolution);
-        }
-        let value = serde_json::Value::String(quality.as_json().to_string());
-        if !crate::store::set_store_setting(
-            crate::store::GENERAL_SETTINGS,
-            "editorPreviewQuality",
-            value,
-        ) {
-            tracing::warn!("failed to persist preview quality");
         }
         if was_playing {
             self.stop_playback(cx);
@@ -11843,8 +11968,11 @@ impl EditorWindow {
     /// the sprite atlas.
     fn render_preview_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let audio_card =
+            self.project_ready() && self.is_audio_only() && !self.audio_visuals_enabled();
         let body = match (&self.state, self.latest_frame.is_some()) {
             (LoadState::Failed(message), _) => self.render_error_state(message).into_any_element(),
+            _ if audio_card => self.render_audio_card(cx),
             (_, true) => loading::reveal(
                 "editor-preview-ready",
                 self.preview
@@ -11871,7 +11999,7 @@ impl EditorWindow {
             // `CanvasElementsOverlay` + `SnapGuidesOverlay`
             // (`Player.tsx:636-643`), both mounted inside the letterbox
             // wrapper and only while a frame exists.
-            .children(if self.project_ready() {
+            .children(if self.project_ready() && !audio_card {
                 self.render_canvas_overlay(cx)
             } else {
                 None
@@ -12052,26 +12180,35 @@ impl EditorWindow {
                     .flex_row()
                     .items_center()
                     .flex_none()
-                    .text_size(px(13.))
-                    .when(narrow, |clock| clock.text_size(px(12.)))
+                    .gap(px(10.))
                     .child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(editor.text_1))
-                            .child(timeline::format_time(current)),
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .flex_none()
+                            .text_size(px(13.))
+                            .when(narrow, |clock| clock.text_size(px(12.)))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child(timeline::format_time(current)),
+                            )
+                            .children((!narrow).then(|| {
+                                div().text_color(Hsla::from(editor.text_3)).child(
+                                    SharedString::from(format!(
+                                        " / {}",
+                                        if total > 0.0 {
+                                            timeline::format_time(total)
+                                        } else {
+                                            "--:--".into()
+                                        }
+                                    )),
+                                )
+                            })),
                     )
-                    .children((!narrow).then(|| {
-                        div()
-                            .text_color(Hsla::from(editor.text_3))
-                            .child(SharedString::from(format!(
-                                " / {}",
-                                if total > 0.0 {
-                                    timeline::format_time(total)
-                                } else {
-                                    "--:--".into()
-                                }
-                            )))
-                    })),
+                    .child(self.render_preview_enhance(player_width >= 920., cx)),
             )
             .child(
                 div()
@@ -12225,6 +12362,98 @@ impl EditorWindow {
                         cx,
                     )),
             )
+    }
+
+    /// The Enhance toggle and, while it is on, Compare: hold it to see the
+    /// paused frame without enhancement.
+    fn render_preview_enhance(&self, labels: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let ready = self.project_ready();
+        let enhance = ui::Button::plain(
+            &theme,
+            "transport-enhance",
+            if self.preview_enhance {
+                ui::ButtonVariant::Primary
+            } else {
+                ui::ButtonVariant::Gray
+            },
+            ui::ButtonSize::Sm,
+        )
+        .icon("icons/scan-text.svg")
+        .when(labels, |button| {
+            button.label(tr::editor::window::transport::enhance())
+        })
+        .radius(px(7.))
+        .disabled(!ready)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.toggle_preview_enhance(window, cx);
+        }));
+        let comparing = self.preview_comparing;
+        let can_compare = ready && !self.playing;
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .child(
+                div()
+                    .id("transport-enhance-tooltip")
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::enhance_tooltip())
+                            .view(cx)
+                    })
+                    .child(enhance),
+            )
+            .children(self.preview_enhance.then(|| {
+                div()
+                    .id("transport-compare")
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::window::transport::compare_tooltip())
+                            .view(cx)
+                    })
+                    .when(can_compare, |this| {
+                        this.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.set_preview_comparing(true, cx);
+                            }),
+                        )
+                    })
+                    // Release always ends Compare, even once playback has
+                    // disabled the button under the held mouse.
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.set_preview_comparing(false, cx);
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                            this.set_preview_comparing(false, cx);
+                        }),
+                    )
+                    .child(
+                        ui::Button::plain(
+                            &theme,
+                            "transport-compare-button",
+                            if comparing {
+                                ui::ButtonVariant::Primary
+                            } else {
+                                ui::ButtonVariant::Gray
+                            },
+                            ui::ButtonSize::Sm,
+                        )
+                        .icon("icons/columns-2.svg")
+                        .when(labels, |button| {
+                            button.label(tr::editor::window::transport::compare())
+                        })
+                        .radius(px(7.))
+                        .disabled(!can_compare),
+                    )
+            }))
     }
 
     fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -14030,6 +14259,34 @@ fn split_camera3d_segment(timeline: &mut TimelineConfiguration, index: usize, at
     true
 }
 
+/// Playback frames are drawn without screen enhancement, so with the preview's
+/// Enhance toggle on, pausing redraws the frame under the playhead once the
+/// engine has stopped. With it off the last playback frame stays, as before.
+async fn rerender_paused_frame_enhanced(instance: &EditorInstance, resolution: XY<u32>) {
+    let enhanced = instance
+        .project_config
+        .1
+        .borrow()
+        .screen_enhancement
+        .effective_strength()
+        > 0.0;
+    if !enhanced {
+        return;
+    }
+    let mut active = instance.playback_watch();
+    let stopped = tokio::time::timeout(
+        Duration::from_millis(500),
+        active.wait_for(|playing| !*playing),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok());
+    if !stopped {
+        return;
+    }
+    let frame = instance.state.lock().await.playhead_position;
+    request_frame(instance, frame, resolution);
+}
+
 /// The instruction that actually produces a picture. `seek_to` and
 /// `set_playhead_position` would move the playhead and render nothing --
 /// the classic "the editor opened but the canvas is black" bug.
@@ -14408,6 +14665,26 @@ mod tests {
                 assert_eq!(editor.finish_ordinary_handoff(13, window, cx), None);
                 assert_eq!(editor.ordinary_handoff_frame, Some(12));
                 assert!(editor.preparing_presentation.is_some());
+            });
+        }
+
+        #[gpui::test]
+        fn full_gets_the_sharp_redraw_and_quarter_is_drawn_as_chosen(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = super::side_panel::fixture(cx);
+            editor.update(cx, |editor, cx| {
+                editor.playing = false;
+                editor.preview_quality = crate::store::EditorPreviewQuality::Full;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::NoEngine
+                );
+                editor.preview_quality = crate::store::EditorPreviewQuality::Quarter;
+                assert_eq!(
+                    editor.schedule_sharp_preview(Duration::ZERO, cx),
+                    SharpPreview::ChosenQuality
+                );
             });
         }
 
@@ -16832,6 +17109,31 @@ mod tests {
         cx.simulate_click(title, gpui::Modifiers::default());
 
         cx.update(|window, _| assert!(input_focus.is_focused(window)));
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn playback_ends_a_held_compare(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx
+            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
+        editor.update(cx, |editor, cx| {
+            editor.preview_enhance = true;
+            editor.set_preview_comparing(true, cx);
+            assert!(editor.preview_comparing);
+            assert_eq!(
+                editor.preview_screen_enhancement(),
+                cap_project::ScreenEnhancement::default()
+            );
+            editor.start_playback(0.0, cx);
+            assert!(!editor.preview_comparing);
+            assert_eq!(
+                editor.preview_screen_enhancement(),
+                cap_project::ScreenEnhancement::on()
+            );
+        });
     }
 
     // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.

@@ -4491,8 +4491,13 @@ pub fn close_camera_window(cx: &mut App) {
     }
 }
 
+/// Camera Only shows the preview inside its overlay; Audio Only records no
+/// camera, so the floating preview steps aside for both.
 fn camera_preview_is_inline(cx: &App) -> bool {
-    TargetSelect::global(cx).read(cx).mode == Some(TargetType::CameraOnly)
+    matches!(
+        TargetSelect::global(cx).read(cx).mode,
+        Some(TargetType::CameraOnly | TargetType::AudioOnly)
+    )
 }
 
 pub fn camera_preview_entity(cx: &mut App) -> Option<Entity<CameraWindow>> {
@@ -5531,12 +5536,14 @@ pub(crate) async fn shared_wgpu_device() -> Option<cap_rendering::SharedWgpuDevi
                 software = shared.is_software_adapter,
                 "shared wgpu device ready"
             );
+            crate::store::EditorPreviewQuality::note_rendering_adapter(shared.is_software_adapter);
             let cloned = clone_shared_wgpu_device(&shared);
             *guard = Some(CachedWgpuDevice { shared, lost });
             Some(cloned)
         }
         Err(error) => {
             tracing::warn!(%error, "could not precreate shared wgpu device");
+            crate::store::EditorPreviewQuality::note_rendering_adapter(true);
             None
         }
     }
@@ -6018,6 +6025,7 @@ fn load_editor_project_candidate(
                 view.set_summary(summary, window, cx);
                 view.set_project(config, window, cx);
                 view.set_instance(instance.clone());
+                view.apply_pending_auto_zoom(window, cx);
                 view.refine_caption_timings(window, cx);
             })
             .is_err()
@@ -6194,6 +6202,14 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
     cx.background_executor()
         .timer(std::time::Duration::from_millis(300))
         .await;
+    if let Ok(style) = std::env::var("CAP_GPUI_AUTO_AUDIO_VISUALS") {
+        let _ = handle.update(cx, |view, window, cx| {
+            view.enable_audio_visuals_for_automation(&style, window, cx)
+        });
+        cx.background_executor()
+            .timer(std::time::Duration::from_secs(2))
+            .await;
+    }
     let _ = handle.update(cx, |view, window, cx| {
         view.open_export(window, cx);
         let tracks = std::env::var("CAP_GPUI_AUTO_EXPORT_TRACKS").ok();
@@ -6201,6 +6217,15 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
             && let Some(tracks) = tracks.as_deref()
         {
             export.use_tracks(Some(tracks));
+        } else if let Some(export) = view.export.as_mut()
+            && let Some(format) = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .and_then(cap_export::audio::AudioExportFormat::from_extension)
+        {
+            export.destination = crate::editor_export::ExportDestination::File;
+            export.format = crate::editor_export::ExportFormatKind::Audio;
+            export.audio_format = format;
         } else if let Some(export) = view.export.as_mut() {
             export.destination = crate::editor_export::ExportDestination::File;
             export.format = if path.extension().is_some_and(|extension| extension == "gif") {
@@ -7495,6 +7520,10 @@ pub fn arm_screenshot_picker(kind: TargetType, cx: &mut App) {
 #[cfg(target_os = "macos")]
 pub(crate) fn camera_window_id(cx: &mut App) -> Option<scap_targets::WindowId> {
     camera_window_number(cx).and_then(|number| number.to_string().parse().ok())
+}
+
+pub(crate) fn camera_window_open(cx: &App) -> bool {
+    cx.global::<AppWindows>().camera.is_some()
 }
 
 pub(crate) fn camera_preview_shown(cx: &App) -> bool {

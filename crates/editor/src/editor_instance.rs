@@ -8,7 +8,7 @@ use cap_project::{
 };
 use cap_rendering::{
     CursorEventOrder, HoverChanges, PrecomputedCursorTimeline, ProjectRecordingsMeta,
-    ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants, RendererLayers,
+    ProjectUniforms, RecordingSegmentDecoders, RenderQuality, RenderVideoConstants, RendererLayers,
     SegmentVideoPaths, SharedWgpuDevice, Video, ZoomTransformTimeline, get_duration,
     spring_mass_damper::SpringMassDamperSimulationConfig,
 };
@@ -29,6 +29,10 @@ pub(super) const PREVIEW_RENDER_MAX_ATTEMPTS: u32 = 3;
 pub(super) const PREVIEW_RENDER_RETRY_DELAY_MS: u64 = 120;
 const PREVIEW_CURSOR_CACHE_CAPACITY: usize = 2;
 const PREVIEW_SCRUB_FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// How long the playhead has to rest before a segment with a kept source
+/// video is shown again from that file. Playback and scrubbing stay on
+/// `display.mp4`, so they decode exactly what they always did.
+const PREVIEW_STILL_SETTLE: Duration = Duration::from_millis(150);
 
 type PreviewRequest = Option<PreviewFrameInstruction>;
 
@@ -52,6 +56,30 @@ async fn preview_superseded_while_fresh(
 ) {
     if probe.changed().await.is_err() || preview_frame_overdue(last_presented) {
         std::future::pending::<()>().await;
+    }
+}
+
+async fn preview_changed(mut probe: watch::Receiver<PreviewRequest>) {
+    if probe.changed().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+async fn playback_started(mut playing: watch::Receiver<bool>) {
+    while !*playing.borrow_and_update() {
+        if playing.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+async fn still_interrupted(
+    preview: watch::Receiver<PreviewRequest>,
+    playing: watch::Receiver<bool>,
+) {
+    tokio::select! {
+        _ = preview_changed(preview) => {}
+        _ = playback_started(playing) => {}
     }
 }
 
@@ -1274,14 +1302,58 @@ impl EditorInstance {
             let mut project = Arc::new(project_rx.borrow_and_update().clone());
             let mut zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
             let mut outgoing_zoom_timelines = HashMap::<u32, ZoomTransformTimeline>::new();
+            let has_source_video = self
+                .segment_medias
+                .iter()
+                .any(|media| media.decoders.has_source_video());
+            let mut playback_rx = self.playback_active_rx.clone();
+            let mut still_due: Option<(tokio::time::Instant, PreviewFrameInstruction)> = None;
+            let mut render_still = false;
 
             loop {
-                preview_rx.changed().await.unwrap();
-                self.preview_activity_ms.store(now_ms(), Ordering::Release);
-                self.ensure_hover_analysis();
+                let still_deadline = still_due.map(|(at, _)| at);
+                tokio::select! {
+                    changed = preview_rx.changed() => {
+                        changed.unwrap();
+                        self.preview_activity_ms.store(now_ms(), Ordering::Release);
+                        self.ensure_hover_analysis();
+                    }
+                    _ = tokio::time::sleep_until(still_deadline.unwrap_or_else(tokio::time::Instant::now)),
+                        if still_deadline.is_some() =>
+                    {
+                        let Some((_, request)) = still_due.take() else {
+                            continue;
+                        };
+                        if *preview_rx.borrow() != Some(request) {
+                            continue;
+                        }
+                        render_still = true;
+                    }
+                    changed = playback_rx.changed(), if has_source_video => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let playing = *playback_rx.borrow_and_update();
+                        still_due = None;
+                        let request = *preview_rx.borrow();
+                        if !playing && let Some((_, fps, resolution_base)) = request {
+                            let frame = self.state.lock().await.playhead_position;
+                            let request = (frame, fps, resolution_base);
+                            self.preview_tx.send_if_modified(|value| {
+                                *value = Some(request);
+                                false
+                            });
+                            still_due =
+                                Some((tokio::time::Instant::now() + PREVIEW_STILL_SETTLE, request));
+                        }
+                        continue;
+                    }
+                }
+                still_due = None;
 
                 loop {
-                    let Some((frame_number, fps, resolution_base)) =
+                    let still_now = std::mem::take(&mut render_still);
+                    let Some(request @ (frame_number, fps, resolution_base)) =
                         *preview_rx.borrow_and_update()
                     else {
                         break;
@@ -1355,6 +1427,15 @@ impl EditorInstance {
                         );
                         break;
                     };
+                    let sharpens = segment_medias.decoders.has_source_video()
+                        || transition_mapping.as_ref().is_some_and(|(outgoing, _, _)| {
+                            self.segment_medias
+                                .get(outgoing.segment.recording_clip as usize)
+                                .is_some_and(|media| media.decoders.has_source_video())
+                        });
+                    if still_now && !sharpens {
+                        break;
+                    }
                     let clip_config = project
                         .clips
                         .iter()
@@ -1367,18 +1448,45 @@ impl EditorInstance {
                     tokio::select! {
                         biased;
 
-                        _ = preview_superseded_while_fresh(preview_rx.clone(), last_presented) => {
+                        _ = async {
+                            if still_now {
+                                still_interrupted(
+                                    preview_rx.clone(),
+                                    self.playback_active_rx.clone(),
+                                )
+                                .await;
+                            } else {
+                                preview_superseded_while_fresh(preview_rx.clone(), last_presented)
+                                    .await;
+                            }
+                        } => {
                             continue;
                         }
 
-                        segment_frames_opt = segment_medias.decoders.get_frames_initial(
-                            segment_time as f32,
-                            project.requires_camera(),
-                            true,
-                            clip_offsets,
-                        ) => {
-                            if preview_superseded(&preview_rx, last_presented) {
+                        segment_frames_opt = async {
+                            if still_now {
+                                segment_medias.decoders.get_frames_still(
+                                    segment_time as f32,
+                                    project.requires_camera(),
+                                    true,
+                                    clip_offsets,
+                                ).await
+                            } else {
+                                segment_medias.decoders.get_frames_initial(
+                                    segment_time as f32,
+                                    project.requires_camera(),
+                                    true,
+                                    clip_offsets,
+                                ).await
+                            }
+                        } => {
+                            if preview_superseded(&preview_rx, last_presented)
+                                || (still_now && preview_rx.has_changed().unwrap_or(false))
+                            {
                                 continue;
+                            }
+                            if still_now && *self.playback_active_rx.borrow() {
+                                break;
                             }
 
                             if segment_frames_opt.is_none() {
@@ -1421,10 +1529,21 @@ impl EditorInstance {
                                     .unwrap_or_default();
                                 let outgoing_frames = tokio::select! {
                                     biased;
-                                    _ = preview_superseded_while_fresh(
-                                        preview_rx.clone(),
-                                        last_presented,
-                                    ) => {
+                                    _ = async {
+                                        if still_now {
+                                            still_interrupted(
+                                                preview_rx.clone(),
+                                                self.playback_active_rx.clone(),
+                                            )
+                                            .await;
+                                        } else {
+                                            preview_superseded_while_fresh(
+                                                preview_rx.clone(),
+                                                last_presented,
+                                            )
+                                            .await;
+                                        }
+                                    } => {
                                         continue;
                                     }
                                     frames = async {
@@ -1435,16 +1554,33 @@ impl EditorInstance {
                                         } else {
                                             &outgoing_media.decoders
                                         };
-                                        decoders
-                                            .get_frames_initial(
-                                                outgoing.source_time as f32,
-                                                project.requires_camera(),
-                                                true,
-                                                outgoing_offsets,
-                                            )
-                                            .await
+                                        if still_now {
+                                            decoders
+                                                .get_frames_still(
+                                                    outgoing.source_time as f32,
+                                                    project.requires_camera(),
+                                                    true,
+                                                    outgoing_offsets,
+                                                )
+                                                .await
+                                        } else {
+                                            decoders
+                                                .get_frames_initial(
+                                                    outgoing.source_time as f32,
+                                                    project.requires_camera(),
+                                                    true,
+                                                    outgoing_offsets,
+                                                )
+                                                .await
+                                        }
                                     } => frames,
                                 };
+                                if still_now
+                                    && (preview_rx.has_changed().unwrap_or(false)
+                                        || *self.playback_active_rx.borrow())
+                                {
+                                    continue;
+                                }
                                 if let Some(outgoing_frames) = outgoing_frames {
                                     let outgoing_zoom = outgoing_zoom_timelines
                                         .entry(outgoing.segment.recording_clip)
@@ -1497,7 +1633,8 @@ impl EditorInstance {
                                             outgoing_zoom,
                                             cursor_cache.event_order(&outgoing_media.cursor),
                                         )
-                                    };
+                                    }
+                                    .with_quality(RenderQuality::PausedPreview);
                                     Some((
                                         outgoing_frames,
                                         outgoing_uniforms,
@@ -1560,8 +1697,12 @@ impl EditorInstance {
                                         zoom_timeline,
                                         cursor_cache.event_order(&segment_medias.cursor),
                                     )
-                                };
+                                }
+                                .with_quality(RenderQuality::PausedPreview);
 
+                                if still_now {
+                                    self.renderer.forget_last_frame().await;
+                                }
                                 let render_confirmed = if let Some((
                                     outgoing_frames,
                                     outgoing_uniforms,
@@ -1620,6 +1761,17 @@ impl EditorInstance {
                                         )
                                         .await;
                                 }
+                            }
+
+                            if rendered
+                                && !still_now
+                                && sharpens
+                                && !*self.playback_active_rx.borrow()
+                            {
+                                still_due = Some((
+                                    tokio::time::Instant::now() + PREVIEW_STILL_SETTLE,
+                                    request,
+                                ));
                             }
 
                             if !rendered && !preview_rx.has_changed().unwrap_or(false) {

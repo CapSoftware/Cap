@@ -304,6 +304,7 @@ open_link = "Ouvrir le lien"
 retry_upload = "Relancer la mise en ligne"
 show_all = "Tout afficher"
 title = "Enregistrements"
+save_audio = "Enregistrer l'audio"
 
 [settings.recordings.empty]
 all = "Aucun enregistrement"
@@ -1044,6 +1045,7 @@ off = "Non"
 on = "Oui"
 
 [main.error]
+audio_only_needs_audio = "L'enregistrement audio seul nécessite un micro ou l'audio système."
 camera_only_needs_camera = "L'enregistrement caméra seule nécessite une caméra sélectionnée."
 copy = "Copier l'erreur"
 devices_not_ready = "Les appareils d'enregistrement ne sont pas prêts. Ouvrez l'enregistreur et réessayez."
@@ -1153,6 +1155,7 @@ title = "Espace de stockage faible"
 
 [main.target]
 area = "Zone"
+audio_only = "Audio seul"
 camera_only = "Caméra seule"
 choose_display = "Choisir un écran"
 choose_window = "Choisir une fenêtre"
@@ -1535,12 +1538,14 @@ placeholder = "Collez ou saisissez votre script…"
 words_per_minute = "{wpm} mots/min"
 
 [import]
+audio_failed = "Impossible d'importer l'audio : {error}"
 error_title = "Erreur d'importation"
 image_failed = "Impossible d'importer l'image : {error}"
 unsupported = "Fichier multimédia non pris en charge."
 video_failed = "Impossible d'importer la vidéo : {error}"
 
 [import.filter]
+audio = "Fichiers audio"
 image = "Fichiers image"
 media = "Fichiers multimédias"
 video = "Fichiers vidéo"
@@ -1582,6 +1587,13 @@ unlock_title = "Déverrouiller la zone"
 unlock_body = "Permettre de déplacer, redimensionner ou redessiner la zone."
 locked_title = "Zone verrouillée"
 locked_body = "Cliquez pour la déverrouiller afin de pouvoir la déplacer, la redimensionner ou la redessiner."
+
+[overlay.audio_only]
+choose_source = "Choisissez un micro ou activez l'audio système"
+description = "Enregistrez votre micro et le son de votre ordinateur, sans l'écran ni la caméra"
+meter_hint = "Dites quelque chose pour vérifier le niveau"
+system_audio = "Audio système"
+system_audio_only = "Seul l'audio système sera enregistré"
 
 [overlay.camera_only]
 description = "Enregistrez uniquement avec votre caméra et votre micro"
@@ -1840,6 +1852,20 @@ change_hint = "Choisissez une autre piste pour ce segment"
 change_title = "Changer l'audio"
 done = "Terminé"
 import = "Importer un fichier"
+
+[editor.audio_only]
+add_visuals = "Ajouter des visuels"
+body = "Cet enregistrement n'a pas de vidéo. Exportez le son en MP3 ou WAV, ou ajoutez des visuels pour en faire une vidéo."
+export_audio = "Exporter l'audio"
+show_visuals = "Afficher les visuels"
+size_large = "Grand"
+size_medium = "Moyen"
+size_small = "Petit"
+style_bars = "Barres"
+style_circle = "Cercle"
+style_wave = "Onde"
+title = "Audio seul"
+visuals = "Visuels"
 
 [editor.color]
 apply_to_cursor = "Appliquer au curseur"
@@ -2445,6 +2471,7 @@ split = "Partie {number}"
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Les enregistrements audio seul et les clips vidéo ne peuvent pas être combinés dans un même projet"
 cancelled = "Importation annulée"
 cannot_decode = "Impossible de décoder la vidéo {path} : {error}"
 in_use = "Importation impossible tant que cet enregistrement est utilisé : {error}"
@@ -2485,6 +2512,15 @@ upgrade_message = "Cette fonctionnalité nécessite une offre supérieure"
 upgrade_title = "Mise à niveau requise"
 upload_failed = "Impossible de mettre en ligne l'enregistrement"
 
+[editor.export.audio]
+cta = "Exporter l'audio"
+exported = "Audio exporté"
+exporting = "Export de l'audio"
+file_type = "Type de fichier"
+format = "Audio"
+mp3_description = "Léger et lisible partout. 192 kb/s en stéréo."
+wav_description = "Sans perte, 16 bits, 48 kHz. Idéal pour continuer le montage."
+
 [editor.export.advanced]
 bits_per_pixel = "Bits par pixel"
 cursor_only = "Exporter le curseur seul"
@@ -2517,6 +2553,10 @@ open_link = "Ouvrir le lien"
 retry_copy = "Réessayer la copie"
 reuploaded = "Votre dernière modification est disponible sur le même lien"
 uploaded = "Votre Cap a bien été mis en ligne"
+
+[editor.export.enhance]
+description = "Rend le texte et les détails fins plus nets quand votre enregistrement est agrandi ou réduit. Les exports peuvent prendre plus de temps."
+title = "Améliorer la qualité"
 
 [editor.export.estimate]
 gigabytes = "~{value} Go"
@@ -3254,7 +3294,11 @@ wipe_down = "Volet vers le bas"
 zoom = "Zoom"
 
 [editor.window.transport]
+compare = "Comparer"
+compare_tooltip = "Maintenez pour voir l'original"
 done_splitting = "Terminer la découpe"
+enhance = "Améliorer"
+enhance_tooltip = "Afficher l'image en pause améliorée"
 play_pause = "Lire/mettre en pause la vidéo"
 speed = "Vitesse de l'aperçu"
 split = "Couper"

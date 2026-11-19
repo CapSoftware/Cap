@@ -304,6 +304,7 @@ open_link = "打开链接"
 retry_upload = "重新上传"
 show_all = "全部显示"
 title = "录制"
+save_audio = "保存音频"
 
 [settings.recordings.empty]
 all = "没有录制"
@@ -1044,6 +1045,7 @@ off = "关"
 on = "开"
 
 [main.error]
+audio_only_needs_audio = "仅音频录制需要先选择麦克风或开启系统音频。"
 camera_only_needs_camera = "仅摄像头录制需要先选择摄像头。"
 copy = "复制错误信息"
 devices_not_ready = "录制设备尚未就绪。请打开录制器后重试。"
@@ -1153,6 +1155,7 @@ title = "存储空间不足"
 
 [main.target]
 area = "区域"
+audio_only = "仅音频"
 camera_only = "仅摄像头"
 choose_display = "选择屏幕"
 choose_window = "选择窗口"
@@ -1535,12 +1538,14 @@ placeholder = "粘贴或输入你的脚本…"
 words_per_minute = "{wpm} 字/分钟"
 
 [import]
+audio_failed = "无法导入音频：{error}"
 error_title = "导入错误"
 image_failed = "无法导入图像：{error}"
 unsupported = "不支持的媒体文件。"
 video_failed = "无法导入视频：{error}"
 
 [import.filter]
+audio = "音频文件"
 image = "图像文件"
 media = "媒体文件"
 video = "视频文件"
@@ -1582,6 +1587,13 @@ unlock_title = "解锁区域"
 unlock_body = "允许再次移动、调整大小或重新绘制该区域。"
 locked_title = "区域已锁定"
 locked_body = "点击即可解锁，以便移动、调整大小或重新绘制。"
+
+[overlay.audio_only]
+choose_source = "请选择麦克风或开启系统音频"
+description = "只录制麦克风和电脑的声音，不录屏幕和摄像头"
+meter_hint = "说句话来检查音量"
+system_audio = "系统音频"
+system_audio_only = "仅录制系统音频"
 
 [overlay.camera_only]
 description = "仅使用摄像头和麦克风录制"
@@ -1840,6 +1852,20 @@ change_hint = "为此分段选择其他音轨"
 change_title = "更换音频"
 done = "完成"
 import = "导入文件"
+
+[editor.audio_only]
+add_visuals = "添加视觉效果"
+body = "此录制没有视频。可将声音导出为 MP3 或 WAV，或添加视觉效果把它变成视频。"
+export_audio = "导出音频"
+show_visuals = "显示视觉效果"
+size_large = "大"
+size_medium = "中"
+size_small = "小"
+style_bars = "条形"
+style_circle = "圆形"
+style_wave = "波形"
+title = "仅音频"
+visuals = "视觉效果"
 
 [editor.color]
 apply_to_cursor = "应用到光标"
@@ -2445,6 +2471,7 @@ split = "拆分 {number}"
 title = "片段"
 
 [editor.clips.error]
+audio_only_mix = "仅音频录制和视频片段不能合并到同一个项目中"
 cancelled = "已取消导入"
 cannot_decode = "无法解码视频 {path}：{error}"
 in_use = "此录制正在使用中，无法导入：{error}"
@@ -2485,6 +2512,15 @@ upgrade_message = "此功能需要升级套餐"
 upgrade_title = "需要升级"
 upload_failed = "无法上传录制"
 
+[editor.export.audio]
+cta = "导出音频"
+exported = "音频已导出"
+exporting = "正在导出音频"
+file_type = "文件类型"
+format = "音频"
+mp3_description = "体积小，随处可播放。192 kb/s 立体声。"
+wav_description = "无损 16 位，48 kHz。最适合后续编辑。"
+
 [editor.export.advanced]
 bits_per_pixel = "每像素比特数"
 cursor_only = "仅导出光标"
@@ -2517,6 +2553,10 @@ open_link = "打开链接"
 retry_copy = "重新复制"
 reuploaded = "你最新的编辑已在同一链接上就绪"
 uploaded = "你的录制已成功上传"
+
+[editor.export.enhance]
+description = "录制内容放大或缩小时，让文字和细节更清晰。导出可能需要更长时间。"
+title = "提升画质"
 
 [editor.export.estimate]
 gigabytes = "约 {value} GB"
@@ -3254,7 +3294,11 @@ wipe_down = "向下擦除"
 zoom = "缩放"
 
 [editor.window.transport]
+compare = "对比"
+compare_tooltip = "按住查看原始画面"
 done_splitting = "完成拆分"
+enhance = "增强"
+enhance_tooltip = "以增强效果显示暂停的画面"
 play_pause = "播放/暂停视频"
 speed = "预览播放速度"
 split = "拆分"

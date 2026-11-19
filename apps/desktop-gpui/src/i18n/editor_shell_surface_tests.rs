@@ -142,6 +142,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Cannot import a recording into itself",
         ),
         (
+            tr::editor::clips::error::audio_only_mix(),
+            "Audio only recordings and video clips cannot be combined in one project",
+        ),
+        (
             tr::editor::clips::error::no_duration(),
             "Imported video has no valid duration",
         ),
@@ -262,6 +266,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Re-encodes with software for much smaller files (slower)",
         ),
         (tr::editor::export::optimize::title(), "Optimize file size"),
+        (
+            tr::editor::export::enhance::description(),
+            "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer.",
+        ),
+        (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
         (
             tr::editor::export::phase::clipboard_failed(),
@@ -1304,6 +1313,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
         ),
+        (tr::editor::window::transport::enhance(), "Enhance"),
+        (
+            tr::editor::window::transport::enhance_tooltip(),
+            "Show the paused frame enhanced",
+        ),
+        (tr::editor::window::transport::compare(), "Compare"),
+        (
+            tr::editor::window::transport::compare_tooltip(),
+            "Hold to see the original",
+        ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
         (tr::editor::window::undo(), "Undo"),
@@ -1473,6 +1492,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Choose at least one track to export.",
         ),
         (tr::editor::export::tracks::cta(), "Export Tracks"),
+        (tr::editor::export::audio::cta(), "Export Audio"),
+        (tr::editor::export::audio::exported(), "Audio exported"),
+        (tr::editor::export::audio::exporting(), "Exporting audio"),
+        (tr::editor::export::audio::file_type(), "File type"),
+        (tr::editor::export::audio::format(), "Audio"),
+        (
+            tr::editor::export::audio::mp3_description(),
+            "Small and plays everywhere. 192 kb/s stereo.",
+        ),
+        (
+            tr::editor::export::audio::wav_description(),
+            "Lossless 16-bit, 48 kHz. Best for further editing.",
+        ),
         (tr::editor::export::tracks::exported(), "Tracks exported"),
         (tr::editor::export::tracks::exporting(), "Exporting tracks"),
         (
