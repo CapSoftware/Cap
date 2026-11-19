@@ -7362,6 +7362,146 @@ mod style_image_tests {
     }
 }
 
+/// The next-index check (`decoder::request_next_frame`) as a decoder handle
+/// and an export see it: samples captured 0.75 of a frame after each grid
+/// line, read 0.98 of a frame into each cell.
+#[cfg(test)]
+mod next_index_tests {
+    use super::*;
+    use std::{collections::BTreeSet, time::Duration};
+
+    const FPS: u32 = 60;
+
+    fn sample_secs(index: u32) -> f64 {
+        (f64::from(index) - 0.25) / f64::from(FPS)
+    }
+
+    /// Answers each request with the sample filed under its grid index
+    /// (identified by its first byte), presented at `sample_secs`, and never
+    /// answers the indices in `stalled`. Polls on the paused clock so only an
+    /// unanswered request lets time run out.
+    fn decoder(stalled: &[u32]) -> RecordingSegmentDecoders {
+        let (sender, receiver) = std::sync::mpsc::channel::<decoder::VideoDecoderMessage>();
+        let stalled: BTreeSet<u32> = stalled.iter().copied().collect();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                match receiver.try_recv() {
+                    Ok(decoder::VideoDecoderMessage::GetFrame(time, _, reply)) => {
+                        let index = decoder::request_frame(time, FPS);
+                        if stalled.contains(&index) {
+                            held.push(reply);
+                            continue;
+                        }
+                        let _ = reply.send(
+                            DecodedFrame::new(vec![index as u8; 16 * 16 * 4], 16, 16)
+                                .with_presentation_secs(sample_secs(index)),
+                        );
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                }
+            }
+        });
+        RecordingSegmentDecoders {
+            screen: AsyncVideoDecoderHandle::for_test(sender, 16, 16).with_test_fps(FPS),
+            camera: None,
+            segment_offset: 0.0,
+            transition_readers: None,
+        }
+    }
+
+    fn shown(frames: &DecodedSegmentFrames) -> u8 {
+        frames.screen_frame.as_ref().expect("screen frame").data()[0]
+    }
+
+    /// 0.98 of a frame into the cell before grid index 11.
+    const OFF_GRID: f32 = 10.98 / FPS as f32;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sample_captured_before_the_request_is_shown() {
+        let decoders = decoder(&[]);
+        let offsets = cap_project::ClipOffsets::default();
+        let frames = decoders
+            .get_frames_for_export(OFF_GRID, false, true, offsets, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shown(&frames),
+            11,
+            "sample 11 is captured at 10.75, before 10.98"
+        );
+        let frames = decoders
+            .get_frames_for_export(10.0 / FPS as f32, false, true, offsets, false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shown(&frames), 10);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sample_captured_after_the_request_is_not_shown() {
+        let decoders = decoder(&[]);
+        let frames = decoders
+            .get_frames_for_export(10.6 / FPS as f32, false, true, Default::default(), false)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shown(&frames),
+            10,
+            "sample 11 is captured at 10.75, after 10.6"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_next_index_fails_the_export_like_a_stalled_grid_index() {
+        for (stalled, time) in [(11, OFF_GRID), (10, OFF_GRID), (10, 10.0 / FPS as f32)] {
+            let decoders = decoder(&[stalled]);
+            let result = decode_segment_frames_with_retry(
+                &decoders,
+                f64::from(time),
+                false,
+                true,
+                Default::default(),
+                10,
+                false,
+                FPS,
+            )
+            .await;
+            match result {
+                Err(RenderingError::FrameDecodeStalled {
+                    frame_number,
+                    waited_secs,
+                }) => {
+                    assert_eq!(frame_number, 10);
+                    assert!(waited_secs >= decoder::EXPORT_STALL_LIMIT.as_secs());
+                }
+                other => panic!(
+                    "stalled index {stalled} at {time}: {:?}",
+                    other.map(|frames| frames.map(|frames| shown(&frames)))
+                ),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn playback_shows_the_grid_sample_when_the_next_index_misses_its_deadline() {
+        let decoders = decoder(&[11]);
+        let started = tokio::time::Instant::now();
+        let frames = decoders
+            .get_frames(OFF_GRID, false, true, Default::default())
+            .await
+            .unwrap();
+        assert_eq!(shown(&frames), 10);
+        // The lookahead waits a quarter second, not the frame deadline.
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+}
+
 /// Offline export under load: a decode or GPU readback that misses its
 /// playback deadline must not change which frames are written or their order.
 #[cfg(test)]
