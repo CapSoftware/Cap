@@ -2109,10 +2109,15 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         hidden_text_segments: _,
         screen_motion_blur: _,
         screen_movement_spring: _,
+        screen_enhancement: _,
         color_correction: _,
+        clip_alignment_version: _,
         text_size_version: _,
         text_anim_version: _,
+        auto_zoom_version: _,
+        auto_zoom_pending: _,
         markers: _,
+        audio_visuals: _,
     } = project;
     let timeline = timeline.as_ref().map(|timeline| {
         let TimelineConfiguration {

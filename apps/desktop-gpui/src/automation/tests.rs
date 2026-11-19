@@ -675,8 +675,18 @@ async fn delete_outside_the_recordings_library_is_refused() {
     assert!(project.join("recording-meta.json").is_file());
 }
 
-#[tokio::test]
-async fn a_failed_export_keeps_the_recording() {
+/// Automations run on the app runtime, whose 16 MiB workers hold the
+/// export's debug-build future; libtest's 2 MiB thread does not.
+#[test]
+fn a_failed_export_keeps_the_recording() {
+    let runtime = crate::app_runtime();
+    runtime
+        .block_on(runtime.spawn(failed_export_keeps_the_recording()))
+        .unwrap();
+    runtime.shutdown_background();
+}
+
+async fn failed_export_keeps_the_recording() {
     let root = tempfile::tempdir().unwrap();
     let project = recording_project(root.path());
     let rules = store(vec![rule(
@@ -897,6 +907,15 @@ async fn delete_is_refused_when_the_saved_copy_is_not_the_one_this_run_wrote() {
     let copy = replaced.last_output().unwrap();
     let other = root.path().join("other.png");
     std::fs::write(&other, b"png bytes").unwrap();
+    // Same length and modified time as the copy, so only file identity
+    // (inode, or the NTFS file index on Windows) can tell them apart.
+    let copy_modified = std::fs::metadata(&copy).unwrap().modified().unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&other)
+        .unwrap()
+        .set_modified(copy_modified)
+        .unwrap();
     std::fs::rename(&other, &copy).unwrap();
     let error = check(&replaced).unwrap_err();
     assert!(

@@ -207,6 +207,10 @@ fps_30 = "30 i/s"
 fps_60 = "60 i/s (recommandé)"
 label = "Fréquence d'images maximale"
 
+[settings.general.recording.keep_drawings]
+description = "Les dessins restent jusqu'à ce que vous les effaciez. Sinon, chacun s'estompe quelques secondes après avoir été tracé."
+label = "Garder les dessins à l'écran"
+
 [settings.general.recording.marker_sound]
 description = "Émet un son bref lorsque vous ajoutez un repère pendant un enregistrement Studio. Votre micro ou le son du système peuvent l'enregistrer."
 label = "Émettre un son pour les repères"
@@ -301,6 +305,7 @@ open_link = "Ouvrir le lien"
 retry_upload = "Relancer la mise en ligne"
 show_all = "Tout afficher"
 title = "Enregistrements"
+save_audio = "Enregistrer l'audio"
 
 [settings.recordings.empty]
 all = "Aucun enregistrement"
@@ -391,16 +396,19 @@ cancelling_description = "Pour les captures et les enregistrements lancés depui
 cancelling_title = "Annulation"
 closing_editor_description = "Pour l'éditeur de captures et l'éditeur vidéo."
 closing_editor_title = "Fermeture de l'éditeur"
+conflict = "Déjà utilisé par « {shortcut} »."
 needs_modifier_macos = "Incluez ⌘, ⌃ ou ⌥ pour que le raccourci ne gêne pas la saisie."
 needs_modifier_other = "Incluez Ctrl, Alt ou Win pour que le raccourci ne gêne pas la saisie."
-record_shortcut = "Définir un raccourci"
+not_set = "Non défini"
 recording_description = "Lancez un enregistrement sans ouvrir Cap au préalable."
 recording_hint = "Appuyez sur les touches à utiliser. Échap annule, Suppr retire le raccourci."
 recording_title = "Enregistrement"
+replace = "Remplacer"
 saved = "Enregistré. Appuyez sur {keys} dans n'importe quelle app pour {effect}."
 saved_moved = "Enregistré. Appuyez sur {keys} dans n'importe quelle app pour {effect}. Retiré de « {shortcut} »."
 screenshots_description = "Les raccourcis fonctionnent depuis n'importe quelle app. Cliquez sur un raccourci pour le modifier."
 screenshots_title = "Captures d'écran"
+shared = "Mêmes touches que « {shortcut} », les deux s'exécutent donc."
 type_shortcut = "Saisissez un raccourci…"
 unavailable = "Une autre app ou le système utilise déjà ce raccourci. Cliquez pour en choisir un autre."
 unsupported_key = "Cette touche ne peut pas être utilisée dans un raccourci. Essayez une lettre, un chiffre ou une touche F."
@@ -469,8 +477,10 @@ screenshot_area = "Capturer une zone"
 screenshot_display = "Capturer l'écran"
 screenshot_window = "Capturer une fenêtre"
 start_instant = "Démarrer un enregistrement Instant"
+start_selected = "Démarrer dans le mode sélectionné"
 start_studio = "Démarrer un enregistrement Studio"
 stop = "Arrêter l'enregistrement"
+toggle_drawing = "Dessiner à l'écran"
 
 [settings.shortcuts.effect]
 add_marker = "marquer ce moment dans un enregistrement Studio"
@@ -480,13 +490,10 @@ instant_copy_and_open = "enregistrer l'écran ou la fenêtre sélectionnés en m
 open_picker = "ouvrir Cap pour choisir ce que vous voulez enregistrer"
 pause = "mettre en pause l'enregistrement en cours, ou le reprendre"
 picker_area_instant = "sélectionner une zone, puis l'enregistrer en mode Instant"
-picker_area_screenshot = "sélectionner une zone, puis en faire une capture d'écran"
 picker_area_studio = "sélectionner une zone, puis l'enregistrer en mode Studio"
 picker_display_instant = "choisir un écran, puis l'enregistrer en mode Instant"
-picker_display_screenshot = "choisir un écran, puis en faire une capture d'écran"
 picker_display_studio = "choisir un écran, puis l'enregistrer en mode Studio"
 picker_window_instant = "choisir une fenêtre, puis l'enregistrer en mode Instant"
-picker_window_screenshot = "choisir une fenêtre, puis en faire une capture d'écran"
 picker_window_studio = "choisir une fenêtre, puis l'enregistrer en mode Studio"
 restart = "abandonner la prise en cours et recommencer"
 screenshot_area_copy = "sélectionner une zone et copier la capture dans le presse-papiers"
@@ -501,9 +508,11 @@ screenshot_window_copy = "capturer la fenêtre sous votre pointeur et copier la 
 screenshot_window_copy_and_open_editor = "capturer la fenêtre sous votre pointeur, copier la capture et ouvrir l'éditeur"
 screenshot_window_open_editor = "capturer la fenêtre sous votre pointeur et ouvrir la capture dans l'éditeur"
 screenshot_window_save = "capturer la fenêtre sous votre pointeur et enregistrer la capture dans votre bibliothèque sans rien ouvrir"
+start_selected = "lancer un enregistrement ou une capture dans le mode sélectionné dans Cap"
 stop = "arrêter l'enregistrement en cours"
 studio = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio"
 studio_open_editor = "enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt"
+toggle_drawing = "commencer ou arrêter de dessiner à l'écran pendant l'enregistrement"
 
 [settings.shortcuts.sentence]
 add_marker = "Marquer ce moment dans un enregistrement Studio."
@@ -513,13 +522,10 @@ instant_copy_and_open = "Enregistrer l'écran ou la fenêtre sélectionnés en m
 open_picker = "Ouvrir Cap pour choisir ce que vous voulez enregistrer."
 pause = "Mettre en pause l'enregistrement en cours, ou le reprendre."
 picker_area_instant = "Sélectionner une zone, puis l'enregistrer en mode Instant."
-picker_area_screenshot = "Sélectionner une zone, puis en faire une capture d'écran."
 picker_area_studio = "Sélectionner une zone, puis l'enregistrer en mode Studio."
 picker_display_instant = "Choisir un écran, puis l'enregistrer en mode Instant."
-picker_display_screenshot = "Choisir un écran, puis en faire une capture d'écran."
 picker_display_studio = "Choisir un écran, puis l'enregistrer en mode Studio."
 picker_window_instant = "Choisir une fenêtre, puis l'enregistrer en mode Instant."
-picker_window_screenshot = "Choisir une fenêtre, puis en faire une capture d'écran."
 picker_window_studio = "Choisir une fenêtre, puis l'enregistrer en mode Studio."
 restart = "Abandonner la prise en cours et recommencer."
 screenshot_area_copy = "Sélectionner une zone et copier la capture dans le presse-papiers."
@@ -534,9 +540,11 @@ screenshot_window_copy = "Capturer la fenêtre sous votre pointeur et copier la 
 screenshot_window_copy_and_open_editor = "Capturer la fenêtre sous votre pointeur, copier la capture et ouvrir l'éditeur."
 screenshot_window_open_editor = "Capturer la fenêtre sous votre pointeur et ouvrir la capture dans l'éditeur."
 screenshot_window_save = "Capturer la fenêtre sous votre pointeur et enregistrer la capture dans votre bibliothèque sans rien ouvrir."
+start_selected = "Lancer un enregistrement ou une capture dans le mode sélectionné dans Cap."
 stop = "Arrêter l'enregistrement en cours."
 studio = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Studio."
 studio_open_editor = "Enregistrer l'écran ou la fenêtre sélectionnés en mode Studio, puis ouvrir l'éditeur à l'arrêt."
+toggle_drawing = "Commencer ou arrêter de dessiner à l'écran pendant l'enregistrement."
 
 [settings.cli]
 command = "Commande"
@@ -605,6 +613,9 @@ uploading = "Envoi..."
 confirm_body = "Cap va occuper votre écran avec un motif clignotant et émettre des bips forts pendant environ {seconds} secondes par chaîne de traitement. Retirez votre casque, laissez le volume audible et ne touchez pas à l'ordinateur jusqu'à la fin."
 confirm_title = "Lancer le diagnostic ?"
 description = "Enregistre une courte mire clignotante et sonore, mesure le décalage entre l'image et le son, et relève vos écrans, caméras, micros, espace disque et paramètres d'enregistrement. Rien n'est envoyé tant que vous ne le décidez pas."
+duration_description = "Un test plus long détecte mieux les dérives lentes."
+duration_label = "Durée du test"
+duration_option = "{seconds} secondes"
 mic_description = "Enregistre aussi votre micro et vérifie qu'il capte les bips à temps. Nécessite des haut-parleurs que le micro peut réellement entendre."
 mic_label = "Tester le micro"
 mode_description = "La chaîne de traitement à tester. « Les deux » exécute d'abord la partie Studio, puis la partie Instant."
@@ -645,6 +656,8 @@ activating = "Activation..."
 active_title = "Licence de bureau"
 checking = "Vérification…"
 deactivate = "Désactiver la licence"
+deactivate_failed = "Impossible de désactiver votre licence. Vérifiez votre connexion et réessayez."
+deactivating = "Désactivation..."
 description = "Votre offre Cap et votre licence de bureau, au même endroit."
 desktop_description = "Votre licence de bureau couvre l'enregistrement et le montage à usage commercial. Cap Pro ajoute le partage dans le cloud et les fonctionnalités collaboratives."
 desktop_name = "Licence de bureau"
@@ -1033,6 +1046,7 @@ off = "Non"
 on = "Oui"
 
 [main.error]
+audio_only_needs_audio = "L'enregistrement audio seul nécessite un micro ou l'audio système."
 camera_only_needs_camera = "L'enregistrement caméra seule nécessite une caméra sélectionnée."
 copy = "Copier l'erreur"
 devices_not_ready = "Les appareils d'enregistrement ne sont pas prêts. Ouvrez l'enregistreur et réessayez."
@@ -1142,6 +1156,7 @@ title = "Espace de stockage faible"
 
 [main.target]
 area = "Zone"
+audio_only = "Audio seul"
 camera_only = "Caméra seule"
 choose_display = "Choisir un écran"
 choose_window = "Choisir une fenêtre"
@@ -1210,8 +1225,31 @@ resuming = "Reprise…"
 saving = "Arrêt…"
 starting = "Début"
 
+[controls.disconnected]
+camera = "Caméra déconnectée. L'enregistrement continue sans l'incrustation de la caméra."
+microphone = "Micro déconnecté. Du silence sera enregistré jusqu'à sa reconnexion."
+
 [controls.marker]
 add = "Ajouter un repère"
+
+[controls.draw]
+arrow = "Flèche, ⇧ aligne à 45°"
+clear = "Tout effacer"
+highlighter = "Surligneur, ⇧ pour une ligne droite"
+pen = "Stylo, ⇧ pour une ligne droite"
+rectangle = "Rectangle, ⇧ pour un carré"
+start = "Dessiner à l'écran"
+stop = "Arrêter de dessiner"
+undo = "Annuler"
+window_unavailable = "Le dessin fonctionne dans les enregistrements d'écran et de zone"
+
+[controls.settings]
+locked = "Non modifiable dans cet enregistrement"
+not_in_recording = "Absent de cet enregistrement"
+open = "Réglages d'enregistrement"
+show_camera_preview = "Afficher l'aperçu de la caméra"
+switch_failed = "Impossible de passer à {device}. L'enregistrement continue."
+switching = "Changement…"
 
 [camera]
 waiting_title = "En attente de l'accès à la caméra"
@@ -1227,6 +1265,8 @@ mirror_title = "Miroir indisponible"
 [camera.issue]
 access_message = "Cliquez pour autoriser Cap à utiliser votre caméra dans Réglages Système."
 access_title = "Accès à la caméra requis"
+disconnected_message = "La caméra sélectionnée n'envoie plus de vidéo."
+disconnected_title = "Caméra déconnectée"
 generic = "La caméra sélectionnée n'a pas pu démarrer. Choisissez une autre caméra ou reconnectez celle-ci."
 invalid_format = "Cette caméra n'a signalé aucun format de capture utilisable."
 not_found = "Cette caméra n'est plus disponible. Vérifiez qu'elle est connectée et autorisée dans les autorisations du système."
@@ -1499,12 +1539,14 @@ placeholder = "Collez ou saisissez votre script…"
 words_per_minute = "{wpm} mots/min"
 
 [import]
+audio_failed = "Impossible d'importer l'audio : {error}"
 error_title = "Erreur d'importation"
 image_failed = "Impossible d'importer l'image : {error}"
 unsupported = "Fichier multimédia non pris en charge."
 video_failed = "Impossible d'importer la vidéo : {error}"
 
 [import.filter]
+audio = "Fichiers audio"
 image = "Fichiers image"
 media = "Fichiers multimédias"
 video = "Fichiers vidéo"
@@ -1546,6 +1588,13 @@ unlock_title = "Déverrouiller la zone"
 unlock_body = "Permettre de déplacer, redimensionner ou redessiner la zone."
 locked_title = "Zone verrouillée"
 locked_body = "Cliquez pour la déverrouiller afin de pouvoir la déplacer, la redimensionner ou la redessiner."
+
+[overlay.audio_only]
+choose_source = "Choisissez un micro ou activez l'audio système"
+description = "Enregistrez votre micro et le son de votre ordinateur, sans l'écran ni la caméra"
+meter_hint = "Dites quelque chose pour vérifier le niveau"
+system_audio = "Audio système"
+system_audio_only = "Seul l'audio système sera enregistré"
 
 [overlay.camera_only]
 description = "Enregistrez uniquement avec votre caméra et votre micro"
@@ -1804,6 +1853,20 @@ change_hint = "Choisissez une autre piste pour ce segment"
 change_title = "Changer l'audio"
 done = "Terminé"
 import = "Importer un fichier"
+
+[editor.audio_only]
+add_visuals = "Ajouter des visuels"
+body = "Cet enregistrement n'a pas de vidéo. Exportez le son en MP3 ou WAV, ou ajoutez des visuels pour en faire une vidéo."
+export_audio = "Exporter l'audio"
+show_visuals = "Afficher les visuels"
+size_large = "Grand"
+size_medium = "Moyen"
+size_small = "Petit"
+style_bars = "Barres"
+style_circle = "Cercle"
+style_wave = "Onde"
+title = "Audio seul"
+visuals = "Visuels"
 
 [editor.color]
 apply_to_cursor = "Appliquer au curseur"
@@ -2219,6 +2282,7 @@ manual_help = "Le zoom manuel reste sur le point fixe que vous choisissez ci-des
 mixed = "Mixte"
 mode = "Mode de zoom"
 positions_mixed = "Les segments zooment sur des points différents. Faites glisser pour tous les placer au même endroit."
+start_early = "Lancer les zooms plus tôt"
 title = "Zoom {number}"
 
 [editor.side_panel]
@@ -2323,6 +2387,7 @@ background_blur = "Flou de l'arrière-plan"
 custom_position = "Position d'écran personnalisée (déplacée sur le canevas)"
 motion_blur = "Flou de mouvement"
 padding = "Marge"
+padding_style = "Style de marge"
 rounded_corners = "Coins arrondis"
 title = "Disposition"
 
@@ -2401,11 +2466,13 @@ mp4_filter = "Vidéo MP4"
 prepare_controls_failed = "Impossible de préparer les commandes d'enregistrement : {error}"
 record = "Enregistrer"
 record_new = "Enregistrer un nouveau clip"
+removed_media = "{name} (clips supprimés)"
 save_before_recording_failed = "Impossible de sauvegarder le projet actuel avant l'enregistrement : {error}"
 split = "Partie {number}"
 title = "Clips"
 
 [editor.clips.error]
+audio_only_mix = "Les enregistrements audio seul et les clips vidéo ne peuvent pas être combinés dans un même projet"
 cancelled = "Importation annulée"
 cannot_decode = "Impossible de décoder la vidéo {path} : {error}"
 in_use = "Importation impossible tant que cet enregistrement est utilisé : {error}"
@@ -2446,6 +2513,15 @@ upgrade_message = "Cette fonctionnalité nécessite une offre supérieure"
 upgrade_title = "Mise à niveau requise"
 upload_failed = "Impossible de mettre en ligne l'enregistrement"
 
+[editor.export.audio]
+cta = "Exporter l'audio"
+exported = "Audio exporté"
+exporting = "Export de l'audio"
+file_type = "Type de fichier"
+format = "Audio"
+mp3_description = "Léger et lisible partout. 192 kb/s en stéréo."
+wav_description = "Sans perte, 16 bits, 48 kHz. Idéal pour continuer le montage."
+
 [editor.export.advanced]
 bits_per_pixel = "Bits par pixel"
 cursor_only = "Exporter le curseur seul"
@@ -2478,6 +2554,10 @@ open_link = "Ouvrir le lien"
 retry_copy = "Réessayer la copie"
 reuploaded = "Votre dernière modification est disponible sur le même lien"
 uploaded = "Votre Cap a bien été mis en ligne"
+
+[editor.export.enhance]
+description = "Rend le texte et les détails fins plus nets quand votre enregistrement est agrandi ou réduit. Les exports peuvent prendre plus de temps."
+title = "Améliorer la qualité"
 
 [editor.export.estimate]
 gigabytes = "~{value} Go"
@@ -2533,6 +2613,7 @@ format = "Format"
 frame_rate = "Fréquence d'images"
 quality = "Qualité"
 resolution = "Résolution"
+tracks = "Pistes"
 
 [editor.export.stats]
 calculating = "Calcul…"
@@ -2544,6 +2625,25 @@ output_value = "{width}×{height} · {fps} i/s"
 refining_size = "Affinage de la taille…"
 refining_time = "Affinage de la durée…"
 unavailable = "Indisponible"
+
+[editor.export.tracks]
+aligned = "Les pistes suivent vos coupes et votre vitesse, et s'alignent dans n'importe quel logiciel de montage. La vidéo sort propre, sans arrière-plan ni effets."
+audio_detail = "WAV · 48 kHz"
+camera = "Caméra"
+choose_one = "Choisissez au moins une piste à exporter."
+cta = "Exporter les pistes"
+exported = "Pistes exportées"
+exporting = "Exportation des pistes"
+file_count = { one = "{count} fichier", other = "{count} fichiers" }
+file_only = "Les pistes sont enregistrées dans un dossier, en fichiers séparés."
+files = "Fichiers"
+format = "Pistes"
+microphone = "Micro"
+open_folder = "Ouvrir le dossier"
+screen = "Écran"
+studio_only = "Les pistes séparées ne sont enregistrées qu'en mode Studio."
+system_audio = "Audio système"
+video_detail = "MP4 · {width}×{height}"
 
 [editor.export.turbo]
 title = "Exportation turbo"
@@ -2747,6 +2847,7 @@ rounded = "Arrondi"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+follow_hover = "Suivre les survols"
 friction = "Friction"
 hide_when_idle = "Masquer en cas d'inactivité"
 inactivity_delay = "Délai d'inactivité"
@@ -2800,6 +2901,10 @@ timeline_unavailable = "La timeline du projet n'est pas disponible."
 timeline_unreadable = "Impossible de lire la timeline du projet."
 title = "Afficher le clavier"
 uppercase = "Majuscules"
+
+[editor.tabs.padding]
+even = "Uniforme"
+proportional = "Proportionnelle"
 
 [editor.tabs.position]
 bottom_center = "En bas au centre"
@@ -3190,7 +3295,11 @@ wipe_down = "Volet vers le bas"
 zoom = "Zoom"
 
 [editor.window.transport]
+compare = "Comparer"
+compare_tooltip = "Maintenez pour voir l'original"
 done_splitting = "Terminer la découpe"
+enhance = "Améliorer"
+enhance_tooltip = "Afficher l'image en pause améliorée"
 play_pause = "Lire/mettre en pause la vidéo"
 speed = "Vitesse de l'aperçu"
 split = "Couper"
@@ -3331,6 +3440,7 @@ changed_after = "L'enregistrement local a changé après l'envoi ; il a été co
 already_queued = "Cet enregistrement est déjà en attente d'envoi"
 paused = "Envoi en pause ; l'enregistrement local est conservé"
 worker_failed = "Le processus d'envoi a échoué ; l'enregistrement local est conservé"
+deleted_on_web = "Cet enregistrement a été supprimé sur le web ; l'enregistrement local est conservé"
 empty = "L'enregistrement sauvegardé est vide"
 no_resumable_state = "Cet enregistrement n'a pas d'envoi pouvant reprendre"
 verification_failed = "La vérification de l'enregistrement a échoué : {status}"

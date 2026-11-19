@@ -1862,6 +1862,7 @@ impl AudioSource for SystemAudioSource {
             tx,
             ctx,
             X11Capture::audio_info().channels,
+            None,
         );
         async move {
             let inner = setup
@@ -1894,7 +1895,7 @@ impl AudioSource for SystemAudioSource {
     }
 }
 
-async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
+pub async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
     let (error_tx, _error_rx) = flume::bounded(16);
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new_system_audio(error_tx));
     let owned_feed = OwnedSystemAudioFeed {

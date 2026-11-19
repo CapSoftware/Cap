@@ -23,6 +23,10 @@ import {
 	resolveEffectiveVideoRules,
 	Videos,
 } from "@cap/web-backend";
+import {
+	getCustomThumbnailKey,
+	getCustomThumbnailVersion,
+} from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import {
 	Comment,
@@ -57,6 +61,7 @@ import {
 	getEffectiveOrganizationRole,
 } from "@/lib/permissions/roles";
 import { resolveDefaultPlaybackSpeed } from "@/lib/playback-speed";
+import { getPlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
 import { getPublicShareVideo } from "@/lib/public-share-video";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
@@ -68,6 +73,7 @@ import {
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
 import {
 	canStartPlaybackInHtml,
+	getCustomThumbnailUrl,
 	getSharePlaybackSource,
 } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
@@ -82,6 +88,7 @@ import {
 	isSocialCrawlerUserAgent,
 	SOCIAL_REFERRER_DOMAINS,
 } from "@/lib/social-crawlers";
+import { getSpaceUpNext } from "@/lib/space-up-next";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	areViewerDownloadsEnabled,
@@ -329,6 +336,9 @@ export async function generateMetadata(
 							webUrl,
 							canonicalWebUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
 							advertiseIframelyPlayer: shouldAdvertiseIframelyPlayer,
+							thumbnailVersion: getCustomThumbnailVersion(
+								Option.getOrNull(video.metadata),
+							),
 						}),
 						robots: canRenderSocialPreview
 							? "index, follow"
@@ -435,6 +445,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 					organizationName: organizations.name,
 					organizationIconUrl: organizations.iconUrl,
 					shareableLinkIconUrl: organizations.shareableLinkIconUrl,
+					organizationMetadata: organizations.metadata,
 					hasActiveUpload:
 						sql`${videoUploads.videoId} IS NOT NULL AND ${videos.isScreenshot} = false`.mapWith(
 							Boolean,
@@ -480,6 +491,12 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 				<div
 					key={videoId}
 					className="flex overflow-x-clip flex-col min-h-screen bg-gray-2 lg:h-screen lg:min-h-0 lg:overflow-hidden"
+					{...playerBrandAttributes(
+						getPlayerBrand({
+							ownerIsPro: userIsPro(data.video.owner),
+							organizationMetadata: data.video.organizationMetadata,
+						}),
+					)}
 				>
 					<AuthorizedContent video={data.video} searchParams={searchParams} />
 				</div>
@@ -497,12 +514,12 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 }
 
 async function AuthorizedContent({
-	video,
+	video: { organizationMetadata, ...video },
 	searchParams,
 }: {
 	video: Omit<
 		InferSelectModel<typeof videos>,
-		"password" | "settings" | "ownerId"
+		"password" | "settings" | "ownerId" | "archivedAt"
 	> & {
 		owner: InferSelectModel<typeof users>;
 		sharedOrganization: { organizationId: Organisation.OrganisationId } | null;
@@ -515,6 +532,7 @@ async function AuthorizedContent({
 		organizationName?: string | null;
 		organizationIconUrl?: ImageUpload.ImageUrlOrKey | null;
 		shareableLinkIconUrl?: ImageUpload.ImageUrlOrKey | null;
+		organizationMetadata?: unknown;
 	};
 	searchParams: ShareVideoSearchParams;
 }) {
@@ -643,6 +661,17 @@ async function AuthorizedContent({
 		canStartPlaybackInHtml((await headers()).get("user-agent"))
 			? resolveWithin(initialPlaybackSourcePromise, SERVER_PLAYBACK_WAIT_MS)
 			: Promise.resolve(null);
+
+	const customThumbnailKey = video.isScreenshot
+		? undefined
+		: getCustomThumbnailKey({
+				id: videoId,
+				ownerId: video.owner.id,
+				metadata: video.metadata,
+			});
+	const posterUrlPromise = customThumbnailKey
+		? getCustomThumbnailUrl(video, customThumbnailKey)
+		: Promise.resolve(null);
 
 	const aiGenerationEnabledPromise = isAiGenerationEnabled(video.owner);
 	const imagesPromise = Effect.gen(function* () {
@@ -879,6 +908,19 @@ async function AuthorizedContent({
 		return null;
 	});
 
+	const upNextPromise =
+		user && searchParams.space && !video.isScreenshot
+			? getSpaceUpNext({ spaceParam: searchParams.space, videoId }).catch(
+					(error) => {
+						console.error(
+							`[ShareVideoPage] Up next lookup failed for ${videoId}:`,
+							error,
+						);
+						return null;
+					},
+				)
+			: null;
+
 	const videoHasEditsPromise = memberCanDownloadPromise.then((canDownload) => {
 		if (!canDownload || video.isScreenshot) return false;
 		return db()
@@ -911,6 +953,7 @@ async function AuthorizedContent({
 		resolvedImages,
 		dashboardDestination,
 		serverPlaybackSource,
+		posterUrl,
 	] = await Promise.all([
 		spacesDataPromise,
 		sharedSpacesPromise,
@@ -927,6 +970,7 @@ async function AuthorizedContent({
 		imagesPromise,
 		dashboardDestinationPromise,
 		serverPlaybackSourcePromise,
+		posterUrlPromise,
 		viewNotificationPromise,
 	]);
 
@@ -1093,6 +1137,12 @@ async function AuthorizedContent({
 						canManageSharePageBranding={canManageOrganizationSettings(
 							videoOrganizationRole,
 						)}
+						brandColor={
+							getPlayerBrand({
+								ownerIsPro,
+								organizationMetadata,
+							})?.color ?? null
+						}
 						canDownload={canDownloadVideo}
 						hasEdits={videoHasEdits}
 						// Caught separately from the copy the sidebar consumes: the
@@ -1103,12 +1153,14 @@ async function AuthorizedContent({
 					/>
 				}
 				dashboardDestination={dashboardDestination}
+				upNext={upNextPromise}
 				data={videoWithOrganizationInfo}
 				initialPlaybackUrl={initialPlaybackUrlPromise}
 				serverPlaybackUrl={
 					serverPlaybackSource?.defaultStorage ? serverPlaybackSource.url : null
 				}
 				screenshotImageUrl={screenshotImageUrl}
+				posterUrl={posterUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
 				comments={commentsPromise}
 				views={viewsPromise}

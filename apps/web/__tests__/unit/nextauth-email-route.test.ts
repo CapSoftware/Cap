@@ -193,6 +193,21 @@ describe("email code verification", () => {
 		expect(mocks.nextAuth.mock.calls[0]?.[0]).toBe(request);
 	});
 
+	it.each(["pérson@example.com", "person@@example.com"])(
+		"redirects %j to the verification error without checking the code",
+		async (email) => {
+			const response = await GET(
+				emailCallback({ email, token: "123456" }),
+				context("callback", "email"),
+			);
+
+			expect(response.status).toBe(302);
+			expect(mocks.nextAuth).not.toHaveBeenCalled();
+			const location = new URL(response.headers.get("location") ?? "");
+			expect(location.searchParams.get("error")).toBe("Verification");
+		},
+	);
+
 	it("redirects to the verification error without checking the code when limited", async () => {
 		mocks.isRateLimited.mockResolvedValue(true);
 

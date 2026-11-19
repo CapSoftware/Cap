@@ -69,8 +69,12 @@ const EMPTY_FORM: FormState = {
 
 const PREVIEW_PLACEHOLDER_LABEL = "Book a call";
 
-function formFromCallToAction(cta: ShareCallToAction | null): FormState {
-	if (!cta) return EMPTY_FORM;
+function formFromCallToAction(
+	cta: ShareCallToAction | null,
+	brandColor: string | null,
+): FormState {
+	if (!cta)
+		return brandColor ? { ...EMPTY_FORM, color: brandColor } : EMPTY_FORM;
 	return {
 		label: cta.label,
 		url: cta.url,
@@ -114,6 +118,7 @@ export function CallToActionDialog({
 	callToAction,
 	onSaved,
 	onUpgradeRequest,
+	brandColor = null,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -121,6 +126,7 @@ export function CallToActionDialog({
 	callToAction: ShareCallToAction | null;
 	onSaved?: (callToAction: ShareCallToAction | null) => void;
 	onUpgradeRequest: () => void;
+	brandColor?: string | null;
 }) {
 	const isWorkspace = target.kind === "workspace";
 	const videoSource = target.kind === "video" ? target.source : null;
@@ -129,7 +135,7 @@ export function CallToActionDialog({
 	const initialIncludeExisting =
 		target.kind === "workspace" ? target.includeExisting : false;
 	const [form, setForm] = useState<FormState>(() =>
-		formFromCallToAction(callToAction),
+		formFromCallToAction(callToAction, brandColor),
 	);
 	const [includeExisting, setIncludeExisting] = useState(
 		initialIncludeExisting,
@@ -157,13 +163,13 @@ export function CallToActionDialog({
 		const opening = open && !wasOpenRef.current;
 		wasOpenRef.current = open;
 		if (!opening) return;
-		setForm(formFromCallToAction(callToAction));
+		setForm(formFromCallToAction(callToAction, brandColor));
 		setIncludeExisting(initialIncludeExisting);
 		setErrors({});
 		setTouched({});
 		setPreviewMode("end");
 		setPending(null);
-	}, [open, callToAction, initialIncludeExisting]);
+	}, [open, callToAction, brandColor, initialIncludeExisting]);
 
 	const liveErrors = useMemo(() => {
 		const result = validateCallToAction(form);
@@ -515,6 +521,7 @@ export function CallToActionDialog({
 							<ColorPicker
 								value={form.color}
 								onChange={(color) => update("color", color)}
+								brandColor={brandColor}
 							/>
 						</div>
 
@@ -839,18 +846,23 @@ function TextInput({
 function ColorPicker({
 	value,
 	onChange,
+	brandColor,
 }: {
 	value: string;
 	onChange: (color: string) => void;
+	brandColor: string | null;
 }) {
 	const normalized = normalizeHexColor(value) ?? DEFAULT_CTA_COLOR;
-	const isCustom = !CTA_COLOR_PRESETS.some(
-		(preset) => preset.value === normalized,
-	);
+	const presets =
+		brandColor &&
+		!CTA_COLOR_PRESETS.some((preset) => preset.value === brandColor)
+			? [{ name: "Brand", value: brandColor }, ...CTA_COLOR_PRESETS]
+			: CTA_COLOR_PRESETS;
+	const isCustom = !presets.some((preset) => preset.value === normalized);
 
 	return (
 		<div className="flex flex-wrap items-center gap-2">
-			{CTA_COLOR_PRESETS.map((preset) => {
+			{presets.map((preset) => {
 				const selected = preset.value === normalized;
 				return (
 					<button

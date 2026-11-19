@@ -19,8 +19,8 @@ use crate::{
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{FragmentedAudioMuxer, FragmentedAudioMuxerConfig, OggMuxer, OggMuxerConfig},
     output_pipeline::{
-        AudioAnchor, AudioGapSummary, DoneFut, FinishedOutputPipeline, OutputPipeline,
-        OutputPipelineStopOutcome, PipelineDoneError,
+        AudioAnchor, AudioGapSummary, DoneFut, FinishedOutputPipeline, NoVideoFramesCaptured,
+        OutputPipeline, OutputPipelineStopOutcome, PipelineDoneError,
     },
     screen_capture::ScreenCaptureConfig,
     sources::{self, screen_capture},
@@ -53,6 +53,8 @@ use tracing::{Instrument, debug, error_span, info, trace, warn};
 
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_WIDTH: u32 = 1600;
 const COMPATIBILITY_CAMERA_ACTIVE_MAX_SCREEN_HEIGHT: u32 = 1000;
+pub const AUDIO_ONLY_NEEDS_A_SOURCE: &str =
+    "Audio only recording needs a microphone or system audio";
 const UNCONFIRMED_CAPTURE_CLEANUP: &str =
     "Studio capture cleanup is unconfirmed; local recording preserved";
 
@@ -123,6 +125,31 @@ fn studio_capture_stopped(error: &anyhow::Error) -> bool {
     error
         .chain()
         .any(|cause| cause.downcast_ref::<StudioCaptureStoppedError>().is_some())
+}
+
+/// A track whose muxer never got a video frame has empty media, not broken
+/// media.
+fn captured_no_video(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.is::<NoVideoFramesCaptured>()
+            || cause
+                .downcast_ref::<PipelineDoneError>()
+                .is_some_and(PipelineDoneError::is_caused_by::<NoVideoFramesCaptured>)
+    })
+}
+
+/// The screen pipeline of a segment stopped without a single frame (a
+/// resumed segment paused before capture delivered anything). It has no
+/// video to show, so the segment is left out instead of failing the whole
+/// recording.
+fn screen_captured_nothing(outcome: &OutputPipelineStopOutcome) -> bool {
+    match &outcome.media_error {
+        Some(error) => captured_no_video(error),
+        None => {
+            outcome.finished.video_frame_count == 0
+                && outcome.finished.video_timestamp_span.is_none()
+        }
+    }
 }
 
 fn accumulate_finalization_error(failure: &mut Option<anyhow::Error>, result: anyhow::Result<()>) {
@@ -370,6 +397,8 @@ pub struct Actor {
     #[cfg(target_os = "linux")]
     resume_cleanup_error: Option<String>,
     segments: Vec<RecordingSegment>,
+    /// Segments left out because their screen got no frame.
+    empty_segments: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     // Resolved once at recording start: the display can be disconnected, or its
     // mode changed, by the time the recording stops.
@@ -414,8 +443,9 @@ impl Actor {
     async fn stop_pipeline(
         &mut self,
         pipeline: Pipeline,
+        index: u32,
         segment_start_time: f64,
-    ) -> anyhow::Result<(Cursors, u32)> {
+    ) -> anyhow::Result<((Cursors, u32), SegmentKept)> {
         tracing::info!("pipeline shutting down");
 
         let stopped = pipeline.stop().await;
@@ -425,6 +455,7 @@ impl Actor {
             mut pipeline,
             mut media_error,
             all_tracks_stopped,
+            screen_empty,
         } = stopped?;
         self.all_tracks_stopped &= all_tracks_stopped;
 
@@ -467,6 +498,11 @@ impl Actor {
         let camera_device_id = self.segment_factory.camera_device_id();
         let mic_device_id = self.segment_factory.mic_device_id();
 
+        if screen_empty && media_error.is_none() {
+            self.leave_out_empty_segment(index)?;
+            return Ok((cursors, SegmentKept::No));
+        }
+
         self.segments.push(RecordingSegment {
             start: segment_start_time,
             end: segment_stop_time,
@@ -482,7 +518,37 @@ impl Actor {
             return Err(error.context(message));
         }
 
-        Ok(cursors)
+        Ok((cursors, SegmentKept::Yes))
+    }
+
+    /// A segment whose screen captured no frame is left out of the recording
+    /// and gives its index to the next segment, so the folders under
+    /// `content/segments` stay numbered like the saved segments, which
+    /// recovery and finalization rely on. Its other files are kept under
+    /// `content/empty-segments`.
+    fn leave_out_empty_segment(&mut self, index: u32) -> anyhow::Result<()> {
+        let segments_dir = &self.segment_factory.segments_dir;
+        let source = segments_dir.join(format!("segment-{index}"));
+        if source.exists() {
+            let target_dir = segments_dir.with_file_name("empty-segments");
+            let target = target_dir.join(format!("segment-{index}-{}", self.empty_segments));
+            std::fs::create_dir_all(&target_dir)
+                .and_then(|()| std::fs::rename(&source, &target))
+                .with_context(|| {
+                    format!("Could not move aside segment {index}, which captured no screen frames")
+                })?;
+        }
+        warn!(
+            segment = index,
+            "Studio segment captured no screen frames; leaving it out and keeping the rest of the recording"
+        );
+        self.empty_segments += 1;
+        self.segment_factory.index = index;
+        if index == 0 {
+            self.segment_factory.base_inputs.start_gate = None;
+        }
+        self.markers.segment_dropped(index);
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -601,8 +667,11 @@ impl Actor {
                     tokio::time::sleep_until(deadline.into()).await;
                 }
 
-                match self.stop_pipeline(pipeline, segment_start_time).await {
-                    Ok((cursors, _)) => cursors,
+                match self
+                    .stop_pipeline(pipeline, index, segment_start_time)
+                    .await
+                {
+                    Ok(((cursors, _), _)) => cursors,
                     Err(error) if studio_capture_stopped(&error) => {
                         let error = self.preserve_failure_evidence(error);
                         let error = match ctx.actor_ref().stop_gracefully().await {
@@ -650,6 +719,18 @@ impl Actor {
             })
         };
 
+        if self.segments.is_empty() && self.empty_segments > 0 {
+            let error = anyhow!(known_failure.unwrap_or_else(|| {
+                "Screen capture delivered no frames, so nothing was recorded".to_string()
+            }));
+            let error = if self.all_tracks_stopped {
+                anyhow::Error::new(StudioCaptureStoppedError::new(error))
+            } else {
+                error
+            };
+            return Err(self.preserve_failure_evidence(error));
+        }
+
         self.update_diagnostic_segment_count();
         self.markers.stopped();
         let recording = stop_recording(
@@ -660,6 +741,11 @@ impl Actor {
             RecordingStartDetails {
                 display_notch: self.display_notch,
                 pretty_name: self.pretty_name.as_deref(),
+                audio_only: self
+                    .segment_factory
+                    .base_inputs
+                    .capture_target
+                    .is_audio_only(),
             },
             known_failure,
             self.markers.snapshot(),
@@ -731,13 +817,16 @@ impl Message<Pause> for Actor {
                     diagnostic.stage("pausing");
                 }
                 let stopped = self
-                    .stop_pipeline(pipeline, segment_start_time)
+                    .stop_pipeline(pipeline, index, segment_start_time)
                     .await
                     .context("stop_pipeline");
                 match stopped {
-                    Ok((cursors, next_cursor_id)) if self.all_tracks_stopped => {
+                    Ok(((cursors, next_cursor_id), kept)) if self.all_tracks_stopped => {
                         self.state = Some(ActorState::Paused {
-                            next_index: index + 1,
+                            next_index: match kept {
+                                SegmentKept::Yes => index + 1,
+                                SegmentKept::No => index,
+                            },
                             cursors,
                             next_cursor_id,
                         });
@@ -1256,6 +1345,31 @@ impl Message<SetCameraFeed> for Actor {
     }
 }
 
+#[cfg(target_os = "macos")]
+struct AddExcludedWindows(Vec<scap_targets::WindowId>);
+
+#[cfg(target_os = "macos")]
+impl Message<AddExcludedWindows> for Actor {
+    type Reply = anyhow::Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: AddExcludedWindows,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match self.state.as_ref() {
+            Some(ActorState::Recording { .. }) => {
+                bail!("Pause the recording before changing excluded windows")
+            }
+            Some(ActorState::Paused { .. }) => {
+                self.segment_factory.add_excluded_windows(msg.0);
+                Ok(())
+            }
+            None => Err(anyhow!("Recording no longer active")),
+        }
+    }
+}
+
 pub struct IsPaused;
 
 impl Message<IsPaused> for Actor {
@@ -1297,6 +1411,11 @@ struct Pipeline {
     pub track_failures: SharedTrackFailures,
     pub watcher_task: Option<JoinHandle<()>>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
+    /// macOS records an audio-only segment's system audio from its own
+    /// ScreenCaptureKit stream, so that stream ending (sharing stopped, the
+    /// display gone, a system stop) has to end the recording the way the
+    /// screen ending does, instead of leaving only the black canvas running.
+    system_audio_required: bool,
 }
 
 struct FinishedPipeline {
@@ -1310,10 +1429,19 @@ struct FinishedPipeline {
     pub track_failures: Vec<TrackFailureRecord>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SegmentKept {
+    Yes,
+    /// Left out for having no screen frames; its index is reused.
+    No,
+}
+
 struct PipelineStopOutcome {
     pipeline: FinishedPipeline,
     media_error: Option<anyhow::Error>,
     all_tracks_stopped: bool,
+    /// The screen got no frame in this segment; see [`screen_captured_nothing`].
+    screen_empty: bool,
 }
 
 fn classify_pipeline_stop_errors(
@@ -1662,6 +1790,19 @@ impl Pipeline {
             ));
         }
 
+        let screen_empty = screen.as_ref().is_ok_and(screen_captured_nothing);
+        // A camera with no frame in this segment is left out of it, like a
+        // segment recorded with the camera off.
+        let camera = camera.filter(|result| {
+            let empty = result
+                .as_ref()
+                .is_ok_and(|outcome| outcome.media_error.as_ref().is_some_and(captured_no_video));
+            if empty {
+                warn!("Studio camera captured no frames in this segment; leaving it out");
+            }
+            !empty
+        });
+
         let stop_errors = [
             ("display", screen.as_ref().err()),
             (
@@ -1689,7 +1830,8 @@ impl Pipeline {
                 screen
                     .as_ref()
                     .ok()
-                    .and_then(|outcome| outcome.media_error.as_ref()),
+                    .and_then(|outcome| outcome.media_error.as_ref())
+                    .filter(|_| !screen_empty),
             ),
             (
                 "microphone",
@@ -1761,6 +1903,7 @@ impl Pipeline {
             },
             media_error,
             all_tracks_stopped: stop_errors.is_empty(),
+            screen_empty,
         })
     }
 
@@ -1797,9 +1940,10 @@ impl Pipeline {
         }
 
         if let Some(ref system_audio) = self.system_audio {
+            let required = self.system_audio_required;
             futures.push(Box::pin({
                 let done_fut = system_audio.done_fut();
-                async move { (RecordingTrackKind::SystemAudio, false, done_fut.await) }
+                async move { (RecordingTrackKind::SystemAudio, required, done_fut.await) }
             }));
         }
 
@@ -1840,6 +1984,18 @@ impl Pipeline {
         let track_failures = self.track_failures.clone();
         self.watcher_task = Some(tokio::spawn(async move {
             while let Some((track, required, res)) = futures.next().await {
+                // Empty media at Pause or Stop is left out by Stop; a track
+                // that ends on its own before Stop is still a failure.
+                let res = match res {
+                    Err(error)
+                        if error.is_caused_by::<NoVideoFramesCaptured>()
+                            && stopping.load(std::sync::atomic::Ordering::Acquire) =>
+                    {
+                        warn!(?track, "Recording track captured no video frames");
+                        Ok(())
+                    }
+                    result => result,
+                };
                 // ScreenCaptureKit ends the screen pipeline cleanly when its source goes away
                 // (display asleep or unplugged, window closed, sharing stopped). The other tracks
                 // are cancelled with it, so without a completion the app would keep showing a
@@ -2189,6 +2345,17 @@ impl ActorHandle {
         Ok(self.actor_ref.ask(SetCameraFeed { camera_feed }).await?)
     }
 
+    #[cfg(target_os = "macos")]
+    /// Keeps windows opened mid-recording (a reopened camera bubble) out of
+    /// the segments recorded after the next resume.
+    pub async fn add_excluded_windows(
+        &self,
+        windows: Vec<scap_targets::WindowId>,
+    ) -> anyhow::Result<()> {
+        self.actor_ref.ask(AddExcludedWindows(windows)).await?;
+        Ok(())
+    }
+
     pub async fn is_paused(&self) -> anyhow::Result<bool> {
         Ok(self.actor_ref.ask(IsPaused).await?)
     }
@@ -2332,6 +2499,10 @@ impl ActorBuilder {
         self,
         #[cfg(target_os = "macos")] shareable_content: Option<SendableShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
+        let audio_only = self.capture_target.is_audio_only();
+        if audio_only && self.mic_feed.is_none() && !self.system_audio {
+            bail!("{AUDIO_ONLY_NEEDS_A_SOURCE}");
+        }
         let recording_dir = self.output_path.clone();
         #[cfg(target_os = "linux")]
         let lifecycle = self.lifetime.lifecycle.clone();
@@ -2348,17 +2519,17 @@ impl ActorBuilder {
                 window_only: self.window_only,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
-                camera_feed: self.camera_feed,
+                camera_feed: if audio_only { None } else { self.camera_feed },
                 start_gate: self.start_gate,
                 #[cfg(target_os = "macos")]
                 shareable_content,
                 #[cfg(target_os = "macos")]
                 excluded_windows: self.excluded_windows,
             },
-            self.custom_cursor,
-            self.keyboard_capture,
-            self.fragmented,
-            self.use_oop_muxer,
+            self.custom_cursor && !audio_only,
+            self.keyboard_capture && !audio_only,
+            self.fragmented || audio_only,
+            self.use_oop_muxer && !audio_only,
             self.max_fps,
             self.quality,
             self.pretty_name,
@@ -2503,7 +2674,11 @@ async fn spawn_studio_recording_actor(
     );
 
     if fragmented || cfg!(any(target_os = "linux", windows)) {
-        write_in_progress_meta(&recording_dir, pretty_name.as_deref())?;
+        write_in_progress_meta_for(
+            &recording_dir,
+            pretty_name.as_deref(),
+            base_inputs.capture_target.is_audio_only(),
+        )?;
     }
 
     let index = 0;
@@ -2540,6 +2715,7 @@ async fn spawn_studio_recording_actor(
         }),
         all_tracks_stopped: true,
         terminal_stop_failure: None,
+        empty_segments: 0,
         segment_factory: segment_pipeline_factory,
         #[cfg(target_os = "linux")]
         resume_attempt: None,
@@ -2801,6 +2977,7 @@ fn snap_nearby_start_time(
 struct RecordingStartDetails<'a> {
     display_notch: Option<cap_project::DisplayNotch>,
     pretty_name: Option<&'a str>,
+    audio_only: bool,
 }
 
 async fn stop_recording(
@@ -2817,6 +2994,7 @@ async fn stop_recording(
     let RecordingStartDetails {
         display_notch,
         pretty_name,
+        audio_only,
     } = start;
 
     const DEFAULT_FPS: u32 = 30;
@@ -2910,6 +3088,10 @@ async fn stop_recording(
                 }
                 _ => 0.0,
             };
+            let display_media_duration = audio_only
+                .then(|| cap_enc_ffmpeg::remux::get_media_duration(&s.pipeline.screen.path))
+                .flatten()
+                .map_or(display_media_duration, |duration| duration.as_secs_f64());
 
             // Non-fragmented recordings have their final display file already;
             // verify the muxed container matches the timestamps we sent it.
@@ -2975,6 +3157,7 @@ async fn stop_recording(
                             .map(make_relative)
                     }),
                     display_notch,
+                    cursor_shape_version: None,
                 },
                 diagnostics,
                 duration: display_media_duration,
@@ -3076,6 +3259,8 @@ async fn stop_recording(
                     .collect(),
             ),
             status,
+            cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
+            audio_only,
         },
     };
 
@@ -3097,7 +3282,7 @@ async fn stop_recording(
         None
     };
 
-    let mut project_config = cap_project::ProjectConfiguration::default();
+    let mut project_config = cap_project::ProjectConfiguration::for_new_project();
     if !timeline_segments.is_empty() {
         project_config.timeline = Some(TimelineConfiguration {
             segments: timeline_segments,
@@ -3319,6 +3504,15 @@ impl SegmentPipelineFactory {
         self.base_inputs.camera_feed = camera_feed;
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn add_excluded_windows(&mut self, windows: Vec<scap_targets::WindowId>) {
+        for window in windows {
+            if !self.base_inputs.excluded_windows.contains(&window) {
+                self.base_inputs.excluded_windows.push(window);
+            }
+        }
+    }
+
     pub fn camera_device_id(&self) -> Option<String> {
         self.base_inputs
             .camera_feed
@@ -3424,12 +3618,32 @@ async fn create_segment_pipeline(
         base_inputs.capture_target,
         screen_capture::ScreenCaptureTarget::CameraOnly
     );
+    let audio_only = base_inputs.capture_target.is_audio_only();
     #[cfg(target_os = "linux")]
     let custom_cursor_capture = custom_cursor_capture && !screen_capture::prefers_wayland_portal();
     #[cfg(target_os = "linux")]
     let mut start_time = start_time;
 
-    let (screen, system_audio, cursor_display) = if camera_only {
+    let (screen, system_audio, cursor_display) = if audio_only {
+        let screen = OutputPipeline::builder(dir.join("display.mp4"))
+            .with_video::<sources::AudioOnlyClock>(sources::AudioOnlyClockConfig)
+            .with_timestamps(start_time)
+            .with_start_gate(start_gate.clone())
+            .build::<sources::AudioOnlyStandinMuxer>(())
+            .instrument(error_span!("screen-out"))
+            .await
+            .context("audio-only display pipeline setup")?;
+        let system_audio = if base_inputs.capture_system_audio {
+            Some(
+                audio_only_system_audio(&base_inputs, start_time)
+                    .await
+                    .context("audio-only system audio setup")?,
+            )
+        } else {
+            None
+        };
+        (screen, system_audio, None)
+    } else if camera_only {
         #[cfg(target_os = "linux")]
         {
             let camera_feed = base_inputs.camera_feed.clone().ok_or_else(|| {
@@ -3584,7 +3798,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(target_os = "macos")]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -3617,7 +3831,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -3650,7 +3864,7 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(target_os = "linux")]
-    let camera = if camera_only {
+    let camera = if camera_only || audio_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -3747,7 +3961,7 @@ async fn create_segment_pipeline(
         None
     };
 
-    let cursor = if camera_only {
+    let cursor = if camera_only || audio_only {
         None
     } else {
         (custom_cursor_capture || keyboard_capture)
@@ -3818,7 +4032,56 @@ async fn create_segment_pipeline(
         track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
         watcher_task: None,
         stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        system_audio_required: audio_only && cfg!(target_os = "macos"),
     })
+}
+
+/// System audio for a recording with no screen capture. Windows and Linux read
+/// the output device directly. macOS only offers it through a ScreenCaptureKit
+/// stream, so this opens one on the main display at a token size and rate and
+/// keeps none of its frames.
+async fn audio_only_system_audio(
+    base_inputs: &RecordingBaseInputs,
+    start_time: Timestamps,
+) -> anyhow::Result<screen_capture::SystemAudioSourceConfig> {
+    #[cfg(windows)]
+    {
+        let _ = (base_inputs, start_time);
+        Ok(screen_capture::SystemAudioSourceConfig)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (base_inputs, start_time);
+        screen_capture::create_system_audio_source_config().await
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        const TOKEN_CAPTURE_SIZE: (u32, u32) = (64, 64);
+        let config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+            scap_targets::Display::primary(),
+            None,
+            false,
+            1,
+            Some(TOKEN_CAPTURE_SIZE),
+            start_time.system_time(),
+            true,
+            None,
+            base_inputs
+                .shareable_content
+                .clone()
+                .ok_or_else(|| anyhow!("Missing shareable content"))?,
+            Vec::new(),
+        )
+        .await
+        .context("system audio capture init")?;
+        let (video, system_audio) = config.to_sources().await?;
+        drop(video);
+        system_audio
+            .map(screen_capture::SystemAudioSourceConfig::standalone)
+            .ok_or_else(|| anyhow!("System audio capture is unavailable"))
+    }
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
@@ -3913,7 +4176,16 @@ fn write_segment_start_times(segment_dir: &Path, times: &SegmentStartTimes) -> s
     Ok(())
 }
 
+#[cfg(test)]
 fn write_in_progress_meta(recording_dir: &Path, pretty_name: Option<&str>) -> anyhow::Result<()> {
+    write_in_progress_meta_for(recording_dir, pretty_name, false)
+}
+
+fn write_in_progress_meta_for(
+    recording_dir: &Path,
+    pretty_name: Option<&str>,
+    audio_only: bool,
+) -> anyhow::Result<()> {
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.to_path_buf(),
@@ -3924,6 +4196,8 @@ fn write_in_progress_meta(recording_dir: &Path, pretty_name: Option<&str>) -> an
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::InProgress),
+                cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
+                audio_only,
             },
         })),
         upload: None,
@@ -3965,14 +4239,16 @@ mod tests {
         let started = tempfile::tempdir().unwrap();
         write_in_progress_meta(started.path(), None).unwrap();
         preserve_failed_startup(started.path(), Ok(())).unwrap();
+        let started_meta = RecordingMeta::load_for_project(started.path()).unwrap();
+        let started_meta = started_meta.studio_meta().unwrap();
         assert!(matches!(
-            RecordingMeta::load_for_project(started.path())
-                .unwrap()
-                .studio_meta()
-                .unwrap()
-                .status(),
+            started_meta.status(),
             StudioRecordingStatus::InProgress
         ));
+        assert_eq!(
+            started_meta.cursor_shape_version(),
+            cap_project::CURSOR_SHAPE_VERSION
+        );
 
         let unwritten = tempfile::tempdir().unwrap();
         assert!(preserve_failed_startup::<()>(unwritten.path(), Err(anyhow!("no meta"))).is_err());
@@ -4213,6 +4489,7 @@ mod tests {
                     }),
                     all_tracks_stopped: true,
                     terminal_stop_failure: None,
+                    empty_segments: 0,
                     #[cfg(windows)]
                     cancel_error: None,
                     segment_factory,
@@ -4323,6 +4600,7 @@ mod tests {
             }),
             all_tracks_stopped: true,
             terminal_stop_failure: None,
+            empty_segments: 0,
             #[cfg(windows)]
             cancel_error: None,
             segment_factory,
@@ -4335,9 +4613,11 @@ mod tests {
 
         actor.ask(Stop).await.unwrap();
 
+        let meta = RecordingMeta::load_for_project(root).unwrap();
+        assert_eq!(meta.pretty_name, name);
         assert_eq!(
-            RecordingMeta::load_for_project(root).unwrap().pretty_name,
-            name
+            meta.studio_meta().unwrap().cursor_shape_version(),
+            cap_project::CURSOR_SHAPE_VERSION
         );
     }
 
@@ -4374,6 +4654,7 @@ mod tests {
             state: None,
             all_tracks_stopped: true,
             terminal_stop_failure: None,
+            empty_segments: 0,
             #[cfg(windows)]
             cancel_error: None,
             segment_factory,
@@ -4568,6 +4849,7 @@ mod tests {
                     track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                     watcher_task: None,
                     stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    system_audio_required: false,
                 },
                 index: 0,
                 segment_start_time: 0.0,
@@ -4575,6 +4857,7 @@ mod tests {
             }),
             all_tracks_stopped: true,
             terminal_stop_failure: None,
+            empty_segments: 0,
             #[cfg(windows)]
             cancel_error: None,
             segment_factory,
@@ -4649,6 +4932,7 @@ mod tests {
             }),
             all_tracks_stopped: false,
             terminal_stop_failure: None,
+            empty_segments: 0,
             segment_factory,
             segments: vec![RecordingSegment {
                 start: 0.0,
@@ -4821,6 +5105,7 @@ mod tests {
                 }),
                 all_tracks_stopped: true,
                 terminal_stop_failure: None,
+                empty_segments: 0,
                 #[cfg(windows)]
                 cancel_error: None,
                 segment_factory: factory,
@@ -4894,6 +5179,107 @@ mod tests {
                     panic!("expected saved segments");
                 };
                 assert_eq!(inner.segments.len(), 2);
+            }
+        }
+
+        /// A user reported a Studio recording lost after Pause logged
+        /// `Failed to finish MP4 encoder: NotWriting`: the resumed segment's
+        /// screen had not delivered a frame. Pause and Stop must succeed and
+        /// keep every recorded segment, leaving the empty one out.
+        #[tokio::test]
+        async fn a_resumed_segment_without_screen_frames_is_left_out() {
+            for (stop_while_recording, reports_empty) in
+                [(false, true), (true, true), (false, false), (true, false)]
+            {
+                let case = format!(
+                    "stop_while_recording {stop_while_recording}, reports_empty {reports_empty}"
+                );
+                let temp = tempfile::tempdir().unwrap();
+                let senders = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let prepare_senders = senders.clone();
+                let display = temp.path().join("content/segments/segment-2/display.mp4");
+                let handle = paused_handle(
+                    temp.path(),
+                    Arc::new(move |_, _| {
+                        let senders = prepare_senders.clone();
+                        let display = display.clone();
+                        async move {
+                            let segment_dir = display.parent().unwrap();
+                            std::fs::create_dir_all(segment_dir)?;
+                            std::fs::write(segment_dir.join("audio-input.ogg"), b"audio")?;
+                            let (tx, rx) = flume::bounded(4);
+                            senders.lock().unwrap().push(tx);
+                            let timestamps = Timestamps::now();
+                            Ok(Pipeline {
+                                start_time: timestamps,
+                                start_gate: None,
+                                screen: empty_screen_pipeline(
+                                    display,
+                                    timestamps,
+                                    rx,
+                                    reports_empty,
+                                )
+                                .await?,
+                                microphone: None,
+                                camera: None,
+                                system_audio: None,
+                                cursor: None,
+                                track_failures: Default::default(),
+                                watcher_task: None,
+                                stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                                system_audio_required: false,
+                            })
+                        }
+                        .boxed()
+                    }),
+                );
+                let empty_segments = if stop_while_recording { 1 } else { 2 };
+                for _ in 0..empty_segments {
+                    handle.resume().await.unwrap();
+                    if !stop_while_recording {
+                        handle.pause().await.unwrap_or_else(|error| {
+                            panic!(
+                                "{case}: pausing an empty segment failed the recording: {error:#}"
+                            )
+                        });
+                        assert!(handle.is_paused().await.unwrap(), "{case}");
+                    }
+                }
+                let report = handle.stop_with_intent(StudioStopIntent::Preserve).await;
+                assert!(report.accepted_intent && report.stop_acknowledged, "{case}");
+                let completed = report
+                    .result
+                    .unwrap_or_else(|error| panic!("{case}: stop failed: {error}"));
+                assert!(
+                    matches!(completed.meta.status(), StudioRecordingStatus::Complete),
+                    "{case}: {:?}",
+                    completed.meta.status()
+                );
+                let StudioRecordingMeta::MultipleSegments { inner } = completed.meta else {
+                    panic!("{case}: expected saved segments");
+                };
+                let kept: Vec<_> = inner
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.path.as_str().to_string())
+                    .collect();
+                assert_eq!(kept, ["saved-0.m4s", "saved-1.m4s"], "{case}");
+                assert!(handle.done_fut().await.is_ok(), "{case}");
+                assert!(
+                    !temp.path().join("content/segments/segment-2").exists(),
+                    "{case}: the next segment can take the empty one's index"
+                );
+                for moved in 0..empty_segments {
+                    assert_eq!(
+                        std::fs::read(temp.path().join(format!(
+                            "content/empty-segments/segment-2-{moved}/audio-input.ogg"
+                        )))
+                        .unwrap(),
+                        b"audio",
+                        "{case}: the empty segment's other files are kept"
+                    );
+                }
+                drop(senders);
             }
         }
 
@@ -5084,6 +5470,7 @@ mod tests {
                     }),
                     all_tracks_stopped: true,
                     terminal_stop_failure: None,
+                    empty_segments: 0,
                     segment_factory: factory,
                     resume_attempt: None,
                     resume_generation: 0,
@@ -5544,8 +5931,8 @@ mod tests {
                                 cursor: None,
                                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                                 watcher_task: None,
-                                #[cfg(target_os = "linux")]
                                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                                system_audio_required: false,
                             })
                         }
                         .boxed()
@@ -5653,6 +6040,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
 
         let stopping = tokio::spawn(pipeline.stop());
@@ -5775,6 +6163,7 @@ mod tests {
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                system_audio_required: false,
             };
 
             let stopping = tokio::spawn(pipeline.stop());
@@ -5873,6 +6262,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         pipeline.spawn_watcher(completion_tx.clone());
         (
@@ -6006,6 +6396,79 @@ mod tests {
         }
     }
 
+    /// Finishes like the AVFoundation writer: no frame means empty output.
+    #[derive(Default)]
+    struct EmptyVideoMuxer {
+        frames: u64,
+    }
+
+    impl Muxer for EmptyVideoMuxer {
+        type Config = ();
+
+        async fn setup(
+            _config: Self::Config,
+            _output_path: PathBuf,
+            _video_config: Option<VideoInfo>,
+            _audio_config: Option<cap_media_info::AudioInfo>,
+            _pause_flag: Arc<std::sync::atomic::AtomicBool>,
+            _tasks: &mut TaskPool,
+        ) -> anyhow::Result<Self> {
+            Ok(Self::default())
+        }
+
+        fn finish(&mut self, _timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
+            if self.frames == 0 {
+                return Err(anyhow::Error::new(NoVideoFramesCaptured));
+            }
+            Ok(Ok(()))
+        }
+    }
+
+    impl AudioMuxer for EmptyVideoMuxer {
+        fn send_audio_frame(
+            &mut self,
+            _frame: crate::output_pipeline::AudioFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl VideoMuxer for EmptyVideoMuxer {
+        type VideoFrame = TestVideoFrame;
+
+        fn send_video_frame(
+            &mut self,
+            _frame: Self::VideoFrame,
+            _timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            self.frames += 1;
+            Ok(())
+        }
+    }
+
+    /// The screen pipeline of a segment paused before capture delivered a
+    /// frame: built with a writer that reports empty output (AVFoundation)
+    /// or one that finishes cleanly with nothing in it (fragmented).
+    async fn empty_screen_pipeline(
+        path: PathBuf,
+        timestamps: Timestamps,
+        rx: flume::Receiver<TestVideoFrame>,
+        reports_empty: bool,
+    ) -> anyhow::Result<OutputPipeline> {
+        let builder = OutputPipeline::builder(path)
+            .with_video::<ChannelVideoSource<TestVideoFrame>>(ChannelVideoSourceConfig::new(
+                test_video_info(),
+                rx,
+            ))
+            .with_timestamps(timestamps);
+        if reports_empty {
+            builder.build::<EmptyVideoMuxer>(()).await
+        } else {
+            builder.build::<SuccessfulVideoMuxer>(()).await
+        }
+    }
+
     #[derive(Clone, Copy)]
     struct FailingAudioMuxerConfig {
         fail_after_frame: u64,
@@ -6092,6 +6555,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         pipeline.spawn_start_time_persister();
         let persisted = || -> Option<SegmentStartTimes> {
@@ -6181,6 +6645,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         let pipeline = Pipeline {
             microphone: Some(microphone),
@@ -6672,6 +7137,7 @@ mod tests {
                 track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
                 watcher_task: None,
                 stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                system_audio_required: false,
             },
             index: 0,
             segment_start_time: 0.0,
@@ -6761,6 +7227,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         match role {
             RecordingTrackKind::Microphone => pipeline.microphone = Some(microphone),
@@ -6817,6 +7284,7 @@ mod tests {
                 }),
                 all_tracks_stopped: true,
                 terminal_stop_failure: None,
+                empty_segments: 0,
                 segment_factory,
                 segments: Vec::new(),
                 completion_tx,
@@ -6953,6 +7421,7 @@ mod tests {
             track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
             watcher_task: None,
             stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            system_audio_required: false,
         };
         pipeline.spawn_watcher(completion_tx);
 
@@ -7021,6 +7490,82 @@ mod tests {
         );
     }
 
+    /// A segment paused before its screen and camera delivered a frame. Stop
+    /// confirms capture stopped and reports the screen as empty, with no
+    /// media error, no track failure and no failed completion. The camera is
+    /// left out of the segment and the microphone is kept.
+    #[tokio::test]
+    async fn stop_reports_a_screen_and_camera_that_captured_nothing_as_empty() {
+        for reports_empty in [true, false] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let timestamps = Timestamps::now();
+            let (_screen_tx, screen_rx) = flume::bounded(4);
+            let (_camera_tx, camera_rx) = flume::bounded(4);
+            let (completion_tx, completion_rx) = watch::channel(None);
+            let (mut microphone_tx, microphone_rx) = futures::channel::mpsc::channel(4);
+            let screen = empty_screen_pipeline(
+                temp_dir.path().join("display.mp4"),
+                timestamps,
+                screen_rx,
+                reports_empty,
+            )
+            .await
+            .unwrap();
+            let camera = empty_screen_pipeline(
+                temp_dir.path().join("camera.mp4"),
+                timestamps,
+                camera_rx,
+                true,
+            )
+            .await
+            .unwrap();
+            let microphone = OutputPipeline::builder(temp_dir.path().join("audio-input.ogg"))
+                .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                    test_audio_info(),
+                    microphone_rx,
+                ))
+                .with_timestamps(timestamps)
+                .build::<FailingAudioMuxer>(FailingAudioMuxerConfig {
+                    fail_after_frame: u64::MAX,
+                })
+                .await
+                .unwrap();
+            let mut pipeline = Pipeline {
+                start_time: timestamps,
+                start_gate: None,
+                screen,
+                microphone: Some(microphone),
+                camera: Some(camera),
+                system_audio: None,
+                cursor: None,
+                track_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+                watcher_task: None,
+                stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                system_audio_required: false,
+            };
+            pipeline.spawn_watcher(completion_tx);
+            microphone_tx
+                .try_send(crate::output_pipeline::AudioFrame::new(
+                    test_audio_info().empty_frame(960),
+                    Timestamp::Instant(timestamps.instant() + Duration::from_millis(20)),
+                ))
+                .unwrap();
+
+            let stopped = pipeline.stop().await.unwrap();
+            assert!(stopped.screen_empty, "reports_empty {reports_empty}");
+            assert!(
+                stopped.media_error.is_none(),
+                "reports_empty {reports_empty}: {:?}",
+                stopped.media_error
+            );
+            assert!(stopped.all_tracks_stopped);
+            assert!(stopped.pipeline.camera.is_none());
+            assert!(stopped.pipeline.microphone.is_some());
+            assert!(stopped.pipeline.track_failures.is_empty());
+            assert!(completion_rx.borrow().is_none());
+        }
+    }
+
     #[test]
     fn recording_metadata_keeps_the_given_project_name() {
         let name = "Untitled (Window) 2026-11-06 03.29 PM";
@@ -7039,6 +7584,8 @@ mod tests {
                 segments: Vec::new(),
                 cursors: cap_project::Cursors::default(),
                 status: Some(StudioRecordingStatus::Complete),
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         };
         let persisted =
@@ -7098,6 +7645,7 @@ mod windows_cancel_tests {
             state: None,
             all_tracks_stopped: true,
             terminal_stop_failure: None,
+            empty_segments: 0,
             cancel_error: error,
             segment_factory,
             segments: Vec::new(),
@@ -7152,6 +7700,7 @@ mod clean_stop_receipt_tests {
             cursor: None,
             keyboard: None,
             display_notch: None,
+            cursor_shape_version: None,
         };
         RecordingMeta {
             platform: Some(Platform::default()),
@@ -7177,6 +7726,8 @@ mod clean_stop_receipt_tests {
                             .collect(),
                     ),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
             upload: None,

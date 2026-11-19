@@ -35,11 +35,14 @@ const FORMATTED: &[&str] = &[
     "settings.sidebar.restart_to_update",
     "settings.shortcuts.saved",
     "settings.shortcuts.saved_moved",
+    "settings.shortcuts.conflict",
+    "settings.shortcuts.shared",
     "settings.cli.load_failed",
     "settings.cli.installs_command",
     "settings.cli.path_missing",
     "settings.transcription.count",
     "settings.feedback.diagnostic.confirm_body",
+    "settings.feedback.diagnostic.duration_option",
     "settings.changelog.version",
     "settings.integrations.managed_by",
     "settings.integrations.s3.guide_intro",
@@ -112,6 +115,7 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::recordings::failed(), "Recording failed"),
         (tr::settings::recordings::open_link(), "Open link"),
+        (tr::settings::recordings::save_audio(), "Save Audio"),
         (tr::settings::recordings::edit(), "Edit"),
         (tr::settings::recordings::retry_upload(), "Retry upload"),
         (
@@ -491,6 +495,10 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::settings::shortcuts::label::stop(), "Stop recording"),
         (tr::settings::shortcuts::label::add_marker(), "Add marker"),
+        (
+            tr::settings::shortcuts::label::toggle_drawing(),
+            "Draw on screen",
+        ),
         (tr::settings::shortcuts::label::pause(), "Pause or resume"),
         (
             tr::settings::shortcuts::label::restart(),
@@ -522,9 +530,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Another app or the system already uses this shortcut. Click to choose a different one.",
         ),
         (tr::settings::shortcuts::type_shortcut(), "Type shortcut…"),
+        (tr::settings::shortcuts::not_set(), "Not set"),
+        (tr::settings::shortcuts::replace(), "Replace"),
         (
-            tr::settings::shortcuts::record_shortcut(),
-            "Record shortcut",
+            tr::settings::shortcuts::label::start_selected(),
+            "Start in selected mode",
         ),
         (tr::settings::cli::title(), "Command Line"),
         (
@@ -671,6 +681,14 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Which pipeline to test. Both runs the studio leg and then the instant one.",
         ),
         (
+            tr::settings::feedback::diagnostic::duration_label(),
+            "Test duration",
+        ),
+        (
+            tr::settings::feedback::diagnostic::duration_description(),
+            "Longer runs are more sensitive to slow drift.",
+        ),
+        (
             tr::settings::feedback::diagnostic::mic_label(),
             "Test microphone",
         ),
@@ -759,6 +777,11 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         (tr::settings::license::key(), "License Key"),
         (tr::settings::license::expires(), "Expires"),
         (tr::settings::license::deactivate(), "Deactivate License"),
+        (tr::settings::license::deactivating(), "Deactivating..."),
+        (
+            tr::settings::license::deactivate_failed(),
+            "Couldn't deactivate your license. Check your connection and try again.",
+        ),
         (tr::settings::license::have_key(), "Have a license key?"),
         (tr::settings::license::placeholder(), "License key"),
         (tr::settings::license::activating(), "Activating..."),
@@ -1527,6 +1550,14 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
         tr::settings::shortcuts::saved_moved(&keys, effect, from),
         moved
     );
+    assert_eq!(
+        tr::settings::shortcuts::conflict(from),
+        format!("Already used by {from}.")
+    );
+    assert_eq!(
+        tr::settings::shortcuts::shared(from),
+        format!("Same keys as {from}, so both run.")
+    );
 
     let error = "permission denied".to_string();
     assert_eq!(
@@ -1577,6 +1608,13 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
             crate::diagnostics::DEFAULT_DURATION_SECS
         )
     );
+
+    for seconds in crate::diagnostics::DURATION_CHOICES_SECS {
+        assert_eq!(
+            tr::settings::feedback::diagnostic::duration_option(*seconds),
+            format!("{seconds} seconds")
+        );
+    }
 
     let date = "8/17/2026".to_string();
     assert_eq!(

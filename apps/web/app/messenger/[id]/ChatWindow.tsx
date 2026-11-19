@@ -9,6 +9,7 @@ import {
 	sendMessengerUserMessage,
 } from "@/actions/messenger";
 import { MESSENGER_SUGGESTED_PROMPTS } from "@/lib/messenger/constants";
+import { useMessengerPoll } from "@/lib/messenger/use-messenger-poll";
 
 interface ChatMessage {
 	id: string;
@@ -128,8 +129,6 @@ function MessageBubble({
 	);
 }
 
-const FULLPAGE_POLL_MS = 3000;
-
 export function ChatWindow({
 	conversation: initialConversation,
 	initialMessages,
@@ -180,34 +179,17 @@ export function ChatWindow({
 		userScrolledRef.current = distanceFromBottom > 80;
 	}, []);
 
-	useEffect(() => {
-		let active = true;
-		let pollVersion = 0;
-		let appliedPollVersion = 0;
-		const interval = setInterval(async () => {
-			if (isSendingRef.current) return;
-			const requestVersion = ++pollVersion;
-			const messageVersion = messageVersionRef.current;
-			const data = await fetchMessengerConversation(
-				initialConversation.id,
-			).catch(() => null);
-			if (
-				!active ||
-				!data ||
-				isSendingRef.current ||
-				requestVersion <= appliedPollVersion ||
-				messageVersion !== messageVersionRef.current
-			)
-				return;
-			appliedPollVersion = requestVersion;
+	const resetPollBackoff = useMessengerPoll({
+		conversation,
+		messages,
+		hiddenPollMs: null,
+		isSendingRef,
+		messageVersionRef,
+		onSnapshot: (data) => {
 			setMessages(data.messages);
 			setConversation(data.conversation);
-		}, FULLPAGE_POLL_MS);
-		return () => {
-			active = false;
-			clearInterval(interval);
-		};
-	}, [initialConversation.id]);
+		},
+	});
 
 	const sendMessage = (text: string) => {
 		if (!text || isPending) return;
@@ -243,6 +225,7 @@ export function ChatWindow({
 			setMessages(data.messages);
 			setConversation(data.conversation);
 			isSendingRef.current = false;
+			resetPollBackoff();
 		});
 	};
 
