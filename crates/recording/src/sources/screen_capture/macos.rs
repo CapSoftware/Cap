@@ -157,24 +157,44 @@ fn excluded_shareable_windows(
     collected
 }
 
-struct FrameScaler {
+pub(crate) struct FrameScaler {
     session: arc::R<cidre::vt::PixelTransferSession>,
     pool: arc::R<cv::PixelBufPool>,
 }
 
 unsafe impl Send for FrameScaler {}
 
+/// Buffers a frame copier keeps between frames. It allocates more while the
+/// writer is behind and lets the extra ones age out afterwards.
+const FRAME_COPY_POOL_MIN_BUFFERS: usize = 4;
+
 impl FrameScaler {
     fn new(expected_width: usize, expected_height: usize) -> Option<Self> {
+        Self::with_pool(
+            expected_width,
+            expected_height,
+            get_pixel_buffer_pool_size(),
+        )
+    }
+
+    /// Copies frames at their own size into a pool this process owns.
+    pub(crate) fn copier(width: usize, height: usize) -> Option<Self> {
+        Self::with_pool(width, height, FRAME_COPY_POOL_MIN_BUFFERS)
+    }
+
+    fn with_pool(width: usize, height: usize, min_buffers: usize) -> Option<Self> {
         let mut session = cidre::vt::PixelTransferSession::new().ok()?;
         session.set_scaling_letter_box().ok()?;
         session.set_realtime(true).ok()?;
-        let pool = create_pixel_buffer_pool(expected_width, expected_height)?;
+        let pool = create_pixel_buffer_pool(width, height, min_buffers)?;
 
         Some(Self { session, pool })
     }
 
-    fn scale_frame(&self, src_sample_buf: &cm::SampleBuf) -> Option<arc::R<cm::SampleBuf>> {
+    pub(crate) fn scale_frame(
+        &self,
+        src_sample_buf: &cm::SampleBuf,
+    ) -> Option<arc::R<cm::SampleBuf>> {
         let src_image_buf = src_sample_buf.image_buf()?;
         let dst_buf = self.pool.pixel_buf().ok()?;
 
@@ -194,9 +214,11 @@ fn get_pixel_buffer_pool_size() -> usize {
         .unwrap_or(20)
 }
 
-fn create_pixel_buffer_pool(width: usize, height: usize) -> Option<arc::R<cv::PixelBufPool>> {
-    let min_count = get_pixel_buffer_pool_size();
-
+fn create_pixel_buffer_pool(
+    width: usize,
+    height: usize,
+    min_count: usize,
+) -> Option<arc::R<cv::PixelBufPool>> {
     let min_count_num = cf::Number::from_usize(min_count);
     let width_num = cf::Number::from_usize(width);
     let height_num = cf::Number::from_usize(height);

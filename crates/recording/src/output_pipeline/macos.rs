@@ -317,6 +317,7 @@ pub struct AVFoundationMp4Muxer {
     was_paused: bool,
     fatal_error: SharedFatalError,
     health_tx: SharedHealthSender,
+    frame_copier: Option<FrameCopier>,
 }
 
 #[derive(Default)]
@@ -697,6 +698,7 @@ impl Muxer for AVFoundationMp4Muxer {
             channel_pressure,
             audio_channel_pressure,
             was_paused: false,
+            frame_copier: None,
             fatal_error,
             health_tx,
         })
@@ -865,6 +867,43 @@ impl Muxer for AVFoundationMp4Muxer {
     }
 }
 
+/// AVAssetWriter keeps appended frames until it has encoded and written
+/// them, which periodically takes up to a second and longer under CPU load.
+/// ScreenCaptureKit gives each stream only a few surfaces and delivers
+/// nothing while the app holds all of them, so the recorded screen froze
+/// for as long as the writer lagged. The writer gets a copy from a pool this
+/// process owns, and the capture surface goes straight back.
+struct FrameCopier {
+    size: (usize, usize),
+    scaler: Option<screen_capture::FrameScaler>,
+}
+
+impl FrameCopier {
+    /// The copy, or the original frame if it cannot be copied.
+    fn copy(
+        copier: &mut Option<Self>,
+        sample_buf: arc::R<cidre::cm::SampleBuf>,
+    ) -> arc::R<cidre::cm::SampleBuf> {
+        let Some(size) = sample_buf
+            .image_buf()
+            .map(|image| (image.width(), image.height()))
+        else {
+            return sample_buf;
+        };
+        if copier.as_ref().is_none_or(|c| c.size != size) {
+            *copier = Some(Self {
+                size,
+                scaler: screen_capture::FrameScaler::copier(size.0, size.1),
+            });
+        }
+        copier
+            .as_ref()
+            .and_then(|c| c.scaler.as_ref())
+            .and_then(|scaler| scaler.scale_frame(&sample_buf))
+            .unwrap_or(sample_buf)
+    }
+}
+
 impl VideoMuxer for AVFoundationMp4Muxer {
     type VideoFrame = screen_capture::VideoFrame;
 
@@ -897,9 +936,10 @@ impl VideoMuxer for AVFoundationMp4Muxer {
                 pressure.on_send();
             }
 
+            let sample_buf = FrameCopier::copy(&mut self.frame_copier, frame.sample_buf);
             let send_result = state
                 .video_tx
-                .try_send(Some(VideoFrameMessage::Frame(frame.sample_buf, timestamp)));
+                .try_send(Some(VideoFrameMessage::Frame(sample_buf, timestamp)));
 
             match send_result {
                 Ok(()) => {
@@ -1558,6 +1598,33 @@ impl AudioMuxer for AVFoundationCameraMuxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn screen_frame(width: usize, height: usize, index: i64) -> arc::R<cidre::cm::SampleBuf> {
+        use cidre::{cm, cv};
+        let buf = cv::PixelBuf::new(width, height, cv::PixelFormat::_420V, None).unwrap();
+        let desc = cm::VideoFormatDesc::with_image_buf(&buf).unwrap();
+        let timing = cm::SampleTimingInfo {
+            duration: cm::Time::new(1, 30),
+            pts: cm::Time::new(index, 30),
+            dts: cm::Time::invalid(),
+        };
+        cm::SampleBuf::with_image_buf(&buf, true, None, std::ptr::null(), &desc, &timing).unwrap()
+    }
+
+    /// The writer must never hold the capture surface: it gets a different
+    /// pixel buffer with the same size and timing, also after a size change.
+    #[test]
+    fn writer_gets_a_copy_of_each_screen_frame() {
+        let mut copier = None;
+        for (index, (width, height)) in [(64, 48), (64, 48), (32, 16)].into_iter().enumerate() {
+            let source = screen_frame(width, height, index as i64);
+            let copy = FrameCopier::copy(&mut copier, source.clone());
+            let (from, to) = (source.image_buf().unwrap(), copy.image_buf().unwrap());
+            assert!(!std::ptr::eq(from, to), "frame {index} was not copied");
+            assert_eq!((to.width(), to.height()), (width, height));
+            assert_eq!(copy.pts(), source.pts());
+        }
+    }
 
     /// The writers behind a resumed Studio segment that got no screen frame
     /// before Pause, and a segment whose camera got no frame. They report an
