@@ -386,6 +386,7 @@ impl EditorWindow {
             .iter()
             .map(|segment| (segment.start, segment.track))
             .collect();
+        let height = self.preferred_timeline_height();
         let inserted = self.edit_timeline_project(
             move |project| {
                 let Some(timeline) = project.timeline.as_mut() else {
@@ -402,9 +403,7 @@ impl EditorWindow {
         if !inserted {
             return;
         }
-        if self.timeline_height_override.is_none() {
-            self.timeline_height_override = Some(self.preferred_timeline_height());
-        }
+        self.timeline_height_override.get_or_insert(height);
         self.tracks.mask = self.tracks.mask.max(lanes);
         let indices: Vec<usize> = self
             .project
