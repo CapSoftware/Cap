@@ -203,7 +203,7 @@ pub struct Scanner<'a> {
     last_read: Option<(f64, LumaFrame)>,
     still_since: f64,
     travel: f32,
-    force_read: bool,
+    force_read: Option<f64>,
     ocr_frames: usize,
     window: Vec<WindowFrame>,
     arrival: Option<Similarity>,
@@ -221,7 +221,7 @@ impl<'a> Scanner<'a> {
             last_read: None,
             still_since: 0.0,
             travel: 0.0,
-            force_read: false,
+            force_read: None,
             ocr_frames: 0,
             window: Vec::new(),
             arrival: None,
@@ -397,7 +397,15 @@ impl<'a> Scanner<'a> {
                             covered_share(moved, &tiles.changed) >= REPLACED_SHARE
                         });
                     }
-                    self.force_read = true;
+                    let in_place = global.is_some_and(|global| {
+                        agrees(global.motion_for(small.bounds()), Motion::default(), 1.0)
+                    });
+                    let earliest = self
+                        .last_read
+                        .as_ref()
+                        .filter(|_| in_place)
+                        .map_or(time, |(read_at, _)| read_at + MIN_CUT_GAP);
+                    self.force_read = Some(self.force_read.map_or(earliest, |at| at.min(earliest)));
                 }
                 if let Some(global) = global {
                     let motion = global.motion_for(small.bounds());
@@ -426,7 +434,7 @@ impl<'a> Scanner<'a> {
         let due = match &self.last_read {
             None => true,
             Some((read_at, read_frame)) => {
-                self.force_read
+                self.force_read.is_some_and(|at| time >= at)
                     || (changed(read_frame, &small)
                         && (time - self.still_since >= SETTLE_TIME
                             || time - read_at >= self.settings.max_ocr_interval
@@ -441,7 +449,7 @@ impl<'a> Scanner<'a> {
             self.window.clear();
             self.last_read = Some((time, small.clone()));
             self.travel = 0.0;
-            self.force_read = false;
+            self.force_read = None;
             self.unread = None;
         } else {
             self.unread = Some((time, frame.clone()));
