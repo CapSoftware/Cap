@@ -1,0 +1,23 @@
+[package]
+name = "cap-sensitive-scan"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+cap-project = { path = "../../../crates/project" }
+ab_glyph = { version = "0.2", optional = true }
+anyhow = "1"
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "load-dynamic", "api-23"] }
+regex = "1"
+
+[dev-dependencies]
+ab_glyph = "0.2"
+
+[features]
+synthetic = ["dep:ab_glyph"]
+
+[[example]]
+name = "scan-bench"
+required-features = ["synthetic"]
