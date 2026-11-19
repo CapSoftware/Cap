@@ -2555,7 +2555,7 @@ reuploaded = "Ihre neueste Bearbeitung ist unter demselben Link bereit"
 uploaded = "Ihr Cap wurde erfolgreich hochgeladen"
 
 [editor.export.enhance]
-description = "Schärft vergrößerte und kontrastarme Bildschirminhalte. Exporte können länger dauern."
+description = "Schärft Text und feine Details, wenn Ihre Aufnahme vergrößert oder verkleinert ist. Exporte können länger dauern."
 title = "Qualität verbessern"
 
 [editor.export.estimate]
