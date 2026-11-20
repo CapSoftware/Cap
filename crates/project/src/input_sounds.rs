@@ -286,8 +286,8 @@ impl<'a> ShownShortcuts<'a> {
             let source_end = clip.end + take.keyboard_offset_secs;
             let first = presses.partition_point(|press| press.time_ms / 1000.0 < source_start);
             let last = presses.partition_point(|press| press.time_ms / 1000.0 < source_end);
-            for index in first..last.max(first) {
-                let press = presses[index];
+            for (offset, press) in presses[first..last.max(first)].iter().enumerate() {
+                let index = first + offset;
                 if !press.down || crate::keyboard::is_modifier_key(&press.key) {
                     continue;
                 }
