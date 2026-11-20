@@ -65,6 +65,9 @@ const SWEEP_COVERED: f64 = 0.3;
 /// of one line are heard too.
 const SWEEP_HEARD_SLACK_MS: u64 = 400;
 const SWEEP_PAD_SAMPLES: u64 = timeline::RATE as u64 / 4;
+/// Audio before a repaired segment the local model hears with it: a short
+/// gap that starts mid-word is too little to recognise on its own.
+const REPAIR_CONTEXT_SAMPLES: u64 = timeline::RATE as u64 * 2;
 const SWEEP_MAX_SAMPLES: u64 = timeline::RATE as u64 * 25;
 const SWEEP_READ_SAMPLES: u64 = timeline::RATE as u64 * 30;
 
@@ -418,6 +421,8 @@ struct Worker {
     /// so a lost answer still leaves the audio in the ledger.
     inflight: HashMap<(usize, u64), Vec<(u64, u64)>>,
     readers: [Option<(PathBuf, TrackReader)>; 2],
+    /// The saved audio just before each repair segment, by (track, start).
+    repair_context: HashMap<(usize, u64), Vec<f32>>,
     /// What the transcript already says, per track (ms spans of words),
     /// so a repair never writes the same words twice.
     heard: [Vec<(u64, u64)>; 2],
@@ -724,6 +729,7 @@ impl Worker {
             repairs: HashMap::new(),
             repairing: HashSet::new(),
             readers: [None, None],
+            repair_context: HashMap::new(),
             heard: [Vec::new(), Vec::new()],
             unwritten: Vec::new(),
             policy: RetryPolicy::default(),
@@ -1748,8 +1754,14 @@ impl Worker {
         } else {
             let mut segments = gap.segments.clone();
             segments.sort_unstable();
+            // Never before the previous read's start: the reader only goes
+            // forward, and an earlier start decodes the file from the top.
+            let mut floor = 0u64;
             for (start, len) in segments {
-                let samples = self.read_audio(gap.source, start, len)?;
+                let from = start.saturating_sub(REPAIR_CONTEXT_SAMPLES).max(floor).min(start);
+                floor = from;
+                let mut samples = self.read_audio(gap.source, from, start + len - from)?;
+                let context: Vec<f32> = samples.drain(..((start - from) as usize).min(samples.len())).collect();
                 let short = len.saturating_sub(samples.len() as u64);
                 if short > 0 {
                     // While the meeting records, a short read is a file still
@@ -1768,6 +1780,9 @@ impl Worker {
                     );
                 }
                 let speech_ms = timeline::samples_to_ms(samples.len() as u64);
+                if !context.is_empty() {
+                    self.repair_context.insert((source_index(gap.source), start), context);
+                }
                 jobs.push(SegmentJob {
                     source: gap.source,
                     start_sample: start,
@@ -1788,6 +1803,9 @@ impl Worker {
         let Some(jobs) = self.gap_jobs(gap) else {
             return false;
         };
+        for job in &jobs {
+            self.repair_context.remove(&(source_index(job.source), job.start_sample));
+        }
         if jobs.is_empty() {
             self.close_gap(&gap.id);
             return true;
@@ -1839,7 +1857,23 @@ impl Worker {
         };
         for job in jobs {
             self.diarize(&job);
-            match self.transcribe(local, &job) {
+            let context = self.repair_context.remove(&(source_index(job.source), job.start_sample));
+            let heard = match &context {
+                Some(context) => {
+                    let mut samples = context.clone();
+                    samples.extend_from_slice(&job.samples);
+                    let with_context = SegmentJob {
+                        start_sample: job.start_sample - context.len() as u64,
+                        samples,
+                        ..job.clone()
+                    };
+                    let from = job.start_ms();
+                    self.transcribe(local, &with_context)
+                        .map(|words| words.into_iter().filter(|w| w.end_ms > from).collect())
+                }
+                None => self.transcribe(local, &job),
+            };
+            match heard {
                 Ok(words) => self.commit(job.source, job.start_sample, words),
                 Err(error) => {
                     tracing::warn!(%error, "meeting repair transcription failed");
@@ -1921,6 +1955,7 @@ impl Worker {
             }
         }
         self.repairing.clear();
+        self.repair_context.clear();
         self.readers = [None, None];
     }
 

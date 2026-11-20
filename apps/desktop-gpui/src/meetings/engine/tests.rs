@@ -26,6 +26,21 @@ fn caption_words(texts: &[&str]) -> Vec<CaptionWord> {
         .collect()
 }
 
+/// A model stub for repairs: `texts` heard in the last `seconds` of what it
+/// is given (the gap; anything before it is context).
+fn words_at_end(
+    texts: &'static [&'static str],
+    seconds: f32,
+) -> Arc<dyn Fn(&[f32]) -> Result<Vec<CaptionWord>, String> + Send + Sync> {
+    Arc::new(move |samples: &[f32]| {
+        let offset = samples.len() as f32 / 16_000.0 - seconds;
+        Ok(caption_words(texts)
+            .into_iter()
+            .map(|w| CaptionWord { start: w.start + offset, end: w.end + offset, ..w })
+            .collect())
+    })
+}
+
 fn local_model() -> LocalModel {
     LocalModel {
         model: "best".into(),
@@ -146,6 +161,10 @@ struct Opts {
     disk_full_until: Option<usize>,
     /// Records how many samples each local pass heard.
     heard: Option<Arc<std::sync::Mutex<Vec<usize>>>>,
+    /// The stand-in model puts its words at the start of what it hears, as
+    /// the live caption tests expect, instead of at its end (repairs hear
+    /// context before their gap).
+    words_at_start: bool,
 }
 
 impl Default for Opts {
@@ -164,6 +183,7 @@ impl Default for Opts {
             audio: true,
             disk_full_until: None,
             heard: None,
+            words_at_start: false,
         }
     }
 }
@@ -183,6 +203,7 @@ fn run_opts(opts: Opts) -> Ran {
         audio,
         disk_full_until,
         heard,
+        words_at_start,
     } = opts;
     let dictionary = dictionary.as_slice();
     let dir = tempfile::tempdir().unwrap();
@@ -249,7 +270,18 @@ fn run_opts(opts: Opts) -> Ran {
         if disk_full_until.is_some_and(|until| n >= until) {
             disk_full.store(false, Ordering::SeqCst);
         }
-        Ok(caption_words(local))
+        if words_at_start {
+            return Ok(caption_words(local));
+        }
+        // The words end where the audio does: a repair hears the 2 s before
+        // its gap first, and only words reaching into the gap are its own.
+        let words = caption_words(local);
+        let span = words.last().map_or(0.0, |w| w.end) + 0.05;
+        let offset = (samples.len() as f32 / 16_000.0 - span).max(0.0);
+        Ok(words
+            .into_iter()
+            .map(|w| CaptionWord { start: w.start + offset, end: w.end + offset, ..w })
+            .collect())
     }));
     if audio {
         worker.hooks.audio = Some(Arc::new(|_, _, len| Some(vec![0.1; len as usize])));
@@ -783,7 +815,7 @@ fn a_repair_never_writes_words_a_line_already_has() {
         Arc::new(AtomicBool::new(false)),
     );
     // "hello" lands at 1000 ms, on the line already there; "from here" is new.
-    worker.hooks.local = Some(Arc::new(|_| Ok(caption_words(LOCAL))));
+    worker.hooks.local = Some(words_at_end(LOCAL, 2.0));
     worker.hooks.audio = Some(Arc::new(|_, _, len| Some(vec![0.1; len as usize])));
     worker.repair_after_stop();
     drop(commands_tx);
@@ -934,6 +966,7 @@ fn caption_passes_hear_the_audio_after_their_kept_words_and_finals_hear_everythi
         mode: EngineMode::Local(local_model()),
         partials: vec![partial(4), partial(6), partial(8)],
         heard: Some(heard.clone()),
+        words_at_start: true,
         ..Opts::default()
     });
     // LOCAL's words end at 0.3, 0.7 and 1.1 s: the second pass agrees on
@@ -1042,6 +1075,7 @@ fn after_stop_a_track_that_ends_early_is_repaired_with_what_it_holds() {
     let gap = tail_gap(START, 19_360);
     let mut b = bench(gap, Vec::new());
     b.worker.hooks.audio = Some(Arc::new(|_, _, len| Some(vec![0.1; len as usize - 90])));
+    b.worker.hooks.local = Some(words_at_end(LOCAL, 1.2));
     b.worker.finishing = true;
     b.worker.repair_after_stop();
     let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
@@ -1080,9 +1114,10 @@ fn after_stop_the_saved_audio_is_read_again_from_the_finished_file() {
     let mut b = bench(gap.clone(), vec![part]);
     let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = heard.clone();
+    let words = words_at_end(LOCAL, 1.5);
     b.worker.hooks.local = Some(Arc::new(move |samples: &[f32]| {
         seen.store(samples.len(), Ordering::SeqCst);
-        Ok(caption_words(LOCAL))
+        words(samples)
     }));
     assert!(b.worker.gap_jobs(&gap).is_none(), "still being written");
     b.worker.repairing.clear();
@@ -1092,7 +1127,42 @@ fn after_stop_the_saved_audio_is_read_again_from_the_finished_file() {
     drop(writer);
     b.worker.finishing = true;
     b.worker.repair_after_stop();
-    assert_eq!(heard.load(Ordering::SeqCst), 24_000, "the whole stretch, not what the early reader saw");
+    assert_eq!(
+        heard.load(Ordering::SeqCst),
+        32_000 + 24_000,
+        "2 s of context and the whole stretch, not what the early reader saw"
+    );
     let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
     assert!(transcript.gaps().is_empty());
+    let line = transcript.get(&utterance_id(Source::System, 32_000)).expect("the stretch got its words");
+    assert_eq!(line.text, "hello from here");
+}
+
+#[test]
+fn a_short_tail_gap_that_starts_mid_word_gets_its_words() {
+    // The meeting stopped mid-sentence: the sweep's gap holds the last 1.2 s,
+    // starting inside a word. On its own that is too little for the model;
+    // with the 2 s before it, it hears the words, and only the gap's are kept.
+    let start = START * 10;
+    let gap = tail_gap(start, 19_360);
+    let mut b = bench(gap, Vec::new());
+    let mut line = utterance(Source::System, 0, vec![Word { text: "his".into(), start_ms: 9_200, end_ms: 9_500 }], true).unwrap();
+    line.id = "s0".into();
+    append_jsonl(&b.path, &[LogLine::Upsert { utterance: line }]).unwrap();
+    b.worker.hooks.audio = Some(Arc::new(|_, _, len| Some(vec![0.1; len as usize])));
+    b.worker.hooks.local = Some(Arc::new(|samples: &[f32]| {
+        let secs = samples.len() as f32 / 16_000.0;
+        if secs < 2.0 {
+            return Ok(Vec::new());
+        }
+        let at = |text: &str, from: f32, to: f32| CaptionWord { text: text.into(), start: secs + from, end: secs + to };
+        // "his" is context (heard already), the rest is the gap's own.
+        Ok(vec![at("his", -2.8, -2.5), at("revelation", -1.3, -0.6), at("lighted", -0.5, -0.1)])
+    }));
+    b.worker.finishing = true;
+    b.worker.repair_after_stop();
+    let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    assert!(transcript.gaps().is_empty(), "{:?}", transcript.gaps());
+    let repaired = transcript.get(&utterance_id(Source::System, start)).expect("the tail got its words");
+    assert_eq!(repaired.text, "revelation lighted");
 }
