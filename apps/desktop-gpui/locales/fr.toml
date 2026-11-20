@@ -1632,7 +1632,9 @@ center_description = "Déplace la fenêtre au centre quand vous la choisissez"
 
 [permission.guide]
 accessibility_body = "Déposez-le dans la liste « Accessibilité » ci-dessus, puis vérifiez que son interrupteur est activé."
+plus_title = "Ajoutez Cap avec le bouton +"
 screen_body = "Déposez-le dans la liste « Enregistrement de l'écran et des sons du système » ci-dessus, puis vérifiez que son interrupteur est activé."
+screen_plus_body = "Cliquez sur + sous la liste « Enregistrement de l'écran et des sons du système » ci-dessus, puis choisissez Cap."
 title = "Faites glisser Cap dans la liste"
 
 [permission.name]
@@ -1672,6 +1674,7 @@ regained_title = "Cap a besoin de récupérer une autorisation"
 title = "Préparons Cap"
 
 [permission.onboarding.hint]
+add_with_plus = "Dans Réglages Système, cliquez sur + sous la liste « Enregistrement de l'écran et des sons du système », puis choisissez Cap. Déjà dans la liste ? Activez-le simplement."
 drag_into_list = "Faites glisser Cap depuis le panneau sous Réglages Système vers la liste. Déjà dans la liste ? Activez-le simplement."
 find_in_list = "Trouvez Cap dans la liste et activez-le. Si macOS vous a d'abord posé la question, choisissez « Ouvrir Réglages Système »."
 no_prompt = "Aucune demande n'est apparue ? Activez Cap dans Réglages Système."

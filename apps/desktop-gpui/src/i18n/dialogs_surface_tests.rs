@@ -586,6 +586,10 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Let's get Cap ready",
         ),
         (
+            tr::permission::onboarding::hint::add_with_plus(),
+            "Click + under the Screen & System Audio Recording list in System Settings, then choose Cap. Already listed? Just switch it on.",
+        ),
+        (
             tr::permission::onboarding::hint::drag_into_list(),
             "Drag Cap from the panel under System Settings into the list. Already listed? Just switch it on.",
         ),
@@ -690,6 +694,14 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Drop it on the Screen & System Audio Recording list above, then make sure its switch is on.",
         ),
         (tr::permission::guide::title(), "Drag Cap into the list"),
+        (
+            tr::permission::guide::plus_title(),
+            "Add Cap with the + button",
+        ),
+        (
+            tr::permission::guide::screen_plus_body(),
+            "Click + under the Screen & System Audio Recording list above, then choose Cap.",
+        ),
         (tr::permission::name::accessibility(), "Accessibility"),
         (tr::permission::name::camera(), "Camera"),
         (tr::permission::name::microphone(), "Microphone"),

@@ -1632,7 +1632,9 @@ center_description = "选择窗口时将其移到屏幕中央"
 
 [permission.guide]
 accessibility_body = "将它拖放到上方的“辅助功能”列表中，然后确认它的开关已打开。"
+plus_title = "用 + 按钮添加 Cap"
 screen_body = "将它拖放到上方的“录屏与系统录音”列表中，然后确认它的开关已打开。"
+screen_plus_body = "点按上方“录屏与系统录音”列表下的 +，然后选择 Cap。"
 title = "将 Cap 拖到列表中"
 
 [permission.name]
@@ -1672,6 +1674,7 @@ regained_title = "Cap 需要重新获得一项权限"
 title = "先来设置 Cap"
 
 [permission.onboarding.hint]
+add_with_plus = "在系统设置中，点按“录屏与系统录音”列表下的 +，然后选择 Cap。已经在列表里了？直接打开即可。"
 drag_into_list = "将 Cap 从系统设置下方的面板拖到列表中。已经在列表里了？直接打开即可。"
 find_in_list = "在列表中找到 Cap 并打开。如果 macOS 先弹出了询问，请选择“打开系统设置”。"
 no_prompt = "没有出现提示？请在系统设置中打开 Cap。"

@@ -598,13 +598,17 @@ impl OnboardingWindow {
         let waiting = self.stage.waiting_on == Some(permission);
         let guided = crate::permission_guide::eligible(permission);
         let waiting_required = waiting && permission.required();
-        let body = if waiting_required && guided {
+        let settings_only = self.state.settings_only();
+        let body = if waiting_required && settings_only {
+            tr::permission::onboarding::hint::add_with_plus()
+        } else if waiting_required && guided {
             tr::permission::onboarding::hint::drag_into_list()
         } else if waiting_required {
             tr::permission::onboarding::hint::find_in_list()
         } else if status == OSPermissionStatus::Denied && !permission.required() {
             tr::permission::onboarding::hint::turned_off()
-        } else if action == Some(RowAction::OpenSettings) && permission.required() {
+        } else if action == Some(RowAction::OpenSettings) && permission.required() && !settings_only
+        {
             tr::permission::onboarding::hint::open_settings()
         } else {
             copy.body

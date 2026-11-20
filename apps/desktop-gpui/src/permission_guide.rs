@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, AppContext, Bounds, Context, FontWeight, Global, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, Styled, Task, Window, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, div, img, point, px, size,
+    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
 };
 
 use crate::doodle;
@@ -92,6 +92,9 @@ pub struct PermissionGuide {
     hidden: bool,
     app: PathBuf,
     icon: Arc<gpui::Image>,
+    /// macOS 27.3 adds an app to these lists only through the + button
+    /// (issue #4410), so the panel teaches that instead of a drag.
+    add_with_plus: bool,
 }
 
 /// Show the guide for `permission` while the user is in System Settings.
@@ -141,6 +144,7 @@ pub fn start(permission: OSPermission, cx: &mut App) {
                         gpui::ImageFormat::Png,
                         APP_ICON.to_vec(),
                     )),
+                    add_with_plus: crate::permissions::grants_are_settings_only(),
                 }
             })
         },
@@ -326,9 +330,20 @@ impl Render for PermissionGuide {
         let palette = paper.palette();
         // The arrow bobs forever; a hidden panel must not keep drawing.
         let still = self.hidden;
-        let body = match self.permission {
-            OSPermission::Accessibility => tr::permission::guide::accessibility_body(),
-            _ => tr::permission::guide::screen_body(),
+        let add_with_plus = self.add_with_plus;
+        let (title, body) = match self.permission {
+            _ if add_with_plus => (
+                tr::permission::guide::plus_title(),
+                tr::permission::guide::screen_plus_body(),
+            ),
+            OSPermission::Accessibility => (
+                tr::permission::guide::title(),
+                tr::permission::guide::accessibility_body(),
+            ),
+            _ => (
+                tr::permission::guide::title(),
+                tr::permission::guide::screen_body(),
+            ),
         };
         div()
             .size_full()
@@ -354,15 +369,16 @@ impl Render for PermissionGuide {
                             .relative()
                             .flex_none()
                             .size(px(80.))
-                            .cursor_grab()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, _| {
-                                    if !platform::begin_file_drag(window, &this.app) {
-                                        tracing::warn!("permission guide: drag did not start");
-                                    }
-                                }),
-                            )
+                            .when(!add_with_plus, |icon| {
+                                icon.cursor_grab().on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, _| {
+                                        if !platform::begin_file_drag(window, &this.app) {
+                                            tracing::warn!("permission guide: drag did not start");
+                                        }
+                                    }),
+                                )
+                            })
                             .child(div().absolute().inset_0().child(doodle::doodle(
                                 &art::DRAG_FRAME,
                                 palette,
@@ -394,7 +410,7 @@ impl Render for PermissionGuide {
                                     .line_height(px(19.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(paper.ink)
-                                    .child(tr::permission::guide::title()),
+                                    .child(title),
                             )
                             .child(
                                 div()

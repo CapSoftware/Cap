@@ -1632,7 +1632,9 @@ center_description = "Verschiebt das Fenster beim Auswählen in die Mitte"
 
 [permission.guide]
 accessibility_body = "Legen Sie es oben in der Liste „Bedienungshilfen“ ab und achten Sie darauf, dass der Schalter aktiviert ist."
+plus_title = "Fügen Sie Cap mit + hinzu"
 screen_body = "Legen Sie es oben in der Liste „Bildschirm- & Systemaudioaufnahme“ ab und achten Sie darauf, dass der Schalter aktiviert ist."
+screen_plus_body = "Klicken Sie oben unter der Liste „Bildschirm- & Systemaudioaufnahme“ auf + und wählen Sie Cap aus."
 title = "Ziehen Sie Cap in die Liste"
 
 [permission.name]
@@ -1672,6 +1674,7 @@ regained_title = "Cap benötigt erneut eine Berechtigung"
 title = "Machen wir Cap startklar"
 
 [permission.onboarding.hint]
+add_with_plus = "Klicken Sie in den Systemeinstellungen unter der Liste „Bildschirm- & Systemaudioaufnahme“ auf + und wählen Sie Cap aus. Schon aufgeführt? Dann einfach aktivieren."
 drag_into_list = "Ziehen Sie Cap aus dem Feld unter den Systemeinstellungen in die Liste. Schon aufgeführt? Dann einfach aktivieren."
 find_in_list = "Suchen Sie Cap in der Liste und aktivieren Sie es. Wenn macOS zuerst gefragt hat, wählen Sie „Systemeinstellungen öffnen“."
 no_prompt = "Keine Abfrage erschienen? Aktivieren Sie Cap in den Systemeinstellungen."
