@@ -47,6 +47,15 @@ export function createGoogleOneTapNonce() {
 	return crypto.randomBytes(32).toString("base64url");
 }
 
+/**
+ * The cookie keeps a random secret and Google only ever sees its hash
+ * (OIDC Core 15.5.2). The nonce is readable in the ID token, so storing it
+ * directly would let anyone holding a token rebuild the cookie.
+ */
+export function googleOneTapNonceForSecret(secret: string) {
+	return crypto.createHash("sha256").update(secret).digest("base64url");
+}
+
 type GoogleOneTapNonceEntry = { nonce: string; issuedAt: number };
 
 export function readGoogleOneTapNonces(
@@ -79,12 +88,15 @@ export function issueGoogleOneTapNonce(
 	cookieValue: string | null | undefined,
 	now = Date.now(),
 ) {
-	const nonce = createGoogleOneTapNonce();
+	const secret = createGoogleOneTapNonce();
 	const entries = [
 		...readGoogleOneTapNonces(cookieValue, now),
-		{ nonce, issuedAt: Math.floor(now / 1000) },
+		{ nonce: secret, issuedAt: Math.floor(now / 1000) },
 	].slice(-MAX_OUTSTANDING_NONCES);
-	return { nonce, cookieValue: serializeGoogleOneTapNonces(entries) };
+	return {
+		nonce: googleOneTapNonceForSecret(secret),
+		cookieValue: serializeGoogleOneTapNonces(entries),
+	};
 }
 
 function unverifiedCredentialNonce(credential: string | null | undefined) {
@@ -110,7 +122,9 @@ export function consumeGoogleOneTapNonce(
 	const used = unverifiedCredentialNonce(credential);
 	return serializeGoogleOneTapNonces(
 		readGoogleOneTapNonces(cookieValue, now).filter(
-			(entry) => used === null || !noncesMatch(entry.nonce, used),
+			(entry) =>
+				used === null ||
+				!noncesMatch(googleOneTapNonceForSecret(entry.nonce), used),
 		),
 	);
 }
@@ -208,7 +222,7 @@ export async function authorizeGoogleOneTap(
 		credential,
 		expectedNonces: readGoogleOneTapNonces(
 			readCookie(cookieHeader, cookie.name),
-		).map((entry) => entry.nonce),
+		).map((entry) => googleOneTapNonceForSecret(entry.nonce)),
 		clientId: env.GOOGLE_CLIENT_ID,
 	});
 	if (!claims) return null;
