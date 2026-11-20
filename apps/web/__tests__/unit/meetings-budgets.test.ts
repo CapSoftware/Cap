@@ -219,10 +219,12 @@ describe("meeting budgets", () => {
 	it("issues one firewall check per unit, all in one parallel round trip", async () => {
 		vi.stubEnv("NODE_ENV", "production");
 		const pending: Array<() => void> = [];
+		const allPending = Promise.withResolvers<void>();
 		mocks.checkRateLimit.mockImplementation(
 			() =>
 				new Promise((resolve) => {
 					pending.push(() => resolve({ rateLimited: false }));
+					if (pending.length === 12) allPending.resolve();
 				}),
 		);
 		const { budgets } = await load();
@@ -231,7 +233,8 @@ describe("meeting budgets", () => {
 			CLIP_120S,
 			new Headers({ "x-real-ip": "203.0.113.1" }),
 		);
-		await vi.waitFor(() => expect(pending).toHaveLength(12));
+		await allPending.promise;
+		expect(pending).toHaveLength(12);
 		for (const release of pending) release();
 		expect(await result).toEqual({ limited: false });
 		expect(mocks.checkRateLimit).toHaveBeenCalledTimes(12);
