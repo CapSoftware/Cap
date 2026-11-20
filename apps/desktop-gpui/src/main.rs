@@ -58,6 +58,7 @@ mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod keylat;
 mod library;
 mod live_draw;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -70,6 +71,8 @@ mod linux_portal_id;
 mod linux_wallpaper;
 mod main_window;
 mod media_access;
+mod meetings;
+mod meetings_ui;
 mod menus;
 mod mode_select_window;
 mod notifications;
@@ -414,15 +417,20 @@ fn main() {
         // binding consumes the keystroke before any `on_key_down` listener on
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
+        cap_notes_ui::bind_keys(cx);
+        crate::meetings_ui::documents::bind_keys(cx);
         let general_settings = crate::store::GeneralSettings::load();
         crate::i18n::init(general_settings.ui_language.as_deref());
         crate::theme::init(general_settings.theme, cx);
         platform::follow_system_reduce_motion(cx);
+        keylat::install(cx);
 
         let session = RecordingSession::init(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::media_access::MediaAccess::init(cx);
+        crate::meetings::Meetings::init(cx);
+        crate::meetings_ui::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
         let dev_restore = dev_restore::load();
@@ -724,6 +732,16 @@ fn main() {
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
         #[cfg(debug_assertions)]
         snapshot::arm_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::live::debug::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::setup::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::documents::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::cap_ai::run_from_env(cx);
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead

@@ -880,6 +880,16 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Everything recorded so far stays in the recording's folder.",
         ),
         (tr::dialog::quit::keep_open(), "Keep Cap Open"),
+        (
+            tr::dialog::quit::meeting_title(),
+            "Stop recording this meeting?",
+        ),
+        (
+            tr::dialog::quit::meeting_message(),
+            "Quitting stops the recording. Cap keeps everything so far and finishes the transcript.",
+        ),
+        (tr::dialog::quit::meeting_quit(), "Stop and Quit"),
+        (tr::dialog::quit::meeting_keep(), "Keep Recording"),
         (tr::dialog::quit::quit_anyway(), "Quit Anyway"),
         (
             tr::dialog::quit::pending(),
