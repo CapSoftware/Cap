@@ -1079,6 +1079,8 @@ fn scratch_audio_is_repairable_but_never_part_of_the_note() {
         writer.write(chunk).unwrap();
     }
     writer.finish().unwrap();
+    // Windows refuses to delete a file a writer still holds open.
+    drop(writer);
     let mut details = MeetingDetails::default();
     details.extra.insert(persist::SCRATCH_KEY.into(), serde_json::json!(true));
     details.extra.insert(
