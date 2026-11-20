@@ -823,13 +823,17 @@ pub fn handle_item(item: TrayItem, cx: &mut App) {
             }
             crate::meetings_ui::live::toggle(cx)
         }
-        TrayItem::MeetingOpenNotes => crate::meetings_ui::live::open_document(None, cx),
+        TrayItem::MeetingOpenNotes => {
+            crate::meetings_ui::live::open_document(None, cx);
+            cx.activate(true);
+        }
         TrayItem::MeetingNewNote => {
             crate::meetings_ui::documents::remember_start(
                 cap_meetings::settings::StartChoice::Blank,
                 cx,
             );
-            crate::meetings_ui::documents::new_note(cx)
+            crate::meetings_ui::documents::new_note(cx);
+            cx.activate(true);
         }
         TrayItem::MeetingEvent(id) => {
             crate::meetings_ui::live::start_or_set_up(crate::meetings::StartSource::Event(id), cx)
