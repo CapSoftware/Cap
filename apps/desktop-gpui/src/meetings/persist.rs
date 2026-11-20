@@ -458,6 +458,36 @@ pub fn set_flag(meta: &mut DocMeta, key: &str, on: bool) -> bool {
     was != on
 }
 
+/// How many finishes in a row left a meeting with audio still waiting for
+/// its words.
+pub const REPAIR_TRIES_KEY: &str = "repairTries";
+/// After this many, the repair stops: whatever kept those words out (audio
+/// that ends early, a model that hears nothing there) won't change by
+/// itself, and every launch would try again for nothing.
+pub const REPAIR_TRIES_MAX: u64 = 3;
+
+/// Records how a finish left the meeting's repair: (tried again at the next
+/// launch, given up now).
+pub fn after_repair(meta: &mut DocMeta, open: bool) -> (bool, bool) {
+    let Some(meeting) = meta.meeting.as_mut() else {
+        return (false, false);
+    };
+    let tries = if open {
+        meeting.extra.get(REPAIR_TRIES_KEY).and_then(|v| v.as_u64()).unwrap_or(0) + 1
+    } else {
+        0
+    };
+    let give_up = tries >= REPAIR_TRIES_MAX;
+    if open && !give_up {
+        meeting.extra.insert(REPAIR_TRIES_KEY.into(), serde_json::Value::from(tries));
+    } else {
+        meeting.extra.remove(REPAIR_TRIES_KEY);
+    }
+    let pending = open && !give_up;
+    set_flag(meta, REPAIR_KEY, pending);
+    (pending, open && give_up)
+}
+
 pub fn recover_unfinished(library: &Library, skip: Option<&str>) -> Vec<String> {
     let Ok(listing) = library.list(&ListFilter {
         kind: Some(DocKind::Meeting),

@@ -2374,10 +2374,18 @@ impl Meetings {
                 tracing::info!(doc_id, added = chars - finishing.chars_before, "a repair added words after the notes were written");
                 persist::set_flag(&mut meta, persist::NOTES_STALE_KEY, true);
             }
-            if open {
-                tracing::warn!(doc_id, gaps = finishing.open_gaps, "meeting audio left to repair at the next launch");
+            match persist::after_repair(&mut meta, open) {
+                (true, _) => {
+                    tracing::warn!(doc_id, gaps = finishing.open_gaps, "meeting audio left to repair at the next launch");
+                }
+                (false, true) => tracing::warn!(
+                    doc_id,
+                    gaps = finishing.open_gaps,
+                    tries = persist::REPAIR_TRIES_MAX,
+                    "meeting audio could not be repaired, giving up"
+                ),
+                (false, false) => {}
             }
-            persist::set_flag(&mut meta, persist::REPAIR_KEY, open);
             if let Err(error) = library.save(&meta) {
                 tracing::warn!(%error, "could not save the meeting transcript size");
             }

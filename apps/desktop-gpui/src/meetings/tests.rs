@@ -1120,3 +1120,40 @@ fn stale_scratch_goes_but_a_pending_repair_or_a_live_recording_keeps_its_copy() 
     assert!(root.join("old-pending").exists(), "a repair still needs it");
     assert!(root.join("recording-now").exists(), "written to just now");
 }
+
+#[test]
+fn saved_audio_keeps_every_sample_up_to_a_partial_last_frame() {
+    // Opus frames are 20 ms (320 samples here); a meeting stops anywhere.
+    for n in [16_000 + 390, 16_000 + 96, 16_000 + 319, 32_000] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio/others.ogg");
+        let mut writer = OpusOggWriter::create(&path).unwrap();
+        for chunk in tone(3.0)[..n].chunks(480) {
+            writer.write(chunk).unwrap();
+        }
+        writer.finish().unwrap();
+        drop(writer);
+        let mut reader = super::audio_file::TrackReader::open(&path).unwrap();
+        assert_eq!(reader.read(0, n as u64 + 5_000).unwrap().len(), n, "{n} samples written");
+    }
+}
+
+#[test]
+fn a_repair_that_never_fills_stops_after_a_few_launches() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 9).unwrap();
+    meta.meeting = Some(MeetingDetails::default());
+    for _ in 1..persist::REPAIR_TRIES_MAX {
+        assert_eq!(persist::after_repair(&mut meta, true), (true, false));
+        assert!(persist::flag(&meta, persist::REPAIR_KEY));
+    }
+    assert_eq!(persist::after_repair(&mut meta, true), (false, true), "given up");
+    assert!(!persist::flag(&meta, persist::REPAIR_KEY), "no longer tried at launch");
+    // A repair that fills clears the count, so a later gap gets its own tries.
+    assert_eq!(persist::after_repair(&mut meta, true), (true, false));
+    assert_eq!(persist::after_repair(&mut meta, false), (false, false));
+    assert!(!persist::flag(&meta, persist::REPAIR_KEY));
+    let tries = meta.meeting.as_ref().unwrap().extra.get(persist::REPAIR_TRIES_KEY).cloned();
+    assert_eq!(tries, None);
+}
