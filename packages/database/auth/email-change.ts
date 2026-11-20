@@ -306,10 +306,15 @@ async function setStripeCustomerEmail(
 async function restoreStripeCustomerEmail(user: {
 	id: User.UserId;
 	stripeCustomerId: string | null;
-	email: string;
 }) {
 	try {
-		await setStripeCustomerEmail(user, user.email);
+		const [current] = await db()
+			.select({ email: users.email })
+			.from(users)
+			.where(eq(users.id, user.id))
+			.limit(1);
+		if (!current) return;
+		await setStripeCustomerEmail(user, current.email);
 	} catch (error) {
 		console.error("[email-change] Failed to restore the Stripe customer", {
 			userId: user.id,
