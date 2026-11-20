@@ -53,6 +53,7 @@ export const Passkeys = ({
 	const [verifyOpen, setVerifyOpen] = useState(false);
 	const [grant, setGrant] = useState<string | null>(null);
 	const [registering, setRegistering] = useState(false);
+	const [readyOpen, setReadyOpen] = useState(false);
 	const [removeTarget, setRemoveTarget] = useState<PasskeyListItem | null>(
 		null,
 	);
@@ -97,6 +98,7 @@ export const Passkeys = ({
 			);
 			if (result.status === "registered") {
 				setPasskeys((current) => [...current, result.passkey]);
+				setGrant(null);
 				toast.success("Passkey added");
 				return;
 			}
@@ -220,9 +222,42 @@ export const Passkeys = ({
 				onVerified={(stepUpGrant) => {
 					setGrant(stepUpGrant);
 					setVerifyOpen(false);
-					register(stepUpGrant);
+					setReadyOpen(true);
 				}}
 			/>
+
+			<Dialog open={readyOpen} onOpenChange={setReadyOpen}>
+				<DialogContent>
+					<DialogHeader
+						icon={<Fingerprint className="size-4" />}
+						description="Your browser will ask you to use Face ID, Touch ID, Windows Hello or your password manager."
+					>
+						<DialogTitle>Create your passkey</DialogTitle>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							type="button"
+							size="sm"
+							variant="gray"
+							onClick={() => setReadyOpen(false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							type="button"
+							size="sm"
+							variant="dark"
+							icon={<Fingerprint className="size-3.5" />}
+							onClick={() => {
+								setReadyOpen(false);
+								if (grant) register(grant);
+							}}
+						>
+							Create passkey
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 
 			<Dialog
 				open={removeTarget !== null}
