@@ -48,6 +48,7 @@ const fixture = vi.hoisted(() => ({
 	currentUser: null as unknown,
 	securityCodes: [] as { email: string; code: string }[],
 	passkeyNotices: [] as { email: string; name: string }[],
+	removedNotices: [] as { email: string; name: string }[],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -70,6 +71,9 @@ vi.mock("@cap/database/auth/security-emails", () => ({
 	},
 	sendPasskeyAddedNotice: async (email: string, name: string) => {
 		fixture.passkeyNotices.push({ email, name });
+	},
+	sendPasskeyRemovedNotice: async (email: string, name: string) => {
+		fixture.removedNotices.push({ email, name });
 	},
 }));
 vi.mock("@/lib/rate-limit", () => ({
@@ -575,7 +579,9 @@ describe.runIf(Boolean(databaseUrl))(
 					.where(
 						eq(
 							authChallenges.secretHash,
-							createHash("sha256").update(challenge).digest("hex"),
+							createHash("sha256")
+								.update(`passkey_sign_in:${challenge}`)
+								.digest("hex"),
 						),
 					);
 				expect(
@@ -708,8 +714,10 @@ describe.runIf(Boolean(databaseUrl))(
 				const [stored] = await listPasskeys(user.id);
 				if (!stored) throw new Error("Missing passkey.");
 				const other = await makeUser();
-				expect(await deletePasskey(other.id, stored.id)).toBe(false);
-				expect(await deletePasskey(user.id, stored.id)).toBe(true);
+				expect(await deletePasskey(other.id, stored.id)).toBeNull();
+				expect(await deletePasskey(user.id, stored.id)).toEqual({
+					name: "iCloud Keychain",
+				});
 				expect(
 					await verifyPasskeySignIn(
 						authenticator.assert(await signInChallenge()),
@@ -814,7 +822,9 @@ describe.runIf(Boolean(databaseUrl))(
 					.where(
 						eq(
 							authChallenges.secretHash,
-							createHash("sha256").update(expired).digest("hex"),
+							createHash("sha256")
+								.update(`step_up_grant:${expired}`)
+								.digest("hex"),
 						),
 					);
 				expect(await getPasskeyRegistrationOptions(expired)).toEqual({
@@ -859,6 +869,9 @@ describe.runIf(Boolean(databaseUrl))(
 					name: "iCloud Keychain",
 				});
 				expect(await listMyPasskeys()).toHaveLength(1);
+				expect(await getPasskeyRegistrationOptions(confirmed.grant)).toEqual({
+					status: "verify",
+				});
 			});
 
 			it("confirms with an existing passkey and nobody else's", async () => {
@@ -892,10 +905,43 @@ describe.runIf(Boolean(databaseUrl))(
 				const [otherPasskey] = await listPasskeys(other.id);
 				if (!otherPasskey) throw new Error("Missing passkey.");
 				fixture.currentUser = user;
+				const noticesBefore = fixture.removedNotices.length;
 				expect(await removePasskey(otherPasskey.id)).toEqual({
 					removed: false,
 				});
 				expect(await listPasskeys(other.id)).toHaveLength(1);
+				expect(fixture.removedNotices).toHaveLength(noticesBefore);
+				fixture.currentUser = other;
+				expect(await removePasskey(otherPasskey.id)).toEqual({
+					removed: true,
+				});
+				expect(fixture.removedNotices.at(-1)).toEqual({
+					email: other.email,
+					name: "iCloud Keychain",
+				});
+			});
+
+			it("signing out of all devices removes passkeys and pending checks", async () => {
+				const { signOutAllDevices } = await import(
+					"@/app/(org)/dashboard/settings/account/server"
+				);
+				const user = await makeUser();
+				const authenticator = await registerPasskey(user);
+				await issueStepUpGrant(user.id);
+				fixture.currentUser = user;
+				await signOutAllDevices();
+				expect(await listPasskeys(user.id)).toHaveLength(0);
+				expect(
+					await database()
+						.select()
+						.from(authChallenges)
+						.where(eq(authChallenges.userId, user.id)),
+				).toHaveLength(0);
+				expect(
+					await verifyPasskeySignIn(
+						authenticator.assert(await signInChallenge()),
+					),
+				).toBeNull();
 			});
 
 			it("rejects every action without a session", async () => {
