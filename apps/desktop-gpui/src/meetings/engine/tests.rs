@@ -258,27 +258,41 @@ fn run_opts(opts: Opts) -> Ran {
     }
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     worker.hooks.cloud = cloud.map(|answer| -> CloudAnswer {
-        let words = |texts: &[&str]| cloud::CloudTranscript {
-            text: texts.join(" "),
-            words: caption_words(texts)
-                .into_iter()
-                .map(|w| cloud::CloudWord {
-                    text: w.text,
-                    start_ms: f64::from(w.start) * 1000.0,
-                    end_ms: f64::from(w.end) * 1000.0,
-                    speaker: None,
-                })
-                .collect(),
+        // The words are heard in every part of the clip, as real speech in
+        // each batched segment would be.
+        let words = |clip: &Clip, texts: &[&str]| {
+            let offsets: Vec<f64> = if clip.parts.is_empty() {
+                vec![0.0]
+            } else {
+                clip.parts
+                    .iter()
+                    .map(|p| timeline::samples_to_ms(p.clip_offset_samples) as f64)
+                    .collect()
+            };
+            cloud::CloudTranscript {
+                text: vec![texts.join(" "); offsets.len()].join(" "),
+                words: offsets
+                    .iter()
+                    .flat_map(|offset| {
+                        caption_words(texts).into_iter().map(move |w| cloud::CloudWord {
+                            text: w.text,
+                            start_ms: offset + f64::from(w.start) * 1000.0,
+                            end_ms: offset + f64::from(w.end) * 1000.0,
+                            speaker: None,
+                        })
+                    })
+                    .collect(),
+            }
         };
-        Arc::new(move |_clip: &Clip| {
+        Arc::new(move |clip: &Clip| {
             let n = calls.fetch_add(1, Ordering::SeqCst);
             match &answer {
-                Answer::Words(texts) => Ok(words(texts)),
+                Answer::Words(texts) => Ok(words(clip, texts)),
                 Answer::Fail => Err(CloudError::Failed("server error".into())),
-                Answer::FailThen(fails, texts) if n >= *fails => Ok(words(texts)),
+                Answer::FailThen(fails, texts) if n >= *fails => Ok(words(clip, texts)),
                 Answer::FailThen(..) => Err(CloudError::Offline("unreachable".into())),
                 Answer::Upgrade => Err(CloudError::UpgradeRequired),
-                Answer::AuthThen(fails, texts) if n >= *fails => Ok(words(texts)),
+                Answer::AuthThen(fails, texts) if n >= *fails => Ok(words(clip, texts)),
                 Answer::AuthThen(..) => Err(CloudError::NotSignedIn),
             }
         })
