@@ -84,6 +84,23 @@ pub fn resolve(input: AccessInput<'_>) -> AiAccess {
     }
 }
 
+/// What a free account may send for one meeting's notes. The server counts
+/// free meetings per meeting: one it wrote up free can be rewritten after the
+/// last free meeting is used, a new one cannot. `covered` marks a meeting that
+/// may be one of those (written free here, or already holding AI notes); the
+/// server has the last word, so notes first written under Pro are refused there.
+pub fn trial_gate(remaining: Option<u32>, covered: bool) -> Result<(), NotesError> {
+    if covered || remaining.is_some_and(|n| n > 0) {
+        Ok(())
+    } else {
+        Err(NotesError::UpgradeRequired)
+    }
+}
+
+fn holds_ai_notes(library: &cap_meetings::library::Library, doc_id: &str) -> bool {
+    library.read_enhanced(doc_id).ok().flatten().is_some()
+}
+
 pub fn settled(input: AccessInput<'_>) -> bool {
     !input.signed_in || input.pro || input.caps.is_some() || input.error.is_some()
 }
@@ -244,10 +261,15 @@ impl Meetings {
         }
     }
 
-    pub(super) fn trial_allows(&self) -> bool {
-        self.capabilities()
-            .and_then(|c| c.notes_trial_remaining)
-            .is_some_and(|n| n > 0)
+    pub(super) fn trial_gate_for(&mut self, doc_id: &str) -> Result<(), NotesError> {
+        let covered = self.ai.on_trial(doc_id)
+            || self
+                .library()
+                .is_some_and(|library| holds_ai_notes(library, doc_id));
+        trial_gate(
+            self.capabilities().and_then(|c| c.notes_trial_remaining),
+            covered,
+        )
     }
 
     pub(super) fn capabilities_settled(&mut self, cx: &mut Context<Self>) {
@@ -352,6 +374,43 @@ fn read_unwritten(path: &std::path::Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_free_meeting_can_be_rewritten_after_the_last_one_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = cap_meetings::library::Library::open(dir.path().join("documents")).unwrap();
+        let written = library
+            .create(
+                cap_meetings::library::DocKind::Meeting,
+                chrono::Utc::now(),
+                1,
+            )
+            .unwrap();
+        library.write_enhanced(&written.id, "{}").unwrap();
+        let fresh = library
+            .create(
+                cap_meetings::library::DocKind::Meeting,
+                chrono::Utc::now(),
+                2,
+            )
+            .unwrap();
+        assert!(holds_ai_notes(&library, &written.id));
+        assert!(!holds_ai_notes(&library, &fresh.id));
+
+        // All free meetings used: a meeting with notes still goes to the
+        // server, which allows it within its runs; a new one is stopped here
+        // with the upgrade message.
+        assert_eq!(
+            trial_gate(Some(0), holds_ai_notes(&library, &written.id)),
+            Ok(())
+        );
+        assert_eq!(
+            trial_gate(Some(0), holds_ai_notes(&library, &fresh.id)),
+            Err(NotesError::UpgradeRequired)
+        );
+        assert_eq!(trial_gate(None, false), Err(NotesError::UpgradeRequired));
+        assert_eq!(trial_gate(Some(1), false), Ok(()));
+    }
 
     fn caps(notes: bool, trial: Option<u32>) -> Capabilities {
         Capabilities {

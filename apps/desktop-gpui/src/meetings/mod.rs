@@ -3722,9 +3722,7 @@ impl Meetings {
             return Err(NotesError::NotSignedIn);
         }
         if !auth.is_upgraded() {
-            if !self.trial_allows() {
-                return Err(NotesError::UpgradeRequired);
-            }
+            self.trial_gate_for(doc_id)?;
             self.ai.mark_trial(doc_id);
         }
         let library = self.library().cloned().ok_or(NotesError::NotFound)?;
