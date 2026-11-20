@@ -999,11 +999,23 @@ fn dialpad(c: &Ctx) -> Option<Hit> {
     None
 }
 
+/// Zoho's regional data centres. Only these count, so a lookalike such as
+/// `meeting.zoho.example.com` is never taken for a Zoho meeting.
+const ZOHO_DOMAINS: &[&str] = &[
+    "zoho.com",
+    "zoho.eu",
+    "zoho.in",
+    "zoho.com.au",
+    "zoho.com.cn",
+    "zoho.jp",
+    "zoho.uk",
+    "zoho.sa",
+    "zohocloud.ca",
+];
+
 fn zoho_host(host: &str, prefix: &str) -> bool {
-    host.strip_prefix(prefix).is_some_and(|rest| {
-        rest.strip_prefix("zoho.")
-            .is_some_and(|tld| !tld.is_empty() && tld.split('.').all(|p| !p.is_empty()))
-    })
+    host.strip_prefix(prefix)
+        .is_some_and(|rest| ZOHO_DOMAINS.contains(&rest))
 }
 
 fn zoho(c: &Ctx) -> Option<Hit> {
