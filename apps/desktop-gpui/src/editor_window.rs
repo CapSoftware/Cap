@@ -2092,7 +2092,6 @@ pub struct EditorWindow {
     /// frame. Never saved with the project.
     pub(crate) preview_enhance: bool,
     /// Compare is held down: the paused preview shows the original.
-    preview_comparing: bool,
     /// The Enhance chip's bounds, for anchoring its card.
     enhance_chip_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
     enhance_hovered: bool,
@@ -2805,7 +2804,6 @@ impl EditorWindow {
             // one for exports; either being on turns the one switch on.
             preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance
                 || crate::editor_export::ExportUi::load().enhance_quality,
-            preview_comparing: false,
             enhance_chip_bounds: Rc::new(Cell::new(None)),
             enhance_hovered: false,
             enhance_card: None,
@@ -3993,7 +3991,7 @@ impl EditorWindow {
     }
 
     fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
-        if self.preview_enhance && !self.preview_comparing {
+        if self.preview_enhance {
             cap_project::ScreenEnhancement::on()
         } else {
             cap_project::ScreenEnhancement::default()
@@ -4190,8 +4188,6 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
-        // Compare only applies to a paused frame, so playing ends it.
-        self.set_preview_comparing(false, cx);
         let Some(transport) = &self.transport else {
             return;
         };
@@ -9043,7 +9039,7 @@ impl EditorWindow {
     /// together, from the toolbar or the export page.
     pub(crate) fn set_enhance(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.preview_enhance = on;
-        self.preview_comparing = false;
+        self.update_enhance_card(cx);
         if !crate::store::set_store_setting(
             crate::store::GENERAL_SETTINGS,
             crate::store::EDITOR_PREVIEW_ENHANCE_KEY,
@@ -9058,17 +9054,6 @@ impl EditorWindow {
         self.publish_project();
         cx.notify();
         window.refresh();
-    }
-
-    /// Holding Compare shows the original paused frame; letting go shows the
-    /// enhanced one again.
-    fn set_preview_comparing(&mut self, comparing: bool, cx: &mut Context<Self>) {
-        if self.preview_comparing == comparing {
-            return;
-        }
-        self.preview_comparing = comparing;
-        self.publish_project();
-        cx.notify();
     }
 
     fn has_open_menu(&self) -> bool {
@@ -17861,31 +17846,6 @@ mod tests {
         cx.simulate_click(title, gpui::Modifiers::default());
 
         cx.update(|window, _| assert!(input_focus.is_focused(window)));
-    }
-
-    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
-    #[cfg(target_os = "linux")]
-    #[gpui::test]
-    fn playback_ends_a_held_compare(cx: &mut gpui::TestAppContext) {
-        let project = tempfile::tempdir().unwrap();
-        let project_path = project.path().to_path_buf();
-        let (editor, cx) = cx
-            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
-        editor.update(cx, |editor, cx| {
-            editor.preview_enhance = true;
-            editor.set_preview_comparing(true, cx);
-            assert!(editor.preview_comparing);
-            assert_eq!(
-                editor.preview_screen_enhancement(),
-                cap_project::ScreenEnhancement::default()
-            );
-            editor.start_playback(0.0, cx);
-            assert!(!editor.preview_comparing);
-            assert_eq!(
-                editor.preview_screen_enhancement(),
-                cap_project::ScreenEnhancement::on()
-            );
-        });
     }
 
     // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.

@@ -3437,12 +3437,9 @@ wipe_down = "Volet vers le bas"
 zoom = "Zoom"
 
 [editor.window.transport]
-compare = "Comparer"
-compare_tooltip = "Maintenez pour voir l'original"
 done_splitting = "Terminer la découpe"
 enhance = "Améliorer"
 enhance_card_body = "Utilise un modèle d'IA pour rendre plus nets les petits textes et les détails fins de chaque image, pour une vidéo claire même agrandie ou réduite."
-enhance_card_compare = "Maintenez Comparer pour voir l'original."
 enhance_card_export = "S'applique à votre export, qui peut prendre un peu plus de temps."
 enhance_card_local = "Fonctionne sur cet ordinateur, rien n'est envoyé."
 enhance_card_preview = "Mettez la vidéo en pause pour le voir dans l'aperçu."

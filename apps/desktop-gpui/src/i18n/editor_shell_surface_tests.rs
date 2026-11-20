@@ -1499,15 +1499,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::enhance_card_preview(),
             "Pause the video to see it in the preview.",
         ),
-        (
-            tr::editor::window::transport::enhance_card_compare(),
-            "Hold Compare to see the original.",
-        ),
-        (tr::editor::window::transport::compare(), "Compare"),
-        (
-            tr::editor::window::transport::compare_tooltip(),
-            "Hold to see the original",
-        ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
         (tr::editor::window::undo(), "Undo"),

@@ -3437,12 +3437,9 @@ wipe_down = "Wischen nach unten"
 zoom = "Zoom"
 
 [editor.window.transport]
-compare = "Vergleichen"
-compare_tooltip = "Gedrückt halten, um das Original zu sehen"
 done_splitting = "Teilen beenden"
 enhance = "Verbessern"
 enhance_card_body = "Nutzt ein KI-Modell, um kleinen Text und feine Details in jedem Frame zu schärfen, damit dein Video auch vergrößert oder verkleinert scharf bleibt."
-enhance_card_compare = "Halte Vergleichen gedrückt, um das Original zu sehen."
 enhance_card_export = "Gilt für deinen Export, der etwas länger dauern kann."
 enhance_card_local = "Läuft auf diesem Computer, es wird nichts hochgeladen."
 enhance_card_preview = "Pausiere das Video, um es in der Vorschau zu sehen."

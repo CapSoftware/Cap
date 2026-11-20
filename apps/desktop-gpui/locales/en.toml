@@ -3439,12 +3439,9 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
-compare = "Compare"
-compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
 enhance = "Enhance"
 enhance_card_body = "Uses an AI model to sharpen small text and fine detail in every frame, so your video stays crisp when it is zoomed in or scaled down."
-enhance_card_compare = "Hold Compare to see the original."
 enhance_card_export = "Applies to your export, which can take a little longer."
 enhance_card_local = "Runs on this computer, so nothing is uploaded."
 enhance_card_preview = "Pause the video to see it in the preview."

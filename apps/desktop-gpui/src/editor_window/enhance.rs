@@ -1,6 +1,7 @@
 //! Enhance in the player toolbar: a quiet chip that takes the accent while it
-//! is on, Compare beside it, and a card that explains what it does. The card
-//! is its own small view, so its entrance repaints only the card.
+//! is on, and a card that explains what it does and stays up while the pointer
+//! is on the chip, so toggling shows the change and the new state together.
+//! The card is its own small view, so its entrance repaints only the card.
 
 use super::*;
 
@@ -9,7 +10,6 @@ const CARD_DELAY: Duration = Duration::from_millis(350);
 const CARD_ENTER: Duration = Duration::from_millis(180);
 const CARD_RISE: f32 = 6.;
 const CARD_WIDTH: f32 = 284.;
-const COMPARE_ENTER: Duration = Duration::from_millis(160);
 
 pub(crate) struct EnhanceCard {
     theme: Theme,
@@ -116,13 +116,7 @@ impl Render for EnhanceCard {
                     .child(row(
                         "icons/pause.svg",
                         tr::editor::window::transport::enhance_card_preview().into(),
-                    ))
-                    .when(on, |this| {
-                        this.child(row(
-                            "icons/columns-2.svg",
-                            tr::editor::window::transport::enhance_card_compare().into(),
-                        ))
-                    }),
+                    )),
             );
         if self.still {
             return card.into_any_element();
@@ -140,8 +134,8 @@ impl Render for EnhanceCard {
 }
 
 impl EditorWindow {
-    /// The chip, with Compare to its left while Enhance is on, so turning it
-    /// on or off never moves the chip out from under the pointer.
+    /// The chip. Its width never changes with its state, so it stays under
+    /// the pointer to be clicked again.
     pub(super) fn render_preview_enhance(
         &self,
         labels: bool,
@@ -191,8 +185,12 @@ impl EditorWindow {
                         }
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.hide_enhance_card(cx);
                         this.toggle_preview_enhance(window, cx);
+                        // The card answers the click straight away, with the
+                        // new state, and stays until the pointer leaves.
+                        if this.enhance_hovered {
+                            this.show_enhance_card(cx);
+                        }
                     }))
             })
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
@@ -218,75 +216,7 @@ impl EditorWindow {
                     .absolute()
                     .size_full(),
             );
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(4.))
-            .children(on.then(|| self.render_preview_compare(labels, cx)))
-            .child(chip)
-    }
-
-    fn render_preview_compare(&self, labels: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let theme = self.theme;
-        let comparing = self.preview_comparing;
-        let can_compare = self.project_ready() && !self.playing;
-        let compare = div()
-            .id("transport-compare")
-            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-            .tooltip(move |_, cx| {
-                ui::Tooltip::new(&theme, tr::editor::window::transport::compare_tooltip()).view(cx)
-            })
-            .when(can_compare, |this| {
-                this.on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.set_preview_comparing(true, cx);
-                    }),
-                )
-            })
-            // Release always ends Compare, even once playback has disabled
-            // the button under the held mouse.
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    this.set_preview_comparing(false, cx);
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    this.set_preview_comparing(false, cx);
-                }),
-            )
-            .child(
-                ui::Button::editor(
-                    &theme,
-                    "transport-compare-button",
-                    if comparing {
-                        ui::ButtonVariant::Primary
-                    } else {
-                        ui::ButtonVariant::Gray
-                    },
-                    ui::ButtonSize::Sm,
-                )
-                .icon("icons/columns-2.svg")
-                .when(labels, |button| {
-                    button.label(tr::editor::window::transport::compare())
-                })
-                .radius(px(7.))
-                .disabled(!can_compare),
-            );
-        if cx.reduce_motion() {
-            return compare.into_any_element();
-        }
-        compare
-            .with_animation(
-                "transport-compare-enter",
-                Animation::new(COMPARE_ENTER),
-                |compare, progress| compare.opacity(ease_out_quint(progress)),
-            )
-            .into_any_element()
+        chip
     }
 
     /// Opens the card once the pointer has rested on the chip, and closes it
@@ -304,19 +234,37 @@ impl EditorWindow {
             cx.background_executor().timer(CARD_DELAY).await;
             let _ = this.update(cx, |this, cx| {
                 this.enhance_card_task = None;
-                if !this.enhance_hovered || this.preview_comparing {
-                    return;
+                if this.enhance_hovered {
+                    this.show_enhance_card(cx);
                 }
-                let (theme, on, still) = (this.theme, this.preview_enhance, cx.reduce_motion());
-                this.enhance_card = Some(cx.new(|_| EnhanceCard { theme, on, still }));
-                cx.notify();
             });
         }));
     }
 
-    /// A click hides the card until the pointer comes back, so the frame it
-    /// changes is in view.
-    pub(super) fn hide_enhance_card(&mut self, cx: &mut Context<Self>) {
+    fn show_enhance_card(&mut self, cx: &mut Context<Self>) {
+        self.enhance_card_task = None;
+        if self.enhance_card.is_some() {
+            return;
+        }
+        let (theme, on, still) = (self.theme, self.preview_enhance, cx.reduce_motion());
+        self.enhance_card = Some(cx.new(|_| EnhanceCard { theme, on, still }));
+        cx.notify();
+    }
+
+    /// An open card follows the setting, from the chip or the export page.
+    pub(super) fn update_enhance_card(&mut self, cx: &mut Context<Self>) {
+        let on = self.preview_enhance;
+        if let Some(card) = &self.enhance_card {
+            card.update(cx, |card, cx| {
+                if card.on != on {
+                    card.on = on;
+                    cx.notify();
+                }
+            });
+        }
+    }
+
+    fn hide_enhance_card(&mut self, cx: &mut Context<Self>) {
         self.enhance_card_task = None;
         if self.enhance_card.take().is_some() {
             cx.notify();
@@ -338,15 +286,18 @@ impl EditorWindow {
     }
 }
 
-#[cfg(test)]
+// gpui's test windows have no platform window handle on macOS or Windows,
+// which the editor needs.
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
-    /// The card waits for the pointer to rest, closes when it leaves, and a
-    /// click on the chip puts it away so the changed frame is in view.
-    #[cfg(target_os = "linux")]
+    /// The card waits for the pointer to rest and closes when it leaves; a
+    /// click opens it at once and it follows the new state.
     #[gpui::test]
-    fn the_enhance_card_opens_on_rest_and_closes_on_leave_or_click(cx: &mut gpui::TestAppContext) {
+    fn the_enhance_card_opens_on_rest_follows_clicks_and_closes_on_leave(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let project = tempfile::tempdir().unwrap();
         let project_path = project.path().to_path_buf();
         let (editor, cx) = cx
@@ -370,12 +321,21 @@ mod tests {
         cx.run_until_parked();
         assert!(editor.update(cx, |editor, _| editor.enhance_card.is_none()));
 
-        editor.update(cx, |editor, cx| {
+        // A click before the delay opens it straight away with the new
+        // state, and a second click updates it in place.
+        let card_on = |editor: &EditorWindow, cx: &gpui::App| {
+            editor.enhance_card.as_ref().map(|card| card.read(cx).on)
+        };
+        editor.update_in(cx, |editor, window, cx| {
+            editor.preview_enhance = false;
             editor.hover_enhance(true, cx);
-            editor.hide_enhance_card(cx);
+            editor.set_enhance(true, window, cx);
+            editor.show_enhance_card(cx);
+            assert_eq!(card_on(editor, cx), Some(true));
+            editor.set_enhance(false, window, cx);
+            assert_eq!(card_on(editor, cx), Some(false));
+            editor.hover_enhance(false, cx);
+            assert!(editor.enhance_card.is_none());
         });
-        cx.executor().advance_clock(CARD_DELAY);
-        cx.run_until_parked();
-        assert!(editor.update(cx, |editor, _| editor.enhance_card.is_none()));
     }
 }
