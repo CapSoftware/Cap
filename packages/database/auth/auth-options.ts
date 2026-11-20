@@ -31,6 +31,7 @@ import {
 	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { GoogleOneTapProvider } from "./google-one-tap.ts";
 import {
 	provisionSsoMembership,
 	type SsoAuthContext,
@@ -224,6 +225,9 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						},
 					},
 				}),
+				...(serverEnv().GOOGLE_CLIENT_ID && serverEnv().GOOGLE_CLIENT_SECRET
+					? [GoogleOneTapProvider()]
+					: []),
 				...(serverEnv().WORKOS_CLIENT_ID && serverEnv().WORKOS_API_KEY
 					? [
 							WorkOSProvider({

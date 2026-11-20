@@ -194,6 +194,8 @@ export const RATE_LIMIT_IDS = {
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
 	AUTH_SSO_START: "rl_auth_sso_start",
+	/** Google One Tap sign-in attempts. Suggested: 30 / 1m per IP. */
+	AUTH_GOOGLE_ONE_TAP: "rl_auth_google_one_tap",
 	MCP_CLIENT_REGISTRATION: "rl_mcp_client_registration",
 	/** Share-page video password attempts. Suggested: 20 / 10m per IP. */
 	VIDEO_PASSWORD: "rl_video_password",
@@ -251,6 +253,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.AGENT_LOOM_IMPORT]: { limit: 20, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_GOOGLE_ONE_TAP]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },

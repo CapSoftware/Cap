@@ -2,6 +2,10 @@
 //! Recording or Accessibility pane, a small panel floats under its window
 //! with Cap's icon to drag into the list.
 //!
+//! From macOS 27.3 nothing can be dropped any more: the panel says which +
+//! to click instead, and it also covers Input Monitoring (keystrokes) and
+//! System & App Protection Override, where the Accessibility link now lands.
+//!
 //! Those two panes (macOS 13+, System Settings) add a `.app` dropped onto
 //! their list, which rescues the case where Cap is missing from the list or
 //! listed under a stale signature. Camera and Microphone lists accept no
@@ -18,7 +22,7 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, AppContext, Bounds, Context, FontWeight, Global, InteractiveElement, IntoElement,
     MouseButton, ParentElement, Render, Styled, Task, Window, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, div, img, point, px, size,
+    WindowKind, WindowOptions, div, img, point, prelude::FluentBuilder as _, px, size,
 };
 
 use crate::doodle;
@@ -68,10 +72,11 @@ fn preview() -> bool {
 
 pub fn eligible(permission: OSPermission) -> bool {
     cfg!(target_os = "macos")
-        && matches!(
-            permission,
-            OSPermission::ScreenRecording | OSPermission::Accessibility
-        )
+        && match permission {
+            OSPermission::ScreenRecording | OSPermission::Accessibility => true,
+            OSPermission::InputMonitoring => crate::permissions::grants_are_settings_only(),
+            OSPermission::Microphone | OSPermission::Camera => false,
+        }
         && std::path::Path::new("/System/Applications/System Settings.app").exists()
         && app_bundle().is_some()
 }
@@ -92,6 +97,9 @@ pub struct PermissionGuide {
     hidden: bool,
     app: PathBuf,
     icon: Arc<gpui::Image>,
+    /// macOS 27.3 adds an app to these lists only through the + button
+    /// (issue #4410), so the panel teaches that instead of a drag.
+    add_with_plus: bool,
 }
 
 /// Show the guide for `permission` while the user is in System Settings.
@@ -141,6 +149,8 @@ pub fn start(permission: OSPermission, cx: &mut App) {
                         gpui::ImageFormat::Png,
                         APP_ICON.to_vec(),
                     )),
+                    add_with_plus: crate::permissions::grants_are_settings_only()
+                        || permission == OSPermission::InputMonitoring,
                 }
             })
         },
@@ -287,9 +297,8 @@ fn granted(permission: OSPermission) -> bool {
         return false;
     };
     match permission {
-        OSPermission::ScreenRecording => raw.screen_granted,
-        OSPermission::Accessibility => raw.accessibility_granted,
         OSPermission::Microphone | OSPermission::Camera => true,
+        _ => crate::permissions::raw_granted(&raw, permission),
     }
 }
 
@@ -302,21 +311,45 @@ fn panel_origin((x, y, width, height): (f64, f64, f64, f64)) -> (f64, f64) {
     let inset = SHADOW_INSET as f64;
     let left = (x + sidebar + (width - sidebar - panel_w) / 2.).round();
     let below = y + height - inset + 10.;
-    let screen_bottom = scap_targets::Display::list()
-        .into_iter()
-        .filter_map(|display| display.raw_handle().logical_bounds())
-        .find(|bounds| {
-            let (bx, by) = (bounds.position().x(), bounds.position().y());
-            let (bw, bh) = (bounds.size().width(), bounds.size().height());
-            let (cx, cy) = (x + width / 2., y + height / 2.);
-            cx >= bx && cx < bx + bw && cy >= by && cy < by + bh
-        })
-        .map(|bounds| bounds.position().y() + bounds.size().height());
+    let screen_bottom = visible_bottom(x + width / 2., y + height / 2.).or_else(|| {
+        scap_targets::Display::list()
+            .into_iter()
+            .filter_map(|display| display.raw_handle().logical_bounds())
+            .find(|bounds| {
+                let (bx, by) = (bounds.position().x(), bounds.position().y());
+                let (bw, bh) = (bounds.size().width(), bounds.size().height());
+                let (cx, cy) = (x + width / 2., y + height / 2.);
+                cx >= bx && cx < bx + bw && cy >= by && cy < by + bh
+            })
+            .map(|bounds| bounds.position().y() + bounds.size().height())
+    });
     let top = match screen_bottom {
         Some(bottom) if below + panel_h > bottom - 4. => y + height - panel_h - 14.,
         _ => below,
     };
     (left, top.round())
+}
+
+/// The bottom of the usable area (above the Dock) of the screen holding
+/// this point, in top-left coordinates: a panel placed below that line would
+/// sit under the Dock with its instructions cut off.
+fn visible_bottom(px: f64, py: f64) -> Option<f64> {
+    #[cfg(target_os = "macos")]
+    {
+        let screens = platform::screen_geometries();
+        let primary_height = screens.first()?.frame.3;
+        screens.iter().find_map(|screen| {
+            let (fx, fy, fw, fh) = screen.frame;
+            let top = primary_height - (fy + fh);
+            (px >= fx && px < fx + fw && py >= top && py < top + fh)
+                .then(|| primary_height - screen.visible.1)
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (px, py);
+        None
+    }
 }
 
 impl Render for PermissionGuide {
@@ -326,9 +359,28 @@ impl Render for PermissionGuide {
         let palette = paper.palette();
         // The arrow bobs forever; a hidden panel must not keep drawing.
         let still = self.hidden;
-        let body = match self.permission {
-            OSPermission::Accessibility => tr::permission::guide::accessibility_body(),
-            _ => tr::permission::guide::screen_body(),
+        let add_with_plus = self.add_with_plus;
+        let (title, body) = match self.permission {
+            OSPermission::Accessibility if add_with_plus => (
+                tr::permission::guide::override_title(),
+                tr::permission::guide::override_body(),
+            ),
+            OSPermission::InputMonitoring => (
+                tr::permission::guide::plus_title(),
+                tr::permission::guide::input_monitoring_plus_body(),
+            ),
+            _ if add_with_plus => (
+                tr::permission::guide::plus_title(),
+                tr::permission::guide::screen_plus_body(),
+            ),
+            OSPermission::Accessibility => (
+                tr::permission::guide::title(),
+                tr::permission::guide::accessibility_body(),
+            ),
+            _ => (
+                tr::permission::guide::title(),
+                tr::permission::guide::screen_body(),
+            ),
         };
         div()
             .size_full()
@@ -354,15 +406,16 @@ impl Render for PermissionGuide {
                             .relative()
                             .flex_none()
                             .size(px(80.))
-                            .cursor_grab()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, _| {
-                                    if !platform::begin_file_drag(window, &this.app) {
-                                        tracing::warn!("permission guide: drag did not start");
-                                    }
-                                }),
-                            )
+                            .when(!add_with_plus, |icon| {
+                                icon.cursor_grab().on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, _| {
+                                        if !platform::begin_file_drag(window, &this.app) {
+                                            tracing::warn!("permission guide: drag did not start");
+                                        }
+                                    }),
+                                )
+                            })
                             .child(div().absolute().inset_0().child(doodle::doodle(
                                 &art::DRAG_FRAME,
                                 palette,
@@ -394,7 +447,7 @@ impl Render for PermissionGuide {
                                     .line_height(px(19.))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(paper.ink)
-                                    .child(tr::permission::guide::title()),
+                                    .child(title),
                             )
                             .child(
                                 div()
