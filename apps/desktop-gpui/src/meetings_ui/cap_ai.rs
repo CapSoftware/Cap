@@ -398,10 +398,6 @@ pub fn status_line(
     }
 }
 
-pub fn access(cx: &App) -> Option<AiAccess> {
-    Meetings::try_global(cx).map(|m| m.read(cx).ai_access())
-}
-
 pub fn ensure_access(cx: &mut App) {
     if let Some(meetings) = Meetings::try_global(cx) {
         meetings.update(cx, |m, cx| m.ensure_access(cx));

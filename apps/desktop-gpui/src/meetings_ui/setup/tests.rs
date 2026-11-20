@@ -21,7 +21,7 @@ fn open(
         |window, cx| SetupWindow::new(Some(step), window, cx),
     );
     let view = window.root(cx).unwrap();
-    let mut visual = VisualTestContext::from_window(window.into(), cx);
+    let visual = VisualTestContext::from_window(window.into(), cx);
     visual.run_until_parked();
     (view, meetings, visual, fixture)
 }
