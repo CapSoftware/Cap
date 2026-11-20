@@ -88,7 +88,7 @@ pub struct CompositeVideoFrameUniforms {
     pub border_width: f32,
     pub preserve_source_alpha: f32,
     /// 1 blurs along each pixel's full frame-to-frame path with equal taps
-    /// and trails the shadow with the card; 0 keeps the original kernels.
+    /// and trails the shadow with the card; 0 keeps the fixed 21-tap kernels.
     pub motion_blur_kernel: f32,
     pub _padding1: [f32; 2],
     pub border_color: [f32; 4],

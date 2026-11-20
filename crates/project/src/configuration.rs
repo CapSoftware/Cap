@@ -3475,11 +3475,12 @@ pub struct ProjectConfiguration {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_zoom_pending: bool,
     /// How the screen follows the cursor while zoomed and how motion blur
-    /// draws. Absent (0) keeps the original rules: an auto zoom frames the
-    /// middle of the cursor's bounding box and blur uses fixed tap kernels.
-    /// [`SCREEN_MOTION_VERSION`] frames where the cursor spent its time and
-    /// blurs along the full path each pixel travelled since the last frame.
-    /// New projects start on it.
+    /// spreads its taps. Absent (0) keeps the original follow, where an auto
+    /// zoom frames the middle of the cursor's bounding box, and a fixed
+    /// 21-tap blur kernel. [`SCREEN_MOTION_VERSION`] frames where the cursor
+    /// spent its time and blurs along the full path each pixel travelled
+    /// since the last frame. New projects start on it. Which way blur runs
+    /// and where a zoom blur converges do not depend on it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub screen_motion_version: u32,
     #[serde(

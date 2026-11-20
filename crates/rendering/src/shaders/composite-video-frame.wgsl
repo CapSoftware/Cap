@@ -20,7 +20,7 @@ struct Uniforms {
     preserve_source_alpha: f32,
     // 1 spreads blur taps evenly over the whole path a pixel travelled since
     // the previous frame, with equal weights and the card's shadow trailing
-    // too. 0 keeps the original kernels.
+    // too. 0 keeps the fixed 21-tap kernels.
     motion_blur_kernel: f32,
     _padding1b: f32,
     _padding1c: f32,
