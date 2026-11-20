@@ -263,11 +263,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let card_size = max(card.zw, vec2<f32>(1.0));
         let dir = uniforms.screen_blur.yz - (p - card.xy) / card_size;
         let dist = length(dir);
-        let amount = min(uniforms.screen_blur.w, 1.0);
+        // A negative amount is a zoom in: the taps run outward, as the
+        // display's do.
+        let amount = min(abs(uniforms.screen_blur.w), 1.0);
+        let ray_sign = select(1.0, -1.0, uniforms.screen_blur.w < 0.0);
         if (dist < 1e-4 || amount < 1e-4) {
             color = own_blurred(input.uv, velocity_uv) * screen_bounds_mask(p);
         } else {
-            let ray_px = dir / dist * min(dist * amount, MAX_ZOOM_RAY_UV) * card_size;
+            let ray_px = dir / dist * min(dist * amount, MAX_ZOOM_RAY_UV) * card_size
+                * ray_sign;
             let dither = interleaved_noise(p);
             var weight_sum = 0.0;
             for (var i = 0; i < 13; i = i + 1) {

@@ -3542,6 +3542,8 @@ struct MotionAnalysis {
     size_delta_px: f32,
     zoom_center_uv: XY<f32>,
     zoom_magnitude: f32,
+    /// The frame is larger than it was: a zoom in.
+    zoom_growing: bool,
     /// Forces the zoom (radial) branch regardless of dominance — used by
     /// scene transitions that inject synthetic zoom blur.
     prefer_zoom: bool,
@@ -3631,6 +3633,7 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
     analysis.movement_magnitude = movement_magnitude;
     analysis.size_delta_px = size_delta_px;
     analysis.zoom_magnitude = zoom_magnitude;
+    analysis.zoom_growing = curr_diag > prev_diag;
     // Not clamped to the card: a zoom that also pans scales about a point
     // off the card, and the rays still converge on it.
     let zoom_center_uv = current.point_to_uv(zoom_center_point);
@@ -3708,7 +3711,12 @@ fn resolve_motion_descriptor(
         if zoom_amount <= f32::EPSILON {
             return MotionBlurDescriptor::none();
         }
-        MotionBlurDescriptor::zoom(analysis.zoom_center_uv, zoom_amount, 1.0)
+        MotionBlurDescriptor::zoom(
+            analysis.zoom_center_uv,
+            zoom_amount,
+            1.0,
+            analysis.zoom_growing,
+        )
     } else {
         let move_strength = base_amount * move_multiplier;
         if move_strength <= 0.0 || move_px < MOTION_ACTIVATION_PX {
@@ -3877,6 +3885,9 @@ struct MotionBlurDescriptor {
     movement_vector_uv: [f32; 2],
     zoom_center_uv: [f32; 2],
     zoom_amount: f32,
+    /// The frame grew this frame: the radial taps run away from the zoom
+    /// centre, so the smear trails the motion as it does zooming out.
+    zoom_outward: bool,
 }
 
 impl Default for MotionBlurDescriptor {
@@ -3887,6 +3898,7 @@ impl Default for MotionBlurDescriptor {
             movement_vector_uv: [0.0, 0.0],
             zoom_center_uv: [0.5, 0.5],
             zoom_amount: 0.0,
+            zoom_outward: false,
         }
     }
 }
@@ -3903,17 +3915,24 @@ impl MotionBlurDescriptor {
             movement_vector_uv: [vector_uv.x, vector_uv.y],
             zoom_center_uv: [0.5, 0.5],
             zoom_amount: 0.0,
+            zoom_outward: false,
         }
     }
 
-    fn zoom(center_uv: XY<f32>, zoom_amount: f32, strength: f32) -> Self {
+    fn zoom(center_uv: XY<f32>, zoom_amount: f32, strength: f32, outward: bool) -> Self {
         Self {
             mode: MotionBlurMode::Zoom,
             strength,
             movement_vector_uv: [0.0, 0.0],
             zoom_center_uv: [center_uv.x, center_uv.y],
             zoom_amount,
+            zoom_outward: outward,
         }
+    }
+
+    /// The uniform's fourth parameter: 1 when the radial taps run outward.
+    fn zoom_direction(&self) -> f32 {
+        if self.zoom_outward { 1.0 } else { 0.0 }
     }
 }
 
@@ -5288,7 +5307,7 @@ impl ProjectUniforms {
                             descriptor.mode.as_f32(),
                             descriptor.strength,
                             descriptor.zoom_amount,
-                            0.0,
+                            descriptor.zoom_direction(),
                         ],
                         shadow: if decorated {
                             project.background.shadow
@@ -5422,7 +5441,7 @@ impl ProjectUniforms {
                         descriptor.mode.as_f32(),
                         descriptor.strength,
                         descriptor.zoom_amount,
-                        0.0,
+                        descriptor.zoom_direction(),
                     ],
                     shadow: project.background.shadow
                         * display_decoration_fade
@@ -5666,7 +5685,7 @@ impl ProjectUniforms {
                         camera_descriptor.mode.as_f32(),
                         camera_descriptor.strength,
                         camera_descriptor.zoom_amount,
-                        0.0,
+                        camera_descriptor.zoom_direction(),
                     ],
                     shadow: project.camera.shadow
                         * chrome_fade
@@ -5766,6 +5785,7 @@ impl ProjectUniforms {
                         XY::new(0.5, 0.5),
                         camera_only_blur.min(TRANSITION_ZOOM_CAP),
                         1.0,
+                        false,
                     )
                 };
 
@@ -5793,7 +5813,7 @@ impl ProjectUniforms {
                         camera_only_descriptor.mode.as_f32(),
                         camera_only_descriptor.strength,
                         camera_only_descriptor.zoom_amount,
-                        0.0,
+                        camera_only_descriptor.zoom_direction(),
                     ],
                     shadow: if padding > 0.0 {
                         project.background.shadow * visibility
@@ -6940,6 +6960,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn display_zoom_blur_trails_the_motion_both_ways() {
+        // Zooming in, the frame grows and content moves away from the centre,
+        // so the taps run outward; zooming out they run inward.
+        let small = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let large = motion_bounds(XY::new(-38.4, -21.6), XY::new(1958.4, 1101.6));
+        let zoom_in =
+            ProjectUniforms::compute_display_motion_blur(large, small, true, 1.0, 0.0, 1.0);
+        let zoom_out =
+            ProjectUniforms::compute_display_motion_blur(small, large, true, 1.0, 0.0, 1.0);
+        assert_eq!(zoom_in.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(zoom_in.descriptor.zoom_outward);
+        assert_eq!(zoom_in.descriptor.zoom_direction(), 1.0);
+        assert_eq!(zoom_out.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(!zoom_out.descriptor.zoom_outward);
     }
 
     #[test]

@@ -817,7 +817,7 @@ fn screen_blur_over_cursor(
         display.target_size[0].max(1.0),
         display.target_size[1].max(1.0),
     ];
-    let [mode, strength, zoom_amount, _] = display.motion_blur_params;
+    let [mode, strength, zoom_amount, outward] = display.motion_blur_params;
     if mode < 0.5 || strength < 0.001 {
         return ([0.0; 4], card, 0.0);
     }
@@ -852,8 +852,14 @@ fn screen_blur_over_cursor(
         ((dx * ray * card[2]).powi(2) + (dy * ray * card[3]).powi(2)).sqrt()
     })
     .fold(0.0f32, f32::max);
+    // A negative amount carries the display's outward taps (a zoom in).
+    let signed_amount = if outward > 0.5 {
+        -zoom_amount
+    } else {
+        zoom_amount
+    };
     (
-        [2.0, center_x, center_y, zoom_amount],
+        [2.0, center_x, center_y, signed_amount],
         card,
         reach * 1.25 + 2.0,
     )

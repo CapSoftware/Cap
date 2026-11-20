@@ -410,7 +410,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // from the center (ray = center_dist * amount), parabolic weights peaked
     // mid-ray, and a per-pixel random phase to dither the 13-tap banding —
     // all matching the reference zoom filter.
-    let scaled_dir = dir / center_dist * min(center_dist * min(zoom_amount, 1.0), MAX_ZOOM_RAY_UV);
+    // Taps run toward the centre while the frame shrinks and away from it
+    // while it grows, so the smear always trails where the content was.
+    let ray_sign = select(1.0, -1.0, uniforms.motion_blur_params.w > 0.5);
+    let scaled_dir = dir / center_dist * min(center_dist * min(zoom_amount, 1.0), MAX_ZOOM_RAY_UV)
+        * ray_sign;
     let max_kernel = 13.0;
     let dither = interleaved_noise(p);
 

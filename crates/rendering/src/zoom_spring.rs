@@ -1456,12 +1456,12 @@ mod tests {
 
     #[test]
     fn new_project_zoom_is_quicker_without_overshoot() {
-        // New projects reach 90% of a zoom by about 317 ms with no
+        // New projects reach 90% of a zoom by about 290 ms with no
         // overshoot; saved projects keep the old spring, about 383 ms.
         let segments = [manual_segment(0.5, 6.0, 2.0, 0.5, 0.5)];
         let fresh = precomputed(&segments, ScreenMovementSpring::NEW_PROJECT, 6.0);
         let (t90, peak) = rise(&fresh, 0.5, 2.0, 0.9);
-        assert!((0.30..=0.33).contains(&t90), "new project t90 {t90}");
+        assert!((0.28..=0.30).contains(&t90), "new project t90 {t90}");
         assert!(peak <= 2.0 + 2e-3, "new project overshoot {peak}");
 
         let saved = precomputed(&segments, ScreenMovementSpring::default(), 6.0);

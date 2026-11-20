@@ -1100,11 +1100,11 @@ impl ScreenMovementSpring {
     /// How far ahead of its segment an early zoom starts moving.
     pub const EARLY_START_SECS: f64 = 0.35;
 
-    /// New projects' zoom motion: reaches 90% of a zoom in 317 ms with no
-    /// overshoot and settles within 1% by 500 ms.
+    /// New projects' zoom motion: critically damped, reaching 50% of a zoom
+    /// in 123 ms and 90% in 290 ms, with no overshoot.
     pub const NEW_PROJECT: Self = Self {
-        stiffness: 205.0,
-        damping: 33.3,
+        stiffness: 286.0,
+        damping: 42.2,
         mass: 1.5,
         start_zooms_early: false,
     };
