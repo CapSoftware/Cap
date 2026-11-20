@@ -124,6 +124,8 @@ fn a_project_saved_before_keycaps_and_input_sounds_loads_and_saves_unchanged() {
             ".cursor.clickSoundType",
             ".cursor.clickSoundVolume",
             ".cursor.clickSounds",
+            ".cursor.follow",
+            ".cursor.pressAnimation",
             ".keyboard.settings.keySoundType",
             ".keyboard.settings.keySoundVolume",
             ".keyboard.settings.keySounds",
@@ -138,6 +140,13 @@ fn a_project_saved_before_keycaps_and_input_sounds_loads_and_saves_unchanged() {
     assert_eq!(value["keyboard"]["settings"]["showTyping"], true);
     assert_eq!(value["keyboard"]["settings"]["keySounds"], false);
     assert_eq!(value["cursor"]["clickSounds"], false);
+    assert_eq!(value["cursor"]["follow"], "onPointer");
+    assert_eq!(value["cursor"]["pressAnimation"], "quick");
+    assert!(
+        value
+            .get("screenMotionVersion")
+            .is_none_or(|version| version == 0)
+    );
 
     loaded.write(project.path()).unwrap();
     let reloaded = ProjectConfiguration::load(project.path()).unwrap();
