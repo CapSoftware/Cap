@@ -8,6 +8,7 @@ import { db } from "../index.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
 import {
 	accounts,
+	authChallenges,
 	directoryUsers,
 	emailChangeRequests,
 	sessions,
@@ -299,6 +300,7 @@ export async function confirmEmailChange(
 				.delete(emailChangeRequests)
 				.where(eq(emailChangeRequests.userId, userId));
 			await tx.delete(sessions).where(eq(sessions.userId, userId));
+			await tx.delete(authChallenges).where(eq(authChallenges.userId, userId));
 			await enqueueLoopsSync(tx, userId);
 			return true;
 		});

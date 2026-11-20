@@ -224,6 +224,12 @@ describe.runIf(Boolean(databaseUrl))(
 					expires: new Date(Date.now() + 86_400_000),
 				});
 			const started = await start(user, `  ${newEmail.toUpperCase()} `);
+			expect(
+				await database()
+					.select()
+					.from(authChallenges)
+					.where(eq(authChallenges.userId, user.id)),
+			).toHaveLength(1);
 			expect(started).toEqual({ status: "sent", email: newEmail });
 			expect(fixture.codes.at(-1)?.email).toBe(newEmail);
 			expect((await reload(user.id))?.email).toBe(user.email);
@@ -248,6 +254,12 @@ describe.runIf(Boolean(databaseUrl))(
 					.select()
 					.from(emailChangeRequests)
 					.where(eq(emailChangeRequests.userId, user.id)),
+			).toHaveLength(0);
+			expect(
+				await database()
+					.select()
+					.from(authChallenges)
+					.where(eq(authChallenges.userId, user.id)),
 			).toHaveLength(0);
 			expect(fixture.notices.at(-1)).toEqual({
 				previousEmail: user.email,
