@@ -94,12 +94,14 @@ function Meeting($Case, $Engine, $Ask) {
   $env:CAP_GPUI_AUTO_MEETING = "$secs"; $env:CAP_GPUI_AUTO_MEETING_LINGER = "$linger"
   $env:CAP_GPUI_AUTO_MEETING_OUT = "$R\summary.json"; $env:CAP_GPUI_AUTO_MEETING_MIC_SCRIPT = "$R\mic_script.txt"
   $env:CAP_GPUI_AUTO_MEETING_MARKS = "$R\marks.txt"
+  New-Item -ItemType Directory -Force "$R\logs" | Out-Null
   $p = Start-Process -PassThru -FilePath $Bin -RedirectStandardOutput "$R\app.out" -RedirectStandardError "$R\app.err"
   $log = "$R\logs\cap-gpui.log*"
   for ($i = 0; $i -lt 900; $i++) { if (Select-String -Quiet -Path $log -Pattern 'CAP_GPUI_AUTO_MEETING: recording' -ErrorAction SilentlyContinue) { break }; if ($p.HasExited) { break }; Start-Sleep -Milliseconds 100 }
   $at = (Epoch) + 5000
   $server = Start-Process -PassThru -WindowStyle Hidden $py -ArgumentList "`"$Here\call_server.py`" `"$Meet`" 8443 `"$R\page_started.log`" --tls `"$Work\cert.pem`" `"$Work\key.pem`""
   Start-Sleep -Milliseconds 500
+  if ($server.HasExited) { "the call page server did not start"; exit 1 }
   $cargs = @("--user-data-dir=`"$R\chrome`"", '--no-first-run', '--no-default-browser-check',
     '"--host-resolver-rules=MAP meet.google.com:443 127.0.0.1:8443"', '--ignore-certificate-errors',
     '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required',

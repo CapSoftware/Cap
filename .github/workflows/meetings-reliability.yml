@@ -54,7 +54,7 @@ jobs:
       - name: Install the meeting harness tools
         run: |
           sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xdotool imagemagick dbus \
-            pulseaudio pulseaudio-utils libasound2-plugins ffmpeg openssl > /dev/null
+            pulseaudio pulseaudio-utils libasound2-plugins ffmpeg openssl openbox > /dev/null
           if ! command -v google-chrome > /dev/null; then
             curl -fsSL -o "$RUNNER_TEMP/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
             sudo apt-get install -y -qq "$RUNNER_TEMP/chrome.deb" > /dev/null
@@ -112,6 +112,7 @@ jobs:
             ${{ runner.temp }}/meetings/*/check.txt
             ${{ runner.temp }}/meetings/*/score.json
             ${{ runner.temp }}/meetings/*/stub.jsonl
+            ${{ runner.temp }}/meetings/*/page_started.log
             ${{ runner.temp }}/meetings/*/app.log
             ${{ runner.temp }}/meetings/*/shots/*.png
             ${{ runner.temp }}/meetings/indicator/indicator.png
@@ -244,6 +245,7 @@ jobs:
             ${{ runner.temp }}/meetings/*/check.txt
             ${{ runner.temp }}/meetings/*/score.json
             ${{ runner.temp }}/meetings/*/stub.jsonl
+            ${{ runner.temp }}/meetings/*/page_started.log
             ${{ runner.temp }}/meetings/*/app.log
             ${{ runner.temp }}/meetings/*/shots/*.png
             ${{ runner.temp }}/meetings/indicator/indicator.png

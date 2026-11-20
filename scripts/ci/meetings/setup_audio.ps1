@@ -14,6 +14,12 @@ certutil -addstore TrustedPublisher "$d\signer.cer" | Out-Null
 # The vendor's own silent installer creates the device and installs the driver.
 Start-Process -Wait -FilePath "$d\pack\VBCABLE_Setup_x64.exe" -ArgumentList '-i', '-h'
 Set-Service Audiosrv -StartupType Automatic; Start-Service Audiosrv
+# A runner's user has never allowed microphone access, so Windows refuses the call page's
+# microphone (NotAllowedError) and never records it in the consent store Cap reads to find the
+# call. Someone in a call has it on: turn it on for this user, desktop apps included.
+$consent = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone'
+New-Item -Force $consent | Out-Null; Set-ItemProperty $consent Value Allow
+New-Item -Force "$consent\NonPackaged" | Out-Null; Set-ItemProperty "$consent\NonPackaged" Value Allow
 Start-Sleep -Seconds 3
 $endpoints = Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' }
 $endpoints | Select-Object FriendlyName, Status | Out-Host

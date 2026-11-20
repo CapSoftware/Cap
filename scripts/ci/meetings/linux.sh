@@ -49,6 +49,7 @@ start_call() { # <case dir> <start epoch ms>
   python3 "$HERE/call_server.py" "$MEET" 8443 "$1/page_started.log" --tls "$WORK/cert.pem" "$WORK/key.pem" &
   echo $! > "$1/call_server.pid"
   sleep 0.5
+  kill -0 "$(cat "$1/call_server.pid")" 2> /dev/null || { echo "the call page server did not start"; exit 1; }
   "$CHROME" --user-data-dir="$1/chrome" --no-first-run --no-default-browser-check --disable-gpu \
     --host-resolver-rules="MAP meet.google.com:443 127.0.0.1:8443" --ignore-certificate-errors \
     --use-fake-ui-for-media-stream --autoplay-policy=no-user-gesture-required \
@@ -111,26 +112,42 @@ meeting() { # <case> <local|cloud> [ask question]
   CAP_EXPECT_QUESTION="$ASK" python3 "$HERE/check.py" "$R" "$DOC" "$ENGINE" "$MEET" | tee "$R/check.txt"
 }
 
-indicator() { # the live indicator in its "call ended" banner, docked at the right edge
+indicator() { # the live indicator docked at the right edge, under a window manager (openbox):
+  # a tour switches it between collapsed and the "call ended" banner six times while its window's
+  # root position is sampled; the right edge must stay where it is, on screen.
   local R=$WORK/indicator; mkdir -p "$R/home" "$R/data"
   echo '{"general_settings":{"hasCompletedOnboarding":true,"hasCompletedStartup":true,"enableNotifications":false,"enableTelemetry":false}}' > "$R/data/store"
-  env HOME="$R/home" CAP_GPUI_APP_DATA_DIR="$R/data" CAP_GPUI_NO_TRAY=1 CAP_GPUI_MEETING_UI=ind-ending \
+  : > "$R/tour.txt"
+  for i in 1 2 3 4 5 6; do
+    printf 'c%s recording indicator 2500\nb%s ind-ending indicator 2500\n' "$i" "$i" >> "$R/tour.txt"
+  done
+  openbox > "$R/openbox.log" 2>&1 &
+  local WM=$!
+  sleep 1
+  env HOME="$R/home" CAP_GPUI_APP_DATA_DIR="$R/data" CAP_GPUI_NO_TRAY=1 CAP_GPUI_MEETING_UI="$R/tour.txt" \
     "$BIN" < /dev/null > "$R/app.log" 2>&1 &
-  local P=$!
-  sleep 15; shot "$R/indicator.png"
-  local geom screen
-  geom=$(xwininfo -root -tree | grep '"Cap Meeting Indicator"' | grep -oE '[0-9]+x[0-9]+\+[0-9-]+\+[0-9-]+' | head -1)
+  local P=$! id
+  sleep 4
+  : > "$R/samples.txt"
+  for i in $(seq 110); do
+    id=$(xwininfo -root -tree 2> /dev/null | grep '"Cap Meeting Indicator"' | grep -oE '^ *0x[0-9a-f]+' | tr -d ' ' | head -1)
+    [ -n "$id" ] && xwininfo -id "$id" 2> /dev/null \
+      | awk '/Absolute upper-left X/ {x=$4} /Width:/ {w=$2} END {print x, w}' >> "$R/samples.txt"
+    [ "$i" = 40 ] && shot "$R/indicator.png"
+    sleep 0.3
+  done
+  kill $P $WM; sleep 1; kill -9 $P 2> /dev/null
+  local screen
   screen=$(xwininfo -root | awk '/Width:/ {w=$2} END {print w}')
-  kill $P; sleep 1; kill -9 $P 2> /dev/null
-  python3 - "$geom" "$screen" << 'PY' | tee "$R/check.txt"
-import re, sys
-m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", sys.argv[1] or "")
+  python3 - "$R/samples.txt" "$screen" << 'PY' | tee "$R/check.txt"
+import sys
+rows = [tuple(map(int, l.split())) for l in open(sys.argv[1]) if len(l.split()) == 2]
 screen = int(sys.argv[2])
-if not m:
-    print("FAIL indicator window found"); print("SOME_FAILED"); sys.exit()
-w, h, x, y = map(int, m.groups())
-ok = w > 160 and x >= 0 and x + w <= screen
-print(("PASS" if ok else "FAIL"), f"banner on screen x={x} w={w} right={x + w} screen={screen}")
+wide = [r for r in rows if r[1] > 200]
+rights = {x + w for x, w in rows}
+ok = len(wide) >= 3 and len(rows) - len(wide) >= 3 and rights and max(rights) - min(rights) <= 1 \
+    and max(rights) <= screen and min(x for x, _ in rows) >= 0
+print(("PASS" if ok else "FAIL"), f"right edge {sorted(rights)} on a {screen} px screen over {len(rows)} samples ({len(wide)} with the banner)")
 print("ALL_PASS" if ok else "SOME_FAILED")
 PY
 }

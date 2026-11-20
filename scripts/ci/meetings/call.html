@@ -50,6 +50,7 @@ async function start() {
   } catch (e) {
     state.textContent = "in call, microphone unavailable: " + e.name;
   }
+  fetch("/mic?state=" + encodeURIComponent(micStream ? "on" : state.textContent), { method: "POST" }).catch(() => {});
   // Wait for the harness to say when the meeting starts (or start now).
   const at = Number(new URLSearchParams(location.search).get("at") || 0);
   const wait = Math.max(0, at - Date.now());
