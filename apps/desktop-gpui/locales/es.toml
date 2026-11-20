@@ -3840,7 +3840,7 @@ interview = "Entrevista"
 project_kickoff = "Inicio de proyecto"
 retrospective = "Retrospectiva"
 brainstorm = "Lluvia de ideas"
-board_update = "Novedades para la junta o inversores"
+board_update = "Junta e inversores"
 
 [documents.toolbar]
 toggle_sidebar = "Mostrar u ocultar la barra lateral"

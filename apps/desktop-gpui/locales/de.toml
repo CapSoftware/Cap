@@ -3840,7 +3840,7 @@ interview = "Bewerbungsgespräch"
 project_kickoff = "Projektstart"
 retrospective = "Retrospektive"
 brainstorm = "Brainstorming"
-board_update = "Update für Vorstand oder Investoren"
+board_update = "Vorstand und Investoren"
 
 [documents.toolbar]
 toggle_sidebar = "Seitenleiste ein- oder ausblenden"
