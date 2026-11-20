@@ -2341,7 +2341,7 @@ impl Meetings {
                         .map(|u| u.id.clone())
                         .collect();
                     transcript.remove(&stale);
-                    let echoes = transcript.suppress_echo(&EchoConfig::default());
+                    let echoes = remove_echoes(transcript);
                     if !echoes.is_empty() {
                         let line = vec![LogLine::Delete { ids: echoes }];
                         if let Some(engine) = engine
@@ -4087,6 +4087,23 @@ pub(crate) fn respell(
 
 /// The pass's speakers that still say something in `transcript`, plus any
 /// voice holding lines the pass did not list (a line someone moved by hand).
+/// Removes the lines that are only the call heard through the speakers and
+/// returns the ones the saved transcript has to drop. A live caption is never
+/// saved, and its id becomes its segment's final line: a Delete for the
+/// caption that reaches the file after that line would take the person's
+/// words with it.
+fn remove_echoes(transcript: &mut Transcript) -> Vec<String> {
+    let live: HashSet<String> = transcript
+        .utterances()
+        .iter()
+        .filter(|u| !u.is_final)
+        .map(|u| u.id.clone())
+        .collect();
+    let mut removed = transcript.suppress_echo(&EchoConfig::default());
+    removed.retain(|id| !live.contains(id));
+    removed
+}
+
 fn speakers_with_lines(
     pass_speakers: &[cap_diarize::SpeakerInfo],
     transcript: &Transcript,

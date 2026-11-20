@@ -362,6 +362,33 @@ fn utterance(id: &str, source: Source, start_ms: u64, text: &str) -> Utterance {
 }
 
 #[test]
+fn a_live_captions_echo_is_dropped_without_a_saved_delete_for_its_final_line() {
+    let call = "the squire was not pleased with the answer he got";
+    let mut transcript = Transcript::new();
+    transcript.upsert(utterance("s1", Source::System, 10_000, call));
+    // The microphone's open segment, still a caption, heard the call through
+    // the speakers; its final line (same id) will hold the user's own words.
+    transcript.upsert(Utterance {
+        is_final: false,
+        ..utterance("m1", Source::Mic, 10_100, call)
+    });
+    transcript.upsert(utterance("s2", Source::System, 30_000, call));
+    transcript.upsert(utterance("m2", Source::Mic, 30_100, call));
+    let saved = super::remove_echoes(&mut transcript);
+    assert_eq!(
+        saved,
+        vec!["m2".to_string()],
+        "only final lines are deleted on disk"
+    );
+    let ids: Vec<&str> = transcript
+        .utterances()
+        .iter()
+        .map(|u| u.id.as_str())
+        .collect();
+    assert!(!ids.contains(&"m1") && !ids.contains(&"m2"), "{ids:?}");
+}
+
+#[test]
 fn the_notes_body_matches_the_server_schema() {
     let mut transcript = Transcript::new();
     transcript.upsert(utterance("m1", Source::Mic, 0, "Shall we start?"));
