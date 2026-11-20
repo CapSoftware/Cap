@@ -1,6 +1,6 @@
 use crate::{
     CursorClickEvent, KeyPressEvent, KeyboardEvents, ProjectConfiguration,
-    keyboard::{clip_windows, held_output_time, is_modifier_key},
+    keyboard::{ClipWindow, clip_windows, held_output_time, is_modifier_key},
 };
 
 /// One recording clip's input, in its own time base: cursor clicks are in
@@ -255,22 +255,22 @@ impl<'a> ShownShortcuts<'a> {
                 .any(|(start, end)| *start <= time && time <= *end)
     }
 
-    /// Which of each take's ordered presses belong to a shortcut on screen:
-    /// a key listed where some clip places it, and any modifier held down
-    /// while one is struck. Decided over the whole take, so a split between
-    /// a modifier and its key keeps both.
+    /// For each clip window, which of its presses belong to a shortcut on
+    /// screen there: a key listed at that output time, and any modifier held
+    /// down while one is struck. Each occurrence of a source range decides
+    /// on its own; a modifier carries over only into a clip that continues
+    /// straight on, so a split between a modifier and its key keeps both.
     fn heard(
         &self,
-        timeline: &crate::TimelineConfiguration,
+        windows: &[ClipWindow<'_>],
         takes: &[InputSoundTake<'_>],
         ordered: &[Vec<&KeyPressEvent>],
         holds: &[(f64, f64)],
     ) -> Vec<Vec<bool>> {
-        let mut heard: Vec<Vec<bool>> = ordered
-            .iter()
-            .map(|presses| vec![false; presses.len()])
-            .collect();
-        for window in clip_windows(timeline) {
+        let mut heard: Vec<Vec<bool>> = vec![Vec::new(); windows.len()];
+        let mut held: Vec<(usize, usize, &str)> = Vec::new();
+        let mut previous: Option<(u32, f64, f64)> = None;
+        for (window_index, window) in windows.iter().enumerate() {
             let clip = window.clip;
             if clip.speed_audio_muted() {
                 continue;
@@ -281,14 +281,32 @@ impl<'a> ShownShortcuts<'a> {
             if !take.keyboard_offset_secs.is_finite() {
                 continue;
             }
+            let continues = previous.is_some_and(|(recording_clip, end, edited_end)| {
+                recording_clip == clip.recording_clip
+                    && (end - clip.start).abs() < 1e-6
+                    && (edited_end - window.edited_start).abs() < 1e-6
+            });
+            if !continues {
+                held.clear();
+            }
+            previous = Some((clip.recording_clip, clip.end, window.edited_end));
             let presses = &ordered[clip.recording_clip as usize];
             let source_start = clip.start + take.keyboard_offset_secs;
             let source_end = clip.end + take.keyboard_offset_secs;
             let first = presses.partition_point(|press| press.time_ms / 1000.0 < source_start);
             let last = presses.partition_point(|press| press.time_ms / 1000.0 < source_end);
-            for (offset, press) in presses[first..last.max(first)].iter().enumerate() {
-                let index = first + offset;
-                if !press.down || crate::keyboard::is_modifier_key(&press.key) {
+            let presses = &presses[first..last.max(first)];
+            heard[window_index] = vec![false; presses.len()];
+            for (index, press) in presses.iter().enumerate() {
+                if is_modifier_key(&press.key) {
+                    if press.down {
+                        held.push((window_index, index, press.key.as_str()));
+                    } else {
+                        held.retain(|(_, _, key)| *key != press.key);
+                    }
+                    continue;
+                }
+                if !press.down {
                     continue;
                 }
                 let time = held_output_time(
@@ -299,22 +317,9 @@ impl<'a> ShownShortcuts<'a> {
                     false,
                 );
                 if self.shows(&press.key, time) {
-                    heard[clip.recording_clip as usize][index] = true;
-                }
-            }
-        }
-        for (presses, heard) in ordered.iter().zip(&mut heard) {
-            let mut held: Vec<(usize, &str)> = Vec::new();
-            for (index, press) in presses.iter().enumerate() {
-                if crate::keyboard::is_modifier_key(&press.key) {
-                    if press.down {
-                        held.push((index, press.key.as_str()));
-                    } else {
-                        held.retain(|(_, key)| *key != press.key);
-                    }
-                } else if heard[index] {
-                    for (modifier, _) in &held {
-                        heard[*modifier] = true;
+                    heard[window_index][index] = true;
+                    for &(modifier_window, modifier, _) in &held {
+                        heard[modifier_window][modifier] = true;
                     }
                 }
             }
@@ -394,9 +399,10 @@ pub fn input_sound_events(
     let holds = timeline.hold_windows();
     let mut events = Vec::new();
     let mut ordered_keys: Vec<Option<Vec<&KeyPressEvent>>> = vec![None; takes.len()];
+    let windows = clip_windows(timeline);
     let heard = shortcuts.as_ref().map(|shortcuts| {
         let ordered = takes.iter().map(ordered_presses).collect::<Vec<_>>();
-        let heard = shortcuts.heard(timeline, takes, &ordered, &holds);
+        let heard = shortcuts.heard(&windows, takes, &ordered, &holds);
         for (slot, presses) in ordered_keys.iter_mut().zip(ordered) {
             *slot = Some(presses);
         }
@@ -408,7 +414,7 @@ pub fn input_sound_events(
     // still released on the far side of it.
     let mut held_until: Option<(u32, f64, f64)> = None;
 
-    for window in clip_windows(timeline) {
+    for (window_index, window) in windows.iter().enumerate() {
         let clip = window.clip;
         // A clip whose own audio is silent, muted or sped up without kept
         // audio, is silent here too.
@@ -448,9 +454,7 @@ pub fn input_sound_events(
                 held.clear();
             }
             held_until = Some((clip.recording_clip, clip.end, window.edited_end));
-            let heard = heard
-                .as_ref()
-                .map(|heard| &heard[clip.recording_clip as usize][first..last.max(first)]);
+            let heard = heard.as_ref().map(|heard| &heard[window_index]);
             let presses = &presses[first..last.max(first)];
             for (index, &press) in presses.iter().enumerate() {
                 let time = to_output(press.time_ms / 1000.0 - take.keyboard_offset_secs);

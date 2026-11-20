@@ -765,3 +765,47 @@ fn a_split_between_a_modifier_and_its_key_keeps_both_sounds() {
     assert_eq!(key_times(&events, true), [0.98, 1.0]);
     assert_eq!(key_times(&events, false), [1.06, 1.1]);
 }
+
+#[test]
+fn a_repeated_range_sounds_only_the_shortcut_each_place_shows() {
+    let mut project = project(
+        serde_json::json!({
+            "segments": [
+                { "start": 0.0, "end": 2.0, "timescale": 1.0, "recordingSegment": 0 },
+                { "start": 0.0, "end": 2.0, "timescale": 1.0, "recordingSegment": 0 }
+            ],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let keyboard = KeyboardEvents {
+        presses: vec![
+            press("LMeta", 980.0, true),
+            press("K", 1000.0, true),
+            press("K", 1060.0, false),
+            press("LMeta", 1100.0, false),
+        ],
+    };
+    let shortcut: KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
+        "id": "kb-k", "start": 0.9, "end": 2.0, "displayText": "⌘K",
+        "keys": [{ "key": "K", "timeOffset": 100.0 }]
+    }))
+    .unwrap();
+    let other: KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
+        "id": "kb-j", "start": 2.8, "end": 3.6, "displayText": "⌘J",
+        "keys": [{ "key": "J", "timeOffset": 300.0 }]
+    }))
+    .unwrap();
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![shortcut, other];
+    let events = input_sound_events(
+        &project,
+        &[InputSoundTake {
+            keyboard: &keyboard,
+            keyboard_offset_secs: 0.0,
+            clicks: &[],
+        }],
+    );
+    assert_eq!(key_times(&events, true), [0.98, 1.0]);
+    assert_eq!(key_times(&events, false), [1.06, 1.1]);
+}
