@@ -83,6 +83,28 @@ impl Concern {
 
 const LINGER: Duration = Duration::from_secs(3);
 
+/// What macOS says about Cap recording the computer's audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioGrant {
+    Granted,
+    Denied,
+    /// Never answered, or the answer can't be read.
+    Unanswered,
+}
+
+/// Whether the call's audio is missing its permission. Before macOS 27.3 a
+/// tap that never asked raises the system prompt itself, so only a refusal
+/// with a silent tap counts. From 27.3 nothing prompts (the grant is added
+/// with + in System Settings) and a tap without it records silence, so
+/// anything short of a grant means the meeting has only the microphone.
+pub fn system_audio_missing(grant: AudioGrant, settings_only: bool, tap_silent: bool) -> bool {
+    match grant {
+        AudioGrant::Granted => false,
+        AudioGrant::Denied => tap_silent || settings_only,
+        AudioGrant::Unanswered => settings_only,
+    }
+}
+
 /// Everything true about the meeting right now, most urgent first.
 pub fn concerns(active: &ActiveMeeting) -> Vec<Concern> {
     concerns_with(active, false)
@@ -319,6 +341,26 @@ mod tests {
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    #[test]
+    fn call_audio_without_its_grant_is_never_recorded_quietly() {
+        use AudioGrant::*;
+        // Before macOS 27.3: unchanged, a refusal counts once the tap is silent.
+        assert!(!system_audio_missing(Granted, false, true));
+        assert!(system_audio_missing(Denied, false, true));
+        assert!(!system_audio_missing(Denied, false, false));
+        assert!(!system_audio_missing(Unanswered, false, true));
+        // From 27.3 nothing prompts and the tap records silence: no grant,
+        // no call audio, whatever the tap delivers.
+        assert!(!system_audio_missing(Granted, true, true));
+        assert!(system_audio_missing(Denied, true, false));
+        assert!(system_audio_missing(Unanswered, true, false));
+        assert!(system_audio_missing(Unanswered, true, true));
+        // Through the version helper.
+        let settings_only = crate::permissions::version_has_settings_only_grants;
+        assert!(system_audio_missing(Unanswered, settings_only("27.3"), false));
+        assert!(!system_audio_missing(Unanswered, settings_only("27.0.1"), false));
     }
 
     #[test]

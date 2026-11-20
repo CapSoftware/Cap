@@ -434,28 +434,37 @@ impl Global for MeetingsGlobal {}
 
 impl EventEmitter<MeetingEvent> for Meetings {}
 
-// The system audio tap delivers nothing until some app plays sound, so a
-// tap without callbacks is only a fault when the permission was refused.
+// What macOS says about recording the call's audio, read at most every
+// 5 s. `health::system_audio_missing` decides what it means.
 #[cfg(target_os = "macos")]
-fn system_audio_denied() -> bool {
+fn system_audio_grant() -> health::AudioGrant {
     use cap_meeting_platform::{AudioCapturePermission, audio_capture_permission};
-    static CHECKED: std::sync::Mutex<Option<(Instant, bool)>> = std::sync::Mutex::new(None);
+    static CHECKED: std::sync::Mutex<Option<(Instant, health::AudioGrant)>> =
+        std::sync::Mutex::new(None);
     let mut checked = CHECKED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     match *checked {
-        Some((at, denied)) if at.elapsed() < Duration::from_secs(5) => denied,
+        Some((at, grant)) if at.elapsed() < Duration::from_secs(5) => grant,
         _ => {
-            let denied = audio_capture_permission() == AudioCapturePermission::Denied;
-            *checked = Some((Instant::now(), denied));
-            denied
+            let grant = match audio_capture_permission() {
+                AudioCapturePermission::Granted | AudioCapturePermission::NotNeeded => {
+                    health::AudioGrant::Granted
+                }
+                AudioCapturePermission::Denied => health::AudioGrant::Denied,
+                AudioCapturePermission::NotDetermined | AudioCapturePermission::Unknown => {
+                    health::AudioGrant::Unanswered
+                }
+            };
+            *checked = Some((Instant::now(), grant));
+            grant
         }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn system_audio_denied() -> bool {
-    false
+fn system_audio_grant() -> health::AudioGrant {
+    health::AudioGrant::Granted
 }
 
 /// Linux records the speakers through `parec`; without it there is nothing
@@ -2120,8 +2129,9 @@ impl Meetings {
             return;
         };
         let stats = capture.stats();
-        let tap_silent = stats.tap.is_some_and(|t| t.callbacks == 0)
-            && recording.started.elapsed() > NO_TAP_CALLBACKS_AFTER;
+        let settled = recording.started.elapsed() > NO_TAP_CALLBACKS_AFTER;
+        let tap_silent = settled && stats.tap.is_some_and(|t| t.callbacks == 0);
+        let tap_running = stats.tap.is_some();
         let Some(active) = self.active.as_mut() else {
             return;
         };
@@ -2135,7 +2145,15 @@ impl Meetings {
         if let Some(tap) = stats.tap {
             active.system.dropped_batches += tap.dropped;
         }
-        if tap_silent && !active.system.health.is_error() && system_audio_denied() {
+        if settled
+            && tap_running
+            && !active.system.health.is_error()
+            && health::system_audio_missing(
+                system_audio_grant(),
+                crate::permissions::grants_are_settings_only(),
+                tap_silent,
+            )
+        {
             active.system.health = SourceHealth::Error(HealthIssue::MissingPermission);
         }
     }
