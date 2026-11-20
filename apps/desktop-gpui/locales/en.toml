@@ -3088,6 +3088,7 @@ split_screen = "Split Screen"
 [editor.timeline.segment]
 audio = { text = "Audio", context = "Name of an audio segment that has none." }
 automatic_zoom = "Automatic Zoom"
+canvas = "Canvas"
 caption = { text = "Caption", context = "Caption segment with no text yet." }
 clip = "Clip"
 cursor_hidden = "Cursor hidden"
@@ -3211,6 +3212,17 @@ directory_failed = "Failed to create audio directory: {error}"
 no_extension = "Audio file has no extension"
 not_found = "Audio file not found: {path}"
 unsupported = { text = "Unsupported audio format: .{extension}", context = "{extension} is a file extension such as ogg." }
+
+[editor.window.blank_start]
+body = "Pick something to add, or drop files here."
+clips = "Add clips"
+drop_failed = "That sound file could not be added"
+drop_unsupported = "Drop a video, image or sound file to add it"
+image = "Add an image"
+keys = "Type keys"
+music = "Add music"
+text_item = "Add text"
+title = { text = "Start your video", context = "Heading over the actions shown in a new, empty project." }
 
 [editor.window.busy]
 clip_import = "Wait for the clip import to finish before closing or deleting this recording."

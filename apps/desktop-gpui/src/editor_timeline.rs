@@ -1468,6 +1468,29 @@ pub struct TimelineModel {
 }
 
 impl TimelineModel {
+    /// A blank project's first clip is the canvas everything sits on, so it
+    /// is named for that unless the user renamed it.
+    pub fn label_blank_canvas(&mut self, timeline: Option<&TimelineConfiguration>) {
+        let Some(timeline) = timeline else {
+            return;
+        };
+        for (segment, config) in self.clips.iter_mut().zip(&timeline.segments) {
+            let renamed = config
+                .name
+                .as_deref()
+                .is_some_and(|name| !name.trim().is_empty());
+            if let SegmentDetail::Clip {
+                name,
+                recording_clip: 0,
+                ..
+            } = &mut segment.detail
+                && !renamed
+            {
+                *name = SharedString::new_static(tr::editor::timeline::segment::canvas());
+            }
+        }
+    }
+
     pub fn track_height(&self) -> f32 {
         TRACK_HEIGHT
     }

@@ -3086,6 +3086,7 @@ split_screen = "分割画面"
 [editor.timeline.segment]
 audio = "音声"
 automatic_zoom = "自動ズーム"
+canvas = "キャンバス"
 caption = "字幕"
 clip = "クリップ"
 cursor_hidden = "カーソル非表示"
@@ -3209,6 +3210,17 @@ directory_failed = "音声フォルダを作成できませんでした：{error
 no_extension = "音声ファイルに拡張子がありません"
 not_found = "音声ファイルが見つかりません：{path}"
 unsupported = "対応していない音声形式です：.{extension}"
+
+[editor.window.blank_start]
+body = "追加するものを選ぶか、ここにファイルをドロップしてください。"
+clips = "クリップを追加"
+drop_failed = "この音声ファイルを追加できませんでした"
+drop_unsupported = "動画、画像、音声ファイルをドロップして追加します"
+image = "画像を追加"
+keys = "キーを入力"
+music = "音楽を追加"
+text_item = "テキストを追加"
+title = "動画をはじめる"
 
 [editor.window.busy]
 clip_import = "この録画を閉じるか削除する前に、クリップの読み込みが終わるまでお待ちください。"

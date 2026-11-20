@@ -1028,6 +1028,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::timeline::segment::caption(), "Caption"),
         (tr::editor::timeline::segment::clip(), "Clip"),
+        (tr::editor::timeline::segment::canvas(), "Canvas"),
         (
             tr::editor::timeline::segment::cursor_hidden(),
             "Cursor hidden",
@@ -1080,6 +1081,24 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::window::audio_segment_changed(),
             "This audio segment changed. Select it and choose a replacement again.",
+        ),
+        (tr::editor::window::blank_start::title(), "Start your video"),
+        (
+            tr::editor::window::blank_start::body(),
+            "Pick something to add, or drop files here.",
+        ),
+        (tr::editor::window::blank_start::clips(), "Add clips"),
+        (tr::editor::window::blank_start::keys(), "Type keys"),
+        (tr::editor::window::blank_start::text_item(), "Add text"),
+        (tr::editor::window::blank_start::music(), "Add music"),
+        (tr::editor::window::blank_start::image(), "Add an image"),
+        (
+            tr::editor::window::blank_start::drop_failed(),
+            "That sound file could not be added",
+        ),
+        (
+            tr::editor::window::blank_start::drop_unsupported(),
+            "Drop a video, image or sound file to add it",
         ),
         (
             tr::editor::window::busy::clip_import(),

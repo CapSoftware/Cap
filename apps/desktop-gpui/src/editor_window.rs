@@ -79,6 +79,7 @@ use crate::{
     ui,
 };
 
+mod blank_start;
 mod frame;
 mod loading;
 mod markers;
@@ -1138,6 +1139,7 @@ enum EditorSection {
     Timeline,
     Transcript,
     PanelSwitcher,
+    BlankStart,
 }
 
 pub(crate) struct EditorSectionView {
@@ -1211,6 +1213,7 @@ impl Render for EditorSectionView {
                 }
                 EditorSection::Transcript => editor.render_transcript(window, cx),
                 EditorSection::PanelSwitcher => editor.render_panel_switcher(cx).into_any_element(),
+                EditorSection::BlankStart => editor.render_blank_start(window, cx),
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
@@ -1855,6 +1858,11 @@ pub struct EditorWindow {
     transport_controls: Entity<EditorSectionView>,
     sidebar_view: Entity<EditorSectionView>,
     pub(crate) sidebar_rail_view: Entity<EditorSectionView>,
+    /// The blank slate a new blank project opens on, a section of its own so
+    /// its hover fades repaint nothing else.
+    blank_start_view: Entity<EditorSectionView>,
+    blank_start: blank_start::BlankStart,
+    blank_panel: blank_start::BlankPanel,
     timeline_view: Entity<EditorSectionView>,
     pub(crate) frame_layout: Option<FrameLayout>,
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
@@ -2637,6 +2645,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
         });
+        let blank_start_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::BlankStart, cx)
+        });
         let sidebar_rail_view = cx.new({
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::SidebarRail, cx)
@@ -2686,6 +2698,9 @@ impl EditorWindow {
             transport_controls,
             sidebar_view,
             sidebar_rail_view,
+            blank_start_view,
+            blank_start: blank_start::BlankStart::default(),
+            blank_panel: blank_start::BlankPanel::default(),
             timeline_view,
             frame_layout: None,
             instance: None,
@@ -2938,6 +2953,7 @@ impl EditorWindow {
         self.transcript.dirty = true;
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
+        self.refresh_blank_start(true);
         self.rebuild_timeline();
         // The sidebar's own signals are seeded from the config the instance
         // actually loaded, not the pre-flight's: `backgroundSourceTab`'s
@@ -2966,6 +2982,11 @@ impl EditorWindow {
             &self.tracks,
             platform.as_ref(),
         );
+        self.refresh_blank_start(false);
+        if self.summary().is_some_and(|summary| summary.blank) {
+            self.timeline
+                .label_blank_canvas(self.project.timeline.as_ref());
+        }
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
         self.timeline.imported_waveforms = imported;
@@ -4264,6 +4285,9 @@ impl EditorWindow {
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.blank_start_shown() {
+            return;
+        }
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
                 let seek = self.is_at_end().then_some(0.0);
@@ -12392,6 +12416,8 @@ impl EditorWindow {
     /// `accent-2 -> accent` gradient with a 1px top highlight.
     fn render_export_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.theme.editor;
+        // A blank slate has nothing in it to export yet.
+        let exportable = self.project_ready() && !self.blank_start_shown();
         let gradient = |top: gpui::Rgba, bottom: gpui::Rgba| {
             gpui::linear_gradient(
                 180.,
@@ -12413,8 +12439,8 @@ impl EditorWindow {
             .flex_none()
             .overflow_hidden()
             .rounded(px(8.))
-            .when(self.project_ready(), |button| button.cursor_pointer())
-            .when(!self.project_ready(), |button| button.opacity(0.5))
+            .when(exportable, |button| button.cursor_pointer())
+            .when(!exportable, |button| button.opacity(0.5))
             .bg(gradient(editor.accent_2, editor.accent))
             .hover(move |style| {
                 style.bg(gradient(
@@ -12448,9 +12474,9 @@ impl EditorWindow {
                     .text_color(gpui::white()),
             )
             .child(tr::editor::window::header::export())
-            .when(self.project_ready(), |button| {
+            .when(exportable, |button| {
                 button.on_click(cx.listener(|this, _, window, cx| {
-                    if this.project_ready() {
+                    if this.project_ready() && !this.blank_start_shown() {
                         this.open_export(window, cx);
                     }
                 }))
@@ -12463,20 +12489,22 @@ impl EditorWindow {
     /// transport, with no rule between them.
     fn render_player(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let panel_bounds = self.player_panel_bounds.clone();
-        div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| panel_bounds.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
+        let player = div().relative().flex().flex_col().flex_1().min_h_0().child(
+            gpui::canvas(
+                move |bounds, _, _| panel_bounds.set(Some(bounds)),
+                |_, _, _, _| {},
             )
+            .absolute()
+            .inset_0(),
+        );
+        // A new blank project is a blank slate until something is added:
+        // nothing plays and there is no frame to show yet.
+        if self.blank_start_shown() && self.project_ready() {
+            return player
+                .children(self.render_blank_start_layer(cx))
+                .children(self.render_notice());
+        }
+        player
             .child(
                 self.toolbar.clone().cached(
                     StyleRefinement::default()
@@ -12490,6 +12518,7 @@ impl EditorWindow {
                     .clone()
                     .cached(StyleRefinement::default().w_full().h(px(PLAYER_BAR_HEIGHT))),
             )
+            .children(self.render_blank_start_layer(cx))
             .children(self.render_notice())
     }
 
@@ -13347,6 +13376,9 @@ impl EditorWindow {
                 })
                 .into_any_element();
         }
+        if self.blank_start_shown() {
+            return self.render_blank_timeline(viewport_width, cx);
+        }
         let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
 
@@ -13390,7 +13422,7 @@ impl EditorWindow {
 
         // The card itself is the root shell's; this is its inside, at the
         // brief's `10px 12px 12px` less the hairline the card already draws.
-        div()
+        let timeline = div()
             .size_full()
             .min_h_0()
             .relative()
@@ -13510,8 +13542,19 @@ impl EditorWindow {
                     as f32;
                 x.is_finite()
                     .then(|| render_split_preview(&theme, x, true, false))
-            }))
-            .into_any_element()
+            }));
+        if self.blank_start_leaving(cx).is_some() {
+            return div()
+                .size_full()
+                .child(timeline)
+                .with_animation(
+                    "timeline-after-blank-start",
+                    Animation::new(Duration::from_millis(260)),
+                    |timeline, progress| timeline.opacity(1. - (1. - progress).powi(3)),
+                )
+                .into_any_element();
+        }
+        timeline.into_any_element()
     }
 
     /// The 26px header strip (`TL/index.tsx:1220-1245`): the ruler, the "Add
@@ -14656,8 +14699,11 @@ impl Render for EditorWindow {
                                     // the panel is one card whatever its tab,
                                     // at one width, so a switch never moves
                                     // the player.
-                                    .child(self.render_panel_grip(cx))
-                                    .child(self.render_side_panel(viewport_width, window)),
+                                    .children(self.render_side_panel_slot(
+                                        viewport_width,
+                                        window,
+                                        cx,
+                                    )),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain

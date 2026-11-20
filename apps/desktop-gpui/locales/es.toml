@@ -3086,6 +3086,7 @@ split_screen = "Pantalla dividida"
 [editor.timeline.segment]
 audio = "Audio"
 automatic_zoom = "Zoom automático"
+canvas = "Lienzo"
 caption = "Subtítulo"
 clip = "Clip"
 cursor_hidden = "Cursor oculto"
@@ -3209,6 +3210,17 @@ directory_failed = "No se pudo crear la carpeta de audio: {error}"
 no_extension = "El archivo de audio no tiene extensión"
 not_found = "No se encontró el archivo de audio: {path}"
 unsupported = "Formato de audio no compatible: .{extension}"
+
+[editor.window.blank_start]
+body = "Elige qué añadir, o suelta archivos aquí."
+clips = "Añadir clips"
+drop_failed = "No se pudo añadir ese archivo de audio"
+drop_unsupported = "Suelta un vídeo, una imagen o un archivo de audio para añadirlo"
+image = "Añadir una imagen"
+keys = "Escribir teclas"
+music = "Añadir música"
+text_item = "Añadir texto"
+title = "Empieza tu vídeo"
 
 [editor.window.busy]
 clip_import = "Espera a que termine la importación del clip antes de cerrar o eliminar esta grabación."

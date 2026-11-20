@@ -3086,6 +3086,7 @@ split_screen = "स्प्लिट स्क्रीन"
 [editor.timeline.segment]
 audio = "ऑडियो"
 automatic_zoom = "ऑटोमैटिक ज़ूम"
+canvas = "कैनवस"
 caption = "कैप्शन"
 clip = "क्लिप"
 cursor_hidden = "कर्सर छिपा है"
@@ -3209,6 +3210,17 @@ directory_failed = "ऑडियो फ़ोल्डर नहीं बन �
 no_extension = "ऑडियो फ़ाइल का कोई एक्सटेंशन नहीं है"
 not_found = "ऑडियो फ़ाइल नहीं मिली: {path}"
 unsupported = "असमर्थित ऑडियो फ़ॉर्मैट: .{extension}"
+
+[editor.window.blank_start]
+body = "कुछ जोड़ने के लिए चुनें, या फ़ाइलें यहाँ छोड़ें।"
+clips = "क्लिप जोड़ें"
+drop_failed = "वह ऑडियो फ़ाइल नहीं जोड़ी जा सकी"
+drop_unsupported = "जोड़ने के लिए वीडियो, इमेज या ऑडियो फ़ाइल छोड़ें"
+image = "इमेज जोड़ें"
+keys = "की टाइप करें"
+music = "म्यूज़िक जोड़ें"
+text_item = "टेक्स्ट जोड़ें"
+title = "अपना वीडियो शुरू करें"
 
 [editor.window.busy]
 clip_import = "इस रिकॉर्डिंग को बंद करने या हटाने से पहले क्लिप इम्पोर्ट पूरा होने दें।"

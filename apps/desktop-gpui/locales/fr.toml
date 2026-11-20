@@ -3086,6 +3086,7 @@ split_screen = "Écran partagé"
 [editor.timeline.segment]
 audio = "Audio"
 automatic_zoom = "Zoom automatique"
+canvas = "Canevas"
 caption = "Sous-titre"
 clip = "Clip"
 cursor_hidden = "Curseur masqué"
@@ -3209,6 +3210,17 @@ directory_failed = "Impossible de créer le dossier audio : {error}"
 no_extension = "Le fichier audio n'a pas d'extension"
 not_found = "Fichier audio introuvable : {path}"
 unsupported = "Format audio non pris en charge : .{extension}"
+
+[editor.window.blank_start]
+body = "Choisissez quoi ajouter, ou déposez des fichiers ici."
+clips = "Ajouter des clips"
+drop_failed = "Impossible d'ajouter ce fichier audio"
+drop_unsupported = "Déposez une vidéo, une image ou un fichier audio pour l'ajouter"
+image = "Ajouter une image"
+keys = "Taper des touches"
+music = "Ajouter de la musique"
+text_item = "Ajouter du texte"
+title = "Commencez votre vidéo"
 
 [editor.window.busy]
 clip_import = "Attendez la fin de l'importation du clip avant de fermer ou de supprimer cet enregistrement."

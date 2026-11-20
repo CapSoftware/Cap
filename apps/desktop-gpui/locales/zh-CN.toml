@@ -3086,6 +3086,7 @@ split_screen = "分屏"
 [editor.timeline.segment]
 audio = "音频"
 automatic_zoom = "自动缩放"
+canvas = "画布"
 caption = "字幕"
 clip = "片段"
 cursor_hidden = "已隐藏光标"
@@ -3209,6 +3210,17 @@ directory_failed = "无法创建音频文件夹：{error}"
 no_extension = "音频文件没有扩展名"
 not_found = "找不到音频文件：{path}"
 unsupported = "不支持的音频格式：.{extension}"
+
+[editor.window.blank_start]
+body = "选择要添加的内容，或将文件拖放到这里。"
+clips = "添加片段"
+drop_failed = "无法添加该音频文件"
+drop_unsupported = "拖放视频、图片或音频文件即可添加"
+image = "添加图片"
+keys = "输入按键"
+music = "添加音乐"
+text_item = "添加文字"
+title = "开始制作视频"
 
 [editor.window.busy]
 clip_import = "请等待片段导入完成后再关闭或删除此录制。"

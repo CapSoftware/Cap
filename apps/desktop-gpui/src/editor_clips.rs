@@ -915,12 +915,10 @@ impl EditorWindow {
                         .disabled(importing)
                         .pressed(self.clips.import_menu.is_some())
                         .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, _window, cx| {
-                            if this.clips.importing {
-                                return;
-                            }
-                            this.clips.import_menu =
-                                Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
-                            cx.notify();
+                            this.open_clips_import_menu(
+                                bounds.bottom_left() + gpui::point(px(0.), px(4.)),
+                                cx,
+                            );
                         })),
                 ),
         )
@@ -1396,6 +1394,15 @@ impl EditorWindow {
         .detach();
     }
 
+    /// The import menu: an existing recording or an MP4, opened at `origin`.
+    pub(crate) fn open_clips_import_menu(&mut self, origin: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.clips.importing {
+            return;
+        }
+        self.clips.import_menu = Some(origin);
+        cx.notify();
+    }
+
     pub(crate) fn render_clips_overlays(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut overlays = Vec::new();
         if let Some(menu) = self.render_clips_import_menu(cx) {
@@ -1594,7 +1601,7 @@ impl EditorWindow {
     /// config (the `setProjectConfig` call -- the import merges into what is
     /// on disk), run the import off-thread, then reload the editor the way
     /// `window.location.reload()` does.
-    fn import_recording_path(
+    pub(crate) fn import_recording_path(
         &mut self,
         source: PathBuf,
         window: &mut Window,
