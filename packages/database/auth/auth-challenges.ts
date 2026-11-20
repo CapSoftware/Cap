@@ -11,12 +11,15 @@ export type AuthChallengePurpose =
 	| "passkey_step_up"
 	| "passkey_registration"
 	| "step_up_email_code"
+	| "step_up_email_code_sent"
 	| "step_up_grant";
 
 export const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 export const STEP_UP_CODE_TTL_MS = 10 * 60 * 1000;
 export const STEP_UP_GRANT_TTL_MS = 5 * 60 * 1000;
-export const STEP_UP_CODE_MAX_ATTEMPTS = 5;
+export const STEP_UP_CODE_MAX_ATTEMPTS = 3;
+export const STEP_UP_CODES_PER_DAY = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
 export const STEP_UP_CODE_RESEND_COOLDOWN_MS = 30 * 1000;
 
 const getAffectedRows = (result: unknown) => {
@@ -58,7 +61,7 @@ async function deleteExpiredChallenges() {
 export async function storeChallenge(input: {
 	purpose: Exclude<
 		AuthChallengePurpose,
-		"step_up_email_code" | "step_up_grant"
+		"step_up_email_code" | "step_up_email_code_sent" | "step_up_grant"
 	>;
 	challenge: string;
 	userId: User.UserId | null;
@@ -82,7 +85,7 @@ export async function storeChallenge(input: {
 export async function consumeChallenge(input: {
 	purpose: Exclude<
 		AuthChallengePurpose,
-		"step_up_email_code" | "step_up_grant"
+		"step_up_email_code" | "step_up_email_code_sent" | "step_up_grant"
 	>;
 	challenge: string;
 	userId: User.UserId | null;
@@ -108,7 +111,8 @@ export async function consumeChallenge(input: {
 
 export type StepUpCodeIssue =
 	| { status: "issued"; code: string }
-	| { status: "cooldown"; retryAfterSeconds: number };
+	| { status: "cooldown"; retryAfterSeconds: number }
+	| { status: "daily_limit" };
 
 export async function issueStepUpCode(
 	userId: User.UserId,
@@ -162,6 +166,27 @@ export async function issueStepUpCode(
 				),
 			);
 		}
+		const sentToday = await tx
+			.select({ id: authChallenges.id })
+			.from(authChallenges)
+			.where(
+				and(
+					eq(authChallenges.userId, userId),
+					eq(authChallenges.purpose, "step_up_email_code_sent"),
+					gt(authChallenges.expiresAt, new Date()),
+				),
+			);
+		if (sentToday.length >= STEP_UP_CODES_PER_DAY) {
+			return { status: "daily_limit" };
+		}
+		const markerId = nanoId();
+		await tx.insert(authChallenges).values({
+			id: markerId,
+			userId,
+			purpose: "step_up_email_code_sent",
+			secretHash: hashChallenge("step_up_email_code_sent", `${markerId}:${id}`),
+			expiresAt: new Date(Date.now() + DAY_MS),
+		});
 		await tx.insert(authChallenges).values({
 			id,
 			userId,
@@ -207,10 +232,7 @@ export async function verifyStepUpCode(userId: User.UserId, code: string) {
 				gt(authChallenges.expiresAt, new Date()),
 			),
 		);
-	if (getAffectedRows(counted) !== 1) {
-		await db().delete(authChallenges).where(eq(authChallenges.id, row.id));
-		return false;
-	}
+	if (getAffectedRows(counted) !== 1) return false;
 
 	if (!sameHash(row.secretHash, hashStepUpCode(row.id, normalizedCode))) {
 		return false;

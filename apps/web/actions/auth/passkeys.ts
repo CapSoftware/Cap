@@ -73,6 +73,7 @@ export async function sendSecurityCode(): Promise<
 	}
 	const issued = await issueStepUpCode(user.id);
 	if (issued.status === "cooldown") return issued;
+	if (issued.status === "daily_limit") return { status: "rate_limited" };
 	await sendAccountSecurityCode(user.email, issued.code);
 	return { status: "sent" };
 }
