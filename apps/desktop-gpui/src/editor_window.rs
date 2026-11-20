@@ -1134,6 +1134,7 @@ enum EditorSection {
     Toolbar,
     Transport,
     Sidebar,
+    SidebarRail,
     Timeline,
     Transcript,
     PanelSwitcher,
@@ -1184,16 +1185,32 @@ impl Render for EditorSectionView {
                             editor.render_sidebar(cx).into_any_element()
                         })
                     };
-                    loading::reveal(
+                    // The placeholder still covers the rail, which draws above
+                    // this section.
+                    let rail = if editor.sidebar_rail_shown() {
+                        SIDEBAR_TAB_BAR_HEIGHT
+                    } else {
+                        0.
+                    };
+                    loading::reveal_from(
                         "editor-sidebar-ready",
                         sidebar,
                         editor.render_preparing_sidebar(false),
+                        rail,
                     )
                 }
-                EditorSection::Transcript => editor.render_transcript(window, cx),
-                EditorSection::PanelSwitcher => {
-                    editor.render_panel_switcher(cx).into_any_element()
+                EditorSection::SidebarRail => {
+                    if editor.sidebar_rail_shown() {
+                        div()
+                            .size_full()
+                            .child(editor.render_sidebar_rail(cx))
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }
                 }
+                EditorSection::Transcript => editor.render_transcript(window, cx),
+                EditorSection::PanelSwitcher => editor.render_panel_switcher(cx).into_any_element(),
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
@@ -1837,6 +1854,7 @@ pub struct EditorWindow {
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
     sidebar_view: Entity<EditorSectionView>,
+    pub(crate) sidebar_rail_view: Entity<EditorSectionView>,
     timeline_view: Entity<EditorSectionView>,
     pub(crate) frame_layout: Option<FrameLayout>,
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
@@ -2619,6 +2637,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
         });
+        let sidebar_rail_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::SidebarRail, cx)
+        });
         let transcript_view = cx.new({
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Transcript, cx)
@@ -2663,6 +2685,7 @@ impl EditorWindow {
             toolbar,
             transport_controls,
             sidebar_view,
+            sidebar_rail_view,
             timeline_view,
             frame_layout: None,
             instance: None,
@@ -3647,6 +3670,12 @@ impl EditorWindow {
             && self.preparing_consumer.is_none()
             && self.ordinary_handoff_frame.is_none()
             && self.preparing_candidate_frame.is_none()
+    }
+
+    /// Whether the Style tab's rail is up: the preparing placeholder draws a
+    /// rail of its own, and Clips and Transcript have none.
+    pub(crate) fn sidebar_rail_shown(&self) -> bool {
+        self.panel_tab() == crate::editor_side_panel::PanelTab::Style && self.visual_ready()
     }
 
     pub(crate) fn project_ready(&self) -> bool {

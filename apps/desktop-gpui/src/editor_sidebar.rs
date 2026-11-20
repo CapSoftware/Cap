@@ -2709,9 +2709,10 @@ const GRADIENT_PREVIEW_WIDTH: f32 = CONTENT_WIDTH;
 const GRADIENT_PREVIEW_HEIGHT: f32 = 112.;
 
 impl EditorWindow {
-    pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The tab rail, drawn by its own section above [`Self::render_sidebar`].
+    pub(crate) fn render_sidebar_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let selection = self.sidebar_selection().cloned();
+        let selection = self.sidebar_selection();
         let selected_tab = self.sidebar.tab;
 
         let items = SidebarTab::ALL
@@ -2732,14 +2733,19 @@ impl EditorWindow {
             })
             .collect();
 
-        let rail = ui::TabRail::editor(&theme, "sidebar-tabs", self.panel_bg(), items)
+        ui::TabRail::editor(&theme, "sidebar-tabs", self.panel_bg(), items)
             .height(px(crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT))
             .on_select(cx.listener(|this, index: &usize, window, cx| {
                 this.select_sidebar_tab(*index, window, cx);
-            }));
+            }))
+    }
 
-        // The panel card around it, and the switcher above the rail, are the
-        // root's (`crate::editor_side_panel`).
+    pub(crate) fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let selection = self.sidebar_selection().cloned();
+
+        // The panel card around it, and the switcher and the rail above it,
+        // are the root's (`crate::editor_side_panel`).
         div().size_full().flex().flex_col().min_h_0().child(
             div()
                 .flex()
@@ -2748,7 +2754,6 @@ impl EditorWindow {
                 .min_h_0()
                 .h_full()
                 .overflow_hidden()
-                .child(rail)
                 .children(self.sidebar.image_import_error.as_ref().map(|error| {
                     div()
                         .p(px(12.))

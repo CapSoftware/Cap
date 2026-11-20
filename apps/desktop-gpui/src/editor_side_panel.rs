@@ -556,6 +556,17 @@ impl EditorWindow {
             .overflow_hidden()
             .relative()
             .child(self.panel_switcher_view.clone())
+            // A section of its own, so its hover fades repaint the rail
+            // without rebuilding the tab under it.
+            .child(self.sidebar_rail_view.clone().cached(
+                StyleRefinement::default().w_full().flex_none().h(px(
+                    if self.sidebar_rail_shown() {
+                        SIDEBAR_TAB_BAR_HEIGHT
+                    } else {
+                        0.
+                    },
+                )),
+            ))
             .child(self.cached_panel_body(
                 tab == PanelTab::Transcript,
                 StyleRefinement::default().w_full().flex_1().min_h_0(),
