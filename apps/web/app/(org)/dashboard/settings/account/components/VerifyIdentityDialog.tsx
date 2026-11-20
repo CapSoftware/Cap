@@ -177,6 +177,7 @@ export function VerifyIdentityDialog({
 					<form
 						onSubmit={(event) => {
 							event.preventDefault();
+							event.stopPropagation();
 							if (code.length === 6) verifyCode();
 						}}
 					>

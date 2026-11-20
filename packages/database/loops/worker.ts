@@ -39,6 +39,9 @@ import {
 import { profileFingerprint } from "./sync-policy";
 
 const claimBatchSize = 50;
+// A changed address stays held until it is reconciled in Loops, so retrying
+// it hourly only spends API calls; any new profile change still re-queues it.
+const heldIdentityRecheckMs = 30 * 24 * 60 * 60_000;
 
 export async function syncLoopsContact(
 	api: LoopsClient,
@@ -328,7 +331,12 @@ export async function runLoopsSync(customerCopy: CustomerCopy) {
 						job,
 						token,
 						reason,
-						new Date(Date.now() + retryDelay(job.failures)),
+						new Date(
+							Date.now() +
+								(reason === "identity_change_held"
+									? heldIdentityRecheckMs
+									: retryDelay(job.failures)),
+						),
 					);
 					console.error("Loops sync deferred", { userId: job.userId, reason });
 					return error instanceof LoopsRequestError &&
