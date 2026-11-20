@@ -452,9 +452,8 @@ fn system_audio_grant() -> health::AudioGrant {
                     health::AudioGrant::Granted
                 }
                 AudioCapturePermission::Denied => health::AudioGrant::Denied,
-                AudioCapturePermission::NotDetermined | AudioCapturePermission::Unknown => {
-                    health::AudioGrant::Unanswered
-                }
+                AudioCapturePermission::NotDetermined => health::AudioGrant::NotDetermined,
+                AudioCapturePermission::Unknown => health::AudioGrant::Unknown,
             };
             *checked = Some((Instant::now(), grant));
             grant
@@ -2129,9 +2128,14 @@ impl Meetings {
             return;
         };
         let stats = capture.stats();
-        let settled = recording.started.elapsed() > NO_TAP_CALLBACKS_AFTER;
-        let tap_silent = settled && stats.tap.is_some_and(|t| t.callbacks == 0);
-        let tap_running = stats.tap.is_some();
+        // What the tap has delivered, once it has run long enough to judge.
+        let heard = stats
+            .tap
+            .filter(|_| recording.started.elapsed() > NO_TAP_CALLBACKS_AFTER)
+            .map(|tap| health::TapHeard {
+                callbacks: tap.callbacks > 0,
+                sound: stats.system.is_some_and(|s| s.sound_at_ms > 0),
+            });
         let Some(active) = self.active.as_mut() else {
             return;
         };
@@ -2145,16 +2149,15 @@ impl Meetings {
         if let Some(tap) = stats.tap {
             active.system.dropped_batches += tap.dropped;
         }
-        if settled
-            && tap_running
-            && !active.system.health.is_error()
-            && health::system_audio_missing(
+        if let Some(health) = heard.and_then(|heard| {
+            health::system_permission_health(
+                &active.system.health,
                 system_audio_grant(),
                 crate::permissions::grants_are_settings_only(),
-                tap_silent,
+                Some(heard),
             )
-        {
-            active.system.health = SourceHealth::Error(HealthIssue::MissingPermission);
+        }) {
+            active.system.health = health;
         }
     }
 

@@ -88,21 +88,54 @@ const LINGER: Duration = Duration::from_secs(3);
 pub enum AudioGrant {
     Granted,
     Denied,
-    /// Never answered, or the answer can't be read.
-    Unanswered,
+    /// Never answered.
+    NotDetermined,
+    /// The answer can't be read.
+    Unknown,
+}
+
+/// What the computer audio tap has delivered since the meeting began.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TapHeard {
+    /// Any callback at all.
+    pub callbacks: bool,
+    /// Any sample above digital silence.
+    pub sound: bool,
 }
 
 /// Whether the call's audio is missing its permission. Before macOS 27.3 a
 /// tap that never asked raises the system prompt itself, so only a refusal
-/// with a silent tap counts. From 27.3 nothing prompts (the grant is added
-/// with + in System Settings) and a tap without it records silence, so
-/// anything short of a grant means the meeting has only the microphone.
-pub fn system_audio_missing(grant: AudioGrant, settings_only: bool, tap_silent: bool) -> bool {
+/// with a tap that never called back counts. From 27.3 nothing prompts (the
+/// grant is added with + in System Settings) and a tap without it records
+/// exact zeros, so anything short of a grant counts while the tap has heard
+/// no sound. The grant alone never decides it there: this process's copy can
+/// lag a grant made in System Settings, and Unknown means it couldn't be read.
+pub fn system_audio_missing(grant: AudioGrant, settings_only: bool, tap: TapHeard) -> bool {
     match grant {
         AudioGrant::Granted => false,
-        AudioGrant::Denied => tap_silent || settings_only,
-        AudioGrant::Unanswered => settings_only,
+        _ if settings_only => !tap.sound,
+        AudioGrant::Denied => !tap.callbacks,
+        AudioGrant::NotDetermined | AudioGrant::Unknown => false,
     }
+}
+
+/// The computer audio's health after this look at its grant and tap, when it
+/// changes: the permission line goes up when the audio is missing and comes
+/// down once the tap delivers sound. `None` while the tap has not run long
+/// enough to judge, or when nothing changes.
+pub fn system_permission_health(
+    current: &SourceHealth,
+    grant: AudioGrant,
+    settings_only: bool,
+    tap: Option<TapHeard>,
+) -> Option<SourceHealth> {
+    let tap = tap?;
+    let flagged = *current == SourceHealth::Error(HealthIssue::MissingPermission);
+    if flagged {
+        return tap.sound.then_some(SourceHealth::Ok);
+    }
+    (!current.is_error() && system_audio_missing(grant, settings_only, tap))
+        .then_some(SourceHealth::Error(HealthIssue::MissingPermission))
 }
 
 /// Everything true about the meeting right now, most urgent first.
@@ -343,24 +376,100 @@ mod tests {
         Duration::from_secs(n)
     }
 
+    const SILENT: TapHeard = TapHeard {
+        callbacks: false,
+        sound: false,
+    };
+    const ZEROS: TapHeard = TapHeard {
+        callbacks: true,
+        sound: false,
+    };
+    const LIVE: TapHeard = TapHeard {
+        callbacks: true,
+        sound: true,
+    };
+
     #[test]
-    fn call_audio_without_its_grant_is_never_recorded_quietly() {
+    fn before_macos_27_3_only_a_refusal_with_a_dead_tap_counts() {
         use AudioGrant::*;
-        // Before macOS 27.3: unchanged, a refusal counts once the tap is silent.
-        assert!(!system_audio_missing(Granted, false, true));
-        assert!(system_audio_missing(Denied, false, true));
-        assert!(!system_audio_missing(Denied, false, false));
-        assert!(!system_audio_missing(Unanswered, false, true));
-        // From 27.3 nothing prompts and the tap records silence: no grant,
-        // no call audio, whatever the tap delivers.
-        assert!(!system_audio_missing(Granted, true, true));
-        assert!(system_audio_missing(Denied, true, false));
-        assert!(system_audio_missing(Unanswered, true, false));
-        assert!(system_audio_missing(Unanswered, true, true));
-        // Through the version helper.
-        let settings_only = crate::permissions::version_has_settings_only_grants;
-        assert!(system_audio_missing(Unanswered, settings_only("27.3"), false));
-        assert!(!system_audio_missing(Unanswered, settings_only("27.0.1"), false));
+        assert!(system_audio_missing(Denied, false, SILENT));
+        assert!(!system_audio_missing(Denied, false, ZEROS));
+        assert!(!system_audio_missing(Granted, false, SILENT));
+        assert!(!system_audio_missing(NotDetermined, false, SILENT));
+        assert!(!system_audio_missing(Unknown, false, SILENT));
+    }
+
+    #[test]
+    fn from_macos_27_3_no_grant_and_no_sound_is_missing_call_audio() {
+        use AudioGrant::*;
+        // An ungranted tap records exact zeros, with or without callbacks.
+        assert!(system_audio_missing(NotDetermined, true, ZEROS));
+        assert!(system_audio_missing(NotDetermined, true, SILENT));
+        assert!(system_audio_missing(Denied, true, ZEROS));
+        assert!(system_audio_missing(Unknown, true, ZEROS));
+        assert!(!system_audio_missing(Granted, true, ZEROS));
+    }
+
+    #[test]
+    fn a_tap_that_hears_sound_outweighs_a_stale_or_unreadable_grant() {
+        use AudioGrant::*;
+        // Granted in System Settings while Cap runs: the process's copy can
+        // still say "not determined" until a relaunch.
+        assert!(!system_audio_missing(NotDetermined, true, LIVE));
+        // The TCC lookup failed.
+        assert!(!system_audio_missing(Unknown, true, LIVE));
+        assert!(!system_audio_missing(Denied, true, LIVE));
+    }
+
+    #[test]
+    fn the_permission_line_follows_the_tap_on_macos_27_3() {
+        use AudioGrant::*;
+        let missing = SourceHealth::Error(HealthIssue::MissingPermission);
+        // Not judged before the tap has run a moment.
+        assert_eq!(
+            system_permission_health(&SourceHealth::Ok, NotDetermined, true, None),
+            None
+        );
+        // Up while only zeros arrive.
+        assert_eq!(
+            system_permission_health(&SourceHealth::Ok, NotDetermined, true, Some(ZEROS)),
+            Some(missing.clone())
+        );
+        assert_eq!(
+            system_permission_health(&missing, NotDetermined, true, Some(ZEROS)),
+            None
+        );
+        // Down once real sound arrives, whatever the grant copy says.
+        assert_eq!(
+            system_permission_health(&missing, NotDetermined, true, Some(LIVE)),
+            Some(SourceHealth::Ok)
+        );
+        // Never up while sound flows.
+        assert_eq!(
+            system_permission_health(&SourceHealth::Ok, Unknown, true, Some(LIVE)),
+            None
+        );
+        // Another fault is left alone.
+        let failed = SourceHealth::Error(HealthIssue::Failed("x".into()));
+        assert_eq!(
+            system_permission_health(&failed, NotDetermined, true, Some(ZEROS)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_version_decides_which_rule_applies() {
+        use AudioGrant::*;
+        let on = |version: &str, grant, tap| {
+            system_audio_missing(
+                grant,
+                crate::permissions::version_has_settings_only_grants(version),
+                tap,
+            )
+        };
+        assert!(on("27.3", NotDetermined, ZEROS));
+        assert!(!on("27.0.1", NotDetermined, ZEROS));
+        assert!(on("27.0.1", Denied, SILENT));
     }
 
     #[test]
