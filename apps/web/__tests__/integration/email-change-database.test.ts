@@ -47,6 +47,7 @@ const fixture = vi.hoisted(() => ({
 	workosDown: false,
 	workosDomains: new Map<string, { domain: string; state: string }[]>(),
 	limitedAddress: null as string | null,
+	sendLimitedAddress: null as string | null,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -107,7 +108,11 @@ vi.mock("@/lib/rate-limit", () => ({
 	},
 }));
 vi.mock("@/lib/email-code-rate-limit", () => ({
-	isEmailCodeSendLimited: async () => false,
+	isEmailCodeSendLimited: async () => {
+		throw new Error("Email changes must not use the sign-in send bucket");
+	},
+	isEmailChangeSendLimited: async (email: string) =>
+		email === fixture.sendLimitedAddress,
 	isEmailCodeVerifyLimited: async () => {
 		throw new Error("Email changes must not use the sign-in guess bucket");
 	},
@@ -240,6 +245,7 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.stripeFails = false;
 			fixture.failLoops = false;
 			fixture.limitedAddress = null;
+			fixture.sendLimitedAddress = null;
 			fixture.workosDown = false;
 			fixture.onStripeUpdate = null;
 		});
@@ -462,6 +468,15 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
 			expect(await finishEmailChange(code)).toEqual({ status: "invalid" });
 			expect((await reload(user.id))?.email).toBe(user.email);
+		});
+
+		it("limits codes sent to one target address", async () => {
+			const user = await makeUser();
+			const target = address();
+			fixture.sendLimitedAddress = target;
+			const sent = fixture.codes.length;
+			expect(await start(user, target)).toEqual({ status: "rate_limited" });
+			expect(fixture.codes).toHaveLength(sent);
 		});
 
 		it("limits guesses per target address across accounts", async () => {
