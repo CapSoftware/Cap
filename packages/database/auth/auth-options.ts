@@ -31,6 +31,7 @@ import {
 	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { signInTimestamp } from "./fresh-sign-in.ts";
 import { GoogleOneTapProvider } from "./google-one-tap.ts";
 import { verifyPasskeySignIn } from "./passkeys.ts";
 import {
@@ -499,6 +500,9 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					session.user.email = token.email ?? null;
 					session.user.image = token.picture ?? null;
 				}
+				if (typeof token?.authTime === "number") {
+					(session as { authTime?: number }).authTime = token.authTime;
+				}
 
 				return session;
 			},
@@ -533,6 +537,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					if (!dbUser) {
 						if (user) {
 							token.id = user?.id;
+							token.authTime = signInTimestamp();
 						}
 						return token;
 					}
@@ -544,6 +549,11 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						email: dbUser.email,
 						picture: dbUser.image,
 						sessionVersion: dbUser.authSessionVersion,
+						...(user
+							? { authTime: signInTimestamp() }
+							: typeof token.authTime === "number"
+								? { authTime: token.authTime }
+								: {}),
 					};
 				}
 

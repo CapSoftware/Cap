@@ -123,6 +123,7 @@ export const users = mysqlTable(
 				dashboard?: {
 					pageSize?: number;
 				};
+				passkeyPromptDismissedAt?: string;
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(

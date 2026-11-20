@@ -66,6 +66,7 @@
 		"./auth/domain-utils": "./auth/domain-utils.ts",
 		"./auth/auth-challenges": "./auth/auth-challenges.ts",
 		"./auth/passkeys": "./auth/passkeys.ts",
+		"./auth/fresh-sign-in": "./auth/fresh-sign-in.ts",
 		"./auth/security-emails": "./auth/security-emails.ts",
 		"./auth/google-one-tap": "./auth/google-one-tap.ts",
 		"./auth/request-site": "./auth/request-site.ts",
