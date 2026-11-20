@@ -150,13 +150,13 @@ impl EditorWindow {
             .px(px(8.))
             .map(|this| {
                 if selected {
-                    this.bg(editor.pill_fill())
+                    this.bg(editor.choice_selected_fill())
                         .shadow(editor.choice_selected_shadow())
                 } else {
-                    this.bg(Hsla::from(editor.ctl))
-                        .shadow(editor.trough_ring())
+                    this.bg(editor.choice_fill())
+                        .shadow(editor.choice_ring())
                         .cursor_pointer()
-                        .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                        .hover(move |style| style.bg(editor.choice_hover_fill()))
                 }
             })
             .child(

@@ -3024,11 +3024,12 @@ impl EditorWindow {
             )
         } else {
             (
-                Hsla::from(editor.ctl),
-                Hsla::from(editor.ctl_hover),
+                editor.choice_fill(),
+                editor.choice_hover_fill(),
                 Hsla::from(editor.text_1),
             )
         };
+        let light = !self.theme.is_dark();
 
         let gradient = |top: gpui::Rgba, bottom: gpui::Rgba| {
             gpui::linear_gradient(
@@ -3071,6 +3072,7 @@ impl EditorWindow {
                         }])
                 } else {
                     this.bg(bg)
+                        .when(light, |this| this.shadow(editor.choice_ring()))
                 }
             })
             .when(busy, |this| this.opacity(0.5))
@@ -3173,16 +3175,16 @@ impl EditorWindow {
                             .text_color(ink)
                             .map(|this| {
                                 if selected {
-                                    this.bg(editor.pill_fill())
+                                    this.bg(editor.choice_selected_fill())
                                         .shadow(editor.choice_selected_shadow())
                                 } else {
-                                    this.bg(Hsla::from(editor.ctl)).shadow(editor.trough_ring())
+                                    this.bg(editor.choice_fill()).shadow(editor.choice_ring())
                                 }
                             })
                             .when(disabled, |this| this.opacity(0.4))
                             .when(!disabled && !selected, |this| {
                                 this.cursor_pointer()
-                                    .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                                    .hover(move |style| style.bg(editor.choice_hover_fill()))
                             })
                             .when(!disabled, |this| {
                                 this.on_click(cx.listener(move |this, _, window, cx| {
@@ -3495,17 +3497,17 @@ impl EditorWindow {
             .rounded(px(12.))
             .map(|this| {
                 if selected {
-                    this.bg(editor.pill_fill())
+                    this.bg(editor.choice_selected_fill())
                         .shadow(editor.choice_selected_shadow())
                 } else {
-                    this.bg(Hsla::from(editor.ctl)).shadow(editor.trough_ring())
+                    this.bg(editor.choice_fill()).shadow(editor.choice_ring())
                 }
             })
             .when(disabled, |this| this.opacity(0.4))
             .when(!disabled, |this| {
                 this.cursor_pointer()
                     .when(!selected, |this| {
-                        this.hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                        this.hover(move |style| style.bg(editor.choice_hover_fill()))
                     })
                     .on_click(on_click)
             })
@@ -4266,7 +4268,7 @@ impl EditorWindow {
             })
             .when(ui.phase.is_busy(), |this| {
                 this.child(
-                    ui::Button::plain(
+                    ui::Button::editor(
                         &theme,
                         "export-cancel",
                         ui::ButtonVariant::Gray,
@@ -4335,7 +4337,7 @@ impl EditorWindow {
                     // One accent action, a quieter second one beside it, and
                     // the way back as a plain link underneath.
                     let button = |id: &'static str, primary: bool| {
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             id,
                             if primary {

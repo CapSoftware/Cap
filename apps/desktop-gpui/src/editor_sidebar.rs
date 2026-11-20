@@ -3027,12 +3027,13 @@ impl EditorWindow {
                 .text_color(ink)
                 .map(|this| {
                     if selected {
-                        this.bg(editor.pill_fill()).shadow(editor.pill_shadow())
+                        this.bg(editor.choice_selected_fill())
+                            .shadow(editor.choice_pill_shadow())
                     } else {
-                        this.bg(Hsla::from(editor.ctl))
-                            .shadow(editor.trough_ring())
+                        this.bg(editor.choice_fill())
+                            .shadow(editor.choice_ring())
                             .cursor_pointer()
-                            .hover(|this| this.bg(Hsla::from(editor.ctl_hover)))
+                            .hover(move |this| this.bg(editor.choice_hover_fill()))
                     }
                 })
                 .child(div().flex_none().child(glyph))

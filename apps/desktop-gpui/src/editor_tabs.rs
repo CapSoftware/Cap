@@ -2898,13 +2898,13 @@ impl EditorWindow {
             .rounded(px(12.))
             .map(|this| {
                 if selected {
-                    this.bg(editor.pill_fill())
+                    this.bg(editor.choice_selected_fill())
                         .shadow(editor.choice_selected_shadow())
                 } else {
-                    this.bg(Hsla::from(editor.ctl))
-                        .shadow(editor.trough_ring())
+                    this.bg(editor.choice_fill())
+                        .shadow(editor.choice_ring())
                         .cursor_pointer()
-                        .hover(move |style| style.bg(Hsla::from(editor.ctl_hover)))
+                        .hover(move |style| style.bg(editor.choice_hover_fill()))
                 }
             })
             .on_click(on_click)
@@ -3180,7 +3180,7 @@ impl EditorWindow {
             .when(!blank, |this| {
                 this.child(
                     div().pt(px(8.)).child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             "keyboard-generate",
                             ui::ButtonVariant::Primary,
@@ -3267,12 +3267,12 @@ impl EditorWindow {
                     .gap(px(8.))
                     .h(px(34.))
                     .rounded(px(10.))
-                    .bg(Hsla::from(editor.ctl))
-                    .shadow(editor.trough_ring())
+                    .bg(editor.choice_fill())
+                    .shadow(editor.choice_ring())
                     .text_size(px(13.))
                     .text_color(Hsla::from(editor.text_1))
                     .cursor_pointer()
-                    .hover(|this| this.bg(Hsla::from(editor.ctl_hover)))
+                    .hover(move |this| this.bg(editor.choice_hover_fill()))
                     .child(
                         svg()
                             .path("icons/keyboard.svg")
@@ -3499,7 +3499,7 @@ impl EditorWindow {
                 )
             })
             .child(
-                ui::Button::plain(
+                ui::Button::editor(
                     &theme,
                     "key-prompt-add",
                     ui::ButtonVariant::Blue,
@@ -3727,7 +3727,7 @@ impl EditorWindow {
             let mut column = div().flex().flex_col().gap(px(8.));
             if has_audio {
                 column = column.child(
-                    ui::Button::plain(
+                    ui::Button::editor(
                         &theme,
                         "caption-generate",
                         ui::ButtonVariant::Primary,
@@ -3781,7 +3781,7 @@ impl EditorWindow {
                             ),
                     )
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             "caption-delete",
                             ui::ButtonVariant::Gray,
@@ -3827,7 +3827,7 @@ impl EditorWindow {
             }
             column
         } else {
-            let download_button = ui::Button::plain(
+            let download_button = ui::Button::editor(
                 &theme,
                 "caption-download",
                 ui::ButtonVariant::Primary,
@@ -4150,7 +4150,7 @@ impl EditorWindow {
                     ))
                     .child(
                         div().flex().flex_row().justify_end().child(
-                            ui::Button::plain(
+                            ui::Button::editor(
                                 &theme,
                                 "caption-reset-position",
                                 ui::ButtonVariant::Gray,

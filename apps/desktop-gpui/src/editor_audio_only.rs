@@ -160,13 +160,13 @@ impl EditorWindow {
                     .rounded(px(12.))
                     .map(|this| {
                         if chosen {
-                            this.bg(editor.pill_fill())
+                            this.bg(editor.choice_selected_fill())
                                 .shadow(editor.choice_selected_shadow())
                         } else {
-                            this.bg(Hsla::from(editor.ctl))
-                                .shadow(editor.trough_ring())
+                            this.bg(editor.choice_fill())
+                                .shadow(editor.choice_ring())
                                 .cursor_pointer()
-                                .hover(move |this| this.bg(Hsla::from(editor.ctl_hover)))
+                                .hover(move |this| this.bg(editor.choice_hover_fill()))
                         }
                     })
                     .child(visualizer_preview(style, tile_height))
@@ -265,7 +265,7 @@ impl EditorWindow {
                                     ),
                             )
                             .child(
-                                ui::Button::plain(
+                                ui::Button::editor(
                                     &theme,
                                     "audio-only-export",
                                     ui::ButtonVariant::Blue,

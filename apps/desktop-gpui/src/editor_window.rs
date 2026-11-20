@@ -12137,7 +12137,7 @@ impl EditorWindow {
                                 .px(px(16.))
                                 .pb(px(16.))
                                 .child(
-                                    ui::Button::plain(
+                                    ui::Button::editor(
                                         &theme,
                                         "preset-cancel",
                                         ui::ButtonVariant::Gray,
@@ -12152,7 +12152,7 @@ impl EditorWindow {
                                     )),
                                 )
                                 .child(
-                                    ui::Button::plain(
+                                    ui::Button::editor(
                                         &theme,
                                         "preset-confirm",
                                         if danger {
@@ -13111,7 +13111,7 @@ impl EditorWindow {
                                 .view(cx)
                             })
                             .child(
-                                ui::Button::plain(
+                                ui::Button::editor(
                                     &theme,
                                     "transport-split",
                                     if self.split_mode {
@@ -13263,7 +13263,7 @@ impl EditorWindow {
                         }),
                     )
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             "transport-compare-button",
                             if comparing {
@@ -13993,7 +13993,7 @@ impl EditorWindow {
                                                     .child(self.auto_zoom_prompt()),
                                             )
                                             .child(
-                                                ui::Button::plain(
+                                                ui::Button::editor(
                                                     &theme,
                                                     "zoom-generate-button",
                                                     ui::ButtonVariant::Primary,
@@ -14074,7 +14074,7 @@ impl EditorWindow {
                                         .child(tr::editor::window::camera3d_lane::prompt()),
                                 )
                                 .child(
-                                    ui::Button::plain(
+                                    ui::Button::editor(
                                         &theme,
                                         "camera3d-auto-scene",
                                         ui::ButtonVariant::Primary,
@@ -14113,7 +14113,7 @@ impl EditorWindow {
                                 )
                             })
                             .child(
-                                ui::Button::plain(
+                                ui::Button::editor(
                                     &theme,
                                     "camera3d-add-shot",
                                     ui::ButtonVariant::Outline,

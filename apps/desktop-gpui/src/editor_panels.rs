@@ -6088,7 +6088,7 @@ impl EditorWindow {
                 // How every key looks lives in the Keyboard tab, one click
                 // away from any key.
                 .value(
-                    ui::Button::plain(
+                    ui::Button::editor(
                         &theme,
                         SharedString::from(format!("keyboard-style-{index}")),
                         ui::ButtonVariant::Gray,
@@ -9657,7 +9657,7 @@ impl EditorWindow {
                             .child(tr::editor::panel::image::arrange_help()),
                     )
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &self.theme,
                             SharedString::from(format!("center-image-{index}")),
                             ui::ButtonVariant::Gray,
@@ -9682,7 +9682,7 @@ impl EditorWindow {
                     ),
             )
             .child(
-                ui::Button::plain(
+                ui::Button::editor(
                     &self.theme,
                     SharedString::from(format!("replace-image-{index}")),
                     ui::ButtonVariant::Gray,

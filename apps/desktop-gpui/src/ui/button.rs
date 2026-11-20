@@ -131,6 +131,8 @@ pub struct Button {
     /// than the settings surface's repaint.
     dim_disabled: bool,
     dark: bool,
+    /// A flat fill behind these shadows instead of the sheen and drop shadow.
+    flat_ring: Option<Vec<gpui::BoxShadow>>,
     on_click: Option<ClickHandler>,
     on_open: Option<OpenHandler>,
 }
@@ -160,9 +162,30 @@ impl Button {
             height: None,
             dim_disabled: false,
             dark: theme.is_dark(),
+            flat_ring: None,
             on_click: None,
             on_open: None,
         }
+    }
+
+    /// The editor's panels. On the white light panel a grey button with a
+    /// sheen reads as muddy, so `Gray` there is the choice tiles' white with a
+    /// hairline instead; dark keeps the plain finish.
+    pub fn editor(
+        theme: &Theme,
+        id: impl Into<ElementId>,
+        variant: ButtonVariant,
+        size: ButtonSize,
+    ) -> Self {
+        let mut button = Self::plain(theme, id, variant, size);
+        if variant == ButtonVariant::Gray && !theme.is_dark() {
+            let editor = theme.editor;
+            button.paint.bg = Some(editor.choice_fill());
+            button.paint.hover_bg = Some(editor.choice_hover_fill());
+            button.paint.text = Hsla::from(editor.text_1);
+            button.flat_ring = Some(editor.choice_ring());
+        }
+        button
     }
 
     /// The main window: `Theme::body_*` already folds the panel material's
@@ -439,6 +462,7 @@ impl RenderOnce for Button {
             disabled,
             dim_disabled,
             dark,
+            flat_ring,
             gap,
             font_weight,
             width,
@@ -449,8 +473,21 @@ impl RenderOnce for Button {
         } = self;
 
         let icon_color = paint.text;
-        let finish = paint.bg.map(|bg| ButtonFinish::new(bg, dark));
-        let hover_fill = paint.hover_bg.map(|bg| ButtonFinish::sheen(bg, dark));
+        let flat = flat_ring.is_some();
+        let finish = paint.bg.map(|bg| match &flat_ring {
+            Some(ring) => ButtonFinish {
+                fill: bg.into(),
+                shadow: ring.clone(),
+            },
+            None => ButtonFinish::new(bg, dark),
+        });
+        let hover_fill = paint.hover_bg.map(|bg| {
+            if flat {
+                bg.into()
+            } else {
+                ButtonFinish::sheen(bg, dark)
+            }
+        });
         let pressed_fill = paint
             .hover_bg
             .or(paint.bg)

@@ -712,9 +712,65 @@ impl EditorPalette {
         ]
     }
 
+    /// A choice tile at rest. On the white light panel a grey wash reads as
+    /// muddy and makes the white selected tile look like the odd one out, so
+    /// light tiles are the card's own white behind a hairline.
+    pub fn choice_fill(&self) -> Hsla {
+        if self.is_dark() {
+            self.ctl.into()
+        } else {
+            self.card.into()
+        }
+    }
+
+    pub fn choice_hover_fill(&self) -> Hsla {
+        if self.is_dark() {
+            self.ctl_hover.into()
+        } else {
+            self.window.into()
+        }
+    }
+
+    /// Inset, so the ring adds no layout size.
+    pub fn choice_ring(&self) -> Vec<BoxShadow> {
+        if self.is_dark() {
+            return self.trough_ring();
+        }
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.1),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.04),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// The selected tile: a faint accent wash on light, so selection always
+    /// reads as a step away from the white tiles beside it.
+    pub fn choice_selected_fill(&self) -> Hsla {
+        if self.is_dark() {
+            self.pill_fill()
+        } else {
+            mix(self.card, self.accent, 0.07).into()
+        }
+    }
+
     /// Shadows only, so selecting a tile never shifts the layout.
     pub fn choice_selected_shadow(&self) -> Vec<BoxShadow> {
-        let mut shadow = self.pill_shadow();
+        let mut shadow = if self.is_dark() {
+            self.pill_shadow()
+        } else {
+            Vec::new()
+        };
         shadow.push(BoxShadow {
             color: self.accent.into(),
             offset: point(px(0.), px(0.)),
@@ -723,6 +779,15 @@ impl EditorPalette {
             inset: true,
         });
         shadow
+    }
+
+    /// The selected tile in a set that marks it with a raised pill on dark.
+    pub fn choice_pill_shadow(&self) -> Vec<BoxShadow> {
+        if self.is_dark() {
+            self.pill_shadow()
+        } else {
+            self.choice_selected_shadow()
+        }
     }
 
     /// Opaque, so the pill's own drop shadow never shows through it.

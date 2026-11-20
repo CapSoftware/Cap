@@ -211,12 +211,12 @@ impl EditorWindow {
             .justify_center()
             .map(|this| {
                 if selected {
-                    this.bg(editor.pill_fill())
+                    this.bg(editor.choice_selected_fill())
                         .shadow(editor.choice_selected_shadow())
                 } else {
-                    this.bg(Hsla::from(editor.ctl))
-                        .shadow(editor.trough_ring())
-                        .group_hover(CARD_GROUP, |this| this.bg(Hsla::from(editor.ctl_hover)))
+                    this.bg(editor.choice_fill())
+                        .shadow(editor.choice_ring())
+                        .group_hover(CARD_GROUP, move |this| this.bg(editor.choice_hover_fill()))
                 }
             })
             .when(recorded || card == CursorCard::Default, |this| {

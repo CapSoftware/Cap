@@ -818,7 +818,7 @@ impl EditorWindow {
             .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
             .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::editor::markers::title()).view(cx))
             .child(
-                ui::Button::plain(
+                ui::Button::editor(
                     &theme,
                     "transport-markers",
                     if self.markers.list.is_some() {
@@ -1144,7 +1144,7 @@ impl EditorWindow {
                 )
             })
             .child(
-                ui::Button::plain(
+                ui::Button::editor(
                     &theme,
                     "marker-split",
                     ui::ButtonVariant::Gray,
@@ -1277,7 +1277,7 @@ impl EditorWindow {
                     .items_center()
                     .gap(px(6.))
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             "marker-delete",
                             ui::ButtonVariant::Gray,
@@ -1295,7 +1295,7 @@ impl EditorWindow {
                     )
                     .child(div().flex_1())
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             "marker-done",
                             ui::ButtonVariant::Primary,
