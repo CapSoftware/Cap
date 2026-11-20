@@ -3873,6 +3873,18 @@ mod notch_tests {
 /// Callers fall back to a default configuration when the file cannot be
 /// read (written by a newer Cap, edited by hand) and save over it on the next
 /// edit. A copy named after its contents keeps the original recoverable.
+fn write_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+}
+
 fn keep_unreadable_config(config_path: &Path, contents: &[u8]) {
     use std::hash::{Hash, Hasher};
 
@@ -3893,10 +3905,16 @@ fn keep_unreadable_config(config_path: &Path, contents: &[u8]) {
         .and_then(tempfile::NamedTempFile::new_in)
         .and_then(|mut staged| {
             staged.write_all(contents)?;
-            staged
-                .persist_noclobber(&backup)
-                .map_err(|error| error.error)?;
-            Ok(())
+            match staged.persist_noclobber(&backup) {
+                Ok(_) => Ok(()),
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(error.error)
+                }
+                // exFAT on macOS and some network volumes refuse the
+                // no-replace move. Claim the name with O_EXCL instead, which
+                // also never follows or replaces an existing entry.
+                Err(_) => write_new_file(&backup, contents),
+            }
         });
     match result {
         Ok(()) => {
@@ -3945,7 +3963,19 @@ mod tests {
             .unwrap();
         ProjectConfiguration::load(project.path()).unwrap();
         assert_eq!(backups(), kept);
-        assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 2);
+        // exFAT on macOS adds `._` AppleDouble files next to each one.
+        let files = std::fs::read_dir(project.path())
+            .unwrap()
+            .filter(|entry| {
+                !entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("._")
+            })
+            .count();
+        assert_eq!(files, 2);
     }
 
     #[test]
@@ -3959,10 +3989,33 @@ mod tests {
         let kept: Vec<_> = std::fs::read_dir(project.path())
             .unwrap()
             .map(|entry| entry.unwrap().path())
-            .filter(|path| path != &project.path().join("project-config.json"))
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("project-config.json.unreadable-")
+            })
             .collect();
         assert_eq!(kept.len(), 1, "{kept:?}");
         assert_eq!(std::fs::read(&kept[0]).unwrap(), unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_exclusive_fallback_never_replaces_or_follows_an_existing_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        assert!(write_new_file(&link, b"copy").is_err());
+        assert!(write_new_file(&victim, b"copy").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+
+        let fresh = dir.path().join("fresh");
+        write_new_file(&fresh, b"copy").unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"copy");
     }
 
     #[cfg(unix)]
