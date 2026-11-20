@@ -263,7 +263,10 @@ fn parts_under(meta: &DocMeta, key: &str, base: &Path) -> Vec<AudioPart> {
                 .filter_map(|part| {
                     let file = part.get("file")?.as_str()?;
                     // Only files inside the meeting's own folder.
-                    if file.contains("..") || Path::new(file).is_absolute() {
+                    if file.contains("..")
+                        || Path::new(file).is_absolute()
+                        || Path::new(file).has_root()
+                    {
                         return None;
                     }
                     let source: Source = serde_json::from_value(part.get("source")?.clone()).ok()?;
