@@ -758,6 +758,13 @@ describe("authOptions", () => {
 		const refreshed = await callbacks.jwt({ token: { ...signedIn } } as never);
 		expect(refreshed.authTime).toBe(signedIn.authTime);
 
+		const updated = await callbacks.jwt({
+			token: { ...signedIn },
+			trigger: "update",
+			session: { authTime: after + 100_000 },
+		} as never);
+		expect(updated.authTime).toBe(signedIn.authTime);
+
 		const legacy = await callbacks.jwt({
 			token: { email: AUTHENTICATED_USER.email },
 		} as never);

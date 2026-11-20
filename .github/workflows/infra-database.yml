@@ -31,6 +31,7 @@ on:
       - "packages/database/migrations/**"
       - "packages/database/auth/**"
       - "apps/web/actions/auth/**"
+      - "apps/web/lib/passkey-prompt.ts"
       - ".github/workflows/infra-database.yml"
   push:
     branches: [main]
@@ -61,6 +62,7 @@ on:
       - "packages/database/migrations/**"
       - "packages/database/auth/**"
       - "apps/web/actions/auth/**"
+      - "apps/web/lib/passkey-prompt.ts"
       - ".github/workflows/infra-database.yml"
 
 permissions:

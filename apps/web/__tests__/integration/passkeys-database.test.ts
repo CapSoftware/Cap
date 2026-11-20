@@ -7,7 +7,12 @@ import nodeCrypto, {
 	sign,
 	webcrypto,
 } from "node:crypto";
-import { authChallenges, userPasskeys, users } from "@cap/database/schema";
+import {
+	authChallenges,
+	mcpOAuthTokens,
+	userPasskeys,
+	users,
+} from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
 import { isoCBOR } from "@simplewebauthn/server/helpers";
 import { and, eq, inArray } from "drizzle-orm";
@@ -20,6 +25,7 @@ import {
 	issueStepUpGrant,
 	STEP_UP_CODE_MAX_ATTEMPTS,
 	STEP_UP_CODES_PER_DAY,
+	storeChallenge,
 	verifyStepUpCode,
 } from "../../../../packages/database/auth/auth-challenges";
 import {
@@ -982,28 +988,193 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(confirmed.status).toBe("ok");
 			});
 
-			it("removes only the signed-in account's passkeys", async () => {
+			it("removes a passkey only after confirming it's you, and only your own", async () => {
 				const { removePasskey } = await actions();
 				const user = await makeUser();
 				const other = await makeUser();
 				await registerPasskey(other);
 				const [otherPasskey] = await listPasskeys(other.id);
 				if (!otherPasskey) throw new Error("Missing passkey.");
-				fixture.currentUser = user;
 				const noticesBefore = fixture.removedNotices.length;
-				expect(await removePasskey(otherPasskey.id)).toEqual({
-					removed: false,
+
+				fixture.currentUser = user;
+				const userGrant = await issueStepUpGrant(user.id);
+				expect(await removePasskey(otherPasskey.id, userGrant)).toEqual({
+					status: "missing",
+				});
+
+				fixture.currentUser = other;
+				expect(await removePasskey(otherPasskey.id, "")).toEqual({
+					status: "verify",
+				});
+				expect(await removePasskey(otherPasskey.id, userGrant)).toEqual({
+					status: "verify",
 				});
 				expect(await listPasskeys(other.id)).toHaveLength(1);
 				expect(fixture.removedNotices).toHaveLength(noticesBefore);
-				fixture.currentUser = other;
-				expect(await removePasskey(otherPasskey.id)).toEqual({
-					removed: true,
+
+				const otherGrant = await issueStepUpGrant(other.id);
+				expect(await removePasskey(otherPasskey.id, otherGrant)).toEqual({
+					status: "removed",
 				});
+				expect(await listPasskeys(other.id)).toHaveLength(0);
 				expect(fixture.removedNotices.at(-1)).toEqual({
 					email: other.email,
 					name: "iCloud Keychain",
 				});
+			});
+
+			it("makes passkeys added without a code sign-in only", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptionsAfterSignIn,
+					getPasskeyStepUpOptions,
+					verifyPasskeyForStepUp,
+				} = await actions();
+				const { startEmailChange } = await import(
+					"@/actions/auth/email-change"
+				);
+				const user = await makeUser();
+				fixture.currentUser = user;
+				fixture.session = {
+					user: { id: user.id },
+					authTime: Math.floor(Date.now() / 1000) - 30,
+				};
+				const options = await getPasskeyRegistrationOptionsAfterSignIn();
+				if (options.status !== "ok") throw new Error("No options.");
+				const attacker = new SoftwareAuthenticator(user.id);
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(attacker.register(options.options.challenge)),
+						)
+					).status,
+				).toBe("registered");
+				const [stored] = await listPasskeys(user.id);
+				expect(stored?.confirmsIdentity).toBe(false);
+
+				expect(
+					(await verifyPasskeySignIn(attacker.assert(await signInChallenge())))
+						?.id,
+				).toBe(user.id);
+
+				expect(await getPasskeyStepUpOptions()).toEqual({ status: "none" });
+				const forced = await createPasskeyStepUpOptions(user.id);
+				expect(forced).toBeNull();
+				const smuggled = b64url(randomBytes(32));
+				await storeChallenge({
+					purpose: "passkey_step_up",
+					challenge: smuggled,
+					userId: user.id,
+				});
+				expect(await verifyPasskeyForStepUp(attacker.assert(smuggled))).toEqual(
+					{ status: "invalid" },
+				);
+				expect(
+					await startEmailChange("", `attacker-${id()}@example.com`),
+				).toEqual({ status: "verify" });
+
+				const confirmed = await issueStepUpGrant(user.id);
+				const settingsOptions = await createPasskeyRegistrationOptions(user);
+				if (!settingsOptions) throw new Error("No options.");
+				expect(
+					(
+						await verifyPasskeyRegistration(
+							user.id,
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(
+									settingsOptions.challenge,
+								),
+							),
+						)
+					).status,
+				).toBe("registered");
+				expect(typeof confirmed).toBe("string");
+				const stepUp = await createPasskeyStepUpOptions(user.id);
+				expect(stepUp?.allowCredentials).toHaveLength(1);
+				expect(stepUp?.allowCredentials?.[0]?.id).not.toBe(
+					attacker.credentialId,
+				);
+			});
+
+			it("closes the no-code route once the sign-in is no longer fresh", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptionsAfterSignIn,
+				} = await actions();
+				const user = await makeUser();
+				fixture.currentUser = user;
+				const now = Math.floor(Date.now() / 1000);
+				fixture.session = { user: { id: user.id }, authTime: now - 30 };
+				const options = await getPasskeyRegistrationOptionsAfterSignIn();
+				if (options.status !== "ok") throw new Error("No options.");
+				fixture.session = { user: { id: user.id }, authTime: now - 11 * 60 };
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(
+									options.options.challenge,
+								),
+							),
+						)
+					).status,
+				).toBe("invalid");
+				expect(await listPasskeys(user.id)).toHaveLength(0);
+			});
+
+			it("refuses a no-code passkey once the account has one, even if a setup survived", async () => {
+				const user = await makeUser();
+				await registerPasskey(user);
+				const survivor = b64url(randomBytes(32));
+				await storeChallenge({
+					purpose: "passkey_first_registration",
+					challenge: survivor,
+					userId: user.id,
+				});
+				expect(
+					(
+						await verifyPasskeyRegistration(
+							user.id,
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(survivor),
+							),
+							{ allowFirstPasskey: true },
+						)
+					).status,
+				).toBe("invalid");
+				expect(await listPasskeys(user.id)).toHaveLength(1);
+			});
+
+			it("signing out of all devices also revokes connected MCP apps", async () => {
+				const { signOutAllDevices } = await import(
+					"@/app/(org)/dashboard/settings/account/server"
+				);
+				const user = await makeUser();
+				const tokenId = id();
+				await database()
+					.insert(mcpOAuthTokens)
+					.values({
+						id: tokenId,
+						userId: user.id,
+						clientId: "client",
+						familyId: id(),
+						resource: "https://cap.test/mcp",
+						accessHash: randomUUID().replaceAll("-", ""),
+						refreshHash: randomUUID().replaceAll("-", ""),
+						accessExpiresAt: new Date(Date.now() + 3_600_000),
+						refreshExpiresAt: new Date(Date.now() + 86_400_000),
+					});
+				fixture.currentUser = user;
+				await signOutAllDevices();
+				const [token] = await database()
+					.select()
+					.from(mcpOAuthTokens)
+					.where(eq(mcpOAuthTokens.id, tokenId));
+				expect(token?.revokedAt).toBeInstanceOf(Date);
+				await database()
+					.delete(mcpOAuthTokens)
+					.where(eq(mcpOAuthTokens.id, tokenId));
 			});
 
 			it("signing out of all devices removes passkeys and pending checks", async () => {
@@ -1158,6 +1329,7 @@ describe.runIf(Boolean(databaseUrl))(
 							JSON.stringify(
 								new SoftwareAuthenticator(racing.id).register(challenge),
 							),
+							{ allowFirstPasskey: true },
 						),
 					),
 				);
@@ -1231,7 +1403,7 @@ describe.runIf(Boolean(databaseUrl))(
 					() => passkeyActions.getPasskeyRegistrationOptions("x"),
 					() => passkeyActions.completePasskeyRegistration("{}"),
 					() => passkeyActions.listMyPasskeys(),
-					() => passkeyActions.removePasskey("x"),
+					() => passkeyActions.removePasskey("x", "y"),
 				]) {
 					await expect(call()).rejects.toThrow("Unauthorized");
 				}
