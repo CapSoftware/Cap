@@ -218,6 +218,34 @@ async function checkNewEmail(
 	return { email };
 }
 
+/**
+ * Best-effort cleanup. Expired rows are deleted by primary key: a range
+ * delete on expiresAt takes gap locks that deadlock with other accounts'
+ * inserts on MySQL 8.4.
+ */
+async function deleteExpiredRequests() {
+	try {
+		const expired = await db()
+			.select({ id: emailChangeRequests.id })
+			.from(emailChangeRequests)
+			.where(lt(emailChangeRequests.expiresAt, new Date()))
+			.limit(100);
+		if (expired.length === 0) return;
+		await db()
+			.delete(emailChangeRequests)
+			.where(
+				inArray(
+					emailChangeRequests.id,
+					expired.map((row) => row.id),
+				),
+			);
+	} catch (error) {
+		console.warn("[email-change] Expired request cleanup skipped", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 export async function requestEmailChange(
 	user: { id: User.UserId; email: string },
 	rawEmail: unknown,
@@ -226,9 +254,7 @@ export async function requestEmailChange(
 	const checked = await checkNewEmail(rawEmail, user.email);
 	if ("status" in checked) return checked;
 
-	await db()
-		.delete(emailChangeRequests)
-		.where(lt(emailChangeRequests.expiresAt, new Date()));
+	await deleteExpiredRequests();
 	const id = nanoId();
 	const code = crypto.randomInt(100000, 1000000).toString();
 	return db().transaction(async (tx): Promise<EmailChangeRequestResult> => {
