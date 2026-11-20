@@ -1,7 +1,6 @@
 "use server";
 
 import {
-	clearStepUpGrants,
 	hasStepUpGrant,
 	issueStepUpCode,
 	issueStepUpGrant,
@@ -143,7 +142,6 @@ export async function completePasskeyRegistration(
 	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
 	const result = await verifyPasskeyRegistration(user.id, response);
 	if (result.status !== "registered") return { status: result.status };
-	await clearStepUpGrants(user.id);
 	await sendPasskeyAddedNotice(user.email, result.passkey.name);
 	return {
 		status: "registered",

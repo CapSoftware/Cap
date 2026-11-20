@@ -23,7 +23,11 @@ import { and, asc, count, eq } from "drizzle-orm";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
 import { userPasskeys, users } from "../schema.ts";
-import { consumeChallenge, storeChallenge } from "./auth-challenges.ts";
+import {
+	consumeChallenge,
+	spendPasskeySetup,
+	storeChallenge,
+} from "./auth-challenges.ts";
 
 export const MAX_PASSKEYS_PER_USER = 10;
 const MAX_RESPONSE_JSON_LENGTH = 16 * 1024;
@@ -442,15 +446,6 @@ export async function verifyPasskeyRegistration(
 		.where(eq(users.id, userId))
 		.limit(1);
 	if (!account) return { status: "invalid" };
-	if (
-		!(await consumeChallenge({
-			purpose: "passkey_registration",
-			challenge,
-			userId,
-		}))
-	) {
-		return { status: "invalid" };
-	}
 
 	const { rpID, origin } = passkeyRelyingParty();
 	let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
@@ -488,6 +483,16 @@ export async function verifyPasskeyRegistration(
 			if (locked?.authSessionVersion !== account.authSessionVersion) {
 				return "reset";
 			}
+			if (
+				!(await consumeChallenge({
+					purpose: "passkey_registration",
+					challenge,
+					userId,
+					database: tx,
+				}))
+			) {
+				return "reset";
+			}
 			const [row] = await tx
 				.select({ total: count() })
 				.from(userPasskeys)
@@ -507,6 +512,7 @@ export async function verifyPasskeyRegistration(
 				name,
 				createdAt,
 			});
+			await spendPasskeySetup(userId, tx);
 			return "inserted";
 		});
 		if (inserted === "limit") return { status: "limit" };

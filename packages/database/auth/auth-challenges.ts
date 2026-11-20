@@ -89,9 +89,10 @@ export async function consumeChallenge(input: {
 	>;
 	challenge: string;
 	userId: User.UserId | null;
+	database?: Pick<ReturnType<typeof db>, "delete">;
 }) {
 	if (!input.challenge || input.challenge.length > 512) return false;
-	const result = await db()
+	const result = await (input.database ?? db())
 		.delete(authChallenges)
 		.where(
 			and(
@@ -282,13 +283,31 @@ export async function hasStepUpGrant(userId: User.UserId, grant: unknown) {
 	return !!row;
 }
 
-export async function clearStepUpGrants(userId: User.UserId) {
-	await db()
-		.delete(authChallenges)
+/**
+ * Spends the confirmation and every other registration challenge it minted,
+ * so one confirmation adds at most one passkey.
+ */
+export async function spendPasskeySetup(
+	userId: User.UserId,
+	database: Pick<ReturnType<typeof db>, "select" | "delete">,
+) {
+	const rows = await database
+		.select({ id: authChallenges.id })
+		.from(authChallenges)
 		.where(
 			and(
 				eq(authChallenges.userId, userId),
-				eq(authChallenges.purpose, "step_up_grant"),
+				inArray(authChallenges.purpose, [
+					"step_up_grant",
+					"passkey_registration",
+				]),
 			),
 		);
+	if (rows.length === 0) return;
+	await database.delete(authChallenges).where(
+		inArray(
+			authChallenges.id,
+			rows.map((row) => row.id),
+		),
+	);
 }
