@@ -275,4 +275,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn speaker_names_read_at_aa_in_both_themes() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let palette = Palette::new(&Theme::new(appearance));
+            for i in 0..super::super::style::SPEAKERS.len() {
+                let c = contrast(palette.speaker(i), palette.content);
+                assert!(c >= 4.5, "{appearance:?} speaker {i} at {c:.2}");
+            }
+        }
+    }
 }

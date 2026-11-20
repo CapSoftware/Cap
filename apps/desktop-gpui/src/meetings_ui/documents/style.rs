@@ -50,6 +50,20 @@ pub struct Palette {
     pub highlight: Hsla,
 }
 
+/// Speaker colours as (hue, saturation, lightness on light, on dark). Every
+/// name reads at 4.5:1 on the page in both themes, and each pair stays apart
+/// for red-green and blue-yellow colour blindness, not only by hue. Six,
+/// not eight: AA text on a light page squeezes the whole yellow to cyan half
+/// of the wheel into dark greens, so two more would be near twins.
+pub const SPEAKERS: [(f32, f32, f32, f32); 6] = [
+    (282., 0.46, 0.33, 0.59),
+    (167., 0.53, 0.20, 0.72),
+    (11., 0.50, 0.32, 0.70),
+    (336., 0.56, 0.43, 0.64),
+    (203., 0.48, 0.40, 0.68),
+    (40., 0.62, 0.34, 0.75),
+];
+
 fn alpha(color: Hsla, a: f32) -> Hsla {
     Hsla { a, ..color }
 }
@@ -162,13 +176,13 @@ impl Palette {
     }
 
     pub fn speaker(&self, index: usize) -> Hsla {
-        const HUES: [f32; SPEAKER_COLOURS] = [262., 160., 24., 316., 196., 44.];
-        let hue = HUES[index % HUES.len()] / 360.;
-        if self.dark {
-            hsla(hue, 0.55, 0.70, 1.)
-        } else {
-            hsla(hue, 0.50, 0.40, 1.)
-        }
+        let (hue, saturation, light, dark) = SPEAKERS[index % SPEAKERS.len()];
+        hsla(
+            hue / 360.,
+            saturation,
+            if self.dark { dark } else { light },
+            1.,
+        )
     }
 
     pub fn doodle(&self) -> doodle::Palette {
@@ -306,7 +320,7 @@ pub fn heading(palette: &Palette, title: impl Into<SharedString>, shown_at: Inst
 }
 
 /// How many speakers can be told apart by colour (see [`Palette::speaker`]).
-pub const SPEAKER_COLOURS: usize = 6;
+pub const SPEAKER_COLOURS: usize = SPEAKERS.len();
 
 pub fn ink_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
     use gpui::InteractiveElement;
