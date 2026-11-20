@@ -3830,6 +3830,18 @@ untitled = "Sans titre"
 meeting_at = "Réunion à {time}"
 app_at = "{app} à {time}"
 
+[documents.templates]
+general = "Réunion générale"
+one_on_one = "Tête-à-tête"
+stand_up = "Stand-up"
+customer_call = "Appel client"
+sales_discovery = "Découverte commerciale"
+interview = "Entretien"
+project_kickoff = "Lancement de projet"
+retrospective = "Rétrospective"
+brainstorm = "Brainstorming"
+board_update = "Point conseil ou investisseurs"
+
 [documents.toolbar]
 toggle_sidebar = "Afficher ou masquer la barre latérale"
 new_note = "Nouvelle note"

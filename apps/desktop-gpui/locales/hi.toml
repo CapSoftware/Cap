@@ -3830,6 +3830,18 @@ untitled = "बिना शीर्षक"
 meeting_at = "{time} की मीटिंग"
 app_at = "{time} की {app} कॉल"
 
+[documents.templates]
+general = "सामान्य मीटिंग"
+one_on_one = "वन-ऑन-वन"
+stand_up = "स्टैंड-अप"
+customer_call = "ग्राहक कॉल"
+sales_discovery = "सेल्स डिस्कवरी"
+interview = "इंटरव्यू"
+project_kickoff = "प्रोजेक्ट किकऑफ़"
+retrospective = "रेट्रोस्पेक्टिव"
+brainstorm = "ब्रेनस्टॉर्म"
+board_update = "बोर्ड या निवेशक अपडेट"
+
 [documents.toolbar]
 toggle_sidebar = "साइडबार दिखाएँ या छिपाएँ"
 new_note = "नया नोट"

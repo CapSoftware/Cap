@@ -893,7 +893,12 @@ impl SettingsWindow {
                 .meetings
                 .templates
                 .iter()
-                .map(|t| ui::MenuItem::new(t.name.clone(), t.id == s.notes.default_template_id))
+                .map(|t| {
+                    ui::MenuItem::new(
+                        crate::meetings_ui::documents::format::template_name(t),
+                        t.id == s.notes.default_template_id,
+                    )
+                })
                 .collect(),
             MeetingsMenu::NotesLanguage => {
                 let mut items = vec![ui::MenuItem::new(

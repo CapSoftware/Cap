@@ -3830,6 +3830,18 @@ untitled = "Ohne Titel"
 meeting_at = "Meeting um {time}"
 app_at = "{app} um {time}"
 
+[documents.templates]
+general = "Allgemeines Meeting"
+one_on_one = "Einzelgespräch"
+stand_up = "Stand-up"
+customer_call = "Kundengespräch"
+sales_discovery = "Vertriebsgespräch"
+interview = "Bewerbungsgespräch"
+project_kickoff = "Projektstart"
+retrospective = "Retrospektive"
+brainstorm = "Brainstorming"
+board_update = "Update für Vorstand oder Investoren"
+
 [documents.toolbar]
 toggle_sidebar = "Seitenleiste ein- oder ausblenden"
 new_note = "Neue Notiz"

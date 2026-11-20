@@ -629,7 +629,7 @@ impl Pane {
             .map(|t| {
                 SlashItem::new(
                     format!("template:{}", t.id),
-                    tr::documents::editor::template_item(&t.name),
+                    tr::documents::editor::template_item(format::template_name(&t)),
                 )
             })
             .collect();
@@ -2708,7 +2708,7 @@ impl Pane {
     fn template_name(&self, cx: &App) -> String {
         let id = self.current_template_id(cx);
         templates::find_template(&self.templates, &id)
-            .map(|t| t.name.clone())
+            .map(format::template_name)
             .unwrap_or_default()
     }
 
@@ -2718,7 +2718,7 @@ impl Pane {
             .into_iter()
             .map(|t| {
                 let checked = t.id == current;
-                Entry::new(t.name.clone(), PaneAction::Template(t.id)).checked(checked)
+                Entry::new(format::template_name(&t), PaneAction::Template(t.id)).checked(checked)
             })
             .collect();
         self.menu = Some(OpenMenu {
@@ -4237,7 +4237,7 @@ impl Pane {
                     body = body.child(
                         item(
                             SharedString::from(format!("regen-{}", template.id)),
-                            template.name.clone().into(),
+                            format::template_name(&template).into(),
                             template.id == current,
                         )
                         .on_click(cx.listener(

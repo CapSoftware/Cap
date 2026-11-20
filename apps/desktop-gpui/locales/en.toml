@@ -3832,6 +3832,18 @@ untitled = "Untitled"
 meeting_at = { text = "Meeting at {time}", context = "Title of a new meeting note until it is named. {time} is the start time, for example 5:46 PM." }
 app_at = { text = "{app} at {time}", context = "Title of a new meeting note recorded from a call app until it is named. {app} is the app, for example Zoom; {time} is the start time." }
 
+[documents.templates]
+general = { text = "General meeting", context = "Name of a built-in notes template, shown in the note header and the template menus." }
+one_on_one = "One-on-one"
+stand_up = "Stand-up"
+customer_call = "Customer call"
+sales_discovery = "Sales discovery"
+interview = "Interview"
+project_kickoff = "Project kickoff"
+retrospective = "Retrospective"
+brainstorm = "Brainstorm"
+board_update = "Board or investor update"
+
 [documents.toolbar]
 toggle_sidebar = "Show or hide the sidebar"
 new_note = "New note"

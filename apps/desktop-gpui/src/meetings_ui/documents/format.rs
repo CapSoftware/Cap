@@ -1,3 +1,4 @@
+use cap_meetings::templates::Template;
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, Timelike, Utc};
 
 use crate::i18n::{self, Locale, tr};
@@ -125,6 +126,34 @@ pub fn meeting_title(app_name: Option<&str>, at: NaiveDateTime) -> String {
     }
 }
 
+/// A template's name as the app shows it: Cap's own templates in the app's
+/// language, the person's templates as they named them. The name sent with
+/// a notes request stays the template's own.
+pub fn template_name(template: &Template) -> String {
+    built_in_template_name(template)
+        .map(str::to_string)
+        .unwrap_or_else(|| template.name.clone())
+}
+
+fn built_in_template_name(template: &Template) -> Option<&'static str> {
+    if !template.built_in {
+        return None;
+    }
+    Some(match template.id.as_str() {
+        "general" => tr::documents::templates::general(),
+        "one-on-one" => tr::documents::templates::one_on_one(),
+        "stand-up" => tr::documents::templates::stand_up(),
+        "customer-call" => tr::documents::templates::customer_call(),
+        "sales-discovery" => tr::documents::templates::sales_discovery(),
+        "interview" => tr::documents::templates::interview(),
+        "project-kickoff" => tr::documents::templates::project_kickoff(),
+        "retrospective" => tr::documents::templates::retrospective(),
+        "brainstorm" => tr::documents::templates::brainstorm(),
+        "board-update" => tr::documents::templates::board_update(),
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +163,35 @@ mod tests {
             .unwrap()
             .and_hms_opt(h, m, 0)
             .unwrap()
+    }
+
+    #[test]
+    fn built_in_templates_show_in_the_app_language_and_yours_as_named() {
+        let built_in = cap_meetings::templates::built_in_templates();
+        assert_eq!(built_in.len(), 10);
+        for template in &built_in {
+            // Every built-in id has its own string (en matches the crate's name).
+            assert!(
+                built_in_template_name(template).is_some(),
+                "{}",
+                template.id
+            );
+            assert_eq!(template_name(template), template.name, "{}", template.id);
+        }
+        let mine = Template {
+            id: "weekly".into(),
+            name: "Weekly sync".into(),
+            built_in: false,
+            ..Template::default()
+        };
+        assert_eq!(template_name(&mine), "Weekly sync");
+        let unknown = Template {
+            id: "from-a-newer-cap".into(),
+            name: "Planning".into(),
+            built_in: true,
+            ..Template::default()
+        };
+        assert_eq!(template_name(&unknown), "Planning");
     }
 
     #[test]
@@ -184,6 +242,13 @@ mod tests {
                 "{locale:?}"
             );
         }
+        let general = cap_meetings::templates::built_in_templates().remove(0);
+        i18n::init(Some(Locale::De.code()));
+        assert_eq!(template_name(&general), "Allgemeines Meeting");
+        assert_eq!(
+            general.name, "General meeting",
+            "the request keeps the template's own name"
+        );
         i18n::init(Some(Locale::En.code()));
     }
 

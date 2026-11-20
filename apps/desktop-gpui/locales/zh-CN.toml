@@ -3830,6 +3830,18 @@ untitled = "未命名"
 meeting_at = "{time} 的会议"
 app_at = "{time} 的 {app}"
 
+[documents.templates]
+general = "常规会议"
+one_on_one = "一对一"
+stand_up = "站会"
+customer_call = "客户通话"
+sales_discovery = "销售需求沟通"
+interview = "面试"
+project_kickoff = "项目启动"
+retrospective = "复盘"
+brainstorm = "头脑风暴"
+board_update = "董事会或投资人汇报"
+
 [documents.toolbar]
 toggle_sidebar = "显示或隐藏边栏"
 new_note = "新建笔记"

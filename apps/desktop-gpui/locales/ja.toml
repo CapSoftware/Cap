@@ -3830,6 +3830,18 @@ untitled = "無題"
 meeting_at = "{time}の会議"
 app_at = "{time}の{app}"
 
+[documents.templates]
+general = "一般的な会議"
+one_on_one = "1on1"
+stand_up = "スタンドアップ"
+customer_call = "顧客との通話"
+sales_discovery = "営業ヒアリング"
+interview = "面接"
+project_kickoff = "プロジェクトキックオフ"
+retrospective = "振り返り"
+brainstorm = "ブレインストーミング"
+board_update = "取締役会・投資家向け報告"
+
 [documents.toolbar]
 toggle_sidebar = "サイドバーを表示または非表示"
 new_note = "新規メモ"
