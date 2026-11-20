@@ -13,8 +13,8 @@ import {
 } from "@cap/database/auth/security-emails";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
+	isEmailChangeSendLimited,
 	isEmailChangeVerifyLimited,
-	isEmailCodeSendLimited,
 } from "@/lib/email-code-rate-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
@@ -58,7 +58,7 @@ export async function startEmailChange(
 		return { status: "rate_limited" };
 	}
 	const target = normalizeSignInEmail(newEmail);
-	if (target && (await isEmailCodeSendLimited(target))) {
+	if (target && (await isEmailChangeSendLimited(target))) {
 		return { status: "rate_limited" };
 	}
 	const result = await requestEmailChange(user, newEmail);
