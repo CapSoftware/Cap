@@ -140,10 +140,22 @@ pub fn manual_key_text(input: &str) -> String {
     } else {
         input.split_whitespace().collect()
     };
+    // Without a `+`, the last word must name one key, so a phrase such as
+    // "super cool" or "alt text" stays typed text.
+    let one_key = |word: &str| {
+        modifier(word).is_some()
+            || named(word).is_some()
+            || word.chars().count() == 1
+            || word
+                .strip_prefix(['F', 'f'])
+                .and_then(|number| number.parse::<u8>().ok())
+                .is_some_and(|number| (1..=24).contains(&number))
+    };
     let shortcut = words.len() > 1
         && words[..words.len() - 1]
             .iter()
-            .all(|word| modifier(word).is_some());
+            .all(|word| modifier(word).is_some())
+        && (input.contains('+') || one_key(words[words.len() - 1]));
     if shortcut {
         let last = words[words.len() - 1];
         let mut text: String = words[..words.len() - 1]
@@ -186,14 +198,13 @@ pub fn manual_key_runs(text: &str, split: &str) -> Vec<ManualKeyRun> {
     let shortcut = text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃' | '⇧'));
     let pieces: Vec<String> = match split {
         _ if shortcut => vec![text.to_string()],
-        "keys" => text
-            .chars()
-            .filter(|c| !c.is_control())
-            .map(|c| {
-                if c == ' ' {
+        "keys" => typed_characters(text)
+            .into_iter()
+            .map(|piece| {
+                if piece == " " {
                     "␣".to_string()
                 } else {
-                    c.to_string()
+                    piece
                 }
             })
             .collect(),
@@ -223,6 +234,40 @@ pub fn manual_key_runs(text: &str, split: &str) -> Vec<ManualKeyRun> {
             run
         })
         .collect()
+}
+
+/// `text` as the characters a reader sees, so an accent, a skin tone, a flag
+/// or a joined emoji never becomes a key of its own.
+fn typed_characters(text: &str) -> Vec<String> {
+    let extends_previous = |c: char| {
+        matches!(
+            c as u32,
+            0x0300..=0x036F
+                | 0x1AB0..=0x1AFF
+                | 0x1DC0..=0x1DFF
+                | 0x20D0..=0x20FF
+                | 0xFE20..=0xFE2F
+                | 0x200D
+                | 0xFE00..=0xFE0F
+                | 0x1F3FB..=0x1F3FF
+                | 0xE0020..=0xE007F
+                | 0xE0100..=0xE01EF
+        )
+    };
+    let mut pieces: Vec<String> = Vec::new();
+    let mut after_joiner = false;
+    let mut half_flag = false;
+    for c in text.chars().filter(|c| !c.is_control()) {
+        let regional = ('\u{1F1E6}'..='\u{1F1FF}').contains(&c);
+        let pairs_flag = regional && half_flag;
+        match pieces.last_mut() {
+            Some(last) if after_joiner || pairs_flag || extends_previous(c) => last.push(c),
+            _ => pieces.push(c.to_string()),
+        }
+        after_joiner = c == '\u{200D}';
+        half_flag = regional && !pairs_flag;
+    }
+    pieces
 }
 
 /// How long a hand-made key press stays up: long enough to strike its last
@@ -2610,6 +2655,32 @@ mod manual_key_tests {
         assert_eq!(manual_key_text("hello world"), "hello world");
         assert_eq!(manual_key_text("shift"), "shift");
         assert_eq!(manual_key_text(""), "");
+        assert_eq!(manual_key_text("cmd shift p"), "⌘⇧P");
+        assert_eq!(manual_key_text("ctrl F5"), "⌃F5");
+        assert_eq!(manual_key_text("shift enter"), "⇧⏎");
+        assert_eq!(manual_key_text("cmd+click"), "⌘CLICK");
+        for phrase in ["super cool", "Command center", "alt text", "shift happens"] {
+            assert_eq!(manual_key_text(phrase), phrase);
+        }
+    }
+
+    #[test]
+    fn typing_key_by_key_keeps_each_character_whole() {
+        let texts = |text: &str| {
+            manual_key_runs(text, "keys")
+                .into_iter()
+                .map(|run| run.text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts("ok 👍🏽"), ["o", "k", "␣", "👍🏽"]);
+        assert_eq!(
+            texts("👨\u{200d}👩\u{200d}👧!"),
+            ["👨\u{200d}👩\u{200d}👧", "!"]
+        );
+        assert_eq!(texts("🇺🇸🇬🇧"), ["🇺🇸", "🇬🇧"]);
+        assert_eq!(texts("cafe\u{301}"), ["c", "a", "f", "e\u{301}"]);
+        assert_eq!(texts("1\u{fe0f}\u{20e3}"), ["1\u{fe0f}\u{20e3}"]);
+        assert!(manual_key_runs("", "keys").is_empty());
     }
 
     #[test]
