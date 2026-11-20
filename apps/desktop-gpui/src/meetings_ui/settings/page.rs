@@ -1115,6 +1115,32 @@ impl SettingsWindow {
                 cx,
             ),
         ));
+        // From macOS 27.3 the grant lives under System & App Protection
+        // Override, per meeting app (issue #4410): say so, and show how.
+        if crate::permissions::grants_are_settings_only()
+            && !cap_meeting_platform::accessibility_trusted()
+        {
+            rows.push(
+                self.setting_row(
+                    tr::settings::meetings::transcription::app_names_setup(),
+                    Some(tr::settings::meetings::transcription::app_names_setup_description()),
+                    self.button(
+                        "meetings-app-names-setup",
+                        (ui::ButtonVariant::Gray, None),
+                        tr::settings::meetings::transcription::app_names_setup_button(),
+                        false,
+                        cx,
+                        |_, _, cx| {
+                            crate::permission_help::show(
+                                crate::permission_help::Need::MeetingApps,
+                                cx,
+                            )
+                        },
+                    )
+                    .into_any_element(),
+                ),
+            );
+        }
         if let Some(state) = shared::speakers_model() {
             rows.push(self.setting_row(
                 tr::settings::meetings::transcription::speakers_model(),

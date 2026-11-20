@@ -28,6 +28,14 @@ pub(crate) enum Perm {
     Accessibility,
 }
 
+/// Setup asks for Accessibility (speaker names from meeting apps) only on a
+/// macOS that can still grant it from a prompt or the Accessibility list:
+/// from 27.3 neither works for Cap (issue #4410), so the step would only
+/// lead to System & App Protection Override.
+pub(crate) fn accessibility_step_shown(on_macos: bool, settings_only: bool) -> bool {
+    on_macos && !settings_only
+}
+
 impl Perm {
     pub(crate) const ALL: [Perm; 3] = [Perm::Microphone, Perm::Audio, Perm::Accessibility];
 
@@ -103,9 +111,13 @@ impl SetupWindow {
     }
 
     pub(crate) fn shown_perms(&self) -> Vec<Perm> {
+        let ax = accessibility_step_shown(
+            cfg!(target_os = "macos"),
+            crate::permissions::grants_are_settings_only(),
+        );
         Perm::ALL
             .into_iter()
-            .filter(|perm| *perm != Perm::Accessibility || cfg!(target_os = "macos"))
+            .filter(|perm| *perm != Perm::Accessibility || ax)
             .collect()
     }
 

@@ -817,6 +817,26 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
             "Let Cap resize windows",
         ),
         (
+            tr::permission::help::meeting_title(),
+            "Name speakers from meeting apps",
+        ),
+        (
+            tr::permission::help::meeting_body(),
+            "macOS needs your OK before Cap can see who’s talking in Zoom, Teams or your browser.",
+        ),
+        (
+            tr::permission::help::done_meeting(),
+            "Cap can name speakers from your meeting apps now.",
+        ),
+        (
+            tr::permission::help::meeting_step_choose_apps(),
+            "Pick Choose Apps, then add Zoom, Teams or your browser.",
+        ),
+        (
+            tr::permission::help::meeting_step_add_apps(),
+            "Click + and add Zoom, Teams or your browser.",
+        ),
+        (
             tr::screenshot_editor::loading_preview(),
             "Loading preview...",
         ),

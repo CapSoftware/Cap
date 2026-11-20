@@ -2572,7 +2572,11 @@ impl TranscriptView {
     /// let it, so the next call's speakers get their names. Shown only here,
     /// never while starting or recording, and gone for good once dismissed.
     pub fn render_names_offer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !cfg!(target_os = "macos") || self.is_live() || self.names_offer_hidden {
+        if !cfg!(target_os = "macos")
+            || crate::permissions::grants_are_settings_only()
+            || self.is_live()
+            || self.names_offer_hidden
+        {
             return None;
         }
         let from_app = self

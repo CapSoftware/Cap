@@ -247,3 +247,17 @@ fn every_step_renders_in_both_appearances(cx: &mut TestAppContext) {
         cx.update(|window, cx| view.update(cx, |v, cx| v.go_to(Step::Welcome, window, cx)));
     }
 }
+
+/// From macOS 27.3 Accessibility can't be granted from a prompt or the
+/// Accessibility list (issue #4410), so setup leaves the step out there
+/// instead of leading to System & App Protection Override.
+#[test]
+fn the_accessibility_step_shows_only_where_it_can_be_granted() {
+    use super::permissions::accessibility_step_shown;
+    assert!(accessibility_step_shown(true, false), "macOS before 27.3");
+    assert!(
+        !accessibility_step_shown(true, true),
+        "macOS 27.3 and later"
+    );
+    assert!(!accessibility_step_shown(false, false), "Windows and Linux");
+}
