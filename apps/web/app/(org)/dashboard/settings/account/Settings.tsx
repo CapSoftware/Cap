@@ -243,7 +243,7 @@ export const Settings = ({
 							}
 							description={
 								emailManaged
-									? "Your organization manages this address through single sign-on."
+									? "Your organization manages this address."
 									: "This is the email address you sign in to Cap with."
 							}
 							control={

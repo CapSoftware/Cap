@@ -106,6 +106,13 @@ export function ChangeEmail({
 				return;
 			}
 			setCode("");
+			if (result.status === "invalid") {
+				setStep("email");
+				toast.error(
+					"That code didn't work, so it can't be used again. Send a new code and try once more.",
+				);
+				return;
+			}
 			toast.error(
 				result.status === "taken"
 					? "That email address already has a Cap account."
