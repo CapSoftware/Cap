@@ -625,13 +625,11 @@ impl ExportUi {
         true
     }
 
-    /// Enhance, kept with the rest of the export settings.
     pub(crate) fn set_enhance_quality(&mut self, on: bool) {
         self.enhance_quality = on;
         self.persist();
     }
 
-    /// [`Self::set_enhance_quality`] with no export page open.
     pub(crate) fn save_enhance_quality(on: bool) {
         Self::load().set_enhance_quality(on);
     }
@@ -922,7 +920,6 @@ impl EditorWindow {
             self.toggle_play_from_crop(cx);
         }
         let mut ui = ExportUi::load();
-        // The editor's Enhance switch is the export's.
         ui.enhance_quality = self.preview_enhance;
         ui.source = self.export_source();
         if let Ok(meta) = RecordingMeta::load_for_project(&self.project_path) {

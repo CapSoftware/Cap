@@ -1204,6 +1204,8 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        // An edit lands on the real project, never on a look being previewed.
+        self.end_look_preview(cx);
         self.end_color_history();
         if !self.apply_control_change(change) {
             return;

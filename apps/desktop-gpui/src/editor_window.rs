@@ -3497,6 +3497,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A previewed look is not part of history: put the real project back
+        // first so the step applies to it and nothing restores over it later.
+        self.end_look_preview(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -3511,6 +3514,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_look_preview(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
