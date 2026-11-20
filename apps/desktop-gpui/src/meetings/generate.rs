@@ -48,9 +48,13 @@ pub struct AskTurn {
 pub enum NotesError {
     NotSignedIn,
     UpgradeRequired,
-    RateLimited { retry_after_secs: u64 },
+    RateLimited {
+        retry_after_secs: u64,
+    },
     NotConfigured,
     Offline(String),
+    /// Cap answered, then the answer stopped before it was finished.
+    Interrupted(String),
     Failed(String),
     NothingToSummarize,
     NotFound,
@@ -67,6 +71,7 @@ impl NotesError {
             }
             NotesError::NotConfigured => "Notes generation is not available right now".into(),
             NotesError::Offline(_) => "Could not reach Cap, check your connection".into(),
+            NotesError::Interrupted(_) => "Cap AI stopped partway, try again".into(),
             NotesError::Failed(_) => "Notes could not be generated, try again".into(),
             NotesError::NothingToSummarize => "There is nothing to summarize yet".into(),
             NotesError::NotFound => "This meeting no longer exists".into(),
@@ -419,18 +424,33 @@ pub async fn stream(
         let body = response.text().await.unwrap_or_default();
         return Err(cloud::classify_status(status, &body, retry).into());
     }
+    read_events(response.bytes_stream(), Duration::from_secs(90), &events).await
+}
+
+/// The events of an answer Cap has started. Once it answered, an answer
+/// that stops early (cut off, quiet too long, broken) is an interruption,
+/// not a missing connection.
+pub(crate) async fn read_events<S, B, E>(
+    bytes: S,
+    idle: Duration,
+    events: &flume::Sender<SseEvent>,
+) -> Result<(), NotesError>
+where
+    S: futures_util::Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+{
+    let mut bytes = std::pin::pin!(bytes);
     let mut parser = SseParser::default();
-    let mut bytes = response.bytes_stream();
-    let idle = Duration::from_secs(90);
     loop {
         let next = tokio::time::timeout(idle, bytes.next())
             .await
-            .map_err(|_| NotesError::Offline("the connection went quiet".into()))?;
+            .map_err(|_| NotesError::Interrupted("the answer went quiet".into()))?;
         let Some(chunk) = next else {
             break;
         };
-        let chunk = chunk.map_err(|e| NotesError::Offline(e.to_string()))?;
-        for event in parser.push(&chunk) {
+        let chunk = chunk.map_err(|e| NotesError::Interrupted(e.to_string()))?;
+        for event in parser.push(chunk.as_ref()) {
             let terminal = matches!(event, SseEvent::Done | SseEvent::Error(_));
             if let SseEvent::Error(reason) = &event {
                 return Err(NotesError::Failed(reason.clone()));
@@ -451,5 +471,5 @@ pub async fn stream(
             return Ok(());
         }
     }
-    Err(NotesError::Offline("the stream ended early".into()))
+    Err(NotesError::Interrupted("the answer ended early".into()))
 }

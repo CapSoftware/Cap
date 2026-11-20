@@ -1255,3 +1255,77 @@ fn typing_in_the_page_summary_leaves_the_lines_alone(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(lines(cx) > drawn, "a change to the lines repaints them");
 }
+
+#[test]
+fn the_writing_line_names_the_connection_only_when_offline() {
+    use super::bar::writing_line;
+    assert_eq!(
+        writing_line(None),
+        crate::i18n::tr::documents::notes::writing()
+    );
+    assert_eq!(writing_line(Some(true)), "Waiting for a connection…");
+    assert_eq!(
+        writing_line(Some(false)),
+        "Cap AI is having trouble. Trying again…"
+    );
+}
+
+#[test]
+fn an_answer_that_stops_partway_does_not_blame_the_connection() {
+    use crate::meetings::NotesError;
+    let text = super::pane::notes_error_text(&NotesError::Interrupted("cut".into()));
+    assert_eq!(text, "Cap AI stopped partway.");
+    assert_ne!(
+        text,
+        super::pane::notes_error_text(&NotesError::Offline("cut".into()))
+    );
+}
+
+#[gpui::test]
+fn a_title_sent_with_notes_that_failed_goes_back_to_the_saved_one(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (f, cx) = fixture(cx);
+    let id = f.store.read_with(cx, |s, _| {
+        s.snapshot
+            .docs
+            .iter()
+            .find(|d| d.kind == DocKind::Meeting)
+            .unwrap()
+            .id
+            .clone()
+    });
+    f.store.update(cx, |s, cx| {
+        s.rename(&id, "", Some("Meeting at 5:46 PM".into()), cx)
+    });
+    f.store.update(cx, |s, cx| s.open(Some(id.clone()), cx));
+    cx.run_until_parked();
+    let title = f.pane.read_with(cx, |p, _| p.title.clone());
+    let shown = |cx: &mut VisualTestContext| title.read_with(cx, |t, _| t.text().to_string());
+
+    // Cap AI's title lands with the first words, then the notes fail.
+    f.pane.update_in(cx, |p, window, cx| {
+        p.land_title("Roadmap review", window, cx)
+    });
+    assert_eq!(shown(cx), "Roadmap review");
+    f.pane
+        .update_in(cx, |p, window, cx| p.unland_title(window, cx));
+    assert_eq!(
+        shown(cx),
+        "Meeting at 5:46 PM",
+        "the page shows what is saved"
+    );
+    assert_eq!(f.library.load(&id).unwrap().title, "Meeting at 5:46 PM");
+
+    // A title the person changed stays theirs.
+    f.pane.update_in(cx, |p, window, cx| {
+        p.land_title("Roadmap review", window, cx)
+    });
+    cx.update(|window, cx| {
+        title.update(cx, |t, cx| t.replace_text_in_range(None, " v2", window, cx))
+    });
+    f.pane
+        .update_in(cx, |p, window, cx| p.unland_title(window, cx));
+    let kept = shown(cx);
+    assert!(kept.contains("v2"), "{kept}");
+    assert_ne!(kept, "Meeting at 5:46 PM");
+}

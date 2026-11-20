@@ -206,8 +206,10 @@ pub enum NotesStage {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NotesState {
     pub running: bool,
-    /// Cap couldn't reach the server and tries again shortly.
+    /// Cap tries again shortly: it couldn't reach the server, or (when
+    /// `offline` is false) the server answered with trouble.
     pub waiting: bool,
+    pub offline: bool,
     pub markdown: String,
     pub title: Option<String>,
     pub error: Option<NotesError>,
@@ -223,8 +225,16 @@ const NOTES_RETRY_FOR: Duration = Duration::from_secs(30 * 60);
 pub fn notes_retryable(error: &NotesError) -> bool {
     matches!(
         error,
-        NotesError::Offline(_) | NotesError::Failed(_) | NotesError::RateLimited { .. }
+        NotesError::Offline(_)
+            | NotesError::Interrupted(_)
+            | NotesError::Failed(_)
+            | NotesError::RateLimited { .. }
     )
+}
+
+/// A wait on the network, not on Cap: only then is it the connection.
+pub fn waits_on_connection(error: &NotesError) -> bool {
+    matches!(error, NotesError::Offline(_))
 }
 
 pub fn notes_retry_wait(attempt: usize, error: &NotesError) -> Duration {
@@ -3704,12 +3714,13 @@ impl Meetings {
                     Some(wait) if started.elapsed() + wait < NOTES_RETRY_FOR => {
                         tracing::info!(attempt, ?result, wait_secs = wait.as_secs(), "notes could not reach Cap, trying again");
                         attempt += 1;
-                        this.update(cx, |this, cx| this.notes_waiting(&doc, true, cx))
+                        let offline = result.as_ref().err().is_some_and(waits_on_connection);
+                        this.update(cx, |this, cx| this.notes_waiting(&doc, true, offline, cx))
                             .ok();
                         cx.background_executor().timer(wait).await;
                         let still = this
                             .update(cx, |this, cx| {
-                                this.notes_waiting(&doc, false, cx);
+                                this.notes_waiting(&doc, false, false, cx);
                                 this.notes.get(&doc).is_some_and(|s| s.running)
                             })
                             .unwrap_or(false);
@@ -3787,11 +3798,18 @@ impl Meetings {
         Ok((body.body, body.title_requested, template.id))
     }
 
-    fn notes_waiting(&mut self, doc_id: &str, waiting: bool, cx: &mut Context<Self>) {
+    fn notes_waiting(
+        &mut self,
+        doc_id: &str,
+        waiting: bool,
+        offline: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(state) = self.notes.get_mut(doc_id)
-            && state.waiting != waiting
+            && (state.waiting, state.offline) != (waiting, offline)
         {
             state.waiting = waiting;
+            state.offline = offline;
             cx.emit(MeetingEvent::NotesProgress {
                 doc_id: doc_id.to_string(),
                 stage: NotesStage::Waiting(waiting),

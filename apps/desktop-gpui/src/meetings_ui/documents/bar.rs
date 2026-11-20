@@ -205,6 +205,16 @@ pub enum EndedItem {
     },
 }
 
+/// The bar's line while Cap AI writes: the connection is named only when
+/// Cap can't be reached; a server in trouble says so instead.
+pub(super) fn writing_line(waiting: Option<bool>) -> &'static str {
+    match waiting {
+        None => tr::documents::notes::writing(),
+        Some(true) => tr::documents::notes::waiting(),
+        Some(false) => tr::documents::notes::waiting_server(),
+    }
+}
+
 pub fn ended_item(writing: bool, stopped_at: Option<Instant>, now: Instant) -> EndedItem {
     if writing {
         EndedItem::Writing
@@ -340,13 +350,13 @@ impl RecordingBar {
     }
 
     /// The notes can't reach Cap yet and will try again by themselves.
-    fn notes_waiting(&self, cx: &App) -> bool {
-        let Some(doc_id) = self.doc_id.as_deref() else {
-            return false;
-        };
+    /// Some(offline) while the notes wait to try again.
+    fn notes_waiting(&self, cx: &App) -> Option<bool> {
+        let doc_id = self.doc_id.as_deref()?;
         Meetings::try_global(cx)
-            .and_then(|m| m.read(cx).notes_state(doc_id).map(|s| s.waiting))
-            .unwrap_or(false)
+            .and_then(|m| m.read(cx).notes_state(doc_id).cloned())
+            .filter(|s| s.waiting)
+            .map(|s| s.offline)
     }
 
     fn record_more(&mut self, cx: &mut Context<Self>) {
@@ -773,13 +783,11 @@ impl RecordingBar {
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(palette.muted)
                 .child(breathing_dot(palette.accent, now))
-                .child(div().whitespace_nowrap().child(
-                    if self.notes_waiting(cx) {
-                        tr::documents::notes::waiting()
-                    } else {
-                        tr::documents::notes::writing()
-                    },
-                ))
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .child(writing_line(self.notes_waiting(cx))),
+                )
                 .when(self.can_stop_writing, |el| {
                     el.child(
                         div()

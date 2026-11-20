@@ -4003,12 +4003,14 @@ error_rate_limited_soon = "Too many requests. Try again in a minute."
 error_rate_limited_minutes = { one = "Too many requests. Try again in {count} minute.", other = "Too many requests. Try again in {count} minutes." }
 error_not_configured = "Writing notes isn't available on this server."
 error_offline = "Cap can't be reached. Check your connection."
+error_interrupted = { text = "Cap AI stopped partway.", context = "Shown when the notes or an answer started arriving and then stopped before the end. A Try again button follows." }
 error_nothing = "There isn't enough in the transcript yet."
 error_not_found = "This note no longer exists."
 error_busy = "Notes are already being written."
 error_failed = "The notes couldn't be written."
 writing_yours = { text = "Writing the summary", context = "Faint line where the summary will start, shown while Cap AI writes it after a meeting." }
 waiting = { text = "Waiting for a connection…", context = "Shown instead of Writing summary while Cap cannot reach its server and will try again." }
+waiting_server = { text = "Cap AI is having trouble. Trying again…", context = "Shown instead of Writing summary while Cap's server answers with an error and Cap will try again by itself." }
 recovered = { text = "Recovered after Cap closed unexpectedly. Your audio and transcript are safe.", context = "One-time line on a meeting note Cap finished after it quit by itself." }
 transcript_updated = { text = "Transcript updated with words Cap recovered.", context = "One-time line on a note whose transcript grew after its notes were written." }
 update_notes = "Update notes"

@@ -148,6 +148,7 @@ pub fn notes_error_text(error: &NotesError) -> String {
         }
         NotesError::NotConfigured => tr::documents::notes::error_not_configured().into(),
         NotesError::Offline(_) => tr::documents::notes::error_offline().into(),
+        NotesError::Interrupted(_) => tr::documents::notes::error_interrupted().into(),
         NotesError::NothingToSummarize => tr::documents::notes::error_nothing().into(),
         NotesError::NotFound => tr::documents::notes::error_not_found().into(),
         NotesError::Busy => tr::documents::notes::error_busy().into(),
@@ -2291,7 +2292,12 @@ impl Pane {
                     NotesStage::Failed(error)
                         if !self.auto_retried
                             && !self.has_enhanced()
-                            && matches!(error, NotesError::Offline(_) | NotesError::Failed(_)) =>
+                            && matches!(
+                                error,
+                                NotesError::Offline(_)
+                                    | NotesError::Interrupted(_)
+                                    | NotesError::Failed(_)
+                            ) =>
                     {
                         self.streaming = false;
                         self.generation = None;
@@ -2302,6 +2308,7 @@ impl Pane {
                         self.streaming = false;
                         self.generation = None;
                         self.gen_error = Some(error.clone());
+                        self.unland_title(window, cx);
                         if *error == NotesError::UpgradeRequired {
                             self.refresh_access(cx);
                         }
@@ -2443,7 +2450,7 @@ impl Pane {
 
     /// The title Cap AI chose shows the moment it arrives, not after the
     /// last word of the notes.
-    fn land_title(&mut self, title: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn land_title(&mut self, title: &str, window: &mut Window, cx: &mut Context<Self>) {
         let title = title.trim();
         let auto = self.doc.as_ref().is_some_and(|d| d.title_is_auto);
         if !auto || title.is_empty() || self.title.read(cx).is_focused(window) {
@@ -2455,6 +2462,24 @@ impl Pane {
         self.auto_title = Some(title.to_string());
         let title = title.to_string();
         self.title.update(cx, |input, cx| input.set_text(title, cx));
+    }
+
+    /// Notes that failed take back the title Cap AI sent with them: the
+    /// field shows the saved title again, unless the person changed it.
+    pub(super) fn unland_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(meta) = self.doc.as_ref() else {
+            return;
+        };
+        if !meta.title_is_auto || self.title.read(cx).is_focused(window) {
+            return;
+        }
+        let shown = self.title.read(cx).text().trim().to_string();
+        let saved = meta.title.clone();
+        if self.auto_title.as_deref() != Some(shown.as_str()) || shown == saved.trim() {
+            return;
+        }
+        self.auto_title = Some(saved.clone()).filter(|t| !t.trim().is_empty());
+        self.title.update(cx, |input, cx| input.set_text(saved, cx));
     }
 
     /// One quiet retry a few seconds after a failed write; the writing

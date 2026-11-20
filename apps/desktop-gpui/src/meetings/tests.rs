@@ -1157,3 +1157,55 @@ fn a_repair_that_never_fills_stops_after_a_few_launches() {
     let tries = meta.meeting.as_ref().unwrap().extra.get(persist::REPAIR_TRIES_KEY).cloned();
     assert_eq!(tries, None);
 }
+
+fn read(
+    chunks: Vec<Result<&'static str, &'static str>>,
+) -> (Result<(), NotesError>, Vec<SseEvent>) {
+    let (tx, rx) = flume::unbounded();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let stream = futures_util::stream::iter(chunks);
+    let result = runtime.block_on(generate::read_events(
+        stream,
+        std::time::Duration::from_secs(5),
+        &tx,
+    ));
+    (result, rx.try_iter().collect())
+}
+
+#[test]
+fn an_answer_that_stops_early_is_an_interruption_not_a_lost_connection() {
+    let title = "event: title\ndata: {\"title\":\"Plan\"}\n\n";
+    let delta = "event: delta\ndata: {\"text\":\"## Summary\\n\"}\n\n";
+    let done = "event: done\ndata: {}\n\n";
+
+    let (whole, events) = read(vec![Ok(title), Ok(delta), Ok(done)]);
+    assert_eq!(whole, Ok(()));
+    assert!(events.contains(&SseEvent::Done));
+
+    let (cut, events) = read(vec![Ok(title), Ok(delta)]);
+    assert!(matches!(cut, Err(NotesError::Interrupted(_))), "{cut:?}");
+    assert_eq!(events.len(), 2, "what arrived is still delivered");
+
+    let (broken, _) = read(vec![Ok(title), Err("connection reset")]);
+    assert!(
+        matches!(broken, Err(NotesError::Interrupted(_))),
+        "{broken:?}"
+    );
+
+    for error in [
+        NotesError::Interrupted("cut".into()),
+        NotesError::Failed("HTTP 500".into()),
+    ] {
+        assert!(super::notes_retryable(&error));
+        assert!(
+            !super::waits_on_connection(&error),
+            "{error:?} is not the connection"
+        );
+    }
+    assert!(super::waits_on_connection(&NotesError::Offline(
+        "dns".into()
+    )));
+}
