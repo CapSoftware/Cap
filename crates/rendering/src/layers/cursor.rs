@@ -587,12 +587,25 @@ impl CursorLayer {
         };
 
         let size = {
-            let click_t = get_click_t(
-                &cursor.clicks,
-                (time_s as f64) * 1000.0,
-                uniforms.cursor_event_order.clicks,
-            );
-            let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
+            let time_ms = (time_s as f64) * 1000.0;
+            let cursor_config = &uniforms.project.cursor;
+            let click_scale_factor = match cursor_config.press_animation {
+                CursorPressAnimation::Quick => {
+                    let click_t =
+                        get_click_t(&cursor.clicks, time_ms, uniforms.cursor_event_order.clicks);
+                    click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE
+                }
+                CursorPressAnimation::Held => held_press_scale(
+                    &cursor.clicks,
+                    time_ms,
+                    uniforms.cursor_event_order.clicks,
+                    (!cursor_config.raw).then_some(PressSpring {
+                        tension: f64::from(cursor_config.tension),
+                        mass: f64::from(cursor_config.mass),
+                        friction: f64::from(cursor_config.friction),
+                    }),
+                ),
+            };
             let display = &uniforms.display;
             let size = cursor_height_px(
                 display.frame_size[1],
@@ -1045,6 +1058,161 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64, clicks_ordered: bool) 
     }
 
     1.0
+}
+
+/// The held press: the cursor eases to this size while a button is down.
+const HELD_PRESS_SCALE: f64 = 0.9;
+/// A press this close ahead already starts easing the cursor down, and a
+/// release this close ahead already starts easing it back up.
+const HELD_PRESS_LOOKAHEAD_MS: f64 = 500.0;
+/// The press spring is stepped on a fixed 60 Hz grid, so every frame rate
+/// and every seek reads the same curve.
+const HELD_PRESS_STEP_MS: f64 = 1000.0 / 60.0;
+/// The press spring has settled once its target has held this long.
+const HELD_PRESS_SETTLE_MS: f64 = 2000.0;
+/// Clicks earlier than this are assumed settled, which bounds the work per
+/// frame however fast the clicks come.
+const HELD_PRESS_MAX_HISTORY_MS: f64 = 10_000.0;
+/// Within this of its target, and slower than this per second, the press
+/// spring snaps onto the target.
+const HELD_PRESS_PRECISION: f64 = 0.002;
+
+#[derive(Clone, Copy, Debug)]
+struct PressSpring {
+    tension: f64,
+    mass: f64,
+    friction: f64,
+}
+
+/// Whether the held press aims down at `time_ms`: toward a press up to
+/// `HELD_PRESS_LOOKAHEAD_MS` ahead, away from a release that close, and
+/// otherwise down while the last button event so far was a press. `clicks`
+/// is in time order.
+fn held_press_aims_down(clicks: &[CursorClickEvent], time_ms: f64) -> bool {
+    let next = clicks.partition_point(|click| click.time_ms < time_ms);
+    if let Some(click) = clicks.get(next)
+        && click.time_ms - time_ms <= HELD_PRESS_LOOKAHEAD_MS
+    {
+        return click.down;
+    }
+    let held = clicks.partition_point(|click| click.time_ms <= time_ms);
+    held.checked_sub(1).is_some_and(|last| clicks[last].down)
+}
+
+fn held_press_target(clicks: &[CursorClickEvent], time_ms: f64) -> f64 {
+    if held_press_aims_down(clicks, time_ms) {
+        HELD_PRESS_SCALE
+    } else {
+        1.0
+    }
+}
+
+/// One grid step of the press spring toward `target`, integrated in 1 ms
+/// substeps. While the scale still closes on its target faster than the
+/// undamped spring would carry it there, the step is critically damped, so
+/// it never overshoots.
+fn held_press_step(spring: PressSpring, value: &mut f64, velocity: &mut f64, target: f64) {
+    let distance = target - *value;
+    let omega = (spring.tension / spring.mass).sqrt();
+    let damping = if *velocity * distance > 0.0 && velocity.abs() > distance.abs() * omega {
+        spring
+            .friction
+            .max(2.0 * (spring.mass * spring.tension).sqrt())
+    } else {
+        spring.friction
+    };
+    let substeps = HELD_PRESS_STEP_MS.ceil() as usize;
+    for substep in 1..=substeps {
+        let dt_ms = if substep as f64 > HELD_PRESS_STEP_MS {
+            substep as f64 - HELD_PRESS_STEP_MS
+        } else {
+            1.0
+        };
+        let dt = dt_ms / 1000.0;
+        let acceleration =
+            (-(*value - target) * spring.tension - *velocity * damping) / spring.mass;
+        let next_velocity = *velocity + acceleration * dt;
+        let next_value = *value + next_velocity * dt;
+        if next_velocity.abs() < HELD_PRESS_PRECISION
+            && (next_value - target).abs() < HELD_PRESS_PRECISION
+        {
+            *value = target;
+            *velocity = 0.0;
+            return;
+        }
+        *value = next_value;
+        *velocity = next_velocity;
+    }
+}
+
+/// The held press scale at `time_ms`: the cursor's own spring easing toward
+/// 0.9 or 1.0 as `held_press_target` says, stepped on a fixed grid from the
+/// last moment it was at rest. With no spring (a raw cursor) the scale jumps.
+fn held_press_scale(
+    clicks: &[CursorClickEvent],
+    time_ms: f64,
+    clicks_ordered: bool,
+    spring: Option<PressSpring>,
+) -> f32 {
+    let sorted;
+    let clicks = if clicks_ordered {
+        clicks
+    } else {
+        let mut copy = clicks.to_vec();
+        copy.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        sorted = copy;
+        &sorted
+    };
+    if !time_ms.is_finite() {
+        return 1.0;
+    }
+    let Some(spring) = spring
+        .filter(|spring| spring.tension > 0.0 && spring.mass > 0.0 && spring.friction.is_finite())
+    else {
+        return held_press_target(clicks, time_ms) as f32;
+    };
+
+    // The target only changes at a button event or `HELD_PRESS_LOOKAHEAD_MS`
+    // before one. Walk back to the latest change with a settled gap before
+    // it; the spring rests there.
+    let earliest = time_ms - HELD_PRESS_MAX_HISTORY_MS - HELD_PRESS_SETTLE_MS;
+    let first = clicks.partition_point(|click| click.time_ms < earliest);
+    let upcoming =
+        clicks.partition_point(|click| click.time_ms <= time_ms + HELD_PRESS_LOOKAHEAD_MS);
+    let mut changes: Vec<f64> = clicks[first..upcoming.max(first)]
+        .iter()
+        .flat_map(|click| [click.time_ms - HELD_PRESS_LOOKAHEAD_MS, click.time_ms])
+        .filter(|&change| change <= time_ms)
+        .collect();
+    changes.sort_by(|a, b| b.total_cmp(a));
+    let mut start = None;
+    for change in changes {
+        if start.unwrap_or(time_ms) - change >= HELD_PRESS_SETTLE_MS
+            || time_ms - change > HELD_PRESS_MAX_HISTORY_MS
+        {
+            break;
+        }
+        start = Some(change);
+    }
+    let Some(start) = start else {
+        return held_press_target(clicks, time_ms) as f32;
+    };
+
+    // Each step eases toward the target at its end, so the scale starts
+    // moving on the first step that ends inside a new target.
+    let mut step = (start / HELD_PRESS_STEP_MS).floor() - 1.0;
+    let mut value = held_press_target(clicks, step * HELD_PRESS_STEP_MS);
+    let mut velocity = 0.0;
+    let mut previous = value;
+    while step * HELD_PRESS_STEP_MS < time_ms {
+        previous = value;
+        step += 1.0;
+        let target = held_press_target(clicks, step * HELD_PRESS_STEP_MS);
+        held_press_step(spring, &mut value, &mut velocity, target);
+    }
+    let end = step * HELD_PRESS_STEP_MS;
+    let u = ((time_ms - (end - HELD_PRESS_STEP_MS)) / HELD_PRESS_STEP_MS).clamp(0.0, 1.0);
+    (previous + (value - previous) * u) as f32
 }
 
 struct CursorTexture {
@@ -1842,5 +2010,89 @@ mod tests {
         }
         assert_eq!(ordered_moves, 14);
         assert_eq!(ordered_clicks, 12);
+    }
+
+    fn new_project_press_spring() -> Option<PressSpring> {
+        Some(PressSpring {
+            tension: 125.0,
+            mass: 1.5,
+            friction: 12.0,
+        })
+    }
+
+    fn frame_ms(frame: u32) -> f64 {
+        f64::from(frame) * 1000.0 / 60.0
+    }
+
+    #[test]
+    fn a_held_press_eases_down_before_the_press_and_back_after_the_release() {
+        // Press at frame 492 (8200 ms), release 80 ms later.
+        let clicks = vec![click_event(8200.0, true), click_event(8280.0, false)];
+        let scale = |frame: u32| {
+            held_press_scale(&clicks, frame_ms(frame), true, new_project_press_spring())
+        };
+        // At rest until the press is 500 ms away, easing from the frame it
+        // comes within reach.
+        assert_eq!(scale(400), 1.0);
+        assert_eq!(scale(461), 1.0);
+        assert!((f64::from(scale(462)) - 0.9989).abs() < 0.0005);
+        // Deep in by the press, held through it, and never below 0.9.
+        for (frame, expected) in [(470, 0.945), (480, 0.909), (492, 0.901), (497, 0.922)] {
+            let value = f64::from(scale(frame));
+            assert!((value - expected).abs() < 0.002, "frame {frame}: {value}");
+        }
+        for frame in 440..560 {
+            assert!(scale(frame) >= 0.9 - 1e-6);
+        }
+        // Back to full size, smoothly, within half a second of the release.
+        assert!((f64::from(scale(504)) - 0.972).abs() < 0.002);
+        assert!(scale(520) > 0.99);
+        assert_eq!(scale(560), 1.0);
+    }
+
+    #[test]
+    fn a_held_press_holds_through_a_drag() {
+        let clicks = vec![click_event(1000.0, true), click_event(4000.0, false)];
+        let scale =
+            |time_ms: f64| held_press_scale(&clicks, time_ms, true, new_project_press_spring());
+        assert_eq!(scale(2500.0), 0.9);
+        // The release is 500 ms away: the cursor already grows back.
+        assert_eq!(scale(3450.0), 0.9);
+        assert!(scale(3600.0) > 0.9);
+        assert_eq!(scale(6000.0), 1.0);
+    }
+
+    #[test]
+    fn a_held_press_jumps_without_a_spring_and_ignores_click_order() {
+        let ordered = vec![click_event(1000.0, true), click_event(1080.0, false)];
+        assert_eq!(held_press_scale(&ordered, 400.0, true, None), 1.0);
+        assert_eq!(held_press_scale(&ordered, 600.0, true, None), 0.9);
+        assert_eq!(held_press_scale(&ordered, 1040.0, true, None), 1.0);
+
+        let unordered = vec![ordered[1].clone(), ordered[0].clone()];
+        for time_ms in [550.0, 700.0, 990.0, 1100.0, 1300.0] {
+            assert_eq!(
+                held_press_scale(&ordered, time_ms, true, new_project_press_spring()),
+                held_press_scale(&unordered, time_ms, false, new_project_press_spring()),
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_press_reads_the_same_at_any_frame_rate() {
+        let clicks = vec![click_event(1000.0, true), click_event(1080.0, false)];
+        // A 30 fps frame lands on every other 60 Hz step.
+        for frame in 0..60 {
+            let at_30 = f64::from(frame) * 1000.0 / 30.0;
+            assert_eq!(
+                held_press_scale(&clicks, at_30, true, new_project_press_spring()),
+                held_press_scale(
+                    &clicks,
+                    frame_ms(frame * 2),
+                    true,
+                    new_project_press_spring()
+                ),
+            );
+        }
     }
 }
