@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
 	accounts,
 	authApiKeys,
+	authChallenges,
 	directoryUsers,
 	mcpOAuthTokens,
 	organizationDirectorySync,
@@ -10,6 +11,7 @@ import {
 	organizationSso,
 	organizations,
 	sessions,
+	userPasskeys,
 	users,
 } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
@@ -350,6 +352,27 @@ describe.runIf(Boolean(databaseUrl))(
 					refreshExpiresAt: new Date(Date.now() + 86_400_000),
 				});
 
+			await database()
+				.insert(userPasskeys)
+				.values({
+					id: id(),
+					userId: aliceUser.id,
+					credentialId: randomUUID(),
+					credentialIdHash: randomUUID().replaceAll("-", ""),
+					publicKey: "key",
+					deviceType: "multiDevice",
+					name: "Passkey",
+				});
+			await database()
+				.insert(authChallenges)
+				.values({
+					id: id(),
+					userId: aliceUser.id,
+					purpose: "step_up_grant",
+					secretHash: randomUUID().replaceAll("-", ""),
+					expiresAt: new Date(Date.now() + 300_000),
+				});
+
 			bob.state = "inactive";
 			fixture.users.set(org.directoryId, [bob]);
 			const result = await syncOrganizationDirectory(
@@ -378,6 +401,18 @@ describe.runIf(Boolean(databaseUrl))(
 					.select()
 					.from(authApiKeys)
 					.where(eq(authApiKeys.userId, aliceUser.id)),
+			).toHaveLength(0);
+			expect(
+				await database()
+					.select()
+					.from(userPasskeys)
+					.where(eq(userPasskeys.userId, aliceUser.id)),
+			).toHaveLength(0);
+			expect(
+				await database()
+					.select()
+					.from(authChallenges)
+					.where(eq(authChallenges.userId, aliceUser.id)),
 			).toHaveLength(0);
 			const [token] = await database()
 				.select()
