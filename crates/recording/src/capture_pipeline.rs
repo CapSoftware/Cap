@@ -6,6 +6,13 @@ use crate::{
 
 #[cfg(target_os = "macos")]
 use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig};
+
+/// Studio screen recordings set an explicit keyframe interval on VideoToolbox;
+/// left unset it falls back to FFmpeg's 12-frame GOP, which puts most of the
+/// file's bytes into keyframes.
+#[cfg(target_os = "macos")]
+const STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(1);
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
@@ -178,6 +185,9 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
                         timed_fragments: true,
+                        realtime_videotoolbox_keyframe_interval: Some(
+                            STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL,
+                        ),
                         preset,
                         bpp,
                         output_size,

@@ -690,6 +690,7 @@ impl SegmentedVideoMuxer {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            realtime_videotoolbox_keyframe_interval: None,
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);

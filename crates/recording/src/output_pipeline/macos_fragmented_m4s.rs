@@ -225,6 +225,7 @@ struct EncoderState {
 
 pub struct MacOSFragmentedM4SMuxer {
     timed_fragments: bool,
+    realtime_videotoolbox_keyframe_interval: Option<Duration>,
     base_path: PathBuf,
     video_config: VideoInfo,
     segment_duration: Duration,
@@ -242,6 +243,7 @@ pub struct MacOSFragmentedM4SMuxer {
 
 pub struct MacOSFragmentedM4SMuxerConfig {
     pub timed_fragments: bool,
+    pub realtime_videotoolbox_keyframe_interval: Option<Duration>,
     pub segment_duration: Duration,
     pub preset: H264Preset,
     pub bpp: f32,
@@ -255,6 +257,7 @@ impl Default for MacOSFragmentedM4SMuxerConfig {
     fn default() -> Self {
         Self {
             timed_fragments: false,
+            realtime_videotoolbox_keyframe_interval: None,
             segment_duration: Duration::from_secs(2),
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
@@ -292,6 +295,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
 
         Ok(Self {
             timed_fragments: config.timed_fragments,
+            realtime_videotoolbox_keyframe_interval: config.realtime_videotoolbox_keyframe_interval,
             base_path: output_path,
             video_config,
             segment_duration: config.segment_duration,
@@ -368,6 +372,7 @@ impl MacOSFragmentedM4SMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: true,
+            realtime_videotoolbox_keyframe_interval: self.realtime_videotoolbox_keyframe_interval,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_write_behind(
@@ -771,6 +776,7 @@ impl MacOSFragmentedM4SCameraMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            realtime_videotoolbox_keyframe_interval: None,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_write_behind(
