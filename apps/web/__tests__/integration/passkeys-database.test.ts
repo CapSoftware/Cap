@@ -50,6 +50,7 @@ const fixture = vi.hoisted(() => ({
 	securityCodes: [] as { email: string; code: string }[],
 	passkeyNotices: [] as { email: string; name: string }[],
 	removedNotices: [] as { email: string; name: string }[],
+	afterRegistrationVerify: null as null | (() => Promise<void>),
 }));
 
 vi.mock("@cap/database", () => ({
@@ -63,6 +64,22 @@ vi.mock("@cap/env", () => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "false" },
 }));
 
+vi.mock("@simplewebauthn/server", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("@simplewebauthn/server")>();
+	return {
+		...original,
+		verifyRegistrationResponse: async (
+			...args: Parameters<typeof original.verifyRegistrationResponse>
+		) => {
+			const result = await original.verifyRegistrationResponse(...args);
+			const hook = fixture.afterRegistrationVerify;
+			fixture.afterRegistrationVerify = null;
+			await hook?.();
+			return result;
+		},
+	};
+});
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: async () => fixture.currentUser,
 }));
@@ -261,6 +278,15 @@ async function makeUser(email = `${id()}@example.com`) {
 		.from(users)
 		.where(eq(users.id, userId));
 	if (!row) throw new Error("User was not created.");
+	return row;
+}
+
+async function reloadUser(userId: User.UserId) {
+	const [row] = await database()
+		.select()
+		.from(users)
+		.where(eq(users.id, userId));
+	if (!row) throw new Error("User was not found.");
 	return row;
 }
 
@@ -943,6 +969,43 @@ describe.runIf(Boolean(databaseUrl))(
 						authenticator.assert(await signInChallenge()),
 					),
 				).toBeNull();
+			});
+
+			it("does not add a passkey started before signing out of all devices", async () => {
+				const { signOutAllDevices } = await import(
+					"@/app/(org)/dashboard/settings/account/server"
+				);
+				const user = await makeUser();
+				const options = await createPasskeyRegistrationOptions(user);
+				if (!options) throw new Error("Missing options.");
+				fixture.currentUser = user;
+				await signOutAllDevices();
+				const response = JSON.stringify(
+					new SoftwareAuthenticator(user.id).register(options.challenge),
+				);
+				expect(
+					(await verifyPasskeyRegistration(user.id, response)).status,
+				).toBe("invalid");
+				expect(await listPasskeys(user.id)).toHaveLength(0);
+
+				const fresh = await reloadUser(user.id);
+				const retry = await createPasskeyRegistrationOptions(fresh);
+				if (!retry) throw new Error("Missing options.");
+				fixture.afterRegistrationVerify = async () => {
+					fixture.currentUser = fresh;
+					await signOutAllDevices();
+				};
+				expect(
+					(
+						await verifyPasskeyRegistration(
+							user.id,
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(retry.challenge),
+							),
+						)
+					).status,
+				).toBe("invalid");
+				expect(await listPasskeys(user.id)).toHaveLength(0);
 			});
 
 			it("rejects every action without a session", async () => {
