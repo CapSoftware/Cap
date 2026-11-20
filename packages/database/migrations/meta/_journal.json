@@ -449,6 +449,13 @@
 			"when": 1795200696826,
 			"tag": "0063_passkeys",
 			"breakpoints": true
+		},
+		{
+			"idx": 64,
+			"version": "5",
+			"when": 1795202295715,
+			"tag": "0064_email_change_requests",
+			"breakpoints": true
 		}
 	]
 }
