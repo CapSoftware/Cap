@@ -2286,7 +2286,7 @@ impl EditorWindow {
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.sidebar.desktop_background = stored;
-                this.ensure_source_thumbs(window, cx);
+                this.ensure_preview(window, cx);
                 cx.notify();
             })
             .ok();
