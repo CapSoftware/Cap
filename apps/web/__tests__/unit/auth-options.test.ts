@@ -736,6 +736,40 @@ describe("authOptions", () => {
 		expect(mocks.select).not.toHaveBeenCalled();
 	});
 
+	it("stamps the sign-in time only when someone signs in", async () => {
+		const options = authOptions(CONTEXT);
+		const callbacks = callbacksFor(options);
+		const account = { ...WORKOS_ACCOUNT, provider: "google" };
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account,
+			profile: PROFILE,
+		});
+		const before = Math.floor(Date.now() / 1000);
+		const signedIn = await callbacks.jwt({
+			token: { id: "old-user", email: PROFILE.email },
+			user: AUTHENTICATED_USER,
+			account,
+		});
+		const after = Math.floor(Date.now() / 1000);
+		expect(signedIn.authTime).toBeGreaterThanOrEqual(before);
+		expect(signedIn.authTime).toBeLessThanOrEqual(after);
+
+		const refreshed = await callbacks.jwt({ token: { ...signedIn } });
+		expect(refreshed.authTime).toBe(signedIn.authTime);
+
+		const legacy = await callbacks.jwt({
+			token: { email: AUTHENTICATED_USER.email } as never,
+		});
+		expect(legacy.authTime).toBeUndefined();
+
+		const session = await options.callbacks?.session?.({
+			session: { user: {}, expires: "" },
+			token: { id: AUTHENTICATED_USER.id, authTime: 1234 },
+		} as never);
+		expect((session as { authTime?: number }).authTime).toBe(1234);
+	});
+
 	it.each(["workos", "google", "apple"])(
 		"anchors %s tokens to the authenticated user ID instead of token email",
 		async (provider) => {

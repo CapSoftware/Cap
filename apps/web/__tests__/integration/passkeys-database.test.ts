@@ -47,6 +47,7 @@ const fixture = vi.hoisted(() => ({
 		GOOGLE_CLIENT_SECRET: "google-secret",
 	} as Record<string, string | undefined>,
 	currentUser: null as unknown,
+	session: null as unknown,
 	securityCodes: [] as { email: string; code: string }[],
 	passkeyNotices: [] as { email: string; name: string }[],
 	removedNotices: [] as { email: string; name: string }[],
@@ -82,7 +83,9 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => {
 });
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: async () => fixture.currentUser,
+	getSession: async () => fixture.session,
 }));
+vi.mock("server-only", () => ({}));
 vi.mock("@cap/database/auth/security-emails", () => ({
 	sendAccountSecurityCode: async (email: string, code: string) => {
 		fixture.securityCodes.push({ email, code });
@@ -1061,6 +1064,100 @@ describe.runIf(Boolean(databaseUrl))(
 					).status,
 				).toBe("invalid");
 				expect(await listPasskeys(user.id)).toHaveLength(0);
+			});
+
+			it("lets a fresh sign-in add a passkey from the prompt without a code", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptionsAfterSignIn,
+				} = await actions();
+				const user = await makeUser();
+				const other = await makeUser();
+				fixture.currentUser = user;
+				const now = Math.floor(Date.now() / 1000);
+
+				fixture.session = { user: { id: user.id }, authTime: now - 11 * 60 };
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+				fixture.session = { user: { id: user.id } };
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+				fixture.session = { user: { id: user.id }, authTime: now + 600 };
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+				fixture.session = { user: { id: other.id }, authTime: now };
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+
+				fixture.session = { user: { id: user.id }, authTime: now - 60 };
+				const options = await getPasskeyRegistrationOptionsAfterSignIn();
+				if (options.status !== "ok") throw new Error("No options.");
+				const result = await completePasskeyRegistration(
+					JSON.stringify(
+						new SoftwareAuthenticator(user.id).register(
+							options.options.challenge,
+						),
+					),
+				);
+				expect(result.status).toBe("registered");
+				expect(await listPasskeys(user.id)).toHaveLength(1);
+			});
+
+			it("offers the prompt only after a fresh sign-in, without passkeys, unless snoozed", async () => {
+				const { dismissPasskeyPrompt } = await actions();
+				const { shouldOfferPasskey } = await import("@/lib/passkey-prompt");
+				const user = await makeUser();
+				const now = Math.floor(Date.now() / 1000);
+				const fresh = { user: { id: user.id }, authTime: now - 30 };
+
+				fixture.session = fresh;
+				expect(await shouldOfferPasskey(await reloadUser(user.id))).toBe(true);
+				fixture.session = { user: { id: user.id }, authTime: now - 11 * 60 };
+				expect(await shouldOfferPasskey(await reloadUser(user.id))).toBe(false);
+				fixture.session = null;
+				expect(await shouldOfferPasskey(await reloadUser(user.id))).toBe(false);
+
+				fixture.session = fresh;
+				fixture.currentUser = user;
+				await dismissPasskeyPrompt();
+				const snoozed = await reloadUser(user.id);
+				expect(typeof snoozed.preferences?.passkeyPromptDismissedAt).toBe(
+					"string",
+				);
+				expect(await shouldOfferPasskey(snoozed)).toBe(false);
+				const later = Date.now() + 31 * 24 * 60 * 60 * 1000;
+				fixture.session = {
+					user: { id: user.id },
+					authTime: Math.floor(later / 1000) - 30,
+				};
+				expect(await shouldOfferPasskey(snoozed, later)).toBe(true);
+
+				const withPasskey = await makeUser();
+				await registerPasskey(withPasskey);
+				fixture.session = { user: { id: withPasskey.id }, authTime: now - 30 };
+				expect(await shouldOfferPasskey(await reloadUser(withPasskey.id))).toBe(
+					false,
+				);
+			});
+
+			it("keeps other preferences when snoozing the prompt", async () => {
+				const { dismissPasskeyPrompt } = await actions();
+				const user = await makeUser();
+				await database()
+					.update(users)
+					.set({ preferences: { dashboard: { pageSize: 30 } } as never })
+					.where(eq(users.id, user.id));
+				fixture.currentUser = user;
+				await dismissPasskeyPrompt();
+				const saved = await reloadUser(user.id);
+				expect(saved.preferences?.dashboard?.pageSize).toBe(30);
+				expect(typeof saved.preferences?.passkeyPromptDismissedAt).toBe(
+					"string",
+				);
 			});
 
 			it("rejects every action without a session", async () => {
