@@ -1937,6 +1937,7 @@ impl RenderOnce for TextInput {
             selection_color: self.selection_color,
             multi_line,
             focused,
+            view: Some(window.current_view()),
         };
 
         let border = if focused {
@@ -2043,6 +2044,8 @@ struct TextBody {
     selection_color: Hsla,
     multi_line: bool,
     focused: bool,
+    /// The view rendering the field, told to redraw on every change.
+    view: Option<EntityId>,
 }
 
 struct BodyPrepaint {
@@ -2489,10 +2492,12 @@ impl Element for TextBody {
             ElementInputHandler::new(bounds, self.state.clone()),
             cx,
         );
-        let view = window.current_view();
+        let view = self.view;
         self.state.update(cx, |state, _| {
             state.scroll_x = prepaint.scroll_x;
-            state.painted_in = Some(view);
+            if view.is_some() {
+                state.painted_in = view;
+            }
         });
 
         for quad in prepaint.selection.drain(..) {
@@ -3186,6 +3191,7 @@ mod tests {
             selection_color: gpui::black(),
             multi_line: true,
             focused: false,
+            view: None,
         }
     }
 
