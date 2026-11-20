@@ -122,7 +122,7 @@ class BuildCacheManifestTests(unittest.TestCase):
             if path.is_file() and ".git" not in path.parts and "target" not in path.parts:
                 os.utime(path, None)
         self.run_command(root, env, sys.executable, str(SCRIPT), "apply", MANIFEST)
-        arguments = ["cargo", "build", "--offline"]
+        arguments = ["cargo", "build", "--offline", "--color", "never"]
         for package in packages:
             arguments += ["-p", package]
         output = self.run_command(root, env, *arguments)
