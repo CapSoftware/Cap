@@ -3637,7 +3637,10 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let config_str = std::fs::read_to_string(&config_path)?;
+        let config_str = String::from_utf8(std::fs::read(&config_path)?).map_err(|error| {
+            keep_unreadable_config(&config_path, error.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.utf8_error())
+        })?;
         let migration_keys = serde_json::from_str::<MigrationKeys>(&config_str).ok();
         let missing_screen_motion_blur = migration_keys
             .as_ref()
@@ -3649,7 +3652,7 @@ impl ProjectConfiguration {
                 camera.zoom_size || camera.advanced_shadow || camera.rounding_type
             });
         let mut config: Self = serde_json::from_str(&config_str).map_err(|error| {
-            keep_unreadable_config(&config_path, &config_str);
+            keep_unreadable_config(&config_path, config_str.as_bytes());
             std::io::Error::new(std::io::ErrorKind::InvalidData, error)
         })?;
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
@@ -3711,7 +3714,7 @@ impl ProjectConfiguration {
         }
 
         config.validate().map_err(|error| {
-            keep_unreadable_config(&config_path, &config_str);
+            keep_unreadable_config(&config_path, config_str.as_bytes());
             std::io::Error::new(std::io::ErrorKind::InvalidData, error)
         })?;
 
@@ -3870,7 +3873,7 @@ mod notch_tests {
 /// Callers fall back to a default configuration when the file cannot be
 /// read (written by a newer Cap, edited by hand) and save over it on the next
 /// edit. A copy named after its contents keeps the original recoverable.
-fn keep_unreadable_config(config_path: &Path, contents: &str) {
+fn keep_unreadable_config(config_path: &Path, contents: &[u8]) {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -3879,17 +3882,27 @@ fn keep_unreadable_config(config_path: &Path, contents: &str) {
         "project-config.json.unreadable-{:016x}",
         hasher.finish()
     ));
-    if backup.exists() {
+    if backup.symlink_metadata().is_ok() {
         return;
     }
-    let staged = backup.with_extension("tmp");
-    let result = std::fs::write(&staged, contents).and_then(|()| std::fs::rename(&staged, &backup));
+    // A fresh exclusively created file, never a predictable path that a
+    // project folder from elsewhere could already hold as a symlink.
+    let result = config_path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("project config has no folder"))
+        .and_then(tempfile::NamedTempFile::new_in)
+        .and_then(|mut staged| {
+            staged.write_all(contents)?;
+            staged
+                .persist_noclobber(&backup)
+                .map_err(|error| error.error)?;
+            Ok(())
+        });
     match result {
         Ok(()) => {
             tracing::warn!(path = %backup.display(), "kept a copy of an unreadable project config")
         }
         Err(error) => {
-            let _ = std::fs::remove_file(&staged);
             tracing::warn!(path = %backup.display(), %error, "could not keep a copy of an unreadable project config");
         }
     }
@@ -3933,6 +3946,44 @@ mod tests {
         ProjectConfiguration::load(project.path()).unwrap();
         assert_eq!(backups(), kept);
         assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_config_that_is_not_utf8_is_kept_too() {
+        let project = tempfile::tempdir().unwrap();
+        let unreadable = b"{\"aspectRatio\":\"wide\xff\"}".to_vec();
+        std::fs::write(project.path().join("project-config.json"), &unreadable).unwrap();
+
+        let error = ProjectConfiguration::load(project.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let kept: Vec<_> = std::fs::read_dir(project.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path != &project.path().join("project-config.json"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeping_a_copy_never_writes_through_a_symlink_in_the_project() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        for name in ["project-config.json.tmp", "project-config.tmp"] {
+            std::os::unix::fs::symlink(&victim, project.path().join(name)).unwrap();
+        }
+        std::fs::write(
+            project.path().join("project-config.json"),
+            "{\"aspectRatio\":1}",
+        )
+        .unwrap();
+
+        ProjectConfiguration::load(project.path()).unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
     }
 
     #[test]
