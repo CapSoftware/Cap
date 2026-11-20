@@ -8,7 +8,6 @@ use super::{
     persist,
 };
 
-pub const TRIAL_MEETINGS: u32 = 3;
 const UNWRITTEN_FILE: &str = "unwritten-notes.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4229,7 +4229,7 @@ two = "{a} 和 {b}"
 get_pro = "获取 Cap Pro"
 ready = "Cap AI 已随 Cap Pro 开启。"
 sign_in = "登录"
-signed_out = { other = "登录后，Cap AI 会免费为 {count} 场会议写纪要。" }
+signed_out = "登录后，Cap AI 会免费为你的前几场会议写纪要。"
 spent = "免费会议次数已用完。用 Cap Pro 继续使用 Cap AI。"
 trial = { other = "Cap AI 还可免费为 {count} 场会议写纪要。" }
 unavailable = "此服务器上无法使用 Cap AI。"
