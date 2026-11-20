@@ -195,7 +195,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(14.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.editor.text_3))
                             .child(if is_replace {
                                 tr::editor::audio::library::change_title()
                             } else {
@@ -206,7 +206,7 @@ impl EditorWindow {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(if is_replace {
                         tr::editor::audio::library::change_hint()
                     } else {
@@ -277,7 +277,7 @@ fn render_library_row(
                 .child(
                     div()
                         .text_size(px(11.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child("Lo-Fi"),
                 ),
         )

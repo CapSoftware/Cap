@@ -2266,7 +2266,6 @@ impl EditorWindow {
         ];
         let enabled = self.project.audio.improve;
         let enabled_by_default = self.sidebar.audio_enhancement_default;
-        let accent = Hsla::from(theme.editor.accent);
         let line = Hsla::from(theme.editor.line);
 
         div()
@@ -2296,7 +2295,7 @@ impl EditorWindow {
                             })
                             .child(svg().path("icons/microphone.svg").size(px(16.)).text_color(
                                 if enabled {
-                                    accent
+                                    Hsla::from(theme.editor.accent_ink)
                                 } else {
                                     Hsla::from(theme.editor.text_2)
                                 },
@@ -3204,7 +3203,7 @@ impl EditorWindow {
             .children(self.keyboard_generation_message.as_ref().map(|message| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(message.clone())
                     .into_any_element()
             }))
@@ -3224,7 +3223,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.editor.text_3))
                             .child(tr::editor::tabs::keyboard::empty_description()),
                     )
                     .into_any_element()
@@ -3468,7 +3467,7 @@ impl EditorWindow {
                 div()
                     .text_size(px(12.))
                     .line_height(px(17.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(tr::editor::tabs::keyboard::type_keys_hint()),
             )
             .child(
@@ -3486,7 +3485,7 @@ impl EditorWindow {
                 this.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(tr::editor::tabs::keyboard::type_keys_summary(format!(
                             "{seconds:.1}"
                         ))),
@@ -3695,7 +3694,7 @@ impl EditorWindow {
                 div()
                     .flex_shrink_0()
                     .text_size(px(10.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(crate::i18n::decimal(model.size)),
             )
             .child(
@@ -3760,12 +3759,12 @@ impl EditorWindow {
                                     .path("icons/check.svg")
                                     .size(px(14.))
                                     .flex_shrink_0()
-                                    .text_color(Hsla::from(theme.gray_9)),
+                                    .text_color(Hsla::from(theme.editor.text_3)),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .truncate()
                                     .child(SharedString::from(
                                         tr::editor::tabs::captions::model_downloaded(
@@ -3805,7 +3804,7 @@ impl EditorWindow {
                     div()
                         .id("caption-no-speech")
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(SharedString::from(tr::editor::transcript::no_speech())),
                 );
             } else if snapshot.refining {
@@ -3813,7 +3812,7 @@ impl EditorWindow {
                     div()
                         .id("caption-refining")
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(SharedString::from(
                             tr::editor::tabs::captions::refining_word_timings(),
                         )),
@@ -3887,7 +3886,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.editor.text_3))
                             .child(download_message.unwrap_or_else(|| {
                                 tr::editor::tabs::captions::keep_open().to_string()
                             })),
@@ -3917,13 +3916,13 @@ impl EditorWindow {
             .children((!transcription::supports_parakeet()).then(|| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(tr::editor::tabs::captions::intel_unavailable())
             }))
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(tr::editor::tabs::captions::download_note()),
             )
             .child(
@@ -4064,7 +4063,7 @@ impl EditorWindow {
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_10))
+                                        .text_color(Hsla::from(theme.editor.text_3))
                                         .child(tr::editor::tabs::captions::highlight_note()),
                                 ),
                         )

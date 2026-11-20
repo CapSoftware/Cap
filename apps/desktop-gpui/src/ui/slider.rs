@@ -170,7 +170,7 @@ impl Slider {
             editor.accent
         };
         let mut slider = self
-            .track(px(4.), Hsla::from(editor.ctl_active))
+            .track(px(4.), Hsla::from(editor.track))
             .fill(Hsla::from(fill))
             .thumb(knob, gpui::white(), None);
         if let Some(thumb) = slider.thumb.as_mut() {

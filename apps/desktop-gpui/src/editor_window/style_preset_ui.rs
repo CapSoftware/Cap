@@ -226,7 +226,7 @@ fn default_badge(theme: &crate::theme::Theme) -> gpui::Div {
         .text_size(px(10.5))
         .font_weight(FontWeight::MEDIUM)
         .bg(crate::editor_sidebar::with_alpha(theme.editor.accent, 0.16))
-        .text_color(Hsla::from(theme.editor.accent))
+        .text_color(Hsla::from(theme.editor.accent_ink))
         .child(tr::editor::panel::style_presets::default_badge())
 }
 
@@ -490,7 +490,7 @@ impl EditorWindow {
                                 svg()
                                     .path("icons/check.svg")
                                     .size(px(14.))
-                                    .text_color(Hsla::from(theme.editor.accent)),
+                                    .text_color(Hsla::from(theme.editor.accent_ink)),
                             )
                         }))
                         .child(

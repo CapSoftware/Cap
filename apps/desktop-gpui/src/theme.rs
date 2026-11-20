@@ -241,9 +241,9 @@ impl MaterialTokens {
                 selection: rgba(0x0000001a),
                 // `--macos-settings-text: rgba(0, 0, 0, 0.88)`
                 text: rgba(0x000000e0),
-                // `:root { --macos-settings-muted: rgba(0, 0, 0, 0.48) }`,
-                // not overridden by the glass block.
-                muted: rgba(0x0000007a),
+                // 60% black, so secondary text clears 4.5:1 on the grey
+                // sidebar as well as the cards.
+                muted: rgba(0x00000099),
                 // The glass block *does* override these three:
                 // `--macos-settings-fill: rgba(0, 0, 0, 0.045)`
                 fill: rgba(0x0000000b),
@@ -320,7 +320,7 @@ impl MaterialTokens {
                 control_active: rgba(0x00000014),
                 selection: rgba(0x0000001a),
                 text: rgba(0x000000e0),
-                muted: rgba(0x0000007a),
+                muted: rgba(0x00000099),
                 // The `:root` values, none of them overridden without the
                 // glass block: `--macos-settings-fill: rgba(0, 0, 0, 0.055)`
                 fill: rgba(0x0000000e),
@@ -469,9 +469,10 @@ pub struct Theme {
 
 pub const EDITOR_CARD_RADIUS: f32 = 14.;
 
-/// Editor surfaces, transcribed from the `--ed-*` custom properties in
-/// `apps/desktop/src/styles/theme.css`. A layered, low-contrast system
-/// (window < card < control) with one accent; change both files together.
+/// Editor surfaces: a layered, low-contrast system (window < card < control)
+/// with one accent. Every text and icon colour clears WCAG AA (4.5:1) on each
+/// surface it sits on, and every control part clears 3:1; the tests below
+/// hold both themes to that.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EditorPalette {
     pub window: Rgba,
@@ -486,8 +487,17 @@ pub struct EditorPalette {
     pub ctl: Rgba,
     pub ctl_hover: Rgba,
     pub ctl_active: Rgba,
+    /// Rings, indicators, tints and fills with no text on them.
     pub accent: Rgba,
-    pub accent_2: Rgba,
+    /// Accent-coloured text and icons: deep enough on light, and bright enough
+    /// on dark, to clear 4.5:1 even over a 28% accent tint.
+    pub accent_ink: Rgba,
+    /// A fill under white text or a white thumb, bottom and lit top stops.
+    pub accent_fill: Rgba,
+    pub accent_fill_2: Rgba,
+    /// A slider's rail and an off switch: 3:1 against the surface and the
+    /// white thumb, so the control is visible without colour.
+    pub track: Rgba,
     pub playhead: Rgba,
     pub thumb: Rgba,
     pub seg_label_base: Rgba,
@@ -510,13 +520,16 @@ impl EditorPalette {
             line: rgba(0x00000014),
             line_strong: rgba(0x00000021),
             text_1: rgb(0x17171a),
-            text_2: rgb(0x66666e),
-            text_3: rgb(0x9a9aa2),
+            text_2: rgb(0x4f4f56),
+            text_3: rgb(0x68686f),
             ctl: rgba(0x00000008),
             ctl_hover: rgba(0x0000000f),
             ctl_active: rgba(0x00000018),
             accent: rgb(0x0a7cff),
-            accent_2: rgb(0x2b8cff),
+            accent_ink: rgb(0x0058c8),
+            accent_fill: rgb(0x0563d8),
+            accent_fill_2: rgb(0x1670e6),
+            track: rgba(0x0000006e),
             playhead: rgb(0xff3b30),
             thumb: rgb(0xffffff),
             seg_label_base: rgb(0x000000),
@@ -536,13 +549,16 @@ impl EditorPalette {
             line: rgba(0xffffff12),
             line_strong: rgba(0xffffff1f),
             text_1: rgb(0xf5f5f7),
-            text_2: rgb(0x9d9ea8),
-            text_3: rgb(0x64656e),
+            text_2: rgb(0xb8b9c2),
+            text_3: rgb(0x9a9ba5),
             ctl: rgba(0xffffff0d),
             ctl_hover: rgba(0xffffff16),
             ctl_active: rgba(0xffffff21),
             accent: rgb(0x0a84ff),
-            accent_2: rgb(0x3d9bff),
+            accent_ink: rgb(0x5aaaff),
+            accent_fill: rgb(0x0563d8),
+            accent_fill_2: rgb(0x1670e6),
+            track: rgba(0xffffff5c),
             playhead: rgb(0xff453a),
             thumb: rgb(0xf4f4f6),
             seg_label_base: rgb(0xffffff),
@@ -781,15 +797,6 @@ impl EditorPalette {
         shadow
     }
 
-    /// The selected tile in a set that marks it with a raised pill on dark.
-    pub fn choice_pill_shadow(&self) -> Vec<BoxShadow> {
-        if self.is_dark() {
-            self.pill_shadow()
-        } else {
-            self.choice_selected_shadow()
-        }
-    }
-
     /// Opaque, so the pill's own drop shadow never shows through it.
     pub fn pill_fill(&self) -> Hsla {
         if self.is_dark() {
@@ -932,9 +939,11 @@ impl Theme {
             gray_6: rgb(0xd8d9dd),
             gray_7: rgb(0xcdced2),
             gray_8: rgb(0xbbbbbb),
-            gray_9: rgb(0x8d8d8d),
-            gray_10: rgb(0x838383),
-            gray_11: rgb(0x646464),
+            // 9-11 are the text steps, so each clears 4.5:1 on gray 1-3, and
+            // 11 also on the main window's light glass.
+            gray_9: rgb(0x6c6c6c),
+            gray_10: rgb(0x686868),
+            gray_11: rgb(0x505050),
             gray_12: rgb(0x202020),
 
             blue_3: rgb(0xe6f4fe),
@@ -987,9 +996,10 @@ impl Theme {
             gray_6: rgb(0x424349),
             gray_7: rgb(0x47484e),
             gray_8: rgb(0x5f6067),
-            gray_9: rgb(0x6d6e75),
-            gray_10: rgb(0x7a7b82),
-            gray_11: rgb(0xa1a2a9),
+            // 9-11 are the text steps, so each clears 4.5:1 on gray 1-3.
+            gray_9: rgb(0x909198),
+            gray_10: rgb(0x95969d),
+            gray_11: rgb(0xb0b1b8),
             gray_12: rgb(0xeeeef0),
 
             blue_3: rgb(0x0d2847),
@@ -1387,6 +1397,85 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fg` composited over `bg` (itself over `base`), as the screen shows it.
+    fn contrast_over(fg: Rgba, bg: Rgba, base: Rgba) -> f32 {
+        let flat = |top: Rgba, under: Rgba| Rgba {
+            r: top.r * top.a + under.r * (1. - top.a),
+            g: top.g * top.a + under.g * (1. - top.a),
+            b: top.b * top.a + under.b * (1. - top.a),
+            a: 1.,
+        };
+        let under = flat(bg, base);
+        let over = flat(fg, under);
+        let (a, b) = (relative_luminance(over), relative_luminance(under));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// The Radix steps the other windows write text in clear 4.5:1 on the
+    /// backgrounds they sit on.
+    #[test]
+    fn radix_text_steps_clear_wcag_aa() {
+        let clear = rgba(0x00000000);
+        for theme in [Theme::light(), Theme::dark()] {
+            for ink in [theme.gray_9, theme.gray_10, theme.gray_11, theme.gray_12] {
+                for surface in [theme.gray_1, theme.gray_2, theme.gray_3] {
+                    let ratio = contrast_over(ink, clear, surface);
+                    assert!(ratio >= 4.5, "{ink:?} at {ratio:.2} on {surface:?}");
+                }
+            }
+        }
+    }
+
+    /// WCAG AA in both editor themes: 4.5:1 for every text colour on every
+    /// surface and resting control it sits on, 3:1 for control parts.
+    #[test]
+    fn editor_text_and_controls_clear_wcag_aa_in_both_themes() {
+        let white = rgb(0xffffff);
+        for palette in [EditorPalette::light(), EditorPalette::dark()] {
+            let surfaces = [palette.window, palette.card, palette.card_2];
+            let clear = rgba(0x00000000);
+            for (name, ink) in [
+                ("text_1", palette.text_1),
+                ("text_2", palette.text_2),
+                ("text_3", palette.text_3),
+                ("accent_ink", palette.accent_ink),
+            ] {
+                for surface in surfaces {
+                    for under in [clear, palette.ctl, palette.ctl_hover] {
+                        let ratio = contrast_over(ink, under, surface);
+                        assert!(ratio >= 4.5, "{name} at {ratio:.2} on {surface:?}");
+                    }
+                }
+            }
+            // Accent text sits on accent washes: up to 22% on light (the
+            // open speed chip) and 28% on dark (the hovered add-track button).
+            let deepest_wash = if palette.is_dark() { 0.28 } else { 0.22 };
+            for surface in surfaces {
+                let wash = rgba_alpha(palette.accent, deepest_wash);
+                let ratio = contrast_over(palette.accent_ink, wash, surface);
+                assert!(ratio >= 4.5, "accent_ink at {ratio:.2} on a wash");
+            }
+            // White labels on the filled buttons, at rest and deepened on
+            // hover, measured at the lighter top stop.
+            for fill in [palette.accent_fill, palette.accent_fill_2] {
+                assert!(contrast_over(white, clear, fill) >= 4.5);
+                let hover = mix(fill, rgb(0x000000), 0.08);
+                assert!(contrast_over(white, clear, hover) >= 4.5);
+            }
+            // A rail or off switch reads against the surface and the thumb.
+            for surface in surfaces {
+                let rail = contrast_over(palette.track, clear, surface);
+                assert!(rail >= 3., "track at {rail:.2} on {surface:?}");
+                let thumb = contrast_over(white, palette.track, surface);
+                assert!(palette.is_dark() || thumb >= 3., "thumb at {thumb:.2}");
+            }
+            // Selection rings and indicators.
+            for surface in surfaces {
+                assert!(contrast_over(palette.accent, clear, surface) >= 3.);
+            }
+        }
+    }
 
     /// With no material the palette must be byte-for-byte what it was before
     /// the material existed: the shell is opaque `gray-1`, and every body fill

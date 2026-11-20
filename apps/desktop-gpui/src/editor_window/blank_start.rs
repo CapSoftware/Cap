@@ -433,8 +433,12 @@ impl EditorWindow {
     ) -> gpui::AnyElement {
         let editor = self.theme.editor;
         let (fade, level) = ui::hover_fade(window, cx, "blank-start-clips-fade");
-        let rest = Hsla::from(editor.accent);
-        let hover = Hsla::from(crate::theme::mix(editor.accent, gpui::rgb(0xffffff), 0.1));
+        let rest = Hsla::from(editor.accent_fill);
+        let hover = Hsla::from(crate::theme::mix(
+            editor.accent_fill,
+            gpui::rgb(0x000000),
+            0.08,
+        ));
         let button = div()
             .id(Action::Clips.id())
             .flex()
@@ -446,9 +450,9 @@ impl EditorWindow {
             .bg(ui::hover_blend(rest, hover, level))
             .active(move |style| {
                 style.bg(Hsla::from(crate::theme::mix(
-                    editor.accent,
+                    editor.accent_fill,
                     gpui::rgb(0x000000),
-                    0.08,
+                    0.16,
                 )))
             })
             .text_size(px(14.))

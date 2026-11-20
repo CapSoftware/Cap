@@ -2678,7 +2678,7 @@ fn render_track_content(
                         .px(px(6.))
                         .py(px(2.))
                         .rounded(px(6.))
-                        .bg(Hsla::from(gpui::rgb(0xef4444)))
+                        .bg(Hsla::from(gpui::rgb(0xdc2626)))
                         .text_size(px(10.))
                         .line_height(px(12.))
                         .font_weight(FontWeight::MEDIUM)

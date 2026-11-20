@@ -3018,8 +3018,8 @@ impl EditorWindow {
             ui.phase.is_busy() || (ui.format == ExportFormatKind::Tracks && ui.tracks.is_empty());
         let (bg, hover_bg, text) = if primary {
             (
-                Hsla::from(editor.accent),
-                Hsla::from(editor.accent_2),
+                Hsla::from(editor.accent_fill),
+                Hsla::from(editor.accent_fill_2),
                 gpui::white(),
             )
         } else {
@@ -3040,8 +3040,8 @@ impl EditorWindow {
         };
         let tint = move |amount: f32, toward: u32| {
             gradient(
-                crate::theme::mix(editor.accent_2, gpui::rgb(toward), amount),
-                crate::theme::mix(editor.accent, gpui::rgb(toward), amount),
+                crate::theme::mix(editor.accent_fill_2, gpui::rgb(toward), amount),
+                crate::theme::mix(editor.accent_fill, gpui::rgb(toward), amount),
             )
         };
         div()
@@ -3059,10 +3059,10 @@ impl EditorWindow {
             .font_weight(FontWeight::MEDIUM)
             .text_color(text)
             // Primary matches the editor's Export button: an accent gradient
-            // with a lit top edge, lighter on hover and deeper when pressed.
+            // with a lit top edge, deeper on hover and deeper still pressed.
             .map(|this| {
                 if primary {
-                    this.bg(gradient(editor.accent_2, editor.accent))
+                    this.bg(gradient(editor.accent_fill_2, editor.accent_fill))
                         .shadow(vec![gpui::BoxShadow {
                             color: gpui::hsla(0., 0., 1., 0.22),
                             offset: gpui::point(px(0.), px(1.)),
@@ -3080,8 +3080,8 @@ impl EditorWindow {
                 this.cursor_pointer()
                     .map(|this| {
                         if primary {
-                            this.hover(move |style| style.bg(tint(0.10, 0xffffff)))
-                                .active(move |style| style.bg(tint(0.06, 0x000000)))
+                            this.hover(move |style| style.bg(tint(0.08, 0x000000)))
+                                .active(move |style| style.bg(tint(0.16, 0x000000)))
                         } else {
                             this.hover(move |style| style.bg(hover_bg))
                         }
@@ -3249,7 +3249,7 @@ impl EditorWindow {
                                 div()
                                     .id("reupload-existing-link")
                                     .text_size(px(11.5))
-                                    .text_color(Hsla::from(editor.accent))
+                                    .text_color(Hsla::from(editor.accent_ink))
                                     .truncate()
                                     .cursor_pointer()
                                     .child(link.clone())
@@ -3484,7 +3484,6 @@ impl EditorWindow {
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> impl IntoElement {
         let editor = self.theme.editor;
-        let accent = Hsla::from(editor.accent);
         div()
             .id(id)
             .flex()
@@ -3568,7 +3567,7 @@ impl EditorWindow {
                     .justify_center()
                     .map(|this| {
                         if selected {
-                            this.bg(accent).child(
+                            this.bg(Hsla::from(editor.accent_fill)).child(
                                 svg()
                                     .path("icons/check.svg")
                                     .size(px(12.))

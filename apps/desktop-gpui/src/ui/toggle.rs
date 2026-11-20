@@ -74,7 +74,7 @@ impl Toggle {
             id: id.into(),
             checked,
             size: ToggleSize::Sm,
-            off_fill: Hsla::from(theme.editor.ctl_active),
+            off_fill: Hsla::from(theme.editor.track),
             on_fill: Hsla::from(theme.editor.accent),
             thumb: gpui::white(),
             ring: Hsla::from(theme.editor.line),

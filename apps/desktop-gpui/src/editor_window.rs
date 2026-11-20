@@ -2360,7 +2360,7 @@ fn clip_menu_toggle_row(
                 .size(px(14.))
                 .flex_none()
                 .text_color(Hsla::from(if checked {
-                    theme.editor.accent
+                    theme.editor.accent_ink
                 } else {
                     theme.editor.text_2
                 })),
@@ -11134,7 +11134,7 @@ impl EditorWindow {
                                         .size(px(14.))
                                         .flex_none()
                                         .text_color(Hsla::from(if voice_eq_active {
-                                            theme.editor.accent
+                                            theme.editor.accent_ink
                                         } else {
                                             theme.editor.text_2
                                         })),
@@ -11545,7 +11545,7 @@ impl EditorWindow {
                         this.child(
                             badge(div())
                                 .w(px(14.))
-                                .bg(Hsla::from(theme.editor.accent))
+                                .bg(Hsla::from(theme.editor.accent_fill))
                                 .child(
                                     svg()
                                         .path("icons/check.svg")
@@ -12455,17 +12455,19 @@ impl EditorWindow {
             .rounded(px(8.))
             .when(exportable, |button| button.cursor_pointer())
             .when(!exportable, |button| button.opacity(0.5))
-            .bg(gradient(editor.accent_2, editor.accent))
+            .bg(gradient(editor.accent_fill_2, editor.accent_fill))
+            // Hover deepens rather than lightens, so the white label keeps
+            // its contrast in every state.
             .hover(move |style| {
                 style.bg(gradient(
-                    crate::theme::mix(editor.accent_2, gpui::rgb(0xffffff), 0.10),
-                    crate::theme::mix(editor.accent, gpui::rgb(0xffffff), 0.10),
+                    crate::theme::mix(editor.accent_fill_2, gpui::rgb(0x000000), 0.08),
+                    crate::theme::mix(editor.accent_fill, gpui::rgb(0x000000), 0.08),
                 ))
             })
             .active(move |style| {
                 style.bg(gradient(
-                    crate::theme::mix(editor.accent_2, gpui::rgb(0x000000), 0.06),
-                    crate::theme::mix(editor.accent, gpui::rgb(0x000000), 0.06),
+                    crate::theme::mix(editor.accent_fill_2, gpui::rgb(0x000000), 0.16),
+                    crate::theme::mix(editor.accent_fill, gpui::rgb(0x000000), 0.16),
                 ))
             })
             .text_size(px(13.))
@@ -13205,7 +13207,11 @@ impl EditorWindow {
                 svg()
                     .path("icons/scan-text.svg")
                     .size(px(14.))
-                    .text_color(Hsla::from(if on { editor.accent } else { editor.text_2 })),
+                    .text_color(Hsla::from(if on {
+                        editor.accent_ink
+                    } else {
+                        editor.text_2
+                    })),
             )
             .when(labels, |this| {
                 this.child(tr::editor::window::transport::enhance())
@@ -13307,7 +13313,7 @@ impl EditorWindow {
             .map(|this| {
                 if changed {
                     this.bg(accent.opacity(if open { 0.22 } else { 0.14 }))
-                        .text_color(accent)
+                        .text_color(Hsla::from(editor.accent_ink))
                 } else if open {
                     this.bg(Hsla::from(editor.ctl_hover))
                         .text_color(Hsla::from(editor.text_1))
@@ -13647,11 +13653,7 @@ impl EditorWindow {
                     .active(|style| style.opacity(0.8))
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(if theme.is_dark() {
-                        theme.editor.accent_2
-                    } else {
-                        theme.editor.accent
-                    }))
+                    .text_color(Hsla::from(theme.editor.accent_ink))
                     .child(
                         svg()
                             .path(if self.add_track.is_some() {
@@ -13661,7 +13663,7 @@ impl EditorWindow {
                             })
                             .size(px(14.))
                             .flex_none()
-                            .text_color(Hsla::from(theme.editor.accent)),
+                            .text_color(Hsla::from(theme.editor.accent_ink)),
                     )
                     .child(
                         div()

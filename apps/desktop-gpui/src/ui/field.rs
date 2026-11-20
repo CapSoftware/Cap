@@ -293,7 +293,7 @@ impl Subfield {
             children: Vec::new(),
             gap: None,
             text: Hsla::from(theme.editor.text_1),
-            accent: Hsla::from(theme.editor.accent),
+            accent: Hsla::from(theme.editor.accent_ink),
         }
     }
 

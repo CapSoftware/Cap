@@ -4647,7 +4647,7 @@ impl EditorWindow {
                                             .children(positions_mixed.then(|| {
                                                 div()
                                                     .text_size(px(12.))
-                                                    .text_color(Hsla::from(theme.gray_10))
+                                                    .text_color(Hsla::from(theme.editor.text_3))
                                                     .child(
                                                         tr::editor::panel::zoom::positions_mixed(),
                                                     )
@@ -5476,7 +5476,7 @@ impl EditorWindow {
             .when(italic, |this| this.italic())
             .when(selected, |this| {
                 this.bg(with_alpha(theme.editor.accent, 0.12))
-                    .text_color(Hsla::from(theme.editor.accent))
+                    .text_color(Hsla::from(theme.editor.accent_ink))
             })
             .when(!selected, |this| {
                 this.bg(Hsla::from(theme.editor.ctl))
@@ -5514,7 +5514,7 @@ impl EditorWindow {
                     cx: &mut Context<Self>| {
             let selected = animation == current;
             let color = if selected {
-                accent
+                Hsla::from(theme.editor.accent_ink)
             } else {
                 Hsla::from(theme.editor.text_2)
             };
@@ -6154,7 +6154,7 @@ impl EditorWindow {
                         .justify_between()
                         .items_center()
                         .text_size(px(10.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(label)
                         .child(SharedString::from(format_time(time))),
                 )
@@ -6188,7 +6188,7 @@ impl EditorWindow {
                                     .pt(px(40.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .child(tr::editor::panel::timing::to()),
                             )
                             .child(box_for(tr::editor::panel::timing::end(), end, end_key)),
@@ -6296,7 +6296,7 @@ impl EditorWindow {
                                             div()
                                                 .text_size(px(12.))
                                                 .truncate()
-                                                .text_color(Hsla::from(theme.gray_10))
+                                                .text_color(Hsla::from(theme.editor.text_3))
                                                 .child(tr::editor::panel::audio::change_hint()),
                                         ),
                                 )
@@ -7579,7 +7579,7 @@ impl EditorWindow {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(active, |this| {
-                        this.bg(Hsla::from(theme.editor.accent))
+                        this.bg(Hsla::from(theme.editor.accent_fill))
                             .text_color(gpui::white())
                     })
                     .when(!active, |this| {
@@ -9653,7 +9653,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(self.theme.gray_10))
+                            .text_color(Hsla::from(self.theme.editor.text_3))
                             .child(tr::editor::panel::image::arrange_help()),
                     )
                     .child(

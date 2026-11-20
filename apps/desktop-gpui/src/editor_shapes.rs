@@ -1692,7 +1692,7 @@ impl EditorWindow {
             .px(px(6.))
             .py(px(2.))
             .rounded(px(4.))
-            .bg(Hsla::from(theme.blue_9))
+            .bg(Hsla::from(theme.editor.accent_fill))
             .text_size(px(11.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white())

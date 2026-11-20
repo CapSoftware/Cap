@@ -2709,7 +2709,7 @@ impl EditorWindow {
                 chip.bg(Hsla::from(crate::theme::rgba_alpha(editor.accent, 0.12)))
                     .border_1()
                     .border_color(Hsla::from(editor.accent))
-                    .text_color(Hsla::from(editor.accent))
+                    .text_color(Hsla::from(editor.accent_ink))
             })
             .when(!selected, |chip| {
                 chip.bg(Hsla::from(editor.ctl))
@@ -3097,7 +3097,7 @@ impl EditorWindow {
             .flex_none()
             .overflow_hidden()
             .rounded(px(8.))
-            .bg(gradient(editor.accent_2, editor.accent))
+            .bg(gradient(editor.accent_fill_2, editor.accent_fill))
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white())
@@ -3107,14 +3107,14 @@ impl EditorWindow {
                     .cursor_pointer()
                     .hover(move |style| {
                         style.bg(gradient(
-                            crate::theme::mix(editor.accent_2, gpui::rgb(0xffffff), 0.10),
-                            crate::theme::mix(editor.accent, gpui::rgb(0xffffff), 0.10),
+                            crate::theme::mix(editor.accent_fill_2, gpui::rgb(0x000000), 0.08),
+                            crate::theme::mix(editor.accent_fill, gpui::rgb(0x000000), 0.08),
                         ))
                     })
                     .active(move |style| {
                         style.bg(gradient(
-                            crate::theme::mix(editor.accent_2, gpui::rgb(0x000000), 0.06),
-                            crate::theme::mix(editor.accent, gpui::rgb(0x000000), 0.06),
+                            crate::theme::mix(editor.accent_fill_2, gpui::rgb(0x000000), 0.16),
+                            crate::theme::mix(editor.accent_fill, gpui::rgb(0x000000), 0.16),
                         ))
                     })
                     .on_click(cx.listener(|this, _, window, cx| this.save_crop(window, cx)))

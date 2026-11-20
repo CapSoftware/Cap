@@ -1146,7 +1146,7 @@ impl EditorWindow {
                                     })
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(Hsla::from(theme.gray_9))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .child((index + 1).to_string()),
                             )
                             .children(thumb.map(|image| {
@@ -1208,7 +1208,7 @@ impl EditorWindow {
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .child(subtitle),
                             ),
                     )
@@ -1231,7 +1231,7 @@ impl EditorWindow {
                                     .size(px(28.))
                                     .opacity(0.)
                                     .group_hover(group.clone(), |style| style.opacity(1.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .hover(move |style| {
                                         style
                                             .bg(Hsla::from(theme.gray_5))
@@ -1256,7 +1256,7 @@ impl EditorWindow {
                                     .size(px(28.))
                                     .opacity(0.)
                                     .group_hover(group.clone(), |style| style.opacity(1.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .hover(move |style| {
                                         style.bg(red_3(&theme)).text_color(red_11(&theme))
                                     })
