@@ -4,7 +4,7 @@
 
 pub mod access;
 pub mod accounts;
-mod audio_file;
+pub(crate) mod audio_file;
 pub mod calendar;
 pub mod capture;
 pub mod cloud;
@@ -17,7 +17,7 @@ pub(crate) mod persist;
 pub mod speakers;
 #[cfg(test)]
 mod tests;
-mod timeline;
+pub(crate) mod timeline;
 pub mod voices;
 
 use std::{

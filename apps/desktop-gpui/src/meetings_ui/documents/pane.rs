@@ -105,6 +105,8 @@ enum PaneAction {
     CopyTranscript,
     Export,
     Reveal,
+    OpenInEditor,
+    DownloadAudio,
     Trash,
     Restore,
     DeleteForever,
@@ -2616,11 +2618,27 @@ impl Pane {
             tr::documents::menu::export(),
             PaneAction::Export,
         ));
+        let live = Meetings::try_global(cx)
+            .and_then(|m| m.read(cx).active().map(|a| a.doc_id == meta.id))
+            .unwrap_or(false);
         if has_audio {
             entries.push(Entry::new(
                 tr::documents::menu::reveal(),
                 PaneAction::Reveal,
             ));
+            if live {
+                entries.push(Entry::disabled(tr::documents::menu::open_in_editor()));
+                entries.push(Entry::disabled(tr::documents::menu::download_audio()));
+            } else {
+                entries.push(Entry::new(
+                    tr::documents::menu::open_in_editor(),
+                    PaneAction::OpenInEditor,
+                ));
+                entries.push(Entry::new(
+                    tr::documents::menu::download_audio(),
+                    PaneAction::DownloadAudio,
+                ));
+            }
         }
         entries.push(Entry::separator());
         if meta.is_trashed() {
@@ -2636,9 +2654,6 @@ impl Pane {
                 .danger(),
             );
         } else {
-            let live = Meetings::try_global(cx)
-                .and_then(|m| m.read(cx).active().map(|a| a.doc_id == meta.id))
-                .unwrap_or(false);
             entries.push(if live {
                 Entry::disabled(tr::documents::menu::trash())
             } else {
@@ -2731,6 +2746,16 @@ impl Pane {
                 commands::export_markdown(&self.store, &id, root, window, cx)
             }
             PaneAction::Reveal => commands::reveal_files(&self.store, &id, cx),
+            PaneAction::OpenInEditor => {
+                if let Some(meta) = self.doc.as_ref() {
+                    super::audio::open_in_editor(&self.store, meta, cx);
+                }
+            }
+            PaneAction::DownloadAudio => {
+                if let Some(meta) = self.doc.as_ref() {
+                    super::audio::download(&self.store, meta, window, cx);
+                }
+            }
             PaneAction::Trash => {
                 let store = self.store.downgrade();
                 let restore = id.clone();

@@ -1,4 +1,5 @@
 mod ask;
+mod audio;
 mod bar;
 mod cap_ai;
 mod commands;
