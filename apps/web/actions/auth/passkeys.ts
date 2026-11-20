@@ -1,11 +1,13 @@
 "use server";
 
+import { db } from "@cap/database";
 import {
 	hasStepUpGrant,
 	issueStepUpCode,
 	issueStepUpGrant,
 	verifyStepUpCode,
 } from "@cap/database/auth/auth-challenges";
+import { isFreshSignIn } from "@cap/database/auth/fresh-sign-in";
 import {
 	createPasskeyRegistrationOptions,
 	createPasskeySignInOptions,
@@ -20,12 +22,15 @@ import {
 	sendPasskeyAddedNotice,
 	sendPasskeyRemovedNotice,
 } from "@cap/database/auth/security-emails";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { getCurrentUser, getSession } from "@cap/database/auth/session";
+import { users } from "@cap/database/schema";
 import type {
 	PublicKeyCredentialCreationOptionsJSON,
 	PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
+import { eq, sql } from "drizzle-orm";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 
 export type PasskeyListItem = {
 	id: string;
@@ -168,4 +173,31 @@ export async function removePasskey(passkeyId: string) {
 	const removed = await deletePasskey(user.id, passkeyId);
 	if (removed) await sendPasskeyRemovedNotice(user.email, removed.name);
 	return { removed: removed !== null };
+}
+
+export async function getPasskeyRegistrationOptionsAfterSignIn(): Promise<
+	| { status: "ok"; options: PublicKeyCredentialCreationOptionsJSON }
+	| { status: "verify" | "limit" | "rate_limited" }
+> {
+	const user = await requireUser();
+	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
+	const session = (await getSession()) as {
+		user?: { id?: string };
+		authTime?: number;
+	} | null;
+	if (session?.user?.id !== user.id || !isFreshSignIn(session?.authTime)) {
+		return { status: "verify" };
+	}
+	const options = await createPasskeyRegistrationOptions(user);
+	return options ? { status: "ok", options } : { status: "limit" };
+}
+
+export async function dismissPasskeyPrompt() {
+	const user = await requireUser();
+	await db()
+		.update(users)
+		.set({
+			preferences: sql`JSON_SET(${userPreferencesObject()}, '$.passkeyPromptDismissedAt', ${new Date().toISOString()})`,
+		})
+		.where(eq(users.id, user.id));
 }
