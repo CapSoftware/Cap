@@ -8,7 +8,8 @@
 #
 # Cases: a Local meeting (notes window open, a question asked through the Ask bar with real input,
 # and names for the call's voices read from the call page through UI Automation); a Cloud meeting;
-# the live indicator's banner at the right edge of the screen. Exit code 1 if any check fails.
+# the live indicator's banner at the right edge of the screen; the notes window opened again through
+# its shortcut and a meeting start stays one window, in front. Exit code 1 if any check fails.
 param([string]$Bin, [string]$Work)
 $ErrorActionPreference = 'Continue'
 $Here = $PSScriptRoot
@@ -38,6 +39,13 @@ public class CapCi {
   [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);
+  public static void CtrlAlt(byte key) {
+    keybd_event(0x11, 0, 0, UIntPtr.Zero); keybd_event(0x12, 0, 0, UIntPtr.Zero);
+    keybd_event(key, 0, 0, UIntPtr.Zero); keybd_event(key, 0, 2, UIntPtr.Zero);
+    keybd_event(0x12, 0, 2, UIntPtr.Zero); keybd_event(0x11, 0, 2, UIntPtr.Zero);
+  }
   [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
@@ -158,11 +166,42 @@ function Indicator {
     $(if ($ok) { 'ALL_PASS' } else { 'SOME_FAILED' })) | Tee-Object "$R\check.txt"
 }
 
+function NotesWindow {
+  # Opening the notes window again (its shortcut, then a meeting start) raises the one that is
+  # open: exactly one "Cap Notes" window, in front. Real key input, no hooks.
+  $R = "$Work\notes-window"; New-Item -ItemType Directory -Force "$R\data\meetings", "$R\shots" | Out-Null
+  '{"enabled": true, "setupCompleted": true, "transcription": {"engine": "local", "live": true}}' | Set-Content -Encoding ascii "$R\data\meetings\settings.json"
+  '{"general_settings":{"hasCompletedOnboarding":true,"hasCompletedStartup":true,"enableNotifications":false,"enableTelemetry":false,"recordingCountdown":0},"hotkeys":{"hotkeys":{"openMeetingNotes":{"code":"KeyN","meta":false,"ctrl":true,"alt":true,"shift":false},"toggleMeetingNotes":{"code":"KeyY","meta":false,"ctrl":true,"alt":true,"shift":false}}}}' | Set-Content -Encoding ascii "$R\data\store"
+  foreach ($k in 'CAP_GPUI_AUTO_MEETING', 'CAP_GPUI_AUTO_MEETING_MIC_SCRIPT', 'CAP_GPUI_DOCS_OPEN', 'CAP_GPUI_MEETING_UI') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+  $env:CAP_GPUI_APP_DATA_DIR = "$R\data"; $env:CAP_GPUI_LOG_DIR = "$R\logs"
+  $p = Start-Process -PassThru -FilePath $Bin
+  Start-Sleep -Seconds 12
+  $lines = @()
+  function Look($label) {
+    $all = @(AppWindows $p.Id)
+    $notes = @($all | Where-Object { $_.Title -eq 'Cap Notes' })
+    $front = [CapCi]::GetForegroundWindow()
+    $inFront = @($notes | Where-Object { $_.H -eq $front }).Count -eq 1
+    "$label notes=$($notes.Count) front=$inFront"
+  }
+  [CapCi]::CtrlAlt(0x4E); Start-Sleep -Seconds 3; $lines += Look 'open'
+  $main = AppWindows $p.Id | Where-Object { $_.Title -eq 'Cap' } | Select-Object -First 1
+  if ($main) { [CapCi]::SetForegroundWindow($main.H) | Out-Null }; Start-Sleep -Seconds 1
+  [CapCi]::CtrlAlt(0x4E); Start-Sleep -Seconds 3; $lines += Look 'open-again'
+  [CapCi]::CtrlAlt(0x59); Start-Sleep -Seconds 4; $lines += Look 'meeting'
+  [CapCi]::CtrlAlt(0x59); Start-Sleep -Seconds 2
+  Shot "$R\shots\notes-window.png"
+  Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+  $ok = (@($lines | Where-Object { $_ -notmatch 'notes=1 front=True' }).Count -eq 0)
+  ($lines | ForEach-Object { "$(if ($_ -match 'notes=1 front=True') { 'PASS' } else { 'FAIL' }) $_" }) + @($(if ($ok) { 'ALL_PASS' } else { 'SOME_FAILED' })) | Tee-Object "$R\check.txt"
+}
+
 Meeting 'local' 'local' 'What did Ana say about the plan?'
 Meeting 'cloud' 'cloud' $null
 Indicator
+NotesWindow
 $failed = 0
-foreach ($c in 'local', 'cloud', 'indicator') {
+foreach ($c in 'local', 'cloud', 'indicator', 'notes-window') {
   if (-not (Select-String -Quiet -Path "$Work\$c\check.txt" -Pattern 'ALL_PASS' -ErrorAction SilentlyContinue)) { "case $c failed"; $failed = 1 }
 }
 exit $failed

@@ -9,7 +9,8 @@
 # stub_server.py (capabilities, transcription, notes and Ask), never a real Cap server.
 #
 # Cases: a Local meeting with the notes window open and a question asked through the Ask bar with
-# real X input; a Cloud meeting; the live indicator's banner at the right edge of the screen.
+# real X input; a Cloud meeting; the live indicator's banner at the right edge of the screen; the
+# notes window opened again through its shortcut and a meeting start stays one window, in front.
 # Each case writes <work>/<case>/check.txt; the script fails if any check fails.
 set -uo pipefail
 BIN=$1; WORK=$2
@@ -152,11 +153,47 @@ print("ALL_PASS" if ok else "SOME_FAILED")
 PY
 }
 
+notes_window() { # opening the notes window again (its shortcut, then a meeting start) raises the one
+  # that is open, under a window manager: exactly one "Cap Notes" window, and it is the active one.
+  local R=$WORK/notes-window; mkdir -p "$R/home" "$R/data/meetings" "$R/shots"
+  echo '{"enabled": true, "setupCompleted": true, "transcription": {"engine": "local", "live": true}}' > "$R/data/meetings/settings.json"
+  echo '{"general_settings":{"hasCompletedOnboarding":true,"hasCompletedStartup":true,"enableNotifications":false,"enableTelemetry":false,"recordingCountdown":0},"hotkeys":{"hotkeys":{"openMeetingNotes":{"code":"KeyN","meta":false,"ctrl":true,"alt":true,"shift":false},"toggleMeetingNotes":{"code":"KeyY","meta":false,"ctrl":true,"alt":true,"shift":false}}}}' > "$R/data/store"
+  local M=$R/home/.local/share/so.cap.desktop/transcription_models
+  mkdir -p "$M"; for f in "$MODELS"/*; do ln -s "$f" "$M/"; done
+  openbox > "$R/openbox.log" 2>&1 &
+  local WM=$!
+  sleep 1
+  env HOME="$R/home" CAP_GPUI_APP_DATA_DIR="$R/data" CAP_GPUI_NO_TRAY=1 RUST_LOG=warn,cap_gpui=info \
+    "$BIN" < /dev/null > "$R/app.log" 2>&1 &
+  local P=$!
+  sleep 10
+  look() {
+    local active notes
+    notes=$(xwininfo -root -tree | grep -c '"Cap Notes"')
+    active=$(xdotool getwindowname "$(xdotool getactivewindow 2> /dev/null)" 2> /dev/null)
+    echo "$1 notes=$notes active=$active" >> "$R/states.txt"
+  }
+  : > "$R/states.txt"
+  xdotool key ctrl+alt+n; sleep 3; look open
+  local main
+  main=$(xdotool search --name '^Cap$' 2> /dev/null | head -1)
+  [ -n "$main" ] && xdotool windowactivate "$main" 2> /dev/null; sleep 1
+  xdotool key ctrl+alt+n; sleep 3; look open-again
+  xdotool key ctrl+alt+y; sleep 4; look meeting
+  xdotool key ctrl+alt+y; sleep 2
+  shot "$R/shots/notes-window.png"
+  kill $P $WM; sleep 1; kill -9 $P 2> /dev/null
+  awk '{ ok = ($2 == "notes=1" && $3 == "active=Cap" && $4 == "Notes"); bad += !ok
+         print (ok ? "PASS" : "FAIL"), $0 } END { print (bad || NR < 3 ? "SOME_FAILED" : "ALL_PASS") }' \
+    "$R/states.txt" | tee "$R/check.txt"
+}
+
 meeting local "local" "What did Ana say about the plan?"
 meeting cloud "cloud"
 indicator
+notes_window
 failed=0
-for c in local cloud indicator; do
+for c in local cloud indicator notes-window; do
   grep -q ALL_PASS "$WORK/$c/check.txt" 2> /dev/null || { echo "case $c failed"; failed=1; }
 done
 exit $failed
