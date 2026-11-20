@@ -27,9 +27,45 @@ const STALL_AFTER: Duration = Duration::from_secs(3);
 /// broken; a quiet room is never this quiet.
 const SILENT_AFTER: Duration = Duration::from_secs(120);
 const LEVEL_INTERVAL: Duration = Duration::from_millis(100);
-const PARTIAL_EVERY_SAMPLES: u64 = RATE as u64;
-const PARTIAL_MIN_SAMPLES: usize = RATE as usize * 3 / 2;
-const PARTIAL_GROWTH_SAMPLES: usize = RATE as usize * 2;
+/// A caption pass hears only the audio after the words it already agreed
+/// on (engine.rs `LiveSegment`), so it costs about the same early and late
+/// in a segment and can run every second.
+const PARTIAL_EVERY_SAMPLES: u64 = RATE as u64 / 2;
+const PARTIAL_MIN_SAMPLES: usize = RATE as usize;
+const PARTIAL_GROWTH_SAMPLES: usize = RATE as usize;
+
+/// Debug builds: `CAP_GPUI_MEETING_PARTIAL=<every_ms>,<min_ms>,<growth_ms>`
+/// overrides the caption cadence (measurements).
+fn partial_cadence() -> (u64, usize, usize) {
+    static CADENCE: std::sync::OnceLock<(u64, usize, usize)> = std::sync::OnceLock::new();
+    *CADENCE.get_or_init(|| {
+        let default = (
+            PARTIAL_EVERY_SAMPLES,
+            PARTIAL_MIN_SAMPLES,
+            PARTIAL_GROWTH_SAMPLES,
+        );
+        if !cfg!(debug_assertions) {
+            return default;
+        }
+        let Ok(value) = std::env::var("CAP_GPUI_MEETING_PARTIAL") else {
+            return default;
+        };
+        let ms: Vec<u64> = value
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
+        let samples = |ms: u64| ms * u64::from(RATE) / 1000;
+        match ms.as_slice() {
+            [every, min, growth] => (
+                samples(*every),
+                samples(*min) as usize,
+                samples(*growth) as usize,
+            ),
+            _ => default,
+        }
+    })
+}
+
 /// About -80 dBFS: below any real microphone's noise floor.
 const SOUND_PEAK: f32 = 1e-4;
 /// A failed audio file is tried again as a new part this often.
@@ -723,7 +759,7 @@ impl SourceWorker {
             self.emit_segment(segment);
         }
         self.since_partial += samples.len() as u64;
-        if self.since_partial >= PARTIAL_EVERY_SAMPLES {
+        if self.since_partial >= partial_cadence().0 {
             self.since_partial = 0;
             self.offer_partial();
         }
@@ -865,12 +901,13 @@ impl SourceWorker {
         let Some((start, samples)) = self.segmenter.open_snapshot() else {
             return;
         };
-        if samples.len() < PARTIAL_MIN_SAMPLES {
+        let (_, min, growth) = partial_cadence();
+        if samples.len() < min {
             return;
         }
         if let Some((previous_start, previous_len)) = self.last_partial
             && previous_start == start
-            && samples.len() < previous_len + PARTIAL_GROWTH_SAMPLES
+            && samples.len() < previous_len + growth
         {
             return;
         }
