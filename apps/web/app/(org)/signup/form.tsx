@@ -27,6 +27,7 @@ import { trackEvent } from "@/app/utils/analytics";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
+import { signInWithGoogleOneTap, useGoogleOneTap } from "../google-one-tap";
 import {
 	clearOnboardingNextPath,
 	rememberOnboardingNextPath,
@@ -69,6 +70,33 @@ export function SignupForm() {
 		() => (next ? getSafeNextPath(next, window.location.origin) : null),
 		[next],
 	);
+	const publicEnv = usePublicEnv();
+	const handleGoogleOneTapCredential = useCallback(
+		(credential: string) => {
+			void signInWithGoogleOneTap({
+				credential,
+				nextPath: getNextPath(),
+				isSignup: true,
+				authSurface: "signup",
+			});
+		},
+		[getNextPath],
+	);
+	const cancelGoogleOneTap = useGoogleOneTap({
+		clientId: publicEnv.googleAuthAvailable
+			? publicEnv.googleOneTapClientId
+			: null,
+		enabled:
+			!showOrgInput &&
+			!emailSent &&
+			!searchParams?.get("error") &&
+			!searchParams?.get("mobileProvider") &&
+			!searchParams?.get("organizationId") &&
+			!searchParams?.get("connection_id") &&
+			searchParams?.get("sso") !== "1",
+		context: "signup",
+		onCredential: handleGoogleOneTapCredential,
+	});
 
 	useEffect(() => {
 		const nextPath = getNextPath();
@@ -164,6 +192,7 @@ export function SignupForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = () => {
+		cancelGoogleOneTap();
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "google",
@@ -186,6 +215,7 @@ export function SignupForm() {
 		(identifier: string, connectionId?: string) => {
 			if (workosSignInPending.current) return;
 			workosSignInPending.current = true;
+			cancelGoogleOneTap();
 			setOrganizationName(null);
 
 			startSsoTransition(async () => {
@@ -222,7 +252,7 @@ export function SignupForm() {
 				}
 			});
 		},
-		[getNextPath],
+		[cancelGoogleOneTap, getNextPath],
 	);
 
 	useEffect(() => {
@@ -364,6 +394,7 @@ export function SignupForm() {
 										noValidate
 										onSubmit={async (e) => {
 											e.preventDefault();
+											cancelGoogleOneTap();
 
 											const remainingSeconds =
 												getEmailCodeCooldownSeconds(lastEmailSentTime);
@@ -406,7 +437,10 @@ export function SignupForm() {
 										className="flex flex-col space-y-3"
 									>
 										<NormalSignup
-											setShowOrgInput={setShowOrgInput}
+											setShowOrgInput={(show) => {
+												if (show) cancelGoogleOneTap();
+												setShowOrgInput(show);
+											}}
 											email={email}
 											emailSent={emailSent}
 											setEmail={setEmail}
