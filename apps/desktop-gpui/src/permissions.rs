@@ -34,14 +34,22 @@ use crate::i18n::tr;
 pub enum OSPermission {
     ScreenRecording,
     Accessibility,
+    /// Keystrokes. Before macOS 27.3 Accessibility covers reading key state;
+    /// from 27.3 Input Monitoring is the grant that does it without the
+    /// System & App Protection Override warnings (issue #4410).
+    InputMonitoring,
     Microphone,
     Camera,
 }
 
+/// How many permissions [`OSPermission::ALL`] holds, for per-row arrays.
+pub const PERMISSION_COUNT: usize = 5;
+
 impl OSPermission {
-    pub const ALL: &'static [Self] = &[
+    pub const ALL: &'static [Self; PERMISSION_COUNT] = &[
         Self::ScreenRecording,
         Self::Accessibility,
+        Self::InputMonitoring,
         Self::Microphone,
         Self::Camera,
     ];
@@ -50,6 +58,7 @@ impl OSPermission {
         match self {
             Self::ScreenRecording => "Screen Recording",
             Self::Accessibility => "Accessibility",
+            Self::InputMonitoring => "Input Monitoring",
             Self::Microphone => "Microphone",
             Self::Camera => "Camera",
         }
@@ -69,15 +78,25 @@ impl OSPermission {
         match self {
             Self::ScreenRecording => tr::permission::name::screen_recording(),
             Self::Accessibility => tr::permission::name::accessibility(),
+            Self::InputMonitoring => tr::permission::name::input_monitoring(),
             Self::Microphone => tr::permission::name::microphone(),
             Self::Camera => tr::permission::name::camera(),
         }
     }
 
     /// Screen recording and accessibility gate the app; mic and camera are
-    /// optional. Same split as the Tauri app's `necessary_granted`.
+    /// optional. Same split as the Tauri app's `necessary_granted`, except
+    /// that accessibility is optional where grants are Settings-only.
     pub fn required(self) -> bool {
-        matches!(self, Self::ScreenRecording | Self::Accessibility)
+        self.required_when(grants_are_settings_only())
+    }
+
+    fn required_when(self, settings_only: bool) -> bool {
+        match self {
+            Self::ScreenRecording => true,
+            Self::Accessibility => !settings_only,
+            Self::InputMonitoring | Self::Microphone | Self::Camera => false,
+        }
     }
 
     /// The exact System Settings pane, verbatim from
@@ -90,6 +109,9 @@ impl OSPermission {
             }
             Self::Accessibility => {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            Self::InputMonitoring => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
             }
             Self::Microphone => {
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
@@ -147,6 +169,9 @@ impl MediaAuthorization {
 pub struct RawPermissions {
     pub screen_granted: bool,
     pub accessibility_granted: bool,
+    /// `IOHIDCheckAccess` for listen events, which, unlike the other boolean
+    /// APIs, tells an explicit denial apart from never asked.
+    pub input_monitoring: MediaAuthorization,
     pub microphone: MediaAuthorization,
     pub camera: MediaAuthorization,
 }
@@ -164,6 +189,7 @@ pub struct AttemptedFlags {
 pub struct OSPermissionsCheck {
     pub screen_recording: OSPermissionStatus,
     pub accessibility: OSPermissionStatus,
+    pub input_monitoring: OSPermissionStatus,
     pub microphone: OSPermissionStatus,
     pub camera: OSPermissionStatus,
 }
@@ -173,6 +199,7 @@ impl OSPermissionsCheck {
         match permission {
             OSPermission::ScreenRecording => self.screen_recording,
             OSPermission::Accessibility => self.accessibility,
+            OSPermission::InputMonitoring => self.input_monitoring,
             OSPermission::Microphone => self.microphone,
             OSPermission::Camera => self.camera,
         }
@@ -189,20 +216,139 @@ impl OSPermissionsCheck {
     }
 }
 
+/// macOS 27.3 changed how Screen Recording and Accessibility are granted
+/// (issue #4410, measured on 27.3 beta 2, 26C5047e): `CGRequestScreenCaptureAccess`
+/// and `AXIsProcessTrustedWithOptions` no longer prompt or add the app to the
+/// System Settings list (tccd logs "does not allow prompting"), the
+/// Accessibility list only takes assistive-technology apps, and its URL now
+/// opens System & App Protection Override. Cursor position and mouse buttons
+/// stay readable without any grant, so accessibility stops gating the app.
+pub fn grants_are_settings_only() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static SETTINGS_ONLY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *SETTINGS_ONLY.get_or_init(|| {
+            macos::product_version()
+                .as_deref()
+                .is_some_and(version_has_settings_only_grants)
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+fn version_has_settings_only_grants(version: &str) -> bool {
+    let mut parts = version
+        .trim()
+        .split('.')
+        .map(|part| part.parse::<u32>().ok());
+    let (Some(Some(major)), minor) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let minor = minor.flatten().unwrap_or(0);
+    (major, minor) >= (27, 3)
+}
+
+/// The grant that lets Cap read which keys are down while recording: from
+/// macOS 27.3 Input Monitoring, which is added with + like Screen Recording;
+/// before, Accessibility (measured on 27.3 beta 2: with Input Monitoring on,
+/// `CGEventSourceKeyState` and a listen-only tap both see other apps' keys).
+pub fn keystroke_permission() -> OSPermission {
+    keystroke_permission_when(grants_are_settings_only())
+}
+
+fn keystroke_permission_when(settings_only: bool) -> OSPermission {
+    if settings_only {
+        OSPermission::InputMonitoring
+    } else {
+        OSPermission::Accessibility
+    }
+}
+
+/// Whether one preflight sweep shows `permission` granted.
+pub fn raw_granted(raw: &RawPermissions, permission: OSPermission) -> bool {
+    match permission {
+        OSPermission::ScreenRecording => raw.screen_granted,
+        OSPermission::Accessibility => raw.accessibility_granted,
+        OSPermission::InputMonitoring => raw.input_monitoring == MediaAuthorization::Authorized,
+        OSPermission::Microphone => raw.microphone == MediaAuthorization::Authorized,
+        OSPermission::Camera => raw.camera == MediaAuthorization::Authorized,
+    }
+}
+
+/// Live check for the in-app help: granted, or not something this platform
+/// asks for at all.
+pub fn granted_now(permission: OSPermission) -> bool {
+    match crate::permissions_ui::sweep_raw_preflight() {
+        Some(raw) => raw_granted(&raw, permission),
+        None => true,
+    }
+}
+
+static KEYS_AT_LAUNCH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Record whether keystrokes were allowed when this process started. Called
+/// once at startup; later callers fall back to the first answer they see.
+pub fn note_launch_grants() -> bool {
+    *KEYS_AT_LAUNCH.get_or_init(|| granted_now(keystroke_permission()))
+}
+
+/// Keystrokes are being captured right now: granted, and (for Input
+/// Monitoring, which macOS only applies to a new process) granted before
+/// this launch.
+pub fn keystrokes_live() -> bool {
+    let permission = keystroke_permission();
+    granted_now(permission) && (permission != OSPermission::InputMonitoring || note_launch_grants())
+}
+
+/// Granted, but waiting on a relaunch to take effect.
+pub fn keystrokes_need_relaunch() -> bool {
+    keystroke_permission() == OSPermission::InputMonitoring
+        && !note_launch_grants()
+        && granted_now(OSPermission::InputMonitoring)
+}
+
 /// Pure classification -- the whole status state machine, unit-tested below.
 /// `None` is a platform that needs nothing.
 pub fn classify(raw: Option<RawPermissions>, attempted: AttemptedFlags) -> OSPermissionsCheck {
+    classify_when(raw, attempted, grants_are_settings_only())
+}
+
+/// Where grants are Settings-only an ungranted accessibility row is
+/// `NotNeeded`, so it neither renders nor gates; a grant carried over from an
+/// older macOS still shows as granted.
+pub fn classify_when(
+    raw: Option<RawPermissions>,
+    attempted: AttemptedFlags,
+    settings_only: bool,
+) -> OSPermissionsCheck {
     let Some(raw) = raw else {
         return OSPermissionsCheck {
             screen_recording: OSPermissionStatus::NotNeeded,
             accessibility: OSPermissionStatus::NotNeeded,
+            input_monitoring: OSPermissionStatus::NotNeeded,
             microphone: OSPermissionStatus::NotNeeded,
             camera: OSPermissionStatus::NotNeeded,
         };
     };
+    let accessibility = if settings_only && !raw.accessibility_granted {
+        OSPermissionStatus::NotNeeded
+    } else {
+        bool_status(raw.accessibility_granted, attempted.accessibility)
+    };
+    // Before 27.3 Accessibility already covers keystrokes, so Input
+    // Monitoring only gets a row where Accessibility moved to Override.
+    let input_monitoring = if settings_only {
+        raw.input_monitoring.status()
+    } else {
+        OSPermissionStatus::NotNeeded
+    };
     OSPermissionsCheck {
         screen_recording: bool_status(raw.screen_granted, attempted.screen),
-        accessibility: bool_status(raw.accessibility_granted, attempted.accessibility),
+        accessibility,
+        input_monitoring,
         microphone: raw.microphone.status(),
         camera: raw.camera.status(),
     }
@@ -249,7 +395,10 @@ pub fn check_raw_preflight() -> Option<RawPermissions> {
 /// The startup / tray gate: screen recording + accessibility.
 pub fn necessary_granted() -> bool {
     match check_raw() {
-        Some(raw) => raw.screen_granted && raw.accessibility_granted,
+        Some(raw) => {
+            raw.screen_granted
+                && (raw.accessibility_granted || !OSPermission::Accessibility.required())
+        }
         None => true,
     }
 }
@@ -430,6 +579,104 @@ mod macos {
         fn CGRequestScreenCaptureAccess() -> bool;
     }
 
+    /// `kIOHIDRequestTypeListenEvent`.
+    const HID_LISTEN_EVENT: u32 = 1;
+    /// `kIOHIDAccessTypeGranted` / `kIOHIDAccessTypeDenied`; anything else is
+    /// `kIOHIDAccessTypeUnknown`.
+    const HID_ACCESS_GRANTED: u32 = 0;
+    const HID_ACCESS_DENIED: u32 = 1;
+
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOHIDCheckAccess(request: u32) -> u32;
+        fn IOHIDRequestAccess(request: u32) -> bool;
+    }
+
+    /// `IOHIDCheckAccess` keeps answering what it saw first for the life of
+    /// the process, so a grant added with + mid-session never shows up there.
+    /// Creating a listen-only key tap does see it live (measured on 27.3
+    /// beta 2), so where macOS no longer prompts, that is the second check.
+    /// Before 27.3 the tap would raise a prompt of its own, so it stays out.
+    fn input_monitoring() -> MediaAuthorization {
+        match unsafe { IOHIDCheckAccess(HID_LISTEN_EVENT) } {
+            HID_ACCESS_GRANTED => MediaAuthorization::Authorized,
+            _ if super::grants_are_settings_only() && key_tap_allowed() => {
+                MediaAuthorization::Authorized
+            }
+            // From 27.3 there is no prompt to say no to: tccd records any
+            // listen attempt, the tap above included, as a denial. Only an
+            // older macOS can mean the user actually refused.
+            HID_ACCESS_DENIED if !super::grants_are_settings_only() => MediaAuthorization::Denied,
+            _ => MediaAuthorization::NotDetermined,
+        }
+    }
+
+    type MachPort = *mut std::ffi::c_void;
+    type TapCallback = unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        u32,
+        *mut std::ffi::c_void,
+        *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
+
+    /// `kCGSessionEventTap`, `kCGHeadInsertEventTap`, `kCGEventTapOptionListenOnly`.
+    const SESSION_TAP: u32 = 1;
+    const HEAD_INSERT: u32 = 0;
+    const LISTEN_ONLY: u32 = 1;
+    /// `CGEventMaskBit(kCGEventKeyDown)`.
+    const KEY_DOWN_MASK: u64 = 1 << 10;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: TapCallback,
+            user_info: *mut std::ffi::c_void,
+        ) -> MachPort;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFMachPortInvalidate(port: MachPort);
+        fn CFRelease(object: *const std::ffi::c_void);
+    }
+
+    unsafe extern "C" fn pass_through(
+        _proxy: *mut std::ffi::c_void,
+        _kind: u32,
+        event: *mut std::ffi::c_void,
+        _user_info: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void {
+        event
+    }
+
+    /// Whether macOS would hand this process other apps' key presses right
+    /// now. The tap is never added to a run loop, so it sees no events, and
+    /// it is torn down before returning.
+    fn key_tap_allowed() -> bool {
+        let tap = unsafe {
+            CGEventTapCreate(
+                SESSION_TAP,
+                HEAD_INSERT,
+                LISTEN_ONLY,
+                KEY_DOWN_MASK,
+                pass_through,
+                std::ptr::null_mut(),
+            )
+        };
+        if tap.is_null() {
+            return false;
+        }
+        unsafe {
+            CFMachPortInvalidate(tap);
+            CFRelease(tap);
+        }
+        true
+    }
+
     /// Preflight-only, wrapped in an autoreleasepool: the poll runs this on
     /// gpui's background threads, which have no ambient NSAutoreleasePool,
     /// and AVFoundation's status query autoreleases temporaries (the same
@@ -442,10 +689,34 @@ mod macos {
         }
     }
 
+    /// `kern.osproductversion` reports the real version even to binaries
+    /// that get a compatibility version from `NSProcessInfo`.
+    pub fn product_version() -> Option<String> {
+        let name = c"kern.osproductversion";
+        let mut buffer = [0u8; 64];
+        let mut length = buffer.len();
+        let result = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                buffer.as_mut_ptr().cast(),
+                &mut length,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if result != 0 {
+            return None;
+        }
+        let bytes = buffer.get(..length)?;
+        let bytes = bytes.split(|&byte| byte == 0).next()?;
+        std::str::from_utf8(bytes).ok().map(str::to_owned)
+    }
+
     pub fn check_raw_preflight() -> RawPermissions {
         objc2::rc::autoreleasepool(|_| RawPermissions {
             screen_granted: unsafe { CGPreflightScreenCaptureAccess() },
             accessibility_granted: unsafe { AXIsProcessTrusted() },
+            input_monitoring: input_monitoring(),
             microphone: media_authorization(false),
             camera: media_authorization(true),
         })
@@ -460,6 +731,9 @@ mod macos {
                 let _ = CGRequestScreenCaptureAccess();
             },
             OSPermission::Accessibility => prompt_accessibility(),
+            OSPermission::InputMonitoring => unsafe {
+                let _ = IOHIDRequestAccess(HID_LISTEN_EVENT);
+            },
             OSPermission::Microphone => request_media(false),
             OSPermission::Camera => request_media(true),
         }
@@ -660,6 +934,10 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    fn classify_test(raw: Option<RawPermissions>, attempted: AttemptedFlags) -> OSPermissionsCheck {
+        classify_when(raw, attempted, false)
+    }
+
     fn raw(
         screen: bool,
         ax: bool,
@@ -669,6 +947,7 @@ mod tests {
         Some(RawPermissions {
             screen_granted: screen,
             accessibility_granted: ax,
+            input_monitoring: MediaAuthorization::NotDetermined,
             microphone: mic,
             camera,
         })
@@ -684,7 +963,7 @@ mod tests {
 
     #[test]
     fn platform_without_permissions_is_all_not_needed() {
-        let check = classify(None, AttemptedFlags::default());
+        let check = classify_test(None, AttemptedFlags::default());
         for &permission in OSPermission::ALL {
             assert_eq!(check.get(permission), OSPermissionStatus::NotNeeded);
         }
@@ -696,7 +975,7 @@ mod tests {
     fn media_statuses_surface_distinctly() {
         // notDetermined must stay promptable -- never "Denied" -- regardless
         // of any attempted flag (the bug the old `initial` flag had).
-        let check = classify(
+        let check = classify_test(
             raw(
                 true,
                 true,
@@ -723,7 +1002,7 @@ mod tests {
 
     #[test]
     fn boolean_permissions_flip_to_denied_only_after_an_attempt() {
-        let fresh = classify(
+        let fresh = classify_test(
             raw(
                 false,
                 false,
@@ -735,7 +1014,7 @@ mod tests {
         assert_eq!(fresh.screen_recording, OSPermissionStatus::NotDetermined);
         assert_eq!(fresh.accessibility, OSPermissionStatus::NotDetermined);
 
-        let attempted = classify(
+        let attempted = classify_test(
             raw(
                 false,
                 false,
@@ -753,7 +1032,7 @@ mod tests {
 
     #[test]
     fn granted_beats_attempted() {
-        let check = classify(
+        let check = classify_test(
             raw(
                 true,
                 true,
@@ -771,7 +1050,7 @@ mod tests {
 
     #[test]
     fn necessary_ignores_optional_permissions() {
-        let check = classify(
+        let check = classify_test(
             raw(
                 true,
                 true,
@@ -785,7 +1064,106 @@ mod tests {
     }
 
     #[test]
+    fn settings_only_grants_start_at_macos_27_3() {
+        for version in ["27.3", "27.3.1", "27.4", "28.0", "28", " 27.3\n"] {
+            assert!(version_has_settings_only_grants(version), "{version}");
+        }
+        for version in ["27.2.1", "27.2", "27", "26.4", "15.7.2", "", "beta"] {
+            assert!(!version_has_settings_only_grants(version), "{version}");
+        }
+    }
+
+    #[test]
+    fn settings_only_grants_drop_accessibility_from_the_gate() {
+        let ungranted = raw(
+            true,
+            false,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        let check = classify_when(ungranted, AttemptedFlags::default(), true);
+        assert_eq!(check.accessibility, OSPermissionStatus::NotNeeded);
+        assert!(check.necessary_granted());
+
+        let before = classify_when(ungranted, AttemptedFlags::default(), false);
+        assert_eq!(before.accessibility, OSPermissionStatus::NotDetermined);
+        assert!(!before.necessary_granted());
+
+        let carried_over = raw(
+            true,
+            true,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        assert_eq!(
+            classify_when(carried_over, AttemptedFlags::default(), true).accessibility,
+            OSPermissionStatus::Granted
+        );
+
+        let no_screen = raw(
+            false,
+            false,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        assert!(!classify_when(no_screen, AttemptedFlags::default(), true).necessary_granted());
+
+        assert!(!OSPermission::Accessibility.required_when(true));
+        assert!(OSPermission::Accessibility.required_when(false));
+        assert!(OSPermission::ScreenRecording.required_when(true));
+    }
+
+    #[test]
+    fn input_monitoring_only_gets_a_row_where_grants_are_settings_only() {
+        let mut ungranted = raw(
+            true,
+            false,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        let before = classify_when(ungranted, AttemptedFlags::default(), false);
+        assert_eq!(before.input_monitoring, OSPermissionStatus::NotNeeded);
+
+        let after = classify_when(ungranted, AttemptedFlags::default(), true);
+        assert_eq!(after.input_monitoring, OSPermissionStatus::NotDetermined);
+        assert!(after.necessary_granted());
+        assert!(!after.all_permitted());
+        assert!(!OSPermission::InputMonitoring.required_when(true));
+
+        for (authorization, status) in [
+            (MediaAuthorization::Authorized, OSPermissionStatus::Granted),
+            (MediaAuthorization::Denied, OSPermissionStatus::Denied),
+        ] {
+            if let Some(raw) = ungranted.as_mut() {
+                raw.input_monitoring = authorization;
+            }
+            let check = classify_when(ungranted, AttemptedFlags::default(), true);
+            assert_eq!(check.input_monitoring, status);
+            assert_eq!(
+                raw_granted(ungranted.as_ref().unwrap(), OSPermission::InputMonitoring),
+                status == OSPermissionStatus::Granted
+            );
+        }
+    }
+
+    #[test]
+    fn keystrokes_use_input_monitoring_only_from_macos_27_3() {
+        assert_eq!(
+            keystroke_permission_when(true),
+            OSPermission::InputMonitoring
+        );
+        assert_eq!(
+            keystroke_permission_when(false),
+            OSPermission::Accessibility
+        );
+    }
+
+    #[test]
     fn settings_urls_match_the_tauri_privacy_panes() {
+        assert_eq!(
+            OSPermission::InputMonitoring.settings_url(),
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        );
         assert_eq!(
             OSPermission::ScreenRecording.settings_url(),
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
