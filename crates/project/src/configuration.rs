@@ -1012,6 +1012,36 @@ pub enum CursorAnimationStyle {
     Custom,
 }
 
+/// How the smoothed cursor follows the recorded pointer.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorFollow {
+    /// The spring samples the pointer ahead by its own lag, so the cursor
+    /// sits on the pointer while it moves.
+    #[default]
+    OnPointer,
+    /// The spring chases the pointer without that lead, so on a free glide
+    /// the cursor trails it by the spring's own lag and settles softly. Ahead
+    /// of each press, release, drag sample and shape or hover change the
+    /// target runs ahead in time (and the spring speeds up if that is not
+    /// enough) so the cursor still meets the pointer there.
+    Trailing,
+}
+
+/// How the cursor reacts to a mouse button.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorPressAnimation {
+    /// Shrinks to 80% over the 130 ms before a press and grows back over the
+    /// 130 ms after the release.
+    #[default]
+    Quick,
+    /// Eases to 90% on the cursor's own spring once a press is up to 500 ms
+    /// away, holds there while a button is down, and springs back to full
+    /// size as the release comes up.
+    Held,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct CursorSmoothingPreset {
     pub tension: f32,
@@ -1174,6 +1204,12 @@ pub struct CursorConfiguration {
     /// keep it off.
     #[serde(default)]
     pub hover_anchors: bool,
+    /// Configs saved without the field keep the cursor on the pointer.
+    #[serde(default)]
+    pub follow: CursorFollow,
+    /// Configs saved without the field keep the quick press animation.
+    #[serde(default)]
+    pub press_animation: CursorPressAnimation,
 }
 
 impl Default for CursorConfiguration {
@@ -1201,6 +1237,8 @@ impl Default for CursorConfiguration {
             ripple: CursorRippleConfig::default(),
             interaction_anchors: true,
             hover_anchors: true,
+            follow: CursorFollow::OnPointer,
+            press_animation: CursorPressAnimation::Quick,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -1231,6 +1269,34 @@ impl CursorConfiguration {
 
     pub fn click_spring_config(&self) -> ClickSpringConfig {
         self.click_spring.unwrap_or_default()
+    }
+
+    /// New projects' cursor size: the arrow stands about 49 pt tall on a
+    /// 982 pt tall display.
+    pub const NEW_PROJECT_SIZE: u32 = 128;
+
+    /// New projects' cursor spring: quick to respond, lightly damped, and
+    /// kept from overshooting by the trailing follow's clamp.
+    pub const NEW_PROJECT_SPRING: CursorSmoothingPreset = CursorSmoothingPreset {
+        tension: 125.0,
+        mass: 1.5,
+        friction: 12.0,
+    };
+
+    /// The cursor new projects start with: larger, trailing the pointer on a
+    /// soft spring, and holding a gentle press while a button is down.
+    pub fn for_new_project() -> Self {
+        let spring = Self::NEW_PROJECT_SPRING;
+        Self {
+            size: Self::NEW_PROJECT_SIZE,
+            animation_style: CursorAnimationStyle::Custom,
+            tension: spring.tension,
+            mass: spring.mass,
+            friction: spring.friction,
+            follow: CursorFollow::Trailing,
+            press_animation: CursorPressAnimation::Held,
+            ..Self::default()
+        }
     }
 }
 
@@ -3376,7 +3442,8 @@ impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
     /// is what an older project missing a field reads as) only in framing
     /// and motion: even padding, a lighter and softer card shadow, the
-    /// new-project zoom spring and the newer auto zoom rules. At zero padding both padding modes lay out
+    /// new-project zoom spring, the newer auto zoom rules and the new-project
+    /// cursor. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
@@ -3389,6 +3456,7 @@ impl ProjectConfiguration {
             blur: 46.7,
         });
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
+        config.cursor = CursorConfiguration::for_new_project();
         config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
         config.auto_zoom_pending = true;
         config.screen_motion_version = SCREEN_MOTION_VERSION;
@@ -3941,6 +4009,41 @@ mod tests {
     }
 
     #[test]
+    fn new_projects_get_the_larger_trailing_cursor_and_saved_ones_keep_theirs() {
+        let fresh = ProjectConfiguration::for_new_project().cursor;
+        assert_eq!(fresh.size, CursorConfiguration::NEW_PROJECT_SIZE);
+        assert_eq!(fresh.follow, CursorFollow::Trailing);
+        assert_eq!(fresh.press_animation, CursorPressAnimation::Held);
+        assert_eq!(fresh.animation_style, CursorAnimationStyle::Custom);
+        assert_eq!(
+            (fresh.tension, fresh.mass, fresh.friction),
+            (125.0, 1.5, 12.0)
+        );
+        assert!(fresh.interaction_anchors);
+
+        let defaults = CursorConfiguration::default();
+        assert_eq!(defaults.size, 100);
+        assert_eq!(defaults.follow, CursorFollow::OnPointer);
+        assert_eq!(defaults.press_animation, CursorPressAnimation::Quick);
+
+        let saved: ProjectConfiguration = serde_json::from_str(
+            r#"{"cursor":{"size":100,"animationStyle":"mellow","tension":470.0,"mass":3.0,"friction":70.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(saved.cursor.size, 100);
+        assert_eq!(saved.cursor.follow, CursorFollow::OnPointer);
+        assert_eq!(saved.cursor.press_animation, CursorPressAnimation::Quick);
+
+        let written = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(written["follow"], "trailing");
+        assert_eq!(written["pressAnimation"], "held");
+        let reloaded: CursorConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(reloaded.follow, CursorFollow::Trailing);
+        assert_eq!(reloaded.press_animation, CursorPressAnimation::Held);
+        assert_eq!(reloaded.size, CursorConfiguration::NEW_PROJECT_SIZE);
+    }
+
+    #[test]
     fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
         assert!(ProjectConfiguration::default().cursor.interaction_anchors);
         assert!(ProjectConfiguration::default().cursor.hover_anchors);
@@ -4039,7 +4142,7 @@ mod tests {
     }
 
     #[test]
-    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing_and_motion() {
         let fresh = ProjectConfiguration::for_new_project();
         assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
         assert_eq!(fresh.background.padding, 0.0);
@@ -4055,6 +4158,7 @@ mod tests {
             .unwrap()
             .remove("paddingMode");
         framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
+        framing_reset["cursor"] = default["cursor"].clone();
         framing_reset
             .as_object_mut()
             .unwrap()
