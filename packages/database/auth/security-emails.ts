@@ -52,3 +52,26 @@ export async function sendPasskeyAddedNotice(
 		});
 	}
 }
+
+export async function sendPasskeyRemovedNotice(
+	email: string,
+	passkeyName: string,
+) {
+	if (!getEmailDeliveryStatus().configured) return;
+	try {
+		const { PasskeyRemovedEmail } = await import("../emails/passkey-removed");
+		const settingsUrl = new URL(
+			"/dashboard/settings/account",
+			serverEnv().WEB_URL,
+		).toString();
+		await sendEmail({
+			email,
+			subject: "A passkey was removed from your Cap account",
+			react: PasskeyRemovedEmail({ email, passkeyName, settingsUrl }),
+		});
+	} catch (error) {
+		console.error("[passkeys] Failed to send passkey removed notice", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}

@@ -548,15 +548,25 @@ export async function listPasskeys(
 		.orderBy(asc(userPasskeys.createdAt), asc(userPasskeys.id));
 }
 
-export async function deletePasskey(userId: User.UserId, passkeyId: string) {
-	if (typeof passkeyId !== "string" || passkeyId.length > 15) return false;
-	const result = await db()
-		.delete(userPasskeys)
-		.where(
-			and(eq(userPasskeys.id, passkeyId), eq(userPasskeys.userId, userId)),
-		);
-	const affected = Array.isArray(result)
-		? (result[0] as { affectedRows?: number } | undefined)?.affectedRows
-		: (result as { affectedRows?: number } | undefined)?.affectedRows;
-	return affected === 1;
+export async function deletePasskey(
+	userId: User.UserId,
+	passkeyId: string,
+): Promise<{ name: string } | null> {
+	if (typeof passkeyId !== "string" || passkeyId.length > 15) return null;
+	return db().transaction(async (tx) => {
+		const [passkey] = await tx
+			.select({ name: userPasskeys.name })
+			.from(userPasskeys)
+			.where(
+				and(eq(userPasskeys.id, passkeyId), eq(userPasskeys.userId, userId)),
+			)
+			.for("update");
+		if (!passkey) return null;
+		await tx
+			.delete(userPasskeys)
+			.where(
+				and(eq(userPasskeys.id, passkeyId), eq(userPasskeys.userId, userId)),
+			);
+		return passkey;
+	});
 }

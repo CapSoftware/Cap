@@ -1,6 +1,7 @@
 "use server";
 
 import {
+	clearStepUpGrants,
 	hasStepUpGrant,
 	issueStepUpCode,
 	issueStepUpGrant,
@@ -18,6 +19,7 @@ import {
 import {
 	sendAccountSecurityCode,
 	sendPasskeyAddedNotice,
+	sendPasskeyRemovedNotice,
 } from "@cap/database/auth/security-emails";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type {
@@ -140,6 +142,7 @@ export async function completePasskeyRegistration(
 	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
 	const result = await verifyPasskeyRegistration(user.id, response);
 	if (result.status !== "registered") return { status: result.status };
+	await clearStepUpGrants(user.id);
 	await sendPasskeyAddedNotice(user.email, result.passkey.name);
 	return {
 		status: "registered",
@@ -163,5 +166,7 @@ export async function listMyPasskeys(): Promise<PasskeyListItem[]> {
 
 export async function removePasskey(passkeyId: string) {
 	const user = await requireUser();
-	return { removed: await deletePasskey(user.id, passkeyId) };
+	const removed = await deletePasskey(user.id, passkeyId);
+	if (removed) await sendPasskeyRemovedNotice(user.email, removed.name);
+	return { removed: removed !== null };
 }
