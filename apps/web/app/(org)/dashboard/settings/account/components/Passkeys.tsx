@@ -14,6 +14,7 @@ import {
 } from "@simplewebauthn/browser";
 import { useMutation } from "@tanstack/react-query";
 import { Fingerprint, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -48,6 +49,7 @@ export const Passkeys = ({
 	initialPasskeys: PasskeyListItem[];
 	loadFailed?: boolean;
 }) => {
+	const router = useRouter();
 	const [passkeys, setPasskeys] = useState(initialPasskeys);
 	const [supported, setSupported] = useState<boolean | null>(null);
 	const [verifyOpen, setVerifyOpen] = useState(false);
@@ -100,6 +102,7 @@ export const Passkeys = ({
 				setPasskeys((current) => [...current, result.passkey]);
 				setGrant(null);
 				toast.success("Passkey added");
+				router.refresh();
 				return;
 			}
 			toast.error(
@@ -129,6 +132,7 @@ export const Passkeys = ({
 			);
 			setRemoveTarget(null);
 			toast.success("Passkey removed");
+			router.refresh();
 		},
 		onError: () => {
 			toast.error("Failed to remove passkey");
