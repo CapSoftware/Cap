@@ -1844,6 +1844,18 @@ fn cached_parakeet(model_dir: &str) -> Result<Arc<Mutex<ParakeetTDT>>, String> {
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn load_parakeet(model_dir: &str, threads: Option<usize>) -> Result<ParakeetTDT, String> {
     cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
+    // Once per install: the encoder's weights move to a side file ONNX
+    // Runtime maps, which halves what the loaded model holds. A failure
+    // keeps the file as downloaded. Test builds never rewrite a model
+    // folder unless asked (the eval tests read the developer's own models).
+    if (!cfg!(test) || std::env::var_os("CAP_PARAKEET_SPLIT_IN_TESTS").is_some())
+        && let Err(error) = crate::parakeet_split::ensure_split(
+            Path::new(model_dir),
+            crate::meetings::health::free_bytes,
+        )
+    {
+        tracing::warn!(%error, "Parakeet encoder kept as downloaded");
+    }
     // ONNX Runtime's workers spin between runs by default. A meeting runs the
     // model for a moment every couple of seconds, so they spun in between and
     // kept about two cores busy for the whole meeting. The speaker and aligner

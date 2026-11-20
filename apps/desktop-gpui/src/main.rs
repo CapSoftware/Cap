@@ -118,6 +118,8 @@ mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
 mod transcript;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod parakeet_split;
 mod transcription;
 mod tray;
 mod ui;

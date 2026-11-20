@@ -1623,6 +1623,7 @@ dependencies = [
  "kameo",
  "libc",
  "lyon_tessellation",
+ "memmap2",
  "minisign-verify",
  "notify-rust",
  "objc2 0.6.5",
