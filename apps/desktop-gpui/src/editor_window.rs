@@ -2105,8 +2105,6 @@ struct PresetsMenu {
     /// An open per-preset submenu: which row, and where it was summoned.
     submenu: Option<(PresetRow, gpui::Point<Pixels>)>,
     scroll: gpui::ScrollHandle,
-    /// Each look's wallpaper thumbnail, decoded when the menu opens.
-    look_images: Vec<Option<Arc<gpui::RenderImage>>>,
     /// The look the project wears, found once when the menu opens: finding
     /// it compares the project against every look, too much for each frame.
     current_look: Option<&'static str>,
@@ -9123,21 +9121,12 @@ impl EditorWindow {
             .min(f32::from(viewport.width) - PRESETS_MENU_WIDTH - 12.)
             .max(12.);
         let y = f32::from(anchor.y) + 8.;
-        let look_images = crate::looks::LOOKS
-            .iter()
-            .map(|look| match look.background {
-                crate::looks::LookBackground::Wallpaper(id) => {
-                    crate::editor_sidebar::decode_wallpaper_thumbnail(id)
-                }
-                _ => None,
-            })
-            .collect();
+        self.ensure_look_wallpapers(window, cx);
         self.presets_menu = Some(PresetsMenu {
             origin: point(px(x), px(y)),
             store: crate::presets::PresetsStore::load(),
             submenu: None,
             scroll: gpui::ScrollHandle::new(),
-            look_images,
             current_look: crate::looks::current_look(&self.project),
         });
         cx.notify();
@@ -9203,7 +9192,10 @@ impl EditorWindow {
             .enumerate()
             .map(|(index, look)| {
                 let selected = current == Some(look.id);
-                let image = menu.look_images.get(index).cloned().flatten();
+                let image = match look.background {
+                    crate::looks::LookBackground::Wallpaper(id) => self.wallpaper_thumbnail(id),
+                    _ => None,
+                };
                 div()
                     .id(SharedString::from(format!("look-{}", look.id)))
                     .flex_1()
@@ -16268,7 +16260,6 @@ mod tests {
                     store: store.clone(),
                     submenu: None,
                     scroll: gpui::ScrollHandle::new(),
-                    look_images: Vec::new(),
                     current_look: None,
                 });
             });

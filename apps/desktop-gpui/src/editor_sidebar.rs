@@ -902,6 +902,8 @@ pub struct SidebarState {
     /// first and each tile replaces its own as it decodes.
     wallpapers: HashMap<&'static str, Arc<RenderImage>>,
     wallpaper_task: Option<gpui::Task<()>>,
+    /// The Presets menu's looks draw from the same thumbnails.
+    look_wallpaper_task: Option<gpui::Task<()>>,
     /// The `h-48` preview for the image and desktop panes, keyed by path so a
     /// stale decode cannot land on a newer selection.
     preview: Option<(PathBuf, Arc<RenderImage>)>,
@@ -964,6 +966,7 @@ impl SidebarState {
             color_paused: false,
             wallpapers: HashMap::new(),
             wallpaper_task: None,
+            look_wallpaper_task: None,
             preview: None,
             preview_task: None,
             desktop_background: None,
@@ -2302,7 +2305,37 @@ impl EditorWindow {
         if wanted.is_empty() {
             return;
         }
-        self.sidebar.wallpaper_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.sidebar.wallpaper_task = Some(Self::decode_wallpapers(wanted, window, cx));
+    }
+
+    /// The wallpaper thumbnails the looks gallery shows, decoded off the
+    /// render path into the grid's cache, so the Presets menu opens without
+    /// a decode and each thumbnail is uploaded once.
+    pub(crate) fn ensure_look_wallpapers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let wanted: Vec<&'static str> = crate::looks::LOOKS
+            .iter()
+            .filter_map(|look| match look.background {
+                crate::looks::LookBackground::Wallpaper(id) => Some(id),
+                _ => None,
+            })
+            .filter(|id| !self.sidebar.wallpapers.contains_key(id))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        self.sidebar.look_wallpaper_task = Some(Self::decode_wallpapers(wanted, window, cx));
+    }
+
+    pub(crate) fn wallpaper_thumbnail(&self, id: &str) -> Option<Arc<RenderImage>> {
+        self.sidebar.wallpapers.get(id).cloned()
+    }
+
+    fn decode_wallpapers(
+        wanted: Vec<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
             let (_decodes, results) =
                 library::spawn_decode_pool_limited(cx.background_executor(), wanted, 2, |id| {
                     decode_wallpaper_thumbnail(id).map(|image| (id, image))
@@ -2313,7 +2346,7 @@ impl EditorWindow {
                 if this
                     .update(cx, |this, cx| {
                         for (id, image) in batch {
-                            this.sidebar.wallpapers.insert(id, image);
+                            this.sidebar.wallpapers.entry(id).or_insert(image);
                         }
                         cx.notify();
                     })
@@ -2322,7 +2355,7 @@ impl EditorWindow {
                     return;
                 }
             }
-        }));
+        })
     }
 
     /// The `h-48` preview the image and desktop panes show, decoded off the
