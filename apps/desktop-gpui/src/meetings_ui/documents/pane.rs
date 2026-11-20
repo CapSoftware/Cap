@@ -97,6 +97,9 @@ struct SaveState {
     dirty_since: Option<Instant>,
     task: Option<Task<()>>,
     suppress: u32,
+    /// Counts the user's edits, so a load that started before one never
+    /// replaces it.
+    edits: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -876,6 +879,9 @@ impl Pane {
         };
         let want_enhanced = has_enhanced && !self.streaming;
         let started = self.switch_started;
+        // The editors are live while this loads: whatever is typed meanwhile
+        // wins over the saved text.
+        let (notes_edits, enhanced_edits) = (self.notes_save.edits, self.enhanced_save.edits);
         self.load = Some(cx.spawn(async move |this, cx| {
             let doc_id = id.clone();
             let (notes, enhanced) = cx
@@ -892,11 +898,15 @@ impl Pane {
                 if this.doc_id().as_deref() != Some(id.as_str()) {
                     return;
                 }
-                if let Some(document) = notes {
+                if let Some(document) = notes
+                    && this.notes_save.edits == notes_edits
+                {
                     this.notes_save.suppress += 1;
                     this.notes.update(cx, |e, cx| e.set_document(document, cx));
                 }
-                if let Some(document) = enhanced {
+                if let Some(document) = enhanced
+                    && this.enhanced_save.edits == enhanced_edits
+                {
                     this.set_enhanced(document, cx);
                 }
                 if this.view == View::Generated
@@ -939,6 +949,7 @@ impl Pane {
         let (Some(id), Some(library)) = (self.doc_id(), self.library(cx)) else {
             return;
         };
+        let edits = self.enhanced_save.edits;
         self.load = Some(cx.spawn(async move |this, cx| {
             let doc_id = id.clone();
             let document = cx
@@ -953,6 +964,7 @@ impl Pane {
                 .await;
             this.update(cx, |this, cx| {
                 if this.doc_id().as_deref() == Some(id.as_str())
+                    && this.enhanced_save.edits == edits
                     && let Some(document) = document
                 {
                     this.set_enhanced(document, cx);
@@ -1001,6 +1013,7 @@ impl Pane {
         let (Some(id), Some(library)) = (self.doc_id(), self.library(cx)) else {
             return;
         };
+        let edits = self.enhanced_save.edits;
         self.load = Some(cx.spawn(async move |this, cx| {
             let doc_id = id.clone();
             let document = cx
@@ -1020,7 +1033,10 @@ impl Pane {
                 let Some(document) = document else {
                     return;
                 };
-                if same_page(this.enhanced.read(cx).document(), &document) {
+                if this.enhanced_save.edits != edits {
+                    // Edited since: what is on screen is the page now.
+                    this.enhanced_loaded = true;
+                } else if same_page(this.enhanced.read(cx).document(), &document) {
                     this.enhanced_loaded = true;
                     this.enhanced_edited = false;
                 } else {
@@ -2037,6 +2053,7 @@ impl Pane {
                     if self.streaming || self.enhanced.read(cx).is_pacing() {
                         return;
                     }
+                    self.enhanced_save.edits += 1;
                     if self.rename_echo > 0 {
                         self.rename_echo -= 1;
                     } else {
@@ -2051,6 +2068,7 @@ impl Pane {
                         }));
                     }
                 } else {
+                    self.notes_save.edits += 1;
                     self.typed_at = Some(Instant::now());
                 }
                 if self.is_trashed() {

@@ -1329,3 +1329,30 @@ fn a_title_sent_with_notes_that_failed_goes_back_to_the_saved_one(cx: &mut TestA
     assert!(kept.contains("v2"), "{kept}");
     assert_ne!(kept, "Meeting at 5:46 PM");
 }
+
+#[gpui::test]
+fn typing_before_the_saved_note_loads_is_never_erased(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let second = f.store.read_with(cx, |s, _| s.snapshot.docs[1].id.clone());
+    f.store.update(cx, |s, cx| s.open(Some(second.clone()), cx));
+    // The note is open and editable, but its saved text has not loaded yet.
+    f.pane.update_in(cx, |pane, _, cx| {
+        pane.notes.update(cx, |e, cx| {
+            e.apply(
+                |ed| {
+                    ed.select_all();
+                    ed.insert_text("Typed while loading")
+                },
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    f.pane.read_with(cx, |pane, cx| {
+        assert_eq!(
+            pane.notes.read(cx).document().to_markdown().trim(),
+            "Typed while loading",
+            "the late load must not replace what was typed"
+        );
+    });
+}
