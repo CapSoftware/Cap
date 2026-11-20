@@ -1136,9 +1136,10 @@ enum EditorSection {
     Sidebar,
     Timeline,
     Transcript,
+    PanelSwitcher,
 }
 
-struct EditorSectionView {
+pub(crate) struct EditorSectionView {
     editor: WeakEntity<EditorWindow>,
     section: EditorSection,
     _editor_subscription: Subscription,
@@ -1190,6 +1191,9 @@ impl Render for EditorSectionView {
                     )
                 }
                 EditorSection::Transcript => editor.render_transcript(window, cx),
+                EditorSection::PanelSwitcher => {
+                    editor.render_panel_switcher(cx).into_any_element()
+                }
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
@@ -2108,6 +2112,8 @@ pub struct EditorWindow {
     transcript_view: Entity<EditorSectionView>,
     /// The right-hand panel's shared width and its grip drag.
     pub(crate) panel: crate::editor_side_panel::PanelState,
+    pub(crate) panel_fade: Entity<crate::editor_side_panel::PanelFade>,
+    pub(crate) panel_switcher_view: Entity<EditorSectionView>,
 }
 
 struct PresetsMenu {
@@ -2617,6 +2623,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Transcript, cx)
         });
+        let panel_switcher_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::PanelSwitcher, cx)
+        });
         let timeline_view =
             cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
 
@@ -2779,6 +2789,8 @@ impl EditorWindow {
             transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
             transcript_view,
             panel: crate::editor_side_panel::PanelState::load(window.window_handle()),
+            panel_fade: cx.new(|_| crate::editor_side_panel::PanelFade::default()),
+            panel_switcher_view,
         }
     }
 
@@ -14607,7 +14619,7 @@ impl Render for EditorWindow {
                                     // at one width, so a switch never moves
                                     // the player.
                                     .child(self.render_panel_grip(cx))
-                                    .child(self.render_side_panel(viewport_width, window, cx)),
+                                    .child(self.render_side_panel(viewport_width, window)),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain

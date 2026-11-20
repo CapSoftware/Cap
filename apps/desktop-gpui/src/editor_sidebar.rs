@@ -1087,11 +1087,11 @@ impl EditorWindow {
         self.close_key_prompt(window, cx);
         self.end_field_edit(cx);
         if self.sidebar.tab != tab {
-            self.panel.fade = Some((
-                std::time::Instant::now(),
+            self.start_panel_fade(
                 crate::editor_side_panel::SWITCHER_HEIGHT
                     + crate::editor_window::SIDEBAR_TAB_BAR_HEIGHT,
-            ));
+                cx,
+            );
         }
         self.sidebar.tab = tab;
         self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));

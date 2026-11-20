@@ -11,9 +11,9 @@
 //! them and every switch goes through [`EditorWindow::set_panel_tab`].
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, Context, CursorStyle, Div, FontWeight, Hsla,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
-    StyleRefinement, Styled, Window, div, prelude::FluentBuilder, px, svg,
+    AnyElement, AnyWindowHandle, Context, CursorStyle, Div, FontWeight, Hsla, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString, StyleRefinement, Styled,
+    Window, div, prelude::FluentBuilder, px, svg,
 };
 
 use crate::editor_edits::Selection;
@@ -93,9 +93,6 @@ pub(crate) struct PanelState {
     /// The editor's own window, for the tab switch a selection asks for from
     /// a path that was handed no window.
     window: AnyWindowHandle,
-    /// A tab switch's fade: when it began, and how far down the card the
-    /// new content starts.
-    pub(crate) fade: Option<(std::time::Instant, f32)>,
 }
 
 impl PanelState {
@@ -111,7 +108,6 @@ impl PanelState {
         Self {
             width,
             resize: None,
-            fade: None,
             window,
         }
     }
@@ -268,33 +264,50 @@ pub(crate) fn panel_fade_cover(elapsed: std::time::Duration) -> f32 {
     (1. - t).powi(3)
 }
 
-impl EditorWindow {
-    /// The tab-switch fade: a cover in the card's own colour over the new
-    /// content, clearing over [`PANEL_FADE`]. The content underneath is the
-    /// cached view, painted once; only this rectangle repaints per frame.
-    fn render_panel_fade(&self, window: &Window, cx: &App) -> Option<AnyElement> {
-        let (since, top) = self.panel.fade?;
-        if cx.reduce_motion() {
-            return None;
-        }
-        let cover = panel_fade_cover(since.elapsed());
-        if cover <= 0.001 {
-            return None;
-        }
+/// The tab-switch fade: a cover in the card's own colour over the new
+/// content, clearing over [`PANEL_FADE`]. It is its own view so each frame of
+/// the fade re-renders only the cover: a frame asked for from the editor's
+/// render would notify every section that observes the editor.
+#[derive(Default)]
+pub(crate) struct PanelFade {
+    /// When the fade began, how far down the card the new content starts,
+    /// and the card's colour.
+    started: Option<(std::time::Instant, f32, Hsla)>,
+}
+
+impl gpui::Render for PanelFade {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let cover = self
+            .started
+            .filter(|_| !cx.reduce_motion())
+            .map(|(since, top, color)| (panel_fade_cover(since.elapsed()), top, color))
+            .filter(|(cover, ..)| *cover > 0.001);
+        let Some((cover, top, color)) = cover else {
+            self.started = None;
+            return div().absolute();
+        };
         window.request_animation_frame();
         let radius = px(crate::theme::EDITOR_CARD_RADIUS - 1.);
-        Some(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .top(px(top))
-                .rounded_bl(radius)
-                .rounded_br(radius)
-                .bg(self.panel_bg().opacity(cover))
-                .into_any_element(),
-        )
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .top(px(top))
+            .rounded_bl(radius)
+            .rounded_br(radius)
+            .bg(color.opacity(cover))
+    }
+}
+
+impl EditorWindow {
+    /// Fades the panel's new content in from `top` down.
+    pub(crate) fn start_panel_fade(&self, top: f32, cx: &mut Context<Self>) {
+        let color = self.panel_bg();
+        self.panel_fade.update(cx, |fade, cx| {
+            fade.started = Some((std::time::Instant::now(), top, color));
+            cx.notify();
+        });
     }
 
     pub(crate) fn panel_tab(&self) -> PanelTab {
@@ -349,7 +362,7 @@ impl EditorWindow {
             PanelTab::Style => {}
         }
         tracing::debug!(from = ?current, to = ?tab, "editor panel tab");
-        self.panel.fade = Some((std::time::Instant::now(), SWITCHER_HEIGHT));
+        self.start_panel_fade(SWITCHER_HEIGHT, cx);
         cx.notify();
     }
 
@@ -440,7 +453,7 @@ impl EditorWindow {
         window.refresh();
     }
 
-    fn render_panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let active = self.panel_tab();
         let ready = self.project_ready();
@@ -517,12 +530,9 @@ impl EditorWindow {
     /// The panel card: the switcher, then whichever body the active tab owns.
     /// Style and Clips draw through the sidebar's cached section view, the
     /// transcript through its own, so playback repaints only the transcript.
-    pub(crate) fn render_side_panel(
-        &self,
-        viewport_width: f32,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// The switcher is a section of its own, so its hover and glide frames
+    /// repaint the switcher alone rather than every section of the editor.
+    pub(crate) fn render_side_panel(&self, viewport_width: f32, window: &Window) -> AnyElement {
         let theme = self.theme;
         let tab = self.panel_tab();
         let focused = tab == PanelTab::Transcript && self.transcript.focus.is_focused(window);
@@ -545,12 +555,12 @@ impl EditorWindow {
             .shadow(theme.editor.card_shadow())
             .overflow_hidden()
             .relative()
-            .child(self.render_panel_switcher(cx))
+            .child(self.panel_switcher_view.clone())
             .child(self.cached_panel_body(
                 tab == PanelTab::Transcript,
                 StyleRefinement::default().w_full().flex_1().min_h_0(),
             ))
-            .children(self.render_panel_fade(window, cx))
+            .child(self.panel_fade.clone())
             .into_any_element()
     }
 }
