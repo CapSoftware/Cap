@@ -4229,7 +4229,7 @@ two = { text = "{a} and {b}", context = "First names of two people on a call." }
 get_pro = "Get Cap Pro"
 ready = "Cap AI is on with Cap Pro."
 sign_in = "Sign in"
-signed_out = { one = "Sign in and Cap AI writes up {count} meeting free.", other = "Sign in and Cap AI writes up {count} meetings free." }
+signed_out = { text = "Sign in and Cap AI writes up your first meetings free.", context = "Cap AI status in settings for someone signed out; the server decides how many meetings are free." }
 spent = "Your free meetings are used up. Keep Cap AI with Cap Pro."
 trial = { one = "Cap AI writes up {count} more meeting free.", other = "Cap AI writes up {count} more meetings free." }
 unavailable = "Cap AI isn't available on this server."

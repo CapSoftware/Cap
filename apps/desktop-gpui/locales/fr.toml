@@ -4227,7 +4227,7 @@ two = "{a} et {b}"
 get_pro = "Passer à Cap Pro"
 ready = "Cap AI est activé avec Cap Pro."
 sign_in = "Se connecter"
-signed_out = { one = "Connectez-vous et Cap AI rédige {count} réunion gratuitement.", other = "Connectez-vous et Cap AI rédige {count} réunions gratuitement." }
+signed_out = "Connectez-vous et Cap AI rédige vos premières réunions gratuitement."
 spent = "Vos réunions gratuites sont épuisées. Gardez Cap AI avec Cap Pro."
 trial = { one = "Cap AI rédige encore {count} réunion gratuitement.", other = "Cap AI rédige encore {count} réunions gratuitement." }
 unavailable = "Cap AI n'est pas disponible sur ce serveur."

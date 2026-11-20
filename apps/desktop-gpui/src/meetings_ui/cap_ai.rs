@@ -375,7 +375,7 @@ pub fn status_line(
     access: AiAccess,
     trial: Option<u32>,
 ) -> (String, Option<(&'static str, bool)>) {
-    use crate::{i18n::tr, meetings::access::TRIAL_MEETINGS};
+    use crate::i18n::tr;
     match access {
         AiAccess::Ready => (tr::cap_ai::settings::ready().into(), None),
         AiAccess::Trial { remaining } => (
@@ -391,7 +391,7 @@ pub fn status_line(
             Some((tr::cap_ai::settings::get_pro(), false)),
         ),
         AiAccess::NeedsSignIn => (
-            tr::cap_ai::settings::signed_out(TRIAL_MEETINGS as usize),
+            tr::cap_ai::settings::signed_out().into(),
             Some((tr::cap_ai::settings::sign_in(), true)),
         ),
         AiAccess::Unavailable => (tr::cap_ai::settings::unavailable().into(), None),
@@ -414,6 +414,19 @@ pub fn sign_in(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server sets how many meetings are free, so the signed-out line
+    /// names no number of its own.
+    #[test]
+    fn the_signed_out_line_claims_no_count() {
+        let (line, action) = status_line(AiAccess::NeedsSignIn, None);
+        assert!(!line.chars().any(|c| c.is_ascii_digit()), "{line}");
+        assert_eq!(
+            line,
+            "Sign in and Cap AI writes up your first meetings free."
+        );
+        assert_eq!(action.map(|(_, sign_in)| sign_in), Some(true));
+    }
 
     #[test]
     fn checkout_replies_are_read_safely() {
