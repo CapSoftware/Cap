@@ -1760,14 +1760,7 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
     }
 
     let time_offset_from_start = (current_time - segment.start) * 1000.0;
-    // One press per character a reader sees (keys typed by hand), or one per
-    // code point (keys recorded before characters were grouped).
-    let pieces = cap_project::typed_characters(&segment.display_text);
-    let chars: Vec<String> = if segment.keys.len() == pieces.len() {
-        pieces
-    } else {
-        segment.display_text.chars().map(String::from).collect()
-    };
+    let chars: Vec<char> = segment.display_text.chars().collect();
 
     if segment.keys.len() != chars.len() {
         if segment
@@ -1781,19 +1774,25 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
         return String::new();
     }
 
-    let mut visible = String::new();
-
-    for (i, key) in segment.keys.iter().enumerate() {
-        if time_offset_from_start >= key.time_offset && i < chars.len() {
-            visible.push_str(&chars[i]);
+    let shown = segment
+        .keys
+        .iter()
+        .take(chars.len())
+        .filter(|key| time_offset_from_start >= key.time_offset)
+        .count()
+        .max(1);
+    // A press inside a character a reader sees as one (an emoji with a skin
+    // tone, an accented letter) shows the whole of it, never a piece.
+    let mut covered = 0;
+    for piece in cap_project::typed_characters(&segment.display_text) {
+        if covered >= shown {
+            break;
         }
+        covered += piece.chars().count();
     }
-
-    if visible.is_empty() && !segment.display_text.is_empty() {
-        visible.push_str(&chars[0]);
-    }
-
-    visible
+    chars[..covered.max(shown).min(chars.len())]
+        .iter()
+        .collect()
 }
 
 /// A shortcut shows whole from the start, however many times it was struck:
@@ -2006,13 +2005,15 @@ mod tests {
     fn a_joined_character_types_out_whole() {
         let mut segment: cap_project::KeyboardTrackSegment =
             serde_json::from_value(serde_json::json!({
-                "id": "j", "start": 1.0, "end": 3.0, "displayText": "a👍🏽", "keys": []
+                "id": "j", "start": 1.0, "end": 3.0, "displayText": "a👍🏽b", "keys": []
             }))
             .unwrap();
-        segment.keys = cap_project::manual_key_presses("a👍🏽");
-        assert_eq!(segment.keys.len(), 2);
+        segment.keys = cap_project::manual_key_presses("a👍🏽b");
+        assert_eq!(segment.keys.len(), 4);
         assert_eq!(build_visible_text(&segment, 1.05), "a");
         assert_eq!(build_visible_text(&segment, 1.12), "a👍🏽");
+        assert_eq!(build_visible_text(&segment, 1.23), "a👍🏽");
+        assert_eq!(build_visible_text(&segment, 1.34), "a👍🏽b");
     }
 
     #[test]

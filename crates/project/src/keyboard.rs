@@ -305,25 +305,11 @@ pub fn manual_key_presses(display_text: &str) -> Vec<KeyPressDisplay> {
     };
     let shortcut = display_text.chars().any(|c| matches!(c, '⌘' | '⌥' | '⌃'));
     let mut offset = 0.0;
-    // Typed text strikes once per character a reader sees, so an emoji with a
-    // skin tone or an accented letter arrives whole.
-    let pieces: Vec<String> = if shortcut {
-        display_text
-            .chars()
-            .filter(|c| !c.is_control())
-            .map(String::from)
-            .collect()
-    } else {
-        typed_characters(display_text)
-    };
-    pieces
-        .into_iter()
-        .map(|piece| {
-            let mut chars = piece.chars();
-            let key = match (chars.next(), chars.next()) {
-                (Some(c), None) => key_name(c),
-                _ => piece.to_uppercase(),
-            };
+    display_text
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| {
+            let key = key_name(c);
             let time_offset = if shortcut {
                 if is_modifier_key(&key) {
                     0.0
@@ -2698,10 +2684,11 @@ mod manual_key_tests {
     }
 
     #[test]
-    fn a_joined_character_is_struck_once() {
-        let presses = manual_key_presses("a👍🏽e\u{301}");
+    fn typed_text_is_struck_once_per_code_point() {
+        // Cutting, splitting and shortcut detection count presses against
+        // the text's code points; the reveal keeps a character whole.
+        let presses = manual_key_presses("a👍🏽");
         assert_eq!(presses.len(), 3);
-        assert_eq!(presses[1].time_offset, 110.0);
         assert_eq!(presses[2].time_offset, 220.0);
     }
 
