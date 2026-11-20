@@ -23,7 +23,8 @@ struct Uniforms {
     // The display card in output px (x, y, width, height).
     screen_card: vec4<f32>,
     // (how far the screen's zoom blur can carry the sprite, in output px,
-    // unused x3).
+    // 1 when blur taps spread evenly over each pixel's whole path since the
+    // previous frame, unused x2).
     screen_reach: vec4<f32>,
 };
 
@@ -235,8 +236,19 @@ fn apply_color_grade(color: vec4<f32>, frag_pos: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * color.a, color.a);
 }
 
+// Taps for the path kernels: a streak and a zoom ray, as the display's.
+const PATH_MOVE_TAPS: i32 = 20;
+const PATH_ZOOM_TAPS: i32 = 16;
+
+fn path_kernel() -> bool {
+    return uniforms.screen_reach.y >= 0.5;
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (path_kernel()) {
+        return fs_path(input);
+    }
     let velocity_uv = cursor_velocity_uv();
     let opacity = uniforms.motion_vector_strength.w;
     let p = input.position.xy;
@@ -311,3 +323,62 @@ fn own_blurred(uv: vec2<f32>, velocity_uv: vec2<f32>) -> vec4<f32> {
     return color / 21.0;
 }
 
+
+// The cursor's own smear with the path kernel: equal taps over its whole
+// move since the previous frame, starting at a per-pixel phase.
+fn own_path_blurred(uv: vec2<f32>, velocity_uv: vec2<f32>, phase: f32) -> vec4<f32> {
+    if (length(velocity_uv) < 0.005) {
+        return sample_cursor(uv);
+    }
+    var color = vec4<f32>(0.0);
+    for (var i = 0; i < PATH_MOVE_TAPS; i = i + 1) {
+        color += sample_cursor(uv + velocity_uv * ((f32(i) + phase) / f32(PATH_MOVE_TAPS)));
+    }
+    return color / f32(PATH_MOVE_TAPS);
+}
+
+// `fs_main` for the path kernel: the screen's streak or zoom ray over the
+// cursor and the cursor's own smear both spread equal taps over the whole
+// path, with the screen's taps on the display's own per-pixel phase.
+fn fs_path(input: VertexOutput) -> vec4<f32> {
+    let velocity_uv = cursor_velocity_uv();
+    let opacity = uniforms.motion_vector_strength.w;
+    let p = input.position.xy;
+    let mode = uniforms.screen_blur.x;
+    let phase = interleaved_noise(p);
+    let own_phase = interleaved_noise(p + vec2<f32>(13.0, 5.0));
+
+    var color = vec4<f32>(0.0);
+    if (mode < 0.5) {
+        color = own_path_blurred(input.uv, velocity_uv, own_phase) * screen_bounds_mask(p);
+    } else if (mode < 1.5) {
+        let smear_px = uniforms.screen_blur.yz;
+        for (var i = 0; i < PATH_MOVE_TAPS; i = i + 1) {
+            let offset_px = smear_px * ((f32(i) + phase) / f32(PATH_MOVE_TAPS));
+            color += own_path_blurred(input.uv + px_to_sprite_uv(offset_px), velocity_uv, own_phase)
+                * screen_bounds_mask(p + offset_px);
+        }
+        color /= f32(PATH_MOVE_TAPS);
+    } else {
+        let card = uniforms.screen_card;
+        let card_size = max(card.zw, vec2<f32>(1.0));
+        let dir = uniforms.screen_blur.yz - (p - card.xy) / card_size;
+        let dist = length(dir);
+        let amount = min(abs(uniforms.screen_blur.w), 1.0);
+        let ray_sign = select(1.0, -1.0, uniforms.screen_blur.w < 0.0);
+        if (dist < 1e-4 || amount < 1e-4) {
+            color = own_path_blurred(input.uv, velocity_uv, own_phase) * screen_bounds_mask(p);
+        } else {
+            let ray_px = dir / dist * min(dist * amount, MAX_ZOOM_RAY_UV) * card_size
+                * ray_sign;
+            for (var i = 0; i < PATH_ZOOM_TAPS; i = i + 1) {
+                let offset_px = ray_px * ((f32(i) + phase) / f32(PATH_ZOOM_TAPS));
+                color += own_path_blurred(input.uv + px_to_sprite_uv(offset_px), velocity_uv, own_phase)
+                    * screen_bounds_mask(p + offset_px);
+            }
+            color /= f32(PATH_ZOOM_TAPS);
+        }
+    }
+
+    return apply_color_grade(color * opacity, p);
+}

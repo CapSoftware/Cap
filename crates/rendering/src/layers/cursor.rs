@@ -679,7 +679,12 @@ impl CursorLayer {
             grain_params: cursor_grade.grain_params,
             screen_blur,
             screen_card,
-            screen_reach: [screen_reach, 0.0, 0.0, 0.0],
+            screen_reach: [
+                screen_reach,
+                cursor_path_kernel(&uniforms.project),
+                0.0,
+                0.0,
+            ],
         };
 
         constants.queue.write_buffer(
@@ -1058,6 +1063,17 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64, clicks_ordered: bool) 
     }
 
     1.0
+}
+
+/// 1 when the cursor's blur, its own and the screen's over it, spreads equal
+/// taps over each pixel's whole path since the previous frame, as the
+/// display's does for projects on the newer screen motion rules.
+fn cursor_path_kernel(project: &ProjectConfiguration) -> f32 {
+    if project.screen_motion_version >= SCREEN_MOTION_VERSION {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// The held press: the cursor eases to this size while a button is down.
@@ -2094,5 +2110,14 @@ mod tests {
                 ),
             );
         }
+    }
+
+    #[test]
+    fn the_path_blur_kernel_runs_only_for_new_screen_motion() {
+        assert_eq!(cursor_path_kernel(&ProjectConfiguration::default()), 0.0);
+        assert_eq!(
+            cursor_path_kernel(&ProjectConfiguration::for_new_project()),
+            1.0
+        );
     }
 }
