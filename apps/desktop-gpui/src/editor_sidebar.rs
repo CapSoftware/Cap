@@ -2798,8 +2798,10 @@ impl EditorWindow {
             SidebarTab::Captions => self.render_captions_tab(cx),
         };
 
-        // Block, not a flex column: its one child lays out the same, without
-        // the extra layout pass a flex column spends sizing it on every rebuild.
+        // Block, not flex columns, for the scroll region and its padding: each
+        // holds one child, which lays out the same, and a flex column sizes an
+        // auto-height child in a pass of its own before laying it out, which
+        // every flex column inside the tab then repeats on each rebuild.
         div()
             .id("sidebar-scroll")
             .block()
@@ -2811,9 +2813,7 @@ impl EditorWindow {
             .text_size(px(13.))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(14.))
+                    .block()
                     .pt(px(18.))
                     .px(px(SIDEBAR_INSET))
                     .pb(px(20.))
