@@ -3303,10 +3303,7 @@ impl EditorWindow {
                         } else {
                             this.text_color(Hsla::from(editor.text_2))
                                 .cursor_pointer()
-                                .hover(|this| {
-                                    this.bg(Hsla::from(editor.ctl))
-                                        .text_color(Hsla::from(editor.text_1))
-                                })
+                                .hover(|this| this.text_color(Hsla::from(editor.text_1)))
                         }
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
