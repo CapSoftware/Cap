@@ -12,6 +12,8 @@ export type PostMetadata = {
 	tags?: string;
 	image?: string;
 	video?: string;
+	seoTitle?: string;
+	seoDescription?: string;
 };
 
 export type DocMetadata = {
@@ -33,6 +35,8 @@ interface InteractiveBlogPost {
 	slug: string;
 	title: string;
 	description: string;
+	seoTitle?: string;
+	seoDescription?: string;
 	publishedAt: string;
 	updatedAt?: string;
 	author: string;
@@ -137,6 +141,8 @@ function getInteractiveBlogPosts(): BlogPost[] {
 				description: post.description,
 				tags: post.tags?.join(", ") || "",
 				image: post.image ?? "/og.png",
+				seoTitle: post.seoTitle,
+				seoDescription: post.seoDescription,
 			},
 			content: "",
 			isManual: true,
