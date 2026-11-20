@@ -1,0 +1,1158 @@
+use std::cmp::{Ordering as CmpOrdering, Reverse};
+use std::collections::{BTreeMap, BinaryHeap};
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Offset, Utc};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+
+use crate::serde_util::{lenient, lenient_option};
+use crate::session::StopReason;
+use crate::text::{find_ci, fold_query, snippet};
+use crate::transcript::Source;
+
+#[cfg(test)]
+mod tests;
+
+pub const DOC_FILE: &str = "doc.json";
+pub const NOTES_FILE: &str = "notes.json";
+pub const ENHANCED_FILE: &str = "enhanced.json";
+pub const TRANSCRIPT_FILE: &str = "transcript.jsonl";
+pub const AUDIO_DIR: &str = "audio";
+pub const ATTACHMENTS_DIR: &str = "attachments";
+pub const FOLDERS_FILE: &str = "folders.json";
+pub const TRASH_RETENTION_DAYS: i64 = 30;
+pub const MAX_ATTACHMENTS: usize = 50;
+pub const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
+pub const IMAGE_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif"];
+
+#[derive(Debug, thiserror::Error)]
+pub enum LibraryError {
+    #[error("io error: {0}")]
+    Io(#[from] io::Error),
+    #[error("invalid json: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid id: {0}")]
+    InvalidId(String),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("not allowed: {0}")]
+    NotAllowed(String),
+    #[error("limit reached: {0}")]
+    Limit(String),
+}
+
+pub type Result<T> = std::result::Result<T, LibraryError>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum DocKind {
+    Meeting,
+    Note,
+    Plan,
+    Script,
+    Other(String),
+}
+
+impl DocKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            DocKind::Meeting => "meeting",
+            DocKind::Note => "note",
+            DocKind::Plan => "plan",
+            DocKind::Script => "script",
+            DocKind::Other(other) => other,
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "meeting" => DocKind::Meeting,
+            "note" | "" => DocKind::Note,
+            "plan" => DocKind::Plan,
+            "script" => DocKind::Script,
+            other => DocKind::Other(other.to_string()),
+        }
+    }
+}
+
+impl Serialize for DocKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DocKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|s| DocKind::parse(&s))
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Attendee {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub is_self: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EventSnapshot {
+    pub id: String,
+    pub title: String,
+    pub start: Option<DateTime<Utc>>,
+    pub end: Option<DateTime<Utc>>,
+    pub link: Option<String>,
+    pub attendees: Vec<Attendee>,
+    pub calendar_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AudioTrack {
+    #[serde(deserialize_with = "lenient")]
+    pub source: Source,
+    pub file: String,
+    pub codec: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MeetingDetails {
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub duration_ms: u64,
+    pub app_id: Option<String>,
+    pub app_name: Option<String>,
+    pub event: Option<EventSnapshot>,
+    pub participants: Vec<String>,
+    pub engine: Option<String>,
+    pub language: Option<String>,
+    #[serde(deserialize_with = "lenient_option")]
+    pub stop_reason: Option<StopReason>,
+    pub transcript_chars: u64,
+    pub audio: Vec<AudioTrack>,
+    pub has_enhanced: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", from = "DocMetaRaw")]
+pub struct DocMeta {
+    pub id: String,
+    pub kind: DocKind,
+    pub title: String,
+    pub title_is_auto: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub folder_id: Option<String>,
+    pub tags: Vec<String>,
+    pub template_id: Option<String>,
+    pub pinned: bool,
+    pub trashed_at: Option<DateTime<Utc>>,
+    pub meeting: Option<MeetingDetails>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocMetaRaw {
+    #[serde(default)]
+    id: String,
+    #[serde(default, deserialize_with = "lenient_option")]
+    kind: Option<DocKind>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    title_is_auto: bool,
+    #[serde(default)]
+    created_at: DateTime<Utc>,
+    #[serde(default)]
+    updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    folder_id: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    template_id: Option<String>,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    trashed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    meeting: Option<MeetingDetails>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+impl From<DocMetaRaw> for DocMeta {
+    fn from(raw: DocMetaRaw) -> Self {
+        let kind = raw.kind.unwrap_or(if raw.meeting.is_some() {
+            DocKind::Meeting
+        } else {
+            DocKind::Note
+        });
+        DocMeta {
+            id: raw.id,
+            kind,
+            title: raw.title,
+            title_is_auto: raw.title_is_auto,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at.unwrap_or(raw.created_at),
+            folder_id: raw.folder_id,
+            tags: raw.tags,
+            template_id: raw.template_id,
+            pinned: raw.pinned,
+            trashed_at: raw.trashed_at,
+            meeting: raw.meeting,
+            extra: raw.extra,
+        }
+    }
+}
+
+impl DocMeta {
+    pub fn new(id: String, kind: DocKind, now: DateTime<Utc>) -> Self {
+        let meeting = (kind == DocKind::Meeting).then(MeetingDetails::default);
+        Self {
+            id,
+            kind,
+            title: String::new(),
+            title_is_auto: true,
+            created_at: now,
+            updated_at: now,
+            folder_id: None,
+            tags: Vec::new(),
+            template_id: None,
+            pinned: false,
+            trashed_at: None,
+            meeting,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn sort_time(&self) -> DateTime<Utc> {
+        self.meeting
+            .as_ref()
+            .and_then(|m| m.started_at)
+            .unwrap_or(self.created_at)
+    }
+
+    pub fn is_trashed(&self) -> bool {
+        self.trashed_at.is_some()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub pinned: bool,
+    pub created_at: DateTime<Utc>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct FoldersFile {
+    folders: Vec<Folder>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrashFilter {
+    #[default]
+    Exclude,
+    Only,
+    Include,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ListFilter {
+    pub kind: Option<DocKind>,
+    pub trash: TrashFilter,
+    pub folder_id: Option<String>,
+}
+
+impl ListFilter {
+    fn matches(&self, meta: &DocMeta) -> bool {
+        let kind = self.kind.as_ref().is_none_or(|k| *k == meta.kind);
+        let trash = match self.trash {
+            TrashFilter::Exclude => !meta.is_trashed(),
+            TrashFilter::Only => meta.is_trashed(),
+            TrashFilter::Include => true,
+        };
+        let folder = self
+            .folder_id
+            .as_ref()
+            .is_none_or(|f| meta.folder_id.as_ref() == Some(f));
+        kind && trash && folder
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrokenEntry {
+    pub name: String,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    pub docs: Vec<DocMeta>,
+    pub broken: Vec<BrokenEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DayGroup {
+    pub date: NaiveDate,
+    pub ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchOptions {
+    pub kind: Option<DocKind>,
+    pub include_trashed: bool,
+    pub limit: usize,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            kind: None,
+            include_trashed: false,
+            limit: 50,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchField {
+    Title,
+    Notes,
+    Transcript,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchHit {
+    pub id: String,
+    pub kind: DocKind,
+    pub title: String,
+    pub field: SearchField,
+    pub snippet: String,
+    pub score: u32,
+    pub sort_time: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TitleHint<'a> {
+    pub event_title: Option<&'a str>,
+    pub notes_markdown: Option<&'a str>,
+    pub app_name: Option<&'a str>,
+    pub local_start: Option<NaiveDateTime>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Library {
+    root: PathBuf,
+}
+
+impl Library {
+    pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        fs::create_dir_all(&root)?;
+        Ok(Self { root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn doc_dir(&self, id: &str) -> Result<PathBuf> {
+        if !is_valid_id(id) {
+            return Err(LibraryError::InvalidId(id.to_string()));
+        }
+        join_name(&self.root, id)
+    }
+
+    pub fn transcript_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.doc_dir(id)?.join(TRANSCRIPT_FILE))
+    }
+
+    pub fn audio_dir(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.doc_dir(id)?.join(AUDIO_DIR))
+    }
+
+    pub fn attachments_dir(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.doc_dir(id)?.join(ATTACHMENTS_DIR))
+    }
+
+    pub fn audio_file_path(&self, id: &str, file: &str) -> Result<PathBuf> {
+        let name = file
+            .strip_prefix(AUDIO_DIR)
+            .and_then(|rest| rest.strip_prefix(['/', '\\']))
+            .unwrap_or(file);
+        join_name(&self.audio_dir(id)?, name)
+    }
+
+    pub fn create(&self, kind: DocKind, now: DateTime<Utc>, entropy: u64) -> Result<DocMeta> {
+        for attempt in 0..32u64 {
+            let id = new_id(now, entropy.wrapping_add(attempt.wrapping_mul(0x9e37_79b9)));
+            let dir = self.doc_dir(&id)?;
+            match fs::create_dir(&dir) {
+                Ok(()) => {
+                    let meta = DocMeta::new(id, kind, now);
+                    self.save(&meta)?;
+                    return Ok(meta);
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(LibraryError::Limit("could not allocate a unique id".into()))
+    }
+
+    pub fn load(&self, id: &str) -> Result<DocMeta> {
+        let path = self.doc_dir(id)?.join(DOC_FILE);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(LibraryError::NotFound(id.to_string()));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let mut meta: DocMeta = serde_json::from_slice(&bytes)?;
+        meta.id = id.to_string();
+        Ok(meta)
+    }
+
+    pub fn save(&self, meta: &DocMeta) -> Result<()> {
+        let dir = self.doc_dir(&meta.id)?;
+        fs::create_dir_all(&dir)?;
+        let bytes = serde_json::to_vec_pretty(meta)?;
+        atomic_write(&dir.join(DOC_FILE), &bytes)?;
+        Ok(())
+    }
+
+    pub fn list(&self, filter: &ListFilter) -> Result<Listing> {
+        let mut listing = Listing::default();
+        for name in self.doc_names()? {
+            match self.load(&name) {
+                Ok(meta) => {
+                    if filter.matches(&meta) {
+                        listing.docs.push(meta);
+                    }
+                }
+                Err(e) => listing.broken.push(BrokenEntry {
+                    name,
+                    error: e.to_string(),
+                }),
+            }
+        }
+        listing
+            .docs
+            .sort_by(|a, b| b.sort_time().cmp(&a.sort_time()).then(b.id.cmp(&a.id)));
+        Ok(listing)
+    }
+
+    pub fn trash(&self, id: &str, now: DateTime<Utc>) -> Result<DocMeta> {
+        let mut meta = self.load(id)?;
+        if meta.trashed_at.is_none() {
+            meta.trashed_at = Some(now);
+            self.save(&meta)?;
+        }
+        Ok(meta)
+    }
+
+    pub fn restore(&self, id: &str) -> Result<DocMeta> {
+        let mut meta = self.load(id)?;
+        if meta.trashed_at.take().is_some() {
+            self.save(&meta)?;
+        }
+        Ok(meta)
+    }
+
+    pub fn delete_permanently(&self, id: &str) -> Result<()> {
+        let dir = self.doc_dir(id)?;
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn purge_trash(&self, now: DateTime<Utc>) -> Result<Vec<String>> {
+        let listing = self.list(&ListFilter {
+            trash: TrashFilter::Only,
+            ..ListFilter::default()
+        })?;
+        let mut purged = Vec::new();
+        for meta in listing.docs {
+            let expired = meta
+                .trashed_at
+                .is_some_and(|t| (now - t).num_days() >= TRASH_RETENTION_DAYS);
+            if expired {
+                self.delete_permanently(&meta.id)?;
+                purged.push(meta.id);
+            }
+        }
+        Ok(purged)
+    }
+
+    pub fn read_notes(&self, id: &str) -> Result<Option<String>> {
+        self.read_payload(id, NOTES_FILE)
+    }
+
+    pub fn write_notes(&self, id: &str, json: &str) -> Result<()> {
+        self.write_payload(id, NOTES_FILE, json)
+    }
+
+    pub fn read_enhanced(&self, id: &str) -> Result<Option<String>> {
+        self.read_payload(id, ENHANCED_FILE)
+    }
+
+    pub fn write_enhanced(&self, id: &str, json: &str) -> Result<()> {
+        let meta = self.load(id)?;
+        if meta.kind != DocKind::Meeting {
+            return Err(LibraryError::NotAllowed(
+                "enhanced notes only exist for meetings".into(),
+            ));
+        }
+        self.write_payload(id, ENHANCED_FILE, json)
+    }
+
+    pub fn add_attachment(&self, id: &str, file_name: &str, bytes: &[u8]) -> Result<String> {
+        let dir = self.doc_dir(id)?;
+        if !dir.join(DOC_FILE).exists() {
+            return Err(LibraryError::NotFound(id.to_string()));
+        }
+        let (stem, ext) = sanitise_file_name(file_name)
+            .ok_or_else(|| LibraryError::NotAllowed(format!("unsupported file: {file_name}")))?;
+        if bytes.len() > MAX_ATTACHMENT_BYTES {
+            return Err(LibraryError::Limit("attachment too large".into()));
+        }
+        if self.list_attachments(id)?.len() >= MAX_ATTACHMENTS {
+            return Err(LibraryError::Limit("too many attachments".into()));
+        }
+        let attachments = dir.join(ATTACHMENTS_DIR);
+        fs::create_dir_all(&attachments)?;
+        let mut name = format!("{stem}.{ext}");
+        let mut n = 1u32;
+        while join_name(&attachments, &name)?.exists() {
+            name = format!("{stem}-{n}.{ext}");
+            n = n.saturating_add(1);
+        }
+        atomic_write(&join_name(&attachments, &name)?, bytes)?;
+        Ok(name)
+    }
+
+    pub fn list_attachments(&self, id: &str) -> Result<Vec<String>> {
+        let dir = self.attachments_dir(id)?;
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| !n.starts_with('.'))
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    pub fn attachment_path(&self, id: &str, name: &str) -> Result<PathBuf> {
+        join_name(&self.attachments_dir(id)?, name)
+    }
+
+    pub fn remove_attachment(&self, id: &str, name: &str) -> Result<bool> {
+        match fs::remove_file(self.attachment_path(id, name)?) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn sweep_audio(&self, now: DateTime<Utc>, retention_days: u32) -> Result<Vec<String>> {
+        let listing = self.list(&ListFilter {
+            kind: Some(DocKind::Meeting),
+            trash: TrashFilter::Include,
+            folder_id: None,
+        })?;
+        let mut swept = Vec::new();
+        for mut meta in listing.docs {
+            let Some(meeting) = meta.meeting.as_mut() else {
+                continue;
+            };
+            let reference = meeting
+                .ended_at
+                .or(meeting.started_at)
+                .unwrap_or(meta.created_at);
+            if (now - reference).num_days() < i64::from(retention_days) {
+                continue;
+            }
+            let audio_dir = self.audio_dir(&meta.id)?;
+            let had_dir = audio_dir.exists();
+            if !had_dir && meeting.audio.is_empty() {
+                continue;
+            }
+            if had_dir {
+                fs::remove_dir_all(&audio_dir)?;
+            }
+            meeting.audio.clear();
+            self.save(&meta)?;
+            swept.push(meta.id);
+        }
+        Ok(swept)
+    }
+
+    pub fn folders(&self) -> Result<Vec<Folder>> {
+        Ok(self.read_folders()?.folders)
+    }
+
+    pub fn create_folder(
+        &self,
+        name: &str,
+        parent_id: Option<&str>,
+        now: DateTime<Utc>,
+        entropy: u64,
+    ) -> Result<Folder> {
+        let mut file = self.read_folders()?;
+        if let Some(parent) = parent_id
+            && !file.folders.iter().any(|f| f.id == parent)
+        {
+            return Err(LibraryError::NotFound(parent.to_string()));
+        }
+        let mut id = format!("f-{}", new_id(now, entropy));
+        let mut bump = 1u64;
+        while file.folders.iter().any(|f| f.id == id) {
+            id = format!("f-{}", new_id(now, entropy.wrapping_add(bump)));
+            bump += 1;
+        }
+        let folder = Folder {
+            id,
+            name: clean_name(name),
+            parent_id: parent_id.map(str::to_string),
+            pinned: false,
+            created_at: now,
+            extra: BTreeMap::new(),
+        };
+        file.folders.push(folder.clone());
+        self.write_folders(&file)?;
+        Ok(folder)
+    }
+
+    pub fn rename_folder(&self, id: &str, name: &str) -> Result<Folder> {
+        self.update_folder(id, |f| f.name = clean_name(name))
+    }
+
+    pub fn set_folder_pinned(&self, id: &str, pinned: bool) -> Result<Folder> {
+        self.update_folder(id, |f| f.pinned = pinned)
+    }
+
+    pub fn move_folder(&self, id: &str, parent_id: Option<&str>) -> Result<Folder> {
+        let file = self.read_folders()?;
+        if let Some(parent) = parent_id {
+            let mut cursor = Some(parent.to_string());
+            let mut steps = 0;
+            while let Some(current) = cursor {
+                if current == id {
+                    return Err(LibraryError::NotAllowed("folder cycle".into()));
+                }
+                let folder = file
+                    .folders
+                    .iter()
+                    .find(|f| f.id == current)
+                    .ok_or_else(|| LibraryError::NotFound(current.clone()))?;
+                cursor = folder.parent_id.clone();
+                steps += 1;
+                if steps > file.folders.len() {
+                    return Err(LibraryError::NotAllowed("folder cycle".into()));
+                }
+            }
+        }
+        self.update_folder(id, |f| f.parent_id = parent_id.map(str::to_string))
+    }
+
+    pub fn delete_folder(&self, id: &str) -> Result<Vec<String>> {
+        let mut file = self.read_folders()?;
+        let index = file
+            .folders
+            .iter()
+            .position(|f| f.id == id)
+            .ok_or_else(|| LibraryError::NotFound(id.to_string()))?;
+        let removed = file.folders.remove(index);
+        for folder in &mut file.folders {
+            if folder.parent_id.as_deref() == Some(id) {
+                folder.parent_id.clone_from(&removed.parent_id);
+            }
+        }
+        let mut moved = Vec::new();
+        let listing = self.list(&ListFilter {
+            trash: TrashFilter::Include,
+            folder_id: Some(id.to_string()),
+            ..ListFilter::default()
+        })?;
+        for mut meta in listing.docs {
+            meta.folder_id.clone_from(&removed.parent_id);
+            self.save(&meta)?;
+            moved.push(meta.id);
+        }
+        self.write_folders(&file)?;
+        Ok(moved)
+    }
+
+    pub fn move_doc(&self, id: &str, folder_id: Option<&str>) -> Result<DocMeta> {
+        if let Some(folder) = folder_id
+            && !self.folders()?.iter().any(|f| f.id == folder)
+        {
+            return Err(LibraryError::NotFound(folder.to_string()));
+        }
+        let mut meta = self.load(id)?;
+        meta.folder_id = folder_id.map(str::to_string);
+        self.save(&meta)?;
+        Ok(meta)
+    }
+
+    pub fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchHit>> {
+        let needle = fold_query(query);
+        if needle.is_empty() || options.limit == 0 {
+            return Ok(Vec::new());
+        }
+        let listing = self.list(&ListFilter {
+            kind: options.kind.clone(),
+            trash: if options.include_trashed {
+                TrashFilter::Include
+            } else {
+                TrashFilter::Exclude
+            },
+            folder_id: None,
+        })?;
+        let mut kept: BinaryHeap<Reverse<Ranked>> = BinaryHeap::new();
+        for meta in listing.docs {
+            let floor = (kept.len() >= options.limit)
+                .then(|| kept.peek().map(|worst| worst.0.0.score))
+                .flatten();
+            if floor.is_some_and(|floor| floor >= BEST_SCORE) {
+                break;
+            }
+            if let Some(hit) = self.search_doc(&meta, &needle, floor) {
+                kept.push(Reverse(Ranked(hit)));
+                if kept.len() > options.limit {
+                    kept.pop();
+                }
+            }
+        }
+        let mut hits: Vec<SearchHit> = kept.into_iter().map(|r| r.0.0).collect();
+        hits.sort_by(|a, b| rank(b, a));
+        Ok(hits)
+    }
+
+    fn search_doc(&self, meta: &DocMeta, needle: &[char], floor: Option<u32>) -> Option<SearchHit> {
+        // Documents arrive newest first, so a hit that only ties the worst kept score loses on
+        // recency and fields that cannot beat the floor are never read.
+        let wanted = |score: u32| floor.is_none_or(|floor| score > floor);
+        let hit = |field, score, text: &str, (start, end): (usize, usize)| SearchHit {
+            id: meta.id.clone(),
+            kind: meta.kind.clone(),
+            title: meta.title.clone(),
+            field,
+            snippet: snippet(text, start, end, 40),
+            score,
+            sort_time: meta.sort_time(),
+        };
+        if wanted(TITLE_SCORE)
+            && let Some(range) = find_ci(&meta.title, needle)
+        {
+            let score = if range.0 == 0 {
+                BEST_SCORE
+            } else {
+                TITLE_SCORE
+            };
+            if wanted(score) {
+                return Some(hit(SearchField::Title, score, &meta.title, range));
+            }
+        }
+        if wanted(TAG_SCORE) {
+            for tag in &meta.tags {
+                if let Some(range) = find_ci(tag, needle) {
+                    return Some(hit(SearchField::Title, TAG_SCORE, tag, range));
+                }
+            }
+        }
+        if wanted(NOTES_SCORE)
+            && let Ok(Some(notes)) = self.read_notes(&meta.id)
+        {
+            let text = notes_text(&notes);
+            if let Some(range) = find_ci(&text, needle) {
+                return Some(hit(SearchField::Notes, NOTES_SCORE, &text, range));
+            }
+        }
+        if wanted(TRANSCRIPT_SCORE) && meta.kind == DocKind::Meeting {
+            let path = self.transcript_path(&meta.id).ok()?;
+            let file = File::open(path).ok()?;
+            for chunk in BufReader::new(file).split(b'\n') {
+                let Ok(chunk) = chunk else {
+                    break;
+                };
+                let Ok(value) = serde_json::from_slice::<Value>(&chunk) else {
+                    continue;
+                };
+                let text = value
+                    .pointer("/utterance/text")
+                    .or_else(|| value.get("text"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if let Some(range) = find_ci(text, needle) {
+                    return Some(hit(SearchField::Transcript, TRANSCRIPT_SCORE, text, range));
+                }
+            }
+        }
+        None
+    }
+
+    fn doc_names(&self) -> Result<Vec<String>> {
+        let mut names: Vec<String> = fs::read_dir(&self.root)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| is_valid_id(n))
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    fn read_payload(&self, id: &str, file: &str) -> Result<Option<String>> {
+        match fs::read_to_string(self.doc_dir(id)?.join(file)) {
+            Ok(text) => Ok(Some(text)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn write_payload(&self, id: &str, file: &str, json: &str) -> Result<()> {
+        serde_json::from_str::<serde::de::IgnoredAny>(json)?;
+        let dir = self.doc_dir(id)?;
+        if !dir.join(DOC_FILE).exists() {
+            return Err(LibraryError::NotFound(id.to_string()));
+        }
+        atomic_write(&dir.join(file), json.as_bytes())?;
+        Ok(())
+    }
+
+    fn read_folders(&self) -> Result<FoldersFile> {
+        match fs::read(self.root.join(FOLDERS_FILE)) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(FoldersFile::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn write_folders(&self, file: &FoldersFile) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(file)?;
+        atomic_write(&self.root.join(FOLDERS_FILE), &bytes)?;
+        Ok(())
+    }
+
+    fn update_folder(&self, id: &str, change: impl FnOnce(&mut Folder)) -> Result<Folder> {
+        let mut file = self.read_folders()?;
+        let folder = file
+            .folders
+            .iter_mut()
+            .find(|f| f.id == id)
+            .ok_or_else(|| LibraryError::NotFound(id.to_string()))?;
+        change(folder);
+        let folder = folder.clone();
+        self.write_folders(&file)?;
+        Ok(folder)
+    }
+}
+
+const BEST_SCORE: u32 = 400;
+const TITLE_SCORE: u32 = 300;
+const TAG_SCORE: u32 = 250;
+const NOTES_SCORE: u32 = 200;
+const TRANSCRIPT_SCORE: u32 = 100;
+
+fn rank(a: &SearchHit, b: &SearchHit) -> CmpOrdering {
+    a.score
+        .cmp(&b.score)
+        .then(a.sort_time.cmp(&b.sort_time))
+        .then(a.id.cmp(&b.id))
+}
+
+struct Ranked(SearchHit);
+
+impl PartialEq for Ranked {
+    fn eq(&self, other: &Self) -> bool {
+        rank(&self.0, &other.0) == CmpOrdering::Equal
+    }
+}
+
+impl Eq for Ranked {}
+
+impl PartialOrd for Ranked {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Ranked {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        rank(&self.0, &other.0)
+    }
+}
+
+const ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+pub fn new_id(now: DateTime<Utc>, entropy: u64) -> String {
+    let suffix: String = (0..6)
+        .map(|i| ID_ALPHABET[((entropy >> (i * 5)) & 31) as usize] as char)
+        .collect();
+    format!("{}-{suffix}", now.format("%Y%m%dT%H%M%S%3fZ"))
+}
+
+pub fn is_valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && !is_reserved_device_name(id)
+}
+
+pub fn group_by_day(docs: &[DocMeta], tz_offset_minutes: i32) -> Vec<DayGroup> {
+    let seconds = tz_offset_minutes.clamp(-14 * 60, 14 * 60) * 60;
+    let offset = FixedOffset::east_opt(seconds).unwrap_or_else(|| Utc.fix());
+    let mut sorted: Vec<&DocMeta> = docs.iter().collect();
+    sorted.sort_by(|a, b| b.sort_time().cmp(&a.sort_time()).then(b.id.cmp(&a.id)));
+    let mut groups: Vec<DayGroup> = Vec::new();
+    for doc in sorted {
+        let date = doc.sort_time().with_timezone(&offset).date_naive();
+        match groups.last_mut() {
+            Some(group) if group.date == date => group.ids.push(doc.id.clone()),
+            _ => groups.push(DayGroup {
+                date,
+                ids: vec![doc.id.clone()],
+            }),
+        }
+    }
+    groups
+}
+
+pub fn first_markdown_heading(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(|line| {
+        let line = line.trim();
+        let hashes = line.bytes().take_while(|b| *b == b'#').count();
+        if !(1..=6).contains(&hashes) {
+            return None;
+        }
+        let rest = &line[hashes..];
+        if !rest.starts_with(' ') {
+            return None;
+        }
+        let text = rest.trim().trim_end_matches('#').trim();
+        (!text.is_empty()).then(|| text.to_string())
+    })
+}
+
+pub fn auto_title_from(hint: &TitleHint<'_>) -> String {
+    let clean = |s: Option<&str>| {
+        s.map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|s| !s.is_empty())
+            .map(|s| s.chars().take(120).collect::<String>())
+    };
+    if let Some(title) = clean(hint.event_title) {
+        return title;
+    }
+    if let Some(title) = clean(
+        hint.notes_markdown
+            .and_then(first_markdown_heading)
+            .as_deref(),
+    ) {
+        return title;
+    }
+    let time = hint.local_start.map(|t| t.format("%H:%M").to_string());
+    match (clean(hint.app_name), time) {
+        (Some(app), Some(time)) => format!("{app} at {time}"),
+        (Some(app), None) => app,
+        (None, Some(time)) => format!("Meeting at {time}"),
+        (None, None) => "Untitled".to_string(),
+    }
+}
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?
+        .to_string_lossy()
+        .into_owned();
+    let tmp = dir.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = (|| {
+        let mut file = File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    sync_dir(dir);
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_dir(dir: &Path) {
+    if let Ok(handle) = File::open(dir) {
+        let _ = handle.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) {}
+
+fn clean_name(name: &str) -> String {
+    let name: String = name
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(200)
+        .collect();
+    if name.is_empty() {
+        "Untitled".to_string()
+    } else {
+        name
+    }
+}
+
+fn join_name(base: &Path, name: &str) -> Result<PathBuf> {
+    if !is_plain_file_name(name) {
+        return Err(LibraryError::InvalidId(name.to_string()));
+    }
+    Ok(base.join(name))
+}
+
+const WINDOWS_INVALID: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+
+fn is_plain_file_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    let single = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(part)), None) if part == name
+    );
+    single
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name.ends_with(['.', ' '])
+        && !name
+            .chars()
+            .any(|c| c.is_control() || WINDOWS_INVALID.contains(&c))
+        && !is_reserved_device_name(name)
+}
+
+fn is_reserved_device_name(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+        _ => {
+            let mut chars = stem.chars();
+            let prefix: String = chars.by_ref().take(3).collect();
+            let rest: Vec<char> = chars.collect();
+            (prefix == "COM" || prefix == "LPT")
+                && rest.len() == 1
+                && (rest[0].is_ascii_digit() || matches!(rest[0], '\u{b9}' | '\u{b2}' | '\u{b3}'))
+        }
+    }
+}
+
+fn sanitise_file_name(file_name: &str) -> Option<(String, String)> {
+    let base = file_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(file_name)
+        .trim();
+    let (stem, ext) = base.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    if !IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        return None;
+    }
+    let stem: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(100)
+        .collect();
+    let stem = stem.trim().trim_start_matches('_');
+    let stem = if stem.is_empty() { "image" } else { stem };
+    if is_reserved_device_name(stem) {
+        return Some((format!("{stem}_"), ext));
+    }
+    Some((stem.to_string(), ext))
+}
+
+fn notes_text(json: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(json) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    collect_text(&value, &mut parts, 0);
+    parts.join(" ")
+}
+
+fn collect_text<'a>(value: &'a Value, out: &mut Vec<&'a str>, depth: usize) {
+    if depth > 64 {
+        return;
+    }
+    match value {
+        Value::String(s) if depth == 0 => out.push(s),
+        Value::Array(items) => items.iter().for_each(|v| collect_text(v, out, depth + 1)),
+        Value::Object(map) => {
+            for (key, v) in map {
+                match v {
+                    Value::String(s)
+                        if ["text", "markdown", "md", "content", "title", "plain"]
+                            .contains(&key.as_str()) =>
+                    {
+                        out.push(s)
+                    }
+                    _ => collect_text(v, out, depth + 1),
+                }
+            }
+        }
+        _ => {}
+    }
+}
