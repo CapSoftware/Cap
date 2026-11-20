@@ -34,7 +34,7 @@ write_mirrors() {
 
 rank_mirrors() {
 	local -a candidates=() ranked=()
-	local mirror host seen=" " speed
+	local mirror host seen=" " code speed
 	while read -r mirror _; do
 		if [ -n "$mirror" ]; then
 			candidates+=("${mirror%/}/")
@@ -51,9 +51,14 @@ rank_mirrors() {
 			continue
 		fi
 		seen="$seen$host "
-		speed=$(curl -s -o /dev/null -r 0-8388607 --connect-timeout 3 --max-time 4 \
-			-w '%{speed_download}' "$mirror$probe_path" || true)
-		speed=${speed%%.*}
+		# A transfer cut off by --max-time still reports its speed; an error
+		# page does not count, however fast it came back.
+		read -r code speed < <(curl -s -o /dev/null -r 0-8388607 --connect-timeout 3 --max-time 4 \
+			-w '%{http_code} %{speed_download}\n' "$mirror$probe_path" || true) || true
+		case "${code:-}" in
+		200 | 206) speed=${speed%%.*} ;;
+		*) speed=0 ;;
+		esac
 		echo "apt mirror $mirror: $((${speed:-0} / 1024)) kB/s"
 		echo "${speed:-0} $mirror" >>"$results"
 	done
