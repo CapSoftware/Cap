@@ -2945,7 +2945,7 @@ mod tests {
     fn denied_optional_devices_do_not_block_the_tour_but_either_required_permission_does() {
         for (screen, accessibility) in [(false, false), (false, true), (true, false), (true, true)]
         {
-            let state = PermissionsState::from_raw(Some(RawPermissions {
+            let state = PermissionsState::from_raw_for_test(Some(RawPermissions {
                 screen_granted: screen,
                 accessibility_granted: accessibility,
                 microphone: MediaAuthorization::Denied,
@@ -2967,7 +2967,7 @@ mod tests {
             microphone: MediaAuthorization::Authorized,
             camera: MediaAuthorization::Authorized,
         };
-        let mut state = PermissionsState::from_raw(Some(raw));
+        let mut state = PermissionsState::from_raw_for_test(Some(raw));
         assert_eq!(
             Step::Permissions.next(false, state.necessary_granted()),
             Some(Step::Overview)

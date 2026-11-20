@@ -39,6 +39,7 @@ pub struct PermissionsState {
     /// A required permission has been routed through System Settings; from
     /// then on the relaunch hint stays up until both required grants land.
     sent_to_settings: bool,
+    settings_only: bool,
     check: OSPermissionsCheck,
 }
 
@@ -63,13 +64,22 @@ impl PermissionsState {
     }
 
     pub fn from_raw(raw: Option<RawPermissions>) -> Self {
+        Self::from_raw_when(raw, permissions::grants_are_settings_only())
+    }
+
+    fn from_raw_when(raw: Option<RawPermissions>, settings_only: bool) -> Self {
         let attempted = AttemptedFlags::default();
         Self {
             raw,
             attempted,
             sent_to_settings: false,
-            check: permissions::classify(raw, attempted),
+            settings_only,
+            check: permissions::classify_when(raw, attempted, settings_only),
         }
+    }
+
+    fn reclassify(&mut self) {
+        self.check = permissions::classify_when(self.raw, self.attempted, self.settings_only);
     }
 
     /// Fold in a fresh preflight sweep. Returns true when anything the UI
@@ -79,7 +89,7 @@ impl PermissionsState {
             return false;
         }
         self.raw = raw;
-        self.check = permissions::classify(raw, self.attempted);
+        self.reclassify();
         true
     }
 
@@ -93,7 +103,7 @@ impl PermissionsState {
             // AV reports notDetermined vs denied itself; nothing to record.
             OSPermission::Microphone | OSPermission::Camera => return,
         }
-        self.check = permissions::classify(self.raw, self.attempted);
+        self.reclassify();
     }
 
     /// The user was deep-linked into System Settings for this permission.
@@ -115,12 +125,41 @@ impl PermissionsState {
             .filter(|(_, status)| *status != OSPermissionStatus::NotNeeded)
     }
 
+    /// Where the OS can no longer prompt for a permission, an undecided row
+    /// goes straight to System Settings instead of waiting out a request that
+    /// shows nothing.
     pub fn action(&self, permission: OSPermission) -> Option<RowAction> {
         match self.check.get(permission) {
+            OSPermissionStatus::NotDetermined if !self.can_prompt(permission) => {
+                Some(RowAction::OpenSettings)
+            }
             OSPermissionStatus::NotDetermined => Some(RowAction::Request),
             OSPermissionStatus::Denied => Some(RowAction::OpenSettings),
             OSPermissionStatus::Granted | OSPermissionStatus::NotNeeded => None,
         }
+    }
+
+    fn can_prompt(&self, permission: OSPermission) -> bool {
+        match permission {
+            OSPermission::ScreenRecording | OSPermission::Accessibility => !self.settings_only,
+            OSPermission::Microphone | OSPermission::Camera => true,
+        }
+    }
+
+    /// The settings-only flow: macOS 27.3 adds Cap to the list only through
+    /// the + button under it.
+    pub fn settings_only(&self) -> bool {
+        self.settings_only
+    }
+
+    #[cfg(test)]
+    pub fn from_raw_for_test(raw: Option<RawPermissions>) -> Self {
+        Self::from_raw_when(raw, false)
+    }
+
+    #[cfg(test)]
+    pub fn from_raw_settings_only(raw: Option<RawPermissions>) -> Self {
+        Self::from_raw_when(raw, true)
     }
 
     pub fn refreshed_action(
@@ -286,12 +325,47 @@ mod tests {
     }
 
     fn fresh_ungranted() -> PermissionsState {
-        PermissionsState::from_raw(raw(
+        PermissionsState::from_raw_for_test(raw(
             false,
             false,
             MediaAuthorization::NotDetermined,
             MediaAuthorization::NotDetermined,
         ))
+    }
+
+    #[test]
+    fn settings_only_rows_skip_dead_prompts_and_hide_accessibility() {
+        let state = PermissionsState::from_raw_settings_only(raw(
+            false,
+            false,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        ));
+        assert!(state.settings_only());
+        assert_eq!(
+            state.action(OSPermission::ScreenRecording),
+            Some(RowAction::OpenSettings)
+        );
+        assert_eq!(
+            state.action(OSPermission::Microphone),
+            Some(RowAction::Request)
+        );
+        assert_eq!(state.action(OSPermission::Camera), Some(RowAction::Request));
+        assert!(
+            state
+                .shown()
+                .all(|(permission, _)| permission != OSPermission::Accessibility)
+        );
+        assert!(!state.necessary_granted());
+
+        let granted = PermissionsState::from_raw_settings_only(raw(
+            true,
+            false,
+            MediaAuthorization::Denied,
+            MediaAuthorization::NotDetermined,
+        ));
+        assert!(granted.necessary_granted());
+        assert_eq!(granted.granted_counts(), (1, 3));
     }
 
     #[test]
@@ -327,7 +401,7 @@ mod tests {
 
     #[test]
     fn media_denial_offers_settings_without_any_attempt() {
-        let state = PermissionsState::from_raw(raw(
+        let state = PermissionsState::from_raw_for_test(raw(
             false,
             false,
             MediaAuthorization::Denied,
@@ -476,7 +550,7 @@ mod tests {
 
     #[test]
     fn platform_without_permissions_shows_no_rows() {
-        let state = PermissionsState::from_raw(None);
+        let state = PermissionsState::from_raw_for_test(None);
         assert_eq!(state.shown().count(), 0);
         assert_eq!(state.granted_counts(), (0, 0));
         assert!(state.all_shown_granted());
@@ -485,7 +559,7 @@ mod tests {
 
     #[test]
     fn necessary_ignores_optional_rows() {
-        let state = PermissionsState::from_raw(raw(
+        let state = PermissionsState::from_raw_for_test(raw(
             true,
             true,
             MediaAuthorization::Denied,

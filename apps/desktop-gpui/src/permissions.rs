@@ -75,9 +75,18 @@ impl OSPermission {
     }
 
     /// Screen recording and accessibility gate the app; mic and camera are
-    /// optional. Same split as the Tauri app's `necessary_granted`.
+    /// optional. Same split as the Tauri app's `necessary_granted`, except
+    /// that accessibility is optional where grants are Settings-only.
     pub fn required(self) -> bool {
-        matches!(self, Self::ScreenRecording | Self::Accessibility)
+        self.required_when(grants_are_settings_only())
+    }
+
+    fn required_when(self, settings_only: bool) -> bool {
+        match self {
+            Self::ScreenRecording => true,
+            Self::Accessibility => !settings_only,
+            Self::Microphone | Self::Camera => false,
+        }
     }
 
     /// The exact System Settings pane, verbatim from
@@ -189,9 +198,55 @@ impl OSPermissionsCheck {
     }
 }
 
+/// macOS 27.3 changed how Screen Recording and Accessibility are granted
+/// (issue #4410, measured on 27.3 beta 2, 26C5047e): `CGRequestScreenCaptureAccess`
+/// and `AXIsProcessTrustedWithOptions` no longer prompt or add the app to the
+/// System Settings list (tccd logs "does not allow prompting"), the
+/// Accessibility list only takes assistive-technology apps, and its URL now
+/// opens System & App Protection Override. Cursor position and mouse buttons
+/// stay readable without any grant, so accessibility stops gating the app.
+pub fn grants_are_settings_only() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static SETTINGS_ONLY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *SETTINGS_ONLY.get_or_init(|| {
+            macos::product_version()
+                .as_deref()
+                .is_some_and(version_has_settings_only_grants)
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+fn version_has_settings_only_grants(version: &str) -> bool {
+    let mut parts = version
+        .trim()
+        .split('.')
+        .map(|part| part.parse::<u32>().ok());
+    let (Some(Some(major)), minor) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let minor = minor.flatten().unwrap_or(0);
+    (major, minor) >= (27, 3)
+}
+
 /// Pure classification -- the whole status state machine, unit-tested below.
 /// `None` is a platform that needs nothing.
 pub fn classify(raw: Option<RawPermissions>, attempted: AttemptedFlags) -> OSPermissionsCheck {
+    classify_when(raw, attempted, grants_are_settings_only())
+}
+
+/// Where grants are Settings-only an ungranted accessibility row is
+/// `NotNeeded`, so it neither renders nor gates; a grant carried over from an
+/// older macOS still shows as granted.
+pub fn classify_when(
+    raw: Option<RawPermissions>,
+    attempted: AttemptedFlags,
+    settings_only: bool,
+) -> OSPermissionsCheck {
     let Some(raw) = raw else {
         return OSPermissionsCheck {
             screen_recording: OSPermissionStatus::NotNeeded,
@@ -200,9 +255,14 @@ pub fn classify(raw: Option<RawPermissions>, attempted: AttemptedFlags) -> OSPer
             camera: OSPermissionStatus::NotNeeded,
         };
     };
+    let accessibility = if settings_only && !raw.accessibility_granted {
+        OSPermissionStatus::NotNeeded
+    } else {
+        bool_status(raw.accessibility_granted, attempted.accessibility)
+    };
     OSPermissionsCheck {
         screen_recording: bool_status(raw.screen_granted, attempted.screen),
-        accessibility: bool_status(raw.accessibility_granted, attempted.accessibility),
+        accessibility,
         microphone: raw.microphone.status(),
         camera: raw.camera.status(),
     }
@@ -249,7 +309,10 @@ pub fn check_raw_preflight() -> Option<RawPermissions> {
 /// The startup / tray gate: screen recording + accessibility.
 pub fn necessary_granted() -> bool {
     match check_raw() {
-        Some(raw) => raw.screen_granted && raw.accessibility_granted,
+        Some(raw) => {
+            raw.screen_granted
+                && (raw.accessibility_granted || !OSPermission::Accessibility.required())
+        }
         None => true,
     }
 }
@@ -440,6 +503,29 @@ mod macos {
             screen_granted: super::screen_capture::available(raw.screen_granted),
             ..raw
         }
+    }
+
+    /// `kern.osproductversion` reports the real version even to binaries
+    /// that get a compatibility version from `NSProcessInfo`.
+    pub fn product_version() -> Option<String> {
+        let name = c"kern.osproductversion";
+        let mut buffer = [0u8; 64];
+        let mut length = buffer.len();
+        let result = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                buffer.as_mut_ptr().cast(),
+                &mut length,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if result != 0 {
+            return None;
+        }
+        let bytes = buffer.get(..length)?;
+        let bytes = bytes.split(|&byte| byte == 0).next()?;
+        std::str::from_utf8(bytes).ok().map(str::to_owned)
     }
 
     pub fn check_raw_preflight() -> RawPermissions {
@@ -660,6 +746,10 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    fn classify_test(raw: Option<RawPermissions>, attempted: AttemptedFlags) -> OSPermissionsCheck {
+        classify_when(raw, attempted, false)
+    }
+
     fn raw(
         screen: bool,
         ax: bool,
@@ -684,7 +774,7 @@ mod tests {
 
     #[test]
     fn platform_without_permissions_is_all_not_needed() {
-        let check = classify(None, AttemptedFlags::default());
+        let check = classify_test(None, AttemptedFlags::default());
         for &permission in OSPermission::ALL {
             assert_eq!(check.get(permission), OSPermissionStatus::NotNeeded);
         }
@@ -696,7 +786,7 @@ mod tests {
     fn media_statuses_surface_distinctly() {
         // notDetermined must stay promptable -- never "Denied" -- regardless
         // of any attempted flag (the bug the old `initial` flag had).
-        let check = classify(
+        let check = classify_test(
             raw(
                 true,
                 true,
@@ -723,7 +813,7 @@ mod tests {
 
     #[test]
     fn boolean_permissions_flip_to_denied_only_after_an_attempt() {
-        let fresh = classify(
+        let fresh = classify_test(
             raw(
                 false,
                 false,
@@ -735,7 +825,7 @@ mod tests {
         assert_eq!(fresh.screen_recording, OSPermissionStatus::NotDetermined);
         assert_eq!(fresh.accessibility, OSPermissionStatus::NotDetermined);
 
-        let attempted = classify(
+        let attempted = classify_test(
             raw(
                 false,
                 false,
@@ -753,7 +843,7 @@ mod tests {
 
     #[test]
     fn granted_beats_attempted() {
-        let check = classify(
+        let check = classify_test(
             raw(
                 true,
                 true,
@@ -771,7 +861,7 @@ mod tests {
 
     #[test]
     fn necessary_ignores_optional_permissions() {
-        let check = classify(
+        let check = classify_test(
             raw(
                 true,
                 true,
@@ -782,6 +872,56 @@ mod tests {
         );
         assert!(check.necessary_granted());
         assert!(!check.all_permitted());
+    }
+
+    #[test]
+    fn settings_only_grants_start_at_macos_27_3() {
+        for version in ["27.3", "27.3.1", "27.4", "28.0", "28", " 27.3\n"] {
+            assert!(version_has_settings_only_grants(version), "{version}");
+        }
+        for version in ["27.2.1", "27.2", "27", "26.4", "15.7.2", "", "beta"] {
+            assert!(!version_has_settings_only_grants(version), "{version}");
+        }
+    }
+
+    #[test]
+    fn settings_only_grants_drop_accessibility_from_the_gate() {
+        let ungranted = raw(
+            true,
+            false,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        let check = classify_when(ungranted, AttemptedFlags::default(), true);
+        assert_eq!(check.accessibility, OSPermissionStatus::NotNeeded);
+        assert!(check.necessary_granted());
+
+        let before = classify_when(ungranted, AttemptedFlags::default(), false);
+        assert_eq!(before.accessibility, OSPermissionStatus::NotDetermined);
+        assert!(!before.necessary_granted());
+
+        let carried_over = raw(
+            true,
+            true,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        assert_eq!(
+            classify_when(carried_over, AttemptedFlags::default(), true).accessibility,
+            OSPermissionStatus::Granted
+        );
+
+        let no_screen = raw(
+            false,
+            false,
+            MediaAuthorization::NotDetermined,
+            MediaAuthorization::NotDetermined,
+        );
+        assert!(!classify_when(no_screen, AttemptedFlags::default(), true).necessary_granted());
+
+        assert!(!OSPermission::Accessibility.required_when(true));
+        assert!(OSPermission::Accessibility.required_when(false));
+        assert!(OSPermission::ScreenRecording.required_when(true));
     }
 
     #[test]
