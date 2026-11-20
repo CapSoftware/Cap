@@ -254,7 +254,11 @@ impl<'a> ShownShortcuts<'a> {
         shown
     }
 
-    fn shows(&self, key: &str, time: f64) -> bool {
+    /// Whether a press of `key` at output `time` is a key on screen. `next`
+    /// is when the same key is next struck: a key listed at its label's start
+    /// belongs only to the last press of it before then, so a hidden typed
+    /// key just ahead of the real shortcut never takes its sound.
+    fn shows(&self, key: &str, time: f64, next: Option<f64>) -> bool {
         let first = self
             .keys
             .partition_point(|(at, _, _)| *at < time - SHOWN_KEY_TOLERANCE_SECS);
@@ -267,6 +271,8 @@ impl<'a> ShownShortcuts<'a> {
                 *shown == key
                     && time >= at - deferral - SHOWN_KEY_TOLERANCE_SECS
                     && time <= at + SHOWN_KEY_TOLERANCE_SECS
+                    && (time >= at - SHOWN_KEY_TOLERANCE_SECS
+                        || next.is_none_or(|next| next > at + SHOWN_KEY_TOLERANCE_SECS))
             })
             || self
                 .unlisted
@@ -316,6 +322,25 @@ impl<'a> ShownShortcuts<'a> {
             let last = presses.partition_point(|press| press.time_ms / 1000.0 < source_end);
             let presses = &presses[first..last.max(first)];
             heard[window_index] = vec![false; presses.len()];
+            let output_time = |press: &KeyPressEvent| {
+                held_output_time(
+                    holds,
+                    window.edited_start
+                        + (press.time_ms / 1000.0 - take.keyboard_offset_secs - clip.start)
+                            / clip.timescale,
+                    false,
+                )
+            };
+            // When each key is struck next within this clip, for `shows`.
+            let mut next_strike: Vec<Option<f64>> = vec![None; presses.len()];
+            let mut upcoming: std::collections::HashMap<&str, f64> =
+                std::collections::HashMap::new();
+            for (index, press) in presses.iter().enumerate().rev() {
+                if press.down && !is_modifier_key(&press.key) {
+                    next_strike[index] = upcoming.get(press.key.as_str()).copied();
+                    upcoming.insert(press.key.as_str(), output_time(press));
+                }
+            }
             for (index, press) in presses.iter().enumerate() {
                 if is_modifier_key(&press.key) {
                     if press.down {
@@ -328,14 +353,8 @@ impl<'a> ShownShortcuts<'a> {
                 if !press.down {
                     continue;
                 }
-                let time = held_output_time(
-                    holds,
-                    window.edited_start
-                        + (press.time_ms / 1000.0 - take.keyboard_offset_secs - clip.start)
-                            / clip.timescale,
-                    false,
-                );
-                if self.shows(&press.key, time) {
+                let time = output_time(press);
+                if self.shows(&press.key, time, next_strike[index]) {
                     heard[window_index][index] = true;
                     for &(modifier_window, modifier, _) in &held {
                         heard[modifier_window][modifier] = true;
