@@ -372,14 +372,7 @@ fn read_accounts(dir: &Path) -> AccountsFile {
 }
 
 fn write_accounts(dir: &Path, file: &AccountsFile) -> std::io::Result<()> {
-    let path = accounts_path(dir);
-    persist::atomic_write(&path, &serde_json::to_vec_pretty(file)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    persist::atomic_write_private(&accounts_path(dir), &serde_json::to_vec_pretty(file)?)
 }
 
 pub fn store_refresh_token(dir: &Path, id: &str, refresh_token: &str) -> std::io::Result<()> {
@@ -701,6 +694,35 @@ mod tests {
         drop(stream);
         assert!(get(port, "/?code=ok&state=expected-state").starts_with("HTTP/1.1 200"));
         assert_eq!(handle.join().unwrap(), Ok("ok".to_string()));
+    }
+
+    /// The refresh tokens are owner-only from the first byte: the temp file
+    /// is created 0600 (not chmodded after the rename), and the folder that
+    /// holds it is 0700 even when an older build made it 0755.
+    #[cfg(unix)]
+    #[test]
+    fn the_token_file_is_never_readable_by_others_while_it_is_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("meetings");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let (seen, watch) = persist::private_watch();
+        persist::watch_temp_files(Some(watch));
+        let stored = store_refresh_token(&dir, "account-1", "refresh-a");
+        persist::watch_temp_files(None);
+        stored.unwrap();
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0o600, 0)],
+            "temp file mode and size when created"
+        );
+        assert_eq!(persist::mode(&accounts_path(&dir)), 0o600);
+        assert_eq!(persist::mode(&dir), 0o700);
+        assert_eq!(
+            refresh_token(&dir, "account-1").as_deref(),
+            Some("refresh-a")
+        );
     }
 
     #[test]

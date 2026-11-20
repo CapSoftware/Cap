@@ -131,11 +131,63 @@ pub fn documents_dir() -> PathBuf {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    /// Sees each temp file the moment it exists, before any byte is in it.
+    static TEMP_CREATED: std::cell::RefCell<Option<Box<dyn FnMut(&Path)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn watch_temp_files(watch: Option<Box<dyn FnMut(&Path)>>) {
+    TEMP_CREATED.with(|slot| *slot.borrow_mut() = watch);
+}
+
+/// A watch for [`watch_temp_files`] that records each temp file's
+/// permission bits and length.
+#[cfg(all(test, unix))]
+pub(crate) fn private_watch() -> (
+    std::rc::Rc<std::cell::RefCell<Vec<(u32, u64)>>>,
+    Box<dyn FnMut(&Path)>,
+) {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    let watch = Box::new(move |tmp: &Path| {
+        let len = fs::metadata(tmp).map(|m| m.len()).unwrap_or(u64::MAX);
+        sink.borrow_mut().push((mode(tmp), len));
+    });
+    (seen, watch)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0)
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomically(path, bytes, false)
+}
+
+/// [`atomic_write`] for secrets (calendar refresh tokens, feed addresses):
+/// the temp file is owner-only from the moment it exists, so nothing is ever
+/// readable by other users, and so is the folder that holds it.
+pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomically(path, bytes, true)
+}
+
+fn write_atomically(path: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+    }
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -146,7 +198,13 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
     let result = (|| {
-        let mut file = fs::File::create(&tmp)?;
+        let mut file = create_temp(&tmp, private)?;
+        #[cfg(test)]
+        TEMP_CREATED.with(|slot| {
+            if let Some(watch) = slot.borrow_mut().as_mut() {
+                watch(&tmp);
+            }
+        });
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&tmp, path)
@@ -155,6 +213,21 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+fn create_temp(tmp: &Path, private: bool) -> io::Result<fs::File> {
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        return fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(tmp);
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    fs::File::create(tmp)
 }
 
 pub fn load_settings() -> MeetingSettings {
@@ -245,10 +318,18 @@ pub fn audio_parts(library: &Library, meta: &DocMeta) -> Vec<AudioPart> {
 /// its scratch folder).
 pub fn audio_parts_with(library: &Library, meta: &DocMeta, scratch_root: &Path) -> Vec<AudioPart> {
     let mut parts = Vec::new();
-    if let Some(base) = library.audio_dir(&meta.id).ok().and_then(|d| d.parent().map(Path::to_path_buf)) {
+    if let Some(base) = library
+        .audio_dir(&meta.id)
+        .ok()
+        .and_then(|d| d.parent().map(Path::to_path_buf))
+    {
         parts.extend(parts_under(meta, AUDIO_PARTS_KEY, &base));
     }
-    parts.extend(parts_under(meta, SCRATCH_PARTS_KEY, &scratch_dir_in(scratch_root, &meta.id)));
+    parts.extend(parts_under(
+        meta,
+        SCRATCH_PARTS_KEY,
+        &scratch_dir_in(scratch_root, &meta.id),
+    ));
     parts
 }
 
@@ -269,7 +350,8 @@ fn parts_under(meta: &DocMeta, key: &str, base: &Path) -> Vec<AudioPart> {
                     {
                         return None;
                     }
-                    let source: Source = serde_json::from_value(part.get("source")?.clone()).ok()?;
+                    let source: Source =
+                        serde_json::from_value(part.get("source")?.clone()).ok()?;
                     let offset_ms = part.get("offsetMs").and_then(|v| v.as_u64()).unwrap_or(0);
                     Some(AudioPart {
                         source,
@@ -361,9 +443,15 @@ pub fn set_flag(meta: &mut DocMeta, key: &str, on: bool) -> bool {
     let Some(meeting) = meta.meeting.as_mut() else {
         return false;
     };
-    let was = meeting.extra.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+    let was = meeting
+        .extra
+        .get(key)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if on {
-        meeting.extra.insert(key.into(), serde_json::Value::Bool(true));
+        meeting
+            .extra
+            .insert(key.into(), serde_json::Value::Bool(true));
     } else {
         meeting.extra.remove(key);
     }

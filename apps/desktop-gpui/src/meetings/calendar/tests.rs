@@ -390,15 +390,27 @@ fn every_entry_point_id_finds_its_calendar_event() {
     assert!(!event.calendar_id.is_empty());
 
     let summary = crate::meetings_ui::live::model::EventSummary::of(&event);
-    assert_eq!(state.find(&summary.id).map(|e| &e.title), Some(&event.title));
+    assert_eq!(
+        state.find(&summary.id).map(|e| &e.title),
+        Some(&event.title)
+    );
     let tray = crate::tray::meetings::next_row(&summary, Utc::now(), false);
     let tray_id = tray.event_id.expect("an imminent meeting is clickable");
     assert_eq!(state.find(&tray_id).map(|e| &e.title), Some(&event.title));
     let planner = &state.planner_events(&CalendarSettings::default())[0];
-    assert_eq!(state.find(&planner.id).map(|e| &e.title), Some(&event.title));
+    assert_eq!(
+        state.find(&planner.id).map(|e| &e.title),
+        Some(&event.title)
+    );
     let snapshot = snapshot(&event, None);
-    assert_eq!(state.find(&snapshot.id).map(|e| &e.title), Some(&event.title));
-    assert!(state.find(&event.id).is_none(), "a bare provider id is not a key");
+    assert_eq!(
+        state.find(&snapshot.id).map(|e| &e.title),
+        Some(&event.title)
+    );
+    assert!(
+        state.find(&event.id).is_none(),
+        "a bare provider id is not a key"
+    );
 }
 
 #[test]
@@ -429,4 +441,31 @@ fn a_manual_start_links_the_meeting_in_progress_or_starting_soon() {
         auto_link(&events, now).map(event_key).as_deref(),
         Some("c|running")
     );
+}
+
+/// A feed address is a key to the calendar, so the sources file is written
+/// owner-only from creation, in an owner-only folder.
+#[cfg(unix)]
+#[test]
+fn feed_addresses_are_written_owner_only_from_the_start() {
+    use persist::{mode, private_watch};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("meetings");
+    let mut state = CalendarState::in_dir(dir.clone());
+    state.ensure_loaded();
+    let (seen, watch) = private_watch();
+    persist::watch_temp_files(Some(watch));
+    let added = state.add_ics(
+        "https://calendar.example.com/private-abc123/basic.ics",
+        None,
+    );
+    persist::watch_temp_files(None);
+    added.unwrap();
+    assert_eq!(
+        *seen.borrow(),
+        vec![(0o600, 0)],
+        "temp file mode and size when created"
+    );
+    assert_eq!(mode(&dir.join(CALENDARS_FILE)), 0o600);
+    assert_eq!(mode(&dir), 0o700);
 }

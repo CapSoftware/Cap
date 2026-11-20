@@ -484,7 +484,8 @@ impl CalendarState {
             sources: self.sources.clone(),
         };
         if let Ok(bytes) = serde_json::to_vec_pretty(&file)
-            && let Err(error) = persist::atomic_write(&self.dir().join(CALENDARS_FILE), &bytes)
+            && let Err(error) =
+                persist::atomic_write_private(&self.dir().join(CALENDARS_FILE), &bytes)
         {
             tracing::warn!(%error, "could not save calendar sources");
         }
