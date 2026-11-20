@@ -150,6 +150,9 @@ pub struct TranscriptionSettings {
     /// Learn the user's voice from meetings where only they spoke into the
     /// microphone, so their lines carry their name in rooms with others.
     pub learn_voice: bool,
+    /// While recording, read who the meeting app shows as speaking (local
+    /// only) and name the voices to match.
+    pub name_speakers_from_apps: bool,
 }
 
 pub const DEFAULT_LOCAL_MODEL: &str = "default";
@@ -218,6 +221,7 @@ impl Default for TranscriptionSettings {
                 .collect(),
             live: true,
             learn_voice: true,
+            name_speakers_from_apps: true,
         }
     }
 }

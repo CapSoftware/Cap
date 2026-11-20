@@ -72,6 +72,7 @@ pub(crate) enum Flag {
     Sounds,
     Live,
     LearnVoice,
+    AppNames,
     AutoNotes,
     HideDeclined,
     HideAllDay,
@@ -81,7 +82,7 @@ pub(crate) enum Flag {
 
 impl Flag {
     #[cfg(test)]
-    pub(crate) const ALL: [Flag; 17] = [
+    pub(crate) const ALL: [Flag; 18] = [
         Flag::Scheduled,
         Flag::ShowJoin,
         Flag::Detected,
@@ -94,6 +95,7 @@ impl Flag {
         Flag::Sounds,
         Flag::Live,
         Flag::LearnVoice,
+        Flag::AppNames,
         Flag::AutoNotes,
         Flag::HideDeclined,
         Flag::HideAllDay,
@@ -115,6 +117,7 @@ impl Flag {
             Flag::Sounds => &mut s.recording.sounds,
             Flag::Live => &mut s.transcription.live,
             Flag::LearnVoice => &mut s.transcription.learn_voice,
+            Flag::AppNames => &mut s.transcription.name_speakers_from_apps,
             Flag::AutoNotes => &mut s.notes.auto_generate,
             Flag::HideDeclined => &mut s.calendar.hide_declined,
             Flag::HideAllDay => &mut s.calendar.hide_all_day,
@@ -137,6 +140,7 @@ impl Flag {
             Flag::Sounds => s.recording.sounds,
             Flag::Live => s.transcription.live,
             Flag::LearnVoice => s.transcription.learn_voice,
+            Flag::AppNames => s.transcription.name_speakers_from_apps,
             Flag::AutoNotes => s.notes.auto_generate,
             Flag::HideDeclined => s.calendar.hide_declined,
             Flag::HideAllDay => s.calendar.hide_all_day,

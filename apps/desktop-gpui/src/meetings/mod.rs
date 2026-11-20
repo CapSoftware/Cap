@@ -866,7 +866,10 @@ impl Meetings {
     /// microphone means no walk at all.
     fn watch_speaking(&mut self, doc_id: String, cx: &mut Context<Self>) {
         self.speaking_watch = None;
-        if !cfg!(target_os = "macos") || !cap_meeting_platform::accessibility_trusted() {
+        if !cap_meeting_platform::READS_MEETING_APPS
+            || !self.settings.transcription.name_speakers_from_apps
+            || !cap_meeting_platform::accessibility_trusted()
+        {
             return;
         }
         const CALL_PAGES: &[&str] = &[

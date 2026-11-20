@@ -1105,6 +1105,16 @@ impl SettingsWindow {
                 cx,
             ),
         )];
+        rows.push(self.setting_row(
+            tr::settings::meetings::transcription::app_names(),
+            Some(tr::settings::meetings::transcription::app_names_description()),
+            self.meetings_flag(
+                "meetings-app-names",
+                tr::settings::meetings::transcription::app_names(),
+                Flag::AppNames,
+                cx,
+            ),
+        ));
         if let Some(state) = shared::speakers_model() {
             rows.push(self.setting_row(
                 tr::settings::meetings::transcription::speakers_model(),
