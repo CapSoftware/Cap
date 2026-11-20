@@ -1,7 +1,7 @@
 "use client";
 
 import { captureException } from "@sentry/nextjs";
-import { signIn } from "next-auth/react";
+import { getSession, signIn } from "next-auth/react";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { trackEvent } from "@/app/utils/analytics";
@@ -82,7 +82,12 @@ export function googleCredentialLoginHint(credential: string): string | null {
 		const payload = credential.split(".")[1];
 		if (!payload) return null;
 		const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
-		const claims: unknown = JSON.parse(atob(base64));
+		const binary = atob(base64);
+		const claims: unknown = JSON.parse(
+			new TextDecoder().decode(
+				Uint8Array.from(binary, (character) => character.charCodeAt(0)),
+			),
+		);
 		if (!claims || typeof claims !== "object") return null;
 		const email = (claims as { email?: unknown }).email;
 		if (typeof email !== "string" || !email.includes("@")) return null;
@@ -111,7 +116,7 @@ export async function signInWithGoogleOneTap(input: {
 			callbackUrl,
 			redirect: false,
 		});
-		if (result?.ok && !result.error) {
+		if (result?.ok && !result.error && (await getSession())?.user) {
 			window.location.assign(callbackUrl);
 			return;
 		}
