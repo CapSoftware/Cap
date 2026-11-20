@@ -481,6 +481,9 @@ jobs:
           fi
           ls -la /dev/dri
 
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
+
       - name: Hyprland (portal refuses host apps, tray Stop control)
         run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
@@ -683,6 +686,9 @@ jobs:
             sudo modprobe vkms
           fi
           ls -la /dev/dri
+
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
 
       - name: Build niri
         run: |
