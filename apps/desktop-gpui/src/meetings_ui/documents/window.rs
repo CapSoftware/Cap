@@ -39,7 +39,7 @@ pub const TITLE: &str = "Cap Notes";
 const FRAME_SECTION: &str = "documentsWindow";
 const FRAME_KEY: &str = "frame";
 /// The person's own sidebar choice. Absent until they toggle it: until then
-/// the sidebar follows [`sidebar_auto`].
+/// the sidebar is shown (see [`sidebar_default`]).
 const SIDEBAR_KEY: &str = "sidebarChoice";
 const TOAST_FOR: Duration = Duration::from_secs(6);
 pub const TRAFFIC_LIGHTS: Point<Pixels> = Point {
@@ -97,18 +97,10 @@ fn saved_sidebar_choice() -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
-/// With no choice made, the sidebar is only there when it has somewhere to
-/// go: a folder or a pinned note. A fresh library shows no empty column.
-pub fn sidebar_auto(folders: usize, pinned: usize) -> bool {
-    folders + pinned > 0
-}
-
-fn store_wants_sidebar(store: &DocStore) -> bool {
-    let snapshot = &store.snapshot;
-    sidebar_auto(
-        snapshot.folders.len(),
-        snapshot.docs.iter().filter(|doc| doc.pinned).count(),
-    )
+/// The sidebar is shown until the person hides it, and then their choice
+/// sticks. A window too narrow for it still hides it (see `sidebar_open`).
+pub fn sidebar_default(saved: Option<bool>) -> bool {
+    saved.unwrap_or(true)
 }
 
 fn on_screen(bounds: Bounds<Pixels>, cx: &App) -> bool {
@@ -261,13 +253,12 @@ impl DocumentsWindow {
         let home = cx.new(|cx| Home::new(store.clone(), root.clone(), &theme, window, cx));
         let pane = cx.new(|cx| Pane::new(store.clone(), root.clone(), &theme, window, cx));
         let sidebar_choice = saved_sidebar_choice();
-        let sidebar_open = sidebar_choice.unwrap_or_else(|| store_wants_sidebar(store.read(cx)));
+        let sidebar_open = sidebar_default(sidebar_choice);
         pane.update(cx, |pane, cx| pane.set_leading_inset(!sidebar_open, cx));
         let subscriptions = vec![
             cx.subscribe_in(&sidebar, window, Self::on_sidebar_event),
             cx.subscribe_in(&home, window, Self::on_home_event),
             cx.subscribe_in(&store, window, |this, _, event: &StoreEvent, window, cx| {
-                this.sync_sidebar_auto(cx);
                 match event {
                     StoreEvent::Listed => cx.notify(),
                     StoreEvent::Opened(id) => {
@@ -509,20 +500,6 @@ impl DocumentsWindow {
         }
         if let Some(choice) = self.sidebar_choice {
             crate::store::set_store_setting(FRAME_SECTION, SIDEBAR_KEY, json!(choice));
-        }
-    }
-
-    fn sync_sidebar_auto(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_choice.is_some() {
-            return;
-        }
-        let want = store_wants_sidebar(self.store.read(cx));
-        if want != self.sidebar_open {
-            self.sidebar_open = want;
-            let visible = self.sidebar_open();
-            self.pane
-                .update(cx, |pane, cx| pane.set_leading_inset(!visible, cx));
-            cx.notify();
         }
     }
 

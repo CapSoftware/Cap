@@ -534,11 +534,11 @@ fn leaving_an_empty_note_removes_it_and_keeps_everything_else() {
 }
 
 #[test]
-fn the_sidebar_waits_for_somewhere_to_go() {
-    use super::window::sidebar_auto;
-    assert!(!sidebar_auto(0, 0), "a fresh library has no empty column");
-    assert!(sidebar_auto(1, 0));
-    assert!(sidebar_auto(0, 1));
+fn the_sidebar_is_shown_until_the_person_hides_it() {
+    use super::window::sidebar_default;
+    assert!(sidebar_default(None), "a new person sees the sidebar");
+    assert!(!sidebar_default(Some(false)), "a hidden sidebar stays hidden");
+    assert!(sidebar_default(Some(true)));
 }
 
 #[test]
