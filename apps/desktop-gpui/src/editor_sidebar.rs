@@ -3278,21 +3278,23 @@ impl EditorWindow {
             .id("background-sources")
             .flex()
             .flex_row()
-            .gap(px(2.))
+            .flex_wrap()
             .children(SourceTab::PICKER.map(|item| {
                 let selected = tab == item;
+                // Sized to its label and sharing out the spare width, so no
+                // label is cut short; a longer translation wraps the row.
                 div()
                     .id(SharedString::from(format!("background-source-{item:?}")))
-                    .flex_1()
-                    .min_w_0()
+                    .flex_auto()
                     .flex()
                     .items_center()
                     .justify_center()
                     .h(px(28.))
-                    .px(px(4.))
+                    .px(px(6.))
                     .rounded(px(8.))
-                    .text_size(px(12.5))
-                    .child(div().min_w_0().truncate().child(item.label()))
+                    .text_size(px(12.))
+                    .whitespace_nowrap()
+                    .child(item.label())
                     .map(|this| {
                         if selected {
                             this.bg(Hsla::from(editor.ctl_hover))
