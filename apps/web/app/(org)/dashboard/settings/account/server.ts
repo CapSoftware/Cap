@@ -7,6 +7,7 @@ import {
 	agentApiKeys,
 	authApiKeys,
 	authChallenges,
+	emailChangeRequests,
 	organizationMembers,
 	organizations,
 	sessions,
@@ -215,6 +216,9 @@ export async function signOutAllDevices() {
 		await tx
 			.delete(userPasskeys)
 			.where(eq(userPasskeys.userId, currentUser.id));
+		await tx
+			.delete(emailChangeRequests)
+			.where(eq(emailChangeRequests.userId, currentUser.id));
 		await tx
 			.delete(authChallenges)
 			.where(eq(authChallenges.userId, currentUser.id));

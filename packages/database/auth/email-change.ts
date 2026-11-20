@@ -467,11 +467,20 @@ export async function confirmEmailChange(
 	try {
 		outcome = await db().transaction(async (tx) => {
 			const [locked] = await tx
-				.select({ email: users.email })
+				.select({
+					email: users.email,
+					authSessionVersion: users.authSessionVersion,
+				})
 				.from(users)
 				.where(eq(users.id, userId))
 				.for("update");
-			if (!locked || locked.email !== user.email) return "invalid";
+			if (
+				!locked ||
+				locked.email !== user.email ||
+				locked.authSessionVersion !== user.authSessionVersion
+			) {
+				return "invalid";
+			}
 			if (await isEmailManagedLocally(user, tx)) return "managed";
 			const claimed = await tx
 				.delete(emailChangeRequests)
