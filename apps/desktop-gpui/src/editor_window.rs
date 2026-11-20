@@ -3368,6 +3368,9 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        if self.keep_edit_under_look_preview() {
+            self.publish_project();
+        }
         let durations = self.clip_display_durations.clone();
         let removed_takes = self
             .project
@@ -3490,6 +3493,10 @@ impl EditorWindow {
     pub(crate) fn schedule_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_ready() {
             return;
+        }
+        // A hovered look is never saved.
+        if self.keep_edit_under_look_preview() {
+            self.publish_project();
         }
         self.pending_save.borrow_mut().queue(self.project.clone());
         let pending = self.pending_save.clone();
@@ -7191,6 +7198,9 @@ impl EditorWindow {
         if !self.project.auto_zoom_pending || !self.project_ready() {
             return;
         }
+        if self.keep_edit_under_look_preview() {
+            self.publish_project();
+        }
         let untouched = self.history.is_untouched();
         let settings = crate::store::GeneralSettings::load();
         let amount = f64::from(settings.zoom_amount_for(self.project.auto_zoom_version));
@@ -9192,10 +9202,9 @@ impl EditorWindow {
     /// An edit that reached the project while a look was previewed (a
     /// shortcut, say) landed on the previewed project: keep the edit, take
     /// the look off, and end the preview so nothing restores over it.
-    fn keep_edit_under_look_preview(&mut self) {
-        if let Some((_, saved)) = self.look_preview.take() {
-            crate::looks::take_off_look(&mut self.project, &saved);
-        }
+    /// Returns whether a preview was ended.
+    fn keep_edit_under_look_preview(&mut self) -> bool {
+        crate::looks::keep_edit_under_preview(&mut self.project, &mut self.look_preview)
     }
 
     /// Puts the project back as it was before a look was previewed.

@@ -443,6 +443,20 @@ pub fn take_off_look(project: &mut ProjectConfiguration, before: &ProjectConfigu
     }
 }
 
+/// Ends a look preview whose project took an edit while it was shown: the
+/// edit stays, the look comes off, and nothing is left to restore over it.
+/// Returns whether a preview was ended.
+pub fn keep_edit_under_preview(
+    project: &mut ProjectConfiguration,
+    preview: &mut Option<(usize, ProjectConfiguration)>,
+) -> bool {
+    let Some((_, before)) = preview.take() else {
+        return false;
+    };
+    take_off_look(project, &before);
+    true
+}
+
 /// A built-in animated background, by its template name.
 pub fn animated_background(name: &str) -> Option<AnimatedGradientConfig> {
     animated_template(name).cloned()
@@ -614,6 +628,31 @@ mod distinct_tests {
                 look.id
             );
             assert_eq!(previewed.camera.size, 41.0, "{}", look.id);
+        }
+    }
+
+    /// A background change (refined caption times, a settled auto zoom)
+    /// landing while a look is hovered survives the preview ending, and the
+    /// look it was shown under is not kept.
+    #[test]
+    fn a_change_landing_under_a_hovered_look_is_kept_without_the_look() {
+        let project = ProjectConfiguration::for_new_project();
+        for (index, look) in LOOKS.iter().enumerate() {
+            let mut shown = apply_look(look, &project);
+            let mut preview = Some((index, project.clone()));
+            shown.auto_zoom_pending = false;
+            shown.camera.size = 37.0;
+            assert!(keep_edit_under_preview(&mut shown, &mut preview));
+            assert!(preview.is_none());
+            assert_eq!(
+                look_settings(&shown),
+                look_settings(&project),
+                "{}",
+                look.id
+            );
+            assert!(!shown.auto_zoom_pending);
+            assert_eq!(shown.camera.size, 37.0);
+            assert!(!keep_edit_under_preview(&mut shown, &mut preview));
         }
     }
 
