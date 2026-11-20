@@ -113,10 +113,69 @@ def dep_info_paths(dep_file, root):
     return paths
 
 
-def drop_stale_crates(target, changed, applied_at):
-    """Removes the fingerprint of every cached crate (or build script) this
-    run did not rebuild whose sources changed, so cargo rebuilds it the next
-    time it is needed."""
+def package_dirs(current):
+    """Directory of every workspace package, keyed by package name."""
+    dirs = {}
+    for path in current:
+        if os.path.basename(path) != "Cargo.toml" or not os.path.isfile(path):
+            continue
+        section = None
+        with open(path, encoding="utf-8", errors="surrogateescape") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    section = line
+                elif section == "[package]" and line.startswith("name") and "=" in line:
+                    name = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    dirs[name] = os.path.dirname(path)
+                    break
+    return dirs
+
+
+def build_script_inputs(output_file, package_dir):
+    """Repository-relative paths a build script run watches: its
+    rerun-if-changed paths, or its whole package when it names none."""
+    watched = []
+    with open(output_file, encoding="utf-8", errors="surrogateescape") as f:
+        for line in f:
+            for prefix in ("cargo::rerun-if-changed=", "cargo:rerun-if-changed="):
+                if line.startswith(prefix):
+                    watched.append(line[len(prefix) :].rstrip("\r\n"))
+    root = os.getcwd()
+    paths = []
+    for entry in watched or ["."]:
+        full = os.path.normpath(os.path.join(root, package_dir, entry))
+        try:
+            relative = os.path.relpath(full, root)
+        except ValueError:
+            continue
+        if not relative.startswith(".."):
+            paths.append("" if relative == "." else relative.replace(os.sep, "/"))
+    return paths
+
+
+def touches(paths, changed):
+    for path in paths:
+        if path in changed:
+            return True
+        prefix = path.rstrip("/") + "/" if path else ""
+        if any(item.startswith(prefix) for item in changed):
+            return True
+    return False
+
+
+def drop_fingerprint(profile, suffix):
+    fingerprints = os.path.join(profile, ".fingerprint")
+    if os.path.isdir(fingerprints):
+        for fingerprint in os.listdir(fingerprints):
+            if fingerprint.endswith(suffix):
+                shutil.rmtree(os.path.join(fingerprints, fingerprint))
+
+
+def drop_stale_crates(target, changed, applied_at, packages):
+    """Removes the fingerprint of every cached crate, build script or build
+    script run this run did not redo whose inputs changed, so cargo redoes it
+    the next time it is needed."""
     root = os.getcwd()
     dropped = 0
     for directory, subdirectories, files in os.walk(target):
@@ -128,7 +187,17 @@ def drop_stale_crates(target, changed, applied_at):
         else:
             continue
         subdirectories[:] = []
-        fingerprints = os.path.join(profile, ".fingerprint")
+        if profile != parent and "output" in files:
+            output = os.path.join(directory, "output")
+            package, _, unit = os.path.basename(directory).rpartition("-")
+            if (
+                os.path.getmtime(output) < applied_at
+                and package in packages
+                and touches(build_script_inputs(output, packages[package]), changed)
+            ):
+                drop_fingerprint(profile, "-" + unit)
+                os.remove(output)
+                dropped += 1
         for name in files:
             if not name.endswith(".d") or "-" not in name:
                 continue
@@ -137,11 +206,7 @@ def drop_stale_crates(target, changed, applied_at):
                 continue
             if not any(path in changed for path in dep_info_paths(dep_file, root)):
                 continue
-            suffix = "-" + name[: -len(".d")].rsplit("-", 1)[1]
-            if os.path.isdir(fingerprints):
-                for fingerprint in os.listdir(fingerprints):
-                    if fingerprint.endswith(suffix):
-                        shutil.rmtree(os.path.join(fingerprints, fingerprint))
+            drop_fingerprint(profile, "-" + name[: -len(".d")].rsplit("-", 1)[1])
             os.remove(dep_file)
             dropped += 1
     return dropped
@@ -163,7 +228,9 @@ def main():
                 for path, blob in current.items()
                 if previous is None or previous.get(path) != blob
             }
-            dropped = drop_stale_crates(target, changed, os.path.getmtime(stamp))
+            dropped = drop_stale_crates(
+                target, changed, os.path.getmtime(stamp), package_dirs(current)
+            )
             header = HEADER
             print(f"dropped {dropped} cached crates built from changed sources")
         else:

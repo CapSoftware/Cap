@@ -52,6 +52,32 @@ class BuildCacheManifestTests(unittest.TestCase):
             self.write(root / "c" / "src" / "lib.rs", "pub fn c() -> u32 { a::added() }\n")
             self.ci_run(root, env, ["c"])
 
+    def test_a_build_script_input_another_run_did_not_reread_is_reread_when_needed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.workspace_with_feature(root)
+            self.write(
+                root / "a" / "build.rs",
+                'fn main() {\n'
+                '    println!("cargo:rerun-if-changed=native/flags.txt");\n'
+                '    if std::fs::read_to_string("native/flags.txt").unwrap().contains("added") {\n'
+                '        println!("cargo:rustc-cfg=added");\n'
+                "    }\n"
+                "}\n",
+            )
+            self.write(root / "a" / "native" / "flags.txt", "\n")
+            self.write(root / "a" / "src" / "lib.rs", "#[cfg(added)]\npub fn added() -> u32 { 2 }\npub fn base() -> u32 { 1 }\n")
+            env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target" / "ci-verify"))
+            self.run_command(root, env, "git", "init", "--quiet")
+            self.run_command(root, env, "cargo", "generate-lockfile", "--offline")
+            self.ci_run(root, env, ["b", "c"])
+
+            self.write(root / "a" / "native" / "flags.txt", "added\n")
+            self.ci_run(root, env, ["b"])
+
+            self.write(root / "c" / "src" / "lib.rs", "pub fn c() -> u32 { a::added() }\n")
+            self.ci_run(root, env, ["c"])
+
     def workspace_with_feature(self, root):
         self.write(root / ".gitignore", "target\n")
         self.write(root / "Cargo.toml", '[workspace]\nmembers = ["a", "b", "c"]\nresolver = "2"\n')
