@@ -1,6 +1,6 @@
 //! What a meeting note says about its own health: the live line's words
 //! (the banner above the bottom bar shows them), and a one-time line on a
-//! meeting Cap finished after it closed by itself.
+//! meeting Cap finished after it closed by itself or that missed audio.
 
 use cap_meetings::library::DocMeta;
 use gpui::{AnyElement, App};
@@ -38,6 +38,19 @@ impl Concern {
 pub fn forget(doc: &mut DocMeta) {
     persist::set_flag(doc, persist::RECOVERED_KEY, false);
     persist::set_flag(doc, persist::NOTES_STALE_KEY, false);
+    persist::clear_missed_audio(doc);
+}
+
+/// How much of a meeting was never recorded, in words: seconds rounded to
+/// the nearest 5 under a minute, else whole minutes.
+pub fn missed_line(missed_ms: u64) -> String {
+    let secs = (missed_ms + 500) / 1000;
+    let rounded = ((secs + 2) / 5 * 5).max(5);
+    if rounded < 60 {
+        tr::documents::notes::missed_seconds(rounded as usize)
+    } else {
+        tr::documents::notes::missed_minutes(((secs + 30) / 60).max(1) as usize)
+    }
 }
 
 pub fn is_recovered(doc: &DocMeta) -> bool {
@@ -45,8 +58,9 @@ pub fn is_recovered(doc: &DocMeta) -> bool {
 }
 
 /// The note's one-time line, until dismissed: "Recovered after Cap closed
-/// unexpectedly", or, when a repair added words after the notes were
-/// written, "Transcript updated" with a way to update the notes.
+/// unexpectedly", how much audio the meeting missed while it recorded, or,
+/// when a repair added words after the notes were written, "Transcript
+/// updated" with a way to update the notes.
 /// `dismissed` runs after the note's flags are cleared.
 pub fn recovered(
     doc: Option<&DocMeta>,
@@ -55,7 +69,8 @@ pub fn recovered(
 ) -> Option<AnyElement> {
     let doc = doc?;
     let recovered = is_recovered(doc);
-    if !recovered && !persist::flag(doc, persist::NOTES_STALE_KEY) {
+    let missed = persist::missed_audio_ms(doc);
+    if !recovered && missed == 0 && !persist::flag(doc, persist::NOTES_STALE_KEY) {
         return None;
     }
     let id = doc.id.clone();
@@ -79,6 +94,14 @@ pub fn recovered(
         return Some(cap_ai::dock_line(
             palette,
             tr::documents::notes::recovered().into(),
+            None,
+            Some(dismiss),
+        ));
+    }
+    if missed > 0 {
+        return Some(cap_ai::dock_line(
+            palette,
+            missed_line(missed).into(),
             None,
             Some(dismiss),
         ));

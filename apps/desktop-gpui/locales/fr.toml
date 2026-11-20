@@ -4012,6 +4012,8 @@ waiting = "En attente de connexion…"
 waiting_server = "Cap AI rencontre un problème. Nouvel essai…"
 recovered = "Récupéré après une fermeture inattendue de Cap. Votre audio et votre transcription sont intacts."
 transcript_updated = "Transcription mise à jour avec des mots récupérés par Cap."
+missed_seconds = { one = "Environ {count} seconde de cette réunion n’a pas été enregistrée.", other = "Environ {count} secondes de cette réunion n’ont pas été enregistrées." }
+missed_minutes = { one = "Environ {count} minute de cette réunion n’a pas été enregistrée.", other = "Environ {count} minutes de cette réunion n’ont pas été enregistrées." }
 update_notes = "Mettre à jour les notes"
 
 [documents.transcript]

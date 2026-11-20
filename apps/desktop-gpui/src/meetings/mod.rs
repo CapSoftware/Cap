@@ -335,6 +335,9 @@ struct Recording {
     /// line says words may be missing after a jump in it.
     padded_ms: [u64; 2],
     missed_until: Option<Instant>,
+    /// Audio missed per track this recording (the jumps above), kept on the
+    /// note at Stop.
+    missed_ms: [u64; 2],
     _health_tick: Task<()>,
 }
 
@@ -1919,6 +1922,7 @@ impl Meetings {
             watchdog: health::Watchdog::default(),
             disk_checked: Instant::now(),
             padded_ms: [0, 0],
+            missed_ms: [0, 0],
             missed_until: None,
             _health_tick: health_tick,
         });
@@ -2011,6 +2015,16 @@ impl Meetings {
                 meeting.stop_reason = Some(reason);
                 meeting.transcript_chars = chars;
                 meeting.audio = tracks;
+            }
+            // One hold-up stops both tracks, so the longer track's total is
+            // what the meeting missed.
+            let missed = recording.missed_ms.into_iter().max().unwrap_or(0);
+            if persist::add_missed_audio(&mut meta, missed) {
+                tracing::info!(
+                    doc_id,
+                    missed_ms = missed,
+                    "the meeting missed audio while it recorded"
+                );
             }
             meta.updated_at = Utc::now();
             if let Err(error) = library.save(&meta) {
@@ -2179,6 +2193,7 @@ impl Meetings {
             if jump >= health::MISSED_AUDIO.as_millis() as u64 {
                 tracing::warn!(slot, jump_ms = jump, "meeting audio went missing (the app was held up)");
                 recording.missed_until = Some(now + health::MISSED_SHOWN);
+                recording.missed_ms[slot] += jump;
             }
         }
         let audio_missed = recording.missed_until.is_some_and(|until| now < until);
@@ -2549,7 +2564,8 @@ impl Meetings {
         };
         if let Ok(mut meta) = library.load(doc_id)
             && (persist::set_flag(&mut meta, persist::RECOVERED_KEY, false)
-                | persist::set_flag(&mut meta, persist::NOTES_STALE_KEY, false))
+                | persist::set_flag(&mut meta, persist::NOTES_STALE_KEY, false)
+                | persist::clear_missed_audio(&mut meta))
         {
             if let Err(error) = library.save(&meta) {
                 tracing::warn!(%error, "could not clear a recovered meeting's line");

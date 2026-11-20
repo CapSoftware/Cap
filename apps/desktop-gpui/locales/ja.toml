@@ -4012,6 +4012,8 @@ waiting = "接続を待っています…"
 waiting_server = "Cap AIで問題が発生しています。再試行中…"
 recovered = "Capが予期せず終了したため復元しました。音声と文字起こしは無事です。"
 transcript_updated = "Capが取り戻した言葉で文字起こしを更新しました。"
+missed_seconds = { other = "この会議の約{count}秒は録音されていません。" }
+missed_minutes = { other = "この会議の約{count}分は録音されていません。" }
 update_notes = "メモを更新"
 
 [documents.transcript]

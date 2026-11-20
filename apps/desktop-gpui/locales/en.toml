@@ -4014,6 +4014,8 @@ waiting = { text = "Waiting for a connection…", context = "Shown instead of Wr
 waiting_server = { text = "Cap AI is having trouble. Trying again…", context = "Shown instead of Writing summary while Cap's server answers with an error and Cap will try again by itself." }
 recovered = { text = "Recovered after Cap closed unexpectedly. Your audio and transcript are safe.", context = "One-time line on a meeting note Cap finished after it quit by itself." }
 transcript_updated = { text = "Transcript updated with words Cap recovered.", context = "One-time line on a note whose transcript grew after its notes were written." }
+missed_seconds = { one = "About {count} second of this meeting wasn’t recorded.", other = "About {count} seconds of this meeting weren’t recorded.", context = "One-time line on a finished meeting note when Cap was held up and missed some audio while recording." }
+missed_minutes = { one = "About {count} minute of this meeting wasn’t recorded.", other = "About {count} minutes of this meeting weren’t recorded." }
 update_notes = "Update notes"
 
 [documents.transcript]

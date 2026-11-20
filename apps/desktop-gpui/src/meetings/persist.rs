@@ -458,6 +458,39 @@ pub fn set_flag(meta: &mut DocMeta, key: &str, on: bool) -> bool {
     was != on
 }
 
+/// Audio a meeting never received (the app was held up), in ms, added up
+/// over its recordings, until the person dismisses the note's line about it.
+pub const MISSED_AUDIO_KEY: &str = "missedAudioMs";
+
+pub fn missed_audio_ms(meta: &DocMeta) -> u64 {
+    meta.meeting
+        .as_ref()
+        .and_then(|m| m.extra.get(MISSED_AUDIO_KEY))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0)
+}
+
+/// Adds what one recording missed; a clean recording changes nothing.
+pub fn add_missed_audio(meta: &mut DocMeta, ms: u64) -> bool {
+    if ms == 0 {
+        return false;
+    }
+    let total = missed_audio_ms(meta).saturating_add(ms);
+    let Some(meeting) = meta.meeting.as_mut() else {
+        return false;
+    };
+    meeting
+        .extra
+        .insert(MISSED_AUDIO_KEY.into(), serde_json::Value::from(total));
+    true
+}
+
+pub fn clear_missed_audio(meta: &mut DocMeta) -> bool {
+    meta.meeting
+        .as_mut()
+        .is_some_and(|m| m.extra.remove(MISSED_AUDIO_KEY).is_some())
+}
+
 /// How many finishes in a row left a meeting with audio still waiting for
 /// its words.
 pub const REPAIR_TRIES_KEY: &str = "repairTries";

@@ -1209,3 +1209,32 @@ fn an_answer_that_stops_early_is_an_interruption_not_a_lost_connection() {
         "dns".into()
     )));
 }
+
+#[test]
+fn missed_audio_adds_up_on_the_note_and_survives_a_relaunch() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 11).unwrap();
+    meta.meeting = Some(MeetingDetails::default());
+
+    // A clean recording leaves nothing.
+    assert!(!persist::add_missed_audio(&mut meta, 0));
+    assert_eq!(persist::missed_audio_ms(&meta), 0);
+
+    // Two recordings into the same note, each held up once.
+    assert!(persist::add_missed_audio(&mut meta, 20_141));
+    assert!(persist::add_missed_audio(&mut meta, 15_002));
+    library.save(&meta).unwrap();
+    let reloaded = library.load(&meta.id).unwrap();
+    assert_eq!(persist::missed_audio_ms(&reloaded), 35_143);
+
+    // Dismissed: gone for good.
+    let mut dismissed = reloaded;
+    assert!(persist::clear_missed_audio(&mut dismissed));
+    library.save(&dismissed).unwrap();
+    assert_eq!(
+        persist::missed_audio_ms(&library.load(&meta.id).unwrap()),
+        0
+    );
+    assert!(!persist::clear_missed_audio(&mut dismissed));
+}

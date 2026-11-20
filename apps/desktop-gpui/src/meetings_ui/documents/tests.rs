@@ -1739,3 +1739,28 @@ fn the_real_page_header_and_summary_float_over_the_lines(cx: &mut TestAppContext
         "Weekly sync!"
     );
 }
+
+#[test]
+fn the_missed_audio_line_rounds_to_what_a_person_would_say() {
+    use super::bar::health_line::missed_line;
+    assert_eq!(
+        missed_line(20_141),
+        "About 20 seconds of this meeting weren’t recorded."
+    );
+    assert_eq!(
+        missed_line(35_143),
+        "About 35 seconds of this meeting weren’t recorded."
+    );
+    assert_eq!(
+        missed_line(5_000),
+        "About 5 seconds of this meeting weren’t recorded."
+    );
+    assert_eq!(
+        missed_line(58_000),
+        "About 1 minute of this meeting wasn’t recorded."
+    );
+    assert_eq!(
+        missed_line(125_000),
+        "About 2 minutes of this meeting weren’t recorded."
+    );
+}
