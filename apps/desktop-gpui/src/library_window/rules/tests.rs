@@ -76,7 +76,10 @@ fn speaker_rules_cover_every_person_and_negation_means_nobody() {
     let not_zed =
         folder(Matching::All, vec![person(TextOp::DoesNotContain, "zed")]).compile(today());
     assert!(is_bo.matches(&item, &cx()));
-    assert!(starts.matches(&item, &cx()), "a later word of a name counts");
+    assert!(
+        starts.matches(&item, &cx()),
+        "a later word of a name counts"
+    );
     assert!(!not_ana.matches(&item, &cx()));
     assert!(not_zed.matches(&item, &cx()));
 }
@@ -109,10 +112,17 @@ fn all_and_any() {
 #[test]
 fn empty_and_unfinished_rules_match_nothing_instead_of_everything() {
     let item = meeting("Anything", &["Ana"], 20, 30);
-    assert!(!folder(Matching::All, vec![]).compile(today()).matches(&item, &cx()));
+    assert!(
+        !folder(Matching::All, vec![])
+            .compile(today())
+            .matches(&item, &cx())
+    );
     let unfinished = folder(
         Matching::All,
-        vec![title(TextOp::Contains, "   "), person(TextOp::DoesNotContain, "")],
+        vec![
+            title(TextOp::Contains, "   "),
+            person(TextOp::DoesNotContain, ""),
+        ],
     )
     .compile(today());
     assert!(unfinished.is_empty());
@@ -272,7 +282,11 @@ fn ten_thousand_items_and_twenty_folders_evaluate_in_a_few_milliseconds() {
         .map(|i| SmartFolder {
             id: format!("f{i}"),
             name: format!("F{i}"),
-            matching: if i % 2 == 0 { Matching::All } else { Matching::Any },
+            matching: if i % 2 == 0 {
+                Matching::All
+            } else {
+                Matching::Any
+            },
             rules: vec![
                 title(TextOp::Contains, &format!("roadmap {i}")),
                 person(TextOp::Is, "bo chen"),

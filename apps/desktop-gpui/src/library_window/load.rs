@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
-use chrono::{DateTime, Duration, TimeZone, Utc};
 use cap_meetings::library::{DocKind, DocMeta, Folder, Library};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use super::items::{Item, ItemFacts, ItemKey, ItemKind, sort_newest_first};
 
@@ -172,7 +172,10 @@ const NOTES: [(&str, &str); 5] = [
         "Interview questions",
         "Walk me through a bug you were proud to fix.",
     ),
-    ("Reading list", "Liquid Glass guidelines, source lists, smart albums."),
+    (
+        "Reading list",
+        "Liquid Glass guidelines, source lists, smart albums.",
+    ),
     ("Groceries", "Oat milk, coffee, lemons."),
 ];
 const PEOPLE: [&str; 7] = [

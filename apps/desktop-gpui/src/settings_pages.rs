@@ -2757,6 +2757,22 @@ impl SettingsWindow {
                             )
                             .into_any_element(),
                         ),
+                        self.setting_row(
+                            tr::settings::experimental::library_window(),
+                            Some(tr::settings::experimental::library_window_description()),
+                            self.toggle(
+                                "library-window",
+                                tr::settings::experimental::library_window(),
+                                self.settings.library_window,
+                                cx,
+                                |this, cx| {
+                                    this.settings.library_window = !this.settings.library_window;
+                                    let value = this.settings.library_window;
+                                    this.write_bool("libraryWindow", value, cx);
+                                },
+                            )
+                            .into_any_element(),
+                        ),
                     ])
                     .into_any_element(),
                 ],

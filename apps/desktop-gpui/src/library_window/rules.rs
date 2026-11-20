@@ -257,10 +257,7 @@ fn compile_rule(rule: &Rule, today: NaiveDate) -> CompiledRule {
                 DateRange::Today => (Some(today), Some(today)),
                 DateRange::LastDays { days } => {
                     let days = i64::from(days.max(1)) - 1;
-                    (
-                        today.checked_sub_signed(Duration::days(days)),
-                        Some(today),
-                    )
+                    (today.checked_sub_signed(Duration::days(days)), Some(today))
                 }
                 DateRange::After { date } => (Some(date), None),
                 DateRange::Before { date } => (None, Some(date)),
@@ -303,6 +300,7 @@ fn text_matches(op: TextOp, haystack: &str, needle: &str) -> bool {
 impl Compiled {
     /// Whether the folder has any rule that takes part in matching. A folder
     /// with none shows nothing rather than everything.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
@@ -371,8 +369,10 @@ pub fn evaluate_all(
         .iter()
         .map(|f| (f.id.clone(), f.compile(cx.today)))
         .collect();
-    let mut out: HashMap<String, Vec<u32>> =
-        compiled.iter().map(|(id, _)| (id.clone(), Vec::new())).collect();
+    let mut out: HashMap<String, Vec<u32>> = compiled
+        .iter()
+        .map(|(id, _)| (id.clone(), Vec::new()))
+        .collect();
     for (index, item) in items.iter().enumerate() {
         for (id, rules) in &compiled {
             if rules.matches(item, cx)

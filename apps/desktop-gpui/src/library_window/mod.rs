@@ -2,8 +2,11 @@
 //! source-list sidebar, a home made of the latest things, and folders that
 //! are either filled by hand or by rules.
 
+#[doc(hidden)]
+pub mod bench;
 pub mod items;
 pub mod load;
+pub mod people;
 pub mod rules;
 pub mod store;
 pub mod style;
@@ -27,6 +30,7 @@ use self::rules::{
 };
 use self::style::Palette;
 use crate::{
+    i18n::tr,
     meetings_ui::documents::format,
     platform,
     theme::{LocaleFont as _, Theme},
@@ -74,9 +78,9 @@ impl KindView {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Recordings => "Recordings",
-            Self::Screenshots => "Screenshots",
-            Self::Notes => "Notes",
+            Self::Recordings => tr::library::recordings(),
+            Self::Screenshots => tr::library::screenshots(),
+            Self::Notes => tr::library::notes(),
         }
     }
 
@@ -185,12 +189,23 @@ pub struct LibraryWindow {
     /// One scroll position per layout and kind of page, so switching layouts
     /// is instant and comes back to where each one was.
     home_scroll: [gpui::ScrollHandle; 2],
+    reload_again: bool,
+    last_scan: Option<Instant>,
+    people_task: Option<Task<()>>,
     list_scroll: gpui::UniformListScrollHandle,
     grid_scroll: gpui::UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
+/// The Experimental setting, or `CAP_GPUI_LIBRARY_WINDOW=1` for tests.
+pub fn enabled() -> bool {
+    std::env::var_os("CAP_GPUI_LIBRARY_WINDOW").is_some()
+        || std::env::var_os("CAP_GPUI_LIBRARY_DIRECTION").is_some()
+        || crate::store::GeneralSettings::load().library_window
+}
+
 pub fn open(cx: &mut App) {
+    crate::app_windows::hide_main_for_meeting_window(cx);
     if let Some(handle) = cx.try_global::<LibraryWindowSlot>().and_then(|s| s.0)
         && handle
             .update(cx, |_, window, _| window.activate_window())
@@ -308,7 +323,7 @@ impl LibraryWindow {
         let palette = Palette::new(&theme);
         let search = cx.new(|cx| {
             let mut input = TextInputState::single_line(window, cx);
-            input.set_placeholder("Search everything");
+            input.set_placeholder(tr::library::search());
             input
         });
         let dir = crate::store::app_data_dir();
@@ -323,7 +338,33 @@ impl LibraryWindow {
             cx.on_release(|_, cx| {
                 cx.set_global(LibraryWindowSlot(None));
             }),
+            cx.observe_window_activation(window, |this, window, cx| {
+                // Recordings and screenshots have no change events: look again
+                // when the person comes back, unless we just did.
+                if window.is_window_active()
+                    && this
+                        .last_scan
+                        .is_some_and(|at| at.elapsed() > std::time::Duration::from_secs(2))
+                {
+                    this.reload(cx);
+                }
+            }),
         ];
+        let mut subscriptions = subscriptions;
+        if let Some(meetings) = crate::meetings::Meetings::try_global(cx) {
+            subscriptions.push(cx.subscribe(
+                &meetings,
+                |this, _, event: &crate::meetings::MeetingEvent, cx| {
+                    if matches!(
+                        event,
+                        crate::meetings::MeetingEvent::LibraryChanged
+                            | crate::meetings::MeetingEvent::SpeakerRenamed { .. }
+                    ) {
+                        this.reload(cx);
+                    }
+                },
+            ));
+        }
         let mut this = Self {
             focus: cx.focus_handle(),
             theme,
@@ -345,11 +386,15 @@ impl LibraryWindow {
             load_task: None,
             dir,
             home_scroll: [gpui::ScrollHandle::new(), gpui::ScrollHandle::new()],
+            reload_again: false,
+            last_scan: None,
+            people_task: None,
             list_scroll: gpui::UniformListScrollHandle::new(),
             grid_scroll: gpui::UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
         };
         this.reload(cx);
+        this.ensure_demo_smart_folders(cx);
         this
     }
 
@@ -359,14 +404,27 @@ impl LibraryWindow {
         }
     }
 
+    /// Rescans everything off the main thread. Calls while a scan runs fold
+    /// into one more scan after it, so a burst of changes costs two scans.
     fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.load_task.is_some() {
+            self.reload_again = true;
+            return;
+        }
         let library = crate::meetings_ui::documents::store::library(cx);
         self.load_up_next(cx);
+        let first = self.last_scan.is_none();
         self.load_task = Some(cx.spawn(async move |this, cx| {
+            if !first {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(150))
+                    .await;
+            }
             let started = Instant::now();
+            let for_scan = library.clone();
             let scan = cx
                 .background_executor()
-                .spawn(async move { load::scan(library) })
+                .spawn(async move { load::scan(for_scan) })
                 .await;
             tracing::info!(
                 items = scan.items.len(),
@@ -374,8 +432,77 @@ impl LibraryWindow {
                 "library scanned"
             );
             this.update(cx, |this, cx| {
+                this.load_task = None;
+                this.last_scan = Some(Instant::now());
                 this.scan = Rc::new(scan);
+                this.prune_members();
                 this.reevaluate(cx);
+                this.index_people(library, cx);
+                if std::mem::take(&mut this.reload_again) {
+                    this.reload(cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Second pass after a scan: speaker names from transcripts, cached.
+    /// The list is already on screen; names arrive a moment later.
+    fn index_people(&mut self, library: Option<cap_meetings::library::Library>, cx: &mut Context<Self>) {
+        let Some(library) = library else {
+            return;
+        };
+        let docs: Vec<(String, PathBuf)> = self
+            .scan
+            .items
+            .iter()
+            .filter(|i| i.kind == ItemKind::Meeting)
+            .filter_map(|i| match &i.key {
+                items::ItemKey::Doc(id) => library.transcript_path(id).ok().map(|p| (id.clone(), p)),
+                _ => None,
+            })
+            .collect();
+        if docs.is_empty() {
+            return;
+        }
+        let cache = self.dir.join(people::CACHE_FILE);
+        let scan = Rc::downgrade(&self.scan);
+        self.people_task = Some(cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            let names = cx
+                .background_executor()
+                .spawn(async move { people::index(&docs, &cache) })
+                .await;
+            tracing::info!(
+                meetings = names.len(),
+                ms = started.elapsed().as_secs_f64() * 1000.,
+                "library people indexed"
+            );
+            this.update(cx, |this, cx| {
+                // A newer scan replaced the items: its own pass will follow.
+                let Some(current) = scan.upgrade() else {
+                    return;
+                };
+                if !Rc::ptr_eq(&current, &this.scan) {
+                    return;
+                }
+                drop(current);
+                let mut next = (*this.scan).clone();
+                let mut changed = false;
+                for item in &mut next.items {
+                    if let items::ItemKey::Doc(id) = &item.key
+                        && let Some(found) = names.get(id)
+                        && !found.is_empty()
+                    {
+                        let before = item.people.len();
+                        item.add_people(found);
+                        changed |= item.people.len() != before;
+                    }
+                }
+                if changed {
+                    this.scan = Rc::new(next);
+                    this.reevaluate(cx);
+                }
             })
             .ok();
         }));
@@ -411,6 +538,35 @@ impl LibraryWindow {
                     .filter_map(|p| p.name.clone().or(p.email.clone()))
                     .collect(),
             });
+    }
+
+    /// Forgets folder entries for recordings and screenshots that are gone
+    /// and for folders that were deleted. Only after a full scan, never with
+    /// made-up items mixed in, and never when the file is read-only.
+    fn prune_members(&mut self) {
+        if self.file.members.is_empty()
+            || self.outcome == store::LoadOutcome::ReadOnly
+            || std::env::var_os("CAP_GPUI_LIBRARY_SEED").is_some()
+        {
+            return;
+        }
+        let folders: std::collections::BTreeSet<String> =
+            self.scan.folders.iter().map(|f| f.id.clone()).collect();
+        let live: std::collections::BTreeSet<String> = self
+            .scan
+            .items
+            .iter()
+            .filter(|i| !i.kind.is_doc())
+            .map(|i| i.key.stored())
+            .collect();
+        let mut probe = self.file.clone();
+        if store::prune_members(&mut probe, &folders, &live)
+            && let Ok(file) = store::update(&self.dir, |file| {
+                store::prune_members(file, &folders, &live);
+            })
+        {
+            self.file = file;
+        }
     }
 
     fn in_folder(&self, id: &str, item: &Item) -> bool {
@@ -525,6 +681,10 @@ impl LibraryWindow {
         let Some(item) = self.scan.items.get(index as usize).cloned() else {
             return;
         };
+        // Made-up demo items have nothing behind them to open.
+        if matches!(&item.key, items::ItemKey::Doc(id) if id.starts_with("seed-")) {
+            return;
+        }
         cx.defer(move |cx| match (&item.key, item.kind) {
             (items::ItemKey::Doc(id), _) => {
                 crate::meetings_ui::documents::open(Some(id.clone()), cx)
@@ -544,7 +704,12 @@ impl LibraryWindow {
 
     // ---- smart folder editor ------------------------------------------
 
-    fn text_input(text: &str, placeholder: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<TextInputState> {
+    fn text_input(
+        text: &str,
+        placeholder: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextInputState> {
         let input = cx.new(|cx| {
             let mut input = TextInputState::single_line(window, cx);
             input.set_placeholder(placeholder.to_string());
@@ -563,14 +728,24 @@ impl LibraryWindow {
     fn row_for(rule: Rule, window: &mut Window, cx: &mut Context<Self>) -> RuleRow {
         let value = match &rule {
             Rule::Title { value, .. } | Rule::Person { value, .. } | Rule::App { value, .. } => {
-                Some(Self::text_input(value, "Type a word or name", window, cx))
+                Some(Self::text_input(
+                    value,
+                    tr::library::value_placeholder(),
+                    window,
+                    cx,
+                ))
             }
             _ => None,
         };
         RuleRow { rule, value }
     }
 
-    fn open_editor(&mut self, folder: Option<SmartFolder>, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_editor(
+        &mut self,
+        folder: Option<SmartFolder>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let folder = folder.unwrap_or_else(|| SmartFolder {
             id: String::new(),
             name: String::new(),
@@ -581,7 +756,7 @@ impl LibraryWindow {
             }],
             extra: Default::default(),
         });
-        let name = Self::text_input(&folder.name, "Smart folder name", window, cx);
+        let name = Self::text_input(&folder.name, tr::library::name_placeholder(), window, cx);
         let rows = folder
             .rules
             .iter()
@@ -607,8 +782,9 @@ impl LibraryWindow {
         for row in &mut editor.rows {
             if let Some(input) = &row.value {
                 let text = input.read(cx).text().to_string();
-                if let Rule::Title { value, .. } | Rule::Person { value, .. } | Rule::App { value, .. } =
-                    &mut row.rule
+                if let Rule::Title { value, .. }
+                | Rule::Person { value, .. }
+                | Rule::App { value, .. } = &mut row.rule
                 {
                     *value = text;
                 }
@@ -661,7 +837,7 @@ impl LibraryWindow {
             return;
         };
         if folder.name.is_empty() {
-            folder.name = "Smart folder".into();
+            folder.name = tr::library::smart_folder().into();
         }
         if folder.id.is_empty() {
             folder.id = format!(
@@ -690,6 +866,36 @@ impl LibraryWindow {
                 self.reevaluate(cx);
             }
             Err(error) => tracing::warn!("smart folder not saved: {error:?}"),
+        }
+    }
+
+    /// The perf bench's "save a rule": the same path the sheet's Create
+    /// button takes, without the sheet.
+    fn bench_save_rule(&mut self, name: &str, cx: &mut Context<Self>) {
+        let id = format!("s-bench-{}", name.replace(' ', "-"));
+        let folder = SmartFolder {
+            id: id.clone(),
+            name: name.to_string(),
+            matching: Matching::All,
+            rules: vec![
+                Rule::Title {
+                    op: TextOp::Contains,
+                    value: "settings".into(),
+                },
+                Rule::Kind {
+                    op: IsOp::Is,
+                    value: ItemKind::Screenshot,
+                },
+            ],
+            extra: Default::default(),
+        };
+        if let Ok(file) = store::update(&self.dir, |file| {
+            file.smart_folders.retain(|f| f.id != folder.id);
+            file.smart_folders.push(folder);
+        }) {
+            self.file = file;
+            self.section = Section::Smart(id);
+            self.reevaluate(cx);
         }
     }
 
@@ -754,7 +960,9 @@ impl LibraryWindow {
     /// Seeded screenshots show a sidebar with smart folders in it; the real
     /// library starts with none.
     fn ensure_demo_smart_folders(&mut self, cx: &mut Context<Self>) {
-        if std::env::var_os("CAP_GPUI_LIBRARY_SEED").is_none() || !self.file.smart_folders.is_empty() {
+        if std::env::var_os("CAP_GPUI_LIBRARY_SEED").is_none()
+            || !self.file.smart_folders.is_empty()
+        {
             return;
         }
         let demo = |id: &str, name: &str, rules: Vec<Rule>| SmartFolder {
@@ -813,10 +1021,10 @@ fn kind_glyph(kind: ItemKind) -> &'static str {
 
 fn kind_word(kind: ItemKind) -> &'static str {
     match kind {
-        ItemKind::Recording => "Recording",
-        ItemKind::Screenshot => "Screenshot",
-        ItemKind::Meeting => "Meeting",
-        ItemKind::Note => "Note",
+        ItemKind::Recording => tr::library::kind_recording(),
+        ItemKind::Screenshot => tr::library::kind_screenshot(),
+        ItemKind::Meeting => tr::library::kind_meeting(),
+        ItemKind::Note => tr::library::kind_note(),
     }
 }
 
@@ -862,22 +1070,22 @@ fn meta_line(item: &Item) -> String {
 
 fn section_title(section: &Section, file: &store::LibraryFile, scan: &Scan) -> String {
     match section {
-        Section::Home => "Home".into(),
+        Section::Home => tr::library::home().into(),
         Section::Kind(kind) => kind.label().into(),
-        Section::Pinned => "Pinned".into(),
+        Section::Pinned => tr::library::pinned().into(),
         Section::Folder(id) => scan
             .folders
             .iter()
             .find(|f| &f.id == id)
             .map(|f| f.name.clone())
-            .unwrap_or_else(|| "Folder".into()),
+            .unwrap_or_else(|| tr::library::folder().into()),
         Section::Smart(id) => file
             .smart_folders
             .iter()
             .find(|f| &f.id == id)
             .map(|f| f.name.clone())
-            .unwrap_or_else(|| "Smart folder".into()),
-        Section::Trash => "Trash".into(),
+            .unwrap_or_else(|| tr::library::smart_folder().into()),
+        Section::Trash => tr::library::trash().into(),
     }
 }
 
@@ -886,6 +1094,7 @@ impl LibraryWindow {
         self.theme.material.is_some()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sidebar_row(
         &self,
         id: impl Into<SharedString>,
@@ -914,7 +1123,9 @@ impl LibraryWindow {
             .role(gpui::Role::Button)
             .aria_label(label.clone())
             .aria_selected(active)
-            .when(active, |el| el.bg(p.selected).font_weight(FontWeight::MEDIUM))
+            .when(active, |el| {
+                el.bg(p.selected).font_weight(FontWeight::MEDIUM)
+            })
             .when(!active, |el| el.hover(move |s| s.bg(p.hover)))
             .child(
                 svg()
@@ -971,12 +1182,12 @@ impl LibraryWindow {
             "nav-home",
             "icons/house.svg",
             Some(p.accent),
-            "Home",
+            tr::library::home(),
             None,
             Section::Home,
             cx,
         ));
-        col = col.child(self.section_label("Library"));
+        col = col.child(self.section_label(tr::library::title()));
         for kind in [KindView::Recordings, KindView::Screenshots, KindView::Notes] {
             let section = Section::Kind(kind);
             let count = self.count_for(&section);
@@ -996,14 +1207,14 @@ impl LibraryWindow {
                 "nav-pinned",
                 "icons/pin.svg",
                 Some(style::kind_tint(ItemKind::Note, dark)),
-                "Pinned",
+                tr::library::pinned(),
                 Some(pinned),
                 Section::Pinned,
                 cx,
             ));
         }
         col = col.child(
-            self.section_label("Folders").child(
+            self.section_label(tr::library::folders()).child(
                 div()
                     .id("new-smart-folder")
                     .size(px(20.))
@@ -1013,10 +1224,17 @@ impl LibraryWindow {
                     .rounded(px(6.))
                     .cursor_pointer()
                     .role(gpui::Role::Button)
-                    .aria_label("New smart folder")
+                    .aria_label(tr::library::new_smart_folder())
                     .hover(move |s| s.bg(p.hover))
-                    .child(svg().path("icons/plus.svg").size(px(13.)).text_color(p.muted))
-                    .on_click(cx.listener(|this, _, window, cx| this.open_editor(None, window, cx))),
+                    .child(
+                        svg()
+                            .path("icons/plus.svg")
+                            .size(px(13.))
+                            .text_color(p.muted),
+                    )
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.open_editor(None, window, cx)),
+                    ),
             ),
         );
         let folders = self.scan.folders.clone();
@@ -1048,12 +1266,28 @@ impl LibraryWindow {
             ));
         }
         col = col.child(div().flex_1().min_h(px(16.)));
+        let notice = match &self.outcome {
+            store::LoadOutcome::MovedAside(_) => Some(tr::library::file_unreadable()),
+            store::LoadOutcome::ReadOnly => Some(tr::library::file_read_only()),
+            _ => None,
+        };
+        if let Some(notice) = notice {
+            col = col.child(
+                div()
+                    .mx(px(18.))
+                    .mb(px(8.))
+                    .text_size(px(11.5))
+                    .line_height(px(16.))
+                    .text_color(p.muted)
+                    .child(notice),
+            );
+        }
         let trash = self.count_for(&Section::Trash);
         col = col.child(self.sidebar_row(
             "nav-trash",
             "icons/trash.svg",
             None,
-            "Trash",
+            tr::library::trash(),
             Some(trash),
             Section::Trash,
             cx,
@@ -1069,8 +1303,16 @@ impl LibraryWindow {
         let search_w = (width * 0.34).clamp(style::SEARCH_MIN_WIDTH, style::SEARCH_WIDTH);
         let show_layout = true;
         let theme = self.theme;
-        let seg = |id: &'static str, icon: &'static str, on: bool, layout: Layout, cx: &mut Context<Self>| {
-            let label = if layout == Layout::Grid { "Magazine" } else { "List" };
+        let seg = |id: &'static str,
+                   icon: &'static str,
+                   on: bool,
+                   layout: Layout,
+                   cx: &mut Context<Self>| {
+            let label = if layout == Layout::Grid {
+                tr::library::layout_magazine()
+            } else {
+                tr::library::layout_list()
+            };
             div()
                 .id(id)
                 .size(px(26.))
@@ -1098,7 +1340,12 @@ impl LibraryWindow {
                     }])
                 })
                 .when(!on, |el| el.hover(move |s| s.bg(p.hover)))
-                .child(svg().path(icon).size(px(14.)).text_color(if on { p.text } else { p.muted }))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(14.))
+                        .text_color(if on { p.text } else { p.muted }),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| this.set_layout(layout, cx)))
         };
         div()
@@ -1130,20 +1377,29 @@ impl LibraryWindow {
                         .bg(p.field)
                         .id("layout-switch")
                         .role(gpui::Role::Group)
-                        .aria_label("Layout")
-                        .child(seg("layout-list", "icons/align-left.svg", self.layout == Layout::List, Layout::List, cx))
-                        .child(seg("layout-grid", "icons/layout.svg", self.layout == Layout::Grid, Layout::Grid, cx)),
+                        .aria_label(tr::library::layout())
+                        .child(seg(
+                            "layout-list",
+                            "icons/align-left.svg",
+                            self.layout == Layout::List,
+                            Layout::List,
+                            cx,
+                        ))
+                        .child(seg(
+                            "layout-grid",
+                            "icons/layout.svg",
+                            self.layout == Layout::Grid,
+                            Layout::Grid,
+                            cx,
+                        )),
                 )
             })
             .child(
-                div()
-                    .flex_shrink_0()
-                    .w(px(search_w))
-                    .child(
-                        TextInput::search(&self.theme, "library-search", &self.search)
-                            .text_color(p.text)
-                            .placeholder_color(p.faint),
-                    ),
+                div().flex_shrink_0().w(px(search_w)).child(
+                    TextInput::search(&self.theme, "library-search", &self.search)
+                        .text_color(p.text)
+                        .placeholder_color(p.faint),
+                ),
             )
             .child(
                 div()
@@ -1164,11 +1420,16 @@ impl LibraryWindow {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(p.text)
                     .role(gpui::Role::Button)
-                    .aria_label("New note")
-                    .child(svg().path("icons/plus.svg").size(px(13.)).text_color(p.text))
-                    .child("New")
+                    .aria_label(tr::library::new_note())
+                    .child(
+                        svg()
+                            .path("icons/plus.svg")
+                            .size(px(13.))
+                            .text_color(p.text),
+                    )
+                    .child(tr::library::new())
                     .on_click(cx.listener(|_, _, _, cx| {
-                        cx.defer(|cx| crate::meetings_ui::documents::new_note(cx));
+                        cx.defer(crate::meetings_ui::documents::new_note);
                     })),
             )
             .into_any_element()
@@ -1194,44 +1455,55 @@ impl LibraryWindow {
                         .size_full()
                         .object_fit(ObjectFit::Cover),
                 )
-                .when_some(item.duration_ms.filter(|_| item.kind == ItemKind::Recording), |el, ms| {
-                    el.child(
-                        div()
-                            .absolute()
-                            .right(px(8.))
-                            .bottom(px(8.))
-                            .px(px(6.))
-                            .py(px(1.))
-                            .rounded(px(6.))
-                            .bg(gpui::hsla(0., 0., 0., 0.55))
-                            .text_size(px(11.))
-                            .text_color(gpui::white())
-                            .child(format::duration(ms)),
-                    )
-                })
+                .when_some(
+                    item.duration_ms
+                        .filter(|_| item.kind == ItemKind::Recording),
+                    |el, ms| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .right(px(8.))
+                                .bottom(px(8.))
+                                .px(px(6.))
+                                .py(px(1.))
+                                .rounded(px(6.))
+                                .bg(gpui::hsla(0., 0., 0., 0.55))
+                                .text_size(px(11.))
+                                .text_color(gpui::white())
+                                .child(format::duration(ms)),
+                        )
+                    },
+                )
                 .into_any_element(),
             None => {
                 // No picture: a quiet paper card that still says what the
                 // meeting was. Who was there, how long, and its first line.
                 let people: Vec<String> = item.people.iter().take(4).cloned().collect();
                 let extra = item.people.len().saturating_sub(people.len());
-                let avatars = div().flex().items_center().children(people.iter().enumerate().map(|(i, name)| {
-                    let initial: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                    div()
-                        .size(px(24.))
-                        .when(i > 0, |el| el.ml(px(-6.)))
-                        .rounded_full()
-                        .border_2()
-                        .border_color(style::paper(dark))
-                        .bg(p.speaker(i))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(10.5))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(gpui::white())
-                        .child(initial)
-                }));
+                let avatars = div()
+                    .flex()
+                    .items_center()
+                    .children(people.iter().enumerate().map(|(i, name)| {
+                        let initial: String = name
+                            .chars()
+                            .next()
+                            .map(|c| c.to_uppercase().collect())
+                            .unwrap_or_default();
+                        div()
+                            .size(px(24.))
+                            .when(i > 0, |el| el.ml(px(-6.)))
+                            .rounded_full()
+                            .border_2()
+                            .border_color(style::paper(dark))
+                            .bg(p.speaker(i))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(10.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(gpui::white())
+                            .child(initial)
+                    }));
                 let footer = (!people.is_empty()).then(|| {
                     div()
                         .flex()
@@ -1268,11 +1540,19 @@ impl LibraryWindow {
                             .text_size(px(11.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(tint)
-                            .child(svg().path(kind_glyph(item.kind)).size(px(13.)).text_color(tint))
+                            .child(
+                                svg()
+                                    .path(kind_glyph(item.kind))
+                                    .size(px(13.))
+                                    .text_color(tint),
+                            )
                             .child(kind_word(item.kind))
                             .child(div().flex_1())
                             .children(item.app.clone().map(|app| {
-                                div().text_color(p.faint).font_weight(FontWeight::NORMAL).child(app)
+                                div()
+                                    .text_color(p.faint)
+                                    .font_weight(FontWeight::NORMAL)
+                                    .child(app)
                             })),
                     )
                     .child(
@@ -1330,7 +1610,12 @@ impl LibraryWindow {
                                     .child(item.title.clone()),
                             )
                             .when(item.pinned, |el| {
-                                el.child(svg().path("icons/pin.svg").size(px(11.)).text_color(p.faint))
+                                el.child(
+                                    svg()
+                                        .path("icons/pin.svg")
+                                        .size(px(11.))
+                                        .text_color(p.faint),
+                                )
                             }),
                     )
                     .child(
@@ -1338,7 +1623,11 @@ impl LibraryWindow {
                             .truncate()
                             .text_size(px(12.))
                             .text_color(p.muted)
-                            .child(format!("{}  ·  {}", when_line(item, today), meta_line(item))),
+                            .child(format!(
+                                "{}  ·  {}",
+                                when_line(item, today),
+                                meta_line(item)
+                            )),
                     ),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.open_item(index, cx)))
@@ -1370,7 +1659,12 @@ impl LibraryWindow {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg().path(kind_glyph(item.kind)).size(px(16.)).text_color(tint))
+                .child(
+                    svg()
+                        .path(kind_glyph(item.kind))
+                        .size(px(16.))
+                        .text_color(tint),
+                )
                 .into_any_element(),
         };
         div()
@@ -1410,7 +1704,12 @@ impl LibraryWindow {
                     ),
             )
             .when(item.pinned, |el| {
-                el.child(svg().path("icons/pin.svg").size(px(12.)).text_color(p.faint))
+                el.child(
+                    svg()
+                        .path("icons/pin.svg")
+                        .size(px(12.))
+                        .text_color(p.faint),
+                )
             })
             .child(
                 div()
@@ -1440,7 +1739,7 @@ impl LibraryWindow {
         let next = self.up_next.as_ref()?;
         let minutes = (next.start - Utc::now()).num_minutes().max(0);
         let when = if minutes < 60 {
-            format!("In {minutes} min")
+            tr::library::up_next_in(minutes).to_string()
         } else {
             format::clock(format::local(next.start))
         };
@@ -1466,7 +1765,12 @@ impl LibraryWindow {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(svg().path("icons/calendar.svg").size(px(16.)).text_color(gpui::white())),
+                        .child(
+                            svg()
+                                .path("icons/calendar.svg")
+                                .size(px(16.))
+                                .text_color(gpui::white()),
+                        ),
                 )
                 .child(
                     div()
@@ -1512,7 +1816,7 @@ impl LibraryWindow {
                         .text_size(px(13.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(gpui::white())
-                        .child("Take notes"),
+                        .child(tr::library::take_notes()),
                 )
                 .into_any_element(),
         )
@@ -1524,7 +1828,10 @@ impl LibraryWindow {
         } else {
             0.
         };
-        (f32::from(window.viewport_size().width) - style::SIDEBAR_WIDTH - inset - style::CONTENT_PAD * 2.)
+        (f32::from(window.viewport_size().width)
+            - style::SIDEBAR_WIDTH
+            - inset
+            - style::CONTENT_PAD * 2.)
             .max(320.)
     }
 
@@ -1550,14 +1857,23 @@ impl LibraryWindow {
             let side: Vec<u32> = rest.iter().copied().take(5).collect();
             rest.drain(..side.len());
             let stacked = width < 720.;
-            let hero_w = if stacked { width } else { (width * 0.58).floor() };
+            let hero_w = if stacked {
+                width
+            } else {
+                (width * 0.58).floor()
+            };
             let hero_h = if has_picture { hero_w * 0.5625 } else { 200. };
-            page = page.child(self.heading("Latest")).child(
+            page = page.child(self.heading(tr::library::latest())).child(
                 div()
                     .flex()
                     .when(stacked, |el| el.flex_col())
                     .gap(px(style::GRID_GAP))
-                    .child(div().w(px(hero_w)).flex_shrink_0().child(self.card(hero, hero_h, cx)))
+                    .child(
+                        div()
+                            .w(px(hero_w))
+                            .flex_shrink_0()
+                            .child(self.card(hero, hero_h, cx)),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -1578,11 +1894,15 @@ impl LibraryWindow {
             .collect();
         if !pinned.is_empty() {
             rest.retain(|i| !pinned.contains(i));
-            page = page.child(self.heading("Pinned")).child(self.grid_rows(&pinned, width, cx));
+            page = page
+                .child(self.heading(tr::library::pinned()))
+                .child(self.grid_rows(&pinned, width, cx));
         }
         let earlier: Vec<u32> = rest.into_iter().take(12).collect();
         if !earlier.is_empty() {
-            page = page.child(self.heading("Earlier")).child(self.grid_rows(&earlier, width, cx));
+            page = page
+                .child(self.heading(tr::library::earlier()))
+                .child(self.grid_rows(&earlier, width, cx));
         }
         if visible.is_empty() {
             page = page.child(self.render_empty());
@@ -1614,28 +1934,37 @@ impl LibraryWindow {
             .take(6)
             .collect();
         if !pinned.is_empty() {
-            page = page.child(self.heading("Pinned")).child(
-                div().flex().flex_wrap().gap(px(8.)).children(pinned.iter().map(|&i| {
-                    let item = &self.scan.items[i as usize];
-                    let tint = style::kind_tint(item.kind, p.dark);
-                    div()
-                        .id(SharedString::from(format!("pin-{i}")))
-                        .h(px(32.))
-                        .px(px(12.))
-                        .flex()
-                        .items_center()
-                        .gap(px(7.))
-                        .rounded_full()
-                        .bg(style::capsule_fill(p.dark))
-                        .border_1()
-                        .border_color(style::capsule_border(p.dark))
-                        .shadow(style::capsule_shadow(p.dark))
-                        .cursor_pointer()
-                        .text_size(px(13.))
-                        .child(svg().path(kind_glyph(item.kind)).size(px(13.)).text_color(tint))
-                        .child(item.title.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| this.open_item(i, cx)))
-                })),
+            page = page.child(self.heading(tr::library::pinned())).child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.))
+                    .children(pinned.iter().map(|&i| {
+                        let item = &self.scan.items[i as usize];
+                        let tint = style::kind_tint(item.kind, p.dark);
+                        div()
+                            .id(SharedString::from(format!("pin-{i}")))
+                            .h(px(32.))
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
+                            .rounded_full()
+                            .bg(style::capsule_fill(p.dark))
+                            .border_1()
+                            .border_color(style::capsule_border(p.dark))
+                            .shadow(style::capsule_shadow(p.dark))
+                            .cursor_pointer()
+                            .text_size(px(13.))
+                            .child(
+                                svg()
+                                    .path(kind_glyph(item.kind))
+                                    .size(px(13.))
+                                    .text_color(tint),
+                            )
+                            .child(item.title.clone())
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_item(i, cx)))
+                    })),
             );
         }
         let mut current: Option<NaiveDate> = None;
@@ -1663,7 +1992,8 @@ impl LibraryWindow {
     }
 
     fn columns(&self, width: f32) -> usize {
-        (((width + style::GRID_GAP) / (style::GRID_MIN_TILE + style::GRID_GAP)).floor() as usize).clamp(1, 6)
+        (((width + style::GRID_GAP) / (style::GRID_MIN_TILE + style::GRID_GAP)).floor() as usize)
+            .clamp(1, 6)
     }
 
     fn grid_rows(&self, indexes: &[u32], width: f32, cx: &mut Context<Self>) -> AnyElement {
@@ -1674,10 +2004,15 @@ impl LibraryWindow {
             .flex_col()
             .gap(px(style::GRID_GAP))
             .children(indexes.chunks(cols).map(|row| {
-                div().flex().gap(px(style::GRID_GAP)).children(
-                    row.iter()
-                        .map(|&i| div().w(px(tile)).flex_shrink_0().child(self.card(i, tile * 0.6, cx))),
-                )
+                div()
+                    .flex()
+                    .gap(px(style::GRID_GAP))
+                    .children(row.iter().map(|&i| {
+                        div()
+                            .w(px(tile))
+                            .flex_shrink_0()
+                            .child(self.card(i, tile * 0.6, cx))
+                    }))
             }))
             .into_any_element()
     }
@@ -1740,15 +2075,12 @@ impl LibraryWindow {
     fn render_empty(&self) -> AnyElement {
         let p = self.palette;
         let (title, body) = if !self.query.is_empty() {
-            ("No matches", "Try another word, or clear the search.")
+            (tr::library::no_matches(), tr::library::no_matches_body())
         } else {
             match &self.section {
-                Section::Smart(_) => (
-                    "Nothing matches yet",
-                    "Items that fit this folder's rules show up here on their own.",
-                ),
-                Section::Trash => ("Trash is empty", "Deleted notes stay here for 30 days."),
-                _ => ("Nothing here yet", "Recordings, screenshots and notes you make show up here."),
+                Section::Smart(_) => (tr::library::smart_empty(), tr::library::smart_empty_body()),
+                Section::Trash => (tr::library::trash_empty(), tr::library::trash_empty_body()),
+                _ => (tr::library::nothing_yet(), tr::library::nothing_yet_body()),
             }
         };
         div()
@@ -1757,12 +2089,24 @@ impl LibraryWindow {
             .flex_col()
             .items_center()
             .gap(px(6.))
-            .child(div().text_size(px(15.)).font_weight(FontWeight::MEDIUM).text_color(p.text).child(title))
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(p.text)
+                    .child(title),
+            )
             .child(div().text_size(px(13.)).text_color(p.muted).child(body))
             .into_any_element()
     }
 
-    fn pill(&self, id: impl Into<SharedString>, label: impl Into<SharedString>, cx: &mut Context<Self>, on: impl Fn(&mut Self, &mut Context<Self>) + 'static) -> AnyElement {
+    fn pill(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+        on: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+    ) -> AnyElement {
         let p = self.palette;
         let dark = p.dark;
         div()
@@ -1782,7 +2126,12 @@ impl LibraryWindow {
             .text_size(px(13.))
             .text_color(p.text)
             .child(label.into())
-            .child(svg().path("icons/chevrons-up-down.svg").size(px(11.)).text_color(p.muted))
+            .child(
+                svg()
+                    .path("icons/chevrons-up-down.svg")
+                    .size(px(11.))
+                    .text_color(p.muted),
+            )
             .on_click(cx.listener(move |this, _, _, cx| on(this, cx)))
             .into_any_element()
     }
@@ -1792,26 +2141,30 @@ impl LibraryWindow {
         let (field, op, value): (&str, String, AnyElement) = match &row.rule {
             Rule::Title { op, .. } | Rule::Person { op, .. } | Rule::App { op, .. } => {
                 let field = match row.rule {
-                    Rule::Title { .. } => "Title",
-                    Rule::Person { .. } => "Speaker or attendee",
-                    _ => "App",
+                    Rule::Title { .. } => tr::library::field_title(),
+                    Rule::Person { .. } => tr::library::field_person(),
+                    _ => tr::library::field_app(),
                 };
                 let op = match op {
-                    TextOp::Contains => "contains",
-                    TextOp::DoesNotContain => "does not contain",
-                    TextOp::Is => "is",
-                    TextOp::StartsWith => "starts with",
+                    TextOp::Contains => tr::library::op_contains(),
+                    TextOp::DoesNotContain => tr::library::op_not_contains(),
+                    TextOp::Is => tr::library::op_is(),
+                    TextOp::StartsWith => tr::library::op_starts_with(),
                 };
                 let value = match &row.value {
                     Some(input) => div()
                         .flex_1()
                         .min_w(px(140.))
                         .child(
-                            TextInput::search(&self.theme, SharedString::from(format!("rule-value-{index}")), input)
-                                .without_icon()
-                                .height(px(30.))
-                                .text_color(p.text)
-                                .placeholder_color(p.faint),
+                            TextInput::search(
+                                &self.theme,
+                                SharedString::from(format!("rule-value-{index}")),
+                                input,
+                            )
+                            .without_icon()
+                            .height(px(30.))
+                            .text_color(p.text)
+                            .placeholder_color(p.faint),
                         )
                         .into_any_element(),
                     None => div().into_any_element(),
@@ -1819,29 +2172,43 @@ impl LibraryWindow {
                 (field, op.to_string(), value)
             }
             Rule::Kind { op, value } => (
-                "Kind",
-                if *op == IsOp::Is { "is" } else { "is not" }.to_string(),
-                self.pill(format!("rule-kind-{index}"), kind_word(*value), cx, move |this, cx| {
-                    if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
-                        && let Rule::Kind { value, .. } = &mut row.rule
-                    {
-                        let at = ItemKind::ALL.iter().position(|k| k == value).unwrap_or(0);
-                        *value = ItemKind::ALL[(at + 1) % ItemKind::ALL.len()];
-                    }
-                    this.refresh_editor_count(cx);
-                }),
+                tr::library::field_kind(),
+                if *op == IsOp::Is {
+                    tr::library::op_is()
+                } else {
+                    tr::library::op_is_not()
+                }
+                .to_string(),
+                self.pill(
+                    format!("rule-kind-{index}"),
+                    kind_word(*value),
+                    cx,
+                    move |this, cx| {
+                        if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
+                            && let Rule::Kind { value, .. } = &mut row.rule
+                        {
+                            let at = ItemKind::ALL.iter().position(|k| k == value).unwrap_or(0);
+                            *value = ItemKind::ALL[(at + 1) % ItemKind::ALL.len()];
+                        }
+                        this.refresh_editor_count(cx);
+                    },
+                ),
             ),
             Rule::Date { range } => (
-                "Date",
-                "is".into(),
+                tr::library::field_date(),
+                tr::library::op_is().into(),
                 self.pill(
                     format!("rule-date-{index}"),
                     match range {
-                        DateRange::Today => "today".to_string(),
-                        DateRange::LastDays { days } => format!("in the last {days} days"),
-                        DateRange::After { date } => format!("after {date}"),
-                        DateRange::Before { date } => format!("before {date}"),
-                        DateRange::Between { from, to } => format!("{from} to {to}"),
+                        DateRange::Today => tr::library::date_today().to_string(),
+                        DateRange::LastDays { days } => {
+                            tr::library::date_last_days(*days as usize).to_string()
+                        }
+                        DateRange::After { date } => tr::library::date_after(date).to_string(),
+                        DateRange::Before { date } => tr::library::date_before(date).to_string(),
+                        DateRange::Between { from, to } => {
+                            tr::library::date_between(from, to).to_string()
+                        }
                     },
                     cx,
                     move |this, cx| {
@@ -1851,7 +2218,9 @@ impl LibraryWindow {
                             *range = match range {
                                 DateRange::Today => DateRange::LastDays { days: 7 },
                                 DateRange::LastDays { days: 7 } => DateRange::LastDays { days: 30 },
-                                DateRange::LastDays { days: 30 } => DateRange::LastDays { days: 90 },
+                                DateRange::LastDays { days: 30 } => {
+                                    DateRange::LastDays { days: 90 }
+                                }
                                 _ => DateRange::Today,
                             };
                         }
@@ -1860,35 +2229,55 @@ impl LibraryWindow {
                 ),
             ),
             Rule::Length { op, minutes } => (
-                "Length",
-                if *op == LengthOp::LongerThan { "longer than" } else { "shorter than" }.to_string(),
-                self.pill(format!("rule-len-{index}"), format!("{minutes} min"), cx, move |this, cx| {
-                    if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
-                        && let Rule::Length { minutes, .. } = &mut row.rule
-                    {
-                        *minutes = match *minutes {
-                            0..=4 => 5,
-                            5..=14 => 15,
-                            15..=29 => 30,
-                            30..=59 => 60,
-                            _ => 5,
-                        };
-                    }
-                    this.refresh_editor_count(cx);
-                }),
+                tr::library::field_length(),
+                if *op == LengthOp::LongerThan {
+                    tr::library::op_longer()
+                } else {
+                    tr::library::op_shorter()
+                }
+                .to_string(),
+                self.pill(
+                    format!("rule-len-{index}"),
+                    tr::library::minutes(minutes).to_string(),
+                    cx,
+                    move |this, cx| {
+                        if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
+                            && let Rule::Length { minutes, .. } = &mut row.rule
+                        {
+                            *minutes = match *minutes {
+                                0..=4 => 5,
+                                5..=14 => 15,
+                                15..=29 => 30,
+                                30..=59 => 60,
+                                _ => 5,
+                            };
+                        }
+                        this.refresh_editor_count(cx);
+                    },
+                ),
             ),
             Rule::Has { what, value } => (
                 match what {
-                    Content::Transcript => "Transcript",
-                    Content::Summary => "Summary",
-                    Content::Notes => "Notes",
+                    Content::Transcript => tr::library::field_transcript(),
+                    Content::Summary => tr::library::field_summary(),
+                    Content::Notes => tr::library::field_notes(),
                 },
-                if *value { "exists" } else { "is missing" }.to_string(),
+                if *value {
+                    tr::library::op_exists()
+                } else {
+                    tr::library::op_missing()
+                }
+                .to_string(),
                 div().into_any_element(),
             ),
             Rule::Folder { op, id } => (
-                "Folder",
-                if *op == IsOp::Is { "is" } else { "is not" }.to_string(),
+                tr::library::folder(),
+                if *op == IsOp::Is {
+                    tr::library::op_is()
+                } else {
+                    tr::library::op_is_not()
+                }
+                .to_string(),
                 div()
                     .text_size(px(13.))
                     .child(
@@ -1897,17 +2286,22 @@ impl LibraryWindow {
                             .iter()
                             .find(|f| &f.id == id)
                             .map(|f| f.name.clone())
-                            .unwrap_or_else(|| "Deleted folder".into()),
+                            .unwrap_or_else(|| tr::library::deleted_folder().into()),
                     )
                     .into_any_element(),
             ),
             Rule::Pinned { value } => (
-                "Pinned",
-                if *value { "yes" } else { "no" }.to_string(),
+                tr::library::field_pinned(),
+                if *value {
+                    tr::library::yes()
+                } else {
+                    tr::library::no()
+                }
+                .to_string(),
                 div().into_any_element(),
             ),
             Rule::Unknown(_) => (
-                "Made by a newer Cap",
+                tr::library::field_unknown(),
                 String::new(),
                 div().into_any_element(),
             ),
@@ -1916,11 +2310,17 @@ impl LibraryWindow {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(self.pill(format!("rule-field-{index}"), field, cx, move |this, cx| {
-                this.cycle_field(index, cx)
-            }))
+            .child(
+                self.pill(format!("rule-field-{index}"), field, cx, move |this, cx| {
+                    this.cycle_field(index, cx)
+                }),
+            )
             .when(!op.is_empty(), |el| {
-                el.child(self.pill(format!("rule-op-{index}"), op, cx, move |this, cx| this.cycle_op(index, cx)))
+                el.child(
+                    self.pill(format!("rule-op-{index}"), op, cx, move |this, cx| {
+                        this.cycle_op(index, cx)
+                    }),
+                )
             })
             .child(div().flex_1().min_w_0().flex().child(value))
             .child(
@@ -1934,9 +2334,14 @@ impl LibraryWindow {
                     .rounded_full()
                     .cursor_pointer()
                     .role(gpui::Role::Button)
-                    .aria_label("Remove rule")
+                    .aria_label(tr::library::remove_rule())
                     .hover(move |s| s.bg(p.hover))
-                    .child(svg().path("icons/minus.svg").size(px(13.)).text_color(p.muted))
+                    .child(
+                        svg()
+                            .path("icons/minus.svg")
+                            .size(px(13.))
+                            .text_color(p.muted),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(editor) = this.editor.as_mut()
                             && index < editor.rows.len()
@@ -1962,8 +2367,14 @@ impl LibraryWindow {
             .map(|v| v.read(cx).text().to_string())
             .unwrap_or_default();
         let next = match &row.rule {
-            Rule::Title { op, .. } => Rule::Person { op: *op, value: text },
-            Rule::Person { op, .. } => Rule::App { op: *op, value: text },
+            Rule::Title { op, .. } => Rule::Person {
+                op: *op,
+                value: text,
+            },
+            Rule::Person { op, .. } => Rule::App {
+                op: *op,
+                value: text,
+            },
             Rule::App { .. } => Rule::Kind {
                 op: IsOp::Is,
                 value: ItemKind::Meeting,
@@ -1984,7 +2395,10 @@ impl LibraryWindow {
                 value: text,
             },
         };
-        let keeps_input = matches!(next, Rule::Title { .. } | Rule::Person { .. } | Rule::App { .. });
+        let keeps_input = matches!(
+            next,
+            Rule::Title { .. } | Rule::Person { .. } | Rule::App { .. }
+        );
         row.rule = next;
         if !keeps_input {
             row.value = None;
@@ -2006,7 +2420,11 @@ impl LibraryWindow {
                     }
                 }
                 Rule::Kind { op, .. } | Rule::Folder { op, .. } => {
-                    *op = if *op == IsOp::Is { IsOp::IsNot } else { IsOp::Is }
+                    *op = if *op == IsOp::Is {
+                        IsOp::IsNot
+                    } else {
+                        IsOp::Is
+                    }
                 }
                 Rule::Length { op, .. } => {
                     *op = if *op == LengthOp::LongerThan {
@@ -2046,9 +2464,26 @@ impl LibraryWindow {
                     .gap(px(8.))
                     .h(px(26.))
                     .text_size(px(12.5))
-                    .child(svg().path(kind_glyph(item.kind)).size(px(13.)).text_color(tint))
-                    .child(div().flex_1().min_w_0().truncate().text_color(p.text).child(item.title.clone()))
-                    .child(div().flex_shrink_0().text_color(p.faint).child(when_line(item, today)))
+                    .child(
+                        svg()
+                            .path(kind_glyph(item.kind))
+                            .size(px(13.))
+                            .text_color(tint),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(p.text)
+                            .child(item.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(p.faint)
+                            .child(when_line(item, today)),
+                    )
                     .into_any_element()
             })
             .collect();
@@ -2069,7 +2504,11 @@ impl LibraryWindow {
                 div()
                     .text_size(px(17.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(if editor.editing.is_some() { "Edit smart folder" } else { "New smart folder" }),
+                    .child(if editor.editing.is_some() {
+                        tr::library::edit_smart_folder()
+                    } else {
+                        tr::library::new_smart_folder()
+                    }),
             )
             .child(
                 TextInput::search(&self.theme, "smart-name", &editor.name)
@@ -2084,10 +2523,14 @@ impl LibraryWindow {
                     .gap(px(8.))
                     .text_size(px(13.))
                     .text_color(p.muted)
-                    .child("Show items that match")
+                    .child(tr::library::match_prefix())
                     .child(self.pill(
                         "smart-matching",
-                        if matching == Matching::All { "all" } else { "any" },
+                        if matching == Matching::All {
+                            tr::library::match_all()
+                        } else {
+                            tr::library::match_any()
+                        },
                         cx,
                         |this, cx| {
                             if let Some(editor) = this.editor.as_mut() {
@@ -2100,7 +2543,7 @@ impl LibraryWindow {
                             this.refresh_editor_count(cx);
                         },
                     ))
-                    .child("of these rules"),
+                    .child(tr::library::match_suffix()),
             )
             .child(div().flex().flex_col().gap(px(8.)).children(rows))
             .child(
@@ -2114,8 +2557,13 @@ impl LibraryWindow {
                     .cursor_pointer()
                     .text_size(px(13.))
                     .text_color(p.accent)
-                    .child(svg().path("icons/plus.svg").size(px(12.)).text_color(p.accent))
-                    .child("Add rule")
+                    .child(
+                        svg()
+                            .path("icons/plus.svg")
+                            .size(px(12.))
+                            .text_color(p.accent),
+                    )
+                    .child(tr::library::add_rule())
                     .on_click(cx.listener(|this, _, window, cx| {
                         let row = Self::row_for(
                             Rule::Title {
@@ -2143,9 +2591,8 @@ impl LibraryWindow {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(p.text)
                             .child(match count {
-                                0 => "No items match yet. New ones that do will appear here on their own.".to_string(),
-                                1 => "1 item matches".to_string(),
-                                n => format!("{n} items match"),
+                                0 => tr::library::match_none().to_string(),
+                                n => tr::library::match_count(n).to_string(),
                             }),
                     )
                     .children(preview),
@@ -2166,7 +2613,7 @@ impl LibraryWindow {
                             .bg(p.field)
                             .cursor_pointer()
                             .text_size(px(13.))
-                            .child("Cancel")
+                            .child(tr::common::cancel())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.editor = None;
                                 cx.notify();
@@ -2185,7 +2632,11 @@ impl LibraryWindow {
                             .text_size(px(13.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(gpui::white())
-                            .child(if editor.editing.is_some() { "Save" } else { "Create" })
+                            .child(if editor.editing.is_some() {
+                                tr::common::save()
+                            } else {
+                                tr::library::create()
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.save_editor(cx))),
                     ),
             );

@@ -741,6 +741,7 @@ fn main() {
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
         library_window::auto_open_from_env(cx); // `CAP_GPUI_AUTO_LIBRARY=home`: the library window.
+        library_window::bench::run_from_env(cx); // `CAP_GPUI_LIBRARY_BENCH=window|panel`: perf gate.
         #[cfg(debug_assertions)]
         snapshot::arm_from_env(cx);
         #[cfg(debug_assertions)]

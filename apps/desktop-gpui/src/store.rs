@@ -1170,6 +1170,9 @@ pub struct GeneralSettings {
     /// `!!settings.outOfProcessMuxer` in experimental.tsx).
     pub enable_native_camera_preview: bool,
     pub out_of_process_muxer: bool,
+    /// Experimental: the header Library button opens the Library window
+    /// instead of the panel. Off until the window is proven.
+    pub library_window: bool,
     /// Not part of `general_settings` at all: the mic-confirmation toggle
     /// lives in the store's own `recording_start_safety` section
     /// (`RECORDING_START_SAFETY_DEFAULTS`), and the page renders it in the
@@ -1643,6 +1646,7 @@ impl GeneralSettings {
             editor_preview_enhance: bool_at(general, EDITOR_PREVIEW_ENHANCE_KEY, false),
             enable_native_camera_preview: bool_at(general, "enableNativeCameraPreview", false),
             out_of_process_muxer: bool_at(general, "outOfProcessMuxer", false),
+            library_window: bool_at(general, "libraryWindow", false),
             confirm_without_microphone: bool_at(
                 safety,
                 "confirmBeforeRecordingWithoutMicrophone",

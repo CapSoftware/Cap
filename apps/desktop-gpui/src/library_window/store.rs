@@ -107,8 +107,9 @@ fn sanitize(file: &mut LibraryFile) {
         folder.rules.truncate(MAX_RULES);
         for rule in &mut folder.rules {
             use super::rules::Rule;
-            if let Rule::Title { value, .. } | Rule::Person { value, .. } | Rule::App { value, .. } =
-                rule
+            if let Rule::Title { value, .. }
+            | Rule::Person { value, .. }
+            | Rule::App { value, .. } = rule
             {
                 *value = clip(value, MAX_VALUE_CHARS);
             }
@@ -179,10 +180,7 @@ pub enum UpdateError {
 
 /// Re-reads the file, applies `edit`, and replaces the file atomically.
 /// Returns the file as written.
-pub fn update(
-    dir: &Path,
-    edit: impl FnOnce(&mut LibraryFile),
-) -> Result<LibraryFile, UpdateError> {
+pub fn update(dir: &Path, edit: impl FnOnce(&mut LibraryFile)) -> Result<LibraryFile, UpdateError> {
     let loaded = load(dir);
     if loaded.outcome == LoadOutcome::ReadOnly {
         return Err(UpdateError::ReadOnly);
@@ -277,9 +275,11 @@ mod tests {
             serde_json::from_slice(&std::fs::read(dir.join("library.json.bak")).unwrap()).unwrap();
         assert_eq!(backup.smart_folders.len(), 1);
         assert!(
-            std::fs::read_dir(&dir)
+            std::fs::read_dir(&dir).unwrap().all(|e| !e
                 .unwrap()
-                .all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp"))
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp"))
         );
     }
 
@@ -305,7 +305,10 @@ mod tests {
         std::fs::write(path_in(&dir), b"{ \"smartFolders\": [ trunc").unwrap();
         let loaded = load(&dir);
         let LoadOutcome::MovedAside(aside) = loaded.outcome else {
-            panic!("expected the file to be moved aside, got {:?}", loaded.outcome);
+            panic!(
+                "expected the file to be moved aside, got {:?}",
+                loaded.outcome
+            );
         };
         assert_eq!(
             std::fs::read(&aside).unwrap(),
@@ -334,7 +337,13 @@ mod tests {
         assert_eq!(loaded.file.smart_folders.len(), 1);
         assert_eq!(loaded.file.smart_folders[0].name, "Good");
         assert_eq!(
-            loaded.file.members.get("f1").unwrap().iter().collect::<Vec<_>>(),
+            loaded
+                .file
+                .members
+                .get("f1")
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>(),
             ["path:/a.cap"]
         );
         assert!(!loaded.file.members.contains_key("f2"));
@@ -351,7 +360,10 @@ mod tests {
         let loaded = load(&dir);
         assert_eq!(loaded.outcome, LoadOutcome::ReadOnly);
         assert_eq!(loaded.file.smart_folders[0].rules.len(), 2);
-        assert!(matches!(loaded.file.smart_folders[0].rules[0], Rule::Unknown(_)));
+        assert!(matches!(
+            loaded.file.smart_folders[0].rules[0],
+            Rule::Unknown(_)
+        ));
         assert_eq!(
             update(&dir, |f| f.smart_folders.clear()),
             Err(UpdateError::ReadOnly)
@@ -399,9 +411,12 @@ mod tests {
     #[test]
     fn pruning_drops_gone_folders_and_items_only() {
         let mut file = LibraryFile::default();
+        file.members.insert(
+            "kept".into(),
+            ["path:/a".into(), "path:/gone".into()].into(),
+        );
         file.members
-            .insert("kept".into(), ["path:/a".into(), "path:/gone".into()].into());
-        file.members.insert("deleted".into(), ["path:/a".into()].into());
+            .insert("deleted".into(), ["path:/a".into()].into());
         let changed = prune_members(
             &mut file,
             &["kept".to_string()].into(),

@@ -4243,7 +4243,7 @@ impl MainWindow {
             )
             .child(label)
             .on_click(cx.listener(|this, _, window, cx| {
-                if std::env::var_os("CAP_GPUI_LIBRARY_DIRECTION").is_some() {
+                if crate::library_window::enabled() {
                     cx.defer(crate::library_window::open);
                     return;
                 }
@@ -5848,6 +5848,14 @@ impl MainWindow {
 
     /// Case-insensitive substring match, the same test the Tauri panels filter
     /// on before they highlight the matched run.
+    /// The Library perf bench types into the panel's search field.
+    pub(crate) fn bench_set_search(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.search_input
+            .update(cx, |input, cx| input.set_text(text.to_string(), cx));
+        self.search = text.to_string();
+        cx.notify();
+    }
+
     pub(crate) fn matches_search(&self, haystack: &str) -> bool {
         if self.search.is_empty() {
             return true;
