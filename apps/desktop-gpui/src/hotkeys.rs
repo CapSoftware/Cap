@@ -1142,8 +1142,16 @@ fn dispatch_without_mode(action: HotkeyAction, pressed_at: std::time::Instant, c
             tracing::error!(?action, "mode shortcut reached the modeless dispatch");
         }
         HotkeyAction::ToggleMeetingNotes => crate::meetings_ui::live::toggle(cx),
-        HotkeyAction::OpenMeetingNotes => crate::meetings_ui::live::open_document(None, cx),
-        HotkeyAction::NewNote => crate::meetings_ui::documents::new_note(cx),
+        // Asked for from another app: the notes come forward, not only
+        // their window (macOS keeps the app that was in front otherwise).
+        HotkeyAction::OpenMeetingNotes => {
+            crate::meetings_ui::live::open_document(None, cx);
+            cx.activate(true);
+        }
+        HotkeyAction::NewNote => {
+            crate::meetings_ui::documents::new_note(cx);
+            cx.activate(true);
+        }
     }
 }
 
