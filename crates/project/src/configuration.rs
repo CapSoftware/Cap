@@ -3218,6 +3218,14 @@ pub struct ProjectConfiguration {
     /// saved projects can never have zooms generated over them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_zoom_pending: bool,
+    /// How the screen follows the cursor while zoomed and how motion blur
+    /// draws. Absent (0) keeps the original rules: an auto zoom frames the
+    /// middle of the cursor's bounding box and blur uses fixed tap kernels.
+    /// [`SCREEN_MOTION_VERSION`] frames where the cursor spent its time and
+    /// blurs along the full path each pixel travelled since the last frame.
+    /// New projects start on it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub screen_motion_version: u32,
     #[serde(
         default,
         deserialize_with = "markers::deserialize_markers",
@@ -3287,6 +3295,7 @@ impl Default for ProjectConfiguration {
             text_anim_version: TEXT_ANIM_VERSION,
             auto_zoom_version: 0,
             auto_zoom_pending: false,
+            screen_motion_version: 0,
             markers: Vec::new(),
             audio_visuals: None,
         }
@@ -3355,6 +3364,10 @@ impl ProjectStyleCache {
     }
 }
 
+/// The screen motion rules new projects start on, see
+/// [`ProjectConfiguration::screen_motion_version`].
+pub const SCREEN_MOTION_VERSION: u32 = 1;
+
 /// Rounding a new project gets when its background first gains padding: a
 /// tighter corner than older projects' 7.5, about 30 px on a 1080p screen.
 pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
@@ -3378,6 +3391,7 @@ impl ProjectConfiguration {
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
         config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
         config.auto_zoom_pending = true;
+        config.screen_motion_version = SCREEN_MOTION_VERSION;
         config
     }
 
@@ -3407,6 +3421,7 @@ impl ProjectConfiguration {
         preset.text_anim_version = self.text_anim_version;
         preset.auto_zoom_version = self.auto_zoom_version;
         preset.auto_zoom_pending = self.auto_zoom_pending;
+        preset.screen_motion_version = self.screen_motion_version;
         preset.overlay_order = self.overlay_order.clone();
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
@@ -3870,6 +3885,24 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn new_projects_use_the_newer_screen_motion_and_saved_ones_keep_theirs() {
+        assert_eq!(
+            ProjectConfiguration::for_new_project().screen_motion_version,
+            SCREEN_MOTION_VERSION
+        );
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.screen_motion_version, 0);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("screenMotionVersion").is_none());
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["screenMotionVersion"], 1);
+        let reloaded: ProjectConfiguration = serde_json::from_value(fresh).unwrap();
+        assert_eq!(reloaded.screen_motion_version, 1);
+        let styled = saved.with_preset(ProjectConfiguration::for_new_project());
+        assert_eq!(styled.screen_motion_version, 0);
+    }
+
+    #[test]
     fn new_projects_use_the_newer_auto_zoom_rules_and_saved_ones_keep_theirs() {
         assert_eq!(
             ProjectConfiguration::for_new_project().auto_zoom_version,
@@ -4030,6 +4063,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("autoZoomPending");
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("screenMotionVersion");
         assert_eq!(framing_reset, default);
     }
 

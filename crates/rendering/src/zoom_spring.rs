@@ -50,10 +50,40 @@ const INSTANT_SNAP_WINDOW_SECS: f64 = 0.1;
 /// bound moves the viewport by at most (bound - 1) of the card: sub-pixel.
 const CENTER_PREAIM_MAX_AMOUNT: f32 = 1.0005;
 
-/// Greedy click-cluster bounding-box limits, as a fraction of the visible
-/// zoomed viewport (50% width x 70% height).
-const CLUSTER_WIDTH_RATIO: f64 = 0.5;
-const CLUSTER_HEIGHT_RATIO: f64 = 0.7;
+/// How an auto zoom picks what to frame from the cursor's movement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FollowRule {
+    /// Clusters fit 50% x 70% of the visible view; each frames the middle of
+    /// its bounding box.
+    BoxMiddle,
+    /// Clusters fit 52% x 55% of the visible view; each frames where the
+    /// cursor spent its time, so a pass across the box barely moves the view
+    /// while a dwell pulls it over. Segments start on their first instant.
+    TimeWeighted,
+}
+
+impl FollowRule {
+    fn for_version(screen_motion_version: u32) -> Self {
+        if screen_motion_version >= cap_project::SCREEN_MOTION_VERSION {
+            Self::TimeWeighted
+        } else {
+            Self::BoxMiddle
+        }
+    }
+
+    /// Greedy cluster bounding-box limits, as a fraction of the visible
+    /// zoomed viewport (width, height).
+    fn cluster_ratios(self) -> (f64, f64) {
+        match self {
+            Self::BoxMiddle => (0.5, 0.7),
+            Self::TimeWeighted => (0.52, 0.55),
+        }
+    }
+}
+
+/// How long the last cursor sample of a cluster nobody left counts for in
+/// its time-weighted centre.
+const LAST_SAMPLE_WEIGHT_MS: f64 = 100.0;
 
 /// Fallback focus when a segment has no usable cursor data.
 const FALLBACK_FOCUS: (f64, f64) = (0.5, 0.5);
@@ -244,6 +274,7 @@ impl ZoomClusters {
         recording_end: f64,
         segment: &ZoomSegment,
         crops: &CursorCropMaps,
+        rule: FollowRule,
     ) -> Self {
         let build = |crop| {
             ClusterCenters::new(build_clusters(
@@ -253,6 +284,7 @@ impl ZoomClusters {
                 recording_end,
                 segment.amount,
                 crop,
+                rule,
             ))
         };
         let base = build(crops.base);
@@ -321,6 +353,16 @@ pub(crate) struct ClickCluster {
     max_y: f64,
     start_time_ms: f64,
     last_time_ms: f64,
+    /// Latest sample, weighted once the next one (or the cluster's end) says
+    /// how long the cursor stayed there.
+    last_x: f64,
+    last_y: f64,
+    /// Time-weighted centre, set by [`Self::finish`] under
+    /// [`FollowRule::TimeWeighted`].
+    weighted_center: Option<(f64, f64)>,
+    weight_ms: f64,
+    weighted_x: f64,
+    weighted_y: f64,
 }
 
 impl ClickCluster {
@@ -332,7 +374,36 @@ impl ClickCluster {
             max_y: y,
             start_time_ms: time_ms,
             last_time_ms: time_ms,
+            last_x: x,
+            last_y: y,
+            weighted_center: None,
+            weight_ms: 0.0,
+            weighted_x: 0.0,
+            weighted_y: 0.0,
         }
+    }
+
+    /// Counts the latest sample for as long as the cursor stayed on it.
+    fn weigh_last(&mut self, until_ms: f64) {
+        let weight = (until_ms - self.last_time_ms).max(0.0);
+        self.weight_ms += weight;
+        self.weighted_x += self.last_x * weight;
+        self.weighted_y += self.last_y * weight;
+    }
+
+    /// Closes the cluster at `end_ms` (when the next one starts, or a short
+    /// hold after its last sample) and fixes its time-weighted centre.
+    fn finish(&mut self, end_ms: f64) {
+        self.weigh_last(end_ms);
+        let center = if self.weight_ms > 0.0 {
+            (
+                self.weighted_x / self.weight_ms,
+                self.weighted_y / self.weight_ms,
+            )
+        } else {
+            (self.last_x, self.last_y)
+        };
+        self.weighted_center = (center.0.is_finite() && center.1.is_finite()).then_some(center);
     }
 
     fn can_add(&self, x: f64, y: f64, max_w: f64, max_h: f64) -> bool {
@@ -342,18 +413,21 @@ impl ClickCluster {
     }
 
     fn add(&mut self, x: f64, y: f64, time_ms: f64) {
+        self.weigh_last(time_ms);
         self.min_x = self.min_x.min(x);
         self.max_x = self.max_x.max(x);
         self.min_y = self.min_y.min(y);
         self.max_y = self.max_y.max(y);
         self.last_time_ms = time_ms;
+        self.last_x = x;
+        self.last_y = y;
     }
 
     fn center(&self) -> (f64, f64) {
-        (
+        self.weighted_center.unwrap_or((
             (self.min_x + self.max_x) / 2.0,
             (self.min_y + self.max_y) / 2.0,
-        )
+        ))
     }
 }
 
@@ -371,11 +445,14 @@ pub(crate) fn build_clusters(
     segment_end_secs: f64,
     zoom_amount: f64,
     crop: Option<CursorCropMap>,
+    rule: FollowRule,
 ) -> Vec<ClickCluster> {
     let start_ms = segment_start_secs * 1000.0;
     let end_ms = segment_end_secs * 1000.0;
-    let cluster_w = CLUSTER_WIDTH_RATIO / zoom_amount.max(1.0);
-    let cluster_h = CLUSTER_HEIGHT_RATIO / zoom_amount.max(1.0);
+    let (width_ratio, height_ratio) = rule.cluster_ratios();
+    let cluster_w = width_ratio / zoom_amount.max(1.0);
+    let cluster_h = height_ratio / zoom_amount.max(1.0);
+    let time_weighted = rule == FollowRule::TimeWeighted;
     // Clustering happens in CONTENT UV space: dead-zone box limits are
     // fractions of the visible (cropped) viewport, so raw display UVs must be
     // remapped before distances mean what the constants say they mean.
@@ -428,7 +505,11 @@ pub(crate) fn build_clusters(
 
         if let Some(evt) = fallback {
             let (x, y) = map_uv(evt.x, evt.y);
-            return vec![ClickCluster::new(x, y, evt.time_ms)];
+            let mut cluster = ClickCluster::new(x, y, evt.time_ms);
+            if time_weighted {
+                cluster.finish(evt.time_ms + LAST_SAMPLE_WEIGHT_MS);
+            }
+            return vec![cluster];
         }
         return vec![];
     }
@@ -440,16 +521,29 @@ pub(crate) fn build_clusters(
     let mut clusters = Vec::new();
     let first = events.next().unwrap();
     let (first_x, first_y) = map_uv(first.x, first.y);
-    let mut current = ClickCluster::new(first_x, first_y, first.time_ms);
+    // Under the time-weighted rule a position held from before the segment
+    // counts from the segment's start, not from whenever it was reached.
+    let first_time = if time_weighted {
+        first.time_ms.max(start_ms - 1.0)
+    } else {
+        first.time_ms
+    };
+    let mut current = ClickCluster::new(first_x, first_y, first_time);
 
     for evt in events {
         let (x, y) = map_uv(evt.x, evt.y);
         if current.can_add(x, y, cluster_w, cluster_h) {
             current.add(x, y, evt.time_ms);
         } else {
+            if time_weighted {
+                current.finish(evt.time_ms);
+            }
             clusters.push(current);
             current = ClickCluster::new(x, y, evt.time_ms);
         }
+    }
+    if time_weighted {
+        current.finish(current.last_time_ms + LAST_SAMPLE_WEIGHT_MS);
     }
     clusters.push(current);
 
@@ -785,6 +879,15 @@ impl ZoomSegmentIndex {
         (first_reaching < started).then(|| self.ordered[first_reaching])
     }
 
+    /// Active over [start, end): a segment counts from its first instant.
+    fn active_from(&self, timeline_secs: f64) -> Option<usize> {
+        let started = self.starts.partition_point(|&start| start <= timeline_secs);
+        let first_reaching = self
+            .max_ends
+            .partition_point(|&max_end| max_end <= timeline_secs);
+        (first_reaching < started).then(|| self.ordered[first_reaching])
+    }
+
     fn snaps_at(&self, timeline_secs: f64) -> bool {
         self.instant_windows
             .iter()
@@ -819,6 +922,7 @@ pub struct ZoomTransformTimeline {
     recording_clip: Option<u32>,
     prefer_outgoing: bool,
     lead_in_secs: f64,
+    follow: FollowRule,
     /// Total number of samples covering [0, duration] plus one lerp partner.
     total_samples: usize,
 }
@@ -851,9 +955,11 @@ impl ZoomTransformTimeline {
                 recording_clip: None,
                 prefer_outgoing: false,
             },
+            FollowRule::BoxMiddle,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_for_recording_clip(
         zoom_segments: &[ZoomSegment],
         timeline: Option<&TimelineConfiguration>,
@@ -862,6 +968,7 @@ impl ZoomTransformTimeline {
         duration_secs: f64,
         crops: CursorCropMaps,
         selection: RecordingClipSelection,
+        follow: FollowRule,
     ) -> Self {
         let RecordingClipSelection {
             recording_clip,
@@ -913,6 +1020,7 @@ impl ZoomTransformTimeline {
                         recording_end,
                         segment,
                         &crops,
+                        follow,
                     ))
                 }
                 ZoomMode::Manual { .. } => None,
@@ -944,6 +1052,7 @@ impl ZoomTransformTimeline {
                 recording_clip,
                 prefer_outgoing,
                 lead_in_secs,
+                follow,
                 total_samples: 1,
             };
         }
@@ -965,6 +1074,7 @@ impl ZoomTransformTimeline {
             recording_clip,
             prefer_outgoing,
             lead_in_secs,
+            follow,
             total_samples,
         };
 
@@ -1026,6 +1136,8 @@ impl ZoomTransformTimeline {
         }
 
         before.screen_movement_spring == after.screen_movement_spring
+            && FollowRule::for_version(before.screen_motion_version)
+                == FollowRule::for_version(after.screen_motion_version)
             && before_timeline.map(TimelineConfiguration::duration)
                 == after_timeline.map(TimelineConfiguration::duration)
             && build_time_map(before_timeline) == build_time_map(after_timeline)
@@ -1111,6 +1223,7 @@ impl ZoomTransformTimeline {
                 recording_clip,
                 prefer_outgoing,
             },
+            FollowRule::for_version(project.screen_motion_version),
         )
     }
 
@@ -1272,7 +1385,11 @@ impl ZoomTransformTimeline {
         lead_in_secs: f64,
     ) -> StepTargets {
         let snap = self.segment_index.snaps_at(timeline_secs);
-        let active = self.segment_index.active_at(timeline_secs).or_else(|| {
+        let active = match self.follow {
+            FollowRule::BoxMiddle => self.segment_index.active_at(timeline_secs),
+            FollowRule::TimeWeighted => self.segment_index.active_from(timeline_secs),
+        };
+        let active = active.or_else(|| {
             // An early zoom aims at the upcoming segment's framing; instant
             // segments keep their cut.
             (lead_in_secs > 0.0 && !snap)
@@ -1452,6 +1569,95 @@ mod tests {
             .map(|sample| sample.amount)
             .fold(f32::MIN, f32::max);
         (first as f64 * STEP_MS / 1000.0 - start, peak)
+    }
+
+    fn timeline_with_rule(
+        segments: &[ZoomSegment],
+        cursor: &CursorEvents,
+        spring: ScreenMovementSpring,
+        duration: f64,
+        rule: FollowRule,
+    ) -> ZoomTransformTimeline {
+        let mut timeline = ZoomTransformTimeline::new_for_recording_clip(
+            segments,
+            None,
+            cursor,
+            spring,
+            duration,
+            CursorCropMaps {
+                base: None,
+                styles: Vec::new(),
+            },
+            RecordingClipSelection {
+                recording_clip: None,
+                prefer_outgoing: false,
+            },
+            rule,
+        );
+        timeline.precompute();
+        timeline
+    }
+
+    #[test]
+    fn time_weighted_follow_frames_where_the_cursor_dwells() {
+        // The cursor rests at x 0.30 for two seconds and flicks to 0.40 and
+        // back in a tenth of a second, all inside one cluster box. The box
+        // middle sits halfway; the time-weighted centre stays at the rest.
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.30, 0.5),
+                move_event(2000.0, 0.40, 0.5),
+                move_event(2100.0, 0.30, 0.5),
+            ],
+            clicks: vec![],
+        };
+        let middle = build_clusters(&cursor, true, 0.5, 4.0, 2.0, None, FollowRule::BoxMiddle);
+        let weighted = build_clusters(&cursor, true, 0.5, 4.0, 2.0, None, FollowRule::TimeWeighted);
+        assert_eq!((middle.len(), weighted.len()), (1, 1));
+        assert!((middle[0].center().0 - 0.35).abs() < 1e-9);
+        // 0.30 from 0.5 s to 2.0 s and from 2.1 s for the 100 ms hold; 0.40
+        // for 100 ms.
+        let expected = (0.30 * 1600.0 + 0.40 * 100.0) / 1700.0;
+        assert!(
+            (weighted[0].center().0 - expected).abs() < 1e-3,
+            "weighted centre {:?}",
+            weighted[0].center()
+        );
+    }
+
+    #[test]
+    fn time_weighted_follow_boxes_are_about_half_the_view() {
+        // At 2x the view shows half the frame. A 0.30 tall sweep fits the
+        // 0.35 tall box of the box-middle rule but not the 0.275 tall
+        // time-weighted box, which re-aims instead.
+        let cursor = CursorEvents {
+            moves: vec![move_event(0.0, 0.5, 0.35), move_event(1000.0, 0.5, 0.65)],
+            clicks: vec![],
+        };
+        let middle = build_clusters(&cursor, true, 0.0, 3.0, 2.0, None, FollowRule::BoxMiddle);
+        let weighted = build_clusters(&cursor, true, 0.0, 3.0, 2.0, None, FollowRule::TimeWeighted);
+        assert_eq!(middle.len(), 1);
+        assert_eq!(weighted.len(), 2);
+        assert!((weighted[1].center().1 - 0.65).abs() < 1e-9);
+    }
+
+    #[test]
+    fn time_weighted_follow_starts_a_segment_on_its_first_instant() {
+        // 0.4 s is exactly a precompute step. Under the time-weighted rule
+        // the zoom is already moving on that step; the box-middle rule
+        // treats the start as exclusive and waits a step.
+        let segments = [manual_segment(0.4, 2.0, 2.0, 0.5, 0.5)];
+        let cursor = CursorEvents::default();
+        let spring = ScreenMovementSpring::NEW_PROJECT;
+        let middle = timeline_with_rule(&segments, &cursor, spring, 3.0, FollowRule::BoxMiddle);
+        let weighted =
+            timeline_with_rule(&segments, &cursor, spring, 3.0, FollowRule::TimeWeighted);
+        assert_eq!(amount_at(&middle, 0.4), 1.0);
+        assert!(amount_at(&weighted, 0.4) > 1.0);
+        assert!(
+            (amount_at(&weighted, 0.4) - amount_at(&middle, 0.408)).abs() < 1e-6,
+            "the response is the same, one step earlier"
+        );
     }
 
     #[test]
@@ -1807,9 +2013,10 @@ mod tests {
     #[test]
     fn zoom_inputs_invalidate_when_framing_or_timing_changes() {
         let project = project_for_zoom_reuse();
-        let changes: [fn(&mut ProjectConfiguration); 9] = [
+        let changes: [fn(&mut ProjectConfiguration); 10] = [
             |project| project.timeline.as_mut().unwrap().zoom_segments[0].amount = 3.0,
             |project| project.screen_movement_spring.stiffness += 1.0,
+            |project| project.screen_motion_version = cap_project::SCREEN_MOTION_VERSION,
             |project| {
                 project.background.crop = Some(Crop {
                     position: XY::new(100, 0),
@@ -2498,7 +2705,15 @@ mod tests {
             clicks: Vec::new(),
         };
         for ordered in [false, true] {
-            let clusters = build_clusters(&cursor, ordered, 2.0, 10.0, 2.0, None);
+            let clusters = build_clusters(
+                &cursor,
+                ordered,
+                2.0,
+                10.0,
+                2.0,
+                None,
+                FollowRule::BoxMiddle,
+            );
             assert_eq!(
                 ClusterCenters::new(clusters).center_at(2000.0),
                 Some((0.1, 0.1))
@@ -3224,6 +3439,7 @@ mod tests {
                     end,
                     segment,
                     &CursorCropMaps::from_project(&project, XY::new(1920, 1080)),
+                    FollowRule::BoxMiddle,
                 ));
                 actual.precompute();
                 original.precompute();
@@ -3554,10 +3770,15 @@ mod tests {
             (f64::NEG_INFINITY, f64::INFINITY),
         ];
         for (start, end) in bounds {
-            for amount in [1.0, 2.0, 4.0] {
-                for crop in [None, crop] {
-                    let ordered = build_clusters(&cursor, true, start, end, amount, crop);
-                    let scanned = build_clusters(&cursor, false, start, end, amount, crop);
+            for (amount, crop, rule) in [1.0, 2.0, 4.0].into_iter().flat_map(|amount| {
+                [None, crop].into_iter().flat_map(move |crop| {
+                    [FollowRule::BoxMiddle, FollowRule::TimeWeighted]
+                        .map(|rule| (amount, crop, rule))
+                })
+            }) {
+                {
+                    let ordered = build_clusters(&cursor, true, start, end, amount, crop, rule);
+                    let scanned = build_clusters(&cursor, false, start, end, amount, crop, rule);
                     assert_eq!(
                         format!("{ordered:?}"),
                         format!("{scanned:?}"),
