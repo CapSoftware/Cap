@@ -415,6 +415,34 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
     next
 }
 
+/// `project` with every setting a look writes put back as `before` had
+/// it, and everything else (an edit made while the look was previewed) kept.
+pub fn take_off_look(project: &mut ProjectConfiguration, before: &ProjectConfiguration) {
+    project.background = before.background.clone();
+    project.screen_movement_spring = before.screen_movement_spring;
+    project.screen_motion_blur = before.screen_motion_blur;
+    let cursor = &mut project.cursor;
+    cursor.set_cursor_type(before.cursor.cursor_type().clone());
+    cursor.size = before.cursor.size;
+    cursor.ripple.enabled = before.cursor.ripple.enabled;
+    cursor.motion_blur = before.cursor.motion_blur;
+    cursor.animation_style = before.cursor.animation_style;
+    cursor.tension = before.cursor.tension;
+    cursor.mass = before.cursor.mass;
+    cursor.friction = before.cursor.friction;
+    match (project.keyboard.as_mut(), before.keyboard.as_ref()) {
+        (Some(keyboard), Some(earlier)) => {
+            keyboard.settings.style = earlier.settings.style.clone();
+            keyboard.settings.theme = earlier.settings.theme.clone();
+        }
+        (Some(_), None) => project.keyboard = None,
+        _ => {}
+    }
+    if let (Some(captions), Some(earlier)) = (project.captions.as_mut(), before.captions.as_ref()) {
+        captions.settings = earlier.settings.clone();
+    }
+}
+
 /// A built-in animated background, by its template name.
 pub fn animated_background(name: &str) -> Option<AnimatedGradientConfig> {
     cap_project::animated_gradient_catalog()
@@ -554,6 +582,24 @@ mod tests {
 #[cfg(test)]
 mod distinct_tests {
     use super::*;
+
+    #[test]
+    fn taking_a_look_off_keeps_an_edit_made_under_it() {
+        let project = ProjectConfiguration::for_new_project();
+        for look in &LOOKS {
+            let mut previewed = apply_look(look, &project);
+            // An edit the look does not touch, made while it was showing.
+            previewed.camera.size = 41.0;
+            take_off_look(&mut previewed, &project);
+            assert_eq!(
+                look_settings(&previewed),
+                look_settings(&project),
+                "{}",
+                look.id
+            );
+            assert_eq!(previewed.camera.size, 41.0, "{}", look.id);
+        }
+    }
 
     /// Every look reads differently at a glance: no two share their
     /// background, framing and cursor all at once.

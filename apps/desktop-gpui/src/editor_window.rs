@@ -3307,6 +3307,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.keep_edit_under_look_preview();
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.transcript.dirty = true;
@@ -3326,6 +3327,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.keep_edit_under_look_preview();
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.transcript.dirty = true;
@@ -9172,6 +9174,15 @@ impl EditorWindow {
         self.look_preview = Some((index, saved));
         self.publish_project();
         cx.notify();
+    }
+
+    /// An edit that reached the project while a look was previewed (a
+    /// shortcut, say) landed on the previewed project: keep the edit, take
+    /// the look off, and end the preview so nothing restores over it.
+    fn keep_edit_under_look_preview(&mut self) {
+        if let Some((_, saved)) = self.look_preview.take() {
+            crate::looks::take_off_look(&mut self.project, &saved);
+        }
     }
 
     /// Puts the project back as it was before a look was previewed.
