@@ -25,7 +25,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
-import { isRateLimited } from "@/lib/rate-limit";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -85,14 +85,18 @@ async function readSignInBody(request: NextRequest) {
 	return null;
 }
 
-async function readOneTapCredential(request: NextRequest) {
+async function readOneTapCredential(
+	request: NextRequest,
+): Promise<string | null | "duplicate"> {
 	if (request.method !== "POST") return null;
 	try {
 		const contentType = request.headers.get("content-type");
 		if (contentType?.includes("application/x-www-form-urlencoded")) {
-			return new URLSearchParams(await request.clone().text()).get(
+			const values = new URLSearchParams(await request.clone().text()).getAll(
 				"credential",
 			);
+			if (values.length > 1) return "duplicate";
+			return values[0] ?? null;
 		}
 		if (contentType?.includes("application/json")) {
 			const body: unknown = await request.clone().json();
@@ -170,12 +174,28 @@ async function handler(
 		nextauth[1] === GOOGLE_ONE_TAP_PROVIDER_ID &&
 		nextauth[0] === "callback"
 	) {
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.AUTH_GOOGLE_ONE_TAP, {
+				headers: request.headers,
+			})
+		) {
+			return NextResponse.json(
+				{ url: authErrorUrl("CredentialsSignin") },
+				{ status: 429 },
+			);
+		}
 		const webUrl = serverEnv().WEB_URL;
 		const nonces = readCookie(
 			request.headers.get("cookie"),
 			googleOneTapNonceCookieForWebUrl(webUrl).name,
 		);
 		const credential = await readOneTapCredential(request);
+		if (credential === "duplicate") {
+			return NextResponse.json(
+				{ url: authErrorUrl("CredentialsSignin") },
+				{ status: 400 },
+			);
+		}
 		const response: Response = await NextAuth(request, context, authOptions());
 		response.headers.append(
 			"set-cookie",
