@@ -4,7 +4,7 @@ import type { User } from "@cap/web-domain";
 import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
-import { authChallenges } from "../schema.ts";
+import { authChallenges, users } from "../schema.ts";
 
 export type AuthChallengePurpose =
 	| "passkey_sign_in"
@@ -107,33 +107,37 @@ export async function issueStepUpCode(
 	userId: User.UserId,
 ): Promise<StepUpCodeIssue> {
 	await deleteExpiredChallenges();
-	const [latest] = await db()
-		.select({ expiresAt: authChallenges.expiresAt })
-		.from(authChallenges)
-		.where(
-			and(
-				eq(authChallenges.userId, userId),
-				eq(authChallenges.purpose, "step_up_email_code"),
-			),
-		)
-		.orderBy(desc(authChallenges.expiresAt))
-		.limit(1);
-	if (latest) {
-		const elapsed =
-			Date.now() - (latest.expiresAt.getTime() - STEP_UP_CODE_TTL_MS);
-		if (elapsed < STEP_UP_CODE_RESEND_COOLDOWN_MS) {
-			return {
-				status: "cooldown",
-				retryAfterSeconds: Math.ceil(
-					(STEP_UP_CODE_RESEND_COOLDOWN_MS - elapsed) / 1000,
-				),
-			};
-		}
-	}
-
 	const id = nanoId();
 	const code = crypto.randomInt(100000, 1000000).toString();
-	await db().transaction(async (tx) => {
+	return db().transaction(async (tx): Promise<StepUpCodeIssue> => {
+		await tx
+			.select({ id: users.id })
+			.from(users)
+			.where(eq(users.id, userId))
+			.for("update");
+		const [latest] = await tx
+			.select({ expiresAt: authChallenges.expiresAt })
+			.from(authChallenges)
+			.where(
+				and(
+					eq(authChallenges.userId, userId),
+					eq(authChallenges.purpose, "step_up_email_code"),
+				),
+			)
+			.orderBy(desc(authChallenges.expiresAt))
+			.limit(1);
+		if (latest) {
+			const elapsed =
+				Date.now() - (latest.expiresAt.getTime() - STEP_UP_CODE_TTL_MS);
+			if (elapsed < STEP_UP_CODE_RESEND_COOLDOWN_MS) {
+				return {
+					status: "cooldown",
+					retryAfterSeconds: Math.ceil(
+						(STEP_UP_CODE_RESEND_COOLDOWN_MS - elapsed) / 1000,
+					),
+				};
+			}
+		}
 		await tx
 			.delete(authChallenges)
 			.where(
@@ -149,8 +153,8 @@ export async function issueStepUpCode(
 			secretHash: hashStepUpCode(id, code),
 			expiresAt: new Date(Date.now() + STEP_UP_CODE_TTL_MS),
 		});
+		return { status: "issued", code };
 	});
-	return { status: "issued", code };
 }
 
 /**
