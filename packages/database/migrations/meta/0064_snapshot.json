@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "efce679c-7308-4e8e-bbe0-9fc1e983c5ef",
+	"id": "8ac84ca4-d730-45c1-82f8-48ed8ca42cf5",
 	"prevId": "e2477762-53de-47a6-9542-3bfa6b417f39",
 	"tables": {
 		"accounts": {
@@ -2409,6 +2409,83 @@
 			"uniqueConstraints": {},
 			"checkConstraint": {}
 		},
+		"email_change_requests": {
+			"name": "email_change_requests",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"userId": {
+					"name": "userId",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"newEmail": {
+					"name": "newEmail",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"codeHash": {
+					"name": "codeHash",
+					"type": "varchar(64)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"attempts": {
+					"name": "attempts",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"expiresAt": {
+					"name": "expiresAt",
+					"type": "datetime",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"user_id_idx": {
+					"name": "user_id_idx",
+					"columns": ["userId"],
+					"isUnique": false
+				},
+				"expires_at_idx": {
+					"name": "expires_at_idx",
+					"columns": ["expiresAt"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"email_change_requests_id": {
+					"name": "email_change_requests_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraint": {}
+		},
 		"folders": {
 			"name": "folders",
 			"columns": {
@@ -3382,85 +3459,6 @@
 				"media_processing_budgets_id": {
 					"name": "media_processing_budgets_id",
 					"columns": ["id"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
-		"meeting_notes_trial_uses": {
-			"name": "meeting_notes_trial_uses",
-			"columns": {
-				"userId": {
-					"name": "userId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"meetingId": {
-					"name": "meetingId",
-					"type": "varchar(64)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"slot": {
-					"name": "slot",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"notesRuns": {
-					"name": "notesRuns",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 1
-				},
-				"askRuns": {
-					"name": "askRuns",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"startedAt": {
-					"name": "startedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"completedAt": {
-					"name": "completedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				}
-			},
-			"indexes": {
-				"user_slot_idx": {
-					"name": "user_slot_idx",
-					"columns": ["userId", "slot"],
-					"isUnique": true
-				}
-			},
-			"foreignKeys": {},
-			"compositePrimaryKeys": {
-				"meeting_notes_trial_uses_userId_meetingId_pk": {
-					"name": "meeting_notes_trial_uses_userId_meetingId_pk",
-					"columns": ["userId", "meetingId"]
 				}
 			},
 			"uniqueConstraints": {},

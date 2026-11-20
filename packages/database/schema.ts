@@ -1083,6 +1083,23 @@ export const authChallenges = mysqlTable(
 	}),
 );
 
+export const emailChangeRequests = mysqlTable(
+	"email_change_requests",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		newEmail: varchar("newEmail", { length: 255 }).notNull(),
+		codeHash: varchar("codeHash", { length: 64 }).notNull(),
+		attempts: int("attempts").notNull().default(0),
+		expiresAt: datetime("expiresAt").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		userIdIndex: index("user_id_idx").on(table.userId),
+		expiresAtIndex: index("expires_at_idx").on(table.expiresAt),
+	}),
+);
+
 export const mobilePushTokens = mysqlTable(
 	"mobile_push_tokens",
 	{
