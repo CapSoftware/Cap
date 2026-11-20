@@ -423,6 +423,8 @@ struct Worker {
     heard: [Vec<(u64, u64)>; 2],
     unwritten: Vec<LogLine>,
     policy: RetryPolicy,
+    /// Live captions per track.
+    live: [Option<LiveSegment>; 2],
     #[cfg(test)]
     hooks: TestHooks,
 }
@@ -445,6 +447,99 @@ struct TestHooks {
 struct Provisional {
     ids: Vec<String>,
     words: Vec<Word>,
+}
+
+/// Live captions of one open segment. Words two passes in a row heard the
+/// same way, and that are not the last second of the audio, are kept as
+/// shown; the next pass hears only the audio after them. A caption then
+/// costs about the same 2 s and 18 s into a segment, so captions can come
+/// every second for what re-hearing the whole segment every 2 s cost. The
+/// segment's final line is still one pass over all of it.
+struct LiveSegment {
+    start_sample: u64,
+    kept: Vec<Word>,
+    /// Where the next pass starts, in samples from the segment's start.
+    from: usize,
+    /// The last pass's words after `kept`.
+    last: Vec<Word>,
+}
+
+/// Words ending this close to the newest audio are never kept yet: the
+/// model may still change them once it hears what follows.
+const LIVE_HOLD_MS: u64 = 1_000;
+/// A pass this long keeps its words up to `LIVE_FORCE_MS` before the end
+/// even when they changed, so a pass never grows without bound.
+const LIVE_MAX_WINDOW_MS: u64 = 8_000;
+const LIVE_FORCE_MS: u64 = 4_000;
+
+/// Debug builds: `CAP_GPUI_MEETING_LIVE_WINDOW=0` hears the whole open
+/// segment on every caption pass, as before (measurements).
+fn live_window() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !(cfg!(debug_assertions)
+            && std::env::var("CAP_GPUI_MEETING_LIVE_WINDOW").is_ok_and(|v| v.trim() == "0"))
+    })
+}
+
+fn same_word(a: &Word, b: &Word) -> bool {
+    let key = |w: &Word| {
+        w.text
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    key(a) == key(b)
+}
+
+impl LiveSegment {
+    fn new(start_sample: u64) -> Self {
+        Self {
+            start_sample,
+            kept: Vec::new(),
+            from: 0,
+            last: Vec::new(),
+        }
+    }
+
+    /// Takes a pass's words (from `from` to `end_ms`) and returns what the
+    /// caption shows.
+    fn heard(&mut self, words: Vec<Word>, segment_start_ms: u64, end_ms: u64) -> Vec<Word> {
+        let window_ms =
+            end_ms.saturating_sub(segment_start_ms + timeline::samples_to_ms(self.from as u64));
+        let agreed = self
+            .last
+            .iter()
+            .zip(&words)
+            .take_while(|(a, b)| same_word(a, b))
+            .count();
+        let mut keep = 0;
+        while keep < agreed && words[keep].end_ms + LIVE_HOLD_MS <= end_ms {
+            keep += 1;
+        }
+        if window_ms > LIVE_MAX_WINDOW_MS {
+            while keep < words.len() && words[keep].end_ms + LIVE_FORCE_MS <= end_ms {
+                keep += 1;
+            }
+        }
+        // The next pass starts between two words, never inside one.
+        keep = keep.min(words.len().saturating_sub(1));
+        if keep > 0 {
+            let boundary_ms =
+                (words[keep - 1].end_ms + words[keep].start_ms.max(words[keep - 1].end_ms)) / 2;
+            let from =
+                timeline::ms_to_samples(boundary_ms.saturating_sub(segment_start_ms)) as usize;
+            self.from = from.max(self.from);
+        }
+        let mut words = words;
+        let rest = words.split_off(keep);
+        self.kept.extend(words);
+        self.last = rest.clone();
+        let mut shown = self.kept.clone();
+        shown.extend(rest);
+        shown
+    }
 }
 
 struct Bridge {
@@ -632,6 +727,7 @@ impl Worker {
             heard: [Vec::new(), Vec::new()],
             unwritten: Vec::new(),
             policy: RetryPolicy::default(),
+            live: [None, None],
             #[cfg(test)]
             hooks: TestHooks::default(),
         };
@@ -1037,6 +1133,13 @@ impl Worker {
     }
 
     fn final_segment(&mut self, job: SegmentJob) {
+        let index = source_index(job.source);
+        if self.live[index]
+            .as_ref()
+            .is_some_and(|live| live.start_sample == job.start_sample)
+        {
+            self.live[index] = None;
+        }
         self.diarize(&job);
         match self.mode.clone() {
             EngineMode::Pending => {
@@ -1271,8 +1374,35 @@ impl Worker {
         if let Some(voices) = self.voices.as_mut() {
             voices.peek(job.source, job.start_sample, &job.samples);
         }
-        let Ok(words) = self.transcribe(&local, &job) else {
-            return;
+        let words = if live_window() {
+            let index = source_index(job.source);
+            let mut live = match self.live[index].take() {
+                Some(live)
+                    if live.start_sample == job.start_sample && live.from < job.samples.len() =>
+                {
+                    live
+                }
+                _ => LiveSegment::new(job.start_sample),
+            };
+            let window = SegmentJob {
+                source: job.source,
+                start_sample: job.start_sample + live.from as u64,
+                samples: job.samples[live.from..].to_vec(),
+                speech_ms: 0,
+            };
+            let Ok(words) = self.transcribe(&local, &window) else {
+                self.live[index] = Some(live);
+                return;
+            };
+            let end_ms = job.start_ms() + timeline::samples_to_ms(job.samples.len() as u64);
+            let shown = live.heard(words, job.start_ms(), end_ms);
+            self.live[index] = Some(live);
+            shown
+        } else {
+            let Ok(words) = self.transcribe(&local, &job) else {
+                return;
+            };
+            words
         };
         for utterance in self.utterances(job.source, job.start_sample, words, false) {
             let _ = self.config.events.send(EngineEvent::Utterance {

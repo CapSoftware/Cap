@@ -144,6 +144,8 @@ struct Opts {
     audio: bool,
     /// The transcript file can't be written until the local model's n-th call.
     disk_full_until: Option<usize>,
+    /// Records how many samples each local pass heard.
+    heard: Option<Arc<std::sync::Mutex<Vec<usize>>>>,
 }
 
 impl Default for Opts {
@@ -161,6 +163,7 @@ impl Default for Opts {
             budget: Duration::from_millis(200),
             audio: true,
             disk_full_until: None,
+            heard: None,
         }
     }
 }
@@ -179,6 +182,7 @@ fn run_opts(opts: Opts) -> Ran {
         budget,
         audio,
         disk_full_until,
+        heard,
     } = opts;
     let dictionary = dictionary.as_slice();
     let dir = tempfile::tempdir().unwrap();
@@ -237,7 +241,10 @@ fn run_opts(opts: Opts) -> Ran {
         worker.hooks.disk_full = Some(disk_full.clone());
     }
     let local_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    worker.hooks.local = Some(Arc::new(move |_| {
+    worker.hooks.local = Some(Arc::new(move |samples: &[f32]| {
+        if let Some(heard) = &heard {
+            heard.lock().unwrap().push(samples.len());
+        }
         let n = local_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if disk_full_until.is_some_and(|until| n >= until) {
             disk_full.store(false, Ordering::SeqCst);
@@ -815,4 +822,127 @@ fn a_refused_sign_in_that_works_again_is_tried_again_and_its_audio_repaired() {
     assert_eq!(ran.saved().len(), 2, "both segments got their words: {:?}", ran.saved());
     assert!(ran.transcript.gaps().is_empty());
     assert_eq!(ran.last_status().unwrap().cloud, CloudState::Ok);
+}
+
+fn w(text: &str, start_ms: u64, end_ms: u64) -> Word {
+    Word {
+        text: text.into(),
+        start_ms,
+        end_ms,
+    }
+}
+
+fn texts(words: &[Word]) -> Vec<&str> {
+    words.iter().map(|w| w.text.as_str()).collect()
+}
+
+#[test]
+fn live_captions_keep_words_two_passes_agree_on_and_hear_only_what_follows() {
+    let mut live = LiveSegment::new(START);
+    let first = vec![
+        w("so", 1_000, 1_300),
+        w("the", 1_400, 1_600),
+        w("plan", 1_700, 2_100),
+        w("is", 3_500, 3_800),
+    ];
+    let shown = live.heard(first.clone(), 1_000, 4_000);
+    assert_eq!(texts(&shown), ["so", "the", "plan", "is"]);
+    assert_eq!(live.from, 0, "nothing is kept after one pass");
+
+    let mut second = first.clone();
+    second.push(w("simple", 4_100, 4_500));
+    let shown = live.heard(second, 1_000, 4_700);
+    assert_eq!(texts(&shown), ["so", "the", "plan", "is", "simple"]);
+    assert_eq!(
+        texts(&live.kept),
+        ["so", "the", "plan"],
+        "the last second waits for more audio"
+    );
+    assert_eq!(
+        live.from,
+        timeline::ms_to_samples((2_100 + 3_500) / 2 - 1_000) as usize
+    );
+}
+
+#[test]
+fn live_captions_never_keep_a_word_the_next_pass_heard_differently() {
+    let mut live = LiveSegment::new(START);
+    live.heard(
+        vec![
+            w("so", 1_000, 1_300),
+            w("the", 1_400, 1_600),
+            w("plan", 1_700, 2_100),
+        ],
+        1_000,
+        4_000,
+    );
+    let shown = live.heard(
+        vec![
+            w("so", 1_000, 1_300),
+            w("they", 1_400, 1_600),
+            w("plan", 1_700, 2_100),
+        ],
+        1_000,
+        5_000,
+    );
+    assert_eq!(texts(&live.kept), ["so"]);
+    assert_eq!(texts(&shown), ["so", "they", "plan"]);
+}
+
+#[test]
+fn a_long_caption_pass_keeps_its_older_words_even_without_agreement() {
+    let mut live = LiveSegment::new(START);
+    let words: Vec<Word> = (0..10)
+        .map(|i| w(&format!("w{i}"), 1_000 + i * 900, 1_000 + i * 900 + 600))
+        .collect();
+    let shown = live.heard(words.clone(), 1_000, 10_500);
+    assert_eq!(texts(&shown), texts(&words), "the caption shows every word");
+    assert_eq!(
+        texts(&live.kept),
+        ["w0", "w1", "w2", "w3", "w4", "w5"],
+        "a 9.5 s pass keeps the words older than 4 s though nothing agreed yet"
+    );
+    assert_eq!(
+        live.from,
+        timeline::ms_to_samples((6_100 + 6_400) / 2 - 1_000) as usize
+    );
+}
+
+#[test]
+fn caption_passes_hear_the_audio_after_their_kept_words_and_finals_hear_everything() {
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let partial = |secs: usize| SegmentJob {
+        samples: vec![0.0; 16_000 * secs],
+        speech_ms: 0,
+        ..job()
+    };
+    run_opts(Opts {
+        mode: EngineMode::Local(local_model()),
+        partials: vec![partial(4), partial(6), partial(8)],
+        heard: Some(heard.clone()),
+        ..Opts::default()
+    });
+    // LOCAL's words end at 0.3, 0.7 and 1.1 s: the second pass agrees on
+    // all three and keeps the first two, so the third starts between
+    // "from" and "here" (0.75 s in).
+    assert_eq!(
+        *heard.lock().unwrap(),
+        vec![64_000, 96_000, 128_000 - 12_000]
+    );
+
+    let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+    run_opts(Opts {
+        mode: EngineMode::Local(local_model()),
+        segments: vec![SegmentJob {
+            samples: vec![0.0; 16_000 * 8],
+            ..job()
+        }],
+        heard: Some(heard.clone()),
+        ..Opts::default()
+    });
+    assert_eq!(
+        *heard.lock().unwrap(),
+        vec![128_000],
+        "a final line hears the whole segment"
+    );
 }
