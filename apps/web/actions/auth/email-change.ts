@@ -4,6 +4,7 @@ import { hasStepUpGrant } from "@cap/database/auth/auth-challenges";
 import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
 import {
 	confirmEmailChange,
+	pendingEmailChangeAddress,
 	requestEmailChange,
 } from "@cap/database/auth/email-change";
 import {
@@ -11,7 +12,10 @@ import {
 	sendEmailChangedNotice,
 } from "@cap/database/auth/security-emails";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { isEmailCodeSendLimited } from "@/lib/email-code-rate-limit";
+import {
+	isEmailCodeSendLimited,
+	isEmailCodeVerifyLimited,
+} from "@/lib/email-code-rate-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export type StartEmailChangeResult =
@@ -73,6 +77,10 @@ export async function finishEmailChange(
 			key: `email-change-verify:${user.id}`,
 		})
 	) {
+		return { status: "rate_limited" };
+	}
+	const pendingAddress = await pendingEmailChangeAddress(user.id);
+	if (pendingAddress && (await isEmailCodeVerifyLimited(pendingAddress))) {
 		return { status: "rate_limited" };
 	}
 	const result = await confirmEmailChange(user.id, code);

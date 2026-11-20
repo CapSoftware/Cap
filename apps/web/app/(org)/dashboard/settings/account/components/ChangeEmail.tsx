@@ -99,8 +99,9 @@ export function ChangeEmail({
 				changed = true;
 				toast.success("Email updated. Sign in with your new address.");
 				resetUser();
-				await signOut({
-					callbackUrl: `/login?email=${encodeURIComponent(result.email)}`,
+				const callbackUrl = `/login?email=${encodeURIComponent(result.email)}`;
+				await signOut({ callbackUrl }).catch(() => {
+					window.location.assign(callbackUrl);
 				});
 				return;
 			}
@@ -162,7 +163,7 @@ export function ChangeEmail({
 						icon={<Mail className="size-4" />}
 						description={
 							step === "email"
-								? "We'll send a code to the new address to make sure it's yours. After the change, every device is signed out and you sign in with the new address."
+								? "We'll send a code to the new address to make sure it's yours. After the change you're signed out on the web and sign in again with the new address. To also sign out the desktop app and CLI, use Sign out of all devices."
 								: `Enter the code we sent to ${sentTo}.`
 						}
 					>

@@ -41,8 +41,7 @@ export function EmailChangedEmail({
 						</Heading>
 						<Text className="text-sm leading-6 text-black">
 							The email address for your Cap account was changed from {email} to{" "}
-							{newEmail}. Every device was signed out, and you'll sign in with
-							the new address from now on.
+							{newEmail}. You sign in with the new address from now on.
 						</Text>
 						<Text className="text-sm leading-6 text-black">
 							If you didn't make this change, reply to this email right away so

@@ -20,7 +20,7 @@ export default async function SettingsPage() {
 		getCurrentUser(),
 	]);
 	const emailManaged = user
-		? await isEmailManagedByOrganization(user.id).catch(() => true)
+		? await isEmailManagedByOrganization(user).catch(() => true)
 		: true;
 	return (
 		<div className="flex flex-col gap-10 mx-auto w-full max-w-4xl">
