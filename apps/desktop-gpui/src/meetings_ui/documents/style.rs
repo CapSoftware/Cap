@@ -16,11 +16,14 @@ pub const SIDEBAR_WIDTH: f32 = 220.;
 pub const COLUMN_WIDTH: f32 = 680.;
 pub const DOCK_WIDTH: f32 = 600.;
 pub const NARROW_BREAKPOINT: f32 = 520.;
-pub const MATERIAL_RADIUS: f64 = 16.;
+pub const MATERIAL_RADIUS: f64 = super::glass::WINDOW_RADIUS as f64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
     pub dark: bool,
+    /// The window's native glass is live and shown (a material installed
+    /// and Reduce Transparency off), so the chrome may let it through.
+    pub glass: bool,
     pub sidebar: Hsla,
     pub content: Hsla,
     pub card: Hsla,
@@ -89,8 +92,9 @@ impl Palette {
                 rgb(0xb7791f).into(),
             )
         };
-        let sidebar = if theme.material.is_some() {
-            theme.settings_sidebar_bg()
+        let glass = theme.material.is_some() && !super::glass::reduce_transparency();
+        let sidebar = if glass {
+            super::glass::sidebar_wash(dark)
         } else if dark {
             rgb(0x131315).into()
         } else {
@@ -98,6 +102,7 @@ impl Palette {
         };
         Self {
             dark,
+            glass,
             sidebar,
             content,
             card,

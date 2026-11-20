@@ -8,7 +8,7 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Point, Render,
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point,
-    prelude::FluentBuilder, px, size, svg,
+    prelude::FluentBuilder, px, size,
 };
 use serde_json::{Value, json};
 
@@ -16,7 +16,7 @@ use super::start::StartChoice;
 use super::{
     CloseDocuments, Dismiss, FocusSearch, GoHome, KEY_CONTEXT, NewMeetingNotes, NewNote,
     ShowGeneratedNotes, ShowMyNotes, ShowTranscript, ToggleAsk, ToggleRecording, ToggleSidebar,
-    WriteNotes,
+    WriteNotes, glass,
     home::{Home, HomeEvent},
     pane::Pane,
     sidebar::{Sidebar, SidebarEvent},
@@ -685,66 +685,53 @@ impl DocumentsWindow {
         } else {
             12.
         };
+        let top = (style::TOOLBAR_HEIGHT - glass::CAPSULE_HEIGHT) / 2.;
+        let stop = |el: gpui::Stateful<gpui::Div>| {
+            el.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        };
         div()
             .absolute()
-            .top(px(11.))
+            .top(px(top))
             .left(px(left))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(8.))
             .child(
-                style::icon_button(
-                    &palette,
-                    "documents-toggle-sidebar",
-                    "icons/panel-left.svg",
-                    30.,
-                )
-                .rounded(px(8.))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .tooltip(tooltip(tr::documents::toolbar::toggle_sidebar()))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_sidebar(&ToggleSidebar, window, cx)
-                })),
-            )
-            .child(
-                style::icon_button(&palette, "documents-settings", "icons/settings.svg", 30.)
-                    .rounded(px(8.))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .tooltip(tooltip(tr::documents::toolbar::settings()))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                glass::toolbar_group(&palette)
+                    .child(
+                        stop(glass::toolbar_button(
+                            &palette,
+                            "documents-toggle-sidebar",
+                            "icons/panel-left.svg",
+                        ))
+                        .tooltip(tooltip(tr::documents::toolbar::toggle_sidebar()))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_sidebar(&ToggleSidebar, window, cx)
+                        })),
+                    )
+                    .child(
+                        stop(glass::toolbar_button(
+                            &palette,
+                            "documents-settings",
+                            "icons/settings.svg",
+                        ))
+                        .tooltip(tooltip(tr::documents::toolbar::settings()))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_settings(cx))),
+                    ),
             )
             .when(in_note, |el| {
                 el.child(
-                    div()
-                        .id("documents-back-home")
-                        .h(px(30.))
-                        .pl(px(8.))
-                        .pr(px(10.))
-                        .flex()
-                        .items_center()
-                        .gap(px(3.))
-                        .rounded_full()
-                        .border(px(1.5))
-                        .border_color(palette.track)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(palette.hover))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    glass::toolbar_group(&palette).child(
+                        stop(glass::toolbar_button(
+                            &palette,
+                            "documents-back-home",
+                            "icons/chevron-left.svg",
+                        ))
                         .tooltip(tooltip(tr::documents::home::back()))
-                        .child(
-                            svg()
-                                .path("icons/chevron-left.svg")
-                                .size(px(13.))
-                                .text_color(palette.muted),
-                        )
-                        .child(
-                            svg()
-                                .path("icons/house.svg")
-                                .size(px(15.))
-                                .text_color(palette.muted),
-                        )
                         .on_click(
                             cx.listener(|this, _, window, cx| this.go_home(&GoHome, window, cx)),
                         ),
+                    ),
                 )
             })
             .into_any_element()
@@ -884,7 +871,9 @@ impl Render for DocumentsWindow {
             .flex_col()
             .overflow_hidden()
             .rounded(px(radius))
-            .bg(palette.content)
+            // Over the native glass the shell paints nothing: the sidebar is
+            // the window's glass and the page paints its own paper.
+            .when(!palette.glass, |el| el.bg(palette.content))
             .font_family(crate::theme::UI_FONT)
             .locale_font()
             .text_color(palette.text);

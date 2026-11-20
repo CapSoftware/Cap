@@ -7,7 +7,7 @@ use gpui::{
 };
 
 use super::{
-    format,
+    format, glass,
     menu::{self, Entry, OpenMenu},
     start::{StartButton, StartChoice, StartEvent, StartSize},
     store::{DocStore, Scope, StoreEvent},
@@ -280,27 +280,28 @@ impl Sidebar {
         active: bool,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = self.palette;
+        // Coloured glyphs, as the system's own sidebars draw them.
         div()
             .id(id)
             .mx(px(10.))
-            .h(px(30.))
-            .px(px(10.))
+            .h(px(glass::ROW_HEIGHT))
+            .px(px(9.))
             .flex()
             .items_center()
-            .gap(px(9.))
-            .rounded(px(8.))
+            .gap(px(8.))
+            .rounded(px(glass::ROW_RADIUS))
             .cursor_pointer()
-            .text_size(px(13.5))
+            .text_size(px(13.))
             .text_color(palette.text)
-            .when(active, |el| {
-                el.bg(palette.selected).font_weight(FontWeight::MEDIUM)
-            })
+            .when(active, |el| el.bg(palette.selected))
             .when(!active, |el| el.hover(move |s| s.bg(palette.hover)))
-            .child(svg().path(icon).size(px(15.)).text_color(if active {
-                palette.text
-            } else {
-                palette.muted
-            }))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(px(15.))
+                    .flex_shrink_0()
+                    .text_color(palette.accent),
+            )
             .child(div().flex_1().min_w_0().truncate().child(label))
     }
 
@@ -383,16 +384,16 @@ impl Render for Sidebar {
         let open = store.open.clone();
         let header = |label: &'static str| {
             div()
-                .mt(px(18.))
-                .h(px(28.))
-                .pl(px(20.))
+                .mt(px(16.))
+                .h(px(26.))
+                .pl(px(19.))
                 .pr(px(14.))
                 .flex()
                 .items_center()
                 .justify_between()
-                .text_size(px(12.5))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(palette.muted)
+                .text_size(px(glass::SECTION_TITLE_SIZE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(palette.faint)
                 .child(label)
         };
         let recent = (!self.recent.is_empty()).then(|| {
@@ -407,18 +408,16 @@ impl Render for Sidebar {
                     div()
                         .id(SharedString::from(format!("recent-{}", row.id)))
                         .mx(px(10.))
-                        .h(px(30.))
-                        .px(px(10.))
+                        .h(px(glass::ROW_HEIGHT))
+                        .px(px(9.))
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .rounded(px(8.))
+                        .rounded(px(glass::ROW_RADIUS))
                         .cursor_pointer()
                         .text_size(px(13.))
                         .text_color(palette.text)
-                        .when(active, |el| {
-                            el.bg(palette.selected).font_weight(FontWeight::MEDIUM)
-                        })
+                        .when(active, |el| el.bg(palette.selected))
                         .when(!active, |el| el.hover(move |s| s.bg(palette.hover)))
                         .child(div().flex_1().min_w_0().truncate().child(row.title.clone()))
                         .child(
