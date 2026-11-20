@@ -249,8 +249,8 @@ pub(super) fn start_capturing_impl(
             .ok_or(StartCapturingError::DeviceNotFound)?
             .retained();
 
-        let input =
-            av::capture::DeviceInput::with_device(&device).map_err(AVFoundationError::Static)?;
+        let input = av::capture::DeviceInput::with_device(&device)
+            .map_err(|err| AVFoundationError::Retained(err.retained()))?;
         let queue = dispatch::Queue::new();
         let delegate = build_sample_delegate(callback);
 
