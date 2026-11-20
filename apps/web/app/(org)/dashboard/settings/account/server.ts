@@ -8,6 +8,7 @@ import {
 	authApiKeys,
 	authChallenges,
 	emailChangeRequests,
+	mcpOAuthTokens,
 	organizationMembers,
 	organizations,
 	sessions,
@@ -222,6 +223,15 @@ export async function signOutAllDevices() {
 		await tx
 			.delete(authChallenges)
 			.where(eq(authChallenges.userId, currentUser.id));
+		await tx
+			.update(mcpOAuthTokens)
+			.set({ revokedAt: new Date() })
+			.where(
+				and(
+					eq(mcpOAuthTokens.userId, currentUser.id),
+					isNull(mcpOAuthTokens.revokedAt),
+				),
+			);
 		await tx
 			.update(agentApiKeys)
 			.set({ revokedAt: new Date() })
