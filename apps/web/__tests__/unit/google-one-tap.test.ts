@@ -261,6 +261,12 @@ describe("verifyGoogleOneTapCredential", () => {
 		await expect(verify(await token(), "")).resolves.toBeNull();
 	});
 
+	it("rejects a malformed nonce cookie even when the token repeats it", async () => {
+		for (const nonce of ["short", `${"a".repeat(30)};x`, "a".repeat(129)]) {
+			await expect(verify(await token({ nonce }), nonce)).resolves.toBeNull();
+		}
+	});
+
 	it("rejects an azp for another client and accepts our own", async () => {
 		await expect(
 			verify(await token({ azp: "attacker.apps.googleusercontent.com" })),
