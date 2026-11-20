@@ -18,7 +18,10 @@ struct Uniforms {
     border_enabled: f32,
     border_width: f32,
     preserve_source_alpha: f32,
-    _padding1a: f32,
+    // 1 spreads blur taps evenly over the whole path a pixel travelled since
+    // the previous frame, with equal weights and the card's shadow trailing
+    // too. 0 keeps the original kernels.
+    motion_blur_kernel: f32,
     _padding1b: f32,
     _padding1c: f32,
     border_color: vec4<f32>,
@@ -73,6 +76,29 @@ const MAX_ZOOM_RAY_UV: f32 = 0.10;
 // (deterministic in the fragment position, so renders stay reproducible).
 fn interleaved_noise(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+// Taps for the path kernel: a pan streak and a zoom ray.
+const PATH_MOVE_TAPS: i32 = 20;
+const PATH_ZOOM_TAPS: i32 = 16;
+// Positions along the path where the shadow is evaluated.
+const PATH_SHADOW_TAPS: i32 = 8;
+
+// How far (card UV) the content under this pixel travelled since the
+// previous frame, for the active blur mode. Zero when nothing moved.
+fn blur_path_uv(target_uv: vec2<f32>, blur_mode: f32) -> vec2<f32> {
+    if blur_mode < 1.5 {
+        return uniforms.motion_blur_vector;
+    }
+    let zoom_amount = uniforms.motion_blur_params.z;
+    let dir = uniforms.motion_blur_zoom_center - target_uv;
+    let center_dist = length(dir);
+    if center_dist < 1e-4 || zoom_amount < 1e-4 {
+        return vec2<f32>(0.0);
+    }
+    let ray_sign = select(1.0, -1.0, uniforms.motion_blur_params.w > 0.5);
+    return dir / center_dist * min(center_dist * min(zoom_amount, 1.0), MAX_ZOOM_RAY_UV)
+        * ray_sign;
 }
 
 fn superellipse_norm(p: vec2<f32>, power: f32) -> f32 {
@@ -273,7 +299,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // Apply blur and size to shadow
     let shadow_strength_final = smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(shadow_dist));
-    let shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_strength_final * shadow_opacity);
+    var shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_strength_final * shadow_opacity);
 
     let target_uv = (p - uniforms.target_bounds.xy) / uniforms.target_size;
     let crop_bounds_uv = vec4<f32>(uniforms.crop_bounds.xy / uniforms.frame_size, uniforms.crop_bounds.zw / uniforms.frame_size);
@@ -285,6 +311,28 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let blur_mode = uniforms.motion_blur_params.x;
     let blur_strength = uniforms.motion_blur_params.y;
     let blur_active = blur_mode >= 0.5 && blur_strength >= 0.001;
+    let path_kernel = blur_active && uniforms.motion_blur_kernel >= 0.5;
+
+    // The shadow trails with the card: averaged over where the card stood
+    // along the same path the content took.
+    if path_kernel && shadow_opacity > 0.0 {
+        let path_px = blur_path_uv(target_uv, blur_mode) * uniforms.target_size;
+        if dot(path_px, path_px) > 1e-6 {
+            let phase = interleaved_noise(p + vec2<f32>(7.0, 3.0));
+            var shadow_sum = 0.0;
+            for (var i = 0; i < PATH_SHADOW_TAPS; i = i + 1) {
+                let q = p + path_px * ((f32(i) + phase) / f32(PATH_SHADOW_TAPS)) - center;
+                let d = sdf_rounded_rect(q, size, corner_radius_for(q), uniforms.rounding_type);
+                shadow_sum += smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(d));
+            }
+            shadow_color = vec4<f32>(
+                0.0,
+                0.0,
+                0.0,
+                shadow_sum / f32(PATH_SHADOW_TAPS) * shadow_opacity,
+            );
+        }
+    }
     var blur_reach_uv = vec2<f32>(0.0);
     if blur_active {
         if blur_mode < 1.5 {
@@ -365,23 +413,40 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             return composite_source_over(apply_color_grade(base_color, target_uv, p), shadow_color);
         }
 
-        // 21 taps along [0, 0.95 v], the pixel's own tap counted twice:
-        // t = 0, 0, 1/20 ... 19/20, divided by 21. The streak trails the
-        // motion by just under a frame.
         var accum = vec3<f32>(0.0);
         var alpha_sum = 0.0;
-        let k = 20.0;
+        var tap_total = 21.0;
 
-        for (var i = 0; i < 20; i = i + 1) {
-            let sample_uv = target_uv + velocity_uv * (f32(i) / k);
-            var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
-            tap = apply_rounded_corners(tap, sample_uv);
-            let weight = select(1.0, 2.0, i == 0);
-            accum += tap.rgb * tap.a * weight;
-            alpha_sum += tap.a * weight;
+        if path_kernel {
+            // Equal taps over the whole frame-to-frame path, each pixel
+            // starting at its own phase so the streak reads as a smooth
+            // smear rather than repeated copies.
+            let phase = interleaved_noise(p);
+            tap_total = f32(PATH_MOVE_TAPS);
+            for (var i = 0; i < PATH_MOVE_TAPS; i = i + 1) {
+                let sample_uv = target_uv + velocity_uv * ((f32(i) + phase) / tap_total);
+                var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
+                tap = apply_rounded_corners(tap, sample_uv);
+                accum += tap.rgb * tap.a;
+                alpha_sum += tap.a;
+            }
+        } else {
+            // 21 taps along [0, 0.95 v], the pixel's own tap counted twice:
+            // t = 0, 0, 1/20 ... 19/20, divided by 21. The streak trails the
+            // motion by just under a frame.
+            let k = 20.0;
+
+            for (var i = 0; i < 20; i = i + 1) {
+                let sample_uv = target_uv + velocity_uv * (f32(i) / k);
+                var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
+                tap = apply_rounded_corners(tap, sample_uv);
+                let weight = select(1.0, 2.0, i == 0);
+                accum += tap.rgb * tap.a * weight;
+                alpha_sum += tap.a * weight;
+            }
         }
 
-        let out_alpha = (alpha_sum / 21.0) * uniforms.opacity;
+        let out_alpha = (alpha_sum / tap_total) * uniforms.opacity;
         if out_alpha <= 0.0001 || alpha_sum <= 0.0001 {
             return shadow_color;
         }
@@ -422,16 +487,29 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     var alpha_sum = 0.0;
     var weight_sum = 0.0;
 
-    for (var i = 0; i < 13; i = i + 1) {
-        let percent = (f32(i) + dither) / max_kernel;
-        let weight = 4.0 * (percent - percent * percent);
-        let sample_uv = target_uv + scaled_dir * percent;
+    if path_kernel {
+        // Equal weights along the whole ray, the same path kernel a pan uses.
+        let taps = f32(PATH_ZOOM_TAPS);
+        for (var i = 0; i < PATH_ZOOM_TAPS; i = i + 1) {
+            let sample_uv = target_uv + scaled_dir * ((f32(i) + dither) / taps);
+            var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
+            tap = apply_rounded_corners(tap, sample_uv);
+            accum += tap.rgb * tap.a;
+            alpha_sum += tap.a;
+        }
+        weight_sum = taps;
+    } else {
+        for (var i = 0; i < 13; i = i + 1) {
+            let percent = (f32(i) + dither) / max_kernel;
+            let weight = 4.0 * (percent - percent * percent);
+            let sample_uv = target_uv + scaled_dir * percent;
 
-        var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
-        tap = apply_rounded_corners(tap, sample_uv);
-        accum += tap.rgb * tap.a * weight;
-        alpha_sum += tap.a * weight;
-        weight_sum += weight;
+            var tap = sample_layer(sample_uv, crop_bounds_uv, shrink);
+            tap = apply_rounded_corners(tap, sample_uv);
+            accum += tap.rgb * tap.a * weight;
+            alpha_sum += tap.a * weight;
+            weight_sum += weight;
+        }
     }
 
     if weight_sum <= 0.0001 || alpha_sum <= 0.0001 {

@@ -3730,6 +3730,16 @@ fn resolve_motion_descriptor(
     }
 }
 
+/// The blur kernel the composite shader runs for this project's screen
+/// motion rules.
+fn motion_blur_kernel(project: &ProjectConfiguration) -> f32 {
+    if project.screen_motion_version >= cap_project::SCREEN_MOTION_VERSION {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 fn normalized_motion_amount(user_motion_blur: f32, fps: f32) -> f32 {
     if user_motion_blur <= f32::EPSILON {
         0.0
@@ -4824,6 +4834,7 @@ impl ProjectUniforms {
         let screen_motion_blur = project.screen_motion_blur.clamp(0.0, 1.0);
         let has_previous = frame_number > 0;
         let normalized_screen_motion = normalized_motion_amount(screen_motion_blur, fps_f32);
+        let motion_blur_kernel = motion_blur_kernel(project);
 
         let crop = Self::get_crop(options, project);
 
@@ -5339,7 +5350,8 @@ impl ProjectUniforms {
                         border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
                         border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
                         preserve_source_alpha: 1.0,
-                        _padding1: [0.0; 3],
+                        motion_blur_kernel,
+                        _padding1: [0.0; 2],
                         border_color,
                         corner_radii: [1.0; 4],
                         // Chrome is decoration, not video: never graded.
@@ -5409,7 +5421,8 @@ impl ProjectUniforms {
                                 * takeover_accessory_fade,
                             border_enabled: 0.0,
                             border_width: 0.0,
-                            _padding1: [0.0; 3],
+                            motion_blur_kernel: 0.0,
+                            _padding1: [0.0; 2],
                             border_color: [0.0; 4],
                             frame_size: [1.0, 1.0],
                             crop_bounds: [0.0, 0.0, 1.0, 1.0],
@@ -5473,7 +5486,8 @@ impl ProjectUniforms {
                     } else {
                         0.0
                     },
-                    _padding1: [0.0; 3],
+                    motion_blur_kernel,
+                    _padding1: [0.0; 2],
                     border_color,
                     corner_radii: display_corner_radii,
                     color_adjust_a: screen_color_grade.color_adjust_a,
@@ -5715,7 +5729,8 @@ impl ProjectUniforms {
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
-                    _padding1: [0.0; 3],
+                    motion_blur_kernel,
+                    _padding1: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
                     color_adjust_a: camera_color_grade.color_adjust_a,
@@ -5844,7 +5859,8 @@ impl ProjectUniforms {
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
-                    _padding1: [0.0; 3],
+                    motion_blur_kernel,
+                    _padding1: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
                     color_adjust_a: camera_color_grade.color_adjust_a,
@@ -5962,6 +5978,21 @@ impl ProjectUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_blur_kernel_runs_only_for_new_screen_motion() {
+        let saved = ProjectConfiguration::default();
+        assert_eq!(motion_blur_kernel(&saved), 0.0);
+        assert_eq!(
+            motion_blur_kernel(&ProjectConfiguration::for_new_project()),
+            1.0
+        );
+        let spring_only = ProjectConfiguration {
+            screen_movement_spring: cap_project::ScreenMovementSpring::NEW_PROJECT,
+            ..ProjectConfiguration::default()
+        };
+        assert_eq!(motion_blur_kernel(&spring_only), 0.0);
+    }
 
     #[test]
     fn color_components_parse_rgb_hex_with_either_case_and_optional_hash() {
