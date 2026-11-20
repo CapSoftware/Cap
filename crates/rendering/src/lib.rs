@@ -3412,7 +3412,10 @@ pub struct ProjectUniforms {
     /// follows `split`.
     pub takeover: Option<TakeoverDisplayMorph>,
     pub resolution_base: XY<u32>,
-    pub display_parent_motion_px: XY<f32>,
+    /// How the display card moved since the previous frame, per frame;
+    /// `None` on the first frame and across a zoom snap. The cursor rides
+    /// inside the card, so its blur is measured with this motion added.
+    pub display_motion: Option<DisplayMotionDelta>,
     pub motion_blur_amount: f32,
     pub masks: Vec<PreparedMask>,
     pub texts: Vec<PreparedText>,
@@ -3525,13 +3528,6 @@ impl MotionBounds {
         (size.x * size.x + size.y * size.y).sqrt().max(f64::EPSILON)
     }
 
-    fn contains(&self, other: &Self) -> bool {
-        self.start.coord.x <= other.start.coord.x
-            && self.start.coord.y <= other.start.coord.y
-            && self.end.coord.x >= other.end.coord.x
-            && self.end.coord.y >= other.end.coord.y
-    }
-
     fn point_to_uv(&self, point: XY<f64>) -> XY<f32> {
         let size = self.size();
         XY::new(
@@ -3542,18 +3538,6 @@ impl MotionBounds {
 
     fn top_left(&self) -> XY<f64> {
         self.start.coord
-    }
-
-    fn top_right(&self) -> XY<f64> {
-        XY::new(self.end.coord.x, self.start.coord.y)
-    }
-
-    fn bottom_left(&self) -> XY<f64> {
-        XY::new(self.start.coord.x, self.end.coord.y)
-    }
-
-    fn bottom_right(&self) -> XY<f64> {
-        self.end.coord
     }
 }
 
@@ -3567,6 +3551,8 @@ struct MotionAnalysis {
     size_delta_px: f32,
     zoom_center_uv: XY<f32>,
     zoom_magnitude: f32,
+    /// The frame is larger than it was: a zoom in.
+    zoom_growing: bool,
     /// Forces the zoom (radial) branch regardless of dominance — used by
     /// scene transitions that inject synthetic zoom blur.
     prefer_zoom: bool,
@@ -3575,14 +3561,39 @@ struct MotionAnalysis {
 #[derive(Clone, Copy, Debug)]
 struct MotionBlurComputation {
     descriptor: MotionBlurDescriptor,
-    parent_movement_px: XY<f32>,
+}
+
+/// The display card this frame and how it changed since the previous one,
+/// in output px per frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayMotionDelta {
+    /// `[x0, y0, x1, y1]`.
+    pub bounds: [f32; 4],
+    pub start_delta: XY<f32>,
+    pub size_delta: XY<f32>,
+}
+
+impl DisplayMotionDelta {
+    /// How far the card carried a point at `position` (output px, this
+    /// frame) since the previous frame.
+    pub fn carried(&self, position: XY<f32>) -> XY<f32> {
+        let width = (self.bounds[2] - self.bounds[0]).max(f32::EPSILON);
+        let height = (self.bounds[3] - self.bounds[1]).max(f32::EPSILON);
+        let relative = XY::new(
+            (position.x - self.bounds[0]) / width,
+            (position.y - self.bounds[1]) / height,
+        );
+        XY::new(
+            self.start_delta.x + relative.x * self.size_delta.x,
+            self.start_delta.y + relative.y * self.size_delta.y,
+        )
+    }
 }
 
 impl MotionBlurComputation {
     fn none() -> Self {
         Self {
             descriptor: MotionBlurDescriptor::none(),
-            parent_movement_px: XY::new(0.0, 0.0),
         }
     }
 }
@@ -3622,57 +3633,43 @@ fn analyze_motion(current: &MotionBounds, previous: &MotionBounds) -> MotionAnal
         ((curr_diag - prev_diag).abs() / prev_diag) as f32
     };
 
-    let zoom_center_point = if previous.contains(current) {
-        previous.center()
-    } else {
-        zoom_vanishing_point(current, previous).unwrap_or(previous.center())
-    };
+    // The radial blur converges on the point the frame scales about, for a
+    // zoom in and a zoom out alike.
+    let zoom_center_point = zoom_fixed_point(current, previous).unwrap_or(previous.center());
 
     analysis.movement_px = movement_px;
     analysis.movement_uv = movement_uv;
     analysis.movement_magnitude = movement_magnitude;
     analysis.size_delta_px = size_delta_px;
     analysis.zoom_magnitude = zoom_magnitude;
-    let clamp_uv = |v: f32| {
-        if v.is_finite() {
-            v.clamp(0.0, 1.0)
-        } else {
-            0.5
-        }
-    };
+    analysis.zoom_growing = curr_diag > prev_diag;
+    // Not clamped to the card: a zoom that also pans scales about a point
+    // off the card, and the rays still converge on it.
     let zoom_center_uv = current.point_to_uv(zoom_center_point);
-    analysis.zoom_center_uv = XY::new(clamp_uv(zoom_center_uv.x), clamp_uv(zoom_center_uv.y));
+    analysis.zoom_center_uv = if zoom_center_uv.x.is_finite() && zoom_center_uv.y.is_finite() {
+        zoom_center_uv
+    } else {
+        XY::new(0.5, 0.5)
+    };
     analysis
 }
 
-fn zoom_vanishing_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
-    line_intersection(
-        previous.top_left(),
-        current.top_left(),
-        previous.bottom_right(),
-        current.bottom_right(),
-    )
-    .or_else(|| {
-        line_intersection(
-            previous.top_right(),
-            current.top_right(),
-            previous.bottom_left(),
-            current.bottom_left(),
-        )
-    })
-}
-
-fn line_intersection(a1: XY<f64>, a2: XY<f64>, b1: XY<f64>, b2: XY<f64>) -> Option<XY<f64>> {
-    let denom = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
-    if denom.abs() <= f64::EPSILON {
+/// The point that stays put while the frame scales from `previous` to
+/// `current`: where every corner's path meets. Solved per axis from
+/// `x' = s * x + t` (`s` the diagonal ratio), so it holds for every target,
+/// including one on the frame's diagonal where pairing opposite corners'
+/// paths gives two collinear lines and no single crossing.
+fn zoom_fixed_point(current: &MotionBounds, previous: &MotionBounds) -> Option<XY<f64>> {
+    let previous_diagonal = previous.diagonal();
+    if previous_diagonal <= f64::EPSILON {
         return None;
     }
-
-    let a_det = a1.x * a2.y - a1.y * a2.x;
-    let b_det = b1.x * b2.y - b1.y * b2.x;
-    let x = (a_det * (b1.x - b2.x) - (a1.x - a2.x) * b_det) / denom;
-    let y = (a_det * (b1.y - b2.y) - (a1.y - a2.y) * b_det) / denom;
-    Some(XY::new(x, y))
+    let scale = current.diagonal() / previous_diagonal;
+    if !scale.is_finite() || (1.0 - scale).abs() <= 1e-9 {
+        return None;
+    }
+    let point = (current.top_left() - previous.top_left() * scale) / (1.0 - scale);
+    (point.x.is_finite() && point.y.is_finite()).then_some(point)
 }
 
 fn clamp_vector(vec: XY<f32>, max_len: f32) -> XY<f32> {
@@ -3723,7 +3720,12 @@ fn resolve_motion_descriptor(
         if zoom_amount <= f32::EPSILON {
             return MotionBlurDescriptor::none();
         }
-        MotionBlurDescriptor::zoom(analysis.zoom_center_uv, zoom_amount, 1.0)
+        MotionBlurDescriptor::zoom(
+            analysis.zoom_center_uv,
+            zoom_amount,
+            1.0,
+            analysis.zoom_growing,
+        )
     } else {
         let move_strength = base_amount * move_multiplier;
         if move_strength <= 0.0 || move_px < MOTION_ACTIVATION_PX {
@@ -3734,6 +3736,16 @@ fn resolve_motion_descriptor(
             analysis.movement_uv.y * move_strength,
         );
         MotionBlurDescriptor::movement(clamp_vector(vector, MOTION_VECTOR_CAP), 1.0)
+    }
+}
+
+/// The blur kernel the composite shader runs for this project's screen
+/// motion rules.
+fn motion_blur_kernel(project: &ProjectConfiguration) -> f32 {
+    if project.screen_motion_version >= cap_project::SCREEN_MOTION_VERSION {
+        1.0
+    } else {
+        0.0
     }
 }
 
@@ -3892,6 +3904,9 @@ struct MotionBlurDescriptor {
     movement_vector_uv: [f32; 2],
     zoom_center_uv: [f32; 2],
     zoom_amount: f32,
+    /// The frame grew this frame: the radial taps run away from the zoom
+    /// centre, so the smear trails the motion as it does zooming out.
+    zoom_outward: bool,
 }
 
 impl Default for MotionBlurDescriptor {
@@ -3902,6 +3917,7 @@ impl Default for MotionBlurDescriptor {
             movement_vector_uv: [0.0, 0.0],
             zoom_center_uv: [0.5, 0.5],
             zoom_amount: 0.0,
+            zoom_outward: false,
         }
     }
 }
@@ -3918,17 +3934,24 @@ impl MotionBlurDescriptor {
             movement_vector_uv: [vector_uv.x, vector_uv.y],
             zoom_center_uv: [0.5, 0.5],
             zoom_amount: 0.0,
+            zoom_outward: false,
         }
     }
 
-    fn zoom(center_uv: XY<f32>, zoom_amount: f32, strength: f32) -> Self {
+    fn zoom(center_uv: XY<f32>, zoom_amount: f32, strength: f32, outward: bool) -> Self {
         Self {
             mode: MotionBlurMode::Zoom,
             strength,
             movement_vector_uv: [0.0, 0.0],
             zoom_center_uv: [center_uv.x, center_uv.y],
             zoom_amount,
+            zoom_outward: outward,
         }
+    }
+
+    /// The uniform's fourth parameter: 1 when the radial taps run outward.
+    fn zoom_direction(&self) -> f32 {
+        if self.zoom_outward { 1.0 } else { 0.0 }
     }
 }
 
@@ -4468,19 +4491,7 @@ impl ProjectUniforms {
             DISPLAY_MOVE_MULTIPLIER,
             DISPLAY_ZOOM_MULTIPLIER,
         );
-        let move_px = (analysis.movement_px.x * analysis.movement_px.x
-            + analysis.movement_px.y * analysis.movement_px.y)
-            .sqrt();
-        let parent_vector = if move_px >= MOTION_ACTIVATION_PX {
-            analysis.movement_px
-        } else {
-            XY::new(0.0, 0.0)
-        };
-
-        MotionBlurComputation {
-            descriptor,
-            parent_movement_px: parent_vector,
-        }
+        MotionBlurComputation { descriptor }
     }
 
     fn camera_zoom_factor(
@@ -4832,6 +4843,7 @@ impl ProjectUniforms {
         let screen_motion_blur = project.screen_motion_blur.clamp(0.0, 1.0);
         let has_previous = frame_number > 0;
         let normalized_screen_motion = normalized_motion_amount(screen_motion_blur, fps_f32);
+        let motion_blur_kernel = motion_blur_kernel(project);
 
         let crop = Self::get_crop(options, project);
 
@@ -5057,7 +5069,7 @@ impl ProjectUniforms {
         let mut camera3d_zoom: Option<camera3d::Camera3DScreenZoom> = None;
         let (
             display,
-            display_motion_parent,
+            display_motion_delta,
             display_slowest_motion_px,
             frame_chrome,
             display_outer_bounds,
@@ -5132,7 +5144,20 @@ impl ProjectUniforms {
                 )
             };
             let descriptor = display_motion.descriptor;
-            let display_parent_motion_px = display_motion.parent_movement_px;
+            let display_motion_delta = (has_previous && !zoom_snapped_in_window).then(|| {
+                let span = motion_frame_span.max(1.0);
+                DisplayMotionDelta {
+                    bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
+                    start_delta: XY::new(
+                        ((start.x - prev_start.x) as f32) / span,
+                        ((start.y - prev_start.y) as f32) / span,
+                    ),
+                    size_delta: XY::new(
+                        (((end.x - start.x) - (prev_end.x - prev_start.x)) as f32) / span,
+                        (((end.y - start.y) - (prev_end.y - prev_start.y)) as f32) / span,
+                    ),
+                }
+            });
             let display_slowest_motion_px = if has_previous && !zoom_snapped_in_window {
                 screen_enhance::slowest_pixel_motion(
                     [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
@@ -5201,6 +5226,15 @@ impl ProjectUniforms {
                 final_target_bounds[2] - final_target_bounds[0],
                 final_target_bounds[3] - final_target_bounds[1],
             ];
+            // The cursor is placed on the card after the split and takeover
+            // morphs, which the zoom bounds above know nothing about; while
+            // either moves the card, its carried motion is not the zoom's.
+            let display_motion_delta = display_motion_delta.filter(|_| {
+                final_target_bounds
+                    .iter()
+                    .zip(base_target_bounds)
+                    .all(|(placed, zoomed)| (placed - zoomed).abs() < 0.01)
+            });
             let final_min_axis = final_target_size[0].min(final_target_size[1]) as f64;
 
             let display_rounding_px =
@@ -5297,7 +5331,7 @@ impl ProjectUniforms {
                             descriptor.mode.as_f32(),
                             descriptor.strength,
                             descriptor.zoom_amount,
-                            0.0,
+                            descriptor.zoom_direction(),
                         ],
                         shadow: if decorated {
                             project.background.shadow
@@ -5329,7 +5363,8 @@ impl ProjectUniforms {
                         border_enabled: if decorated && border_on { 1.0 } else { 0.0 },
                         border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
                         preserve_source_alpha: 1.0,
-                        _padding1: [0.0; 3],
+                        motion_blur_kernel,
+                        _padding1: [0.0; 2],
                         border_color,
                         corner_radii: [1.0; 4],
                         // Chrome is decoration, not video: never graded.
@@ -5399,7 +5434,8 @@ impl ProjectUniforms {
                                 * takeover_accessory_fade,
                             border_enabled: 0.0,
                             border_width: 0.0,
-                            _padding1: [0.0; 3],
+                            motion_blur_kernel: 0.0,
+                            _padding1: [0.0; 2],
                             border_color: [0.0; 4],
                             frame_size: [1.0, 1.0],
                             crop_bounds: [0.0, 0.0, 1.0, 1.0],
@@ -5431,7 +5467,7 @@ impl ProjectUniforms {
                         descriptor.mode.as_f32(),
                         descriptor.strength,
                         descriptor.zoom_amount,
-                        0.0,
+                        descriptor.zoom_direction(),
                     ],
                     shadow: project.background.shadow
                         * display_decoration_fade
@@ -5463,7 +5499,8 @@ impl ProjectUniforms {
                     } else {
                         0.0
                     },
-                    _padding1: [0.0; 3],
+                    motion_blur_kernel,
+                    _padding1: [0.0; 2],
                     border_color,
                     corner_radii: display_corner_radii,
                     color_adjust_a: screen_color_grade.color_adjust_a,
@@ -5472,7 +5509,7 @@ impl ProjectUniforms {
                     enhance_region: [0.0; 4],
                     enhance_params: [0.0; 4],
                 },
-                display_parent_motion_px,
+                display_motion_delta,
                 display_slowest_motion_px,
                 frame_chrome,
                 display_outer_bounds,
@@ -5675,7 +5712,7 @@ impl ProjectUniforms {
                         camera_descriptor.mode.as_f32(),
                         camera_descriptor.strength,
                         camera_descriptor.zoom_amount,
-                        0.0,
+                        camera_descriptor.zoom_direction(),
                     ],
                     shadow: project.camera.shadow
                         * chrome_fade
@@ -5705,7 +5742,8 @@ impl ProjectUniforms {
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
-                    _padding1: [0.0; 3],
+                    motion_blur_kernel,
+                    _padding1: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
                     color_adjust_a: camera_color_grade.color_adjust_a,
@@ -5775,6 +5813,7 @@ impl ProjectUniforms {
                         XY::new(0.5, 0.5),
                         camera_only_blur.min(TRANSITION_ZOOM_CAP),
                         1.0,
+                        false,
                     )
                 };
 
@@ -5802,7 +5841,7 @@ impl ProjectUniforms {
                         camera_only_descriptor.mode.as_f32(),
                         camera_only_descriptor.strength,
                         camera_only_descriptor.zoom_amount,
-                        0.0,
+                        camera_only_descriptor.zoom_direction(),
                     ],
                     shadow: if padding > 0.0 {
                         project.background.shadow * visibility
@@ -5833,7 +5872,8 @@ impl ProjectUniforms {
                     border_enabled: 0.0,
                     border_width: 0.0,
                     preserve_source_alpha: 0.0,
-                    _padding1: [0.0; 3],
+                    motion_blur_kernel,
+                    _padding1: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     corner_radii: [1.0; 4],
                     color_adjust_a: camera_color_grade.color_adjust_a,
@@ -5933,7 +5973,7 @@ impl ProjectUniforms {
             cursor_clip_visibility,
             click_ripples,
             cursor_event_order,
-            display_parent_motion_px: display_motion_parent,
+            display_motion: display_motion_delta,
             motion_blur_amount: cursor_motion_blur,
             masks,
             texts,
@@ -5951,6 +5991,21 @@ impl ProjectUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_blur_kernel_runs_only_for_new_screen_motion() {
+        let saved = ProjectConfiguration::default();
+        assert_eq!(motion_blur_kernel(&saved), 0.0);
+        assert_eq!(
+            motion_blur_kernel(&ProjectConfiguration::for_new_project()),
+            1.0
+        );
+        let spring_only = ProjectConfiguration {
+            screen_movement_spring: cap_project::ScreenMovementSpring::NEW_PROJECT,
+            ..ProjectConfiguration::default()
+        };
+        assert_eq!(motion_blur_kernel(&spring_only), 0.0);
+    }
 
     #[test]
     fn color_components_parse_rgb_hex_with_either_case_and_optional_hash() {
@@ -6903,6 +6958,83 @@ mod tests {
         assert!(zoom_out.descriptor.zoom_amount <= MAX_ZOOM_BLUR_AMOUNT);
         assert_eq!(zoom_in.descriptor.strength, 1.0);
         assert_eq!(zoom_out.descriptor.strength, 1.0);
+    }
+
+    #[test]
+    fn display_zoom_blur_converges_on_the_point_the_frame_scales_about() {
+        // A frame scaled by `scale` about `fixed`: x' = fixed + scale * (x - fixed).
+        let frame = |scale: f64, fixed: XY<f64>| {
+            let start = XY::new(0.0, 0.0);
+            let end = XY::new(1920.0, 1080.0);
+            motion_bounds(
+                fixed + (start - fixed) * scale,
+                fixed + (end - fixed) * scale,
+            )
+        };
+        // The centre and another point on the frame's diagonal (where pairing
+        // opposite corners' paths gives no single crossing), one off the
+        // diagonal, and one off the card (a zoom that also pans).
+        for fixed in [
+            XY::new(960.0, 540.0),
+            XY::new(480.0, 270.0),
+            XY::new(1500.0, 200.0),
+            XY::new(2400.0, -100.0),
+        ] {
+            // In, then out.
+            for (from, to) in [(1.0, 1.04), (1.04, 1.0)] {
+                let current = frame(to, fixed);
+                let blur = ProjectUniforms::compute_display_motion_blur(
+                    current,
+                    frame(from, fixed),
+                    true,
+                    1.0,
+                    0.0,
+                    1.0,
+                );
+                assert_eq!(blur.descriptor.mode, MotionBlurMode::Zoom);
+                let size = current.size();
+                let expected = XY::new(
+                    ((fixed.x - current.start.coord.x) / size.x) as f32,
+                    ((fixed.y - current.start.coord.y) / size.y) as f32,
+                );
+                let [x, y] = blur.descriptor.zoom_center_uv;
+                assert!(
+                    (x - expected.x).abs() < 1e-4 && (y - expected.y).abs() < 1e-4,
+                    "{fixed:?} {from} -> {to}: centre ({x}, {y}), expected {expected:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn display_zoom_blur_trails_the_motion_both_ways() {
+        // Zooming in, the frame grows and content moves away from the centre,
+        // so the taps run outward; zooming out they run inward.
+        let small = motion_bounds(XY::new(0.0, 0.0), XY::new(1920.0, 1080.0));
+        let large = motion_bounds(XY::new(-38.4, -21.6), XY::new(1958.4, 1101.6));
+        let zoom_in =
+            ProjectUniforms::compute_display_motion_blur(large, small, true, 1.0, 0.0, 1.0);
+        let zoom_out =
+            ProjectUniforms::compute_display_motion_blur(small, large, true, 1.0, 0.0, 1.0);
+        assert_eq!(zoom_in.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(zoom_in.descriptor.zoom_outward);
+        assert_eq!(zoom_in.descriptor.zoom_direction(), 1.0);
+        assert_eq!(zoom_out.descriptor.mode, MotionBlurMode::Zoom);
+        assert!(!zoom_out.descriptor.zoom_outward);
+    }
+
+    #[test]
+    fn display_motion_carries_a_point_with_the_card() {
+        // The card moved 10px right and grew 100x50px since the last frame.
+        let motion = DisplayMotionDelta {
+            bounds: [100.0, 100.0, 1100.0, 600.0],
+            start_delta: XY::new(10.0, 0.0),
+            size_delta: XY::new(100.0, 50.0),
+        };
+        let carried = |x, y| motion.carried(XY::new(x, y));
+        assert_eq!(carried(100.0, 100.0), XY::new(10.0, 0.0));
+        assert_eq!(carried(600.0, 350.0), XY::new(60.0, 25.0));
+        assert_eq!(carried(1100.0, 600.0), XY::new(110.0, 50.0));
     }
 
     #[test]

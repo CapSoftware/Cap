@@ -17,7 +17,7 @@ struct Case {
 }
 
 impl Case {
-    fn uniforms(self) -> [[f32; 4]; 8] {
+    fn uniforms(self) -> [[f32; 4]; 11] {
         [
             [
                 96.0 + self.offset[0],
@@ -31,6 +31,10 @@ impl Case {
             [0.0, self.rotation, 0.0, 0.0],
             [0.0; 4],
             [0.0; 4],
+            [0.0; 4],
+            // No screen blur.
+            [0.0; 4],
+            [0.0, 0.0, OUTPUT_WIDTH as f32, OUTPUT_HEIGHT as f32],
             [0.0; 4],
         ]
     }
@@ -61,8 +65,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (length(velocity_uv) < 0.005 || blur_strength < 0.001) {
         return apply_color_grade(base_color * opacity, input.position.xy);
     }
-    var color = base_color;
-    for (var i = 1; i <= 20; i = i + 1) {
+    var color = base_color * 2.0;
+    for (var i = 1; i < 20; i = i + 1) {
         let sample_uv = input.uv + velocity_uv * (f32(i) / 20.0);
         let texel = textureSample(t_cursor, s_cursor, sample_uv);
         let inside = all(vec4<bool>(sample_uv >= vec2<f32>(0.0), sample_uv <= vec2<f32>(1.0)));
@@ -293,7 +297,7 @@ fn assert_transparent_exterior(pixels: &[u8], case: Case) {
             c * dx / width - s * dy / height,
             s * dx / width + c * dy / height,
         ];
-        let outside = (0..21).all(|tap| {
+        let outside = (0..20).all(|tap| {
             let sample = [
                 uv[0] + velocity[0] * tap as f32 / 20.0,
                 uv[1] + velocity[1] * tap as f32 / 20.0,

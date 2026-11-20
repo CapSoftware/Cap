@@ -1012,6 +1012,36 @@ pub enum CursorAnimationStyle {
     Custom,
 }
 
+/// How the smoothed cursor follows the recorded pointer.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorFollow {
+    /// The spring samples the pointer ahead by its own lag, so the cursor
+    /// sits on the pointer while it moves.
+    #[default]
+    OnPointer,
+    /// The spring chases the pointer without that lead, so on a free glide
+    /// the cursor trails it by the spring's own lag and settles softly. Ahead
+    /// of each press, release, drag sample and shape or hover change the
+    /// target runs ahead in time (and the spring speeds up if that is not
+    /// enough) so the cursor still meets the pointer there.
+    Trailing,
+}
+
+/// How the cursor reacts to a mouse button.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorPressAnimation {
+    /// Shrinks to 80% over the 130 ms before a press and grows back over the
+    /// 130 ms after the release.
+    #[default]
+    Quick,
+    /// Eases to 90% on the cursor's own spring once a press is up to 500 ms
+    /// away, holds there while a button is down, and springs back to full
+    /// size as the release comes up.
+    Held,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct CursorSmoothingPreset {
     pub tension: f32,
@@ -1100,11 +1130,11 @@ impl ScreenMovementSpring {
     /// How far ahead of its segment an early zoom starts moving.
     pub const EARLY_START_SECS: f64 = 0.35;
 
-    /// New projects' zoom motion: reaches 90% of a zoom in 317 ms with no
-    /// overshoot and settles within 1% by 500 ms.
+    /// New projects' zoom motion: critically damped, reaching 50% of a zoom
+    /// in 123 ms and 90% in 290 ms, with no overshoot.
     pub const NEW_PROJECT: Self = Self {
-        stiffness: 205.0,
-        damping: 33.3,
+        stiffness: 286.0,
+        damping: 42.2,
         mass: 1.5,
         start_zooms_early: false,
     };
@@ -1177,6 +1207,12 @@ pub struct CursorConfiguration {
     pub click_sounds: bool,
     pub click_sound_type: ClickSoundType,
     pub click_sound_volume: f32,
+    /// Configs saved without the field keep the cursor on the pointer.
+    #[serde(default)]
+    pub follow: CursorFollow,
+    /// Configs saved without the field keep the quick press animation.
+    #[serde(default)]
+    pub press_animation: CursorPressAnimation,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -1227,6 +1263,8 @@ impl Default for CursorConfiguration {
             click_sounds: false,
             click_sound_type: ClickSoundType::default(),
             click_sound_volume: DEFAULT_INPUT_SOUND_VOLUME,
+            follow: CursorFollow::OnPointer,
+            press_animation: CursorPressAnimation::Quick,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -1257,6 +1295,34 @@ impl CursorConfiguration {
 
     pub fn click_spring_config(&self) -> ClickSpringConfig {
         self.click_spring.unwrap_or_default()
+    }
+
+    /// New projects' cursor size: the arrow stands about 49 pt tall on a
+    /// 982 pt tall display.
+    pub const NEW_PROJECT_SIZE: u32 = 127;
+
+    /// New projects' cursor spring: quick to respond, lightly damped, and
+    /// kept from overshooting by the trailing follow's clamp.
+    pub const NEW_PROJECT_SPRING: CursorSmoothingPreset = CursorSmoothingPreset {
+        tension: 125.0,
+        mass: 1.5,
+        friction: 12.0,
+    };
+
+    /// The cursor new projects start with: larger, trailing the pointer on a
+    /// soft spring, and holding a gentle press while a button is down.
+    pub fn for_new_project() -> Self {
+        let spring = Self::NEW_PROJECT_SPRING;
+        Self {
+            size: Self::NEW_PROJECT_SIZE,
+            animation_style: CursorAnimationStyle::Custom,
+            tension: spring.tension,
+            mass: spring.mass,
+            friction: spring.friction,
+            follow: CursorFollow::Trailing,
+            press_animation: CursorPressAnimation::Held,
+            ..Self::default()
+        }
     }
 }
 
@@ -3408,6 +3474,14 @@ pub struct ProjectConfiguration {
     /// saved projects can never have zooms generated over them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_zoom_pending: bool,
+    /// How the screen follows the cursor while zoomed and how motion blur
+    /// draws. Absent (0) keeps the original rules: an auto zoom frames the
+    /// middle of the cursor's bounding box and blur uses fixed tap kernels.
+    /// [`SCREEN_MOTION_VERSION`] frames where the cursor spent its time and
+    /// blurs along the full path each pixel travelled since the last frame.
+    /// New projects start on it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub screen_motion_version: u32,
     #[serde(
         default,
         deserialize_with = "markers::deserialize_markers",
@@ -3477,6 +3551,7 @@ impl Default for ProjectConfiguration {
             text_anim_version: TEXT_ANIM_VERSION,
             auto_zoom_version: 0,
             auto_zoom_pending: false,
+            screen_motion_version: 0,
             markers: Vec::new(),
             audio_visuals: None,
         }
@@ -3545,6 +3620,10 @@ impl ProjectStyleCache {
     }
 }
 
+/// The screen motion rules new projects start on, see
+/// [`ProjectConfiguration::screen_motion_version`].
+pub const SCREEN_MOTION_VERSION: u32 = 1;
+
 /// Rounding a new project gets when its background first gains padding: a
 /// tighter corner than older projects' 7.5, about 30 px on a 1080p screen.
 pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
@@ -3553,7 +3632,8 @@ impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
     /// is what an older project missing a field reads as) only in framing
     /// and motion: even padding, a lighter and softer card shadow, the
-    /// new-project zoom spring and the newer auto zoom rules. At zero padding both padding modes lay out
+    /// new-project zoom spring, the newer auto zoom rules and the new-project
+    /// cursor. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
@@ -3566,8 +3646,10 @@ impl ProjectConfiguration {
             blur: 46.7,
         });
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
+        config.cursor = CursorConfiguration::for_new_project();
         config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
         config.auto_zoom_pending = true;
+        config.screen_motion_version = SCREEN_MOTION_VERSION;
         config
     }
 
@@ -3597,6 +3679,7 @@ impl ProjectConfiguration {
         preset.text_anim_version = self.text_anim_version;
         preset.auto_zoom_version = self.auto_zoom_version;
         preset.auto_zoom_pending = self.auto_zoom_pending;
+        preset.screen_motion_version = self.screen_motion_version;
         preset.overlay_order = self.overlay_order.clone();
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
@@ -3827,7 +3910,10 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let config_str = std::fs::read_to_string(&config_path)?;
+        let config_str = String::from_utf8(std::fs::read(&config_path)?).map_err(|error| {
+            keep_unreadable_config(&config_path, error.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.utf8_error())
+        })?;
         let migration_keys = serde_json::from_str::<MigrationKeys>(&config_str).ok();
         let missing_screen_motion_blur = migration_keys
             .as_ref()
@@ -3838,8 +3924,10 @@ impl ProjectConfiguration {
             .is_some_and(|camera| {
                 camera.zoom_size || camera.advanced_shadow || camera.rounding_type
             });
-        let mut config: Self = serde_json::from_str(&config_str)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut config: Self = serde_json::from_str(&config_str).map_err(|error| {
+            keep_unreadable_config(&config_path, config_str.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
         let screen_motion_blur = config.screen_motion_blur.clamp(0.0, 1.0);
         let needs_motion_blur_clamp = (config.cursor.motion_blur - cursor_motion_blur).abs()
@@ -3898,9 +3986,10 @@ impl ProjectConfiguration {
             }
         }
 
-        config
-            .validate()
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        config.validate().map_err(|error| {
+            keep_unreadable_config(&config_path, config_str.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
 
         if needs_camera_migration
             || needs_motion_blur_clamp
@@ -4054,10 +4143,192 @@ mod notch_tests {
     }
 }
 
+/// Callers fall back to a default configuration when the file cannot be
+/// read (written by a newer Cap, edited by hand) and save over it on the next
+/// edit. A copy named after its contents keeps the original recoverable.
+fn write_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+}
+
+fn keep_unreadable_config(config_path: &Path, contents: &[u8]) {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    contents.hash(&mut hasher);
+    let backup = config_path.with_file_name(format!(
+        "project-config.json.unreadable-{:016x}",
+        hasher.finish()
+    ));
+    if backup.symlink_metadata().is_ok() {
+        return;
+    }
+    // A fresh exclusively created file, never a predictable path that a
+    // project folder from elsewhere could already hold as a symlink.
+    let result = config_path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("project config has no folder"))
+        .and_then(tempfile::NamedTempFile::new_in)
+        .and_then(|mut staged| {
+            staged.write_all(contents)?;
+            match staged.persist_noclobber(&backup) {
+                Ok(_) => Ok(()),
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(error.error)
+                }
+                // exFAT on macOS and some network volumes refuse the
+                // no-replace move. Claim the name with O_EXCL instead, which
+                // also never follows or replaces an existing entry.
+                Err(_) => write_new_file(&backup, contents),
+            }
+        });
+    match result {
+        Ok(()) => {
+            tracing::warn!(path = %backup.display(), "kept a copy of an unreadable project config")
+        }
+        Err(error) => {
+            tracing::warn!(path = %backup.display(), %error, "could not keep a copy of an unreadable project config");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn new_projects_use_the_newer_screen_motion_and_saved_ones_keep_theirs() {
+        assert_eq!(
+            ProjectConfiguration::for_new_project().screen_motion_version,
+            SCREEN_MOTION_VERSION
+        );
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.screen_motion_version, 0);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("screenMotionVersion").is_none());
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["screenMotionVersion"], 1);
+        let reloaded: ProjectConfiguration = serde_json::from_value(fresh).unwrap();
+        assert_eq!(reloaded.screen_motion_version, 1);
+        let styled = saved.with_preset(ProjectConfiguration::for_new_project());
+        assert_eq!(styled.screen_motion_version, 0);
+    }
+
+    #[test]
+    fn an_unreadable_config_is_kept_before_callers_fall_back_to_defaults() {
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("project-config.json");
+        let unreadable = r#"{"aspectRatio":"ultrawide","timeline":{"segments":[]}}"#;
+        std::fs::write(&config_path, unreadable).unwrap();
+        let backups = || {
+            let mut names: Vec<String> = std::fs::read_dir(project.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with("project-config.json.unreadable-"))
+                .collect();
+            names.sort();
+            names
+        };
+
+        for _ in 0..2 {
+            let error = ProjectConfiguration::load(project.path()).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        }
+        let kept = backups();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(
+            std::fs::read_to_string(project.path().join(&kept[0])).unwrap(),
+            unreadable
+        );
+
+        ProjectConfiguration::default()
+            .write(project.path())
+            .unwrap();
+        ProjectConfiguration::load(project.path()).unwrap();
+        assert_eq!(backups(), kept);
+        // exFAT on macOS adds `._` AppleDouble files next to each one.
+        let files = std::fs::read_dir(project.path())
+            .unwrap()
+            .filter(|entry| {
+                !entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("._")
+            })
+            .count();
+        assert_eq!(files, 2);
+    }
+
+    #[test]
+    fn a_config_that_is_not_utf8_is_kept_too() {
+        let project = tempfile::tempdir().unwrap();
+        let unreadable = b"{\"aspectRatio\":\"wide\xff\"}".to_vec();
+        std::fs::write(project.path().join("project-config.json"), &unreadable).unwrap();
+
+        let error = ProjectConfiguration::load(project.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let kept: Vec<_> = std::fs::read_dir(project.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("project-config.json.unreadable-")
+            })
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_exclusive_fallback_never_replaces_or_follows_an_existing_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        assert!(write_new_file(&link, b"copy").is_err());
+        assert!(write_new_file(&victim, b"copy").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+
+        let fresh = dir.path().join("fresh");
+        write_new_file(&fresh, b"copy").unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"copy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeping_a_copy_never_writes_through_a_symlink_in_the_project() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        for name in ["project-config.json.tmp", "project-config.tmp"] {
+            std::os::unix::fs::symlink(&victim, project.path().join(name)).unwrap();
+        }
+        std::fs::write(
+            project.path().join("project-config.json"),
+            "{\"aspectRatio\":1}",
+        )
+        .unwrap();
+
+        ProjectConfiguration::load(project.path()).unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+    }
 
     #[test]
     fn new_projects_use_the_newer_auto_zoom_rules_and_saved_ones_keep_theirs() {
@@ -4095,6 +4366,41 @@ mod tests {
                 .with_preset(ProjectConfiguration::for_new_project())
                 .auto_zoom_pending
         );
+    }
+
+    #[test]
+    fn new_projects_get_the_larger_trailing_cursor_and_saved_ones_keep_theirs() {
+        let fresh = ProjectConfiguration::for_new_project().cursor;
+        assert_eq!(fresh.size, CursorConfiguration::NEW_PROJECT_SIZE);
+        assert_eq!(fresh.follow, CursorFollow::Trailing);
+        assert_eq!(fresh.press_animation, CursorPressAnimation::Held);
+        assert_eq!(fresh.animation_style, CursorAnimationStyle::Custom);
+        assert_eq!(
+            (fresh.tension, fresh.mass, fresh.friction),
+            (125.0, 1.5, 12.0)
+        );
+        assert!(fresh.interaction_anchors);
+
+        let defaults = CursorConfiguration::default();
+        assert_eq!(defaults.size, 100);
+        assert_eq!(defaults.follow, CursorFollow::OnPointer);
+        assert_eq!(defaults.press_animation, CursorPressAnimation::Quick);
+
+        let saved: ProjectConfiguration = serde_json::from_str(
+            r#"{"cursor":{"size":100,"animationStyle":"mellow","tension":470.0,"mass":3.0,"friction":70.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(saved.cursor.size, 100);
+        assert_eq!(saved.cursor.follow, CursorFollow::OnPointer);
+        assert_eq!(saved.cursor.press_animation, CursorPressAnimation::Quick);
+
+        let written = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(written["follow"], "trailing");
+        assert_eq!(written["pressAnimation"], "held");
+        let reloaded: CursorConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(reloaded.follow, CursorFollow::Trailing);
+        assert_eq!(reloaded.press_animation, CursorPressAnimation::Held);
+        assert_eq!(reloaded.size, CursorConfiguration::NEW_PROJECT_SIZE);
     }
 
     #[test]
@@ -4196,7 +4502,7 @@ mod tests {
     }
 
     #[test]
-    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing_and_motion() {
         let fresh = ProjectConfiguration::for_new_project();
         assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
         assert_eq!(fresh.background.padding, 0.0);
@@ -4212,6 +4518,7 @@ mod tests {
             .unwrap()
             .remove("paddingMode");
         framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
+        framing_reset["cursor"] = default["cursor"].clone();
         framing_reset
             .as_object_mut()
             .unwrap()
@@ -4220,6 +4527,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("autoZoomPending");
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("screenMotionVersion");
         assert_eq!(framing_reset, default);
     }
 

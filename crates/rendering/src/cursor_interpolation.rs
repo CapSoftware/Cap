@@ -12,6 +12,8 @@ use crate::{
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
+mod trailing;
+
 /// Click anticipation windows: the spring target snaps to the press position
 /// once the next button press is <=500ms away, and the spring profile
 /// stiffens 175ms before the press. The early snap relies on the spring
@@ -355,7 +357,7 @@ fn interpolate_raw_cursor(
 const CURSOR_VARIANT_CACHE_CAPACITY: usize = 2;
 
 struct CursorTimelineVariant {
-    settings: [u32; 8],
+    settings: [u32; 9],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -438,11 +440,13 @@ impl HoverChanges {
     }
 }
 
-/// Which interactions a smoothed cursor is anchored to.
+/// Which interactions a smoothed cursor is anchored to, and how it follows
+/// the pointer between them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CursorAnchors {
     pub interaction: bool,
     pub hover: bool,
+    pub follow: cap_project::CursorFollow,
 }
 
 impl CursorAnchors {
@@ -450,6 +454,7 @@ impl CursorAnchors {
         Self {
             interaction: cursor.interaction_anchors,
             hover: cursor.interaction_anchors && cursor.hover_anchors,
+            follow: cursor.follow,
         }
     }
 }
@@ -492,7 +497,17 @@ impl PrecomputedCursorTimeline {
         let smoothing_config = smoothing.unwrap();
         let filtered_moves = filter_cursor_shake(&cursor.moves);
         let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
-        let built = if anchors.interaction {
+        let built = if anchors.follow == cap_project::CursorFollow::Trailing {
+            // Every recorded sample: the trailing spring steps every 1 ms and
+            // holds across gaps itself, and a drag must meet each sample.
+            trailing::build_trailing_timeline(
+                cursor,
+                &cursor.moves,
+                smoothing_config,
+                anchors.interaction,
+                if anchors.hover { hover_changes_ms } else { &[] },
+            )
+        } else if anchors.interaction {
             let with_drag_samples = keep_drag_samples(&cursor.moves, &cursor.clicks);
             build_anchored_timeline(
                 cursor,
@@ -560,6 +575,7 @@ impl PrecomputedCursorTimeline {
             click_spring.friction.to_bits(),
             u32::from(anchors.interaction),
             u32::from(anchors.hover),
+            u32::from(anchors.follow == cap_project::CursorFollow::Trailing),
         ];
         let mut variants = self.variants.lock().unwrap();
         if let Some(index) = variants.iter().position(|entry| entry.settings == settings) {
@@ -3079,6 +3095,7 @@ mod tests {
                 CursorAnchors {
                     interaction: anchors,
                     hover: false,
+                    ..CursorAnchors::default()
                 },
                 &[],
             )

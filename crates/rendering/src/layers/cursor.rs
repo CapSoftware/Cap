@@ -24,6 +24,8 @@ const CURSOR_IDLE_RESUME_LOOKAHEAD_MS: f64 = 250.0;
 /// it at 60fps).
 const CURSOR_VECTOR_CAP: f32 = 480.0;
 const CURSOR_BASELINE_FPS: f32 = 60.0;
+/// Below a pixel of travel per frame the smear is the identity.
+const CURSOR_ACTIVATION_PX: f32 = 1.0;
 const CURSOR_MULTIPLIER: f32 = 1.0;
 /// Upper bound on amount * (fps/60). Generous: it must not clip the fps
 /// normalization at high frame rates (120fps needs 2x to keep the real-time
@@ -474,7 +476,10 @@ impl CursorLayer {
         let fps_scale = fps / CURSOR_BASELINE_FPS;
         let cursor_strength = (uniforms.motion_blur_amount * CURSOR_MULTIPLIER * fps_scale)
             .clamp(0.0, CURSOR_MAX_STRENGTH);
-        let child_motion = uniforms
+        // How far the cursor moved on the frame since the previous frame:
+        // its own travel over the screen plus however far the screen carried
+        // it (a pan, a zoom).
+        let frame_motion = uniforms
             .prev_cursor
             .as_ref()
             .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
@@ -483,14 +488,23 @@ impl CursorLayer {
                     .display
                     .source_uv_to_target(interpolated_cursor.position.coord);
                 let previous = uniforms.display.source_uv_to_target(prev.position.coord);
-                (current - previous).map(|value| value as f32)
+                let own = (current - previous).map(|value| value as f32);
+                let carried = uniforms.display_motion.map_or(XY::new(0.0, 0.0), |motion| {
+                    motion.carried(previous.map(|value| value as f32))
+                });
+                own + carried
             })
             .unwrap_or_else(|| XY::new(0.0, 0.0));
 
         let combined_motion_px = if cursor_strength <= f32::EPSILON {
             XY::new(0.0, 0.0)
         } else {
-            child_motion
+            cursor_own_motion(
+                frame_motion,
+                uniforms
+                    .display_motion
+                    .map_or(XY::new(0.0, 0.0), |motion| motion.size_delta),
+            )
         };
 
         // Length-based semantics: smear length = per-frame travel x amount,
@@ -573,12 +587,25 @@ impl CursorLayer {
         };
 
         let size = {
-            let click_t = get_click_t(
-                &cursor.clicks,
-                (time_s as f64) * 1000.0,
-                uniforms.cursor_event_order.clicks,
-            );
-            let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
+            let time_ms = (time_s as f64) * 1000.0;
+            let cursor_config = &uniforms.project.cursor;
+            let click_scale_factor = match cursor_config.press_animation {
+                CursorPressAnimation::Quick => {
+                    let click_t =
+                        get_click_t(&cursor.clicks, time_ms, uniforms.cursor_event_order.clicks);
+                    click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE
+                }
+                CursorPressAnimation::Held => held_press_scale(
+                    &cursor.clicks,
+                    time_ms,
+                    uniforms.cursor_event_order.clicks,
+                    (!cursor_config.raw).then_some(PressSpring {
+                        tension: f64::from(cursor_config.tension),
+                        mass: f64::from(cursor_config.mass),
+                        friction: f64::from(cursor_config.friction),
+                    }),
+                ),
+            };
             let display = &uniforms.display;
             let size = cursor_height_px(
                 display.frame_size[1],
@@ -610,6 +637,9 @@ impl CursorLayer {
             cursor_texture.hotspot,
             cursor_opacity,
         );
+
+        let (screen_blur, screen_card, screen_reach) =
+            screen_blur_over_cursor(&uniforms.display, position_size);
 
         let cursor_grade = if uniforms.project.color_correction.grade_cursor {
             uniforms.screen_color_grade
@@ -647,6 +677,14 @@ impl CursorLayer {
             color_adjust_a: cursor_grade.color_adjust_a,
             color_adjust_b: cursor_grade.color_adjust_b,
             grain_params: cursor_grade.grain_params,
+            screen_blur,
+            screen_card,
+            screen_reach: [
+                screen_reach,
+                cursor_path_kernel(&uniforms.project),
+                0.0,
+                0.0,
+            ],
         };
 
         constants.queue.write_buffer(
@@ -763,6 +801,88 @@ fn finite_positive_or(value: f32, fallback: f32) -> f32 {
     }
 }
 
+/// The motion the cursor's own blur follows. The cursor rides in a
+/// screen-sized box at its position, so the box's centre moves with the
+/// cursor plus half the screen's change in size; when the size change is the
+/// larger, the frame is a zoom, and the screen's zoom blur is the cursor's
+/// only blur. Under a pixel is none.
+fn cursor_own_motion(frame_motion: XY<f32>, screen_size_delta: XY<f32>) -> XY<f32> {
+    let length = |v: XY<f32>| (v.x * v.x + v.y * v.y).sqrt();
+    let centre_motion = frame_motion + screen_size_delta * 0.5;
+    if length(screen_size_delta) > length(centre_motion)
+        || length(centre_motion) < CURSOR_ACTIVATION_PX
+    {
+        XY::new(0.0, 0.0)
+    } else {
+        centre_motion
+    }
+}
+
+/// Same ceiling as the display's radial blur (composite-video-frame.wgsl).
+const MAX_ZOOM_RAY_UV: f32 = 0.10;
+
+/// The screen's blur this frame, for the cursor that rides inside it, as
+/// `cursor.wgsl` reads it: the mode and its parameters, the card in output
+/// px, and how far a zoom blur can carry the sprite (output px). Mirrors the
+/// gates in `composite-video-frame.wgsl`.
+fn screen_blur_over_cursor(
+    display: &crate::composite_frame::CompositeVideoFrameUniforms,
+    sprite: [f32; 4],
+) -> ([f32; 4], [f32; 4], f32) {
+    let card = [
+        display.target_bounds[0],
+        display.target_bounds[1],
+        display.target_size[0].max(1.0),
+        display.target_size[1].max(1.0),
+    ];
+    let [mode, strength, zoom_amount, outward] = display.motion_blur_params;
+    if mode < 0.5 || strength < 0.001 {
+        return ([0.0; 4], card, 0.0);
+    }
+    if mode < 1.5 {
+        let [x, y] = display.motion_blur_vector;
+        if (x * x + y * y).sqrt() < 1e-5 {
+            return ([0.0; 4], card, 0.0);
+        }
+        return ([1.0, x * card[2], y * card[3], 0.0], card, 0.0);
+    }
+    let amount = zoom_amount.min(1.0);
+    if amount < 1e-4 {
+        return ([0.0; 4], card, 0.0);
+    }
+    let [center_x, center_y] = display.motion_blur_zoom_center;
+    // The longest ray from the sprite's corners, with room to spare.
+    let reach = [
+        (sprite[0], sprite[1]),
+        (sprite[0] + sprite[2], sprite[1]),
+        (sprite[0], sprite[1] + sprite[3]),
+        (sprite[0] + sprite[2], sprite[1] + sprite[3]),
+    ]
+    .into_iter()
+    .map(|(x, y)| {
+        let dx = center_x - (x - card[0]) / card[2];
+        let dy = center_y - (y - card[1]) / card[3];
+        let distance = (dx * dx + dy * dy).sqrt();
+        if distance < 1e-4 {
+            return 0.0;
+        }
+        let ray = (distance * amount).min(MAX_ZOOM_RAY_UV) / distance;
+        ((dx * ray * card[2]).powi(2) + (dy * ray * card[3]).powi(2)).sqrt()
+    })
+    .fold(0.0f32, f32::max);
+    // A negative amount carries the display's outward taps (a zoom in).
+    let signed_amount = if outward > 0.5 {
+        -zoom_amount
+    } else {
+        zoom_amount
+    };
+    (
+        [2.0, center_x, center_y, signed_amount],
+        card,
+        reach * 1.25 + 2.0,
+    )
+}
+
 fn cursor_blur_vector(motion: XY<f32>, strength: f32) -> XY<f32> {
     clamp_cursor_vector(motion * strength)
 }
@@ -789,6 +909,10 @@ pub struct CursorUniforms {
     color_adjust_a: [f32; 4],
     color_adjust_b: [f32; 4],
     grain_params: [f32; 4],
+    /// The screen's blur this frame (see `cursor.wgsl`).
+    screen_blur: [f32; 4],
+    screen_card: [f32; 4],
+    screen_reach: [f32; 4],
 }
 
 fn compute_cursor_idle_opacity(
@@ -939,6 +1063,172 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64, clicks_ordered: bool) 
     }
 
     1.0
+}
+
+/// 1 when the cursor's blur, its own and the screen's over it, spreads equal
+/// taps over each pixel's whole path since the previous frame, as the
+/// display's does for projects on the newer screen motion rules.
+fn cursor_path_kernel(project: &ProjectConfiguration) -> f32 {
+    if project.screen_motion_version >= SCREEN_MOTION_VERSION {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// The held press: the cursor eases to this size while a button is down.
+const HELD_PRESS_SCALE: f64 = 0.9;
+/// A press this close ahead already starts easing the cursor down, and a
+/// release this close ahead already starts easing it back up.
+const HELD_PRESS_LOOKAHEAD_MS: f64 = 500.0;
+/// The press spring is stepped on a fixed 60 Hz grid, so every frame rate
+/// and every seek reads the same curve.
+const HELD_PRESS_STEP_MS: f64 = 1000.0 / 60.0;
+/// The press spring has settled once its target has held this long.
+const HELD_PRESS_SETTLE_MS: f64 = 2000.0;
+/// Clicks earlier than this are assumed settled, which bounds the work per
+/// frame however fast the clicks come.
+const HELD_PRESS_MAX_HISTORY_MS: f64 = 10_000.0;
+/// Within this of its target, and slower than this per second, the press
+/// spring snaps onto the target.
+const HELD_PRESS_PRECISION: f64 = 0.002;
+
+#[derive(Clone, Copy, Debug)]
+struct PressSpring {
+    tension: f64,
+    mass: f64,
+    friction: f64,
+}
+
+/// Whether the held press aims down at `time_ms`: toward a press up to
+/// `HELD_PRESS_LOOKAHEAD_MS` ahead, away from a release that close, and
+/// otherwise down while the last button event so far was a press. `clicks`
+/// is in time order.
+fn held_press_aims_down(clicks: &[CursorClickEvent], time_ms: f64) -> bool {
+    let next = clicks.partition_point(|click| click.time_ms < time_ms);
+    if let Some(click) = clicks.get(next)
+        && click.time_ms - time_ms <= HELD_PRESS_LOOKAHEAD_MS
+    {
+        return click.down;
+    }
+    let held = clicks.partition_point(|click| click.time_ms <= time_ms);
+    held.checked_sub(1).is_some_and(|last| clicks[last].down)
+}
+
+fn held_press_target(clicks: &[CursorClickEvent], time_ms: f64) -> f64 {
+    if held_press_aims_down(clicks, time_ms) {
+        HELD_PRESS_SCALE
+    } else {
+        1.0
+    }
+}
+
+/// One grid step of the press spring toward `target`, integrated in 1 ms
+/// substeps. While the scale still closes on its target faster than the
+/// undamped spring would carry it there, the step is critically damped, so
+/// it never overshoots.
+fn held_press_step(spring: PressSpring, value: &mut f64, velocity: &mut f64, target: f64) {
+    let distance = target - *value;
+    let omega = (spring.tension / spring.mass).sqrt();
+    let damping = if *velocity * distance > 0.0 && velocity.abs() > distance.abs() * omega {
+        spring
+            .friction
+            .max(2.0 * (spring.mass * spring.tension).sqrt())
+    } else {
+        spring.friction
+    };
+    let substeps = HELD_PRESS_STEP_MS.ceil() as usize;
+    for substep in 1..=substeps {
+        let dt_ms = if substep as f64 > HELD_PRESS_STEP_MS {
+            substep as f64 - HELD_PRESS_STEP_MS
+        } else {
+            1.0
+        };
+        let dt = dt_ms / 1000.0;
+        let acceleration =
+            (-(*value - target) * spring.tension - *velocity * damping) / spring.mass;
+        let next_velocity = *velocity + acceleration * dt;
+        let next_value = *value + next_velocity * dt;
+        if next_velocity.abs() < HELD_PRESS_PRECISION
+            && (next_value - target).abs() < HELD_PRESS_PRECISION
+        {
+            *value = target;
+            *velocity = 0.0;
+            return;
+        }
+        *value = next_value;
+        *velocity = next_velocity;
+    }
+}
+
+/// The held press scale at `time_ms`: the cursor's own spring easing toward
+/// 0.9 or 1.0 as `held_press_target` says, stepped on a fixed grid from the
+/// last moment it was at rest. With no spring (a raw cursor) the scale jumps.
+fn held_press_scale(
+    clicks: &[CursorClickEvent],
+    time_ms: f64,
+    clicks_ordered: bool,
+    spring: Option<PressSpring>,
+) -> f32 {
+    let sorted;
+    let clicks = if clicks_ordered {
+        clicks
+    } else {
+        let mut copy = clicks.to_vec();
+        copy.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+        sorted = copy;
+        &sorted
+    };
+    if !time_ms.is_finite() {
+        return 1.0;
+    }
+    let Some(spring) = spring
+        .filter(|spring| spring.tension > 0.0 && spring.mass > 0.0 && spring.friction.is_finite())
+    else {
+        return held_press_target(clicks, time_ms) as f32;
+    };
+
+    // The target only changes at a button event or `HELD_PRESS_LOOKAHEAD_MS`
+    // before one. Walk back to the latest change with a settled gap before
+    // it; the spring rests there.
+    let earliest = time_ms - HELD_PRESS_MAX_HISTORY_MS - HELD_PRESS_SETTLE_MS;
+    let first = clicks.partition_point(|click| click.time_ms < earliest);
+    let upcoming =
+        clicks.partition_point(|click| click.time_ms <= time_ms + HELD_PRESS_LOOKAHEAD_MS);
+    let mut changes: Vec<f64> = clicks[first..upcoming.max(first)]
+        .iter()
+        .flat_map(|click| [click.time_ms - HELD_PRESS_LOOKAHEAD_MS, click.time_ms])
+        .filter(|&change| change <= time_ms)
+        .collect();
+    changes.sort_by(|a, b| b.total_cmp(a));
+    let mut start = None;
+    for change in changes {
+        if start.unwrap_or(time_ms) - change >= HELD_PRESS_SETTLE_MS
+            || time_ms - change > HELD_PRESS_MAX_HISTORY_MS
+        {
+            break;
+        }
+        start = Some(change);
+    }
+    let Some(start) = start else {
+        return held_press_target(clicks, time_ms) as f32;
+    };
+
+    // Each step eases toward the target at its end, so the scale starts
+    // moving on the first step that ends inside a new target.
+    let mut step = (start / HELD_PRESS_STEP_MS).floor() - 1.0;
+    let mut value = held_press_target(clicks, step * HELD_PRESS_STEP_MS);
+    let mut velocity = 0.0;
+    let mut previous = value;
+    while step * HELD_PRESS_STEP_MS < time_ms {
+        previous = value;
+        step += 1.0;
+        let target = held_press_target(clicks, step * HELD_PRESS_STEP_MS);
+        held_press_step(spring, &mut value, &mut velocity, target);
+    }
+    let end = step * HELD_PRESS_STEP_MS;
+    let u = ((time_ms - (end - HELD_PRESS_STEP_MS)) / HELD_PRESS_STEP_MS).clamp(0.0, 1.0);
+    (previous + (value - previous) * u) as f32
 }
 
 struct CursorTexture {
@@ -1141,6 +1431,75 @@ impl CursorTexture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pan_smears_the_cursor_with_the_screen() {
+        // The cursor holds still on a screen panning 30px right: it moves
+        // 30px on the frame, so it smears 30px like the screen under it.
+        assert_eq!(
+            cursor_own_motion(XY::new(30.0, 0.0), XY::new(0.0, 0.0)),
+            XY::new(30.0, 0.0)
+        );
+        // Its own travel adds to the pan's.
+        assert_eq!(
+            cursor_own_motion(XY::new(30.0, 12.0), XY::new(0.0, 0.0)),
+            XY::new(30.0, 12.0)
+        );
+        // Under a pixel is no smear.
+        assert_eq!(
+            cursor_own_motion(XY::new(0.6, 0.0), XY::new(0.0, 0.0)),
+            XY::new(0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn a_zoom_leaves_the_cursor_to_the_screens_zoom_blur() {
+        // The screen grows faster than the cursor's box moves: a zoom, so
+        // the cursor has no smear of its own.
+        assert_eq!(
+            cursor_own_motion(XY::new(4.0, 3.0), XY::new(80.0, 45.0)),
+            XY::new(0.0, 0.0)
+        );
+        // A fast flick through a slow zoom is a move, measured at the box's
+        // centre (half the size change added).
+        assert_eq!(
+            cursor_own_motion(XY::new(120.0, 0.0), XY::new(8.0, 4.0)),
+            XY::new(124.0, 2.0)
+        );
+    }
+
+    #[test]
+    fn the_screen_blur_reaches_the_cursor_in_output_pixels() {
+        let mut display = crate::composite_frame::CompositeVideoFrameUniforms {
+            target_bounds: [100.0, 50.0, 1100.0, 550.0],
+            target_size: [1000.0, 500.0],
+            ..bytemuck::Zeroable::zeroed()
+        };
+        let sprite = [600.0, 300.0, 40.0, 40.0];
+
+        // No screen blur.
+        assert_eq!(screen_blur_over_cursor(&display, sprite).0, [0.0; 4]);
+
+        // A pan of 0.02 x 0.01 of the card is 20 x 5 px.
+        display.motion_blur_params = [1.0, 1.0, 0.0, 0.0];
+        display.motion_blur_vector = [0.02, 0.01];
+        let (blur, card, reach) = screen_blur_over_cursor(&display, sprite);
+        assert_eq!(blur, [1.0, 20.0, 5.0, 0.0]);
+        assert_eq!(card, [100.0, 50.0, 1000.0, 500.0]);
+        assert_eq!(reach, 0.0);
+
+        // A zoom about the card's centre reaches the sprite by its rays.
+        display.motion_blur_params = [2.0, 1.0, 0.04, 0.0];
+        display.motion_blur_zoom_center = [0.5, 0.5];
+        let (blur, _, reach) = screen_blur_over_cursor(&display, sprite);
+        assert_eq!(blur, [2.0, 0.5, 0.5, 0.04]);
+        // The farthest corner, (640, 340), is (40, 40) px from the centre
+        // (600, 300): its ray is 0.04 of that, 2.26 px, padded.
+        assert!(
+            (reach - (2.0f32.sqrt() * 40.0 * 0.04 * 1.25 + 2.0)).abs() < 1e-3,
+            "{reach}"
+        );
+    }
 
     fn alpha_coverage(level: &CursorMipLevel) -> f64 {
         let alpha_sum: u64 = level
@@ -1667,5 +2026,98 @@ mod tests {
         }
         assert_eq!(ordered_moves, 14);
         assert_eq!(ordered_clicks, 12);
+    }
+
+    fn new_project_press_spring() -> Option<PressSpring> {
+        Some(PressSpring {
+            tension: 125.0,
+            mass: 1.5,
+            friction: 12.0,
+        })
+    }
+
+    fn frame_ms(frame: u32) -> f64 {
+        f64::from(frame) * 1000.0 / 60.0
+    }
+
+    #[test]
+    fn a_held_press_eases_down_before_the_press_and_back_after_the_release() {
+        // Press at frame 492 (8200 ms), release 80 ms later.
+        let clicks = vec![click_event(8200.0, true), click_event(8280.0, false)];
+        let scale = |frame: u32| {
+            held_press_scale(&clicks, frame_ms(frame), true, new_project_press_spring())
+        };
+        // At rest until the press is 500 ms away, easing from the frame it
+        // comes within reach.
+        assert_eq!(scale(400), 1.0);
+        assert_eq!(scale(461), 1.0);
+        assert!((f64::from(scale(462)) - 0.9989).abs() < 0.0005);
+        // Deep in by the press, held through it, and never below 0.9.
+        for (frame, expected) in [(470, 0.945), (480, 0.909), (492, 0.901), (497, 0.922)] {
+            let value = f64::from(scale(frame));
+            assert!((value - expected).abs() < 0.002, "frame {frame}: {value}");
+        }
+        for frame in 440..560 {
+            assert!(scale(frame) >= 0.9 - 1e-6);
+        }
+        // Back to full size, smoothly, within half a second of the release.
+        assert!((f64::from(scale(504)) - 0.972).abs() < 0.002);
+        assert!(scale(520) > 0.99);
+        assert_eq!(scale(560), 1.0);
+    }
+
+    #[test]
+    fn a_held_press_holds_through_a_drag() {
+        let clicks = vec![click_event(1000.0, true), click_event(4000.0, false)];
+        let scale =
+            |time_ms: f64| held_press_scale(&clicks, time_ms, true, new_project_press_spring());
+        assert_eq!(scale(2500.0), 0.9);
+        // The release is 500 ms away: the cursor already grows back.
+        assert_eq!(scale(3450.0), 0.9);
+        assert!(scale(3600.0) > 0.9);
+        assert_eq!(scale(6000.0), 1.0);
+    }
+
+    #[test]
+    fn a_held_press_jumps_without_a_spring_and_ignores_click_order() {
+        let ordered = vec![click_event(1000.0, true), click_event(1080.0, false)];
+        assert_eq!(held_press_scale(&ordered, 400.0, true, None), 1.0);
+        assert_eq!(held_press_scale(&ordered, 600.0, true, None), 0.9);
+        assert_eq!(held_press_scale(&ordered, 1040.0, true, None), 1.0);
+
+        let unordered = vec![ordered[1].clone(), ordered[0].clone()];
+        for time_ms in [550.0, 700.0, 990.0, 1100.0, 1300.0] {
+            assert_eq!(
+                held_press_scale(&ordered, time_ms, true, new_project_press_spring()),
+                held_press_scale(&unordered, time_ms, false, new_project_press_spring()),
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_press_reads_the_same_at_any_frame_rate() {
+        let clicks = vec![click_event(1000.0, true), click_event(1080.0, false)];
+        // A 30 fps frame lands on every other 60 Hz step.
+        for frame in 0..60 {
+            let at_30 = f64::from(frame) * 1000.0 / 30.0;
+            assert_eq!(
+                held_press_scale(&clicks, at_30, true, new_project_press_spring()),
+                held_press_scale(
+                    &clicks,
+                    frame_ms(frame * 2),
+                    true,
+                    new_project_press_spring()
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn the_path_blur_kernel_runs_only_for_new_screen_motion() {
+        assert_eq!(cursor_path_kernel(&ProjectConfiguration::default()), 0.0);
+        assert_eq!(
+            cursor_path_kernel(&ProjectConfiguration::for_new_project()),
+            1.0
+        );
     }
 }
