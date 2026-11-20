@@ -41,6 +41,15 @@ const LEAK_REVIEW_MS: u64 = 120_000;
 const LEAK_DECIDE_MS: u64 = 4_000;
 const LEAK_VOICE_SHARE: f64 = 0.8;
 const PERSON_DECIDE_MS: u64 = 8_000;
+/// A microphone voice heard this long and this share of its reviewed speech
+/// while the call is silent, in at least this many of the call's silences,
+/// is a person: the speakers only play the call while it speaks. "Silent" is known once the call's levels run this far
+/// past the stretch, and means the call speaks through at most
+/// `CALL_SILENT_COVER` of it (its delay either side included).
+const ALONE_PERSON_SHARE: f64 = 0.25;
+const ALONE_PERSON_SILENCES: usize = 2;
+const CALL_KNOWN_AFTER_MS: u64 = 1_000;
+const CALL_SILENT_COVER: f64 = 0.1;
 const PERSON_VOICE_SHARE: f64 = 0.2;
 /// At the end, a whole microphone voice heard mostly while the call talks
 /// (this share of its speech comparable with the call) whose speech follows
@@ -1068,7 +1077,15 @@ impl MeetingDiarizer {
             return;
         };
         let since = now.saturating_sub(LEAK_REVIEW_MS);
-        let mut totals: Vec<(SpeakerId, u64, u64)> = Vec::new();
+        // The call's levels are known up to here: a stretch before it that
+        // the call was not speaking through was heard with the call silent.
+        let call_known_ms = self.levels[track_index(Track::System)]
+            .last()
+            .map_or(0, |r| (r.first + r.q.len() as u64) * LEVEL_MS);
+        let call_runs = &self.levels[track_index(Track::System)];
+        // (voice, tested ms, leaked ms, ms heard with the call silent, the
+        // call's silences it was heard in, by the call speech ending each)
+        let mut totals: Vec<(SpeakerId, u64, u64, u64, Vec<usize>)> = Vec::new();
         for i in (0..self.pieces.len()).rev() {
             let p = &self.pieces[i];
             if p.end_ms < since {
@@ -1085,25 +1102,49 @@ impl MeetingDiarizer {
                 None => self.leak(p.start_ms, p.end_ms),
             };
             self.pieces[i].leak = score;
-            let Some(score) = score else {
-                continue;
-            };
-            let ms = self.pieces[i].ms();
-            let leaked = if score >= self.config.leak { ms } else { 0 };
-            match totals.iter_mut().find(|t| t.0 == id) {
-                Some(t) => {
-                    t.1 += ms;
-                    t.2 += leaked;
+            let p = &self.pieces[i];
+            let ms = p.ms();
+            let (tested, leaked, alone) = match score {
+                Some(score) => (ms, if score >= self.config.leak { ms } else { 0 }, 0),
+                None if p.end_ms + CALL_KNOWN_AFTER_MS <= call_known_ms
+                    && self.call_silent(p.start_ms, p.end_ms) =>
+                {
+                    (0, 0, ms)
                 }
-                None => totals.push((id, ms, leaked)),
+                None => continue,
+            };
+            let silence =
+                (alone > 0).then(|| call_runs.partition_point(|r| r.first * LEVEL_MS <= p.end_ms));
+            let t = match totals.iter_mut().position(|t| t.0 == id) {
+                Some(at) => &mut totals[at],
+                None => {
+                    totals.push((id, 0, 0, 0, Vec::new()));
+                    totals.last_mut().unwrap()
+                }
+            };
+            t.1 += tested;
+            t.2 += leaked;
+            t.3 += alone;
+            if let Some(silence) = silence.filter(|s| !t.4.contains(s)) {
+                t.4.push(silence);
             }
         }
         let mut lost_user = false;
-        for (id, tested, leaked) in totals {
+        for (id, tested, leaked, alone, silences) in totals {
             let share = leaked as f64 / tested.max(1) as f64;
-            let verdict = if tested >= LEAK_DECIDE_MS && share >= LEAK_VOICE_SHARE {
+            // The speakers only play the call while the call is speaking, so
+            // speech heard with the call silent counts against the call. A
+            // voice heard that way in several of the call's silences is
+            // someone in the room; a single silence could be the computer
+            // audio dropping out while the speakers kept playing.
+            let heard_alone = alone >= LEAK_DECIDE_MS
+                && silences.len() >= ALONE_PERSON_SILENCES
+                && alone as f64 >= ALONE_PERSON_SHARE * (alone + tested) as f64;
+            let verdict = if tested >= LEAK_DECIDE_MS
+                && leaked as f64 >= LEAK_VOICE_SHARE * (tested + alone) as f64
+            {
                 Some(true)
-            } else if tested >= PERSON_DECIDE_MS && share <= PERSON_VOICE_SHARE {
+            } else if heard_alone || (tested >= PERSON_DECIDE_MS && share <= PERSON_VOICE_SHARE) {
                 Some(false)
             } else {
                 None
@@ -1249,6 +1290,17 @@ impl MeetingDiarizer {
             .filter_map(at_lag)
             .max_by(f32::total_cmp);
         (leads.is_none_or(|leads| follows >= leads)).then_some(follows)
+    }
+
+    /// Whether the call says (almost) nothing through a stretch, counting the
+    /// speakers' delay either side: its levels there are known.
+    fn call_silent(&self, start_ms: u64, end_ms: u64) -> bool {
+        let (early, late) = LEAK_LAG_FRAMES;
+        let from = (start_ms / LEVEL_MS).saturating_sub(late as u64);
+        let to = end_ms.div_ceil(LEVEL_MS) + (-early) as u64;
+        let call = self.levels(Track::System, from, to);
+        let spoken = call.iter().flatten().count();
+        (spoken as f64) <= call.len() as f64 * CALL_SILENT_COVER
     }
 
     /// The call's voice speaking most during a stretch.
@@ -2047,7 +2099,11 @@ impl MeetingDiarizer {
                 })
             });
         }
-        loudest(&voices, &self.config).or_else(|| mic.into_iter().max_by_key(|&f| speech[f]))
+        // Voices set aside as heard with the call never come back as the
+        // fallback: the most speech among the rest.
+        loudest(&voices, &self.config)
+            .or_else(|| voices.iter().max_by_key(|v| v.1).map(|v| v.0))
+            .or_else(|| mic.into_iter().max_by_key(|&f| speech[f]))
     }
 
     /// Whether a microphone voice is heard mostly while the call is talking:

@@ -999,6 +999,172 @@ fn the_speakers_copy_louder_than_a_quiet_user_is_still_the_call() {
     }
 }
 
+#[test]
+fn a_voice_heard_while_the_call_is_silent_is_never_judged_the_call() {
+    // The user talks alone, then the laptop speakers start playing the call
+    // into the microphone. Its copy sounds like the user (same room, same
+    // microphone) and closes before the call's own segment, so it joins the
+    // user's voice untested. The user's speech alone, with the call silent,
+    // must keep that voice a person: later the user's words are not echo.
+    let mut table = speakers(4);
+    table.push(near(1, 3, 0.7));
+    let mut d = diarizer(table);
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    push_samples(
+        &mut d,
+        Track::System,
+        7_000,
+        &spoken(2, 7_000, 3_000, 5, 0, 1.0),
+    );
+    push_samples(
+        &mut d,
+        Track::Mic,
+        11_000,
+        &spoken(1, 11_000, 4_000, 6, 0, 1.0),
+    );
+    for i in 0..4u64 {
+        let t = 16_000 + i * 4_000;
+        // The microphone's copy of the call (voice 4, like the user's)
+        // closes first.
+        push_samples(&mut d, Track::Mic, t, &spoken(4, t, 3_900, 20 + i, 0, 1.0));
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 3_900, 20 + i, 0, 1.0),
+        );
+    }
+    for i in 0..3u64 {
+        let t = 34_000 + i * 6_000;
+        let mine = push_samples(&mut d, Track::Mic, t, &spoken(1, t, 5_000, 40 + i, 0, 1.0));
+        assert!(
+            mine.spans.iter().all(|s| !s.echo && s.speaker == user),
+            "the user alone, the call silent: {mine:?}"
+        );
+        push_samples(
+            &mut d,
+            Track::System,
+            t + 5_200,
+            &spoken(2, t + 5_200, 600, 60 + i, 0, 1.0),
+        );
+    }
+    assert_eq!(d.user(), Some(user));
+    let pass = d.finish();
+    assert_eq!(pass.user, Some(user));
+}
+
+#[test]
+fn a_brief_remark_in_the_room_never_turns_the_call_into_a_person() {
+    // The user says nothing. The speakers' copy of the call (voice 3) is a
+    // voice of its own; someone in the room who sounds like it (voice 5)
+    // says a word or two twice while the call is silent. The copy stays the
+    // call: later copies that close before the call's segment are echo.
+    let mut table = speakers(5);
+    table.push(near(3, 4, 0.75));
+    let mut d = diarizer(table);
+    for i in 0..6u64 {
+        let t = i * 8_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(3, t, 3_900, 7 + i, 0, 1.0));
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 3_900, 7 + i, 0, 1.0),
+        );
+        if i == 1 || i == 3 {
+            push_samples(
+                &mut d,
+                Track::Mic,
+                t + 4_600,
+                &spoken(5, t + 4_600, 2_000, 30 + i, 0, 1.0),
+            );
+        }
+    }
+    for i in 6..10u64 {
+        let t = i * 8_000;
+        let copy = push_samples(&mut d, Track::Mic, t, &spoken(3, t, 3_900, 7 + i, 0, 1.0));
+        assert!(copy.spans.iter().all(|s| s.echo), "{copy:?}");
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 3_900, 7 + i, 0, 1.0),
+        );
+    }
+}
+
+#[test]
+fn the_computer_audio_dropping_out_never_turns_the_call_into_a_person() {
+    // The call's copy (voice 3) closes before the call's segment. Then the
+    // computer audio drops for 12 s while the speakers keep playing: the
+    // copy is heard with the call "silent", in one silence. It must still
+    // be judged the call once the computer audio is back.
+    let mut d = diarizer(speakers(4));
+    push_samples(&mut d, Track::Mic, 0, &spoken(3, 0, 3_900, 7, 0, 1.0));
+    push_samples(&mut d, Track::System, 0, &spoken(2, 0, 3_900, 7, 0, 1.0));
+    for i in 1..4u64 {
+        let t = i * 4_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(3, t, 3_900, 7 + i, 0, 1.0));
+    }
+    for i in 4..24u64 {
+        let t = i * 4_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(3, t, 3_900, 7 + i, 0, 1.0));
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 3_900, 7 + i, 0, 1.0),
+        );
+    }
+    let t = 24 * 4_000;
+    let copy = push_samples(&mut d, Track::Mic, t, &spoken(3, t, 3_900, 40, 0, 1.0));
+    assert!(copy.spans.iter().all(|s| s.echo), "{copy:?}");
+    assert!(
+        d.speakers().iter().all(|s| s.track != Track::Mic),
+        "the call's copy is no one: {:?}",
+        d.speakers()
+    );
+}
+
+#[test]
+fn quieter_chatter_in_the_room_heard_through_the_call_never_takes_the_user() {
+    // A cafe: other people's chatter, about 10 dB under the user, fills the
+    // microphone the whole time the call talks; the user speaks less but
+    // clearly louder, with the call quiet. (The scripted model hears the
+    // sample value: the user at 0.09 is voice 9, the chatter at 0.03 voice 3.)
+    let mut d = diarizer(speakers(11));
+    let mut user = None;
+    for i in 0..6u64 {
+        let t = i * 22_000;
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 12_000, 5 + i, 0, 1.0),
+        );
+        push_samples(
+            &mut d,
+            Track::Mic,
+            t,
+            &spoken(10, t, 12_000, 30 + i, 0, 0.3),
+        );
+        let mine = push_samples(
+            &mut d,
+            Track::Mic,
+            t + 13_000,
+            &spoken(9, t + 13_000, 7_000, 60 + i, 0, 1.0),
+        );
+        user = user.or(Some(only(&mine)));
+    }
+    let pass = d.finish();
+    assert_eq!(pass.user, user, "{:?}", pass.speakers);
+}
+
 /// Hears each 30 s step as one voice, alternating: voice 0, then 1, then 0.
 struct Alternate {
     step: usize,
