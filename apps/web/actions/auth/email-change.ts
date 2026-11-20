@@ -13,8 +13,8 @@ import {
 } from "@cap/database/auth/security-emails";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
+	isEmailChangeVerifyLimited,
 	isEmailCodeSendLimited,
-	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
@@ -80,7 +80,7 @@ export async function finishEmailChange(
 		return { status: "rate_limited" };
 	}
 	const pendingAddress = await pendingEmailChangeAddress(user.id);
-	if (pendingAddress && (await isEmailCodeVerifyLimited(pendingAddress))) {
+	if (pendingAddress && (await isEmailChangeVerifyLimited(pendingAddress))) {
 		return { status: "rate_limited" };
 	}
 	const result = await confirmEmailChange(user.id, code);

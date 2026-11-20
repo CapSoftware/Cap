@@ -20,3 +20,9 @@ export const isEmailCodeVerifyLimited = (email: string, headers?: Headers) =>
 		key: emailCodeRateLimitKey("email-code-verify", email),
 		headers,
 	});
+
+export const isEmailChangeVerifyLimited = (email: string, headers?: Headers) =>
+	isRateLimited(RATE_LIMIT_IDS.AUTH_OTP_VERIFY, {
+		key: emailCodeRateLimitKey("email-change-verify", email),
+		headers,
+	});
