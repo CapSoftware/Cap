@@ -755,12 +755,12 @@ describe("authOptions", () => {
 		expect(signedIn.authTime).toBeGreaterThanOrEqual(before);
 		expect(signedIn.authTime).toBeLessThanOrEqual(after);
 
-		const refreshed = await callbacks.jwt({ token: { ...signedIn } });
+		const refreshed = await callbacks.jwt({ token: { ...signedIn } } as never);
 		expect(refreshed.authTime).toBe(signedIn.authTime);
 
 		const legacy = await callbacks.jwt({
-			token: { email: AUTHENTICATED_USER.email } as never,
-		});
+			token: { email: AUTHENTICATED_USER.email },
+		} as never);
 		expect(legacy.authTime).toBeUndefined();
 
 		const session = await options.callbacks?.session?.({
