@@ -16,7 +16,6 @@ const MESSAGING_TIMEOUT: Duration = Duration::from_millis(80);
 const DEADLINE: Duration = Duration::from_millis(120);
 const NODE_BUDGET: usize = 2500;
 const MAX_DEPTH: usize = 40;
-const MAX_LABELS: usize = 64;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
@@ -58,15 +57,6 @@ fn children(element: &ax::UiElement) -> Vec<arc::R<ax::UiElement>> {
         .collect()
 }
 
-/// Labels worth sending up: they talk about speaking, or mark the user's tile.
-fn interesting(label: &str) -> bool {
-    let lower = label.to_lowercase();
-    label.chars().count() <= 120
-        && ["speaking", "talking", "active speaker", "(you)", "(me)"]
-            .iter()
-            .any(|m| lower.contains(m))
-}
-
 struct Walk {
     labels: SpeakerLabels,
     started: Instant,
@@ -78,8 +68,8 @@ struct Walk {
 impl Walk {
     fn take(&mut self, label: Option<String>) {
         if let Some(label) = label
-            && interesting(&label)
-            && self.labels.labels.len() < MAX_LABELS
+            && crate::interesting_label(&label)
+            && self.labels.labels.len() < crate::MAX_LABELS
             && !self.labels.labels.contains(&label)
         {
             self.labels.labels.push(label);

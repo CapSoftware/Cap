@@ -1920,6 +1920,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "thiserror 2.0.20",
  "tracing",
+ "windows 0.61.3",
  "windows-sys 0.59.0",
 ]
 

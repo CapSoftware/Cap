@@ -31,6 +31,8 @@ pub struct BrowserProbe {
 
 #[cfg(target_os = "macos")]
 pub use macos::browser_probe::{accessibility_trusted, probe_browser};
+#[cfg(windows)]
+pub use windows::uia::probe_browser;
 
 /// Only macOS puts reading other apps behind a permission; elsewhere there is
 /// nothing to grant, so no hint asks for one.
@@ -39,7 +41,7 @@ pub fn accessibility_trusted() -> bool {
     true
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn probe_browser(_pid: u32) -> BrowserProbe {
     BrowserProbe::default()
 }
@@ -56,12 +58,32 @@ pub struct SpeakerLabels {
     pub took: std::time::Duration,
 }
 
+/// Whether this platform can read a meeting app's interface for speaker
+/// names (macOS accessibility, Windows UI Automation).
+pub const READS_MEETING_APPS: bool = cfg!(any(target_os = "macos", windows));
+
+/// The most labels one look sends up.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) const MAX_LABELS: usize = 64;
+
+/// Labels worth sending up: they talk about speaking, or mark the user's tile.
+#[cfg(any(target_os = "macos", windows))]
+pub(crate) fn interesting_label(label: &str) -> bool {
+    let lower = label.to_lowercase();
+    label.chars().count() <= 120
+        && ["speaking", "talking", "active speaker", "(you)", "(me)"]
+            .iter()
+            .any(|m| lower.contains(m))
+}
+
 #[cfg(target_os = "macos")]
 pub use macos::speaker_labels::speaker_labels;
+#[cfg(windows)]
+pub use windows::uia::speaker_labels;
 
-/// Windows (UI Automation) and Linux read nothing yet; the meeting still gets
-/// names from what was said and the calendar.
-#[cfg(not(target_os = "macos"))]
+/// Linux reads nothing yet; the meeting still gets names from what was said
+/// and the calendar.
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn speaker_labels(_pid: u32, _browser: bool, _pages: &'static [&'static str]) -> SpeakerLabels {
     SpeakerLabels::default()
 }

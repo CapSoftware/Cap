@@ -164,6 +164,15 @@ pub fn snapshot_now() -> MicSnapshot {
         }
     }
 
+    // The consent store names executables, not processes: look up one
+    // running process per app so its windows can be read (call check,
+    // speaker names). 0 when it has already exited.
+    let names: Vec<&str> = snapshot.clients.iter().map(|c| c.id.as_str()).collect();
+    let running = super::procs::processes_for(&names);
+    for client in &mut snapshot.clients {
+        client.pid = running.get(&client.id).copied().unwrap_or(0);
+    }
+
     snapshot.clients.sort();
     snapshot.clients.dedup();
     snapshot.mic_in_use = !snapshot.clients.is_empty();
