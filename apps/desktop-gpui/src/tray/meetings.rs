@@ -59,9 +59,12 @@ pub fn insert(entries: &mut Vec<Entry>, meeting: Vec<Entry>) {
     if meeting.is_empty() {
         return;
     }
+    // Off macOS the mode picker is a submenu too, above the capture rows, so
+    // the block goes before the "Previous" submenu by name.
+    let previous = tr::tray::previous();
     let at = entries
         .iter()
-        .position(|entry| matches!(entry, Entry::Submenu { .. }))
+        .position(|entry| matches!(entry, Entry::Submenu { title, .. } if title == previous))
         .unwrap_or(entries.len());
     let mut block = meeting;
     block.push(Entry::Separator);
