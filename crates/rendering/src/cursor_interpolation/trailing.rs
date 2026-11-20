@@ -16,8 +16,8 @@ use cap_project::{CursorEvents, CursorMoveEvent, XY};
 use super::{
     ANCHOR_ACCEPTED_ERROR_RATIO, ANCHOR_GROUP_GAP_MS as GROUP_GAP_MS,
     ANCHOR_LEAD_DECAY_PER_MS as LEAD_DECAY_PER_MS, ANCHOR_SPEED_LEVELS, AnchorKind, CursorIdIndex,
-    SIMULATION_STEP_MS, SPRING_SETTLE_TIMEOUT_MS, SmoothedCursorEvent, SmoothedTimeline,
-    cursor_id_at_time, interaction_anchors, position_at_time_hinted,
+    InteractionAnchor, SIMULATION_STEP_MS, SPRING_SETTLE_TIMEOUT_MS, SmoothedCursorEvent,
+    SmoothedTimeline, cursor_id_at_time, interaction_anchors, position_at_time_hinted,
 };
 use crate::spring_mass_damper::SpringMassDamperSimulationConfig;
 
@@ -47,6 +47,10 @@ const SPEED_BUCKET_MS: f64 = 4.0;
 /// per second, an axis snaps onto the target.
 const SNAP_PT: f64 = 0.01;
 const KNOT_EPSILON_MS: f64 = 0.001;
+/// The planner only brings the spring within a share of each anchor's
+/// tolerance. Over this long either side of a press, release or drag
+/// sample, the drawn cursor eases the rest of the way onto the pointer.
+const LANDING_EASE_MS: f64 = 150.0;
 
 #[derive(Clone, Copy, Debug)]
 struct Sample {
@@ -786,12 +790,15 @@ pub(super) fn build_trailing_timeline(
     let path = Path::new(samples);
 
     let mut points: Vec<(f64, f64)> = Vec::new();
+    let mut landings: Vec<Landing> = Vec::new();
     if interaction {
+        let anchors = interaction_anchors(cursor, path.start_ms(), end_time_ms);
         points.extend(
-            interaction_anchors(cursor, path.start_ms(), end_time_ms)
+            anchors
                 .iter()
                 .map(|anchor| (anchor.time_ms, anchor.tolerance)),
         );
+        landings = landings_of(&anchors);
         points.extend(
             hover_changes_ms
                 .iter()
@@ -814,6 +821,9 @@ pub(super) fn build_trailing_timeline(
     let initial = State::resting_at(path.position_at(origin + lead_view.at(origin)));
 
     let settle_deadline = end_time_ms + SPRING_SETTLE_TIMEOUT_MS;
+    let settle_after = landings.last().map_or(end_time_ms, |last| {
+        end_time_ms.max(last.time + LANDING_EASE_MS)
+    });
     let capacity = ((settle_deadline / SIMULATION_STEP_MS).ceil().max(0.0) as usize) + 2;
     let mut events = Vec::with_capacity(capacity);
     let mut cursor_ids = CursorIdIndex::new();
@@ -859,7 +869,10 @@ pub(super) fn build_trailing_timeline(
                 next_step += 1;
             }
             previous = (time, current);
-            if settled_at.is_none() && time >= end_time_ms && current.vx == 0.0 && current.vy == 0.0
+            if settled_at.is_none()
+                && time >= settle_after
+                && current.vx == 0.0
+                && current.vy == 0.0
             {
                 let target = path.position_at(time + lead_view.at(time));
                 if current.x == target.0 && current.y == target.1 {
@@ -875,10 +888,199 @@ pub(super) fn build_trailing_timeline(
     if events.is_empty() {
         push(0.0, state, &mut events);
     }
+    ease_onto_landings(&mut events, &path, &landings);
 
     SmoothedTimeline {
         events,
         cursor_ids: cursor_ids.ids,
+    }
+}
+
+/// A moment the drawn cursor eases onto the pointer.
+#[derive(Clone, Copy, Debug)]
+struct Landing {
+    time: f64,
+    /// What the planner left is taken away in full up to this many points.
+    /// A larger remainder means the pointer moved faster than the spring can
+    /// follow, and meeting it would copy the pointer's jolts, so the cursor
+    /// is moved by `full_pt^2 / remainder` instead: less the further off.
+    full_pt: f64,
+}
+
+/// Presses and releases, met in full within their tolerance. Drag samples
+/// only up to half the error the planner accepts, and none within two
+/// output steps of a press or release: closer than that, the offset could
+/// only meet both by turning sharply between two frames.
+fn landings_of(anchors: &[InteractionAnchor]) -> Vec<Landing> {
+    let clicks: Vec<f64> = anchors
+        .iter()
+        .filter(|anchor| anchor.kind == AnchorKind::Click)
+        .map(|anchor| anchor.time_ms)
+        .collect();
+    let near_click = |time: f64| {
+        let next = clicks.partition_point(|&click| click < time);
+        let within = |click: f64| (click - time).abs() < 2.0 * SIMULATION_STEP_MS;
+        clicks.get(next).is_some_and(|&click| within(click))
+            || next
+                .checked_sub(1)
+                .is_some_and(|previous| within(clicks[previous]))
+    };
+    let mut landings: Vec<Landing> = Vec::new();
+    for anchor in anchors.iter().filter(|anchor| anchor.time_ms >= 0.0) {
+        let full_pt = match anchor.kind {
+            AnchorKind::Click => anchor.tolerance,
+            AnchorKind::Drag if !near_click(anchor.time_ms) => {
+                anchor.tolerance * ANCHOR_ACCEPTED_ERROR_RATIO / 2.0
+            }
+            _ => continue,
+        };
+        if landings
+            .last()
+            .is_some_and(|last| anchor.time_ms - last.time < 1.0)
+        {
+            continue;
+        }
+        landings.push(Landing {
+            time: anchor.time_ms,
+            full_pt,
+        });
+    }
+    landings
+}
+
+/// Where playback draws the cursor at `time_ms`, in points.
+fn drawn_at(events: &[SmoothedCursorEvent], time_ms: f64) -> (f64, f64) {
+    let query = time_ms as f32;
+    let next = events.partition_point(|event| event.time <= query);
+    let a = &events[next.saturating_sub(1)];
+    let b = events.get(next).unwrap_or(a);
+    let span = b.time - a.time;
+    let u = if span > 0.0 {
+        ((query - a.time) / span).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (
+        f64::from(a.position.x + (b.position.x - a.position.x) * u) * DISPLAY_POINTS.0,
+        f64::from(a.position.y + (b.position.y - a.position.y) * u) * DISPLAY_POINTS.1,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct LandingKnot {
+    time: f64,
+    /// Points, and points per ms.
+    offset: (f64, f64),
+    slope: (f64, f64),
+    /// Where the offset has run out, either side of a run of landings.
+    rest: bool,
+}
+
+/// Takes away what the planner left between the cursor and the pointer at
+/// each landing with an offset that passes through it and runs out over
+/// `LANDING_EASE_MS` either side. Landings closer than twice that are
+/// joined directly. The offset is a monotone cubic, so it is C1 and never
+/// overshoots the values it joins.
+fn ease_onto_landings(events: &mut [SmoothedCursorEvent], path: &Path, landings: &[Landing]) {
+    let Some(last) = events.last() else {
+        return;
+    };
+    let last_ms = f64::from(last.time);
+    let landings = &landings[..landings.partition_point(|landing| landing.time <= last_ms)];
+    if landings.is_empty() {
+        return;
+    }
+    let rest = |time: f64| LandingKnot {
+        time,
+        offset: (0.0, 0.0),
+        slope: (0.0, 0.0),
+        rest: true,
+    };
+    let mut knots: Vec<LandingKnot> = Vec::with_capacity(landings.len() + 2);
+    for landing in landings {
+        let time = landing.time;
+        let (px, py) = path.position_at(time);
+        let (cx, cy) = drawn_at(events, time);
+        let (dx, dy) = (px - cx, py - cy);
+        match knots.last() {
+            Some(previous) if time - previous.time <= 2.0 * LANDING_EASE_MS => {}
+            Some(previous) => {
+                let previous = previous.time;
+                knots.push(rest(previous + LANDING_EASE_MS));
+                knots.push(rest(time - LANDING_EASE_MS));
+            }
+            None => knots.push(rest(time - LANDING_EASE_MS)),
+        }
+        let share = (landing.full_pt / dx.hypot(dy)).powi(2).min(1.0);
+        knots.push(LandingKnot {
+            time,
+            offset: (dx * share, dy * share),
+            slope: (0.0, 0.0),
+            rest: false,
+        });
+    }
+    let end = knots.last().unwrap().time + LANDING_EASE_MS;
+    knots.push(rest(end));
+    for index in 1..knots.len() - 1 {
+        if knots[index].rest {
+            continue;
+        }
+        let (before, at, after) = (knots[index - 1], knots[index], knots[index + 1]);
+        let (h0, h1) = (at.time - before.time, after.time - at.time);
+        let slope = |p0: f64, p1: f64, p2: f64| {
+            let (d0, d1) = ((p1 - p0) / h0, (p2 - p1) / h1);
+            if d0 * d1 <= 0.0 {
+                return 0.0;
+            }
+            let (w0, w1) = (2.0 * h1 + h0, h1 + 2.0 * h0);
+            (w0 + w1) / (w0 / d0 + w1 / d1)
+        };
+        knots[index].slope = (
+            slope(before.offset.0, at.offset.0, after.offset.0),
+            slope(before.offset.1, at.offset.1, after.offset.1),
+        );
+    }
+
+    let (width, height) = DISPLAY_POINTS;
+    let mut segment = 0;
+    for event in events.iter_mut() {
+        let time = f64::from(event.time);
+        if time <= knots[0].time {
+            continue;
+        }
+        if time >= end {
+            break;
+        }
+        while knots[segment + 1].time <= time {
+            segment += 1;
+        }
+        let (a, b) = (knots[segment], knots[segment + 1]);
+        let h = b.time - a.time;
+        let s = (time - a.time) / h;
+        let (s2, s3) = (s * s, s * s * s);
+        let (h00, h10, h01, h11) = (
+            2.0 * s3 - 3.0 * s2 + 1.0,
+            s3 - 2.0 * s2 + s,
+            3.0 * s2 - 2.0 * s3,
+            s3 - s2,
+        );
+        let (d00, d10, d11) = (
+            6.0 * s2 - 6.0 * s,
+            3.0 * s2 - 4.0 * s + 1.0,
+            3.0 * s2 - 2.0 * s,
+        );
+        let hermite = |p0: f64, m0: f64, p1: f64, m1: f64| {
+            (
+                h00 * p0 + h10 * h * m0 + h01 * p1 + h11 * h * m1,
+                d00 * (p0 - p1) / h + d10 * m0 + d11 * m1,
+            )
+        };
+        let (ox, vx) = hermite(a.offset.0, a.slope.0, b.offset.0, b.slope.0);
+        let (oy, vy) = hermite(a.offset.1, a.slope.1, b.offset.1, b.slope.1);
+        event.position.x += (ox / width) as f32;
+        event.position.y += (oy / height) as f32;
+        event.velocity.x += (vx * 1000.0 / width) as f32;
+        event.velocity.y += (vy * 1000.0 / height) as f32;
     }
 }
 
@@ -1144,5 +1346,135 @@ mod tests {
         let pointer_x = 0.2 + 0.4 * (300.0 / 600.0);
         assert!(x > pointer_x, "cursor at {x}, pointer at {pointer_x}");
         assert_eq!(position(&anchored, 0.0), (0.2f32 as f64, 0.3f32 as f64));
+    }
+
+    /// The planner stops once the spring is within 1.5 pt of a 2 pt press;
+    /// a press after a glide, one at the right edge of the screen and a
+    /// release are all drawn on the pointer.
+    #[test]
+    fn presses_and_releases_are_drawn_on_the_pointer() {
+        for to in [(0.6, 0.7), (0.992, 0.5), (0.02, 0.02)] {
+            let moves = moves_along((0.4, 0.4), to, 300.0, 500.0);
+            let cursor = CursorEvents {
+                moves: moves.clone(),
+                clicks: vec![click(1300.0, true), click(1380.0, false)],
+            };
+            let timeline = build_trailing_timeline(&cursor, &moves, SPRING, true, &[]);
+            for time_ms in [1300.0, 1380.0] {
+                let error = distance_pt(position(&timeline, time_ms), to);
+                assert!(error < 0.05, "{error} pt at {time_ms} going to {to:?}");
+            }
+            assert_eq!(
+                position(&timeline, 3000.0),
+                (to.0 as f32 as f64, to.1 as f32 as f64)
+            );
+        }
+    }
+
+    /// A press right after a glide starts a drag: the press and release land
+    /// on the pointer and no sample in between is drawn further off than the
+    /// planner allows.
+    #[test]
+    fn a_drag_keeps_its_samples_while_its_ends_land() {
+        let mut moves = moves_along((0.4, 0.4), (0.2, 0.5), 300.0, 500.0);
+        moves.extend(
+            moves_along((0.2, 0.5), (0.7, 0.6), 1100.0, 900.0)
+                .into_iter()
+                .skip(1),
+        );
+        let cursor = CursorEvents {
+            moves: moves.clone(),
+            clicks: vec![click(1000.0, true), click(2100.0, false)],
+        };
+        let timeline = build_trailing_timeline(&cursor, &moves, SPRING, true, &[]);
+        assert!(distance_pt(position(&timeline, 1000.0), (0.2, 0.5)) < 0.05);
+        assert!(distance_pt(position(&timeline, 2100.0), (0.7, 0.6)) < 0.05);
+        let pointer = |t: f64| {
+            let u = ((t - 1100.0) / 900.0).clamp(0.0, 1.0);
+            (0.2 + 0.5 * u, 0.5 + 0.1 * u)
+        };
+        for sample in moves.iter().filter(|m| m.time_ms > 1000.0) {
+            let t = sample.time_ms;
+            let error = distance_pt(position(&timeline, t), pointer(t));
+            assert!(
+                error <= 2.0 * ANCHOR_ACCEPTED_ERROR_RATIO,
+                "{error} pt at {t}"
+            );
+        }
+    }
+
+    fn resting_events(at: (f64, f64), count: usize) -> Vec<SmoothedCursorEvent> {
+        (0..count)
+            .map(|index| SmoothedCursorEvent {
+                time: (index as f64 * SIMULATION_STEP_MS) as f32,
+                position: XY::new(
+                    (at.0 / DISPLAY_POINTS.0) as f32,
+                    (at.1 / DISPLAY_POINTS.1) as f32,
+                ),
+                velocity: XY::new(0.0, 0.0),
+                cursor_id: 0,
+            })
+            .collect()
+    }
+
+    /// The ease meets the pointer at the landing, leaves every frame more
+    /// than `LANDING_EASE_MS` away untouched and turns no faster than a
+    /// smoothstep over that span would.
+    #[test]
+    fn the_landing_ease_is_local_and_smooth() {
+        let pointer = path(&[(0.0, 101.2, 100.8)]);
+        let original = resting_events((100.0, 100.0), 180);
+        let mut eased = resting_events((100.0, 100.0), 180);
+        let landing = Landing {
+            time: 1005.0,
+            full_pt: 2.0,
+        };
+        ease_onto_landings(&mut eased, &pointer, &[landing]);
+        let (x, y) = drawn_at(&eased, landing.time);
+        assert!((x - 101.2).hypot(y - 100.8) < 0.02, "({x}, {y})");
+
+        let points = |events: &[SmoothedCursorEvent]| -> Vec<(f64, f64)> {
+            events
+                .iter()
+                .map(|event| {
+                    (
+                        f64::from(event.position.x) * DISPLAY_POINTS.0,
+                        f64::from(event.position.y) * DISPLAY_POINTS.1,
+                    )
+                })
+                .collect()
+        };
+        let (before, after) = (points(&original), points(&eased));
+        for (index, event) in eased.iter().enumerate() {
+            if (f64::from(event.time) - landing.time).abs() >= LANDING_EASE_MS {
+                assert_eq!(before[index], after[index], "{}", event.time);
+            }
+        }
+        let remainder = 1.2f64.hypot(0.8);
+        let step = SIMULATION_STEP_MS / LANDING_EASE_MS;
+        let smoothstep_bound = 6.0 * remainder * step * step;
+        for index in 1..after.len() - 1 {
+            let bend = (after[index - 1].0 - 2.0 * after[index].0 + after[index + 1].0)
+                .hypot(after[index - 1].1 - 2.0 * after[index].1 + after[index + 1].1);
+            assert!(bend <= smoothstep_bound * 1.05, "{bend} at frame {index}");
+        }
+    }
+
+    /// A remainder past the landing's full share means the spring could not
+    /// keep up; the cursor is moved by less the further off it is.
+    #[test]
+    fn a_far_remainder_is_eased_only_in_part() {
+        let pointer = path(&[(0.0, 108.0, 100.0)]);
+        let mut eased = resting_events((100.0, 100.0), 180);
+        ease_onto_landings(
+            &mut eased,
+            &pointer,
+            &[Landing {
+                time: 1000.0,
+                full_pt: 2.0,
+            }],
+        );
+        let (x, _) = drawn_at(&eased, 1000.0);
+        assert!((x - 100.5).abs() < 0.01, "{x}");
     }
 }
