@@ -133,7 +133,7 @@ class SoftwareAuthenticator {
 		const attestationObject = isoCBOR.encode(
 			new Map<string, string | Uint8Array | Map<string, never>>([
 				["fmt", "none"],
-				["attStmt", new Map()],
+				["attStmt", new Map<string, never>()],
 				["authData", authData],
 			]),
 		);
