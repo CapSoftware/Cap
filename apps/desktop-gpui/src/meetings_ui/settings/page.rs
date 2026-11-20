@@ -665,7 +665,11 @@ impl SettingsWindow {
             ),
             self.setting_row(
                 tr::settings::meetings::recording::keep_audio(),
-                Some(tr::settings::meetings::recording::keep_audio_description()),
+                Some(if s.keep_audio {
+                    tr::settings::meetings::recording::keep_audio_description()
+                } else {
+                    tr::settings::meetings::recording::keep_audio_off_description()
+                }),
                 self.meetings_flag(
                     "meetings-keep-audio",
                     tr::settings::meetings::recording::keep_audio(),

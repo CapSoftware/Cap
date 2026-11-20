@@ -3591,6 +3591,7 @@ never = "Nunca"
 minutes = { one = "{count} minuto", other = "{count} minutos" }
 keep_audio = "Conservar el audio"
 keep_audio_description = "Guardar la grabación con las notas para poder escucharla."
+keep_audio_off_description = "Cap guarda una copia temporal del audio en este ordenador hasta que la transcripción y las notas estén listas, para completar las palabras que falten. Después se elimina."
 keep_for = "Conservar el audio"
 forever = "Siempre"
 days = { one = "{count} día", other = "{count} días" }

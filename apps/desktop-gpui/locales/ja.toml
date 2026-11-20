@@ -3591,6 +3591,7 @@ never = "しない"
 minutes = { other = "{count}分" }
 keep_audio = "音声を保存"
 keep_audio_description = "あとで再生できるよう、録音をノートと一緒に保存します。"
+keep_audio_off_description = "文字起こしとノートが完成するまで、Cap は聞き逃した言葉を補うために音声の一時的なコピーをこのコンピュータに保存し、その後削除します。"
 keep_for = "音声の保存期間"
 forever = "無期限"
 days = { other = "{count}日" }

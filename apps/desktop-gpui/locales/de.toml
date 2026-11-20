@@ -3591,6 +3591,7 @@ never = "Nie"
 minutes = { one = "{count} Minute", other = "{count} Minuten" }
 keep_audio = "Ton behalten"
 keep_audio_description = "Die Aufnahme bei den Notizen speichern, um sie wieder abzuspielen."
+keep_audio_off_description = "Cap behält eine vorübergehende Kopie des Tons auf diesem Computer, bis Transkription und Notizen fertig sind, um verpasste Wörter zu ergänzen. Danach wird sie gelöscht."
 keep_for = "Ton behalten für"
 forever = "Immer"
 days = { one = "{count} Tag", other = "{count} Tage" }

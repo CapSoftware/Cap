@@ -3593,6 +3593,7 @@ never = "Never"
 minutes = { one = "{count} minute", other = "{count} minutes" }
 keep_audio = "Keep the audio"
 keep_audio_description = "Save the recording with the notes so you can play it back."
+keep_audio_off_description = "Cap keeps a temporary copy of the audio on this computer until the transcript and notes are finished, so it can fill in missed words. Then it's deleted."
 keep_for = "Keep audio for"
 forever = "Forever"
 days = { one = "{count} day", other = "{count} days" }

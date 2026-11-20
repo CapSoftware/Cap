@@ -3591,6 +3591,7 @@ never = "从不"
 minutes = { other = "{count} 分钟" }
 keep_audio = "保留音频"
 keep_audio_description = "将录音与笔记一起保存，方便回放。"
+keep_audio_off_description = "在转写和笔记完成之前，Cap 会在这台电脑上保留一份临时音频副本，用于补全遗漏的字词，之后即删除。"
 keep_for = "音频保留时长"
 forever = "永久"
 days = { other = "{count} 天" }
