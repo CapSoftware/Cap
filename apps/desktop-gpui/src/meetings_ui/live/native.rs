@@ -405,15 +405,23 @@ fn x11_resize_keeping_right_edge(window: &Window, width: f64, height: f64) -> an
     let at = connection.translate_coordinates(id, root, 0, 0)?.reply()?;
     let scale = f64::from(window.scale_factor());
     let new_w = (width * scale).round().max(1.) as u32;
-    let right = i32::from(at.dst_x) + i32::from(geometry.width);
+    let new_h = (height * scale).round().max(1.) as u32;
+    let x = i32::from(at.dst_x) + i32::from(geometry.width) - new_w as i32;
+    let y = i32::from(at.dst_y);
+    if connection.query_tree(id)?.reply()?.parent != root {
+        // Framed by a window manager: ConfigureWindow positions would be
+        // the frame's, so leave it to the ordinary resize. (The indicator is
+        // an override-redirect popup, which no manager frames.)
+        return Ok(false);
+    }
     connection
         .configure_window(
             id,
             &ConfigureWindowAux::new()
-                .x(right - new_w as i32)
-                .y(i32::from(at.dst_y))
+                .x(x)
+                .y(y)
                 .width(new_w)
-                .height((height * scale).round().max(1.) as u32),
+                .height(new_h),
         )?
         .check()?;
     connection.flush()?;
