@@ -60,6 +60,7 @@ mod installer;
 mod jpeg_thumbnail;
 mod keylat;
 mod library;
+mod library_window;
 mod live_draw;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
@@ -739,6 +740,7 @@ fn main() {
         }
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
+        library_window::auto_open_from_env(cx); // `CAP_GPUI_AUTO_LIBRARY=home`: the library window.
         #[cfg(debug_assertions)]
         snapshot::arm_from_env(cx);
         #[cfg(debug_assertions)]

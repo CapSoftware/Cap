@@ -1780,6 +1780,12 @@ impl TextInput {
         }
     }
 
+    /// The search chrome without the magnifier, for plain one-line fields.
+    pub fn without_icon(mut self) -> Self {
+        self.icon = None;
+        self
+    }
+
     pub fn placeholder_color(mut self, color: Hsla) -> Self {
         self.muted = color;
         self

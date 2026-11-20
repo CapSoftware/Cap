@@ -6,7 +6,7 @@ mod commands;
 #[cfg(debug_assertions)]
 pub mod dev;
 mod doodles;
-mod export;
+pub(crate) mod export;
 pub(crate) mod format;
 mod home;
 mod menu;
@@ -14,15 +14,15 @@ mod pane;
 mod player;
 mod sidebar;
 mod start;
-mod store;
-mod style;
+pub(crate) mod store;
+pub(crate) mod style;
 #[cfg(test)]
 mod tests;
 mod transcript;
 mod upgrade;
 mod when;
 mod window;
-pub use window::TITLE;
+pub use window::{TITLE, TRAFFIC_LIGHTS};
 mod writer;
 
 use gpui::{App, KeyBinding, actions};

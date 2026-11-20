@@ -4243,6 +4243,10 @@ impl MainWindow {
             )
             .child(label)
             .on_click(cx.listener(|this, _, window, cx| {
+                if std::env::var_os("CAP_GPUI_LIBRARY_DIRECTION").is_some() {
+                    cx.defer(crate::library_window::open);
+                    return;
+                }
                 let kind = this.library_kind;
                 this.open_panel(Panel::Library(kind), window, cx);
             }))
