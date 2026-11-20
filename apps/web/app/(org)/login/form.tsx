@@ -37,6 +37,7 @@ import {
 } from "@/lib/passkey-sign-in";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
+import { signInWithGoogleOneTap, useGoogleOneTap } from "../google-one-tap";
 import { getSafeNextPath } from "../safe-next";
 import { SsoErrorNotice } from "../sso-error-notice";
 
@@ -95,6 +96,33 @@ export function LoginForm() {
 		() => (next ? getSafeNextPath(next, window.location.origin) : null),
 		[next],
 	);
+	const publicEnv = usePublicEnv();
+	const handleGoogleOneTapCredential = useCallback(
+		(credential: string) => {
+			void signInWithGoogleOneTap({
+				credential,
+				nextPath: getNextPath(),
+				isSignup: false,
+				authSurface: "login",
+			});
+		},
+		[getNextPath],
+	);
+	const cancelGoogleOneTap = useGoogleOneTap({
+		clientId: publicEnv.googleAuthAvailable
+			? publicEnv.googleOneTapClientId
+			: null,
+		enabled:
+			!showOrgInput &&
+			!emailSent &&
+			!searchParams?.get("error") &&
+			!searchParams?.get("mobileProvider") &&
+			!searchParams?.get("organizationId") &&
+			!searchParams?.get("connection_id") &&
+			searchParams?.get("sso") !== "1",
+		context: "signin",
+		onCredential: handleGoogleOneTapCredential,
+	});
 
 	useEffect(() => {
 		loginFormMounted.current = true;
@@ -188,6 +216,7 @@ export function LoginForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = useCallback(() => {
+		cancelGoogleOneTap();
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "google",
@@ -204,9 +233,10 @@ export function LoginForm() {
 				"Could not start sign-in. Check your connection and try again.",
 			);
 		});
-	}, [getNextPath]);
+	}, [cancelGoogleOneTap, getNextPath]);
 
 	const handleAppleSignIn = useCallback(() => {
+		cancelGoogleOneTap();
 		const startAppleSignIn = () => {
 			const nextPath = getNextPath();
 			trackEvent("auth_started", {
@@ -227,7 +257,7 @@ export function LoginForm() {
 			});
 		};
 		startAppleSignIn();
-	}, [getNextPath]);
+	}, [cancelGoogleOneTap, getNextPath]);
 
 	const handlePasskeySignIn = useCallback(async () => {
 		if (passkeySignInPending.current) return;
@@ -279,6 +309,7 @@ export function LoginForm() {
 	}, [getNextPath]);
 
 	const handleOidcSignIn = useCallback(() => {
+		cancelGoogleOneTap();
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "oidc",
@@ -288,12 +319,13 @@ export function LoginForm() {
 		signIn("oidc", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
 		});
-	}, [getNextPath]);
+	}, [cancelGoogleOneTap, getNextPath]);
 
 	const handleWorkosSignIn = useCallback(
 		(identifier: string, connectionId?: string) => {
 			if (workosSignInPending.current) return;
 			workosSignInPending.current = true;
+			cancelGoogleOneTap();
 			setOrganizationName(null);
 
 			startSsoTransition(async () => {
@@ -330,7 +362,7 @@ export function LoginForm() {
 				}
 			});
 		},
-		[getNextPath],
+		[cancelGoogleOneTap, getNextPath],
 	);
 
 	useEffect(() => {
@@ -494,6 +526,7 @@ export function LoginForm() {
 										noValidate
 										onSubmit={async (e) => {
 											e.preventDefault();
+											cancelGoogleOneTap();
 
 											const remainingSeconds =
 												getEmailCodeCooldownSeconds(lastEmailSentTime);
@@ -536,7 +569,10 @@ export function LoginForm() {
 										className="flex flex-col space-y-3"
 									>
 										<NormalLogin
-											setShowOrgInput={setShowOrgInput}
+											setShowOrgInput={(show) => {
+												if (show) cancelGoogleOneTap();
+												setShowOrgInput(show);
+											}}
 											email={email}
 											emailSent={emailSent}
 											setEmail={setEmail}
