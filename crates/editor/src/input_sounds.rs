@@ -422,18 +422,38 @@ impl InputSounds {
                     .chunks_exact_mut(2)
                     .zip(&samples[first_frame..first_frame + (to - from)])
                 {
-                    frame[0] += sample * voice.left;
-                    frame[1] += sample * voice.right;
+                    frame[0] = add_under_ceiling(frame[0], sample * voice.left);
+                    frame[1] = add_under_ceiling(frame[1], sample * voice.right);
                 }
             } else {
                 for (index, frame) in out.chunks_exact_mut(2).enumerate() {
                     let sample = cubic(samples, (first_frame + index) as f32 * voice.step);
-                    frame[0] += sample * voice.left;
-                    frame[1] += sample * voice.right;
+                    frame[0] = add_under_ceiling(frame[0], sample * voice.left);
+                    frame[1] = add_under_ceiling(frame[1], sample * voice.right);
                 }
             }
         }
     }
+}
+
+/// Where a sound starts to bend down rather than add straight on: -1 dBFS.
+const SOUND_CEILING_KNEE: f32 = 0.891;
+/// The level a bent peak approaches, just under full scale.
+const SOUND_CEILING: f32 = 0.999;
+
+/// Adds a sound to the mix, bending any peak it pushes past the knee smoothly
+/// toward [`SOUND_CEILING`] instead of letting it clip. Mixes that stay under
+/// the knee add exactly, and one sound never pulls a peak below the audio it
+/// lands on.
+fn add_under_ceiling(under: f32, sound: f32) -> f32 {
+    let mixed = under + sound;
+    let level = mixed.abs();
+    if level <= SOUND_CEILING_KNEE || level <= under.abs() {
+        return mixed;
+    }
+    let room = SOUND_CEILING - SOUND_CEILING_KNEE;
+    let bent = SOUND_CEILING_KNEE + room * ((level - SOUND_CEILING_KNEE) / room).tanh();
+    bent.max(under.abs()).copysign(mixed)
 }
 
 fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {

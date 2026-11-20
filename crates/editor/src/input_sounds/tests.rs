@@ -272,3 +272,71 @@ fn hiding_the_cursor_on_a_clip_changes_the_click_sounds() {
     after.timeline.as_mut().unwrap().segments[0].hide_cursor = Some(true);
     assert!(input_sounds_changed(&before, &after));
 }
+
+#[test]
+fn a_full_volume_burst_stays_under_full_scale() {
+    let sounds = sounds(&key_project(1.0)).unwrap();
+    let mut output = vec![0.0; 48_000 * 9 * 2];
+    sounds.mix(&mut output, 0);
+    let peak = output
+        .iter()
+        .fold(0f32, |peak, sample| peak.max(sample.abs()));
+    assert!(
+        peak > SOUND_CEILING_KNEE,
+        "the burst should reach the knee: {peak}"
+    );
+    assert!(peak < 1.0, "peak {peak}");
+}
+
+#[test]
+fn sounds_at_the_default_volume_add_exactly() {
+    let sounds = sounds(&key_project(cap_project::DEFAULT_INPUT_SOUND_VOLUME)).unwrap();
+    let mut output = vec![0.0; 48_000 * 9 * 2];
+    sounds.mix(&mut output, 0);
+    let peak = output
+        .iter()
+        .fold(0f32, |peak, sample| peak.max(sample.abs()));
+    assert!(peak < SOUND_CEILING_KNEE, "peak {peak}");
+}
+
+#[test]
+fn sounds_over_loud_audio_stay_under_full_scale() {
+    let sounds = sounds(&key_project(1.0)).unwrap();
+    let frames = 48_000 * 9;
+    let under: Vec<f32> = (0..frames * 2)
+        .map(|index| 0.97 * (index as f32 * 0.0007).sin())
+        .collect();
+    let mut output = under.clone();
+    sounds.mix(&mut output, 0);
+    for (mixed, under) in output.iter().zip(&under) {
+        assert!(mixed.abs() < 1.0 || mixed == under, "{under} -> {mixed}");
+    }
+    let mut silent = vec![0.0; frames * 2];
+    sounds.mix(&mut silent, 0);
+    for ((mixed, under), sound) in output.iter().zip(&under).zip(&silent) {
+        if *sound == 0.0 {
+            assert_eq!(mixed.to_bits(), under.to_bits());
+        }
+    }
+}
+
+#[test]
+fn the_ceiling_is_smooth_bounded_and_exact_below_the_knee() {
+    assert_eq!(add_under_ceiling(0.2, 0.3), 0.2 + 0.3);
+    assert_eq!(add_under_ceiling(-0.5, -0.3), -0.5 - 0.3);
+    assert_eq!(add_under_ceiling(0.95, -0.5), 0.95 - 0.5);
+    let mut previous = 0.0;
+    for step in 0..4000 {
+        let sound = step as f32 * 0.001;
+        let mixed = add_under_ceiling(0.5, sound);
+        assert!(mixed >= previous && mixed < 1.0, "{sound} -> {mixed}");
+        assert_eq!(-mixed, add_under_ceiling(-0.5, -sound));
+        previous = mixed;
+    }
+    let just_under = add_under_ceiling(0.0, SOUND_CEILING_KNEE - 1e-4);
+    let just_over = add_under_ceiling(0.0, SOUND_CEILING_KNEE + 1e-4);
+    assert!((just_over - just_under - 2e-4).abs() < 1e-5);
+    let over_loud = add_under_ceiling(0.99, 0.2);
+    assert!((0.99..1.0).contains(&over_loud), "{over_loud}");
+    assert_eq!(add_under_ceiling(1.2, 0.1), 1.2);
+}
