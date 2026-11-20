@@ -1,10 +1,11 @@
-import {
+import nodeCrypto, {
 	createHash,
 	generateKeyPairSync,
 	type KeyObject,
 	randomBytes,
 	randomUUID,
 	sign,
+	webcrypto,
 } from "node:crypto";
 import { authChallenges, userPasskeys, users } from "@cap/database/schema";
 import { Organisation, User } from "@cap/web-domain";
@@ -108,9 +109,14 @@ function uint32(value: number) {
 	return buffer;
 }
 
-function clientData(type: string, challenge: string, origin: string) {
+function clientData(
+	type: string,
+	challenge: string,
+	origin: string,
+	extra: Record<string, unknown> = {},
+) {
 	return Buffer.from(
-		JSON.stringify({ type, challenge, origin, crossOrigin: false }),
+		JSON.stringify({ type, challenge, origin, crossOrigin: false, ...extra }),
 	);
 }
 
@@ -136,7 +142,13 @@ class SoftwareAuthenticator {
 
 	register(
 		challenge: string,
-		options: { origin?: string; rpId?: string; flags?: number } = {},
+		options: {
+			origin?: string;
+			rpId?: string;
+			flags?: number;
+			fmt?: string;
+			attStmt?: Map<string, unknown>;
+		} = {},
 	) {
 		const flags = options.flags ?? UP | UV | BE | BS | AT;
 		const credentialId = Buffer.from(this.credentialId, "base64url");
@@ -154,11 +166,11 @@ class SoftwareAuthenticator {
 			Buffer.from(this.cosePublicKey()),
 		]);
 		const attestationObject = isoCBOR.encode(
-			new Map<string, string | Uint8Array | Map<string, never>>([
-				["fmt", "none"],
-				["attStmt", new Map<string, never>()],
+			new Map<string, unknown>([
+				["fmt", options.fmt ?? "none"],
+				["attStmt", options.attStmt ?? new Map<string, never>()],
 				["authData", authData],
-			]),
+			]) as Parameters<typeof isoCBOR.encode>[0],
 		);
 		return {
 			id: this.credentialId,
@@ -186,6 +198,7 @@ class SoftwareAuthenticator {
 			signingKey?: KeyObject;
 			credentialId?: string;
 			type?: string;
+			clientData?: Record<string, unknown>;
 		} = {},
 	) {
 		const counter = options.counter ?? this.counter;
@@ -200,6 +213,7 @@ class SoftwareAuthenticator {
 			options.type ?? "webauthn.get",
 			challenge,
 			options.origin ?? ORIGIN,
+			options.clientData,
 		);
 		const signature = sign(
 			"sha256",
@@ -429,6 +443,62 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await createPasskeyRegistrationOptions(user)).toBeNull();
 			});
 
+			it("ignores attestation statements and never fetches their certificate URLs", async () => {
+				const x509 = await import("@peculiar/x509");
+				x509.cryptoProvider.set(webcrypto as unknown as Crypto);
+				const keys = await webcrypto.subtle.generateKey(
+					{ name: "ECDSA", namedCurve: "P-256" },
+					true,
+					["sign", "verify"],
+				);
+				const certificate =
+					await x509.X509CertificateGenerator.createSelfSigned({
+						serialNumber: "01",
+						name: "CN=probe",
+						notBefore: new Date(Date.now() - 60_000),
+						notAfter: new Date(Date.now() + 86_400_000),
+						signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+						keys,
+						extensions: [
+							new x509.CRLDistributionPointsExtension([
+								"http://169.254.169.254/latest/meta-data/probe",
+							]),
+						],
+					});
+				const fetchSpy = vi
+					.spyOn(globalThis, "fetch")
+					.mockResolvedValue(new Response(new Uint8Array(0)));
+				try {
+					for (const fmt of ["apple", "packed", "android-key"]) {
+						const user = await makeUser();
+						const options = await createPasskeyRegistrationOptions(user);
+						if (!options) throw new Error("Missing options.");
+						const response = new SoftwareAuthenticator(user.id).register(
+							options.challenge,
+							{
+								fmt,
+								attStmt: new Map<string, unknown>([
+									["alg", -7],
+									["sig", new Uint8Array(64)],
+									["x5c", [new Uint8Array(certificate.rawData)]],
+								]),
+							},
+						);
+						expect(
+							(
+								await verifyPasskeyRegistration(
+									user.id,
+									JSON.stringify(response),
+								)
+							).status,
+						).toBe("registered");
+					}
+					expect(fetchSpy).not.toHaveBeenCalled();
+				} finally {
+					fetchSpy.mockRestore();
+				}
+			});
+
 			it("rejects malformed and oversized responses", async () => {
 				const user = await makeUser();
 				for (const raw of [
@@ -443,6 +513,16 @@ describe.runIf(Boolean(databaseUrl))(
 						"invalid",
 					);
 				}
+				const options = await createPasskeyRegistrationOptions(user);
+				if (!options) throw new Error("Missing options.");
+				expect(
+					(
+						await verifyPasskeyRegistration(
+							user.id,
+							new SoftwareAuthenticator(user.id).register(options.challenge),
+						)
+					).status,
+				).toBe("invalid");
 			});
 		});
 
@@ -503,7 +583,7 @@ describe.runIf(Boolean(databaseUrl))(
 				).toBeNull();
 			});
 
-			it("refuses challenges issued for registration or another user's check", async () => {
+			it("refuses challenges issued for registration or for a check", async () => {
 				const user = await makeUser();
 				const authenticator = await registerPasskey(user);
 				const registration = await createPasskeyRegistrationOptions(user);
@@ -526,6 +606,12 @@ describe.runIf(Boolean(databaseUrl))(
 				["no user verification", { flags: UP }],
 				["no user presence", { flags: UV }],
 				["a registration ceremony", { type: "webauthn.create" }],
+				["a cross-origin iframe", { clientData: { crossOrigin: true } }],
+				[
+					"an embedding top origin",
+					{ clientData: { topOrigin: "https://evil.test" } },
+				],
+				["no user handle", { userHandle: null }],
 			])("refuses an assertion made for %s", async (_, options) => {
 				const user = await makeUser();
 				const authenticator = await registerPasskey(user);
@@ -900,14 +986,35 @@ describe.runIf(Boolean(databaseUrl))(
 				);
 			});
 
-			it("burns the code after the attempt limit, even under concurrent guesses", async () => {
+			it("accepts a correct code once when submissions race", async () => {
+				const user = await makeUser();
+				const issued = await issueStepUpCode(user.id);
+				if (issued.status !== "issued") throw new Error("No code.");
+				const results = await Promise.all(
+					Array.from({ length: 5 }, () =>
+						verifyStepUpCode(user.id, issued.code),
+					),
+				);
+				expect(results.filter(Boolean)).toHaveLength(1);
+			});
+
+			it("compares at most five guesses, even when they race", async () => {
 				const user = await makeUser();
 				const issued = await issueStepUpCode(user.id);
 				if (issued.status !== "issued") throw new Error("No code.");
 				const wrong = issued.code === "000000" ? "111111" : "000000";
-				const guesses = await Promise.all(
-					Array.from({ length: 25 }, () => verifyStepUpCode(user.id, wrong)),
-				);
+				const compare = vi.spyOn(nodeCrypto, "timingSafeEqual");
+				let guesses: boolean[];
+				try {
+					guesses = await Promise.all(
+						Array.from({ length: 25 }, () => verifyStepUpCode(user.id, wrong)),
+					);
+					expect(compare.mock.calls.length).toBeLessThanOrEqual(
+						STEP_UP_CODE_MAX_ATTEMPTS,
+					);
+				} finally {
+					compare.mockRestore();
+				}
 				expect(guesses.every((result) => result === false)).toBe(true);
 				const [row] = await database()
 					.select({ attempts: authChallenges.attempts })
