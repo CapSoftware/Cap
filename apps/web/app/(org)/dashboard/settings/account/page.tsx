@@ -1,3 +1,4 @@
+import { isEmailManagedByOrganization } from "@cap/database/auth/email-change";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { listMyPasskeys } from "@/actions/auth/passkeys";
@@ -18,9 +19,15 @@ export default async function SettingsPage() {
 		listMyPasskeys().catch(() => null),
 		getCurrentUser(),
 	]);
+	const emailManaged = user
+		? await isEmailManagedByOrganization(user.id).catch(() => true)
+		: true;
 	return (
 		<div className="flex flex-col gap-10 mx-auto w-full max-w-4xl">
-			<Settings />
+			<Settings
+				canUsePasskey={(passkeys?.length ?? 0) > 0}
+				emailManaged={emailManaged}
+			/>
 			{user && (
 				<Passkeys
 					email={user.email}

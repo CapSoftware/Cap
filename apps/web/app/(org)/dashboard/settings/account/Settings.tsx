@@ -29,10 +29,17 @@ import {
 	SettingsSection,
 	settingsFieldClass,
 } from "../organization/_components/settings-ui";
+import { ChangeEmail } from "./components/ChangeEmail";
 import { ProfileImage } from "./components/ProfileImage";
 import { patchAccountSettings, signOutAllDevices } from "./server";
 
-export const Settings = () => {
+export const Settings = ({
+	canUsePasskey = false,
+	emailManaged = false,
+}: {
+	canUsePasskey?: boolean;
+	emailManaged?: boolean;
+}) => {
 	const router = useRouter();
 	const { organizationData, user } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
@@ -234,19 +241,31 @@ export const Settings = () => {
 							title={
 								<label htmlFor={contactEmailId}>Contact email address</label>
 							}
-							description="This is the email address you used to sign up to Cap with."
+							description={
+								emailManaged
+									? "Your organization manages this address through single sign-on."
+									: "This is the email address you sign in to Cap with."
+							}
 							control={
-								<Input
-									type="email"
-									className={clsx(
-										settingsFieldClass,
-										"w-full sm:w-[17rem] disabled:bg-gray-2 disabled:text-gray-10",
+								<div className="flex gap-2 w-full sm:w-auto">
+									<Input
+										type="email"
+										className={clsx(
+											settingsFieldClass,
+											"w-full sm:w-[17rem] disabled:bg-gray-2 disabled:text-gray-10",
+										)}
+										value={user?.email as string}
+										id={contactEmailId}
+										name="contactEmail"
+										disabled
+									/>
+									{!emailManaged && user?.email && (
+										<ChangeEmail
+											email={user.email}
+											canUsePasskey={canUsePasskey}
+										/>
 									)}
-									value={user?.email as string}
-									id={contactEmailId}
-									name="contactEmail"
-									disabled
-								/>
+								</div>
 							}
 						/>
 						<SettingsRow
