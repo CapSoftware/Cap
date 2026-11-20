@@ -1107,6 +1107,66 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await listPasskeys(user.id)).toHaveLength(1);
 			});
 
+			it("lets a fresh sign-in add only the account's first passkey", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptionsAfterSignIn,
+				} = await actions();
+				const now = Math.floor(Date.now() / 1000);
+
+				const owner = await makeUser();
+				await registerPasskey(owner);
+				fixture.currentUser = owner;
+				fixture.session = { user: { id: owner.id }, authTime: now - 30 };
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+				expect(await listPasskeys(owner.id)).toHaveLength(1);
+
+				const late = await makeUser();
+				fixture.currentUser = late;
+				fixture.session = { user: { id: late.id }, authTime: now - 30 };
+				const pending = await getPasskeyRegistrationOptionsAfterSignIn();
+				if (pending.status !== "ok") throw new Error("No options.");
+				await registerPasskey(late);
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(
+								new SoftwareAuthenticator(late.id).register(
+									pending.options.challenge,
+								),
+							),
+						)
+					).status,
+				).toBe("invalid");
+				expect(await listPasskeys(late.id)).toHaveLength(1);
+
+				const racing = await makeUser();
+				fixture.currentUser = racing;
+				fixture.session = { user: { id: racing.id }, authTime: now - 30 };
+				const challenges = [];
+				for (let index = 0; index < 3; index++) {
+					const options = await getPasskeyRegistrationOptionsAfterSignIn();
+					if (options.status !== "ok") throw new Error("No options.");
+					challenges.push(options.options.challenge);
+				}
+				const results = await Promise.all(
+					challenges.map((challenge) =>
+						verifyPasskeyRegistration(
+							racing.id,
+							JSON.stringify(
+								new SoftwareAuthenticator(racing.id).register(challenge),
+							),
+						),
+					),
+				);
+				expect(
+					results.filter((result) => result.status === "registered"),
+				).toHaveLength(1);
+				expect(await listPasskeys(racing.id)).toHaveLength(1);
+			});
+
 			it("offers the prompt only after a fresh sign-in, without passkeys, unless snoozed", async () => {
 				const { dismissPasskeyPrompt } = await actions();
 				const { shouldOfferPasskey } = await import("@/lib/passkey-prompt");
