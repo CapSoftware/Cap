@@ -3640,6 +3640,9 @@ voice = "Recognise my voice"
 voice_description = "Learnt from meetings where only you spoke into the microphone, and kept on this computer. Your lines carry your name even with others in the room."
 speakers_model = "Better speaker labels"
 speakers_model_description = "A 120 MB model that tells voices apart more reliably. Kept on this computer."
+model_credits = "Speaker models"
+model_credits_description = "WeSpeaker CAM++ by the WeSpeaker project (CC BY 4.0) and NVIDIA Nemotron 3 Diarization (OpenMDW 1.1)."
+licenses = "Licenses"
 voice_learnt = { one = "Learnt from {count} meeting", other = "Learnt from {count} meetings" }
 voice_forget = "Forget my voice"
 

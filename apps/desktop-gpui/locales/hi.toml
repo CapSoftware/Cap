@@ -3638,6 +3638,9 @@ voice = "मेरी आवाज़ पहचानें"
 voice_description = "उन मीटिंग से सीखी जाती है जिनमें माइक्रोफ़ोन में केवल आपने बात की, और इसी कंप्यूटर पर रहती है। कमरे में दूसरे लोग हों तब भी आपकी पंक्तियों पर आपका नाम रहता है।"
 speakers_model = "बेहतर वक्ता लेबल"
 speakers_model_description = "120 MB का मॉडल जो आवाज़ों को ज़्यादा भरोसे से अलग पहचानता है। इसी कंप्यूटर पर रहता है।"
+model_credits = "वक्ता मॉडल"
+model_credits_description = "WeSpeaker प्रोजेक्ट का WeSpeaker CAM++ (CC BY 4.0) और NVIDIA Nemotron 3 Diarization (OpenMDW 1.1)।"
+licenses = "लाइसेंस"
 voice_learnt = { one = "{count} मीटिंग से सीखी गई", other = "{count} मीटिंग से सीखी गई" }
 voice_forget = "मेरी आवाज़ भूल जाएँ"
 

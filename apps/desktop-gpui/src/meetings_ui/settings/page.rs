@@ -21,6 +21,10 @@ use crate::{
     ui,
 };
 
+/// The licence texts bundled with the app, for the speaker models it downloads.
+const MODEL_LICENSES_URL: &str =
+    "https://github.com/CapSoftware/Cap/tree/main/apps/desktop-gpui/licenses";
+
 impl SettingsWindow {
     pub(crate) fn render_meetings(
         &self,
@@ -1084,7 +1088,8 @@ impl SettingsWindow {
         .into_any_element()
     }
 
-    /// Learning the user's voice, and forgetting what was learnt.
+    /// Learning the user's voice, forgetting what was learnt, and credit for
+    /// the speaker models.
     pub(crate) fn meetings_voice(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut rows = vec![self.setting_row(
             tr::settings::meetings::transcription::voice(),
@@ -1103,6 +1108,19 @@ impl SettingsWindow {
                 self.meetings_speakers_model(state, cx),
             ));
         }
+        rows.push(self.setting_row(
+            tr::settings::meetings::transcription::model_credits(),
+            Some(tr::settings::meetings::transcription::model_credits_description()),
+            self.button(
+                "meetings-model-licenses",
+                (ui::ButtonVariant::Gray, None),
+                tr::settings::meetings::transcription::licenses(),
+                false,
+                cx,
+                |_, _, cx| cx.open_url(MODEL_LICENSES_URL),
+            )
+            .into_any_element(),
+        ));
         if let Some(meetings) = self.pages.meetings.voice_meetings {
             rows.push(
                 ui::SettingRow::settings(

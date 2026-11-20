@@ -3638,6 +3638,9 @@ voice = "识别我的声音"
 voice_description = "从只有你对着麦克风说话的会议中学习，并保存在这台电脑上。即使房间里还有其他人，你说的内容也会标上你的名字。"
 speakers_model = "更准确的说话人标注"
 speakers_model_description = "一个 120 MB 的模型，能更可靠地区分不同的声音。保存在这台电脑上。"
+model_credits = "说话人模型"
+model_credits_description = "WeSpeaker 项目的 WeSpeaker CAM++（CC BY 4.0）和 NVIDIA Nemotron 3 Diarization（OpenMDW 1.1）。"
+licenses = "许可证"
 voice_learnt = { other = "已从 {count} 场会议中学习" }
 voice_forget = "忘记我的声音"
 

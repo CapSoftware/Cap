@@ -3638,6 +3638,9 @@ voice = "自分の声を認識"
 voice_description = "マイクに向かって自分だけが話した会議から学習し、このコンピュータに保存します。部屋に他の人がいても、自分の発言に名前が付きます。"
 speakers_model = "話者ラベルの精度向上"
 speakers_model_description = "声をより確実に聞き分ける 120 MB のモデルです。このコンピュータに保存されます。"
+model_credits = "話者モデル"
+model_credits_description = "WeSpeaker プロジェクトの WeSpeaker CAM++（CC BY 4.0）と NVIDIA Nemotron 3 Diarization（OpenMDW 1.1）。"
+licenses = "ライセンス"
 voice_learnt = { other = "{count}件の会議から学習済み" }
 voice_forget = "自分の声を消去"
 

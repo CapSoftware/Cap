@@ -3638,6 +3638,9 @@ voice = "Reconocer mi voz"
 voice_description = "Se aprende de reuniones en las que solo tú hablaste al micrófono y se guarda en este equipo. Tus líneas llevan tu nombre aunque haya más personas en la sala."
 speakers_model = "Mejores etiquetas de hablantes"
 speakers_model_description = "Un modelo de 120 MB que distingue las voces con más fiabilidad. Se guarda en este ordenador."
+model_credits = "Modelos de hablantes"
+model_credits_description = "WeSpeaker CAM++ del proyecto WeSpeaker (CC BY 4.0) y NVIDIA Nemotron 3 Diarization (OpenMDW 1.1)."
+licenses = "Licencias"
 voice_learnt = { one = "Aprendida de {count} reunión", other = "Aprendida de {count} reuniones" }
 voice_forget = "Olvidar mi voz"
 

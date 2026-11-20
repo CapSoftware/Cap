@@ -3638,6 +3638,9 @@ voice = "Meine Stimme erkennen"
 voice_description = "Wird aus Meetings gelernt, in denen nur Sie ins Mikrofon gesprochen haben, und bleibt auf diesem Computer. Ihre Zeilen tragen Ihren Namen, auch wenn andere im Raum sind."
 speakers_model = "Bessere Sprecherzuordnung"
 speakers_model_description = "Ein 120-MB-Modell, das Stimmen zuverlässiger unterscheidet. Bleibt auf diesem Computer."
+model_credits = "Sprechermodelle"
+model_credits_description = "WeSpeaker CAM++ vom WeSpeaker-Projekt (CC BY 4.0) und NVIDIA Nemotron 3 Diarization (OpenMDW 1.1)."
+licenses = "Lizenzen"
 voice_learnt = { one = "Aus {count} Meeting gelernt", other = "Aus {count} Meetings gelernt" }
 voice_forget = "Meine Stimme vergessen"
 
