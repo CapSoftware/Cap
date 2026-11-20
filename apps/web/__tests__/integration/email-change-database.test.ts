@@ -33,8 +33,14 @@ const fixture = vi.hoisted(() => ({
 	currentUser: null as unknown,
 	codes: [] as { email: string; code: string }[],
 	notices: [] as { previousEmail: string; newEmail: string }[],
-	stripeUpdates: [] as { id: string; params: Record<string, unknown> }[],
-	stripeFails: false,
+	stripeUpdates: [] as {
+		id: string;
+		params: Record<string, unknown>;
+		options: unknown;
+	}[],
+	stripeFails: false as false | "down" | "missing",
+	failLoops: false,
+	limitedAddress: null as string | null,
 }));
 
 vi.mock("@cap/database", () => ({
@@ -56,9 +62,18 @@ vi.mock("@cap/utils", async (importOriginal) => ({
 	STRIPE_AVAILABLE: () => true,
 	stripe: () => ({
 		customers: {
-			update: async (id: string, params: Record<string, unknown>) => {
+			update: async (
+				id: string,
+				params: Record<string, unknown>,
+				options?: unknown,
+			) => {
+				if (fixture.stripeFails === "missing") {
+					throw Object.assign(new Error("No such customer"), {
+						code: "resource_missing",
+					});
+				}
 				if (fixture.stripeFails) throw new Error("Stripe is down");
-				fixture.stripeUpdates.push({ id, params });
+				fixture.stripeUpdates.push({ id, params, options });
 				return { id };
 			},
 		},
@@ -84,6 +99,13 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 vi.mock("@/lib/email-code-rate-limit", () => ({
 	isEmailCodeSendLimited: async () => false,
+	isEmailCodeVerifyLimited: async (email: string) =>
+		email === fixture.limitedAddress,
+}));
+vi.mock("@cap/database/loops/queue", () => ({
+	enqueueLoopsSync: async () => {
+		if (fixture.failLoops) throw new Error("Loops queue is down");
+	},
 }));
 
 const databaseUrl = process.env.CAP_PASSKEYS_TEST_DATABASE_URL;
@@ -189,6 +211,8 @@ describe.runIf(Boolean(databaseUrl))(
 			};
 			fixture.isCap = "false";
 			fixture.stripeFails = false;
+			fixture.failLoops = false;
+			fixture.limitedAddress = null;
 		});
 
 		afterAll(async () => {
@@ -268,6 +292,7 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(fixture.stripeUpdates.at(-1)).toEqual({
 				id: user.stripeCustomerId,
 				params: { email: newEmail, metadata: { userId: user.id } },
+				options: undefined,
 			});
 
 			const adapter = DrizzleAdapter(database());
@@ -339,8 +364,6 @@ describe.runIf(Boolean(databaseUrl))(
 			const newEmail = address();
 			await start(user, newEmail);
 			const code = lastCode(newEmail);
-			fixture.currentUser = other;
-			expect(await finishEmailChange(code)).toEqual({ status: "invalid" });
 			const otherEmail = address();
 			await start(other, otherEmail);
 			fixture.currentUser = other;
@@ -349,6 +372,15 @@ describe.runIf(Boolean(databaseUrl))(
 				await finishEmailChange(code === otherCode ? "000000" : code),
 			).toEqual({ status: "invalid" });
 			expect((await reload(other.id))?.email).toBe(other.email);
+			expect(await finishEmailChange(otherCode)).toMatchObject({
+				status: "changed",
+				email: otherEmail,
+			});
+			fixture.currentUser = user;
+			expect(await finishEmailChange(code)).toMatchObject({
+				status: "changed",
+				email: newEmail,
+			});
 		});
 
 		it("works once and only before it expires", async () => {
@@ -380,7 +412,49 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await reload(later.id))?.email).toBe(later.email);
 		});
 
-		it("burns the request after five wrong codes, even when guesses race", async () => {
+		it("allows a right code after two wrong ones", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser();
+			const newEmail = address();
+			await start(user, newEmail);
+			const code = lastCode(newEmail);
+			const wrong = code === "000000" ? "111111" : "000000";
+			expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
+			expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
+			expect(await finishEmailChange(code)).toMatchObject({
+				status: "changed",
+			});
+		});
+
+		it("refuses a right code after three wrong ones", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser();
+			const newEmail = address();
+			await start(user, newEmail);
+			const code = lastCode(newEmail);
+			const wrong = code === "000000" ? "111111" : "000000";
+			for (let attempt = 0; attempt < 3; attempt++) {
+				expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
+			}
+			expect(await finishEmailChange(code)).toEqual({ status: "invalid" });
+		});
+
+		it("limits guesses per target address across accounts", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser();
+			const newEmail = address();
+			await start(user, newEmail);
+			fixture.limitedAddress = newEmail;
+			expect(await finishEmailChange(lastCode(newEmail))).toEqual({
+				status: "rate_limited",
+			});
+			fixture.limitedAddress = null;
+			expect(await finishEmailChange(lastCode(newEmail))).toMatchObject({
+				status: "changed",
+			});
+		});
+
+		it("burns the request after three wrong codes, even when guesses race", async () => {
 			const { finishEmailChange } = await actions();
 			const user = await makeUser();
 			const newEmail = address();
@@ -407,6 +481,12 @@ describe.runIf(Boolean(databaseUrl))(
 				status: "sent",
 				email: second,
 			});
+			expect(
+				await database()
+					.select()
+					.from(emailChangeRequests)
+					.where(eq(emailChangeRequests.userId, user.id)),
+			).toHaveLength(1);
 			expect(await finishEmailChange(lastCode(first))).toEqual({
 				status: "invalid",
 			});
@@ -414,6 +494,34 @@ describe.runIf(Boolean(databaseUrl))(
 				status: "changed",
 				email: second,
 			});
+		});
+
+		it("starts changes for many accounts at once without deadlocking", async () => {
+			const { requestEmailChange } = await import(
+				"../../../../packages/database/auth/email-change"
+			);
+			const people = await Promise.all(
+				Array.from({ length: 12 }, () => makeUser()),
+			);
+			for (let round = 0; round < 3; round++) {
+				if (round > 0) {
+					await database()
+						.update(emailChangeRequests)
+						.set({ expiresAt: new Date(Date.now() + 9 * 60 * 1000) })
+						.where(
+							inArray(
+								emailChangeRequests.userId,
+								people.map((person) => person.id),
+							),
+						);
+				}
+				const results = await Promise.all(
+					people.map((person) => requestEmailChange(person, address())),
+				);
+				expect(results.every((result) => result.status === "issued")).toBe(
+					true,
+				);
+			}
 		});
 
 		it("issues one code when requests race", async () => {
@@ -437,7 +545,7 @@ describe.runIf(Boolean(databaseUrl))(
 
 		it("does not reveal at request time that an address is taken", async () => {
 			const { finishEmailChange } = await actions();
-			const owner = await makeUser(address("Taken").replace("taken", "TaKen"));
+			const owner = await makeUser(address("TaKen"));
 			const user = await makeUser();
 			const requested = owner.email.toLowerCase();
 			expect(await start(user, requested)).toEqual({
@@ -575,6 +683,76 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await reload(later.id))?.email).toBe(later.email);
 		});
 
+		it("updates billing every time, even when an address is reused", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser(address("a"), {
+				stripeCustomerId: `cus_${id()}`,
+			});
+			const original = user.email;
+			const other = address("b");
+			const sequence = [other, original, other];
+			let current = user;
+			for (const target of sequence) {
+				await start(current, target);
+				expect(await finishEmailChange(lastCode(target))).toMatchObject({
+					status: "changed",
+				});
+				const next = await reload(user.id);
+				if (!next) throw new Error("User disappeared.");
+				current = next;
+			}
+			const updates = fixture.stripeUpdates.filter(
+				(update) => update.id === user.stripeCustomerId,
+			);
+			expect(updates.map((update) => update.params.email)).toEqual(sequence);
+			expect(updates.every((update) => update.options === undefined)).toBe(
+				true,
+			);
+		});
+
+		it("puts billing back when the change does not commit", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser(address(), {
+				stripeCustomerId: `cus_${id()}`,
+			});
+			const newEmail = address();
+			await start(user, newEmail);
+			fixture.failLoops = true;
+			await expect(finishEmailChange(lastCode(newEmail))).rejects.toThrow(
+				"Loops queue is down",
+			);
+			fixture.failLoops = false;
+			expect((await reload(user.id))?.email).toBe(user.email);
+			const updates = fixture.stripeUpdates
+				.filter((update) => update.id === user.stripeCustomerId)
+				.map((update) => update.params.email);
+			expect(updates).toEqual([newEmail, user.email]);
+		});
+
+		it("changes the email when the billing customer no longer exists", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser(address(), {
+				stripeCustomerId: `cus_${id()}`,
+			});
+			const newEmail = address();
+			await start(user, newEmail);
+			fixture.stripeFails = "missing";
+			expect(await finishEmailChange(lastCode(newEmail))).toMatchObject({
+				status: "changed",
+			});
+			expect((await reload(user.id))?.email).toBe(newEmail);
+		});
+
+		it("treats the trusted-proxy account as managed", async () => {
+			const user = await makeUser();
+			fixture.env.TRUSTED_PROXY_AUTH_HEADER = "x-owner";
+			fixture.env.TRUSTED_PROXY_AUTH_SECRET = "secret";
+			fixture.env.TRUSTED_PROXY_AUTH_EMAIL = user.email.toUpperCase();
+			expect(await start(user, address())).toEqual({ status: "managed" });
+			const other = await makeUser();
+			expect((await start(other, address())).status).toBe("sent");
+		});
+
 		it("keeps the old email when billing cannot be updated, and recovers", async () => {
 			const { finishEmailChange } = await actions();
 			const user = await makeUser(address(), {
@@ -583,7 +761,7 @@ describe.runIf(Boolean(databaseUrl))(
 			const newEmail = address();
 			await start(user, newEmail);
 			const code = lastCode(newEmail);
-			fixture.stripeFails = true;
+			fixture.stripeFails = "down";
 			expect(await finishEmailChange(code)).toEqual({ status: "failed" });
 			expect((await reload(user.id))?.email).toBe(user.email);
 			fixture.stripeFails = false;
