@@ -2480,6 +2480,7 @@ enum ToolbarMenu {
     AspectRatio,
     PreviewSpeed,
     CaptionDownload,
+    AddClips,
 }
 
 struct OpenToolbarMenu {
@@ -8811,6 +8812,10 @@ impl EditorWindow {
                 .iter()
                 .map(|format| ui::MenuItem::new(format.label(), false))
                 .collect(),
+            ToolbarMenu::AddClips => vec![
+                ui::MenuItem::new(tr::editor::clips::import_existing(), false),
+                ui::MenuItem::new(tr::editor::clips::import_mp4(), false),
+            ],
         }
     }
 
@@ -8959,6 +8964,11 @@ impl EditorWindow {
                     self.download_captions(*format, window, cx);
                 }
             }
+            ToolbarMenu::AddClips => match index {
+                0 => self.pick_existing_recording(window, cx),
+                1 => self.pick_mp4(window, cx),
+                _ => {}
+            },
         }
         cx.notify();
         window.refresh();
@@ -8974,6 +8984,7 @@ impl EditorWindow {
                     ToolbarMenu::AspectRatio => px(200.),
                     ToolbarMenu::PreviewSpeed => px(96.),
                     ToolbarMenu::CaptionDownload => px(160.),
+                    ToolbarMenu::AddClips => px(180.),
                 })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);

@@ -442,9 +442,9 @@ impl EditorWindow {
             })
             .child(Action::Clips.label());
         let this = cx.entity().downgrade();
-        ui::Menu::trigger(button, move |bounds, _, cx| {
+        ui::Menu::trigger(button, move |bounds, window, cx| {
             this.update(cx, |this, cx| {
-                this.open_clips_import_menu(bounds.bottom_left() + gpui::point(px(0.), px(6.)), cx);
+                this.open_toolbar_menu(ToolbarMenu::AddClips, *bounds, window, cx);
             })
             .ok();
         })

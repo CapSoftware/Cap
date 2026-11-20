@@ -915,10 +915,12 @@ impl EditorWindow {
                         .disabled(importing)
                         .pressed(self.clips.import_menu.is_some())
                         .on_open(cx.listener(|this, bounds: &Bounds<Pixels>, _window, cx| {
-                            this.open_clips_import_menu(
-                                bounds.bottom_left() + gpui::point(px(0.), px(4.)),
-                                cx,
-                            );
+                            if this.clips.importing {
+                                return;
+                            }
+                            this.clips.import_menu =
+                                Some(bounds.bottom_left() + gpui::point(px(0.), px(4.)));
+                            cx.notify();
                         })),
                 ),
         )
@@ -1394,15 +1396,6 @@ impl EditorWindow {
         .detach();
     }
 
-    /// The import menu: an existing recording or an MP4, opened at `origin`.
-    pub(crate) fn open_clips_import_menu(&mut self, origin: Point<Pixels>, cx: &mut Context<Self>) {
-        if self.clips.importing {
-            return;
-        }
-        self.clips.import_menu = Some(origin);
-        cx.notify();
-    }
-
     pub(crate) fn render_clips_overlays(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut overlays = Vec::new();
         if let Some(menu) = self.render_clips_import_menu(cx) {
@@ -1551,7 +1544,7 @@ impl EditorWindow {
 
     /// `pickCapRecording` (`:533-539`): the `.cap` picker, rooted at the
     /// recordings directory where the platform dialog supports a root.
-    fn pick_existing_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_existing_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.importing {
             return;
         }
@@ -1569,7 +1562,7 @@ impl EditorWindow {
         .detach();
     }
 
-    fn pick_mp4(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_mp4(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.importing {
             return;
         }
