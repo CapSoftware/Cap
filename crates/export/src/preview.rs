@@ -284,6 +284,7 @@ async fn render_preview_frame(
         segment_media.cursor,
         total_duration,
         render_constants.options.screen_size,
+        render_constants.options.camera_size,
         segment.recording_clip,
     );
     zoom_timeline.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);
@@ -356,6 +357,7 @@ async fn render_preview_frame(
             outgoing_media.cursor,
             total_duration,
             render_constants.options.screen_size,
+            render_constants.options.camera_size,
             outgoing.segment.recording_clip,
         );
         outgoing_zoom.ensure_precomputed_until((frame_number as f32 + 1.0) / settings.fps as f32);

@@ -1197,6 +1197,7 @@ pub async fn render_video_to_channel(
                 &segment.cursor,
                 duration,
                 constants.options.screen_size,
+                constants.options.camera_size,
                 recording_clip as u32,
             )
         })
@@ -1215,6 +1216,7 @@ pub async fn render_video_to_channel(
                         &segment.cursor,
                         duration,
                         constants.options.screen_size,
+                        constants.options.camera_size,
                         recording_clip as u32,
                     )
                 })
@@ -1774,6 +1776,7 @@ pub async fn render_video_to_channel_nv12(
                 &segment.cursor,
                 duration,
                 constants.options.screen_size,
+                constants.options.camera_size,
                 recording_clip as u32,
             )
         })
@@ -1792,6 +1795,7 @@ pub async fn render_video_to_channel_nv12(
                         &segment.cursor,
                         duration,
                         constants.options.screen_size,
+                        constants.options.camera_size,
                         recording_clip as u32,
                     )
                 })
@@ -3301,6 +3305,37 @@ fn inset_crop_bounds(bounds: [f32; 4], frame_size: [f32; 2], inset: f32) -> [f32
     [x0 + inset_x, y0 + inset_y, x1 - inset_x, y1 - inset_y]
 }
 
+/// Size of the camera bubble in output px at `scale` of the frame's shorter
+/// axis.
+fn camera_bubble_size(
+    shape: CameraShape,
+    frame_size: [f32; 2],
+    min_axis: f32,
+    scale: f32,
+    camera_padding: f32,
+) -> [f32; 2] {
+    let aspect = frame_size[0] / frame_size[1];
+    match shape {
+        CameraShape::Source => {
+            if aspect >= 1.0 {
+                [
+                    (min_axis * scale + camera_padding) * aspect,
+                    min_axis * scale + camera_padding,
+                ]
+            } else {
+                [
+                    min_axis * scale + camera_padding,
+                    (min_axis * scale + camera_padding) / aspect,
+                ]
+            }
+        }
+        CameraShape::Square => [
+            min_axis * scale + camera_padding,
+            min_axis * scale + camera_padding,
+        ],
+    }
+}
+
 /// Top-left of the camera rect in output px. `manual_position` (normalized
 /// center, clamped fully in-frame) overrides the corner/edge `position` enum.
 fn compute_camera_position(
@@ -4266,6 +4301,28 @@ impl ProjectUniforms {
         (crop_size.x / crop_size.y.max(f64::EPSILON)).max(f64::EPSILON)
     }
 
+    /// The display layout a style segment renders with: its own padding and
+    /// crop fitted inside the base project's output, or the plain layout when
+    /// the style leaves those alone.
+    fn styled_or_base_display_layout(
+        options: &RenderOptions,
+        base: &ProjectConfiguration,
+        styled: &ProjectConfiguration,
+        output_size: (u32, u32),
+        resolution_base: XY<u32>,
+        source_size: XY<u32>,
+    ) -> DisplayLayout {
+        let has_layout_override = Self::get_crop(options, base).size
+            != Self::get_crop(options, styled).size
+            || base.background.padding != styled.background.padding
+            || base.background.padding_mode != styled.background.padding_mode;
+        if has_layout_override {
+            Self::styled_display_layout(options, styled, output_size, resolution_base, source_size)
+        } else {
+            Self::display_layout(options, styled, resolution_base, source_size)
+        }
+    }
+
     fn styled_display_layout(
         options: &RenderOptions,
         project: &ProjectConfiguration,
@@ -4794,22 +4851,18 @@ impl ProjectUniforms {
         let frame_time = timeline_time as f32;
         let cursor_clip_visibility = project.cursor_visibility_at(timeline_time) as f32;
         let camera_only_padding = project.camera_only_padding_at(timeline_time);
-        let base_crop = Self::get_crop(options, project);
-        let base_padding = project.background.padding;
-        let base_padding_mode = project.background.padding_mode;
         let styled_project = constants
             .project_styles
             .resolve(shared_project, timeline_time);
+        let display_layout = Self::styled_or_base_display_layout(
+            options,
+            project,
+            styled_project.as_ref(),
+            output_size,
+            resolution_base,
+            source_size,
+        );
         let project = styled_project.as_ref();
-        let styled_crop = Self::get_crop(options, project);
-        let has_layout_override = base_crop.size != styled_crop.size
-            || base_padding != project.background.padding
-            || base_padding_mode != project.background.padding_mode;
-        let display_layout = if has_layout_override {
-            Self::styled_display_layout(options, project, output_size, resolution_base, source_size)
-        } else {
-            Self::display_layout(options, project, resolution_base, source_size)
-        };
         let prev_frame_time = if frame_number == 0 {
             0.0
         } else {
@@ -5561,25 +5614,14 @@ impl ProjectUniforms {
                 let prev_zoomed_size =
                     Self::camera_zoom_factor(&prev_zoom, &prev_scene, base_size, scale_during_zoom);
 
-                let aspect = frame_size[0] / frame_size[1];
-                let camera_size_for = |scale: f32| match project.camera.shape {
-                    CameraShape::Source => {
-                        if aspect >= 1.0 {
-                            [
-                                (min_axis * scale + camera_padding) * aspect,
-                                min_axis * scale + camera_padding,
-                            ]
-                        } else {
-                            [
-                                min_axis * scale + camera_padding,
-                                (min_axis * scale + camera_padding) / aspect,
-                            ]
-                        }
-                    }
-                    CameraShape::Square => [
-                        min_axis * scale + camera_padding,
-                        min_axis * scale + camera_padding,
-                    ],
+                let camera_size_for = |scale: f32| {
+                    camera_bubble_size(
+                        project.camera.shape,
+                        frame_size,
+                        min_axis,
+                        scale,
+                        camera_padding,
+                    )
                 };
 
                 let size = camera_size_for(zoomed_size);

@@ -657,6 +657,7 @@ async fn run_preview(
                 &cursor,
                 duration,
                 screen_size,
+                camera_size,
             );
             zoom.ensure_precomputed_until((request.frame_number as f32 + 1.0) / request.fps as f32);
             control.check()?;
@@ -779,6 +780,7 @@ fn cached_zoom<'a>(
     cursor: &CursorEvents,
     duration: f64,
     screen_size: XY<u32>,
+    camera_size: Option<XY<u32>>,
 ) -> &'a mut ZoomTransformTimeline {
     if let Some(position) = cache.iter().position(|(index, _)| *index == clip) {
         let entry = cache
@@ -796,6 +798,7 @@ fn cached_zoom<'a>(
                 cursor,
                 duration,
                 screen_size,
+                camera_size,
                 clip,
             ),
         ));

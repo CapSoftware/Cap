@@ -1255,6 +1255,7 @@ impl Playback {
                                 &seg.cursor,
                                 duration,
                                 self.render_constants.options.screen_size,
+                                self.render_constants.options.camera_size,
                                 recording_clip as u32,
                             )
                         })
@@ -1278,6 +1279,7 @@ impl Playback {
                                 &segment.cursor,
                                 duration,
                                 self.render_constants.options.screen_size,
+                                self.render_constants.options.camera_size,
                                 recording_clip as u32,
                             )
                         })
@@ -1608,6 +1610,7 @@ impl Playback {
                         &cached_project,
                         &next_project,
                         self.render_constants.options.screen_size,
+                        self.render_constants.options.camera_size,
                     );
                     cached_project = Arc::new(next_project);
                     if adopted.is_none() && audio_changed {

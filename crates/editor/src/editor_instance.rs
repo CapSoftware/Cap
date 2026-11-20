@@ -1378,6 +1378,7 @@ impl EditorInstance {
                             &previous,
                             &project,
                             self.render_constants.options.screen_size,
+                            self.render_constants.options.camera_size,
                         )
                     {
                         zoom_timelines.clear();
@@ -1510,6 +1511,7 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         total_duration,
                                         self.render_constants.options.screen_size,
+                                        self.render_constants.options.camera_size,
                                         segment.recording_clip,
                                     )
                                 });
@@ -1591,6 +1593,7 @@ impl EditorInstance {
                                                 &outgoing_media.cursor,
                                                 total_duration,
                                                 self.render_constants.options.screen_size,
+                                                self.render_constants.options.camera_size,
                                                 outgoing.segment.recording_clip,
                                             )
                                         });

@@ -26,11 +26,13 @@
 //! export matches playback by construction.
 
 use cap_project::{
-    Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TimelineConfiguration, XY,
-    ZoomMode, ZoomSegment,
+    Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TextLayout,
+    TimelineConfiguration, XY, ZoomMode, ZoomSegment,
 };
 
 use crate::{
+    CAMERA_PADDING, ProjectUniforms, RenderOptions, camera_bubble_size, compute_camera_position,
+    scene::{InterpolatedScene, SceneSegmentsCursor},
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     zoom::{InterpolatedZoom, SegmentBounds},
 };
@@ -213,6 +215,255 @@ impl CursorCropMaps {
             .collect();
         maps
     }
+}
+
+/// The part of the screen an auto zoom keeps its focus in so the camera
+/// bubble does not cover it, piecewise over timeline time. Each entry is a
+/// rect `[x0, y0, x1, y1]` in fractions of the display content rect; the
+/// focus's on-screen position is scaled into it, so a centred focus lands in
+/// its middle and focus near the content's edges still reaches them.
+#[derive(Debug, Default, PartialEq)]
+struct CameraClearance {
+    starts: Vec<f64>,
+    free: Vec<[f64; 4]>,
+}
+
+const WHOLE_SCREEN: [f64; 4] = [0.0, 0.0, 1.0, 1.0];
+
+impl CameraClearance {
+    fn from_project(
+        project: &ProjectConfiguration,
+        screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
+    ) -> Option<Self> {
+        let camera_size = camera_size.filter(|size| size.x > 0 && size.y > 0)?;
+        if screen_size.x == 0
+            || screen_size.y == 0
+            || FollowRule::for_version(project.screen_motion_version) != FollowRule::TimeWeighted
+        {
+            return None;
+        }
+        let timeline = project.timeline.as_ref()?;
+        if !timeline
+            .zoom_segments
+            .iter()
+            .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+        {
+            return None;
+        }
+
+        let mut breaks = vec![0.0];
+        for scene in &timeline.scene_segments {
+            breaks.extend([
+                scene.start - scene.transition_in.max(0.0),
+                scene.start,
+                scene.end - scene.transition_out.max(0.0),
+                scene.end,
+            ]);
+        }
+        for style in &timeline.style_segments {
+            if style.overrides.camera.is_some() || style.overrides.background.is_some() {
+                breaks.extend([style.start, style.end]);
+            }
+        }
+        for text in &timeline.text_segments {
+            if text.enabled && text.layout != TextLayout::Overlay {
+                breaks.extend([text.start, text.end]);
+            }
+        }
+        breaks.retain(|time| time.is_finite() && *time >= 0.0);
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup();
+
+        let options = RenderOptions {
+            camera_size: Some(camera_size),
+            screen_size,
+            preserve_screen_alpha: false,
+        };
+        let mut clearance = Self::default();
+        for (index, &start) in breaks.iter().enumerate() {
+            // A fade's later state wins its whole span, so the focus starts
+            // moving aside as the bubble appears and returns as it leaves.
+            let probe = breaks
+                .get(index + 1)
+                .map_or(start + 1.0, |&end| start + (end - start) * 0.75);
+            let free = camera_free_rect_at(project, &options, probe);
+            if clearance.free.last() != Some(&free) {
+                clearance.starts.push(start);
+                clearance.free.push(free);
+            }
+        }
+        clearance
+            .free
+            .iter()
+            .any(|free| *free != WHOLE_SCREEN)
+            .then_some(clearance)
+    }
+
+    fn free_at(&self, timeline_secs: f64) -> [f64; 4] {
+        let index = self.starts.partition_point(|&start| start <= timeline_secs);
+        index
+            .checked_sub(1)
+            .map_or(WHOLE_SCREEN, |index| self.free[index])
+    }
+
+    /// Moves a follow `center` so the focus lands inside the free rect.
+    fn clear_center(
+        &self,
+        timeline_secs: f64,
+        focus: (f64, f64),
+        center: (f64, f64),
+        amount: f64,
+    ) -> (f64, f64) {
+        let free = self.free_at(timeline_secs);
+        let axis = |focus: f64, center: f64, lo: f64, hi: f64| {
+            let on_screen = focus * amount - center * (amount - 1.0);
+            let cleared = lo + on_screen * (hi - lo);
+            (center + (on_screen - cleared) / (amount - 1.0)).clamp(0.0, 1.0)
+        };
+        (
+            axis(focus.0, center.0, free[0], free[2]),
+            axis(focus.1, center.1, free[1], free[3]),
+        )
+    }
+}
+
+/// The free rect at `time`: the whole screen unless the camera bubble sits
+/// over the screen then.
+fn camera_free_rect_at(
+    project: &ProjectConfiguration,
+    options: &RenderOptions,
+    time: f64,
+) -> [f64; 4] {
+    let none = WHOLE_SCREEN;
+    let styled = project.style_at(time);
+    if styled.camera.hide {
+        return none;
+    }
+    let timeline = project.timeline.as_ref();
+    let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+        time,
+        timeline.map_or(&[], |timeline| timeline.scene_segments.as_slice()),
+    ));
+    if scene.regular_camera_transition_opacity() < 0.5 || scene.split_factor >= 0.5 {
+        return none;
+    }
+    if timeline.is_some_and(|timeline| {
+        crate::takeover::InterpolatedTakeover::sample(time, &timeline.text_segments).is_some()
+    }) {
+        return none;
+    }
+    let Some(camera_size) = options.camera_size else {
+        return none;
+    };
+
+    let (base_w, base_h) = ProjectUniforms::get_base_size(options, project);
+    let resolution_base = XY::new(base_w, base_h);
+    let output_size = ProjectUniforms::get_output_size(options, project, resolution_base);
+    let layout = ProjectUniforms::styled_or_base_display_layout(
+        options,
+        project,
+        styled.as_ref(),
+        output_size,
+        resolution_base,
+        options.screen_size,
+    );
+    let output = [output_size.0 as f32, output_size.1 as f32];
+    let camera_padding = CAMERA_PADDING * output[1] / 1080.0;
+    let scale =
+        styled.camera.size / 100.0 * styled.camera.scale_during_zoom * scene.camera_scale as f32;
+    let size = camera_bubble_size(
+        styled.camera.shape,
+        [camera_size.x as f32, camera_size.y as f32],
+        output[0].min(output[1]),
+        scale,
+        camera_padding,
+    );
+    let position = compute_camera_position(&styled.camera, output, size, camera_padding);
+
+    let area = [
+        layout.content_offset.x.max(0.0),
+        layout.content_offset.y.max(0.0),
+        (layout.content_offset.x + layout.content_size.x).min(f64::from(output[0])),
+        (layout.content_offset.y + layout.content_size.y).min(f64::from(output[1])),
+    ];
+    let camera = [
+        f64::from(position[0]),
+        f64::from(position[1]),
+        f64::from(position[0] + size[0]),
+        f64::from(position[1] + size[1]),
+    ];
+    let Some(free) = free_strip(area, camera, f64::from(camera_padding)) else {
+        return none;
+    };
+    let size = XY::new(
+        layout.content_size.x.max(1.0),
+        layout.content_size.y.max(1.0),
+    );
+    let offset = layout.content_offset;
+    let frees_x = free[0] != area[0] || free[2] != area[2];
+    if frees_x {
+        [
+            (free[0] - offset.x) / size.x,
+            0.0,
+            (free[2] - offset.x) / size.x,
+            1.0,
+        ]
+    } else {
+        [
+            0.0,
+            (free[1] - offset.y) / size.y,
+            1.0,
+            (free[3] - offset.y) / size.y,
+        ]
+    }
+}
+
+/// The largest strip of `area` left of, right of, above or below `camera`
+/// grown by `margin`, or `None` when the camera misses the area (or covers
+/// all of it).
+fn free_strip(area: [f64; 4], camera: [f64; 4], margin: f64) -> Option<[f64; 4]> {
+    let camera = [
+        camera[0] - margin,
+        camera[1] - margin,
+        camera[2] + margin,
+        camera[3] + margin,
+    ];
+    let (width, height) = (area[2] - area[0], area[3] - area[1]);
+    if !(width > 0.0 && height > 0.0)
+        || camera[0] >= area[2]
+        || camera[2] <= area[0]
+        || camera[1] >= area[3]
+        || camera[3] <= area[1]
+    {
+        return None;
+    }
+    let strips = [
+        (
+            (camera[0] - area[0]) * height,
+            [area[0], area[1], camera[0], area[3]],
+        ),
+        (
+            (area[2] - camera[2]) * height,
+            [camera[2], area[1], area[2], area[3]],
+        ),
+        (
+            (camera[1] - area[1]) * width,
+            [area[0], area[1], area[2], camera[1]],
+        ),
+        (
+            (area[3] - camera[3]) * width,
+            [area[0], camera[3], area[2], area[3]],
+        ),
+    ];
+    strips
+        .into_iter()
+        .filter(|(size, _)| *size > 0.0)
+        .fold(None::<(f64, [f64; 4])>, |best, strip| match best {
+            Some(best) if best.0 >= strip.0 => Some(best),
+            _ => Some(strip),
+        })
+        .map(|(_, strip)| strip)
 }
 
 struct ClusterCenters {
@@ -923,6 +1174,7 @@ pub struct ZoomTransformTimeline {
     prefer_outgoing: bool,
     lead_in_secs: f64,
     follow: FollowRule,
+    camera_clearance: Option<CameraClearance>,
     /// Total number of samples covering [0, duration] plus one lerp partner.
     total_samples: usize,
 }
@@ -956,6 +1208,7 @@ impl ZoomTransformTimeline {
                 prefer_outgoing: false,
             },
             FollowRule::BoxMiddle,
+            None,
         )
     }
 
@@ -969,6 +1222,7 @@ impl ZoomTransformTimeline {
         crops: CursorCropMaps,
         selection: RecordingClipSelection,
         follow: FollowRule,
+        camera_clearance: Option<CameraClearance>,
     ) -> Self {
         let RecordingClipSelection {
             recording_clip,
@@ -1053,6 +1307,7 @@ impl ZoomTransformTimeline {
                 prefer_outgoing,
                 lead_in_secs,
                 follow,
+                camera_clearance,
                 total_samples: 1,
             };
         }
@@ -1075,6 +1330,7 @@ impl ZoomTransformTimeline {
             prefer_outgoing,
             lead_in_secs,
             follow,
+            camera_clearance,
             total_samples,
         };
 
@@ -1116,6 +1372,7 @@ impl ZoomTransformTimeline {
         before: &ProjectConfiguration,
         after: &ProjectConfiguration,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
     ) -> bool {
         let before_timeline = before.timeline.as_ref();
         let after_timeline = after.timeline.as_ref();
@@ -1143,6 +1400,8 @@ impl ZoomTransformTimeline {
             && build_time_map(before_timeline) == build_time_map(after_timeline)
             && CursorCropMaps::from_project(before, screen_size)
                 == CursorCropMaps::from_project(after, screen_size)
+            && CameraClearance::from_project(before, screen_size, camera_size)
+                == CameraClearance::from_project(after, screen_size, camera_size)
     }
 
     /// Convenience constructor pulling zoom segments, edit mapping, spring
@@ -1162,15 +1421,20 @@ impl ZoomTransformTimeline {
             duration_secs,
             screen_size,
             None,
+            None,
             false,
         )
     }
 
+    /// `camera_size` is the recorded camera's size in px
+    /// (`RenderOptions::camera_size`); auto zooms keep their focus clear of
+    /// the camera bubble when it is set.
     pub fn from_project_for_clip(
         project: &ProjectConfiguration,
         cursor_events: &CursorEvents,
         duration_secs: f64,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
         recording_clip: u32,
     ) -> Self {
         Self::from_project_for_recording_clip(
@@ -1178,6 +1442,7 @@ impl ZoomTransformTimeline {
             cursor_events,
             duration_secs,
             screen_size,
+            camera_size,
             Some(recording_clip),
             false,
         )
@@ -1188,6 +1453,7 @@ impl ZoomTransformTimeline {
         cursor_events: &CursorEvents,
         duration_secs: f64,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
         recording_clip: u32,
     ) -> Self {
         Self::from_project_for_recording_clip(
@@ -1195,6 +1461,7 @@ impl ZoomTransformTimeline {
             cursor_events,
             duration_secs,
             screen_size,
+            camera_size,
             Some(recording_clip),
             true,
         )
@@ -1205,6 +1472,7 @@ impl ZoomTransformTimeline {
         cursor_events: &CursorEvents,
         duration_secs: f64,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
         recording_clip: Option<u32>,
         prefer_outgoing: bool,
     ) -> Self {
@@ -1224,6 +1492,7 @@ impl ZoomTransformTimeline {
                 prefer_outgoing,
             },
             FollowRule::for_version(project.screen_motion_version),
+            CameraClearance::from_project(project, screen_size, camera_size),
         )
     }
 
@@ -1426,10 +1695,15 @@ impl ZoomTransformTimeline {
                             .as_ref()
                             .and_then(|clusters| clusters.center_at(timeline_secs, recording_ms))
                             .unwrap_or(FALLBACK_FOCUS);
-                        SegmentBounds::calculate_follow_center(
-                            (focus.0.clamp(0.0, 1.0), focus.1.clamp(0.0, 1.0)),
-                            segment.edge_snap_ratio,
-                        )
+                        let focus = (focus.0.clamp(0.0, 1.0), focus.1.clamp(0.0, 1.0));
+                        let center =
+                            SegmentBounds::calculate_follow_center(focus, segment.edge_snap_ratio);
+                        match &self.camera_clearance {
+                            Some(clearance) if amount > 1.0 => {
+                                clearance.clear_center(timeline_secs, focus, center, amount)
+                            }
+                            _ => center,
+                        }
                     }
                 };
 
@@ -1593,6 +1867,7 @@ mod tests {
                 prefer_outgoing: false,
             },
             rule,
+            None,
         );
         timeline.precompute();
         timeline
@@ -1930,6 +2205,7 @@ mod tests {
                             &cursor,
                             duration,
                             XY::new(1920, 1080),
+                            None,
                             clip,
                         )
                     } else {
@@ -1938,6 +2214,7 @@ mod tests {
                             &cursor,
                             duration,
                             XY::new(1920, 1080),
+                            None,
                             clip,
                         )
                     }
@@ -1972,7 +2249,7 @@ mod tests {
             .rounding = 12.0;
         let screen = XY::new(1000, 1000);
         assert!(ZoomTransformTimeline::project_inputs_match(
-            &project, &edited, screen
+            &project, &edited, screen, None
         ));
 
         let cursor = CursorEvents {
@@ -1993,6 +2270,7 @@ mod tests {
                         &cursor,
                         duration,
                         screen,
+                        None,
                         Some(recording_clip),
                         outgoing,
                     )
@@ -2058,7 +2336,8 @@ mod tests {
                 !ZoomTransformTimeline::project_inputs_match(
                     &project,
                     &edited,
-                    XY::new(1000, 1000)
+                    XY::new(1000, 1000),
+                    None
                 ),
                 "change {index} reused stale zoom samples"
             );
@@ -2074,17 +2353,18 @@ mod tests {
         let screen = XY::new(1000, 1000);
 
         assert!(!ZoomTransformTimeline::project_inputs_match(
-            &before, &after, screen
+            &before, &after, screen, None
         ));
         assert!(!ZoomTransformTimeline::project_inputs_match(
-            &after, &before, screen
+            &after, &before, screen, None
         ));
         let no_transitions = after.clone();
         after.background.padding = 24.0;
         assert!(ZoomTransformTimeline::project_inputs_match(
             &no_transitions,
             &after,
-            screen
+            screen,
+            None
         ));
     }
 
@@ -2288,6 +2568,7 @@ mod tests {
             &cursor,
             6.0,
             XY::new(1000, 1000),
+            None,
             0,
         );
         let outgoing = ZoomTransformTimeline::from_project_for_outgoing_clip(
@@ -2295,6 +2576,7 @@ mod tests {
             &cursor,
             6.0,
             XY::new(1000, 1000),
+            None,
             0,
         );
         assert_eq!(
@@ -2749,6 +3031,7 @@ mod tests {
                 &cursor,
                 12.0,
                 XY::new(1920, 1080),
+                None,
                 0,
             );
             timeline.precompute();
@@ -3134,6 +3417,345 @@ mod tests {
         }
     }
 
+    const CAMERA_SCREEN: XY<u32> = XY::new(1920, 1080);
+    const CAMERA_FRAME: Option<XY<u32>> = Some(XY::new(1280, 720));
+
+    fn camera_project(zoom_segments: Vec<ZoomSegment>) -> ProjectConfiguration {
+        let mut project = project_with_crop_styles(zoom_segments, Vec::new());
+        project.screen_motion_version = cap_project::SCREEN_MOTION_VERSION;
+        project
+    }
+
+    fn scene(start: f64, end: f64, mode: cap_project::SceneMode) -> cap_project::SceneSegment {
+        cap_project::SceneSegment {
+            start,
+            end,
+            mode,
+            split_layout: None,
+            transition_in: 0.3,
+            transition_out: 0.3,
+        }
+    }
+
+    fn resting_cursor(x: f64, y: f64) -> CursorEvents {
+        CursorEvents {
+            moves: vec![move_event(0.0, x, y), move_event(10_000.0, x, y)],
+            clicks: Vec::new(),
+        }
+    }
+
+    fn camera_target(
+        project: &ProjectConfiguration,
+        camera: Option<XY<u32>>,
+        focus: (f64, f64),
+        time: f64,
+    ) -> XY<f32> {
+        ZoomTransformTimeline::from_project_for_clip(
+            project,
+            &resting_cursor(focus.0, focus.1),
+            10.0,
+            CAMERA_SCREEN,
+            camera,
+            0,
+        )
+        .targets_at(time, XY::new(0.5, 0.5))
+        .center
+    }
+
+    /// Where on screen (fraction of the content rect) a focus lands for a
+    /// travel-space center at `amount`.
+    fn on_screen(focus: f64, center: f32, amount: f64) -> f64 {
+        focus * amount - f64::from(center) * (amount - 1.0)
+    }
+
+    #[test]
+    fn free_strip_takes_the_largest_side_the_camera_leaves() {
+        let area = [0.0, 0.0, 1920.0, 1080.0];
+        let bubble = 300.0;
+        let at = |x: f64, y: f64| [x, y, x + bubble, y + bubble];
+        let cases = [
+            (
+                "bottom right",
+                at(1570.0, 730.0),
+                [0.0, 0.0, 1520.0, 1080.0],
+            ),
+            ("bottom left", at(50.0, 730.0), [400.0, 0.0, 1920.0, 1080.0]),
+            ("top right", at(1570.0, 50.0), [0.0, 0.0, 1520.0, 1080.0]),
+            ("top left", at(50.0, 50.0), [400.0, 0.0, 1920.0, 1080.0]),
+            ("bottom centre", at(810.0, 730.0), [0.0, 0.0, 1920.0, 680.0]),
+            ("top centre", at(810.0, 50.0), [0.0, 400.0, 1920.0, 1080.0]),
+            ("left centre", at(50.0, 390.0), [400.0, 0.0, 1920.0, 1080.0]),
+            (
+                "right centre",
+                at(1570.0, 390.0),
+                [0.0, 0.0, 1520.0, 1080.0],
+            ),
+        ];
+        for (name, camera, expected) in cases {
+            assert_eq!(free_strip(area, camera, 50.0), Some(expected), "{name}");
+        }
+
+        assert_eq!(
+            free_strip(area, [2000.0, 0.0, 2300.0, 300.0], 50.0),
+            None,
+            "a camera outside the area frees nothing"
+        );
+        assert_eq!(
+            free_strip(area, [-100.0, -100.0, 2100.0, 1200.0], 0.0),
+            None,
+            "a camera covering the area frees nothing"
+        );
+    }
+
+    #[test]
+    fn default_camera_moves_a_centred_focus_into_the_free_strip() {
+        let project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        let center = camera_target(&project, CAMERA_FRAME, (0.5, 0.5), 5.0);
+        let plain = camera_target(&project, None, (0.5, 0.5), 5.0);
+        assert_eq!(plain, follow_center((0.5, 0.5)));
+
+        // The default bubble while zoomed: 30% x 0.7 of the 1080 px short axis
+        // plus 50 px, inset 50 px from the bottom-right corner; the free strip
+        // ends a further 50 px left of it.
+        let bubble = 1080.0 * 0.3 * 0.7 + 50.0;
+        let strip_end = 1920.0 - 50.0 - bubble - 50.0;
+        let expected = strip_end / 2.0 / 1920.0;
+        let landed = on_screen(0.5, center.x, 2.0);
+        assert!(
+            (landed - expected).abs() < 1e-4,
+            "focus landed at {landed}, expected {expected}"
+        );
+        assert!((0.39..0.41).contains(&landed), "{landed}");
+        assert_eq!(center.y, plain.y, "a side strip only moves x");
+    }
+
+    #[test]
+    fn camera_clearance_keeps_the_view_clamp_near_edges() {
+        let project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        let centred_shift = f64::from(
+            camera_target(&project, CAMERA_FRAME, (0.5, 0.5), 5.0).x
+                - camera_target(&project, None, (0.5, 0.5), 5.0).x,
+        );
+        assert!(centred_shift > 0.09, "{centred_shift}");
+
+        let right = camera_target(&project, CAMERA_FRAME, (0.97, 0.5), 5.0);
+        assert_eq!(right.x, 1.0, "the clamp keeps the right edge reachable");
+        assert_eq!(right, camera_target(&project, None, (0.97, 0.5), 5.0));
+
+        let left_shift = f64::from(
+            camera_target(&project, CAMERA_FRAME, (0.03, 0.5), 5.0).x
+                - camera_target(&project, None, (0.03, 0.5), 5.0).x,
+        );
+        assert!(
+            (0.0..centred_shift / 4.0).contains(&left_shift),
+            "focus already clear of the camera barely moves: {left_shift}"
+        );
+    }
+
+    #[test]
+    fn camera_clearance_is_off_without_an_overlaid_camera() {
+        use cap_project::SceneMode;
+
+        let zoom = vec![auto_segment(1.0, 9.0, 2.0)];
+        let plain = camera_target(&camera_project(zoom.clone()), None, (0.5, 0.5), 5.0);
+        let assert_plain = |name: &str, project: &ProjectConfiguration, camera| {
+            assert_eq!(
+                camera_target(project, camera, (0.5, 0.5), 5.0),
+                plain,
+                "{name}"
+            );
+        };
+
+        assert_plain("no camera", &camera_project(zoom.clone()), None);
+
+        let mut hidden = camera_project(zoom.clone());
+        hidden.camera.hide = true;
+        assert_plain("hidden", &hidden, CAMERA_FRAME);
+
+        let mut saved = camera_project(zoom.clone());
+        saved.screen_motion_version = 0;
+        assert_eq!(
+            camera_target(&saved, CAMERA_FRAME, (0.5, 0.5), 5.0),
+            camera_target(&saved, None, (0.5, 0.5), 5.0),
+            "saved projects"
+        );
+
+        for mode in [
+            SceneMode::CameraOnly,
+            SceneMode::HideCamera,
+            SceneMode::SplitScreen,
+            SceneMode::Floating,
+        ] {
+            let mut project = camera_project(zoom.clone());
+            project.timeline.as_mut().unwrap().scene_segments = vec![scene(0.0, 10.0, mode)];
+            assert_plain(&format!("{mode:?} scene"), &project, CAMERA_FRAME);
+        }
+
+        let mut takeover = camera_project(zoom.clone());
+        takeover.timeline.as_mut().unwrap().text_segments.push(
+            serde_json::from_value(serde_json::json!({
+                "start": 0.0, "end": 10.0, "layout": "splitLeft"
+            }))
+            .unwrap(),
+        );
+        assert_plain("text takeover", &takeover, CAMERA_FRAME);
+
+        let mut styled = camera_project(zoom.clone());
+        styled
+            .timeline
+            .as_mut()
+            .unwrap()
+            .style_segments
+            .push(StyleSegment {
+                start: 4.0,
+                end: 6.0,
+                overrides: StyleOverrides {
+                    camera: Some(cap_project::Camera {
+                        hide: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        assert_plain("style hides the camera", &styled, CAMERA_FRAME);
+        assert_ne!(
+            camera_target(&styled, CAMERA_FRAME, (0.5, 0.5), 2.0),
+            plain,
+            "outside the style the camera is back"
+        );
+
+        let manual = camera_project(vec![manual_segment(1.0, 9.0, 2.0, 0.5, 0.5)]);
+        assert_eq!(
+            camera_target(&manual, CAMERA_FRAME, (0.5, 0.5), 5.0),
+            XY::new(0.5, 0.5),
+            "manual zoom keeps its position"
+        );
+    }
+
+    #[test]
+    fn camera_clearance_follows_the_camera_layout() {
+        use cap_project::{CameraXPosition, CameraYPosition};
+
+        let plain = camera_target(
+            &camera_project(vec![auto_segment(1.0, 9.0, 2.0)]),
+            None,
+            (0.5, 0.5),
+            5.0,
+        );
+        let centre = on_screen(0.5, plain.x, 2.0);
+        let landed = |x: CameraXPosition, y: CameraYPosition| {
+            let mut project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+            project.camera.position = cap_project::CameraPosition { x, y };
+            camera_target(&project, CAMERA_FRAME, (0.5, 0.5), 5.0)
+        };
+        let center = landed(CameraXPosition::Left, CameraYPosition::Bottom);
+        assert!(on_screen(0.5, center.x, 2.0) > centre + 0.05 && center.y == plain.y);
+        let center = landed(CameraXPosition::Right, CameraYPosition::Top);
+        assert!(on_screen(0.5, center.x, 2.0) < centre - 0.05 && center.y == plain.y);
+        let center = landed(CameraXPosition::Center, CameraYPosition::Bottom);
+        assert!(on_screen(0.5, center.y, 2.0) < centre - 0.05 && center.x == plain.x);
+        let center = landed(CameraXPosition::Center, CameraYPosition::Top);
+        assert!(on_screen(0.5, center.y, 2.0) > centre + 0.05 && center.x == plain.x);
+
+        let mut manual = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        manual.camera.manual_position = Some(XY::new(0.1, 0.5));
+        let center = camera_target(&manual, CAMERA_FRAME, (0.5, 0.5), 5.0);
+        assert!(on_screen(0.5, center.x, 2.0) > centre + 0.05);
+    }
+
+    #[test]
+    fn camera_appearing_mid_zoom_retargets_smoothly() {
+        let mut project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        project.timeline.as_mut().unwrap().scene_segments =
+            vec![scene(4.0, 6.0, cap_project::SceneMode::HideCamera)];
+        let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+            &project,
+            &resting_cursor(0.5, 0.5),
+            10.0,
+            CAMERA_SCREEN,
+            CAMERA_FRAME,
+            0,
+        );
+        timeline.precompute();
+        let shown = timeline.sample(3.5).bounds;
+        let hidden = timeline.sample(5.5).bounds;
+        assert!(
+            shown.top_left.x < hidden.top_left.x - 0.05,
+            "the view moves back to centre while the camera is hidden"
+        );
+
+        let mut plain = ZoomTransformTimeline::from_project_for_clip(
+            &project,
+            &resting_cursor(0.5, 0.5),
+            10.0,
+            CAMERA_SCREEN,
+            None,
+            0,
+        );
+        plain.precompute();
+        let (jump, slope) = max_step_discontinuities(&timeline);
+        let (plain_jump, plain_slope) = max_step_discontinuities(&plain);
+        assert!(
+            jump <= plain_jump * 1.25 && slope <= plain_slope * 1.25,
+            "largest step {jump} / {slope} vs {plain_jump} / {plain_slope} without a camera"
+        );
+    }
+
+    #[test]
+    fn camera_layout_edits_invalidate_zoom_samples() {
+        let project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        let mut moved = project.clone();
+        moved.camera.position.x = cap_project::CameraXPosition::Left;
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &moved,
+            CAMERA_SCREEN,
+            CAMERA_FRAME
+        ));
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &moved,
+            CAMERA_SCREEN,
+            None
+        ));
+        let mut mirrored = project.clone();
+        mirrored.camera.mirror = true;
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &mirrored,
+            CAMERA_SCREEN,
+            CAMERA_FRAME
+        ));
+    }
+
+    #[test]
+    fn saved_projects_sample_identically_with_a_camera() {
+        let mut project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        project.screen_motion_version = 0;
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.2, 0.8),
+                move_event(3000.0, 0.7, 0.4),
+                move_event(6000.0, 0.9, 0.9),
+            ],
+            clicks: vec![click_event(2000.0)],
+        };
+        let build = |camera| {
+            let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                &project,
+                &cursor,
+                10.0,
+                CAMERA_SCREEN,
+                camera,
+                0,
+            );
+            timeline.precompute();
+            samples_hash(&timeline)
+        };
+        assert_eq!(build(CAMERA_FRAME), build(None));
+    }
+
     fn samples_hash(timeline: &ZoomTransformTimeline) -> u64 {
         timeline
             .samples
@@ -3188,6 +3810,7 @@ mod tests {
                         &cursor,
                         duration_secs,
                         screen_size,
+                        None,
                         0,
                     );
                     let build_elapsed = build_start.elapsed();
@@ -3243,6 +3866,7 @@ mod tests {
                         },
                         8.0 / timescale,
                         XY::new(1920, 1080),
+                        None,
                         0,
                     );
                     timeline.precompute();
@@ -3284,6 +3908,7 @@ mod tests {
             },
             8.0,
             XY::new(1920, 1080),
+            None,
             0,
         );
         timeline.precompute();
@@ -3417,6 +4042,7 @@ mod tests {
                         &cursor,
                         12.0,
                         XY::new(1920, 1080),
+                        None,
                         0,
                     )
                 };
