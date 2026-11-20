@@ -252,11 +252,15 @@ fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
         LookBackground::Wallpaper(_) => ("icons/image.svg", source::wallpaper().to_string()),
         LookBackground::Gradient { .. } => ("icons/palette.svg", source::gradient().to_string()),
         LookBackground::Color(_) => ("icons/palette.svg", source::color().to_string()),
-        LookBackground::Animated(name) => {
-            ("icons/square-play.svg", format!("{} · {name}", source::animated()))
-        }
+        LookBackground::Animated(name) => (
+            "icons/square-play.svg",
+            format!("{} · {name}", source::animated()),
+        ),
     });
-    changes.push(("icons/padding.svg", format!("{} {}%", layout::padding(), look.padding)));
+    changes.push((
+        "icons/padding.svg",
+        format!("{} {}%", layout::padding(), look.padding),
+    ));
     changes.push((
         "icons/corners.svg",
         format!("{} {}%", layout::rounded_corners(), look.rounding),
@@ -264,11 +268,18 @@ fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
     if look.shadow.0 > 0.0 {
         changes.push((
             "icons/shadow.svg",
-            format!("{} {}%", tr::editor::sidebar::shadow::title(), look.shadow.0),
+            format!(
+                "{} {}%",
+                tr::editor::sidebar::shadow::title(),
+                look.shadow.0
+            ),
         ));
     }
     if look.border.is_some() {
-        changes.push(("icons/square.svg", tr::editor::sidebar::border::title().to_string()));
+        changes.push((
+            "icons/square.svg",
+            tr::editor::sidebar::border::title().to_string(),
+        ));
     }
     if let Some((style, _)) = look.frame {
         let name = match style {
@@ -9149,7 +9160,11 @@ impl EditorWindow {
         let Some(look) = crate::looks::LOOKS.get(index) else {
             return;
         };
-        if self.look_preview.as_ref().is_some_and(|(shown, _)| *shown == index) {
+        if self
+            .look_preview
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == index)
+        {
             return;
         }
         let saved = match self.look_preview.take() {
@@ -9345,20 +9360,14 @@ impl EditorWindow {
                 ),
         )
         .child(
-            div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(5.))
-                .children(
-                    look_changes(look)
-                        .into_iter()
-                        .map(|(icon, label)| chip(icon, label)),
-                ),
+            div().flex().flex_row().flex_wrap().gap(px(5.)).children(
+                look_changes(look)
+                    .into_iter()
+                    .map(|(icon, label)| chip(icon, label)),
+            ),
         )
         .into_any_element()
     }
-
 
     /// Apply row `index`: the preset's config with the current timeline and
     /// clips kept -- one undo entry, like any other config edit.
@@ -12919,7 +12928,7 @@ impl EditorWindow {
                                     )),
                                 )
                             })),
-                    )
+                    ),
             )
             .child(
                 div()
