@@ -263,6 +263,22 @@ pub fn dock_fade(palette: &Palette, height: f32) -> Div {
         ))
 }
 
+/// Behind a dock that stacks lines over the bar: solid up to the top of the
+/// dock, so no text shows through between its rows, then a short fade.
+pub fn dock_backdrop(palette: &Palette, solid: f32, fade: f32) -> Div {
+    div()
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .h(px(solid + fade))
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(alpha(palette.content, 0.), 0.),
+            gpui::linear_color_stop(palette.content, fade / (solid + fade)),
+        ))
+}
+
 pub fn heading(palette: &Palette, title: impl Into<SharedString>, shown_at: Instant) -> Div {
     div()
         .flex()

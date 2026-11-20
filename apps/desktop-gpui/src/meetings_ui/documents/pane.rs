@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     rc::Rc,
@@ -64,6 +65,12 @@ const PAGE_LEAD: usize = 2;
 const TYPED_RECENTLY: Duration = Duration::from_secs(20);
 /// Room under inline content so its last line clears the bottom dock.
 const DOCK_CLEARANCE: f32 = 78.;
+/// The dock's geometry: its gap to the window's bottom, its bar, the gap
+/// between its rows, and a stacked line (the trial line).
+const DOCK_BOTTOM: f32 = 16.;
+const DOCK_BAR: f32 = 46.;
+const DOCK_GAP: f32 = 8.;
+const DOCK_LINE: f32 = 30.;
 /// Longest the page waits for notes that should be starting after Stop.
 const AWAIT_NOTES_FOR: Duration = Duration::from_secs(8);
 const QUIET_RETRY_AFTER: Duration = Duration::from_secs(3);
@@ -326,6 +333,9 @@ pub struct Pane {
     /// The page's width at the last render, for the items the transcript
     /// list draws for it.
     page_width: f32,
+    /// The dock's banner height as last drawn (it wraps), so the page keeps
+    /// room for it.
+    banner_height: Rc<Cell<f32>>,
     #[cfg(debug_assertions)]
     debug_stream_text: String,
     _subscriptions: Vec<Subscription>,
@@ -615,6 +625,7 @@ impl Pane {
             sheet_serial: 0,
             sheet_task: None,
             page_width: 800.,
+            banner_height: Rc::new(Cell::new(0.)),
             #[cfg(debug_assertions)]
             debug_stream_text: String::new(),
             _subscriptions: subscriptions,
@@ -4571,15 +4582,49 @@ impl Render for Pane {
             t.set_width(if inline { width } else { panel_w }, cx);
             t.set_inline(inline, cx);
         });
+        // Lines the dock stacks over its bar (the trial line, a banner) take
+        // room of their own: the page fades out under them and its last line
+        // can always scroll clear of them.
+        let docked = !meta.is_trashed() && !self.panel_open;
+        let ai_line = (docked && meeting).then(|| self.render_ai_line(cx)).flatten();
+        let banner = (!meta.is_trashed())
+            .then(|| self.bar.update(cx, |bar, cx| bar.banner(cx)))
+            .flatten();
+        let stacked = ai_line.as_ref().map_or(0., |_| DOCK_LINE + DOCK_GAP)
+            + banner
+                .as_ref()
+                .filter(|_| docked)
+                .map_or(0., |_| self.banner_height.get() + DOCK_GAP);
+        if page_mode {
+            self.transcript
+                .update(cx, |t, cx| t.set_tail(DOCK_CLEARANCE + 32. + stacked, cx));
+        }
+        let banner_height = self.banner_height.clone();
         let dock = (!meta.is_trashed()).then(|| {
             // Everything in the dock sits over the page's editor. GPUI hands a
             // click to every normal hitbox under the pointer, so without this
             // the editor beneath also takes the click (and the focus): a click
             // on Ask put the caret in the notes and typing edited them.
-            let banner = self
-                .bar
-                .update(cx, |bar, cx| bar.banner(cx))
-                .map(|b| div().block_mouse_except_scroll().child(b));
+            let banner = banner.map(|b| {
+                let probe = gpui::canvas(
+                    move |bounds, window, _| {
+                        let height = f32::from(bounds.size.height);
+                        if (banner_height.replace(height) - height).abs() > 0.5 {
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full();
+                div()
+                    .relative()
+                    .block_mouse_except_scroll()
+                    .child(b)
+                    .child(probe)
+            });
             let inner = if self.panel_open {
                 let height = (viewport_h * 0.58)
                     .max(280.)
@@ -4599,12 +4644,7 @@ impl Render for Pane {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .when(meeting, |this| {
-                        this.children(
-                            self.render_ai_line(cx)
-                                .map(|line| div().block_mouse_except_scroll().child(line)),
-                        )
-                    })
+                    .children(ai_line.map(|line| div().block_mouse_except_scroll().child(line)))
                     .children(banner)
                     .child(if meeting && ai_note::ask_visible(self.access) {
                         // With Ask in its sheet, the bar keeps its capsule
@@ -4665,7 +4705,7 @@ impl Render for Pane {
             };
             div()
                 .absolute()
-                .bottom(px(16.))
+                .bottom(px(DOCK_BOTTOM))
                 .left_0()
                 .right_0()
                 .px(px(pad))
@@ -4686,7 +4726,11 @@ impl Render for Pane {
             .when(!page_mode, |el| el.child(self.render_header(width, cx)))
             .child(body)
             .when(dock.is_some() && !self.panel_open, |el| {
-                el.child(style::dock_fade(&palette, 92.))
+                el.child(if stacked > 0. {
+                    style::dock_backdrop(&palette, DOCK_BOTTOM + DOCK_BAR + stacked, 30.)
+                } else {
+                    style::dock_fade(&palette, 92.)
+                })
             })
             .children(captions)
             .children(dock);

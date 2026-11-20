@@ -678,6 +678,17 @@ impl TranscriptView {
         self.lead_width.get()
     }
 
+    /// Room after the page's last line, so it clears whatever floats over
+    /// the bottom of the page (the bar, and any line above it).
+    pub fn set_tail(&mut self, tail: f32, cx: &mut Context<Self>) {
+        if let Some(lead) = self.lead.as_mut()
+            && (lead.tail - tail).abs() > 0.5
+        {
+            lead.tail = tail;
+            self.changed(cx);
+        }
+    }
+
     pub fn list_state(&self) -> ListState {
         self.list.clone()
     }
