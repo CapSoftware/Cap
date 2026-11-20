@@ -188,8 +188,10 @@ export async function getPasskeyRegistrationOptionsAfterSignIn(): Promise<
 	if (session?.user?.id !== user.id || !isFreshSignIn(session?.authTime)) {
 		return { status: "verify" };
 	}
-	const options = await createPasskeyRegistrationOptions(user);
-	return options ? { status: "ok", options } : { status: "limit" };
+	const options = await createPasskeyRegistrationOptions(user, {
+		firstPasskeyOnly: true,
+	});
+	return options ? { status: "ok", options } : { status: "verify" };
 }
 
 export async function dismissPasskeyPrompt() {
