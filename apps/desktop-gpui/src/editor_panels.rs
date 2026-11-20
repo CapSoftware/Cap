@@ -3049,7 +3049,7 @@ impl EditorWindow {
                 // the panel's Add button adds it; Escape closes the panel.
                 ui::TextInputEvent::Confirmed => {}
                 ui::TextInputEvent::Cancelled => {
-                    self.close_key_prompt(cx);
+                    self.close_key_prompt(window, cx);
                 }
                 // The Add button follows whether there is anything to add.
                 ui::TextInputEvent::Changed => cx.notify(),

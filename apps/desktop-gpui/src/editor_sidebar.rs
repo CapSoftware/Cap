@@ -1081,7 +1081,7 @@ impl EditorWindow {
         // A tab switch also dismisses whatever the previous tab had open: the
         // `KSelect` menu, the Type Keys panel, and a field's history bracket.
         self.sidebar.menu = None;
-        self.key_prompt = None;
+        self.close_key_prompt(window, cx);
         self.end_field_edit(cx);
         if self.sidebar.tab != tab {
             self.panel.fade = Some((

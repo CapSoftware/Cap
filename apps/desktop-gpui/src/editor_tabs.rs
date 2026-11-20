@@ -3459,8 +3459,8 @@ impl EditorWindow {
                             .left_icon("icons/x.svg")
                             .icon_size(px(14.))
                             .label(tr::common::cancel())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_key_prompt(cx);
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_key_prompt_from_button(window, cx);
                             })),
                     )
                     .child(
@@ -3513,7 +3513,7 @@ impl EditorWindow {
                     let at = this.key_prompt.unwrap_or(this.playhead);
                     if this.add_typed_keys(&text, at, window, cx) {
                         add_input.update(cx, |input, cx| input.set_text("", cx));
-                        this.close_key_prompt(cx);
+                        this.close_key_prompt_from_button(window, cx);
                     }
                 })),
             )
@@ -3539,9 +3539,24 @@ impl EditorWindow {
         cx.notify();
     }
 
-    pub(crate) fn close_key_prompt(&mut self, cx: &mut Context<Self>) {
+    /// Closes Type Keys. Focus left on its text box or buttons, which are no
+    /// longer drawn, would keep Space and every other editor shortcut off, so
+    /// it goes back to the editor.
+    pub(crate) fn close_key_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.key_prompt = None;
+        if self
+            .field(crate::editor_panels::FieldKey::KeyComposer)
+            .is_some_and(|input| input.read(cx).is_focused(window))
+        {
+            self.focus_root(window, cx);
+        }
         cx.notify();
+    }
+
+    /// Cancel and Add take focus when clicked, then go with the panel.
+    fn close_key_prompt_from_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_key_prompt(window, cx);
+        self.focus_root(window, cx);
     }
 
     /// A slider with a `text-xs text-right` readout underneath -- the shape the

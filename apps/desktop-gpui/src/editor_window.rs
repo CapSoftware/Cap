@@ -4941,7 +4941,7 @@ impl EditorWindow {
                     return;
                 }
                 if self.key_prompt.is_some() {
-                    self.close_key_prompt(cx);
+                    self.close_key_prompt(window, cx);
                     return;
                 }
                 if self.camera3d_picker {
