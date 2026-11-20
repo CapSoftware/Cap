@@ -119,3 +119,41 @@ export function getAiGenerationLanguageName(
 ): string {
 	return AI_GENERATION_LANGUAGES[language];
 }
+
+export const TRANSCRIPTION_VOCABULARY_MAX_TERMS = 100;
+export const TRANSCRIPTION_VOCABULARY_MAX_TERM_LENGTH = 50;
+export const TRANSCRIPTION_VOCABULARY_MAX_TERM_WORDS = 6;
+
+/**
+ * Normalizes organization transcription vocabulary (company names, product
+ * names, jargon) into the list sent to AssemblyAI as `keyterms_prompt`.
+ * Accepts an array or a comma/newline separated string. Terms are trimmed,
+ * empty and over-long terms dropped, duplicates removed case-insensitively,
+ * and the list capped at TRANSCRIPTION_VOCABULARY_MAX_TERMS.
+ */
+export function sanitizeTranscriptionVocabulary(value: unknown): string[] {
+	const raw: unknown[] =
+		typeof value === "string"
+			? value.split(/[\n,]/)
+			: Array.isArray(value)
+				? value
+				: [];
+	const seen = new Set<string>();
+	const terms: string[] = [];
+	for (const entry of raw) {
+		if (typeof entry !== "string") continue;
+		const term = entry.replace(/\s+/g, " ").trim();
+		if (!term || term.length > TRANSCRIPTION_VOCABULARY_MAX_TERM_LENGTH) {
+			continue;
+		}
+		if (term.split(" ").length > TRANSCRIPTION_VOCABULARY_MAX_TERM_WORDS) {
+			continue;
+		}
+		const key = term.toLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		terms.push(term);
+		if (terms.length >= TRANSCRIPTION_VOCABULARY_MAX_TERMS) break;
+	}
+	return terms;
+}

@@ -5,6 +5,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
+	sanitizeTranscriptionVocabulary,
 	Video,
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -47,6 +48,7 @@ type InitResult =
 			transcribedDurationMs: number;
 			languageCode: string | null;
 			orgLanguage: AiGenerationLanguage;
+			vocabulary: string[];
 	  };
 
 type ChunkStepResult =
@@ -121,6 +123,7 @@ export async function liveTranscribeWorkflow(
 				lastProcessedIndex: lastIndex,
 				targetSeconds,
 				language: languageCode ?? init.orgLanguage,
+				vocabulary: init.vocabulary,
 				// After repeated failures the chunk is skipped: advance past it and
 				// leave a gap for the canonical transcription to fill.
 				skipPastFailedChunk:
@@ -265,6 +268,9 @@ async function initLiveTranscription(
 		orgLanguage: parseAiGenerationLanguage(
 			row.orgSettings?.aiGenerationLanguage,
 		),
+		vocabulary: sanitizeTranscriptionVocabulary(
+			row.orgSettings?.transcriptionVocabulary,
+		),
 	};
 }
 
@@ -274,6 +280,7 @@ async function processNextLiveChunk(options: {
 	lastProcessedIndex: number;
 	targetSeconds: number;
 	language: string;
+	vocabulary: string[];
 	skipPastFailedChunk: boolean;
 	withContext: boolean;
 }): Promise<ChunkStepResult> {
@@ -417,7 +424,7 @@ async function processNextLiveChunk(options: {
 			: ("auto" as AiGenerationLanguage);
 		const transcript = await client.transcripts.transcribe({
 			audio: audioBuffer,
-			...getAssemblyAITranscriptionOptions(language),
+			...getAssemblyAITranscriptionOptions(language, options.vocabulary),
 			disfluencies: true,
 		});
 

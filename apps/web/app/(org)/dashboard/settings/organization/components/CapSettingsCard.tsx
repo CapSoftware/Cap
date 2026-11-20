@@ -8,6 +8,7 @@ import {
 	getAiGenerationLanguageName,
 	isAiGenerationLanguage,
 	type Organisation,
+	sanitizeTranscriptionVocabulary,
 } from "@cap/web-domain";
 import { useDebounce } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -36,12 +37,13 @@ const defaultSettings: OrganizationSettings = {
 	hideShareableLinkCapLogo: false,
 	shareableLinkUseOrganizationIcon: false,
 	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
+	transcriptionVocabulary: [],
 	defaultPlaybackSpeed: DEFAULT_PLAYBACK_SPEED,
 };
 
 type BooleanOrganizationSettingKey = Exclude<
 	keyof OrganizationSettings,
-	"aiGenerationLanguage"
+	"aiGenerationLanguage" | "transcriptionVocabulary"
 >;
 
 const options: Array<{
@@ -109,7 +111,12 @@ const mergeSettings = (
 	aiGenerationLanguage: isAiGenerationLanguage(settings?.aiGenerationLanguage)
 		? settings.aiGenerationLanguage
 		: AI_GENERATION_LANGUAGE_AUTO,
+	transcriptionVocabulary: sanitizeTranscriptionVocabulary(
+		settings?.transcriptionVocabulary,
+	),
 });
+
+const formatVocabulary = (terms?: string[]) => (terms ?? []).join(", ");
 
 const CapSettingsCard = () => {
 	const { activeOrganization } = useDashboardContext();
@@ -133,6 +140,9 @@ const OrganizationCapSettings = ({
 	const [settings, setSettings] =
 		useState<OrganizationSettings>(initialSettings);
 	const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+	const [vocabularyText, setVocabularyText] = useState(
+		formatVocabulary(initialSettings.transcriptionVocabulary),
+	);
 
 	const lastSavedSettings = useRef<OrganizationSettings>(initialSettings);
 	const languageMenuRef = useRef<HTMLDivElement>(null);
@@ -144,6 +154,7 @@ const OrganizationCapSettings = ({
 	useEffect(() => {
 		const next = mergeSettings(organizationSettings);
 		setSettings(next);
+		setVocabularyText(formatVocabulary(next.transcriptionVocabulary));
 		lastSavedSettings.current = next;
 	}, [organizationSettings]);
 
@@ -196,6 +207,11 @@ const OrganizationCapSettings = ({
 							toast.success(
 								`AI language set to ${getAiGenerationLanguageName(language)}`,
 							);
+							return;
+						}
+
+						if (changedKey === "transcriptionVocabulary") {
+							toast.success("Transcription vocabulary saved");
 							return;
 						}
 
@@ -266,6 +282,16 @@ const OrganizationCapSettings = ({
 	};
 
 	const selectedSpeed = settings.defaultPlaybackSpeed ?? DEFAULT_PLAYBACK_SPEED;
+
+	const handleVocabularyBlur = () => {
+		const terms = sanitizeTranscriptionVocabulary(vocabularyText);
+		setVocabularyText(formatVocabulary(terms));
+		setSettings((prev) =>
+			formatVocabulary(prev.transcriptionVocabulary) === formatVocabulary(terms)
+				? prev
+				: { ...prev, transcriptionVocabulary: terms },
+		);
+	};
 
 	const handleLanguageChange = (language: AiGenerationLanguage) => {
 		if (!isAiGenerationLanguage(language)) {
@@ -386,6 +412,21 @@ const OrganizationCapSettings = ({
 							</div>
 						}
 					/>
+					<SettingsRow
+						title="Transcription vocabulary"
+						meta={<ProChip />}
+						description="Company names, product names, and jargon to transcribe correctly. Separate with commas or new lines."
+					>
+						<textarea
+							value={vocabularyText}
+							onChange={(event) => setVocabularyText(event.target.value)}
+							onBlur={handleVocabularyBlur}
+							disabled={!user.isPro}
+							rows={3}
+							aria-label="Transcription vocabulary"
+							className="p-3 mt-3 w-full text-[13px] rounded-lg border resize-y border-gray-4 bg-gray-1 text-gray-12 disabled:opacity-50 disabled:cursor-not-allowed"
+						/>
+					</SettingsRow>
 				</SettingsCard>
 			</SettingsSection>
 		</div>
