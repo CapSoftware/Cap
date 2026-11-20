@@ -48,7 +48,8 @@ function sameHash(a: string, b: string) {
 async function deleteExpiredChallenges() {
 	await db()
 		.delete(authChallenges)
-		.where(lt(authChallenges.expiresAt, new Date()));
+		.where(lt(authChallenges.expiresAt, new Date()))
+		.limit(100);
 }
 
 export async function storeChallenge(input: {

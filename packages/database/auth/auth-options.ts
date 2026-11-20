@@ -308,7 +308,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					async authorize(credentials) {
 						const user = await verifyPasskeySignIn(
 							(credentials as Record<string, unknown> | undefined)?.response,
-						);
+						).catch((error: unknown) => {
+							console.error("[passkeys] Sign-in verification failed", {
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return null;
+						});
 						if (!user) return null;
 						return {
 							id: user.id,

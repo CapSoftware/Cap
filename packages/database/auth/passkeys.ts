@@ -13,8 +13,10 @@ import {
 	verifyRegistrationResponse,
 } from "@simplewebauthn/server";
 import {
+	decodeAttestationObject,
 	decodeClientDataJSON,
 	isoBase64URL,
+	isoCBOR,
 	isoUint8Array,
 } from "@simplewebauthn/server/helpers";
 import { and, asc, count, eq } from "drizzle-orm";
@@ -83,14 +85,14 @@ function isBase64Url(value: unknown, maxLength = MAX_FIELD_LENGTH) {
 }
 
 function parseResponseJson(raw: unknown): Record<string, unknown> | null {
-	let value: unknown = raw;
-	if (typeof raw === "string") {
-		if (raw.length > MAX_RESPONSE_JSON_LENGTH) return null;
-		try {
-			value = JSON.parse(raw);
-		} catch {
-			return null;
-		}
+	if (typeof raw !== "string" || raw.length > MAX_RESPONSE_JSON_LENGTH) {
+		return null;
+	}
+	let value: unknown;
+	try {
+		value = JSON.parse(raw);
+	} catch {
+		return null;
 	}
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 	const record = value as Record<string, unknown>;
@@ -157,17 +159,46 @@ export function parseRegistrationResponse(
 					TRANSPORTS.has(transport as AuthenticatorTransportFuture),
 			)
 		: [];
+	const attestationObject = withoutAttestation(
+		response.attestationObject as string,
+	);
+	if (!attestationObject) return null;
 	return {
 		id: record.id as string,
 		rawId: record.rawId as string,
 		type: "public-key",
 		response: {
 			clientDataJSON: response.clientDataJSON as string,
-			attestationObject: response.attestationObject as string,
+			attestationObject,
 			transports,
 		},
 		clientExtensionResults: {},
 	};
+}
+
+/**
+ * Cap requests no attestation and never trusts it, so the statement is
+ * dropped before verification. Verifying other formats would make the library
+ * download revocation lists from URLs inside client-supplied certificates.
+ */
+function withoutAttestation(attestationObject: string) {
+	try {
+		const authData = decodeAttestationObject(
+			isoBase64URL.toBuffer(attestationObject),
+		).get("authData");
+		if (!(authData instanceof Uint8Array)) return null;
+		return isoBase64URL.fromBuffer(
+			isoCBOR.encode(
+				new Map<string, string | Uint8Array | Map<string, never>>([
+					["fmt", "none"],
+					["attStmt", new Map<string, never>()],
+					["authData", authData],
+				]),
+			),
+		);
+	} catch {
+		return null;
+	}
 }
 
 function readChallenge(clientDataJSON: string, expectedType: string) {
@@ -175,7 +206,9 @@ function readChallenge(clientDataJSON: string, expectedType: string) {
 		const clientData = decodeClientDataJSON(clientDataJSON);
 		if (
 			clientData.type !== expectedType ||
-			typeof clientData.challenge !== "string"
+			typeof clientData.challenge !== "string" ||
+			clientData.crossOrigin === true ||
+			(clientData as { topOrigin?: unknown }).topOrigin !== undefined
 		) {
 			return null;
 		}
@@ -276,10 +309,11 @@ async function verifyPasskeyAssertion(
 			.limit(1);
 		if (!user) return null;
 
+		const expectedUserHandle = isoBase64URL.fromBuffer(webAuthnUserId(user.id));
 		if (
-			response.response.userHandle &&
-			response.response.userHandle !==
-				isoBase64URL.fromBuffer(webAuthnUserId(user.id))
+			(purpose === "passkey_sign_in" && !response.response.userHandle) ||
+			(response.response.userHandle &&
+				response.response.userHandle !== expectedUserHandle)
 		) {
 			return null;
 		}
