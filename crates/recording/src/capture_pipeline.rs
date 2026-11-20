@@ -181,9 +181,11 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
                         timed_fragments: true,
-                        realtime_videotoolbox_keyframe_interval: Some(
-                            STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL,
-                        ),
+                        // Ultra keeps the 12-frame GOP for now: with longer GOPs
+                        // VideoToolbox reaches Ultra's much higher bitrate target
+                        // on motion and those recordings grow instead of shrink.
+                        realtime_videotoolbox_keyframe_interval: (!ultra)
+                            .then_some(STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL),
                         preset,
                         bpp,
                         output_size,
