@@ -436,6 +436,12 @@ export async function verifyPasskeyRegistration(
 		"webauthn.create",
 	);
 	if (!challenge) return { status: "invalid" };
+	const [account] = await db()
+		.select({ authSessionVersion: users.authSessionVersion })
+		.from(users)
+		.where(eq(users.id, userId))
+		.limit(1);
+	if (!account) return { status: "invalid" };
 	if (
 		!(await consumeChallenge({
 			purpose: "passkey_registration",
@@ -474,16 +480,19 @@ export async function verifyPasskeyRegistration(
 
 	try {
 		const inserted = await db().transaction(async (tx) => {
-			await tx
-				.select({ id: users.id })
+			const [locked] = await tx
+				.select({ authSessionVersion: users.authSessionVersion })
 				.from(users)
 				.where(eq(users.id, userId))
 				.for("update");
+			if (locked?.authSessionVersion !== account.authSessionVersion) {
+				return "reset";
+			}
 			const [row] = await tx
 				.select({ total: count() })
 				.from(userPasskeys)
 				.where(eq(userPasskeys.userId, userId));
-			if ((row?.total ?? 0) >= MAX_PASSKEYS_PER_USER) return false;
+			if ((row?.total ?? 0) >= MAX_PASSKEYS_PER_USER) return "limit";
 			await tx.insert(userPasskeys).values({
 				id,
 				userId,
@@ -498,9 +507,10 @@ export async function verifyPasskeyRegistration(
 				name,
 				createdAt,
 			});
-			return true;
+			return "inserted";
 		});
-		if (!inserted) return { status: "limit" };
+		if (inserted === "limit") return { status: "limit" };
+		if (inserted === "reset") return { status: "invalid" };
 	} catch (error) {
 		if (isDuplicateKeyError(error)) return { status: "duplicate" };
 		throw error;
