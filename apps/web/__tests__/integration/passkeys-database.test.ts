@@ -19,6 +19,7 @@ import {
 	issueStepUpCode,
 	issueStepUpGrant,
 	STEP_UP_CODE_MAX_ATTEMPTS,
+	STEP_UP_CODES_PER_DAY,
 	verifyStepUpCode,
 } from "../../../../packages/database/auth/auth-challenges";
 import {
@@ -1120,6 +1121,25 @@ describe.runIf(Boolean(databaseUrl))(
 						),
 					);
 				expect(rows).toHaveLength(1);
+			});
+
+			it("sends at most ten codes a day to one account", async () => {
+				const user = await makeUser();
+				for (let sent = 0; sent < STEP_UP_CODES_PER_DAY; sent++) {
+					expect((await issueStepUpCode(user.id)).status).toBe("issued");
+					await database()
+						.update(authChallenges)
+						.set({ expiresAt: new Date(Date.now() + 9 * 60 * 1000) })
+						.where(
+							and(
+								eq(authChallenges.userId, user.id),
+								eq(authChallenges.purpose, "step_up_email_code"),
+							),
+						);
+				}
+				expect((await issueStepUpCode(user.id)).status).toBe("daily_limit");
+				const other = await makeUser();
+				expect((await issueStepUpCode(other.id)).status).toBe("issued");
 			});
 
 			it("refuses an expired code and rate limits new codes", async () => {
