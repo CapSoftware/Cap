@@ -78,6 +78,7 @@ mod onboarding_doodles;
 mod onboarding_window;
 mod overlay_backdrop;
 mod permission_guide;
+mod permission_help;
 mod permissions;
 mod permissions_ui;
 #[cfg(test)]
@@ -539,6 +540,11 @@ fn main() {
         }
         // The store's global shortcuts, after the registry they dispatch into.
         hotkeys::init(cx);
+        // Remember which grants this process started with: an Input Monitoring
+        // grant that lands later only reaches the next launch.
+        cx.background_executor()
+            .spawn(async { crate::permissions::note_launch_grants() })
+            .detach();
         // The gate's TCC queries (screen recording preflight, AXIsProcessTrusted)
         // are ~30ms of synchronous XPC on this Mac -- the whole startup delta
         // between the 08-17 and 08-18 builds. Both are thread-safe reads, so
