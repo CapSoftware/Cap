@@ -241,6 +241,11 @@ pub struct MacOSFragmentedM4SMuxer {
     health_tx: SharedHealthSender,
 }
 
+/// Studio screen recordings set an explicit keyframe interval on VideoToolbox;
+/// left unset it falls back to FFmpeg's 12-frame GOP, which puts most of the
+/// file's bytes into keyframes.
+pub const STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL: Duration = Duration::from_secs(1);
+
 pub struct MacOSFragmentedM4SMuxerConfig {
     pub timed_fragments: bool,
     pub realtime_videotoolbox_keyframe_interval: Option<Duration>,
