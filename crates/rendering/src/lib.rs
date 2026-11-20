@@ -709,6 +709,10 @@ pub struct SegmentVideoPaths {
 }
 
 impl RecordingSegmentDecoders {
+    pub fn has_camera(&self) -> bool {
+        self.camera.is_some()
+    }
+
     pub async fn new(
         _recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
@@ -1197,7 +1201,10 @@ pub async fn render_video_to_channel(
                 &segment.cursor,
                 duration,
                 constants.options.screen_size,
-                constants.options.camera_size,
+                constants
+                    .options
+                    .camera_size
+                    .filter(|_| segment.decoders.has_camera()),
                 recording_clip as u32,
             )
         })
@@ -1216,7 +1223,10 @@ pub async fn render_video_to_channel(
                         &segment.cursor,
                         duration,
                         constants.options.screen_size,
-                        constants.options.camera_size,
+                        constants
+                            .options
+                            .camera_size
+                            .filter(|_| segment.decoders.has_camera()),
                         recording_clip as u32,
                     )
                 })
@@ -1776,7 +1786,10 @@ pub async fn render_video_to_channel_nv12(
                 &segment.cursor,
                 duration,
                 constants.options.screen_size,
-                constants.options.camera_size,
+                constants
+                    .options
+                    .camera_size
+                    .filter(|_| segment.decoders.has_camera()),
                 recording_clip as u32,
             )
         })
@@ -1795,7 +1808,10 @@ pub async fn render_video_to_channel_nv12(
                         &segment.cursor,
                         duration,
                         constants.options.screen_size,
-                        constants.options.camera_size,
+                        constants
+                            .options
+                            .camera_size
+                            .filter(|_| segment.decoders.has_camera()),
                         recording_clip as u32,
                     )
                 })

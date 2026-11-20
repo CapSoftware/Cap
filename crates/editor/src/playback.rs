@@ -1255,7 +1255,10 @@ impl Playback {
                                 &seg.cursor,
                                 duration,
                                 self.render_constants.options.screen_size,
-                                self.render_constants.options.camera_size,
+                                self.render_constants
+                                    .options
+                                    .camera_size
+                                    .filter(|_| seg.decoders.has_camera()),
                                 recording_clip as u32,
                             )
                         })
@@ -1279,7 +1282,10 @@ impl Playback {
                                 &segment.cursor,
                                 duration,
                                 self.render_constants.options.screen_size,
-                                self.render_constants.options.camera_size,
+                                self.render_constants
+                                    .options
+                                    .camera_size
+                                    .filter(|_| segment.decoders.has_camera()),
                                 recording_clip as u32,
                             )
                         })

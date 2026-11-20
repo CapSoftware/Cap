@@ -84,7 +84,10 @@ impl EditorInstance {
             &media.cursor,
             duration,
             self.render_constants.options.screen_size,
-            self.render_constants.options.camera_size,
+            self.render_constants
+                .options
+                .camera_size
+                .filter(|_| media.decoders.has_camera()),
             segment.recording_clip,
         );
         zoom.ensure_precomputed_until(1.0 / THUMBNAIL_FPS as f32);

@@ -59,6 +59,10 @@ pub struct ManagedSegmentVideoInput {
 }
 
 impl ManagedSegmentVideoInput {
+    pub fn has_camera(&self) -> bool {
+        self.camera.is_some()
+    }
+
     pub fn new(
         segment_index: usize,
         metadata: &StudioRecordingMeta,

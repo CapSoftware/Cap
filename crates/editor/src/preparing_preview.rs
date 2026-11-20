@@ -657,7 +657,7 @@ async fn run_preview(
                 &cursor,
                 duration,
                 screen_size,
-                camera_size,
+                camera_size.filter(|_| decoders.inputs[index].video.has_camera()),
             );
             zoom.ensure_precomputed_until((request.frame_number as f32 + 1.0) / request.fps as f32);
             control.check()?;

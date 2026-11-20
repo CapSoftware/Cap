@@ -1511,7 +1511,10 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         total_duration,
                                         self.render_constants.options.screen_size,
-                                        self.render_constants.options.camera_size,
+                                        self.render_constants
+                                            .options
+                                            .camera_size
+                                            .filter(|_| segment_medias.decoders.has_camera()),
                                         segment.recording_clip,
                                     )
                                 });
@@ -1593,7 +1596,10 @@ impl EditorInstance {
                                                 &outgoing_media.cursor,
                                                 total_duration,
                                                 self.render_constants.options.screen_size,
-                                                self.render_constants.options.camera_size,
+                                                self.render_constants
+                                                    .options
+                                                    .camera_size
+                                                    .filter(|_| outgoing_media.decoders.has_camera()),
                                                 outgoing.segment.recording_clip,
                                             )
                                         });
