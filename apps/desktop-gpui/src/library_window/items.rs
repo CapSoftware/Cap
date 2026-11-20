@@ -42,16 +42,6 @@ impl ItemKey {
             Self::Path(path) => format!("path:{}", path.to_string_lossy()),
         }
     }
-
-    pub fn from_stored(stored: &str) -> Option<Self> {
-        if let Some(id) = stored.strip_prefix("doc:") {
-            return (!id.is_empty()).then(|| Self::Doc(id.to_string()));
-        }
-        stored
-            .strip_prefix("path:")
-            .filter(|p| !p.is_empty())
-            .map(|p| Self::Path(PathBuf::from(p)))
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,10 +106,18 @@ impl Item {
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())
             .collect();
-        people.dedup();
+        let mut seen = Vec::with_capacity(people.len());
+        people.retain(|p| {
+            let folded = fold(p);
+            let fresh = !seen.contains(&folded);
+            if fresh {
+                seen.push(folded);
+            }
+            fresh
+        });
         let folded = Folded {
             title: fold(&title),
-            people: people.iter().map(|p| fold(p)).collect(),
+            people: seen,
             app: facts.app.as_deref().map(fold).unwrap_or_default(),
         };
         Self {
@@ -139,6 +137,22 @@ impl Item {
             thumbnail: facts.thumbnail,
             excerpt: facts.excerpt,
             folded,
+        }
+    }
+
+    /// Adds speaker names heard in the meeting, keeping the order people were
+    /// listed in and never repeating a name (case and accents aside).
+    pub fn add_people(&mut self, names: &[String]) {
+        for name in names {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let folded = fold(name);
+            if !self.folded.people.contains(&folded) {
+                self.people.push(name.to_string());
+                self.folded.people.push(folded);
+            }
         }
     }
 
@@ -176,14 +190,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stored_keys_round_trip_and_reject_junk() {
-        let doc = ItemKey::Doc("20261120-abc".into());
-        let path = ItemKey::Path(PathBuf::from("/x/My Recording.cap"));
-        assert_eq!(ItemKey::from_stored(&doc.stored()), Some(doc));
-        assert_eq!(ItemKey::from_stored(&path.stored()), Some(path));
-        assert_eq!(ItemKey::from_stored("doc:"), None);
-        assert_eq!(ItemKey::from_stored("path:"), None);
-        assert_eq!(ItemKey::from_stored("nonsense"), None);
+    fn stored_keys_never_collide_between_notes_and_files() {
+        let doc = ItemKey::Doc("x".into()).stored();
+        let path = ItemKey::Path(PathBuf::from("x")).stored();
+        assert_eq!(doc, "doc:x");
+        assert_eq!(path, "path:x");
+        assert_ne!(doc, path);
     }
 
     #[test]
@@ -200,5 +212,22 @@ mod tests {
         );
         assert_eq!(item.people, vec!["Ana".to_string()]);
         assert_eq!(item.folded_people(), ["ana".to_string()]);
+    }
+
+    #[test]
+    fn speaker_names_merge_with_attendees_without_repeats() {
+        let mut item = Item::new(
+            ItemKey::Doc("a".into()),
+            ItemKind::Meeting,
+            "Sync",
+            Utc::now(),
+            ItemFacts {
+                people: vec!["José Álvarez".into()],
+                ..Default::default()
+            },
+        );
+        item.add_people(&["jose alvarez".into(), "Bo".into(), " ".into(), "BO".into()]);
+        assert_eq!(item.people, vec!["José Álvarez".to_string(), "Bo".to_string()]);
+        assert!(item.matches_query("bo"));
     }
 }
