@@ -15,6 +15,9 @@ const GOOGLE_JWKS_URL = new URL("https://www.googleapis.com/oauth2/v3/certs");
 const GOOGLE_ISSUERS = ["accounts.google.com", "https://accounts.google.com"];
 const CLOCK_TOLERANCE_SECONDS = 30;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{22,128}$/;
+const NONCE_ENTRY_SEPARATOR = ":";
+const MAX_OUTSTANDING_NONCES = 5;
+const MAX_NONCE_COOKIE_LENGTH = 1024;
 
 let googleJwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 
@@ -25,14 +28,12 @@ function getGoogleJwks() {
 
 export function googleOneTapNonceCookie(secure: boolean) {
 	return {
-		name: secure
-			? "__Secure-cap-google-one-tap-nonce"
-			: "cap-google-one-tap-nonce",
+		name: secure ? "__Host-cap-google-one-tap" : "cap-google-one-tap",
 		options: {
 			httpOnly: true,
 			secure,
 			sameSite: "lax" as const,
-			path: "/api/auth",
+			path: "/",
 			maxAge: GOOGLE_ONE_TAP_NONCE_MAX_AGE_SECONDS,
 		},
 	};
@@ -44,6 +45,83 @@ export function googleOneTapNonceCookieForWebUrl(webUrl: string) {
 
 export function createGoogleOneTapNonce() {
 	return crypto.randomBytes(32).toString("base64url");
+}
+
+type GoogleOneTapNonceEntry = { nonce: string; issuedAt: number };
+
+export function readGoogleOneTapNonces(
+	cookieValue: string | null | undefined,
+	now = Date.now(),
+): GoogleOneTapNonceEntry[] {
+	if (!cookieValue || cookieValue.length > MAX_NONCE_COOKIE_LENGTH) return [];
+	const nowSeconds = Math.floor(now / 1000);
+	const entries: GoogleOneTapNonceEntry[] = [];
+	for (const raw of cookieValue.split(NONCE_ENTRY_SEPARATOR)) {
+		const parts = raw.split(".");
+		const [nonce, issued] = parts;
+		if (parts.length !== 2 || !nonce || !issued) continue;
+		if (!NONCE_PATTERN.test(nonce) || !/^\d{1,12}$/.test(issued)) continue;
+		const issuedAt = Number(issued);
+		if (issuedAt > nowSeconds + CLOCK_TOLERANCE_SECONDS) continue;
+		if (nowSeconds - issuedAt >= GOOGLE_ONE_TAP_NONCE_MAX_AGE_SECONDS) continue;
+		entries.push({ nonce, issuedAt });
+	}
+	return entries.slice(-MAX_OUTSTANDING_NONCES);
+}
+
+function serializeGoogleOneTapNonces(entries: GoogleOneTapNonceEntry[]) {
+	return entries
+		.map(({ nonce, issuedAt }) => `${nonce}.${issuedAt}`)
+		.join(NONCE_ENTRY_SEPARATOR);
+}
+
+export function issueGoogleOneTapNonce(
+	cookieValue: string | null | undefined,
+	now = Date.now(),
+) {
+	const nonce = createGoogleOneTapNonce();
+	const entries = [
+		...readGoogleOneTapNonces(cookieValue, now),
+		{ nonce, issuedAt: Math.floor(now / 1000) },
+	].slice(-MAX_OUTSTANDING_NONCES);
+	return { nonce, cookieValue: serializeGoogleOneTapNonces(entries) };
+}
+
+function unverifiedCredentialNonce(credential: string | null | undefined) {
+	if (!credential || credential.length > GOOGLE_ONE_TAP_MAX_CREDENTIAL_LENGTH)
+		return null;
+	try {
+		const payload: unknown = JSON.parse(
+			Buffer.from(credential.split(".")[1] ?? "", "base64url").toString("utf8"),
+		);
+		if (!payload || typeof payload !== "object") return null;
+		const nonce = (payload as { nonce?: unknown }).nonce;
+		return typeof nonce === "string" ? nonce : null;
+	} catch {
+		return null;
+	}
+}
+
+export function consumeGoogleOneTapNonce(
+	cookieValue: string | null | undefined,
+	credential: string | null | undefined,
+	now = Date.now(),
+) {
+	const used = unverifiedCredentialNonce(credential);
+	return serializeGoogleOneTapNonces(
+		readGoogleOneTapNonces(cookieValue, now).filter(
+			(entry) => used === null || !noncesMatch(entry.nonce, used),
+		),
+	);
+}
+
+export function googleOneTapNonceSetCookie(
+	webUrl: string,
+	cookieValue: string,
+) {
+	const { name, options } = googleOneTapNonceCookieForWebUrl(webUrl);
+	const maxAge = cookieValue ? options.maxAge : 0;
+	return `${name}=${encodeURIComponent(cookieValue)}; Path=${options.path}; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${options.secure ? "; Secure" : ""}`;
 }
 
 export function readCookie(
@@ -78,14 +156,17 @@ export type GoogleOneTapClaims = {
 
 export async function verifyGoogleOneTapCredential(input: {
 	credential: unknown;
-	expectedNonce: string | null;
+	expectedNonces: readonly string[];
 	clientId: string | undefined;
 }): Promise<GoogleOneTapClaims | null> {
-	const { credential, expectedNonce, clientId } = input;
+	const { credential, clientId } = input;
+	const expectedNonces = input.expectedNonces.filter((nonce) =>
+		NONCE_PATTERN.test(nonce),
+	);
 	if (!clientId) return null;
 	if (typeof credential !== "string" || !credential) return null;
 	if (credential.length > GOOGLE_ONE_TAP_MAX_CREDENTIAL_LENGTH) return null;
-	if (!expectedNonce || !NONCE_PATTERN.test(expectedNonce)) return null;
+	if (expectedNonces.length === 0) return null;
 
 	let payload: JWTPayload;
 	try {
@@ -104,8 +185,12 @@ export async function verifyGoogleOneTapCredential(input: {
 	if (payload.aud !== clientId) return null;
 	if (payload.azp !== undefined && payload.azp !== clientId) return null;
 	if (payload.email_verified !== true) return null;
-	if (typeof payload.nonce !== "string") return null;
-	if (!noncesMatch(payload.nonce, expectedNonce)) return null;
+	const tokenNonce = payload.nonce;
+	if (typeof tokenNonce !== "string") return null;
+	const nonceMatches = expectedNonces.map((nonce) =>
+		noncesMatch(tokenNonce, nonce),
+	);
+	if (!nonceMatches.includes(true)) return null;
 	if (typeof payload.sub !== "string" || !payload.sub) return null;
 	if (typeof payload.email !== "string" || !payload.email) return null;
 
@@ -121,7 +206,9 @@ export async function authorizeGoogleOneTap(
 	const cookie = googleOneTapNonceCookieForWebUrl(env.WEB_URL);
 	const claims = await verifyGoogleOneTapCredential({
 		credential,
-		expectedNonce: readCookie(cookieHeader, cookie.name),
+		expectedNonces: readGoogleOneTapNonces(
+			readCookie(cookieHeader, cookie.name),
+		).map((entry) => entry.nonce),
 		clientId: env.GOOGLE_CLIENT_ID,
 	});
 	if (!claims) return null;

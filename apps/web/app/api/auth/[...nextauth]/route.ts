@@ -4,8 +4,11 @@ import {
 } from "@cap/database/auth/auth-options";
 import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
 import {
+	consumeGoogleOneTapNonce,
 	GOOGLE_ONE_TAP_PROVIDER_ID,
 	googleOneTapNonceCookieForWebUrl,
+	googleOneTapNonceSetCookie,
+	readCookie,
 } from "@cap/database/auth/google-one-tap";
 import { getWorkOS } from "@cap/database/auth/sso";
 import {
@@ -82,6 +85,29 @@ async function readSignInBody(request: NextRequest) {
 	return null;
 }
 
+async function readOneTapCredential(request: NextRequest) {
+	if (request.method !== "POST") return null;
+	try {
+		const contentType = request.headers.get("content-type");
+		if (contentType?.includes("application/x-www-form-urlencoded")) {
+			return new URLSearchParams(await request.clone().text()).get(
+				"credential",
+			);
+		}
+		if (contentType?.includes("application/json")) {
+			const body: unknown = await request.clone().json();
+			const credential =
+				body && typeof body === "object"
+					? (body as Record<string, unknown>).credential
+					: null;
+			return typeof credential === "string" ? credential : null;
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
 function authErrorUrl(error: string) {
 	const url = new URL("/api/auth/error", serverEnv().WEB_URL);
 	url.searchParams.set("error", error);
@@ -144,11 +170,19 @@ async function handler(
 		nextauth[1] === GOOGLE_ONE_TAP_PROVIDER_ID &&
 		nextauth[0] === "callback"
 	) {
+		const webUrl = serverEnv().WEB_URL;
+		const nonces = readCookie(
+			request.headers.get("cookie"),
+			googleOneTapNonceCookieForWebUrl(webUrl).name,
+		);
+		const credential = await readOneTapCredential(request);
 		const response: Response = await NextAuth(request, context, authOptions());
-		const cookie = googleOneTapNonceCookieForWebUrl(serverEnv().WEB_URL);
 		response.headers.append(
 			"set-cookie",
-			`${cookie.name}=; Path=${cookie.options.path}; HttpOnly; SameSite=Lax; Max-Age=0${cookie.options.secure ? "; Secure" : ""}`,
+			googleOneTapNonceSetCookie(
+				webUrl,
+				consumeGoogleOneTapNonce(nonces, credential),
+			),
 		);
 		return response;
 	}
