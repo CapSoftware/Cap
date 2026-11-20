@@ -18,7 +18,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
-import { isRateLimited } from "@/lib/rate-limit";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -136,6 +136,18 @@ async function handler(
 	const { nextauth } = await context.params;
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
+	if (
+		nextauth[0] === "callback" &&
+		nextauth[1] === "passkey" &&
+		(await isRateLimited(RATE_LIMIT_IDS.AUTH_PASSKEY, {
+			headers: request.headers,
+		}))
+	) {
+		return NextResponse.json(
+			{ url: authErrorUrl("CredentialsSignin") },
+			{ status: 429 },
+		);
+	}
 	if (nextauth[1] !== "workos") {
 		return NextAuth(
 			withSignInEmailIdentifier(request, nextauth),

@@ -5,9 +5,13 @@ import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faEnvelope } from "@fortawesome/free-solid-svg-icons/faEnvelope";
 import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
 import { captureException } from "@sentry/nextjs";
+import {
+	browserSupportsWebAuthn,
+	startAuthentication,
+} from "@simplewebauthn/browser";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
-import { LucideArrowUpRight } from "lucide-react";
+import { Fingerprint, LucideArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -22,9 +26,11 @@ import {
 	useTransition,
 } from "react";
 import { toast } from "sonner";
+import { getPasskeySignInOptions } from "@/actions/auth/passkeys";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { isPasskeyCancellation } from "@/lib/passkey-errors";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
 import { getSafeNextPath } from "../safe-next";
@@ -60,6 +66,9 @@ export function LoginForm() {
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const [passkeySupported, setPasskeySupported] = useState(false);
+	const [passkeyLoading, setPasskeyLoading] = useState(false);
+	const passkeySignInPending = useRef(false);
 	const mobileAppleSignInStarted = useRef(false);
 	const mobileGoogleSignInStarted = useRef(false);
 	const workosSignInStarted = useRef(false);
@@ -76,6 +85,10 @@ export function LoginForm() {
 		return () => {
 			loginFormMounted.current = false;
 		};
+	}, []);
+
+	useEffect(() => {
+		setPasskeySupported(browserSupportsWebAuthn());
 	}, []);
 
 	useEffect(() => {
@@ -198,6 +211,58 @@ export function LoginForm() {
 			});
 		};
 		startAppleSignIn();
+	}, [getNextPath]);
+
+	const handlePasskeySignIn = useCallback(async () => {
+		if (passkeySignInPending.current) return;
+		passkeySignInPending.current = true;
+		setPasskeyLoading(true);
+		trackEvent("auth_started", {
+			method: "passkey",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		let signedIn = false;
+		try {
+			const options = await getPasskeySignInOptions();
+			if (options.status !== "ok") {
+				toast.error("Too many sign-in attempts. Wait a minute and try again.");
+				return;
+			}
+			let response: Awaited<ReturnType<typeof startAuthentication>>;
+			try {
+				response = await startAuthentication({ optionsJSON: options.options });
+			} catch (error) {
+				if (!isPasskeyCancellation(error)) {
+					toast.error(
+						"Your passkey couldn't be used. Try again, or sign in with email.",
+					);
+				}
+				return;
+			}
+			const callbackUrl = getNextPath() ?? "/dashboard";
+			const result = await signIn("passkey", {
+				response: JSON.stringify(response),
+				redirect: false,
+				callbackUrl,
+			});
+			if (!result?.ok || result.error) {
+				toast.error(
+					"That passkey isn't linked to a Cap account. Sign in with email, then add a passkey in your account settings.",
+				);
+				return;
+			}
+			signedIn = true;
+			window.location.assign(callbackUrl);
+		} catch (error) {
+			captureException(error, {
+				tags: { auth_provider: "passkey", auth_surface: "login" },
+			});
+			toast.error("Could not sign in with a passkey. Try again.");
+		} finally {
+			passkeySignInPending.current = false;
+			if (!signedIn && loginFormMounted.current) setPasskeyLoading(false);
+		}
 	}, [getNextPath]);
 
 	const handleOidcSignIn = useCallback(() => {
@@ -466,6 +531,9 @@ export function LoginForm() {
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
 											handleOidcSignIn={handleOidcSignIn}
+											passkeySupported={passkeySupported}
+											passkeyLoading={passkeyLoading}
+											handlePasskeySignIn={handlePasskeySignIn}
 										/>
 									</motion.form>
 								)}
@@ -567,6 +635,9 @@ const NormalLogin = ({
 	oauthError,
 	handleGoogleSignIn,
 	handleOidcSignIn,
+	passkeySupported,
+	passkeyLoading,
+	handlePasskeySignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -576,6 +647,9 @@ const NormalLogin = ({
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
 	handleOidcSignIn: () => void;
+	passkeySupported: boolean;
+	passkeyLoading: boolean;
+	handlePasskeySignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
 	const emailInputId = useId();
@@ -636,7 +710,8 @@ const NormalLogin = ({
 
 			{(publicEnv.googleAuthAvailable ||
 				publicEnv.workosAuthAvailable ||
-				publicEnv.oidcAuthAvailable) && (
+				publicEnv.oidcAuthAvailable ||
+				passkeySupported) && (
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">
 						<span className="flex-1 h-px bg-gray-5" />
@@ -657,6 +732,21 @@ const NormalLogin = ({
 							>
 								<Image src="/google.svg" alt="Google" width={16} height={16} />
 								Login with Google
+							</MotionButton>
+						)}
+
+						{passkeySupported && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="flex gap-2 justify-center items-center w-full text-sm"
+								layout
+								onClick={handlePasskeySignIn}
+								disabled={loading || emailSent || passkeyLoading}
+								spinner={passkeyLoading}
+							>
+								{!passkeyLoading && <Fingerprint size={16} />}
+								Login with a passkey
 							</MotionButton>
 						)}
 
