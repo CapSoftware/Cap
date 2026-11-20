@@ -3219,9 +3219,13 @@ clips = "Add clips"
 drop_failed = "That sound file could not be added"
 drop_unsupported = "Drop a video, image or sound file to add it"
 image = "Add an image"
+image_detail = "Logos, screenshots, overlays"
 keys = "Type keys"
+keys_detail = "Show typing or shortcuts on screen"
 music = "Add music"
+music_detail = "From the library or a file"
 text_item = "Add text"
+text_item_detail = "Titles and callouts"
 title = { text = "Start your video", context = "Heading over the actions shown in a new, empty project." }
 
 [editor.window.busy]

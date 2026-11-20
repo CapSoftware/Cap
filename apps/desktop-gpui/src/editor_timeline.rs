@@ -2141,7 +2141,6 @@ impl SegmentUi<'_> {
 /// track's name. The saturated pill the source draws
 /// (`TL/TrackManager.tsx:264-281`) is gone.
 pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
-    let color = kind.color();
     div()
         .w_full()
         .h_full()
@@ -2151,41 +2150,7 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
         .gap(px(8.))
         .pl(px(TRACK_TILE_INSET))
         .pr(px(TRACK_DELETE_CLEARANCE))
-        .child(
-            div()
-                .flex_none()
-                .size(px(TRACK_TILE_SIZE))
-                .rounded(px(7.))
-                .flex()
-                .items_center()
-                .justify_center()
-                // A small piece of the track's own segment: the same
-                // gradient, lit edge and ring, with a white glyph.
-                .bg(seg_fill_sheen(theme, color))
-                .shadow(vec![
-                    gpui::BoxShadow {
-                        color: gpui::hsla(0., 0., 1., 0.22),
-                        offset: gpui::point(px(0.), px(1.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(0.),
-                        inset: true,
-                    },
-                    gpui::BoxShadow {
-                        color: gpui::hsla(0., 0., 1., 0.1),
-                        offset: gpui::point(px(0.), px(0.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(1.),
-                        inset: true,
-                    },
-                ])
-                .child(
-                    svg()
-                        .path(kind.icon())
-                        .size(px(14.))
-                        .flex_none()
-                        .text_color(gpui::hsla(0., 0., 1., 0.95)),
-                ),
-        )
+        .child(track_tile(theme, kind))
         .child(
             div()
                 .min_w_0()
@@ -2193,6 +2158,42 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
                 .text_size(px(13.))
                 .line_height(px(16.))
                 .child(kind.label()),
+        )
+}
+
+/// The track's tile: a small piece of its own segment, the same gradient,
+/// lit edge and ring, with a white glyph.
+pub fn track_tile(theme: &Theme, kind: TrackKind) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(px(TRACK_TILE_SIZE))
+        .rounded(px(7.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(seg_fill_sheen(theme, kind.color()))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.22),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.1),
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+        ])
+        .child(
+            svg()
+                .path(kind.icon())
+                .size(px(14.))
+                .flex_none()
+                .text_color(gpui::hsla(0., 0., 1., 0.95)),
         )
 }
 

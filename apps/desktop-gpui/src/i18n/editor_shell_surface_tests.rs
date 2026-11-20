@@ -1089,6 +1089,22 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::window::blank_start::clips(), "Add clips"),
         (tr::editor::window::blank_start::keys(), "Type keys"),
+        (
+            tr::editor::window::blank_start::keys_detail(),
+            "Show typing or shortcuts on screen",
+        ),
+        (
+            tr::editor::window::blank_start::text_item_detail(),
+            "Titles and callouts",
+        ),
+        (
+            tr::editor::window::blank_start::music_detail(),
+            "From the library or a file",
+        ),
+        (
+            tr::editor::window::blank_start::image_detail(),
+            "Logos, screenshots, overlays",
+        ),
         (tr::editor::window::blank_start::text_item(), "Add text"),
         (tr::editor::window::blank_start::music(), "Add music"),
         (tr::editor::window::blank_start::image(), "Add an image"),

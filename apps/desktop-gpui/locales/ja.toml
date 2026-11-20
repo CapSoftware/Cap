@@ -3217,9 +3217,13 @@ clips = "クリップを追加"
 drop_failed = "この音声ファイルを追加できませんでした"
 drop_unsupported = "動画、画像、音声ファイルをドロップして追加します"
 image = "画像を追加"
+image_detail = "ロゴ、スクリーンショット、オーバーレイ"
 keys = "キーを入力"
+keys_detail = "入力やショートカットを画面に表示"
 music = "音楽を追加"
+music_detail = "ライブラリまたはファイルから"
 text_item = "テキストを追加"
+text_item_detail = "タイトルや注釈"
 title = "動画をはじめる"
 
 [editor.window.busy]

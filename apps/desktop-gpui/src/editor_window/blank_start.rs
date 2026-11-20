@@ -64,6 +64,16 @@ impl Action {
         }
     }
 
+    fn detail(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Clips => return None,
+            Self::Keys => tr::editor::window::blank_start::keys_detail(),
+            Self::Text => tr::editor::window::blank_start::text_item_detail(),
+            Self::Music => tr::editor::window::blank_start::music_detail(),
+            Self::Image => tr::editor::window::blank_start::image_detail(),
+        })
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Clips => tr::editor::window::blank_start::clips(),
@@ -338,8 +348,8 @@ impl EditorWindow {
 
     /// The side panel and its grip. The slate hides them, since nothing on
     /// it has a picture to act on yet, unless a flow the actions start lives
-    /// there (Type Keys, the music library); when they come back they open
-    /// out rather than jumping in.
+    /// there (Type Keys, the music library); when they come back they
+    /// open out rather than jumping in.
     pub(super) fn render_side_panel_slot(
         &mut self,
         viewport_width: f32,
@@ -465,7 +475,8 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let editor = self.theme.editor;
+        let theme = self.theme;
+        let editor = theme.editor;
         let (fade, level) = ui::hover_fade(
             window,
             cx,
@@ -477,8 +488,10 @@ impl EditorWindow {
             .id(action.id())
             .tab_index(0)
             .flex()
+            .flex_row()
             .items_center()
-            .h(px(40.))
+            .gap(px(12.))
+            .h(px(54.))
             .px(px(14.))
             .cursor_pointer()
             .when(divided, |row| {
@@ -500,7 +513,22 @@ impl EditorWindow {
                 this.add_track = None;
                 this.add_track_kind(kind, window, cx);
             }))
-            .child(action.label())
+            .child(crate::editor_timeline::track_tile(&theme, kind))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w_0()
+                    .gap(px(1.))
+                    .child(div().truncate().child(action.label()))
+                    .children(action.detail().map(|detail| {
+                        div()
+                            .truncate()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(editor.text_2))
+                            .child(detail)
+                    })),
+            )
             .into_any_element()
     }
 

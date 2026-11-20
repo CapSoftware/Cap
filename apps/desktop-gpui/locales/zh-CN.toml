@@ -3217,9 +3217,13 @@ clips = "添加片段"
 drop_failed = "无法添加该音频文件"
 drop_unsupported = "拖放视频、图片或音频文件即可添加"
 image = "添加图片"
+image_detail = "标志、截图、叠加层"
 keys = "输入按键"
+keys_detail = "在屏幕上显示输入或快捷键"
 music = "添加音乐"
+music_detail = "从音乐库或文件添加"
 text_item = "添加文字"
+text_item_detail = "标题和标注"
 title = "开始制作视频"
 
 [editor.window.busy]

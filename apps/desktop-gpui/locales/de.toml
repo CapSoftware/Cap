@@ -3217,9 +3217,13 @@ clips = "Clips hinzufügen"
 drop_failed = "Diese Audiodatei konnte nicht hinzugefügt werden"
 drop_unsupported = "Ziehen Sie ein Video, ein Bild oder eine Audiodatei hierher, um sie hinzuzufügen"
 image = "Bild hinzufügen"
+image_detail = "Logos, Screenshots, Overlays"
 keys = "Tasten eingeben"
+keys_detail = "Eingaben oder Kurzbefehle einblenden"
 music = "Musik hinzufügen"
+music_detail = "Aus der Bibliothek oder einer Datei"
 text_item = "Text hinzufügen"
+text_item_detail = "Titel und Hinweise"
 title = "Starten Sie Ihr Video"
 
 [editor.window.busy]
