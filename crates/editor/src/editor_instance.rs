@@ -83,7 +83,7 @@ async fn still_interrupted(
     }
 }
 
-pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 9] {
+pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 10] {
     let click_spring = cursor.click_spring_config();
     [
         u32::from(cursor.raw),
@@ -95,6 +95,7 @@ pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration
         click_spring.friction.to_bits(),
         u32::from(cursor.interaction_anchors),
         u32::from(cursor.hover_anchors),
+        u32::from(cursor.follow == cap_project::CursorFollow::Trailing),
     ]
 }
 
@@ -113,7 +114,7 @@ struct PreviewCursorCacheEntry {
     recording_clip: u32,
     cursor: Arc<CursorEvents>,
     hover_generation: u64,
-    settings: [u32; 9],
+    settings: [u32; 10],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -2367,6 +2368,14 @@ fn get_calibration_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_how_the_cursor_follows_rebuilds_its_timeline() {
+        let mut cursor = cap_project::CursorConfiguration::default();
+        let on_pointer = cursor_timeline_settings(&cursor);
+        cursor.follow = cap_project::CursorFollow::Trailing;
+        assert_ne!(cursor_timeline_settings(&cursor), on_pointer);
+    }
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
 
     fn scrub_request(frame: u32) -> PreviewRequest {

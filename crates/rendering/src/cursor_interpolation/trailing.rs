@@ -881,7 +881,9 @@ fn plan(spring: &Spring, mut groups: Vec<Group>, origin: f64) -> (Vec<Knot>, Vec
         group: Group,
         choice: Choice,
         lead_before: usize,
-        speed_before: Vec<SpeedBump>,
+        /// Where this group's speed-up went, so dropping the group (the last
+        /// one committed) takes exactly that out again.
+        speed_inserted: Option<usize>,
     }
 
     let path = spring.path;
@@ -915,7 +917,9 @@ fn plan(spring: &Spring, mut groups: Vec<Group>, origin: f64) -> (Vec<Knot>, Vec
         {
             let previous = committed.pop().unwrap();
             lead.truncate(previous.lead_before);
-            speed = previous.speed_before;
+            if let Some(at) = previous.speed_inserted {
+                speed.remove(at);
+            }
             let mut points = previous.group.points;
             points.extend(group.points);
             groups[index] = Group {
@@ -927,17 +931,17 @@ fn plan(spring: &Spring, mut groups: Vec<Group>, origin: f64) -> (Vec<Knot>, Vec
         }
 
         let lead_before = lead.len();
-        let speed_before = speed.clone();
         lead.extend(choice.knots.iter().copied());
-        if let Some(bump) = choice.bump {
+        let speed_inserted = choice.bump.map(|bump| {
             let at = speed.partition_point(|existing| existing.ramp_in_start <= bump.ramp_in_start);
             speed.insert(at, bump);
-        }
+            at
+        });
         committed.push(Committed {
             group,
             choice,
             lead_before,
-            speed_before,
+            speed_inserted,
         });
         index += 1;
     }
