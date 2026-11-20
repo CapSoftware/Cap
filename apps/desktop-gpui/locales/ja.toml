@@ -4202,9 +4202,11 @@ get_pro = "Cap Proにする"
 not_now = "今はしない"
 sign_in = "サインイン"
 spent_title = "Cap AIの無料枠を使い切りました"
-title = "Cap AIにまとめてもらう"
-title_call = { other = "{count}分の通話をメモにまとめる" }
-title_people = { other = "{names}との{count}分の通話をメモにまとめる" }
+title = "この通話をCap AIにまとめてもらう"
+title_people = "{names}との通話をCap AIにまとめてもらう"
+pitch = "要約、決定事項、すべてのアクションアイテムをCap AIが書き出します。そのあと、何でも質問できます。"
+try_free = "サインインして無料で試す"
+write = "メモを書く"
 too_short = "この通話は短すぎてまとめられません。"
 unavailable_title = "このサーバーではCap AIのメモを利用できません"
 free_left = { other = "無料であと{count}件" }

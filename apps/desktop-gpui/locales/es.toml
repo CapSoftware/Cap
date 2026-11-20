@@ -4202,9 +4202,11 @@ get_pro = "Obtener Cap Pro"
 not_now = "Ahora no"
 sign_in = "Iniciar sesión"
 spent_title = "Ya usaste tus notas gratis de Cap AI"
-title = "Deja que Cap AI lo redacte"
-title_call = { one = "Convierte tu llamada de {count} minuto en notas", other = "Convierte tu llamada de {count} minutos en notas" }
-title_people = { one = "Convierte tu llamada de {count} minuto con {names} en notas", other = "Convierte tu llamada de {count} minutos con {names} en notas" }
+title = "Deja que Cap AI redacte esta llamada"
+title_people = "Deja que Cap AI redacte tu llamada con {names}"
+pitch = "Un resumen, las decisiones y cada tarea, redactados para ti. Después, pregúntale a Cap AI lo que quieras."
+try_free = "Inicia sesión y pruébalo gratis"
+write = "Escribir mis notas"
 too_short = "Esta llamada fue demasiado corta para redactarla."
 unavailable_title = "Las notas de Cap AI no están disponibles en este servidor"
 free_left = { one = "Te queda {count} nota gratis", other = "Te quedan {count} notas gratis" }

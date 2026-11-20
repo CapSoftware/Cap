@@ -4202,9 +4202,11 @@ get_pro = "Cap Pro लें"
 not_now = "अभी नहीं"
 sign_in = "साइन इन करें"
 spent_title = "आपके मुफ़्त Cap AI नोट्स खत्म हो गए"
-title = "Cap AI से यह लिखवाएँ"
-title_call = { one = "अपनी {count} मिनट की कॉल को नोट्स में बदलें", other = "अपनी {count} मिनट की कॉल को नोट्स में बदलें" }
-title_people = { one = "{names} के साथ अपनी {count} मिनट की कॉल को नोट्स में बदलें", other = "{names} के साथ अपनी {count} मिनट की कॉल को नोट्स में बदलें" }
+title = "Cap AI से इस कॉल के नोट्स लिखवाएँ"
+title_people = "Cap AI से {names} के साथ अपनी कॉल के नोट्स लिखवाएँ"
+pitch = "सारांश, फ़ैसले और हर काम, आपके लिए लिखे हुए। फिर Cap AI से कुछ भी पूछें।"
+try_free = "साइन इन करें और मुफ़्त आज़माएँ"
+write = "मेरे नोट्स लिखें"
 too_short = "यह कॉल लिखने के लिए बहुत छोटी थी।"
 unavailable_title = "इस सर्वर पर Cap AI नोट्स उपलब्ध नहीं हैं"
 free_left = { one = "{count} मुफ़्त नोट बाकी", other = "{count} मुफ़्त नोट्स बाकी" }

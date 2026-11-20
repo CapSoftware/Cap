@@ -4204,9 +4204,11 @@ get_pro = "Get Cap Pro"
 not_now = "Not now"
 sign_in = "Sign in"
 spent_title = { text = "You've used your free Cap AI notes", context = "Card on a meeting note when the free Cap AI notes on this account are used up, next to a Get Cap Pro button." }
-title = "Let Cap AI write this up"
-title_call = { one = "Turn your {count} minute call into notes", other = "Turn your {count} minute call into notes" }
-title_people = { one = "Turn your {count} minute call with {names} into notes", other = "Turn your {count} minute call with {names} into notes" }
+title = "Let Cap AI write up this call"
+title_people = "Let Cap AI write up your call with {names}"
+pitch = "A summary, the decisions and every action item, written for you. Then ask Cap AI anything."
+try_free = "Sign in to try it free"
+write = "Write my notes"
 too_short = "This call was too short to write up."
 unavailable_title = "Cap AI notes aren't available on this server"
 free_left = { one = "{count} free note left", other = "{count} free notes left" }

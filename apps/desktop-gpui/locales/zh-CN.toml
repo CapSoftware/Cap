@@ -4202,9 +4202,11 @@ get_pro = "获取 Cap Pro"
 not_now = "以后再说"
 sign_in = "登录"
 spent_title = "你的 Cap AI 免费次数已用完"
-title = "让 Cap AI 来写纪要"
-title_call = { other = "把你的 {count} 分钟通话整理成笔记" }
-title_people = { other = "把你与 {names} 的 {count} 分钟通话整理成笔记" }
+title = "让 Cap AI 为这次通话写纪要"
+title_people = "让 Cap AI 为你与 {names} 的通话写纪要"
+pitch = "摘要、决定和每一项待办，都为你写好。之后还能向 Cap AI 提任何问题。"
+try_free = "登录免费试用"
+write = "写纪要"
 too_short = "这次通话太短，无法写纪要。"
 unavailable_title = "此服务器不提供 Cap AI 笔记"
 free_left = { other = "还剩 {count} 次免费" }

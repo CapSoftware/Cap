@@ -4202,9 +4202,11 @@ get_pro = "Cap Pro holen"
 not_now = "Nicht jetzt"
 sign_in = "Anmelden"
 spent_title = "Ihre kostenlosen Cap AI Notizen sind aufgebraucht"
-title = "Lassen Sie Cap AI das zusammenfassen"
-title_call = { one = "Ihr {count}-minütiges Gespräch als Notizen", other = "Ihr {count}-minütiges Gespräch als Notizen" }
-title_people = { one = "Ihr {count}-minütiges Gespräch mit {names} als Notizen", other = "Ihr {count}-minütiges Gespräch mit {names} als Notizen" }
+title = "Lassen Sie Cap AI dieses Gespräch zusammenfassen"
+title_people = "Lassen Sie Cap AI Ihr Gespräch mit {names} zusammenfassen"
+pitch = "Eine Zusammenfassung, die Entscheidungen und jede Aufgabe, für Sie aufgeschrieben. Danach fragen Sie Cap AI alles."
+try_free = "Anmelden und kostenlos testen"
+write = "Notizen schreiben"
 too_short = "Dieses Gespräch war zu kurz für Notizen."
 unavailable_title = "Cap AI-Notizen sind auf diesem Server nicht verfügbar"
 free_left = { one = "Noch {count} kostenlose Notiz", other = "Noch {count} kostenlose Notizen" }

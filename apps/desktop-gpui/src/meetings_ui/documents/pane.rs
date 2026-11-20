@@ -3645,15 +3645,7 @@ impl Pane {
             .as_ref()
             .map(|meta| Pitch::from_meta(meta, None))
             .unwrap_or_default();
-        // The header already says "Under a minute"; a rounded-up "1 minute
-        // call" would contradict it, so short calls get the plain heading.
-        let full_minute = self
-            .doc
-            .as_ref()
-            .and_then(|meta| meta.meeting.as_ref())
-            .is_some_and(|m| m.duration_ms >= 60_000);
-        let minutes = pitch.minutes.filter(|_| full_minute);
-        let title = ai_note::card_title(kind, minutes, pitch.people());
+        let title = ai_note::card_title(kind, pitch.people());
         let pane = cx.weak_entity();
         let dismiss = cx.weak_entity();
         Some(in_column(

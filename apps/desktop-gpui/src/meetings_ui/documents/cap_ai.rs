@@ -171,22 +171,52 @@ fn flag(meta: &DocMeta, key: &str) -> bool {
 
 pub type Handler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// The card's heading names the meeting when Cap knows its length, so the
-/// offer is about this call rather than a feature list.
-pub fn card_title(kind: CardKind, minutes: Option<u64>, people: Option<String>) -> String {
+/// The card's heading names the people on the call when Cap knows them, so
+/// the offer is about this meeting rather than a feature list.
+pub fn card_title(kind: CardKind, people: Option<String>) -> String {
     match kind {
         CardKind::Spent => tr::cap_ai::card::spent_title().into(),
         CardKind::Unavailable => tr::cap_ai::card::unavailable_title().into(),
-        _ => match (minutes, people) {
-            (Some(minutes), Some(names)) => tr::cap_ai::card::title_people(minutes as usize, names),
-            (Some(minutes), None) => tr::cap_ai::card::title_call(minutes as usize),
-            (None, _) => tr::cap_ai::card::title().into(),
+        _ => match people {
+            Some(names) => tr::cap_ai::card::title_people(names),
+            None => tr::cap_ai::card::title().into(),
         },
     }
 }
 
-/// The offer above an ended meeting's transcript: one line that names the
-/// meeting, one action, and a way to put it away. Never a wall.
+/// What the card offers: the pitch, one button, and the short line beside it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CardOffer {
+    pub pitch: bool,
+    pub action: Option<&'static str>,
+    pub note: Option<String>,
+}
+
+pub fn card_offer(kind: CardKind) -> CardOffer {
+    let pitch = kind != CardKind::Unavailable;
+    let (action, note) = match kind {
+        // Signed out, the app can't know how many notes the server gives
+        // free, so the button says it's free and nothing counts.
+        CardKind::SignIn => (Some(tr::cap_ai::card::try_free()), None),
+        CardKind::Write {
+            trial: Some(remaining),
+        } => (
+            Some(tr::cap_ai::card::write()),
+            Some(tr::cap_ai::card::free_left(remaining.max(1) as usize)),
+        ),
+        CardKind::Write { trial: None } => (Some(tr::cap_ai::card::write()), None),
+        CardKind::Upgrade | CardKind::Spent => (Some(tr::cap_ai::card::get_pro()), None),
+        CardKind::Unavailable => (None, None),
+    };
+    CardOffer {
+        pitch,
+        action,
+        note,
+    }
+}
+
+/// The offer above an ended meeting's transcript: what Cap AI writes for
+/// this call, one button, and a way to put it away. Never a wall.
 pub fn render_card(
     palette: &Palette,
     kind: CardKind,
@@ -196,74 +226,83 @@ pub fn render_card(
     not_now: Handler,
 ) -> AnyElement {
     let palette = *palette;
-    let action: Option<&'static str> = match kind {
-        CardKind::SignIn => Some(tr::cap_ai::card::sign_in()),
-        CardKind::Upgrade | CardKind::Spent => Some(tr::cap_ai::card::get_pro()),
-        CardKind::Write { .. } => Some(tr::documents::bar::write_notes()),
-        CardKind::Unavailable => None,
-    };
-    let trial = match kind {
-        CardKind::Write {
-            trial: Some(remaining),
-        } => Some(tr::cap_ai::card::free_left(remaining.max(1) as usize)),
-        _ => None,
-    };
-    div()
-        .id("cap-ai-card")
-        .mt(px(14.))
-        .min_h(px(48.))
-        .pl(px(16.))
-        .pr(px(8.))
-        .py(px(7.))
+    let offer = card_offer(kind);
+    let heading = div()
         .flex()
-        .flex_wrap()
-        .items_center()
-        .gap(px(10.))
-        .rounded(px(14.))
-        .border(px(1.5))
-        .border_color(palette.track)
+        .items_start()
+        .gap(px(8.))
         .child(
             div()
                 .flex_1()
-                .min_w(px(180.))
-                .text_size(px(14.))
-                .line_height(px(20.))
+                .min_w_0()
+                .pt(px(4.))
+                .text_size(px(15.))
+                .line_height(px(21.))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(palette.text)
-                .child(title)
-                .children(trial.map(|trial| {
-                    div()
-                        .text_size(px(12.5))
-                        .text_color(palette.muted)
-                        .child(trial)
-                })),
+                .child(title),
         )
-        .child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap(px(4.))
-                .children(action.map(|action| {
-                    style::ink_pill(&palette, "cap-ai-card-primary")
-                        .h(px(32.))
-                        .px(px(14.))
-                        .child(action)
-                        .on_click(primary)
-                }))
-                .when(kind != CardKind::Unavailable, |el| {
-                    el.child(
-                        style::icon_button(&palette, "cap-ai-card-not-now", "icons/x.svg", 28.)
-                            .tooltip(|_, cx| {
-                                crate::ui::Tooltip::new(
-                                    &crate::theme::Theme::new(crate::theme::Appearance::Dark),
-                                    tr::cap_ai::card::not_now(),
-                                )
-                                .view(cx)
-                            })
-                            .on_click(not_now),
-                    )
-                }),
-        )
+        .when(kind != CardKind::Unavailable, |el| {
+            el.child(
+                style::icon_button(&palette, "cap-ai-card-not-now", "icons/x.svg", 28.)
+                    .flex_shrink_0()
+                    .tooltip(|_, cx| {
+                        crate::ui::Tooltip::new(
+                            &crate::theme::Theme::new(crate::theme::Appearance::Dark),
+                            tr::cap_ai::card::not_now(),
+                        )
+                        .view(cx)
+                    })
+                    .on_click(not_now),
+            )
+        });
+    let actions = offer.action.map(|action| {
+        div()
+            .mt(px(12.))
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                style::ink_pill(&palette, "cap-ai-card-primary")
+                    .h(px(32.))
+                    .px(px(14.))
+                    .child(action)
+                    .on_click(primary),
+            )
+            .children(offer.note.map(|note| {
+                div()
+                    .text_size(px(12.5))
+                    .line_height(px(18.))
+                    .text_color(palette.muted)
+                    .child(note)
+            }))
+    });
+    div()
+        .id("cap-ai-card")
+        .mt(px(14.))
+        .pl(px(18.))
+        .pr(px(10.))
+        .pt(px(10.))
+        .pb(px(14.))
+        .flex()
+        .flex_col()
+        .rounded(px(14.))
+        .border(px(1.5))
+        .border_color(palette.track)
+        .child(heading)
+        .when(offer.pitch, |el| {
+            el.child(
+                div()
+                    .mt(px(4.))
+                    .pr(px(8.))
+                    .text_size(px(13.5))
+                    .line_height(px(20.))
+                    .text_color(palette.muted)
+                    .child(tr::cap_ai::card::pitch()),
+            )
+        })
+        .children(actions)
         .into_any_element()
 }
 
@@ -412,7 +451,7 @@ mod tests {
     /// another computer, so the spent card states only that they are used.
     #[test]
     fn the_spent_card_claims_no_count_of_meetings() {
-        let title = card_title(CardKind::Spent, Some(42), Some("Ana".into()));
+        let title = card_title(CardKind::Spent, Some("Ana".into()));
         assert!(!title.chars().any(|c| c.is_ascii_digit()), "{title}");
         assert_eq!(title, "You've used your free Cap AI notes");
     }
@@ -610,18 +649,57 @@ mod tests {
     }
 
     #[test]
-    fn card_titles_name_the_call_when_cap_knows_it() {
-        let call = card_title(CardKind::SignIn, Some(36), Some("Hana and Jun".into()));
-        assert!(call.contains("36") && call.contains("Hana and Jun"), "{call}");
-        let short = card_title(CardKind::Write { trial: None }, Some(4), None);
-        assert!(short.contains('4'), "{short}");
+    fn card_titles_name_the_people_when_cap_knows_them() {
+        let call = card_title(CardKind::SignIn, Some("Hana and Jun".into()));
+        assert!(call.contains("Hana and Jun"), "{call}");
         assert_eq!(
-            card_title(CardKind::Upgrade, None, None),
+            card_title(CardKind::Upgrade, None),
             tr::cap_ai::card::title()
         );
+        for kind in [CardKind::SignIn, CardKind::Write { trial: None }] {
+            let title = card_title(kind, None);
+            assert!(
+                !title.chars().any(|c| c.is_ascii_digit()),
+                "the heading never counts minutes: {title}"
+            );
+        }
         assert_eq!(
-            card_title(CardKind::Unavailable, Some(36), None),
+            card_title(CardKind::Unavailable, Some("Hana".into())),
             tr::cap_ai::card::unavailable_title()
+        );
+    }
+
+    #[test]
+    fn every_card_says_what_cap_ai_gives_and_has_one_clear_action() {
+        let sign_in = card_offer(CardKind::SignIn);
+        assert!(sign_in.pitch);
+        assert_eq!(sign_in.action, Some(tr::cap_ai::card::try_free()));
+        assert_eq!(sign_in.note, None, "signed out, nothing to count");
+
+        let trial = card_offer(CardKind::Write { trial: Some(2) });
+        assert_eq!(trial.action, Some(tr::cap_ai::card::write()));
+        assert_eq!(trial.note, Some(tr::cap_ai::card::free_left(2)));
+        assert!(trial.note.as_deref().is_some_and(|n| n.contains('2')));
+
+        let ready = card_offer(CardKind::Write { trial: None });
+        assert_eq!(ready.action, Some(tr::cap_ai::card::write()));
+        assert_eq!(ready.note, None, "Cap Pro has nothing to count");
+
+        for kind in [CardKind::Upgrade, CardKind::Spent] {
+            let offer = card_offer(kind);
+            assert!(offer.pitch);
+            assert_eq!(offer.action, Some(tr::cap_ai::card::get_pro()));
+        }
+
+        let unavailable = card_offer(CardKind::Unavailable);
+        assert_eq!(
+            unavailable,
+            CardOffer {
+                pitch: false,
+                action: None,
+                note: None
+            },
+            "no offer where Cap AI can't run"
         );
     }
 
