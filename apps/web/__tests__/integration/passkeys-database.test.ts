@@ -1077,6 +1077,31 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await verifyStepUpCode(user.id, issued.code)).toBe(false);
 			});
 
+			it("issues codes for many accounts at once without deadlocking", async () => {
+				const accounts = await Promise.all(
+					Array.from({ length: 12 }, () => makeUser()),
+				);
+				for (let round = 0; round < 3; round++) {
+					if (round > 0) {
+						await database()
+							.update(authChallenges)
+							.set({ expiresAt: new Date(Date.now() + 9 * 60 * 1000) })
+							.where(
+								inArray(
+									authChallenges.userId,
+									accounts.map((account) => account.id),
+								),
+							);
+					}
+					const results = await Promise.all(
+						accounts.map((account) => issueStepUpCode(account.id)),
+					);
+					expect(results.every((result) => result.status === "issued")).toBe(
+						true,
+					);
+				}
+			});
+
 			it("issues one code when requests race", async () => {
 				const user = await makeUser();
 				const results = await Promise.all(

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { serverEnv } from "@cap/env";
 import type { User } from "@cap/web-domain";
-import { and, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
 import { authChallenges, users } from "../schema.ts";
@@ -145,14 +145,23 @@ export async function issueStepUpCode(
 				};
 			}
 		}
-		await tx
-			.delete(authChallenges)
+		const previous = await tx
+			.select({ id: authChallenges.id })
+			.from(authChallenges)
 			.where(
 				and(
 					eq(authChallenges.userId, userId),
 					eq(authChallenges.purpose, "step_up_email_code"),
 				),
 			);
+		if (previous.length > 0) {
+			await tx.delete(authChallenges).where(
+				inArray(
+					authChallenges.id,
+					previous.map((row) => row.id),
+				),
+			);
+		}
 		await tx.insert(authChallenges).values({
 			id,
 			userId,
