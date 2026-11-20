@@ -43,6 +43,10 @@ const fixture = vi.hoisted(() => ({
 	}[],
 	stripeFails: false as false | "down" | "missing",
 	failLoops: false,
+	stripeCustomers: new Map<
+		string,
+		{ email: string; metadata: Record<string, string> }
+	>(),
 	onStripeUpdate: null as null | (() => Promise<void>),
 	workosDown: false,
 	workosDomains: new Map<string, { domain: string; state: string }[]>(),
@@ -81,12 +85,39 @@ vi.mock("@cap/utils", async (importOriginal) => ({
 				}
 				if (fixture.stripeFails) throw new Error("Stripe is down");
 				fixture.stripeUpdates.push({ id, params, options });
+				const stored = fixture.stripeCustomers.get(id);
+				if (stored) {
+					if (typeof params.email === "string") stored.email = params.email;
+					if (params.metadata && typeof params.metadata === "object") {
+						stored.metadata = {
+							...stored.metadata,
+							...(params.metadata as Record<string, string>),
+						};
+					}
+				}
 				const hook = fixture.onStripeUpdate;
 				fixture.onStripeUpdate = null;
 				await hook?.();
-				return { id };
+				return { id, metadata: stored?.metadata ?? {} };
+			},
+			list: async ({ email }: { email: string }) => ({
+				data: [...fixture.stripeCustomers.entries()]
+					.filter(([, customer]) => customer.email === email)
+					.map(([id, customer]) => ({ id, metadata: customer.metadata })),
+			}),
+			create: async (params: {
+				email: string;
+				metadata: Record<string, string>;
+			}) => {
+				const id = `cus_new_${fixture.stripeCustomers.size}_${Date.now()}`;
+				fixture.stripeCustomers.set(id, {
+					email: params.email,
+					metadata: params.metadata,
+				});
+				return { id, metadata: params.metadata };
 			},
 		},
+		subscriptions: { list: async () => ({ data: [] }) },
 	}),
 }));
 vi.mock("@cap/database/auth/session", () => ({
@@ -780,6 +811,56 @@ describe.runIf(Boolean(databaseUrl))(
 				.filter((update) => update.id === user.stripeCustomerId)
 				.at(-1);
 			expect(last?.params.email).toBe(newEmail);
+		});
+
+		it("never hands a billing customer to a sign-up racing the change", async () => {
+			const { finishEmailChange } = await actions();
+			const { provisionStripeCustomer } = await import(
+				"../../../../packages/database/auth/stripe-customer"
+			);
+			const customerId = `cus_${id()}`;
+			const user = await makeUser(address(), { stripeCustomerId: customerId });
+			fixture.stripeCustomers.set(customerId, {
+				email: user.email,
+				metadata: { userId: user.id },
+			});
+			const newEmail = address();
+			await start(user, newEmail);
+			let racer: Awaited<ReturnType<typeof makeUser>> | undefined;
+			fixture.onStripeUpdate = async () => {
+				racer = await makeUser(newEmail);
+				racer = await provisionStripeCustomer(database(), racer);
+			};
+			expect(await finishEmailChange(lastCode(newEmail))).toEqual({
+				status: "taken",
+			});
+			expect(racer?.stripeCustomerId).toBeTruthy();
+			expect(racer?.stripeCustomerId).not.toBe(customerId);
+			expect(fixture.stripeCustomers.get(customerId)).toEqual({
+				email: user.email,
+				metadata: { userId: user.id },
+			});
+			expect((await reload(user.id))?.stripeCustomerId).toBe(customerId);
+		});
+
+		it("still adopts a customer with no owner or a deleted owner at sign-up", async () => {
+			const { provisionStripeCustomer } = await import(
+				"../../../../packages/database/auth/stripe-customer"
+			);
+			const owners: Record<string, string>[] = [{}, { userId: `gone_${id()}` }];
+			for (const metadata of owners) {
+				const email = address("guest");
+				const customerId = `cus_${id()}`;
+				fixture.stripeCustomers.set(customerId, { email, metadata });
+				const signup = await provisionStripeCustomer(
+					database(),
+					await makeUser(email),
+				);
+				expect(signup.stripeCustomerId).toBe(customerId);
+				expect(fixture.stripeCustomers.get(customerId)?.metadata.userId).toBe(
+					signup.id,
+				);
+			}
 		});
 
 		it("puts billing back when the change does not commit", async () => {
