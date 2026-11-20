@@ -625,8 +625,16 @@ impl Indicator {
     /// Off macOS the window manager moved it: remember where, per display.
     fn window_moved(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let bounds = window.bounds();
+        // A banner widened a right-side indicator leftward: where it rests is
+        // still its collapsed spot at the same right edge.
+        let width = f64::from(bounds.size.width);
+        let x = if self.dock.right() && width > model::INDICATOR_WIDTH {
+            f64::from(bounds.origin.x) + width - model::INDICATOR_WIDTH
+        } else {
+            f64::from(bounds.origin.x)
+        };
         let frame = Rect::new(
-            f64::from(bounds.origin.x),
+            x,
             f64::from(bounds.origin.y),
             model::INDICATOR_WIDTH,
             model::INDICATOR_HEIGHT,
@@ -800,12 +808,18 @@ impl Render for Indicator {
         let dragging = self.drag.is_some();
 
         // Off macOS the window keeps the size it opened with; a banner (or
-        // the hidden line) widens it.
+        // the hidden line) widens it, toward the free side of the screen.
         if !native::can_move_windows() {
             let want = px(self.width() as f32);
             if window.bounds().size.width != want {
+                let keep_right = self.dock.right();
                 window.defer(cx, move |window, _| {
-                    window.resize(size(want, px(model::INDICATOR_HEIGHT as f32)))
+                    let height = model::INDICATOR_HEIGHT;
+                    if !(keep_right
+                        && native::resize_keeping_right_edge(window, f64::from(want), height))
+                    {
+                        window.resize(size(want, px(height as f32)))
+                    }
                 });
             }
         }

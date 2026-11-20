@@ -350,3 +350,72 @@ pub fn window_title(window: &mut Window, title: &str) {
 pub fn can_move_windows() -> bool {
     cfg!(target_os = "macos")
 }
+
+/// Off macOS GPUI can only resize a window from its left edge. For a window
+/// that sits against the right of the screen, resize it keeping its right
+/// edge where it is (Windows and X11). False where the platform cannot place
+/// windows (macOS uses its own panel; Wayland never lets apps position), so
+/// the caller resizes the ordinary way.
+pub fn resize_keeping_right_edge(window: &Window, width: f64, height: f64) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(native) = crate::platform::native_window(window) else {
+            return false;
+        };
+        let scale = f64::from(window.scale_factor());
+        let (x, y, w, _) = crate::platform::window_frame(&native);
+        if w <= 0. {
+            return false;
+        }
+        let new_w = (width * scale).round();
+        crate::platform::set_window_frame(
+            &native,
+            x + w - new_w,
+            y,
+            new_w,
+            (height * scale).round(),
+        );
+        true
+    }
+    #[cfg(target_os = "linux")]
+    {
+        x11_resize_keeping_right_edge(window, width, height).unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = (window, width, height);
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_resize_keeping_right_edge(window: &Window, width: f64, height: f64) -> anyhow::Result<bool> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt};
+
+    let id = match HasWindowHandle::window_handle(window)?.as_raw() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        _ => return Ok(false),
+    };
+    let (connection, screen) = x11rb::connect(None)?;
+    let root = connection.setup().roots[screen].root;
+    let geometry = connection.get_geometry(id)?.reply()?;
+    let at = connection.translate_coordinates(id, root, 0, 0)?.reply()?;
+    let scale = f64::from(window.scale_factor());
+    let new_w = (width * scale).round().max(1.) as u32;
+    let right = i32::from(at.dst_x) + i32::from(geometry.width);
+    connection
+        .configure_window(
+            id,
+            &ConfigureWindowAux::new()
+                .x(right - new_w as i32)
+                .y(i32::from(at.dst_y))
+                .width(new_w)
+                .height((height * scale).round().max(1.) as u32),
+        )?
+        .check()?;
+    connection.flush()?;
+    Ok(true)
+}
