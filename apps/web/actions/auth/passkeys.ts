@@ -38,7 +38,16 @@ export type PasskeyListItem = {
 	createdAt: string;
 	lastUsedAt: string | null;
 	backedUp: boolean;
+	confirmsIdentity: boolean;
 };
+
+async function hasFreshSignIn(userId: string) {
+	const session = (await getSession()) as {
+		user?: { id?: string };
+		authTime?: number;
+	} | null;
+	return session?.user?.id === userId && isFreshSignIn(session?.authTime);
+}
 
 async function requireUser() {
 	const user = await getCurrentUser();
@@ -145,7 +154,9 @@ export async function completePasskeyRegistration(
 > {
 	const user = await requireUser();
 	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
-	const result = await verifyPasskeyRegistration(user.id, response);
+	const result = await verifyPasskeyRegistration(user.id, response, {
+		allowFirstPasskey: await hasFreshSignIn(user.id),
+	});
 	if (result.status !== "registered") return { status: result.status };
 	await sendPasskeyAddedNotice(user.email, result.passkey.name);
 	return {
@@ -168,11 +179,16 @@ export async function listMyPasskeys(): Promise<PasskeyListItem[]> {
 	}));
 }
 
-export async function removePasskey(passkeyId: string) {
+export async function removePasskey(
+	passkeyId: string,
+	grant: string,
+): Promise<{ status: "removed" | "missing" | "verify" }> {
 	const user = await requireUser();
+	if (!(await hasStepUpGrant(user.id, grant))) return { status: "verify" };
 	const removed = await deletePasskey(user.id, passkeyId);
-	if (removed) await sendPasskeyRemovedNotice(user.email, removed.name);
-	return { removed: removed !== null };
+	if (!removed) return { status: "missing" };
+	await sendPasskeyRemovedNotice(user.email, removed.name);
+	return { status: "removed" };
 }
 
 export async function getPasskeyRegistrationOptionsAfterSignIn(): Promise<
@@ -181,13 +197,7 @@ export async function getPasskeyRegistrationOptionsAfterSignIn(): Promise<
 > {
 	const user = await requireUser();
 	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
-	const session = (await getSession()) as {
-		user?: { id?: string };
-		authTime?: number;
-	} | null;
-	if (session?.user?.id !== user.id || !isFreshSignIn(session?.authTime)) {
-		return { status: "verify" };
-	}
+	if (!(await hasFreshSignIn(user.id))) return { status: "verify" };
 	const options = await createPasskeyRegistrationOptions(user, {
 		firstPasskeyOnly: true,
 	});
