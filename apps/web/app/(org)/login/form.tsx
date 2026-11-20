@@ -31,6 +31,10 @@ import { getOrganizationSSOData } from "@/actions/organization/get-organization-
 import { trackEvent } from "@/app/utils/analytics";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { isPasskeyCancellation } from "@/lib/passkey-errors";
+import {
+	completePasskeySignIn,
+	type PasskeySignInResult,
+} from "@/lib/passkey-sign-in";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
 import { getSafeNextPath } from "../safe-next";
@@ -40,6 +44,18 @@ const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
 const MotionLink = motion(Link);
 const MotionButton = motion(Button);
+
+const passkeySignInErrors: Record<
+	Exclude<PasskeySignInResult, "signed_in">,
+	string
+> = {
+	not_linked:
+		"That passkey isn't linked to a Cap account. Sign in with email, then add a passkey in your account settings.",
+	blocked:
+		"This account can't sign in. Contact support if you think this is a mistake.",
+	rate_limited: "Too many sign-in attempts. Wait a minute and try again.",
+	failed: "Could not sign in with a passkey. Try again.",
+};
 
 export function LoginForm() {
 	const searchParams = useSearchParams();
@@ -241,15 +257,12 @@ export function LoginForm() {
 				return;
 			}
 			const callbackUrl = getNextPath() ?? "/dashboard";
-			const result = await signIn("passkey", {
-				response: JSON.stringify(response),
-				redirect: false,
+			const result = await completePasskeySignIn(
+				JSON.stringify(response),
 				callbackUrl,
-			});
-			if (!result?.ok || result.error) {
-				toast.error(
-					"That passkey isn't linked to a Cap account. Sign in with email, then add a passkey in your account settings.",
-				);
+			);
+			if (result !== "signed_in") {
+				toast.error(passkeySignInErrors[result]);
 				return;
 			}
 			signedIn = true;

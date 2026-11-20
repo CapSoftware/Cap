@@ -40,6 +40,12 @@ async function requireUser() {
 	return user;
 }
 
+function isPasskeyLimited(userId: string) {
+	return isRateLimited(RATE_LIMIT_IDS.AUTH_PASSKEY, {
+		key: `passkey-account:${userId}`,
+	});
+}
+
 export async function getPasskeySignInOptions(): Promise<
 	| { status: "ok"; options: PublicKeyCredentialRequestOptionsJSON }
 	| { status: "rate_limited" }
@@ -93,17 +99,18 @@ export async function getPasskeyStepUpOptions(): Promise<
 	| { status: "none" | "rate_limited" }
 > {
 	const user = await requireUser();
-	if (await isRateLimited(RATE_LIMIT_IDS.AUTH_PASSKEY)) {
-		return { status: "rate_limited" };
-	}
+	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
 	const options = await createPasskeyStepUpOptions(user.id);
 	return options ? { status: "ok", options } : { status: "none" };
 }
 
 export async function verifyPasskeyForStepUp(
 	response: string,
-): Promise<{ status: "ok"; grant: string } | { status: "invalid" }> {
+): Promise<
+	{ status: "ok"; grant: string } | { status: "invalid" | "rate_limited" }
+> {
 	const user = await requireUser();
+	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
 	if (!(await verifyPasskeyStepUp(user.id, response))) {
 		return { status: "invalid" };
 	}
@@ -114,9 +121,10 @@ export async function getPasskeyRegistrationOptions(
 	grant: string,
 ): Promise<
 	| { status: "ok"; options: PublicKeyCredentialCreationOptionsJSON }
-	| { status: "verify" | "limit" }
+	| { status: "verify" | "limit" | "rate_limited" }
 > {
 	const user = await requireUser();
+	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
 	if (!(await hasStepUpGrant(user.id, grant))) return { status: "verify" };
 	const options = await createPasskeyRegistrationOptions(user);
 	return options ? { status: "ok", options } : { status: "limit" };
@@ -126,9 +134,10 @@ export async function completePasskeyRegistration(
 	response: string,
 ): Promise<
 	| { status: "registered"; passkey: PasskeyListItem }
-	| { status: "invalid" | "duplicate" | "limit" }
+	| { status: "invalid" | "duplicate" | "limit" | "rate_limited" }
 > {
 	const user = await requireUser();
+	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
 	const result = await verifyPasskeyRegistration(user.id, response);
 	if (result.status !== "registered") return { status: result.status };
 	await sendPasskeyAddedNotice(user.email, result.passkey.name);

@@ -120,7 +120,11 @@ export function VerifyIdentityDialog({
 				onVerified(result.grant);
 				return;
 			}
-			toast.error("Your passkey couldn't be verified. Try an email code.");
+			toast.error(
+				result.status === "rate_limited"
+					? "Too many attempts. Try again in a minute."
+					: "Your passkey couldn't be verified. Try an email code.",
+			);
 		} catch {
 			toast.error("Your passkey couldn't be verified. Try an email code.");
 		} finally {

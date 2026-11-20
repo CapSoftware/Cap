@@ -69,6 +69,8 @@ export const Passkeys = ({
 				if (options.status === "verify") {
 					setGrant(null);
 					setVerifyOpen(true);
+				} else if (options.status === "rate_limited") {
+					toast.error("Too many attempts. Try again in a minute.");
 				} else {
 					toast.error(`You can add up to ${MAX_PASSKEYS} passkeys.`);
 				}
@@ -103,7 +105,9 @@ export const Passkeys = ({
 					? "That passkey is already on your account."
 					: result.status === "limit"
 						? `You can add up to ${MAX_PASSKEYS} passkeys.`
-						: "Your passkey couldn't be verified. Try again.",
+						: result.status === "rate_limited"
+							? "Too many attempts. Try again in a minute."
+							: "Your passkey couldn't be verified. Try again.",
 			);
 		} catch {
 			toast.error("Your passkey couldn't be added. Try again.");
@@ -113,7 +117,10 @@ export const Passkeys = ({
 	};
 
 	const removeMutation = useMutation({
-		mutationFn: (passkeyId: string) => removePasskey(passkeyId),
+		mutationFn: async (passkeyId: string) => {
+			const { removed } = await removePasskey(passkeyId);
+			if (!removed) throw new Error("Passkey was not removed");
+		},
 		onSuccess: (_, passkeyId) => {
 			setPasskeys((current) =>
 				current.filter((passkey) => passkey.id !== passkeyId),
@@ -195,6 +202,7 @@ export const Passkeys = ({
 							variant="secondary"
 							className="px-3 h-8 text-red-500 hover:text-red-600"
 							icon={<Trash2 className="size-3.5" />}
+							aria-label={`Remove passkey ${passkey.name}`}
 							onClick={() => setRemoveTarget(passkey)}
 						>
 							Remove
