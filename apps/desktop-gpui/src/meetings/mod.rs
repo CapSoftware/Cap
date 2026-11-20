@@ -2156,6 +2156,21 @@ impl Meetings {
         let now = Instant::now();
         let stats = capture.stats();
         let elapsed = recording.started.elapsed().as_millis() as u64;
+        // Debug builds: CAP_GPUI_MEETING_HANG_UI=<start_s>:<secs> blocks this
+        // (the UI) thread once, as a hung window would.
+        if cfg!(debug_assertions) {
+            static HUNG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if let Some((start, secs)) = std::env::var("CAP_GPUI_MEETING_HANG_UI").ok().and_then(|v| {
+                let (start, secs) = v.split_once(':')?;
+                Some((start.parse::<u64>().ok()?, secs.parse::<u64>().ok()?))
+            }) && elapsed >= start * 1000
+                && !HUNG.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                tracing::warn!(secs, "debug: blocking the UI thread");
+                std::thread::sleep(Duration::from_secs(secs));
+                tracing::warn!("debug: the UI thread runs again");
+            }
+        }
         // Stamps are ms since capture began plus one; 0 is "never".
         let since = |at: u64| Duration::from_millis(elapsed.saturating_sub(at.saturating_sub(1)));
         let at_ms = recording.timeline_offset_ms + elapsed;
