@@ -1442,7 +1442,10 @@ impl KeyboardLayer {
                     *age < rise_for && index + 1 == drawn.len() && cap.kind == KeycapKind::Wide
                 });
                 if let Some(age) = rising {
-                    let split = cap.label.char_indices().last().map_or(0, |(at, _)| at);
+                    let newest_len = cap_project::typed_characters(&cap.label)
+                        .last()
+                        .map_or(0, String::len);
+                    let split = cap.label.len() - newest_len;
                     let (settled, newest) = cap.label.split_at(split);
                     let settled_width = if settled.is_empty() {
                         0.0
@@ -1731,7 +1734,14 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
     }
 
     let time_offset_from_start = (current_time - segment.start) * 1000.0;
-    let chars: Vec<char> = segment.display_text.chars().collect();
+    // One press per character a reader sees (keys typed by hand), or one per
+    // code point (keys recorded before characters were grouped).
+    let pieces = cap_project::typed_characters(&segment.display_text);
+    let chars: Vec<String> = if segment.keys.len() == pieces.len() {
+        pieces
+    } else {
+        segment.display_text.chars().map(String::from).collect()
+    };
 
     if segment.keys.len() != chars.len() {
         if segment
@@ -1749,12 +1759,12 @@ fn build_visible_text(segment: &cap_project::KeyboardTrackSegment, current_time:
 
     for (i, key) in segment.keys.iter().enumerate() {
         if time_offset_from_start >= key.time_offset && i < chars.len() {
-            visible.push(chars[i]);
+            visible.push_str(&chars[i]);
         }
     }
 
     if visible.is_empty() && !segment.display_text.is_empty() {
-        visible.push(chars[0]);
+        visible.push_str(&chars[0]);
     }
 
     visible
@@ -1964,6 +1974,19 @@ mod tests {
             }))
             .unwrap();
         assert_eq!(build_visible_text(&escaped, 1.2), "⎋");
+    }
+
+    #[test]
+    fn a_joined_character_types_out_whole() {
+        let mut segment: cap_project::KeyboardTrackSegment =
+            serde_json::from_value(serde_json::json!({
+                "id": "j", "start": 1.0, "end": 3.0, "displayText": "a👍🏽", "keys": []
+            }))
+            .unwrap();
+        segment.keys = cap_project::manual_key_presses("a👍🏽");
+        assert_eq!(segment.keys.len(), 2);
+        assert_eq!(build_visible_text(&segment, 1.05), "a");
+        assert_eq!(build_visible_text(&segment, 1.12), "a👍🏽");
     }
 
     #[test]
