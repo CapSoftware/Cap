@@ -149,6 +149,19 @@ export async function issueStepUpCode(
 				};
 			}
 		}
+		const sentToday = await tx
+			.select({ id: authChallenges.id })
+			.from(authChallenges)
+			.where(
+				and(
+					eq(authChallenges.userId, userId),
+					eq(authChallenges.purpose, "step_up_email_code_sent"),
+					gt(authChallenges.expiresAt, new Date()),
+				),
+			);
+		if (sentToday.length >= STEP_UP_CODES_PER_DAY) {
+			return { status: "daily_limit" };
+		}
 		const previous = await tx
 			.select({ id: authChallenges.id })
 			.from(authChallenges)
@@ -165,19 +178,6 @@ export async function issueStepUpCode(
 					previous.map((row) => row.id),
 				),
 			);
-		}
-		const sentToday = await tx
-			.select({ id: authChallenges.id })
-			.from(authChallenges)
-			.where(
-				and(
-					eq(authChallenges.userId, userId),
-					eq(authChallenges.purpose, "step_up_email_code_sent"),
-					gt(authChallenges.expiresAt, new Date()),
-				),
-			);
-		if (sentToday.length >= STEP_UP_CODES_PER_DAY) {
-			return { status: "daily_limit" };
 		}
 		const markerId = nanoId();
 		await tx.insert(authChallenges).values({

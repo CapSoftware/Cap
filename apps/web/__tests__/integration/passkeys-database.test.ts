@@ -1125,8 +1125,11 @@ describe.runIf(Boolean(databaseUrl))(
 
 			it("sends at most ten codes a day to one account", async () => {
 				const user = await makeUser();
+				let lastCode = "";
 				for (let sent = 0; sent < STEP_UP_CODES_PER_DAY; sent++) {
-					expect((await issueStepUpCode(user.id)).status).toBe("issued");
+					const issued = await issueStepUpCode(user.id);
+					expect(issued.status).toBe("issued");
+					if (issued.status === "issued") lastCode = issued.code;
 					await database()
 						.update(authChallenges)
 						.set({ expiresAt: new Date(Date.now() + 9 * 60 * 1000) })
@@ -1138,6 +1141,7 @@ describe.runIf(Boolean(databaseUrl))(
 						);
 				}
 				expect((await issueStepUpCode(user.id)).status).toBe("daily_limit");
+				expect(await verifyStepUpCode(user.id, lastCode)).toBe(true);
 				const other = await makeUser();
 				expect((await issueStepUpCode(other.id)).status).toBe("issued");
 			});
