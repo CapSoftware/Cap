@@ -960,3 +960,139 @@ fn caption_passes_hear_the_audio_after_their_kept_words_and_finals_hear_everythi
         "a final line hears the whole segment"
     );
 }
+
+#[test]
+fn sweep_stretches_stop_where_the_saved_audio_ends() {
+    // Speech runs to the end of a track whose saved audio stops 390 samples
+    // into its last 30 ms frame (a meeting stopped mid-sentence).
+    let end = 845 * SWEEP_FRAME as u64 + 390;
+    let track = levels(&[(700, 846)], 846);
+    let missing = sweep_missing(&track, &[], &[], &[]);
+    let reach = missing.iter().map(|(s, l)| s + l).max().unwrap();
+    assert!(reach > end, "the frame grid alone reaches past the audio: {reach}");
+    let kept = within_track(missing, end);
+    assert_eq!(kept.iter().map(|(s, l)| s + l).max(), Some(end));
+    assert!(within_track(vec![(end, 100), (end + 10, 100)], end).is_empty());
+}
+
+/// A worker holding one ledger gap, as after Stop or at the next launch.
+struct Bench {
+    worker: Worker,
+    path: std::path::PathBuf,
+    _dir: tempfile::TempDir,
+    _runtime: tokio::runtime::Runtime,
+    _senders: (
+        flume::Sender<SegmentJob>,
+        flume::Sender<SegmentJob>,
+        flume::Sender<Missed>,
+        flume::Sender<EngineCommand>,
+    ),
+    _events: flume::Receiver<EngineEvent>,
+}
+
+fn bench(gap: Gap, audio: Vec<AudioPart>) -> Bench {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("transcript.jsonl");
+    append_jsonl(&path, &[LogLine::Gap { gap: gap.clone() }]).unwrap();
+    let (events_tx, events_rx) = flume::unbounded();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let (s, segments_rx) = flume::bounded(1);
+    let (p, partials_rx) = flume::bounded(1);
+    let (m, missed_rx) = flume::unbounded();
+    let (c, commands_rx) = flume::unbounded();
+    let mut worker = Worker::new(
+        EngineConfig {
+            doc_id: "doc".into(),
+            transcript_path: path.clone(),
+            mode: EngineMode::Local(local_model()),
+            fallback: None,
+            vocabulary: Vec::new(),
+            dictionary: Arc::new(cap_meetings::dictionary::Corrector::new(&[])),
+            live: false,
+            voices: None,
+            audio,
+            gaps: vec![gap],
+            runtime: runtime.handle().clone(),
+            events: events_tx,
+        },
+        segments_rx,
+        partials_rx,
+        missed_rx,
+        commands_rx,
+        Arc::new(AtomicBool::new(false)),
+    );
+    worker.hooks.local = Some(Arc::new(|_| Ok(caption_words(LOCAL))));
+    Bench { worker, path, _dir: dir, _runtime: runtime, _senders: (s, p, m, c), _events: events_rx }
+}
+
+fn tail_gap(start: u64, len: u64) -> Gap {
+    Gap {
+        id: Gap::id_for(Source::System, start),
+        source: Source::System,
+        start_sample: start,
+        end_sample: start + len,
+        segments: vec![(start, len)],
+        reason: reason::SWEEP.into(),
+    }
+}
+
+#[test]
+fn after_stop_a_track_that_ends_early_is_repaired_with_what_it_holds() {
+    // The ledger asks for 90 samples more than the saved file holds.
+    let gap = tail_gap(START, 19_360);
+    let mut b = bench(gap, Vec::new());
+    b.worker.hooks.audio = Some(Arc::new(|_, _, len| Some(vec![0.1; len as usize - 90])));
+    b.worker.finishing = true;
+    b.worker.repair_after_stop();
+    let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    assert!(transcript.gaps().is_empty(), "the gap closed: {:?}", transcript.gaps());
+    let line = transcript.get(&utterance_id(Source::System, START)).expect("the tail got its words");
+    assert_eq!(line.text, "hello from here");
+}
+
+#[test]
+fn while_recording_a_short_read_waits_for_the_rest() {
+    let gap = tail_gap(START, 19_360);
+    let mut b = bench(gap.clone(), Vec::new());
+    b.worker.hooks.audio = Some(Arc::new(|_, _, len| Some(vec![0.1; len as usize - 90])));
+    assert!(b.worker.gap_jobs(&gap).is_none(), "the file is still being written");
+    b.worker.finishing = true;
+    let jobs = b.worker.gap_jobs(&gap).expect("after Stop the file is complete");
+    assert_eq!(jobs[0].samples.len(), 19_360 - 90);
+    // Nothing at all is still nothing to repair.
+    b.worker.hooks.audio = Some(Arc::new(|_, _, _| Some(Vec::new())));
+    b.worker.repairing.clear();
+    assert!(b.worker.gap_jobs(&gap).is_none());
+}
+
+#[test]
+fn after_stop_the_saved_audio_is_read_again_from_the_finished_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("audio/others.ogg");
+    let tone: Vec<f32> = (0..16_000 * 5)
+        .map(|n| (0.3 * (n as f64 * 440.0 * std::f64::consts::TAU / 16_000.0).sin()) as f32)
+        .collect();
+    let mut writer = crate::meetings::audio_file::OpusOggWriter::create(&file).unwrap();
+    writer.write(&tone[..16_000 * 3]).unwrap();
+    // 2 s .. 3.5 s: not all written yet while the meeting runs.
+    let gap = tail_gap(32_000, 24_000);
+    let part = AudioPart { source: Source::System, path: file.clone(), offset_samples: 0 };
+    let mut b = bench(gap.clone(), vec![part]);
+    let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = heard.clone();
+    b.worker.hooks.local = Some(Arc::new(move |samples: &[f32]| {
+        seen.store(samples.len(), Ordering::SeqCst);
+        Ok(caption_words(LOCAL))
+    }));
+    assert!(b.worker.gap_jobs(&gap).is_none(), "still being written");
+    b.worker.repairing.clear();
+    // The meeting ends: the rest is written and the file finished.
+    writer.write(&tone[16_000 * 3..]).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    b.worker.finishing = true;
+    b.worker.repair_after_stop();
+    assert_eq!(heard.load(Ordering::SeqCst), 24_000, "the whole stretch, not what the early reader saw");
+    let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    assert!(transcript.gaps().is_empty());
+}

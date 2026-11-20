@@ -1750,18 +1750,29 @@ impl Worker {
             segments.sort_unstable();
             for (start, len) in segments {
                 let samples = self.read_audio(gap.source, start, len)?;
-                // Still being written (or cut off): not ready to repair.
-                if (samples.len() as u64) < len {
-                    for job in &jobs {
-                        self.repairing.remove(&(source_index(job.source), job.start_sample));
+                let short = len.saturating_sub(samples.len() as u64);
+                if short > 0 {
+                    // While the meeting records, a short read is a file still
+                    // being written: wait for it. After Stop nothing more is
+                    // written, so what is there is all there will be.
+                    if !self.finishing || samples.is_empty() {
+                        for job in &jobs {
+                            self.repairing.remove(&(source_index(job.source), job.start_sample));
+                        }
+                        return None;
                     }
-                    return None;
+                    tracing::info!(
+                        id = gap.id,
+                        short_ms = timeline::samples_to_ms(short),
+                        "meeting repair used the saved audio up to its end"
+                    );
                 }
+                let speech_ms = timeline::samples_to_ms(samples.len() as u64);
                 jobs.push(SegmentJob {
                     source: gap.source,
                     start_sample: start,
                     samples,
-                    speech_ms: timeline::samples_to_ms(len),
+                    speech_ms,
                 });
             }
         }
@@ -1875,6 +1886,9 @@ impl Worker {
             return;
         }
         tracing::info!(gaps = self.gaps.len(), "repairing the meeting from its saved audio");
+        // A reader opened while the meeting ran stopped at the end of the
+        // file as it was then; after Stop the files are complete.
+        self.readers = [None, None];
         self.heard = self.heard_spans();
         if matches!(self.mode, EngineMode::Cloud { .. }) && !self.cloud_refused {
             self.bridge = None;
@@ -1932,12 +1946,15 @@ impl Worker {
         heard
     }
 
-    /// Every 30 ms frame of a track's saved audio as (timeline sample, dB).
-    fn track_levels(&self, source: Source) -> Vec<(u64, f32)> {
+    /// Every 30 ms frame of a track's saved audio as (timeline sample, dB),
+    /// and the timeline sample where its saved audio really ends (the last
+    /// frame is usually partial, so it is not the last frame's start + 480).
+    fn track_levels(&self, source: Source) -> (Vec<(u64, f32)>, u64) {
         let mut parts: Vec<&AudioPart> =
             self.config.audio.iter().filter(|p| p.source == source).collect();
         parts.sort_by_key(|p| p.offset_samples);
         let mut levels = Vec::new();
+        let mut end = 0u64;
         for part in parts {
             let mut reader = match TrackReader::open(&part.path) {
                 Ok(reader) => reader,
@@ -1959,13 +1976,14 @@ impl Worker {
                     let db = 10.0 * power.max(1e-12).log10();
                     levels.push((part.offset_samples + at + (n * SWEEP_FRAME) as u64, db));
                 }
+                end = end.max(part.offset_samples + at + samples.len() as u64);
                 if (samples.len() as u64) < SWEEP_READ_SAMPLES {
                     break;
                 }
                 at += SWEEP_READ_SAMPLES;
             }
         }
-        levels
+        (levels, end)
     }
 
     /// After Stop: speech in the saved audio that no line covers is
@@ -1985,8 +2003,8 @@ impl Worker {
         let heard = self.heard_spans();
         let mut found = false;
         for source in [Source::Mic, Source::System] {
-            let levels = self.track_levels(source);
-            let missing = sweep_missing(
+            let (levels, end) = self.track_levels(source);
+            let missing = within_track(sweep_missing(
                 &levels,
                 &heard[source_index(source)],
                 if source == Source::Mic { &heard[1] } else { &[] },
@@ -1996,7 +2014,7 @@ impl Worker {
                     .filter(|g| g.source == source)
                     .map(|g| (timeline::samples_to_ms(g.start_sample), timeline::samples_to_ms(g.end_sample)))
                     .collect::<Vec<_>>(),
-            );
+            ), end);
             tracing::info!(
                 ?source,
                 frames = levels.len(),
@@ -2090,6 +2108,17 @@ fn overlap_ms(start: u64, end: u64, spans: &[(u64, u64)]) -> u64 {
         .iter()
         .map(|(a, b)| end.min(*b).saturating_sub(start.max(*a)))
         .sum()
+}
+
+/// Sweep stretches cut to where the saved track ends. The sweep's 30 ms
+/// frames round the track's last partial frame up to a whole one, and a
+/// stretch reaching past the audio would wait for samples that never come.
+pub(crate) fn within_track(missing: Vec<(u64, u64)>, end: u64) -> Vec<(u64, u64)> {
+    missing
+        .into_iter()
+        .filter(|(start, _)| *start < end)
+        .map(|(start, len)| (start, len.min(end - start)))
+        .collect()
 }
 
 /// The stretches (start, length in samples) of a track's speech that the
