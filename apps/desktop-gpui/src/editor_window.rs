@@ -443,11 +443,11 @@ fn look_preview(
             )),
             (LookBackground::Color(color), _) => this.bg(rgb(color)),
             (LookBackground::Animated(name), _) => {
-                match crate::looks::animated_background(name).map(|config| config.color_stops) {
-                    Some(stops) if stops.len() >= 2 => this.bg(gpui::linear_gradient(
+                match crate::looks::animated_background_ends(name) {
+                    Some((first, last)) => this.bg(gpui::linear_gradient(
                         135.,
-                        gpui::linear_color_stop(rgb(stops[0].color), 0.),
-                        gpui::linear_color_stop(rgb(stops[stops.len() - 1].color), 1.),
+                        gpui::linear_color_stop(rgb(first), 0.),
+                        gpui::linear_color_stop(rgb(last), 1.),
                     )),
                     _ => this.bg(Hsla::from(theme.editor.ctl_active)),
                 }

@@ -445,11 +445,27 @@ pub fn take_off_look(project: &mut ProjectConfiguration, before: &ProjectConfigu
 
 /// A built-in animated background, by its template name.
 pub fn animated_background(name: &str) -> Option<AnimatedGradientConfig> {
-    cap_project::animated_gradient_catalog()
-        .templates
-        .into_iter()
+    animated_template(name).cloned()
+}
+
+/// The looks gallery reads two templates on every repaint, and the catalogue
+/// builds and normalises all of them, so it is built once.
+fn animated_template(name: &str) -> Option<&'static AnimatedGradientConfig> {
+    static TEMPLATES: std::sync::LazyLock<Vec<cap_project::AnimatedGradientPreset>> =
+        std::sync::LazyLock::new(|| cap_project::animated_gradient_catalog().templates);
+    TEMPLATES
+        .iter()
         .find(|template| template.name == name)
-        .map(|template| template.config)
+        .map(|template| &template.config)
+}
+
+/// The first and last colours of a built-in animated background, for the
+/// gallery's small picture of it.
+pub fn animated_background_ends(name: &str) -> Option<([u16; 3], [u16; 3])> {
+    match animated_template(name)?.color_stops.as_slice() {
+        [first, .., last] => Some((first.color, last.color)),
+        _ => None,
+    }
 }
 
 /// Which look the project is wearing: the one whose styling it still has
