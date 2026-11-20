@@ -197,6 +197,11 @@ pub fn app_data_dir() -> PathBuf {
     {
         return PathBuf::from(dir);
     }
+    // A test that never redirects the store or a data folder must not write
+    // into the developer's own Cap profile (the Notes dictionary mirror did).
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("cap-gpui-tests-{}", std::process::id()));
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -2381,6 +2386,18 @@ pub fn preset_names() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tests_never_reach_the_real_cap_profile() {
+        if std::env::var("CAP_GPUI_APP_DATA_DIR").is_ok_and(|dir| !dir.trim().is_empty()) {
+            return;
+        }
+        assert!(app_data_dir().starts_with(std::env::temp_dir()));
+        assert!(
+            tauri_store_path().starts_with(std::env::temp_dir())
+                || TEST_TAURI_STORE_PATH.with(|path| path.borrow().is_some())
+        );
+    }
 
     struct TempStore {
         path: PathBuf,
