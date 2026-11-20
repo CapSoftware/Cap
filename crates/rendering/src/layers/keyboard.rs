@@ -387,6 +387,7 @@ impl KeyboardLayer {
         self.has_content = false;
         self.keycap_mode = false;
         self.background_scissor = None;
+        self.text_atlas.trim();
         self.output_size = (output_size.x, output_size.y);
 
         let Some(keyboard_data) = &uniforms.project.keyboard else {
@@ -2496,6 +2497,99 @@ mod gpu_tests {
                 drawn_frames += usize::from(pixels.chunks_exact(4).any(|pixel| pixel[3] != 0));
             }
             assert!(drawn_frames > 60, "{style}: {drawn_frames}");
+        }
+    }
+
+    /// A letter typed into the composer rises into place beside the letters
+    /// before it, then the word is drawn whole. It must land where the whole
+    /// word sets it, kerned against the letter before, or it jumps sideways
+    /// the frame its rise ends.
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn a_rising_letter_lands_where_the_whole_word_sets_it() {
+        let size = XY::new(1920, 1080);
+        let constants = constants(size);
+        let frames = frames(size);
+        for word in ["To", "Yo", "AV", "שלום"] {
+            let segment = KeyboardTrackSegment {
+                id: format!("{}t", cap_project::MANUAL_KEYBOARD_PREFIX),
+                ..typed_segment("t", 0.2, word, 500.0 / (word.chars().count() - 1) as f64)
+            };
+            let mut uniforms = uniforms(&constants, std::slice::from_ref(&segment), size);
+            with_keycaps(&mut uniforms, "macos", "dark");
+            let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+            // The last frame of the rise, then the first with the word whole.
+            let struck = 0.2 + 0.5;
+            let last_rising = ((struck + super::LETTER_RISE) * FPS as f64).ceil() as u32 - 1;
+            let mut ink_span = |frame: u32, layer: &mut KeyboardLayer| {
+                uniforms.frame_number = frame;
+                layer.prepare(&uniforms, &frames, size, &constants, None);
+                assert!(layer.has_content());
+                let pixels = render_pixels(&constants, layer, size);
+                let columns = pixels
+                    .chunks_exact(4)
+                    .enumerate()
+                    .filter(|(_, pixel)| pixel[0] > 200 && pixel[3] > 200)
+                    .map(|(index, _)| index as u32 % size.x);
+                (columns.clone().min().unwrap(), columns.max().unwrap())
+            };
+            let rising = ink_span(last_rising, &mut layer);
+            let whole = ink_span(last_rising + 1, &mut layer);
+            assert_eq!(
+                rising, whole,
+                "{word}: the letter moved when its rise ended"
+            );
+        }
+    }
+
+    /// A long sentence typed onto one key outgrows the frame, so the row is
+    /// set smaller with every letter. Prints how long each frame took to
+    /// prepare and the process footprint, to show the glyph atlas holds a
+    /// working set rather than every size ever drawn.
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn keycap_atlas_while_a_long_sentence_shrinks() {
+        let size = XY::new(3840, 2160);
+        let constants = constants(size);
+        let frames = frames(size);
+        let text: String = "The quick brown fox jumps over the lazy dog, then packs my box with \
+            five dozen liquor jugs while sphinx of black quartz judges my vow. "
+            .repeat(4);
+        let segment = KeyboardTrackSegment {
+            id: format!("{}t", cap_project::MANUAL_KEYBOARD_PREFIX),
+            ..typed_segment("t", 0.0, &text, 50.0)
+        };
+        let mut uniforms = uniforms(&constants, std::slice::from_ref(&segment), size);
+        with_keycaps(&mut uniforms, "macos", "dark");
+        let mut layer = KeyboardLayer::new(&constants.device, &constants.queue);
+        let mut samples = Vec::new();
+        for frame in 0..(segment.end * FPS as f64) as u32 {
+            uniforms.frame_number = frame;
+            let started = std::time::Instant::now();
+            layer.prepare(&uniforms, &frames, size, &constants, None);
+            samples.push(started.elapsed().as_secs_f64() * 1e3);
+            constants.queue.submit([]);
+        }
+        let footprint = std::process::Command::new("/usr/bin/footprint")
+            .args(["-p", &std::process::id().to_string()])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            .unwrap_or_default();
+        let mut sorted = samples.clone();
+        sorted.sort_by(f64::total_cmp);
+        println!(
+            "keycap atlas: {} frames, prepare p50 {:.2} ms, p99 {:.2} ms, max {:.2} ms, frames over 8 ms {}",
+            samples.len(),
+            sorted[sorted.len() / 2],
+            sorted[sorted.len() * 99 / 100],
+            sorted[sorted.len() - 1],
+            samples.iter().filter(|ms| **ms > 8.0).count(),
+        );
+        for line in footprint
+            .lines()
+            .filter(|line| line.contains("Footprint") || line.contains("IOAccelerator"))
+        {
+            println!("{line}");
         }
     }
 
