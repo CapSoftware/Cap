@@ -227,7 +227,8 @@ impl Button {
         } else {
             (gpui::hsla(0., 0., 0., 0.06), gpui::hsla(0., 0., 0., 0.1))
         };
-        let accent: Hsla = gpui::rgb(Theme::SETTINGS_ACCENT).into();
+        // White labels need the deeper fill to clear 4.5:1.
+        let accent: Hsla = theme.editor.accent_fill.into();
         let edge = if theme.is_dark() {
             gpui::hsla(0., 0., 1., 0.08)
         } else {

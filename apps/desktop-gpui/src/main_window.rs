@@ -6088,7 +6088,7 @@ impl MainWindow {
             .when(self.device_format_pending.is_some(), |this| {
                 this.child(caption(
                     tr::main::device::format::applying().into(),
-                    theme.gray_10.into(),
+                    theme.gray_11.into(),
                 ))
             })
             .when_some(self.device_format_notice.as_ref(), |this, notice| {
@@ -7585,18 +7585,18 @@ impl PillState {
     fn render(self, theme: Theme) -> impl IntoElement {
         let (bg, fg, text) = match self {
             Self::On => (
-                Hsla::from(theme.blue_9),
+                Hsla::from(theme.editor.accent_fill),
                 gpui::white(),
                 tr::main::device::pill::on(),
             ),
             Self::Off => (
                 theme.body_fill(5),
-                Hsla::from(theme.gray_11),
+                Hsla::from(theme.gray_12),
                 tr::main::device::pill::off(),
             ),
             Self::Disconnected => (
                 theme.body_fill(5),
-                Hsla::from(theme.gray_11),
+                Hsla::from(theme.gray_12),
                 tr::main::device::pill::not_connected(),
             ),
             Self::Access(label) => (Hsla::from(theme.amber_3), Hsla::from(theme.amber_11), label),
