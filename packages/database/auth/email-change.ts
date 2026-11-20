@@ -1,8 +1,20 @@
 import crypto from "node:crypto";
+import { domainToUnicode } from "node:url";
 import { buildEnv, serverEnv } from "@cap/env";
 import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
 import type { User } from "@cap/web-domain";
-import { and, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
+import {
+	and,
+	desc,
+	eq,
+	gt,
+	inArray,
+	isNotNull,
+	isNull,
+	lt,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
@@ -11,6 +23,9 @@ import {
 	authChallenges,
 	directoryUsers,
 	emailChangeRequests,
+	organizationInvites,
+	organizationMembers,
+	organizations,
 	sessions,
 	users,
 } from "../schema.ts";
@@ -20,9 +35,10 @@ import {
 	isEmailBlockedFromSignup,
 	normalizeSignInEmail,
 } from "./domain-utils.ts";
+import { getSsoEmailDomain, getWorkOS, normalizeSsoDomain } from "./sso.ts";
 
 export const EMAIL_CHANGE_CODE_TTL_MS = 10 * 60 * 1000;
-export const EMAIL_CHANGE_MAX_ATTEMPTS = 3;
+export const EMAIL_CHANGE_MAX_ATTEMPTS = 1;
 export const EMAIL_CHANGE_RESEND_COOLDOWN_MS = 30 * 1000;
 
 export type EmailChangeRefusal = "invalid" | "same" | "not_allowed" | "managed";
@@ -44,6 +60,15 @@ const getAffectedRows = (result: unknown) => {
 	}
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
+
+function storedSpellings(email: string) {
+	const at = email.lastIndexOf("@");
+	if (at < 1 || !email.includes("xn--", at)) return [email];
+	const unicodeDomain = domainToUnicode(email.slice(at + 1));
+	if (!unicodeDomain) return [email];
+	const unicodeEmail = `${email.slice(0, at)}@${unicodeDomain}`;
+	return unicodeEmail === email ? [email] : [email, unicodeEmail];
+}
 
 function hashCode(requestId: string, newEmail: string, code: string) {
 	return crypto
@@ -77,11 +102,10 @@ function isDuplicateKeyError(error: unknown) {
  * here: SSO sign-in requires the account email to equal the IdP's email, and
  * directory sync matches people by address.
  */
-export async function isEmailManagedByOrganization(
+async function isEmailManagedLocally(
 	user: { id: User.UserId; email: string },
-	database: Pick<ReturnType<typeof db>, "select"> = db(),
+	database: Pick<ReturnType<typeof db>, "select">,
 ) {
-	const userId = user.id;
 	const env = serverEnv();
 	if (
 		env.TRUSTED_PROXY_AUTH_HEADER &&
@@ -95,17 +119,77 @@ export async function isEmailManagedByOrganization(
 		database
 			.select({ id: accounts.id })
 			.from(accounts)
-			.where(and(eq(accounts.userId, userId), eq(accounts.provider, "workos")))
+			.where(and(eq(accounts.userId, user.id), eq(accounts.provider, "workos")))
 			.limit(1),
 		database
 			.select({ id: directoryUsers.id })
 			.from(directoryUsers)
 			.where(
-				and(eq(directoryUsers.userId, userId), eq(directoryUsers.active, true)),
+				and(
+					eq(directoryUsers.userId, user.id),
+					eq(directoryUsers.active, true),
+				),
 			)
 			.limit(1),
 	]);
 	return Boolean(ssoAccount || directoryUser);
+}
+
+/**
+ * Whether the address is on a domain an organization the person belongs to
+ * has verified for SSO. Such members may never have signed in through SSO,
+ * so this is checked against WorkOS rather than linked accounts. Leaving the
+ * corporate address would otherwise keep their access after offboarding.
+ */
+async function isEmailOnMemberOrganizationSsoDomain(user: {
+	id: User.UserId;
+	email: string;
+}) {
+	const domain = getSsoEmailDomain(user.email);
+	if (!domain) return false;
+	const ssoOrganizations = await db()
+		.selectDistinct({
+			workosOrganizationId: organizations.workosOrganizationId,
+		})
+		.from(organizationMembers)
+		.innerJoin(
+			organizations,
+			eq(organizations.id, organizationMembers.organizationId),
+		)
+		.where(
+			and(
+				eq(organizationMembers.userId, user.id),
+				isNotNull(organizations.workosOrganizationId),
+				isNull(organizations.tombstoneAt),
+			),
+		);
+	if (ssoOrganizations.length === 0) return false;
+	const workos = getWorkOS();
+	for (const { workosOrganizationId } of ssoOrganizations) {
+		if (!workosOrganizationId) continue;
+		const organization =
+			await workos.organizations.getOrganization(workosOrganizationId);
+		if (
+			organization.domains.some(
+				(entry) =>
+					entry.state === "verified" &&
+					normalizeSsoDomain(entry.domain) === domain,
+			)
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+export async function isEmailManagedByOrganization(user: {
+	id: User.UserId;
+	email: string;
+}) {
+	return (
+		(await isEmailManagedLocally(user, db())) ||
+		(await isEmailOnMemberOrganizationSsoDomain(user))
+	);
 }
 
 async function checkNewEmail(
@@ -289,12 +373,7 @@ export async function confirmEmailChange(
 				gt(emailChangeRequests.expiresAt, new Date()),
 			),
 		);
-	if (getAffectedRows(counted) !== 1) {
-		await db()
-			.delete(emailChangeRequests)
-			.where(eq(emailChangeRequests.id, request.id));
-		return { status: "invalid" };
-	}
+	if (getAffectedRows(counted) !== 1) return { status: "invalid" };
 	if (
 		!sameHash(
 			request.codeHash,
@@ -324,7 +403,12 @@ export async function confirmEmailChange(
 	const [owner] = await db()
 		.select({ id: users.id })
 		.from(users)
-		.where(and(eq(users.email, request.newEmail), ne(users.id, userId)))
+		.where(
+			and(
+				inArray(users.email, storedSpellings(request.newEmail)),
+				ne(users.id, userId),
+			),
+		)
 		.limit(1);
 	if (owner) return { status: "taken" };
 
@@ -336,6 +420,15 @@ export async function confirmEmailChange(
 			userId,
 			error: error instanceof Error ? error.message : String(error),
 		});
+		await db()
+			.update(emailChangeRequests)
+			.set({ attempts: sql`${emailChangeRequests.attempts} - 1` })
+			.where(
+				and(
+					eq(emailChangeRequests.id, request.id),
+					gt(emailChangeRequests.attempts, 0),
+				),
+			);
 		return { status: "failed" };
 	}
 
@@ -348,7 +441,7 @@ export async function confirmEmailChange(
 				.where(eq(users.id, userId))
 				.for("update");
 			if (!locked || locked.email !== user.email) return "invalid";
-			if (await isEmailManagedByOrganization(user, tx)) return "managed";
+			if (await isEmailManagedLocally(user, tx)) return "managed";
 			const claimed = await tx
 				.delete(emailChangeRequests)
 				.where(
@@ -389,6 +482,29 @@ export async function confirmEmailChange(
 						challenges.map((row) => row.id),
 					),
 				);
+			}
+			const oldAddressInvites = await tx
+				.select({
+					id: organizationInvites.id,
+					invitedEmail: organizationInvites.invitedEmail,
+				})
+				.from(organizationInvites)
+				.where(
+					and(
+						eq(organizationInvites.invitedEmail, user.email),
+						eq(organizationInvites.status, "pending"),
+					),
+				);
+			const staleInviteIds = oldAddressInvites
+				.filter(
+					(invite) =>
+						invite.invitedEmail.toLowerCase() === user.email.toLowerCase(),
+				)
+				.map((invite) => invite.id);
+			if (staleInviteIds.length > 0) {
+				await tx
+					.delete(organizationInvites)
+					.where(inArray(organizationInvites.id, staleInviteIds));
 			}
 			await tx.delete(sessions).where(eq(sessions.userId, userId));
 			await enqueueLoopsSync(tx, userId);
