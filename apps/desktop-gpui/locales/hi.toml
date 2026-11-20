@@ -4229,3 +4229,14 @@ words = "शब्द"
 count = { one = "{count} शब्द", other = "{count} शब्द" }
 edit = "बदलें"
 sounds_like = "+ ऐसा सुनाई देता है"
+
+[local_page]
+signed_in_title = "आप साइन इन हो गए हैं"
+signed_in_body = "जहाँ छोड़ा था वहीं से जारी रखने के लिए Cap पर लौटें।"
+calendar_title = "कैलेंडर जुड़ गया"
+calendar_body = "आपकी आने वाली मीटिंग्स अब Cap में दिखती हैं।"
+calendar_denied_title = "कुछ भी नहीं जुड़ा"
+calendar_denied_body = "Cap को आपके कैलेंडर की अनुमति नहीं मिली। आप Cap से फिर कोशिश कर सकते हैं।"
+unknown_title = "यहाँ देखने को कुछ नहीं है"
+unknown_body = "यह पेज तभी काम करता है जब Cap इसे खोलता है।"
+close_tab = "आप यह टैब बंद कर सकते हैं।"

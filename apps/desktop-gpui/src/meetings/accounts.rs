@@ -217,16 +217,7 @@ impl Pending {
     }
 }
 
-const PAGE_HEAD: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Cap</title><style>html{color-scheme:light dark}body{font:16px/1.5 -apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}h1{font-size:22px;font-weight:600;margin:0 0 6px}p{margin:0;opacity:.6}</style></head><body><div>";
-const PAGE_TAIL: &str = "</div></body></html>";
-const PAGE_DONE: &str =
-    "<h1>Calendar connected</h1><p>You can close this tab and go back to Cap.</p>";
-const PAGE_DENIED: &str =
-    "<h1>Nothing was connected</h1><p>You can close this tab and go back to Cap.</p>";
-const PAGE_UNKNOWN: &str = "<h1>Nothing to see here</h1><p>You can close this tab.</p>";
-
-fn respond(stream: &mut TcpStream, status: &str, body: &str) {
-    let page = format!("{PAGE_HEAD}{body}{PAGE_TAIL}");
+fn respond(stream: &mut TcpStream, status: &str, page: &str) {
     let _ = write!(
         stream,
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
@@ -279,24 +270,40 @@ fn wait_for_code(
         };
         let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
         if path != "/" || query.is_empty() {
-            respond(&mut stream, "404 Not Found", PAGE_UNKNOWN);
+            respond(&mut stream, "404 Not Found", &crate::local_page::unknown());
             continue;
         }
         match oauth::parse_redirect(query, state) {
             Ok(code) => {
-                respond(&mut stream, "200 OK", PAGE_DONE);
+                respond(
+                    &mut stream,
+                    "200 OK",
+                    &crate::local_page::calendar_connected(),
+                );
                 return Ok(code.code);
             }
             Err(AuthError::AccessDenied) => {
-                respond(&mut stream, "200 OK", PAGE_DENIED);
+                respond(
+                    &mut stream,
+                    "200 OK",
+                    &crate::local_page::calendar_not_connected(),
+                );
                 return Err(ConnectError::Denied);
             }
             Err(AuthError::Provider { error, .. }) => {
                 tracing::warn!(error, "calendar sign-in redirect carried an error");
-                respond(&mut stream, "200 OK", PAGE_DENIED);
+                respond(
+                    &mut stream,
+                    "200 OK",
+                    &crate::local_page::calendar_not_connected(),
+                );
                 return Err(ConnectError::Rejected);
             }
-            Err(_) => respond(&mut stream, "400 Bad Request", PAGE_UNKNOWN),
+            Err(_) => respond(
+                &mut stream,
+                "400 Bad Request",
+                &crate::local_page::unknown(),
+            ),
         }
     }
 }
@@ -649,6 +656,10 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains("Calendar connected"));
         assert!(!response.contains("abc123"));
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(head.contains("Content-Type: text/html; charset=utf-8"));
+        assert!(head.contains(&format!("Content-Length: {}\r\n", body.len())));
+        assert!(body.contains("<svg class=\"mark\"") && body.contains("badge done"));
         assert_eq!(handle.join().unwrap(), Ok("abc123".to_string()));
     }
 

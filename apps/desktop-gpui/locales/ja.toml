@@ -4229,3 +4229,14 @@ words = "単語"
 count = { other = "{count}語" }
 edit = "編集"
 sounds_like = "+ 聞こえ方"
+
+[local_page]
+signed_in_title = "サインインしました"
+signed_in_body = "Capに戻って、続きから始めましょう。"
+calendar_title = "カレンダーを接続しました"
+calendar_body = "今後の会議がCapに表示されるようになりました。"
+calendar_denied_title = "何も接続されませんでした"
+calendar_denied_body = "Capはカレンダーへのアクセスを取得できませんでした。Capからもう一度お試しください。"
+unknown_title = "このページには何もありません"
+unknown_body = "このページはCapから開いたときだけ使えます。"
+close_tab = "このタブは閉じてかまいません。"

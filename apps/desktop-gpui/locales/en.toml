@@ -4231,3 +4231,14 @@ words = "Words"
 count = { one = "{count} word", other = "{count} words" }
 edit = "Edit"
 sounds_like = "+ Sounds like"
+
+[local_page]
+signed_in_title = { text = "You’re signed in", context = "Heading of the browser page shown after signing in to Cap from the desktop app." }
+signed_in_body = "Head back to Cap to pick up where you left off."
+calendar_title = "Calendar connected"
+calendar_body = "Your upcoming meetings now show up in Cap."
+calendar_denied_title = "Nothing was connected"
+calendar_denied_body = "Cap didn’t get access to your calendar. You can try again from Cap."
+unknown_title = "Nothing to see here"
+unknown_body = "This page only works when Cap opens it."
+close_tab = { text = "You can close this tab.", context = "Quiet footer on the browser pages Cap shows after sign-in or connecting a calendar." }

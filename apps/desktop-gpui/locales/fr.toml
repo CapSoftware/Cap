@@ -4229,3 +4229,14 @@ words = "Mots"
 count = { one = "{count} mot", other = "{count} mots" }
 edit = "Modifier"
 sounds_like = "+ Se prononce comme"
+
+[local_page]
+signed_in_title = "Vous êtes connecté"
+signed_in_body = "Revenez dans Cap pour reprendre là où vous en étiez."
+calendar_title = "Calendrier connecté"
+calendar_body = "Vos prochaines réunions apparaissent maintenant dans Cap."
+calendar_denied_title = "Rien n’a été connecté"
+calendar_denied_body = "Cap n’a pas obtenu l’accès à votre calendrier. Vous pouvez réessayer depuis Cap."
+unknown_title = "Rien à voir ici"
+unknown_body = "Cette page ne fonctionne que lorsque Cap l’ouvre."
+close_tab = "Vous pouvez fermer cet onglet."

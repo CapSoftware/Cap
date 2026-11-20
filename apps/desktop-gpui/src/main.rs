@@ -69,6 +69,7 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
+mod local_page;
 mod main_window;
 mod media_access;
 mod meetings;

@@ -4229,3 +4229,14 @@ words = "Palabras"
 count = { one = "{count} palabra", other = "{count} palabras" }
 edit = "Editar"
 sounds_like = "+ Suena como"
+
+[local_page]
+signed_in_title = "Ya iniciaste sesión"
+signed_in_body = "Vuelve a Cap para seguir donde lo dejaste."
+calendar_title = "Calendario conectado"
+calendar_body = "Tus próximas reuniones ya aparecen en Cap."
+calendar_denied_title = "No se conectó nada"
+calendar_denied_body = "Cap no obtuvo acceso a tu calendario. Puedes volver a intentarlo desde Cap."
+unknown_title = "Aquí no hay nada"
+unknown_body = "Esta página solo funciona cuando la abre Cap."
+close_tab = "Puedes cerrar esta pestaña."

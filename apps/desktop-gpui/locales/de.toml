@@ -4229,3 +4229,14 @@ words = "Wörter"
 count = { one = "{count} Wort", other = "{count} Wörter" }
 edit = "Bearbeiten"
 sounds_like = "+ Klingt wie"
+
+[local_page]
+signed_in_title = "Sie sind angemeldet"
+signed_in_body = "Kehren Sie zu Cap zurück und machen Sie dort weiter, wo Sie aufgehört haben."
+calendar_title = "Kalender verbunden"
+calendar_body = "Ihre anstehenden Meetings erscheinen jetzt in Cap."
+calendar_denied_title = "Nichts wurde verbunden"
+calendar_denied_body = "Cap hat keinen Zugriff auf Ihren Kalender erhalten. Sie können es in Cap erneut versuchen."
+unknown_title = "Hier gibt es nichts zu sehen"
+unknown_body = "Diese Seite funktioniert nur, wenn Cap sie öffnet."
+close_tab = "Sie können diesen Tab schließen."

@@ -544,6 +544,7 @@ fn english_matches_the_literals_it_replaced() {
                 && !key.starts_with("meeting_setup.")
                 && !key.starts_with("documents.")
                 && !key.starts_with("cap_ai.")
+                && !key.starts_with("local_page.")
         })
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,

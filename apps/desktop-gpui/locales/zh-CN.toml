@@ -4229,3 +4229,14 @@ words = "词语"
 count = { other = "{count} 个词" }
 edit = "编辑"
 sounds_like = "+ 听起来像"
+
+[local_page]
+signed_in_title = "你已登录"
+signed_in_body = "回到 Cap，从上次离开的地方继续。"
+calendar_title = "日历已连接"
+calendar_body = "你即将参加的会议现在会显示在 Cap 中。"
+calendar_denied_title = "未连接任何内容"
+calendar_denied_body = "Cap 没有获得你日历的访问权限。你可以在 Cap 中重试。"
+unknown_title = "这里没有内容"
+unknown_body = "此页面只在由 Cap 打开时有效。"
+close_tab = "你可以关闭此标签页。"
