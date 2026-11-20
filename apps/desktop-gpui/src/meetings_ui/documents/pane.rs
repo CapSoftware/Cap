@@ -551,6 +551,7 @@ impl Pane {
                 }
                 AskEvent::Reveal(ids) => this.reveal_lines(ids.clone(), cx),
                 AskEvent::CloseSheet => this.set_ask_sheet(false, cx),
+                AskEvent::Room => cx.notify(),
             }),
         ];
         if let Some(meetings) = Meetings::try_global(cx) {
@@ -4678,11 +4679,18 @@ impl Render for Pane {
         let banner = (!meta.is_trashed())
             .then(|| self.bar.update(cx, |bar, cx| bar.banner(cx)))
             .flatten();
+        // Ask's suggestions open above its field: they get the same room.
+        let ask_room = if docked && meeting && !self.ask_sheet && !closing_sheet {
+            self.ask.read(cx).chips_room()
+        } else {
+            0.
+        };
         let stacked = ai_line.as_ref().map_or(0., |_| DOCK_LINE + DOCK_GAP)
             + banner
                 .as_ref()
                 .filter(|_| docked)
-                .map_or(0., |_| self.banner_height.get() + DOCK_GAP);
+                .map_or(0., |_| self.banner_height.get() + DOCK_GAP)
+            + ask_room;
         if page_mode {
             self.transcript
                 .update(cx, |t, cx| t.set_tail(DOCK_CLEARANCE + 32. + stacked, cx));

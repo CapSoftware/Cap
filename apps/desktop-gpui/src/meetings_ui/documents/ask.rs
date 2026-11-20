@@ -1,13 +1,14 @@
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{cell::Cell, collections::HashMap, rc::Rc, time::Duration};
 
 use gpui::{
     Animation, AnimationExt, AnyElement, App, AppContext as _, Context, Entity, EventEmitter,
-    FontWeight, HighlightStyle, Hsla, InteractiveElement, InteractiveText, IntoElement,
-    ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    StyledText, Subscription, Task, Window, div, ease_out_quint, prelude::FluentBuilder, px, svg,
+    FocusHandle, FontWeight, HighlightStyle, Hsla, InteractiveElement, InteractiveText,
+    IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, StyledText, Subscription, Task, WeakEntity, Window, div,
+    ease_out_quint, prelude::FluentBuilder, px, svg,
 };
 
-use super::style::Palette;
+use super::{glass, style::Palette};
 use crate::{
     i18n::tr,
     meetings::{AiAccess, AskTurn, MeetingEvent, Meetings, NotesError, generate::AskRole},
@@ -28,6 +29,8 @@ pub enum AskEvent {
     /// A question was sent.
     Asked,
     CloseSheet,
+    /// The suggestions above the field appeared, went or changed height.
+    Room,
 }
 
 /// Where each sentence of an answer came from: its timestamp and lines.
@@ -81,6 +84,11 @@ pub struct AskPanel {
     thread: Vec<Exchange>,
     task: Option<Task<()>>,
     focused: bool,
+    /// The suggested prompts, reachable from the field with Tab or Down.
+    chip_focus: [FocusHandle; 3],
+    /// Height the suggestions take above the field, gap included (0 while
+    /// hidden), so the page can keep its text clear of them.
+    chips_room: Rc<Cell<f32>>,
     serial: u64,
     scroll: ScrollHandle,
     chip: Option<AskChip>,
@@ -112,6 +120,7 @@ impl AskPanel {
             input
         });
         let focus = input.read(cx).focus_handle();
+        let chip_focus: [FocusHandle; 3] = std::array::from_fn(|_| cx.focus_handle());
         let mut subscriptions = vec![
             cx.subscribe_in(
                 &input,
@@ -131,6 +140,9 @@ impl AskPanel {
                 cx.notify();
             }),
         ];
+        for handle in &chip_focus {
+            subscriptions.push(cx.on_blur(handle, window, |_, _, cx| cx.notify()));
+        }
         if let Some(meetings) = Meetings::try_global(cx) {
             subscriptions.push(
                 cx.subscribe(&meetings, |this, _, event: &MeetingEvent, cx| {
@@ -153,6 +165,8 @@ impl AskPanel {
             thread: Vec::new(),
             task: None,
             focused: false,
+            chip_focus,
+            chips_room: Rc::new(Cell::new(0.)),
             serial: 0,
             scroll: ScrollHandle::new(),
             chip: None,
@@ -164,6 +178,64 @@ impl AskPanel {
             links: HashMap::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    pub fn chips_room(&self) -> f32 {
+        self.chips_room.get()
+    }
+
+    fn set_chips_room(room: &Cell<f32>, height: f32, weak: WeakEntity<Self>, cx: &mut App) {
+        if (room.replace(height) - height).abs() > 0.5 {
+            cx.defer(move |cx| {
+                weak.update(cx, |_, cx| cx.emit(AskEvent::Room)).ok();
+            });
+        }
+    }
+
+    fn chip_at(&self, window: &Window) -> Option<usize> {
+        self.chip_focus.iter().position(|h| h.is_focused(window))
+    }
+
+    /// Tab or Down from the field steps onto the suggestions; arrows and Tab
+    /// walk them; Escape, or stepping back past the first, returns to the
+    /// field. Enter and Space press the focused one.
+    fn chip_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let modifiers = keystroke.modifiers;
+        if !self.thread.is_empty()
+            || self.task.is_some()
+            || modifiers.platform
+            || modifiers.control
+            || modifiers.alt
+        {
+            return;
+        }
+        let last = self.chip_focus.len() - 1;
+        let field = self.input.read(cx).focus_handle();
+        let target = match (
+            self.chip_at(window),
+            keystroke.key.as_str(),
+            modifiers.shift,
+        ) {
+            (None, "tab", false) | (None, "down", _) if field.is_focused(window) => Some(Some(0)),
+            (Some(i), "right" | "down", _) | (Some(i), "tab", false) => {
+                Some(if i < last { Some(i + 1) } else { None })
+            }
+            (Some(0), "left" | "up", _) | (Some(0), "tab", true) => Some(None),
+            (Some(i), "left" | "up", _) | (Some(i), "tab", true) => Some(Some(i - 1)),
+            (Some(_), "escape", _) => Some(None),
+            _ => None,
+        };
+        let Some(target) = target else {
+            return;
+        };
+        match target {
+            Some(i) => window.focus(&self.chip_focus[i], cx),
+            None => window.focus(&field, cx),
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        cx.notify();
     }
 
     pub fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
@@ -741,19 +813,12 @@ impl AskPanel {
                 .flex_col()
                 .items_center()
                 .justify_center()
-                .gap(px(4.))
+                .gap(px(8.))
                 .children(suggestions().into_iter().enumerate().map(|(i, text)| {
-                    div()
-                        .id(("ask-sheet-suggestion", i))
+                    glass::chip(&palette, ("ask-sheet-suggestion", i), &self.chip_focus[i])
                         .h(px(30.))
-                        .px(px(12.))
-                        .flex()
-                        .items_center()
-                        .rounded_full()
+                        .px(px(14.))
                         .text_size(px(13.))
-                        .text_color(palette.muted)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(palette.hover).text_color(palette.text))
                         .child(text)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.submit(Some(text.to_string()), cx)
@@ -764,6 +829,7 @@ impl AskPanel {
             .size_full()
             .flex()
             .flex_col()
+            .on_key_down(cx.listener(Self::chip_key))
             .child(
                 div()
                     .h(px(44.))
@@ -857,7 +923,7 @@ impl AskPanel {
 }
 
 impl Render for AskPanel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self.palette;
         let theme = Theme::new(if palette.dark {
             Appearance::Dark
@@ -869,7 +935,8 @@ impl Render for AskPanel {
         }
         let reveal = Self::reveal_handler(cx);
         let busy = self.task.is_some();
-        let show_suggestions = self.thread.is_empty() && self.focused;
+        let show_suggestions =
+            self.thread.is_empty() && (self.focused || self.chip_at(window).is_some());
         let chip = self.chip.filter(|_| self.thread.is_empty() && !busy);
         let thread = (!self.thread.is_empty()).then(|| {
             let exchanges = self.thread.iter().enumerate().map(|(i, exchange)| {
@@ -947,13 +1014,31 @@ impl Render for AskPanel {
                 .into_any_element()
         });
         let locked = self.lock().is_some();
+        if !show_suggestions {
+            Self::set_chips_room(&self.chips_room, 0., cx.weak_entity(), cx);
+        }
+        let room = self.chips_room.clone();
+        let weak = cx.weak_entity();
         let suggestions = show_suggestions.then(|| {
+            let probe = gpui::canvas(
+                move |bounds, _, cx| {
+                    let height = f32::from(bounds.size.height) + 8.;
+                    Self::set_chips_room(&room, height, weak, cx);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
             div()
+                .relative()
+                .child(probe)
                 .flex()
                 .flex_wrap()
                 .justify_center()
                 .items_center()
-                .gap(px(4.))
+                .gap(px(6.))
                 .when(locked, |el| {
                     el.child(
                         div()
@@ -971,17 +1056,7 @@ impl Render for AskPanel {
                     )
                 })
                 .children(suggestions().into_iter().enumerate().map(|(i, text)| {
-                    div()
-                        .id(("ask-suggestion", i))
-                        .h(px(26.))
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .rounded_full()
-                        .text_size(px(12.5))
-                        .text_color(palette.muted)
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(palette.hover).text_color(palette.text))
+                    glass::chip(&palette, ("ask-suggestion", i), &self.chip_focus[i])
                         .child(text)
                         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                             window.prevent_default()
@@ -996,6 +1071,7 @@ impl Render for AskPanel {
             .flex()
             .flex_col()
             .gap(px(8.))
+            .on_key_down(cx.listener(Self::chip_key))
             .children(thread)
             .children(suggestions)
             .child(

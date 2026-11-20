@@ -3624,7 +3624,7 @@ show_cap = "Show Cap when notes close"
 show_cap_description = "Closing the notes window brings back the Cap window."
 browsers = "Calls in browsers"
 browsers_any = { text = "Any microphone use", context = "Segmented option: any browser tab using the microphone counts as a call." }
-browsers_recognised = { text = "Only recognised meeting pages", context = "Segmented option: only known meeting sites count as a call." }
+browsers_recognised = { text = "Only recognized meeting pages", context = "Segmented option: only known meeting sites count as a call." }
 browsers_any_description = "Any page using the microphone counts as a call. Nothing is missed, but a voice message can bring up a notification too."
 browsers_recognised_description = "Only pages like Google Meet, Zoom and Microsoft Teams count as a call. Cap reads the page address, which needs Accessibility."
 ax_granted = "Accessibility is allowed."
@@ -3808,7 +3808,7 @@ audio_old_macos = "This version of macOS cannot record the others in a call. Upd
 audio_linux = "Not supported on Linux yet. Only your side is recorded."
 ax_title = "Recognise meeting pages"
 ax_body = "Optional. Lets Cap tell a meeting in your browser from other microphone use, and name it."
-ax_done = "Meeting pages recognised"
+ax_done = "Meeting pages recognized"
 ax_done_body = "Cap can name the calls in your browser."
 ax_settings = "Turn on Cap under Accessibility, then come back here."
 allow_ax = "Allow Accessibility"
@@ -4140,7 +4140,7 @@ words_missing = { text = "Cap couldn't transcribe part of this meeting, so some 
 [documents.ask]
 placeholder = "Ask about this meeting"
 thinking = "Thinking…"
-suggest_decisions = "Summarise the decisions"
+suggest_decisions = "Summarize the decisions"
 suggest_actions = "List action items"
 suggest_follow_up = "Draft a follow-up email"
 
