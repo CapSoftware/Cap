@@ -908,6 +908,9 @@ pub struct SidebarState {
     /// stale decode cannot land on a newer selection.
     preview: Option<(PathBuf, Arc<RenderImage>)>,
     preview_task: Option<gpui::Task<()>>,
+    /// Small decodes for the image and desktop source swatches.
+    source_thumbs: HashMap<PathBuf, Arc<RenderImage>>,
+    source_thumb_task: Option<gpui::Task<()>>,
 
     /// `currentDesktopBackgroundPath` (`:1783-1784`) and
     /// `importingDesktopBackground` (`:2030-2031`).
@@ -969,6 +972,8 @@ impl SidebarState {
             look_wallpaper_task: None,
             preview: None,
             preview_task: None,
+            source_thumbs: HashMap::new(),
+            source_thumb_task: None,
             desktop_background: None,
             importing_desktop: false,
             picking_image: false,
@@ -2279,8 +2284,9 @@ impl EditorWindow {
                 .background_executor()
                 .spawn(async move { stored_desktop_background(&path) })
                 .await;
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 this.sidebar.desktop_background = stored;
+                this.ensure_source_thumbs(window, cx);
                 cx.notify();
             })
             .ok();
@@ -2361,6 +2367,7 @@ impl EditorWindow {
     /// The `h-48` preview the image and desktop panes show, decoded off the
     /// selected path.
     fn ensure_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_source_thumbs(window, cx);
         let Some(path) = self.preview_path() else {
             if let Some((_, previous)) = self.sidebar.preview.take() {
                 let _ = window.drop_image(previous);
@@ -2700,6 +2707,29 @@ const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
 /// The background sources sit three to a row.
 const SOURCE_COLUMNS: usize = 3;
 const SOURCE_GAP: f32 = 6.;
+const SWATCH_SOURCE_GAP: f32 = 6.;
+const SWATCH_SOURCE_HEIGHT: f32 = 34.;
+
+/// Which background source picker to draw. Two alternatives to the grid are
+/// kept side by side while one is chosen; only screenshots select them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourcePicker {
+    Grid,
+    Swatches,
+    Tabs,
+}
+
+fn source_picker() -> SourcePicker {
+    static PICKER: std::sync::LazyLock<SourcePicker> =
+        std::sync::LazyLock::new(
+            || match std::env::var("CAP_GPUI_SOURCE_PICKER").as_deref() {
+                Ok("swatches") => SourcePicker::Swatches,
+                Ok("tabs") => SourcePicker::Tabs,
+                _ => SourcePicker::Grid,
+            },
+        );
+    *PICKER
+}
 
 const WALLPAPER_COLUMNS: f32 = 4.;
 const WALLPAPER_GAP: f32 = 8.;
@@ -2964,7 +2994,11 @@ impl EditorWindow {
                     this.select_source_tab(SourceTab::None, window, cx);
                 }),
             ))
-            .child(self.render_source_tiles(tab, cx))
+            .child(match source_picker() {
+                SourcePicker::Grid => self.render_source_tiles(tab, cx).into_any_element(),
+                SourcePicker::Swatches => self.render_source_swatches(tab, cx).into_any_element(),
+                SourcePicker::Tabs => self.render_source_tabs(tab, cx).into_any_element(),
+            })
             .child(match tab {
                 SourceTab::Desktop => self.render_desktop_pane(cx).into_any_element(),
                 SourceTab::Wallpaper => self.render_wallpaper_pane(cx).into_any_element(),
@@ -3054,6 +3088,267 @@ impl EditorWindow {
                     .gap(px(SOURCE_GAP))
                     .children(row.iter().map(|item| chip(*item, cx)))
             }))
+    }
+
+    /// The background sources as one row of small previews of what each gives,
+    /// labelled underneath, with the wallpaper grid's accent ring for the
+    /// selected one.
+    fn render_source_swatches(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let columns = SourceTab::PICKER.len() as f32;
+        let width = ((CONTENT_WIDTH - SWATCH_SOURCE_GAP * (columns - 1.)) / columns).floor();
+        let chip = |item: SourceTab, cx: &mut Context<Self>| {
+            let selected = tab == item;
+            let group = SharedString::from(format!("background-source-{item:?}"));
+            div()
+                .id(group.clone())
+                .group(group.clone())
+                .w(px(width))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(5.))
+                .cursor_pointer()
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(SWATCH_SOURCE_HEIGHT + 2. * (RING_WIDTH + RING_GAP)))
+                        .rounded(px(12.))
+                        .selection_ring(self.panel_bg(), editor.accent, selected)
+                        .when(!selected, |this| {
+                            this.group_hover(group.clone(), |this| {
+                                this.border_color(Hsla::from(editor.line_strong))
+                            })
+                        })
+                        .child(
+                            div()
+                                .relative()
+                                .size_full()
+                                .rounded(px(8.))
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(self.source_swatch(item))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .inset_0()
+                                        .rounded(px(8.))
+                                        .shadow(editor.trough_ring()),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .max_w_full()
+                        .truncate()
+                        .text_size(px(11.5))
+                        .text_color(Hsla::from(if selected {
+                            editor.text_1
+                        } else {
+                            editor.text_2
+                        }))
+                        .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
+                        .when(!selected, |this| {
+                            this.group_hover(group, |this| {
+                                this.text_color(Hsla::from(editor.text_1))
+                            })
+                        })
+                        .child(item.label()),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.select_source_tab(item, window, cx);
+                }))
+        };
+        div()
+            .id("background-sources")
+            .flex()
+            .flex_row()
+            .gap(px(SWATCH_SOURCE_GAP))
+            .children(SourceTab::PICKER.map(|item| chip(item, cx)))
+    }
+
+    /// What one source swatch shows: the project's own value for that source
+    /// when it has one, otherwise what picking it would start from.
+    fn source_swatch(&self, item: SourceTab) -> AnyElement {
+        let editor = self.theme.editor;
+        let source = &self.style_background().source;
+        let picture = |image: Option<Arc<RenderImage>>, icon: &'static str| match image {
+            Some(image) => img(image)
+                .size_full()
+                .object_fit(gpui::ObjectFit::Cover)
+                .rounded(px(8.))
+                .into_any_element(),
+            None => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(Hsla::from(editor.ctl))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(16.))
+                        .text_color(Hsla::from(editor.text_3)),
+                )
+                .into_any_element(),
+        };
+        match item {
+            SourceTab::Wallpaper => {
+                let chosen = match source {
+                    BackgroundSource::Wallpaper { path: Some(path) }
+                        if !is_current_desktop_background_path(Some(path)) =>
+                    {
+                        wallpaper_id_for_path(path)
+                    }
+                    _ => None,
+                };
+                let image = chosen
+                    .and_then(|id| self.sidebar.wallpapers.get(id))
+                    .or_else(|| {
+                        wallpapers_for_theme(BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0)
+                            .into_iter()
+                            .find_map(|id| self.sidebar.wallpapers.get(id))
+                    })
+                    .cloned();
+                picture(image, "icons/image.svg")
+            }
+            SourceTab::AnimatedGradient => {
+                let config = self
+                    .animated_gradient_config()
+                    .or(self.sidebar.animated_gradient.library.last_used.as_ref())
+                    .cloned()
+                    .unwrap_or_default();
+                animated_gradient::palette(&config, px(0.)).into_any_element()
+            }
+            SourceTab::Gradient => {
+                let (from, to, angle) = match source {
+                    BackgroundSource::Gradient {
+                        from, to, angle, ..
+                    } => (*from, *to, f32::from(*angle)),
+                    _ => (DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, 90.),
+                };
+                div()
+                    .size_full()
+                    .bg(linear_gradient(
+                        angle,
+                        linear_color_stop(color_to_hsla(from), 0.),
+                        linear_color_stop(color_to_hsla(to), 1.),
+                    ))
+                    .into_any_element()
+            }
+            SourceTab::Color => {
+                let value = match source {
+                    BackgroundSource::Color { value, .. } => *value,
+                    _ => DEFAULT_GRADIENT_FROM,
+                };
+                div()
+                    .size_full()
+                    .bg(color_to_hsla(value))
+                    .into_any_element()
+            }
+            SourceTab::Image => {
+                let image = match source {
+                    BackgroundSource::Image { path: Some(path) } => {
+                        self.sidebar.source_thumbs.get(Path::new(path)).cloned()
+                    }
+                    _ => None,
+                };
+                picture(image, "icons/folder-open.svg")
+            }
+            SourceTab::Desktop => {
+                let image = self
+                    .sidebar
+                    .desktop_background
+                    .as_ref()
+                    .and_then(|path| self.sidebar.source_thumbs.get(path))
+                    .cloned();
+                picture(image, "icons/monitor-outline.svg")
+            }
+            SourceTab::None => div().into_any_element(),
+        }
+    }
+
+    /// The background sources as one quiet row of text tabs.
+    fn render_source_tabs(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor = self.theme.editor;
+        div()
+            .id("background-sources")
+            .flex()
+            .flex_row()
+            .gap(px(2.))
+            .children(SourceTab::PICKER.map(|item| {
+                let selected = tab == item;
+                div()
+                    .id(SharedString::from(format!("background-source-{item:?}")))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(px(28.))
+                    .px(px(4.))
+                    .rounded(px(8.))
+                    .text_size(px(12.5))
+                    .child(div().min_w_0().truncate().child(item.label()))
+                    .map(|this| {
+                        if selected {
+                            this.bg(Hsla::from(editor.ctl_hover))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(editor.text_1))
+                        } else {
+                            this.text_color(Hsla::from(editor.text_2))
+                                .cursor_pointer()
+                                .hover(|this| {
+                                    this.bg(Hsla::from(editor.ctl))
+                                        .text_color(Hsla::from(editor.text_1))
+                                })
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_source_tab(item, window, cx);
+                    }))
+            }))
+    }
+
+    /// Small decodes of the chosen image and the imported desktop picture for
+    /// their source swatches, off the render path and once per file.
+    fn ensure_source_thumbs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if source_picker() != SourcePicker::Swatches {
+            return;
+        }
+        let image = match &self.style_background().source {
+            BackgroundSource::Image { path: Some(path) } => Some(PathBuf::from(path)),
+            _ => None,
+        };
+        let wanted: Vec<PathBuf> = image
+            .into_iter()
+            .chain(self.sidebar.desktop_background.clone())
+            .filter(|path| !self.sidebar.source_thumbs.contains_key(path))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        self.sidebar.source_thumb_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let decoded = cx
+                .background_executor()
+                .spawn(async move {
+                    wanted
+                        .into_iter()
+                        .filter_map(|path| {
+                            decode_scaled(&path, WALLPAPER_TILE_MAX).map(|image| (path, image))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.sidebar.source_thumbs.extend(decoded);
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// The decoded preview for a path, if it is the one already decoded.
