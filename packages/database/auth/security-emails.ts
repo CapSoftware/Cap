@@ -71,6 +71,11 @@ export async function sendPasskeyRemovedNotice(
 		});
 	} catch (error) {
 		console.error("[passkeys] Failed to send passkey removed notice", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 export async function sendEmailChangeCode(email: string, code: string) {
 	const emailStatus = getEmailDeliveryStatus();
 	if (!emailStatus.configured) {
