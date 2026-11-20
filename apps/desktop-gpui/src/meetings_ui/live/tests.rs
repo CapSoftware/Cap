@@ -261,15 +261,30 @@ fn context_prefers_a_live_call_and_otherwise_an_imminent_event() {
 
 #[test]
 fn coming_up_lists_the_rest_of_today_without_the_context_event() {
-    let now = Utc::now();
-    let events = vec![
+    // Local noon, so "the rest of today" holds every event below whenever
+    // the test runs (just before midnight they would fall on tomorrow).
+    let noon = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(12, 0, 0)
+        .and_then(|t| t.and_local_timezone(chrono::Local).earliest())
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap();
+    let shift = noon - Utc::now();
+    let events: Vec<CalendarEvent> = [
         event("past", -90, 30, false),
         event("a", 5, 30, false),
         event("b", 6, 30, false),
         event("c", 7, 30, false),
         event("d", 8, 30, false),
-    ];
-    let rows = model::coming_up(&events, now, Some("cal|a"), 2);
+    ]
+    .into_iter()
+    .map(|mut event| {
+        event.start += shift;
+        event.end += shift;
+        event
+    })
+    .collect();
+    let rows = model::coming_up(&events, noon, Some("cal|a"), 2);
     let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
     assert_eq!(ids, vec!["cal|b", "cal|c"]);
 }
