@@ -3506,7 +3506,7 @@ open_sentence = "Ouvrir vos notes."
 
 [meeting.tray]
 new_note = "Nouvelle note"
-start = "Commencer les notes"
+start = "Lancer les notes"
 stop = "Arrêter l'enregistrement · {time}"
 open_notes = "Ouvrir Notes"
 next = "{time} {title}"
@@ -4127,10 +4127,10 @@ no_calendar = "Connectez un calendrier pour voir vos réunions ici."
 meeting_mode_off = "Activez la détection des réunions pour voir ce qui arrive."
 calendar_settings = "Réglages du calendrier"
 empty_title = "Vos notes apparaîtront ici"
-empty_body = "Appuyez sur Commencer les notes au début d'une réunion. Cap écoute et la rédige quand vous arrêtez."
+empty_body = "Appuyez sur Lancer les notes au début d'une réunion. Cap écoute et la rédige quand vous arrêtez."
 just_you = "Vous seul"
 note = "Note"
-start_notes = "Commencer les notes"
+start_notes = "Lancer les notes"
 
 [documents.panel]
 hide = "Masquer la transcription"
