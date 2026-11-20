@@ -6,9 +6,12 @@ import { nanoId } from "@cap/database/helpers";
 import {
 	agentApiKeys,
 	authApiKeys,
+	authChallenges,
+	emailChangeRequests,
 	organizationMembers,
 	organizations,
 	sessions,
+	userPasskeys,
 	users,
 } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
@@ -210,6 +213,15 @@ export async function signOutAllDevices() {
 			.where(eq(users.id, currentUser.id));
 		await tx.delete(sessions).where(eq(sessions.userId, currentUser.id));
 		await tx.delete(authApiKeys).where(eq(authApiKeys.userId, currentUser.id));
+		await tx
+			.delete(userPasskeys)
+			.where(eq(userPasskeys.userId, currentUser.id));
+		await tx
+			.delete(emailChangeRequests)
+			.where(eq(emailChangeRequests.userId, currentUser.id));
+		await tx
+			.delete(authChallenges)
+			.where(eq(authChallenges.userId, currentUser.id));
 		await tx
 			.update(agentApiKeys)
 			.set({ revokedAt: new Date() })
