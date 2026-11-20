@@ -452,26 +452,34 @@ describe.runIf(Boolean(databaseUrl))(
 
 			it(`caps each account at ${MAX_PASSKEYS_PER_USER} passkeys`, async () => {
 				const user = await makeUser();
-				const pending = [];
-				for (let index = 0; index < MAX_PASSKEYS_PER_USER + 2; index++) {
+				for (let index = 0; index < MAX_PASSKEYS_PER_USER; index++) {
+					await registerPasskey(user);
+				}
+				expect(await listPasskeys(user.id)).toHaveLength(MAX_PASSKEYS_PER_USER);
+				expect(await createPasskeyRegistrationOptions(user)).toBeNull();
+			});
+
+			it("adds one passkey per setup even when several registrations race", async () => {
+				const user = await makeUser();
+				const responses = [];
+				for (let index = 0; index < 4; index++) {
 					const options = await createPasskeyRegistrationOptions(user);
 					if (!options) throw new Error("Missing options.");
-					pending.push(
+					responses.push(
 						JSON.stringify(
 							new SoftwareAuthenticator(user.id).register(options.challenge),
 						),
 					);
 				}
 				const results = await Promise.all(
-					pending.map((response) =>
+					responses.map((response) =>
 						verifyPasskeyRegistration(user.id, response),
 					),
 				);
 				expect(
 					results.filter((result) => result.status === "registered"),
-				).toHaveLength(MAX_PASSKEYS_PER_USER);
-				expect(await listPasskeys(user.id)).toHaveLength(MAX_PASSKEYS_PER_USER);
-				expect(await createPasskeyRegistrationOptions(user)).toBeNull();
+				).toHaveLength(1);
+				expect(await listPasskeys(user.id)).toHaveLength(1);
 			});
 
 			it("ignores attestation statements and never fetches their certificate URLs", async () => {
@@ -899,6 +907,53 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await getPasskeyRegistrationOptions(confirmed.grant)).toEqual({
 					status: "verify",
 				});
+			});
+
+			it("lets one confirmation add only one passkey", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptions,
+					sendSecurityCode,
+					verifySecurityCode,
+				} = await actions();
+				const user = await makeUser();
+				fixture.currentUser = user;
+				expect(await sendSecurityCode()).toEqual({ status: "sent" });
+				const confirmed = await verifySecurityCode(
+					fixture.securityCodes.at(-1)?.code ?? "",
+				);
+				if (confirmed.status !== "ok") throw new Error("No grant.");
+				const first = await getPasskeyRegistrationOptions(confirmed.grant);
+				const second = await getPasskeyRegistrationOptions(confirmed.grant);
+				if (first.status !== "ok" || second.status !== "ok") {
+					throw new Error("No options.");
+				}
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(
+									first.options.challenge,
+								),
+							),
+						)
+					).status,
+				).toBe("registered");
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(
+									second.options.challenge,
+								),
+							),
+						)
+					).status,
+				).toBe("invalid");
+				expect(await getPasskeyRegistrationOptions(confirmed.grant)).toEqual({
+					status: "verify",
+				});
+				expect(await listPasskeys(user.id)).toHaveLength(1);
 			});
 
 			it("confirms with an existing passkey and nobody else's", async () => {
