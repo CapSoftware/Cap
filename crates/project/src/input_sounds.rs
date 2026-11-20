@@ -200,6 +200,84 @@ fn shown_key_ranges(project: &ProjectConfiguration) -> Vec<(f64, f64)> {
     merged
 }
 
+/// What the keyboard track puts on screen when it shows shortcuts alone:
+/// each recorded key it lists, at its output time, and the ranges of older
+/// segments saved without their keys.
+struct ShownShortcuts<'a> {
+    keys: Vec<(f64, &'a str)>,
+    unlisted: Vec<(f64, f64)>,
+}
+
+/// How far a listed key's time may sit from its press: both come from the
+/// same output mapping, so only rounding separates them.
+const SHOWN_KEY_TOLERANCE_SECS: f64 = 0.002;
+
+impl<'a> ShownShortcuts<'a> {
+    fn new(project: &'a ProjectConfiguration) -> Self {
+        let mut shown = Self {
+            keys: Vec::new(),
+            unlisted: Vec::new(),
+        };
+        let Some(timeline) = &project.timeline else {
+            return shown;
+        };
+        for segment in timeline
+            .keyboard_segments
+            .iter()
+            .filter(|segment| !crate::keyboard::is_manual_keyboard_segment(segment))
+            .filter(|segment| segment.start.is_finite() && segment.end > segment.start)
+        {
+            if segment.keys.is_empty() {
+                shown.unlisted.push((segment.start, segment.end));
+            }
+            shown.keys.extend(
+                segment
+                    .keys
+                    .iter()
+                    .map(|key| (segment.start + key.time_offset / 1000.0, key.key.as_str())),
+            );
+        }
+        shown.keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+        shown
+    }
+
+    fn shows(&self, key: &str, time: f64) -> bool {
+        let first = self
+            .keys
+            .partition_point(|(at, _)| *at < time - SHOWN_KEY_TOLERANCE_SECS);
+        self.keys[first..]
+            .iter()
+            .take_while(|(at, _)| *at <= time + SHOWN_KEY_TOLERANCE_SECS)
+            .any(|(_, shown)| *shown == key)
+            || self
+                .unlisted
+                .iter()
+                .any(|(start, end)| *start <= time && time <= *end)
+    }
+
+    /// Which of a clip's ordered presses belong to a shortcut on screen: a
+    /// listed key, and any modifier held down while one is struck.
+    fn heard(&self, presses: &[&KeyPressEvent], to_output: impl Fn(f64) -> f64) -> Vec<bool> {
+        let mut heard = vec![false; presses.len()];
+        let mut held: Vec<(usize, &str)> = Vec::new();
+        for (index, press) in presses.iter().enumerate() {
+            if crate::keyboard::is_modifier_key(&press.key) {
+                if press.down {
+                    held.push((index, press.key.as_str()));
+                } else {
+                    held.retain(|(_, key)| *key != press.key);
+                }
+            } else if press.down && self.shows(&press.key, to_output(press.time_ms / 1000.0)) {
+                heard[index] = true;
+                for (modifier, _) in &held {
+                    heard[*modifier] = true;
+                }
+            }
+        }
+        heard
+    }
+}
+
 fn within(ranges: &[(f64, f64)], time: f64) -> bool {
     let index = ranges.partition_point(|range| range.1 < time);
     ranges
@@ -252,6 +330,11 @@ pub fn input_sound_events(
     } else {
         Vec::new()
     };
+    let shortcuts = project
+        .keyboard
+        .as_ref()
+        .filter(|keyboard| keys && !keyboard.settings.show_typing)
+        .map(|_| ShownShortcuts::new(project));
     let holds = timeline.hold_windows();
     let mut events = Vec::new();
     let mut ordered_keys: Vec<Option<Vec<&KeyPressEvent>>> = vec![None; takes.len()];
@@ -309,10 +392,19 @@ pub fn input_sound_events(
                 held.clear();
             }
             held_until = Some((clip.recording_clip, clip.end, window.edited_end));
-            for &press in &presses[first..last.max(first)] {
+            let presses = &presses[first..last.max(first)];
+            let heard = shortcuts.as_ref().map(|shortcuts| {
+                shortcuts.heard(presses, |source_secs| {
+                    to_output(source_secs - take.keyboard_offset_secs)
+                })
+            });
+            for (index, &press) in presses.iter().enumerate() {
                 let time = to_output(press.time_ms / 1000.0 - take.keyboard_offset_secs);
                 if press.down {
-                    if held.contains(&press.key_code.as_str()) || !within(&shown, time) {
+                    if held.contains(&press.key_code.as_str())
+                        || !within(&shown, time)
+                        || heard.as_ref().is_some_and(|heard| !heard[index])
+                    {
                         continue;
                     }
                     held.push(press.key_code.as_str());

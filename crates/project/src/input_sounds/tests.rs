@@ -663,3 +663,68 @@ fn a_joined_character_typed_by_hand_sounds_once() {
     assert!((downs[2] - 1.33).abs() < 1e-9);
     assert_eq!(key_times(&events, false).len(), 3);
 }
+
+#[test]
+fn typing_hidden_under_a_shortcut_stays_silent() {
+    let mut project = project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let presses = vec![
+        press("LMeta", 980.0, true),
+        press("K", 1000.0, true),
+        press("K", 1060.0, false),
+        press("LMeta", 1100.0, false),
+        press("LShift", 1450.0, true),
+        press("A", 1500.0, true),
+        press("A", 1540.0, false),
+        press("LShift", 1560.0, false),
+        press("B", 1700.0, true),
+        press("B", 1740.0, false),
+    ];
+    let keyboard = KeyboardEvents { presses };
+    let settings = project.keyboard.as_ref().unwrap().settings.clone();
+    assert!(!settings.show_typing);
+    let timeline = project.timeline.as_mut().unwrap();
+    timeline.keyboard_segments =
+        crate::keyboard::project_keyboard_events(&[(keyboard.clone(), 0.0)], timeline, &settings);
+    assert_eq!(timeline.keyboard_segments.len(), 1);
+    let segment = &timeline.keyboard_segments[0];
+    assert!(
+        segment.start < 1.5 && segment.end > 1.7,
+        "the label covers the typing"
+    );
+
+    let events = input_sound_events(
+        &project,
+        &[InputSoundTake {
+            keyboard: &keyboard,
+            keyboard_offset_secs: 0.0,
+            clicks: &[],
+        }],
+    );
+    assert_eq!(key_times(&events, true), [0.98, 1.0]);
+    assert_eq!(key_times(&events, false), [1.06, 1.1]);
+
+    project.keyboard.as_mut().unwrap().settings.show_typing = true;
+    let typing = KeyboardSettings {
+        show_typing: true,
+        ..settings
+    };
+    let timeline = project.timeline.as_mut().unwrap();
+    timeline.keyboard_segments =
+        crate::keyboard::project_keyboard_events(&[(keyboard.clone(), 0.0)], timeline, &typing);
+    let events = input_sound_events(
+        &project,
+        &[InputSoundTake {
+            keyboard: &keyboard,
+            keyboard_offset_secs: 0.0,
+            clicks: &[],
+        }],
+    );
+    assert!(key_times(&events, true).len() > 2, "shown typing sounds");
+}
