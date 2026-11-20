@@ -1448,6 +1448,11 @@ impl KeyboardLayer {
                         .map_or(0, String::len);
                     let split = cap.label.len() - newest_len;
                     let (settled, newest) = cap.label.split_at(split);
+                    let whole = self
+                        .keycap_buffers
+                        .get(*slot)
+                        .and_then(Option::as_ref)
+                        .map(|(_, buffer)| split_offsets(buffer, split));
                     let settled_width = if settled.is_empty() {
                         0.0
                     } else {
@@ -1460,7 +1465,7 @@ impl KeyboardLayer {
                         );
                         self.keycap_labels.push(PlacedLabel {
                             slot: RISING_SLOT,
-                            left,
+                            left: left + whole.and_then(|(settled, _)| settled).unwrap_or(0.0),
                             top,
                             width: metrics.width,
                             height: metrics.height,
@@ -1485,7 +1490,10 @@ impl KeyboardLayer {
                     let shutter = KEYCAP_SHUTTER * frame.pace.min(1.0);
                     self.keycap_labels.push(PlacedLabel {
                         slot: RISING_SLOT + 1,
-                        left: left + settled_width,
+                        left: left
+                            + whole
+                                .and_then(|(_, newest)| newest)
+                                .unwrap_or(settled_width),
                         top: top + rise(age),
                         width: newest_metrics.width,
                         height: newest_metrics.height,
@@ -1586,6 +1594,23 @@ impl KeyboardLayer {
         self.keycap_mode = true;
         self.has_content = true;
     }
+}
+
+/// Where the text before byte `split` and the text from it start in the
+/// shaped `buffer`, so each part drawn on its own lands where the whole text
+/// sets it: kerned against its neighbour, and on the left for right-to-left
+/// text.
+fn split_offsets(buffer: &Buffer, split: usize) -> (Option<f32>, Option<f32>) {
+    let mut offsets: (Option<f32>, Option<f32>) = (None, None);
+    for glyph in buffer.layout_runs().flat_map(|run| run.glyphs.iter()) {
+        let part = if glyph.start < split {
+            &mut offsets.0
+        } else {
+            &mut offsets.1
+        };
+        *part = Some(part.map_or(glyph.x, |x| x.min(glyph.x)));
+    }
+    offsets
 }
 
 /// When the segment's latest key went down, in timeline seconds: the start,
