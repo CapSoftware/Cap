@@ -108,7 +108,10 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 vi.mock("@/lib/email-code-rate-limit", () => ({
 	isEmailCodeSendLimited: async () => false,
-	isEmailCodeVerifyLimited: async (email: string) =>
+	isEmailCodeVerifyLimited: async () => {
+		throw new Error("Email changes must not use the sign-in guess bucket");
+	},
+	isEmailChangeVerifyLimited: async (email: string) =>
 		email === fixture.limitedAddress,
 }));
 vi.mock("../../../../packages/database/auth/sso", async (importOriginal) => ({
@@ -735,6 +738,33 @@ describe.runIf(Boolean(databaseUrl))(
 			expect(updates.every((update) => update.options === undefined)).toBe(
 				true,
 			);
+		});
+
+		it("leaves billing on the new address when a second confirm races the first", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser(address(), {
+				stripeCustomerId: `cus_${id()}`,
+			});
+			const newEmail = address();
+			await start(user, newEmail);
+			const code = lastCode(newEmail);
+			await database()
+				.update(emailChangeRequests)
+				.set({ attempts: -5 })
+				.where(eq(emailChangeRequests.userId, user.id));
+			const results = await Promise.all([
+				finishEmailChange(code),
+				finishEmailChange(code),
+				finishEmailChange(code),
+			]);
+			expect(
+				results.filter((result) => result.status === "changed"),
+			).toHaveLength(1);
+			expect((await reload(user.id))?.email).toBe(newEmail);
+			const last = fixture.stripeUpdates
+				.filter((update) => update.id === user.stripeCustomerId)
+				.at(-1);
+			expect(last?.params.email).toBe(newEmail);
 		});
 
 		it("puts billing back when the change does not commit", async () => {
