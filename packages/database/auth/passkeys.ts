@@ -240,7 +240,9 @@ export async function createPasskeyStepUpOptions(
 
 /**
  * Verifies a passkey assertion. The challenge is claimed before anything else
- * is checked, so every challenge is good for exactly one attempt.
+ * is checked, so every challenge is good for exactly one attempt, and the
+ * passkey row stays locked from the counter check to the counter write so
+ * concurrent sign-ins cannot both pass against the same stored counter.
  */
 async function verifyPasskeyAssertion(
 	raw: unknown,
@@ -256,72 +258,70 @@ async function verifyPasskeyAssertion(
 	if (!challenge) return null;
 	if (!(await consumeChallenge({ purpose, challenge, userId }))) return null;
 
-	const [passkey] = await db()
-		.select()
-		.from(userPasskeys)
-		.where(eq(userPasskeys.credentialIdHash, hashCredentialId(response.id)))
-		.limit(1);
-	if (!passkey || passkey.credentialId !== response.id) return null;
-	if (userId && passkey.userId !== userId) return null;
-
-	const [user] = await db()
-		.select()
-		.from(users)
-		.where(eq(users.id, passkey.userId))
-		.limit(1);
-	if (!user) return null;
-
-	if (
-		response.response.userHandle &&
-		response.response.userHandle !==
-			isoBase64URL.fromBuffer(webAuthnUserId(user.id))
-	) {
-		return null;
-	}
-
 	const { rpID, origin } = passkeyRelyingParty();
-	let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
-	try {
-		verification = await verifyAuthenticationResponse({
-			response,
-			expectedChallenge: challenge,
-			expectedOrigin: origin,
-			expectedRPID: rpID,
-			expectedType: "webauthn.get",
-			requireUserVerification: true,
-			credential: {
-				id: passkey.credentialId,
-				publicKey: isoBase64URL.toBuffer(passkey.publicKey),
-				counter: passkey.counter,
-				transports: storedTransports(passkey.transports),
-			},
-		});
-	} catch {
-		return null;
-	}
-	if (
-		!verification.verified ||
-		!verification.authenticationInfo.userVerified ||
-		verification.authenticationInfo.credentialID !== passkey.credentialId
-	) {
-		return null;
-	}
+	return db().transaction(async (tx) => {
+		const [passkey] = await tx
+			.select()
+			.from(userPasskeys)
+			.where(eq(userPasskeys.credentialIdHash, hashCredentialId(response.id)))
+			.limit(1)
+			.for("update");
+		if (!passkey || passkey.credentialId !== response.id) return null;
+		if (userId && passkey.userId !== userId) return null;
 
-	await db()
-		.update(userPasskeys)
-		.set({
-			counter: verification.authenticationInfo.newCounter,
-			backedUp: verification.authenticationInfo.credentialBackedUp,
-			lastUsedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(userPasskeys.id, passkey.id),
-				eq(userPasskeys.counter, passkey.counter),
-			),
-		);
+		const [user] = await tx
+			.select()
+			.from(users)
+			.where(eq(users.id, passkey.userId))
+			.limit(1);
+		if (!user) return null;
 
-	return user;
+		if (
+			response.response.userHandle &&
+			response.response.userHandle !==
+				isoBase64URL.fromBuffer(webAuthnUserId(user.id))
+		) {
+			return null;
+		}
+
+		let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
+		try {
+			verification = await verifyAuthenticationResponse({
+				response,
+				expectedChallenge: challenge,
+				expectedOrigin: origin,
+				expectedRPID: rpID,
+				expectedType: "webauthn.get",
+				requireUserVerification: true,
+				credential: {
+					id: passkey.credentialId,
+					publicKey: isoBase64URL.toBuffer(passkey.publicKey),
+					counter: passkey.counter,
+					transports: storedTransports(passkey.transports),
+				},
+			});
+		} catch {
+			return null;
+		}
+		if (
+			!verification.verified ||
+			!verification.authenticationInfo.userVerified ||
+			verification.authenticationInfo.credentialID !== passkey.credentialId
+		) {
+			return null;
+		}
+
+		await tx
+			.update(userPasskeys)
+			.set({
+				counter: verification.authenticationInfo.newCounter,
+				backedUp: verification.authenticationInfo.credentialBackedUp,
+				lastUsedAt: new Date(),
+			})
+			.where(eq(userPasskeys.id, passkey.id));
+
+		return user;
+	});
 }
 
 export function verifyPasskeySignIn(raw: unknown) {
