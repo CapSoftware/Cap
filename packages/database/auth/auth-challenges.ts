@@ -28,8 +28,11 @@ const getAffectedRows = (result: unknown) => {
 	return (result as { affectedRows?: number } | undefined)?.affectedRows ?? 0;
 };
 
-export function hashChallenge(value: string) {
-	return crypto.createHash("sha256").update(value).digest("hex");
+export function hashChallenge(purpose: AuthChallengePurpose, value: string) {
+	return crypto
+		.createHash("sha256")
+		.update(`${purpose}:${value}`)
+		.digest("hex");
 }
 
 function hashStepUpCode(challengeId: string, code: string) {
@@ -67,7 +70,7 @@ export async function storeChallenge(input: {
 			id: nanoId(),
 			userId: input.userId,
 			purpose: input.purpose,
-			secretHash: hashChallenge(input.challenge),
+			secretHash: hashChallenge(input.purpose, input.challenge),
 			expiresAt: new Date(Date.now() + WEBAUTHN_CHALLENGE_TTL_MS),
 		});
 }
@@ -89,7 +92,10 @@ export async function consumeChallenge(input: {
 		.delete(authChallenges)
 		.where(
 			and(
-				eq(authChallenges.secretHash, hashChallenge(input.challenge)),
+				eq(
+					authChallenges.secretHash,
+					hashChallenge(input.purpose, input.challenge),
+				),
 				eq(authChallenges.purpose, input.purpose),
 				input.userId
 					? eq(authChallenges.userId, input.userId)
@@ -220,7 +226,7 @@ export async function issueStepUpGrant(userId: User.UserId) {
 			id: nanoId(),
 			userId,
 			purpose: "step_up_grant",
-			secretHash: hashChallenge(grant),
+			secretHash: hashChallenge("step_up_grant", grant),
 			expiresAt: new Date(Date.now() + STEP_UP_GRANT_TTL_MS),
 		});
 	return grant;
@@ -235,7 +241,7 @@ export async function hasStepUpGrant(userId: User.UserId, grant: unknown) {
 		.from(authChallenges)
 		.where(
 			and(
-				eq(authChallenges.secretHash, hashChallenge(grant)),
+				eq(authChallenges.secretHash, hashChallenge("step_up_grant", grant)),
 				eq(authChallenges.purpose, "step_up_grant"),
 				eq(authChallenges.userId, userId),
 				gt(authChallenges.expiresAt, new Date()),
@@ -243,4 +249,15 @@ export async function hasStepUpGrant(userId: User.UserId, grant: unknown) {
 		)
 		.limit(1);
 	return !!row;
+}
+
+export async function clearStepUpGrants(userId: User.UserId) {
+	await db()
+		.delete(authChallenges)
+		.where(
+			and(
+				eq(authChallenges.userId, userId),
+				eq(authChallenges.purpose, "step_up_grant"),
+			),
+		);
 }
