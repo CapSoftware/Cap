@@ -51,11 +51,32 @@ function sameHash(a: string, b: string) {
 	return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+/**
+ * Best-effort cleanup. Expired rows are deleted by primary key: a range
+ * delete on expiresAt takes gap locks that deadlock with other accounts'
+ * inserts on MySQL 8.4.
+ */
 async function deleteExpiredChallenges() {
-	await db()
-		.delete(authChallenges)
-		.where(lt(authChallenges.expiresAt, new Date()))
-		.limit(100);
+	try {
+		const expired = await db()
+			.select({ id: authChallenges.id })
+			.from(authChallenges)
+			.where(lt(authChallenges.expiresAt, new Date()))
+			.limit(100);
+		if (expired.length === 0) return;
+		await db()
+			.delete(authChallenges)
+			.where(
+				inArray(
+					authChallenges.id,
+					expired.map((row) => row.id),
+				),
+			);
+	} catch (error) {
+		console.warn("[auth] Expired challenge cleanup skipped", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 export async function storeChallenge(input: {
