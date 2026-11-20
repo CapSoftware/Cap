@@ -182,6 +182,7 @@ pub async fn prewarm_first_frame(
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: false,
+            display_placeholder: false,
         };
         let uniforms = ProjectUniforms::new(
             &constants,
@@ -573,6 +574,9 @@ impl FrameFetch {
 #[derive(Clone)]
 pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
+    /// This clip's screen is the stand-in a blank project starts from, so it
+    /// is never drawn; clips imported later show as usual.
+    display_placeholder: bool,
     camera: Option<AsyncVideoDecoderHandle>,
     source_video: Option<Arc<SourceVideo>>,
     pub segment_offset: f64,
@@ -757,6 +761,7 @@ impl RecordingSegmentDecoders {
 
         Ok(Self {
             screen,
+            display_placeholder: meta.is_blank() && segment_i == 0,
             camera,
             source_video: SourceVideo::find(&screen_source, force_ffmpeg),
             segment_offset: latest_start_time.unwrap_or(0.0),
@@ -804,6 +809,7 @@ impl RecordingSegmentDecoders {
                 match tokio::try_join!(screen, camera) {
                     Ok((screen, camera)) => Some(RecordingSegmentDecoders {
                         screen,
+                        display_placeholder: self.display_placeholder,
                         camera,
                         source_video: self.source_video.as_ref().map(|video| video.reopened()),
                         segment_offset: self.segment_offset,
@@ -975,6 +981,7 @@ impl RecordingSegmentDecoders {
                 segment_time,
                 recording_time,
                 segment_has_camera: self.camera.is_some(),
+                display_placeholder: self.display_placeholder,
             }))
         } else {
             let camera_frame =
@@ -995,6 +1002,7 @@ impl RecordingSegmentDecoders {
                 segment_time,
                 recording_time,
                 segment_has_camera: self.camera.is_some(),
+                display_placeholder: self.display_placeholder,
             }))
         }
     }
@@ -4882,9 +4890,11 @@ impl ProjectUniforms {
             scene_segments,
         ));
         let audio_only = constants.is_audio_only();
-        // Audio-only and blank projects carry a placeholder display track
-        // that is never drawn: only what is laid over the background shows.
-        if constants.meta.hides_display() {
+        // Audio-only projects and a blank project's starting clip carry a
+        // placeholder display track that is never drawn: only what is laid
+        // over the background shows. Clips imported into a blank project
+        // show as usual.
+        if constants.meta.is_audio_only() || segment_frames.display_placeholder {
             scene.screen_opacity = 0.0;
             prev_scene.screen_opacity = 0.0;
         }
@@ -7004,6 +7014,8 @@ pub struct DecodedSegmentFrames {
     pub segment_time: f32,
     pub recording_time: f32,
     pub segment_has_camera: bool,
+    /// The screen is a blank project's stand-in and is not drawn.
+    pub display_placeholder: bool,
 }
 
 #[derive(Clone)]
@@ -7094,6 +7106,7 @@ mod style_image_tests {
             segment_time: 3.0,
             recording_time: 3.0,
             segment_has_camera: true,
+            display_placeholder: false,
         };
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 6.0, size);
         let at = |project: &ProjectConfiguration, frame| {
@@ -7327,6 +7340,7 @@ mod style_image_tests {
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: true,
+            display_placeholder: false,
         };
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 3.0, XY::new(160, 90));
         let mut layers = RendererLayers::new(&constants.device, &constants.queue);
@@ -7505,6 +7519,7 @@ mod next_index_tests {
         });
         RecordingSegmentDecoders {
             screen: AsyncVideoDecoderHandle::for_test(sender, 16, 16).with_test_fps(FPS),
+            display_placeholder: false,
             camera: None,
             source_video: None,
             segment_offset: 0.0,
@@ -7723,6 +7738,7 @@ mod export_order_tests {
             keyboard: Arc::new(Default::default()),
             decoders: RecordingSegmentDecoders {
                 screen,
+                display_placeholder: false,
                 camera: None,
                 source_video: None,
                 segment_offset: 0.0,
@@ -8027,6 +8043,7 @@ mod nv12_flush_tests {
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: false,
+            display_placeholder: false,
         };
         let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
         let mut renderer = FrameRenderer::new(&constants);
@@ -8150,6 +8167,7 @@ mod nv12_flush_tests {
                 segment_time: 0.0,
                 recording_time: 0.0,
                 segment_has_camera: false,
+                display_placeholder: false,
             };
             let zoom = ZoomTransformTimeline::from_project(&project, &cursor, 1.0, XY::new(4, 4));
             let uniforms = ProjectUniforms::new(
@@ -10881,6 +10899,7 @@ mod project_uniforms_tests {
                     segment_time: time,
                     recording_time: time,
                     segment_has_camera: false,
+                    display_placeholder: false,
                 };
                 let legacy = ProjectUniforms::new(
                     &constants,
@@ -10990,6 +11009,7 @@ mod project_uniforms_tests {
                     segment_time: time,
                     recording_time: time,
                     segment_has_camera: false,
+                    display_placeholder: false,
                 };
                 let started = Instant::now();
                 let uniforms = ProjectUniforms::new_with_precomputed_cursor(
@@ -11139,6 +11159,7 @@ mod project_uniforms_tests {
                     segment_time: time,
                     recording_time: time,
                     segment_has_camera: false,
+                    display_placeholder: false,
                 };
                 let linear = ProjectUniforms::new(
                     &constants,
@@ -11257,6 +11278,7 @@ mod project_uniforms_tests {
                         segment_time: time,
                         recording_time: time,
                         segment_has_camera: false,
+                        display_placeholder: false,
                     };
                     let old = || {
                         ProjectUniforms::new(
@@ -11395,6 +11417,7 @@ mod project_uniforms_tests {
                 segment_time: time,
                 recording_time: time,
                 segment_has_camera: false,
+                display_placeholder: false,
             };
             let ordered = ProjectUniforms::new_with_precomputed_cursor(
                 &constants,
@@ -11481,6 +11504,7 @@ mod project_uniforms_tests {
                 segment_time: time,
                 recording_time: time,
                 segment_has_camera: false,
+                display_placeholder: false,
             };
             let uniforms = ProjectUniforms::new_with_precomputed_cursor(
                 &constants,
@@ -11620,6 +11644,7 @@ mod project_uniforms_tests {
                         segment_time: time,
                         recording_time: time,
                         segment_has_camera: false,
+                        display_placeholder: false,
                     };
                     let started = Instant::now();
                     let uniforms = ProjectUniforms::new_with_precomputed_cursor(
@@ -11686,6 +11711,7 @@ mod project_uniforms_tests {
                 segment_time: 0.0,
                 recording_time: 0.0,
                 segment_has_camera: false,
+                display_placeholder: false,
             };
             for decode_display in [true, false] {
                 frames.screen_size = if decode_display {
@@ -11992,6 +12018,7 @@ mod project_uniforms_tests {
                 segment_time: index as f32 * 0.125,
                 recording_time: index as f32 * 0.125,
                 segment_has_camera: true,
+                display_placeholder: false,
             };
             let events = CursorEvents {
                 moves: vec![cursor_move(0.0, position.x, position.y)],
@@ -12277,6 +12304,7 @@ mod project_uniforms_tests {
             segment_time: frame_number as f32 / 30.0,
             recording_time: frame_number as f32 / 30.0,
             segment_has_camera: false,
+            display_placeholder: false,
         };
         ProjectUniforms::new(
             constants,
@@ -12374,6 +12402,7 @@ mod project_uniforms_tests {
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: false,
+            display_placeholder: false,
         };
         for (transcript, segments) in [
             ("none", 0),
@@ -12540,6 +12569,7 @@ mod per_frame_cache_tests {
                 segment_time: time,
                 recording_time: time,
                 segment_has_camera: false,
+                display_placeholder: false,
             };
             let uniforms = ProjectUniforms::new(
                 &constants,
@@ -12662,6 +12692,7 @@ mod source_video_tests {
     fn segment(kept_source: bool) -> RecordingSegmentDecoders {
         RecordingSegmentDecoders {
             screen: constant_decoder(10),
+            display_placeholder: false,
             camera: None,
             source_video: kept_source.then(|| {
                 Arc::new(SourceVideo {

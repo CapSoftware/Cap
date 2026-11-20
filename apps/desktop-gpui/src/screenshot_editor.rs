@@ -304,6 +304,7 @@ async fn render_still(
         segment_time: 0.0,
         recording_time: 0.0,
         segment_has_camera: false,
+        display_placeholder: false,
     };
 
     let resolution_base = resolution_base.unwrap_or_else(|| {

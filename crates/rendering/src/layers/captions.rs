@@ -2214,6 +2214,7 @@ mod gpu_tests {
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: false,
+            display_placeholder: false,
         }
     }
 

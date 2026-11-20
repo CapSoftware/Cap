@@ -96,6 +96,7 @@ fn segment(source: &DecodedFrame, frame: u32) -> DecodedSegmentFrames {
         segment_time: frame as f32 / 60.0,
         recording_time: frame as f32 / 60.0,
         segment_has_camera: false,
+        display_placeholder: false,
     }
 }
 

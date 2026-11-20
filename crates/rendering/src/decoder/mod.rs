@@ -3479,6 +3479,7 @@ mod managed_worker_tests {
         let (camera, camera_join) = ordinary_worker_with_fps(reference, 0.125, false, 24).await;
         let ordinary = RecordingSegmentDecoders {
             screen: display.with_max_fallback_distance(crate::SCREEN_MAX_FALLBACK_DISTANCE),
+            display_placeholder: false,
             camera: Some(camera.with_max_fallback_distance(crate::CAMERA_MAX_FALLBACK_DISTANCE)),
             source_video: None,
             segment_offset: 10.25,

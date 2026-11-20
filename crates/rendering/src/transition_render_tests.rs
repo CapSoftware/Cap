@@ -137,6 +137,7 @@ fn frames(color: [u8; 4], time: f32) -> DecodedSegmentFrames {
         segment_time: time,
         recording_time: time,
         segment_has_camera: false,
+        display_placeholder: false,
     }
 }
 

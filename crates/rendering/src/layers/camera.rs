@@ -751,6 +751,7 @@ mod tests {
             segment_time: number as f32 / 60.0,
             recording_time: number as f32 / 60.0,
             segment_has_camera: true,
+            display_placeholder: false,
         }
     }
 

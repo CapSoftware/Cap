@@ -428,6 +428,7 @@ mod tests {
             segment_time: frame as f32 / 30.0,
             recording_time: frame as f32 / 30.0,
             segment_has_camera: false,
+            display_placeholder: false,
         };
         let mut zoom = ZoomTransformTimeline::from_project(
             &project,

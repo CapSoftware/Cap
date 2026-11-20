@@ -151,6 +151,7 @@ async fn main() -> Result<()> {
                         segment_time: frame_number as f32 / 60.0,
                         recording_time: frame_number as f32 / 60.0,
                         segment_has_camera: !args.screen_only,
+                        display_placeholder: false,
                     };
                     let uniforms = ProjectUniforms::new(
                         &constants,

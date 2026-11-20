@@ -85,6 +85,7 @@ async fn imported_portrait_fills_a_vertical_output() {
         segment_time: 0.0,
         recording_time: 0.0,
         segment_has_camera: false,
+        display_placeholder: false,
     };
     for decoded in [true, false] {
         let mut frames = frames.clone();
