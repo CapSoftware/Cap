@@ -49,7 +49,6 @@ export async function register() {
 	setTimeout(() => {
 		createS3Bucket().catch((error) => {
 			console.error("🚨 S3 bucket initialization failed:", error);
-			process.exit(1);
 		});
 	}, 5000);
 }
