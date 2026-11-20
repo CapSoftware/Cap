@@ -1656,9 +1656,12 @@ step_choose_cap = "Choose Cap and enter your Mac password."
 step_input_monitoring = { text = "Click + under Input Monitoring.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
 step_open = "Click Open System Settings below."
 window_body = "macOS needs your OK before Cap can move or resize another app's window."
+window_step_add_app = { text = "Click + and add {app}.", context = "{app} is the name of the app whose window is being resized." }
+window_step_add_apps = "Click + and add the app you're recording."
 window_step_any_time = { text = "Set it to At Any Time so macOS doesn't ask again every day.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
 window_step_choose_app = { text = "Pick Choose Apps, then add {app}.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language. {app} is the name of the app whose window is being resized." }
 window_step_choose_apps = { text = "Pick Choose Apps, then add the app you're recording.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+window_step_info = "Click ⓘ next to Cap."
 window_step_override = "Click + in the pane that opens and choose Cap."
 window_title = "Let Cap resize windows"
 

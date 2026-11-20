@@ -3388,6 +3388,19 @@ impl OverlayWindow {
                             return;
                         }
                     }
+                    // Only for the window still picked in a live picker: the
+                    // user may have moved on while the move was refused.
+                    let still_picked = this
+                        .update(cx, |_, cx| {
+                            select
+                                .read(cx)
+                                .active_window()
+                                .is_some_and(|window| window.id == requested)
+                        })
+                        .unwrap_or(false);
+                    if !still_picked {
+                        return;
+                    }
                     let app = Some(window.app_name.clone()).filter(|name| !name.is_empty());
                     cx.update(|cx| {
                         crate::permission_help::show_from_picker(

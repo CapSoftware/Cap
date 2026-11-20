@@ -1654,9 +1654,12 @@ step_choose_cap = "Cap चुनें और अपने Mac का पास�
 step_input_monitoring = "इनपुट मॉनिटरिंग के नीचे + पर क्लिक करें।"
 step_open = "नीचे “सिस्टम सेटिंग्स खोलें” पर क्लिक करें।"
 window_body = "किसी दूसरे ऐप की विंडो को हिलाने या उसका आकार बदलने के लिए Cap को macOS की अनुमति चाहिए।"
+window_step_add_app = "+ पर क्लिक करें और {app} जोड़ें।"
+window_step_add_apps = "+ पर क्लिक करें और वह ऐप जोड़ें जिसे आप रिकॉर्ड कर रहे हैं।"
 window_step_any_time = "“किसी भी समय” चुनें ताकि macOS हर दिन न पूछे।"
 window_step_choose_app = "“ऐप्स चुनें” पर जाएँ, फिर {app} जोड़ें।"
 window_step_choose_apps = "“ऐप्स चुनें” पर जाएँ, फिर वह ऐप जोड़ें जिसे आप रिकॉर्ड कर रहे हैं।"
+window_step_info = "Cap के बगल में ⓘ पर क्लिक करें।"
 window_step_override = "खुलने वाले पैन में + पर क्लिक करें और Cap चुनें।"
 window_title = "Cap को विंडो का आकार बदलने दें"
 

@@ -50,11 +50,20 @@ impl Need {
     }
 }
 
-/// The steps for `need` on this macOS, in order. Pure, so every branch is
-/// unit-tested without a window.
-pub fn steps(need: &Need, settings_only: bool) -> Vec<String> {
+/// The steps for `need` on this macOS, in order; `held` is Cap already
+/// holding the grant (listed under System & App Protection Override, just not
+/// for this app). Pure, so every branch is unit-tested without a window.
+pub fn steps(need: &Need, settings_only: bool, held: bool) -> Vec<String> {
     let mut steps = vec![tr::permission::help::step_open().to_string()];
     match (need, settings_only) {
+        (Need::WindowControl { app }, true) if held => {
+            steps.push(tr::permission::help::window_step_info().to_string());
+            steps.push(match app {
+                Some(app) => tr::permission::help::window_step_add_app(app),
+                None => tr::permission::help::window_step_add_apps().to_string(),
+            });
+            steps.push(tr::permission::help::window_step_any_time().to_string());
+        }
         (Need::Keystrokes, true) => {
             steps.push(tr::permission::help::step_input_monitoring().to_string());
             steps.push(tr::permission::help::step_choose_cap().to_string());
@@ -155,7 +164,12 @@ fn open(need: Need, reveal_main_on_close: bool, cx: &mut App) {
     }
 
     let settings_only = permissions::grants_are_settings_only();
-    let rows = steps(&need, settings_only).len() as f32;
+    let rows = steps(
+        &need,
+        settings_only,
+        permissions::granted_now(need.permission()),
+    )
+    .len() as f32;
     let height = 410. + rows * 36.;
     let bounds = Bounds::centered(None, size(px(WIDTH), px(height)), cx);
     let opened = cx.open_window(
@@ -224,7 +238,45 @@ pub struct PermissionHelp {
     /// Granted, but macOS only applies it once Cap restarts (Input
     /// Monitoring: "will not be able to monitor input ... until it is quit").
     needs_relaunch: bool,
+    /// Cap already held the grant this panel is about: macOS 27.3 refused
+    /// one app it hasn't been allowed to control yet. The global grant can't
+    /// show when the user has chosen that app, so the panel waits for them to
+    /// say they're done instead of declaring success on its own.
+    held_at_open: bool,
     poll: Option<Task<()>>,
+}
+
+/// Nothing changes that Cap can see while the user picks an app in System
+/// Settings, so bring the panel back (with Done) once they leave it.
+async fn come_back_after_settings(cx: &mut gpui::AsyncWindowContext) {
+    const TICK: Duration = Duration::from_millis(400);
+    const GIVE_UP: Duration = Duration::from_secs(10 * 60);
+    let started = Instant::now();
+    let mut seen = false;
+    while started.elapsed() < GIVE_UP {
+        cx.background_executor().timer(TICK).await;
+        let front = cx
+            .background_executor()
+            .spawn(async { crate::platform::system_settings_frontmost() })
+            .await;
+        if front {
+            seen = true;
+        } else if seen {
+            cx.update(|window, cx| {
+                window.activate_window();
+                cx.activate(true);
+            })
+            .ok();
+            return;
+        }
+    }
+}
+
+/// Whether the panel can watch for the grant itself. A per-app choice under
+/// System & App Protection Override doesn't change the global grant Cap
+/// already holds, so that case is finished by the user.
+fn watches_grant(need: &Need, held_at_open: bool) -> bool {
+    !(matches!(need, Need::WindowControl { .. }) && held_at_open)
 }
 
 impl PermissionHelp {
@@ -234,6 +286,7 @@ impl PermissionHelp {
         window.focus(&focus, cx);
         tracing::info!(?need, settings_only, "permission help: shown");
         let needs_relaunch = need == Need::Keystrokes && permissions::keystrokes_need_relaunch();
+        let held_at_open = permissions::granted_now(need.permission());
         Self {
             theme: Theme::for_window(window, cx, true),
             permission: need.permission(),
@@ -244,6 +297,7 @@ impl PermissionHelp {
             opened_settings: false,
             granted_at: needs_relaunch.then(Instant::now),
             needs_relaunch,
+            held_at_open,
             poll: None,
         }
     }
@@ -256,6 +310,7 @@ impl PermissionHelp {
         self.needs_relaunch =
             self.need == Need::Keystrokes && permissions::keystrokes_need_relaunch();
         self.granted_at = self.needs_relaunch.then(Instant::now);
+        self.held_at_open = permissions::granted_now(self.permission);
         self.poll = None;
         cx.notify();
     }
@@ -272,6 +327,12 @@ impl PermissionHelp {
 
     fn arm_poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.poll.is_some() {
+            return;
+        }
+        if !watches_grant(&self.need, self.held_at_open) {
+            self.poll = Some(cx.spawn_in(window, async move |_, cx| {
+                come_back_after_settings(cx).await;
+            }));
             return;
         }
         let permission = self.permission;
@@ -321,10 +382,15 @@ impl PermissionHelp {
         match event.keystroke.key.as_str() {
             "escape" => self.close(window, cx),
             "enter" if self.needs_relaunch => permissions::relaunch(cx),
-            "enter" if self.granted_at.is_some() => self.close(window, cx),
+            "enter" if self.granted_at.is_some() || self.awaiting_user() => self.close(window, cx),
             "enter" => self.open_settings(window, cx),
             _ => {}
         }
+    }
+
+    /// Settings is open for a choice only the user can confirm.
+    fn awaiting_user(&self) -> bool {
+        self.opened_settings && !watches_grant(&self.need, self.held_at_open)
     }
 
     fn copy(&self) -> (&'static Doodle, &'static str, &'static str, &'static str) {
@@ -458,7 +524,7 @@ impl Render for PermissionHelp {
             );
 
         if !granted {
-            let steps = steps(&self.need, self.settings_only);
+            let steps = steps(&self.need, self.settings_only, self.held_at_open);
             card = card.child(
                 div()
                     .mt(px(20.))
@@ -476,7 +542,7 @@ impl Render for PermissionHelp {
                         self.render_step(&paper, index, text, index == 0 && self.opened_settings)
                     })),
             );
-            if self.opened_settings {
+            if self.opened_settings && !self.awaiting_user() {
                 card = card.child(
                     div()
                         .mt(px(14.))
@@ -523,6 +589,27 @@ impl Render for PermissionHelp {
                     true,
                     cx.listener(|this, _, window, cx| this.close(window, cx)),
                 ))
+        } else if self.awaiting_user() {
+            div()
+                .flex()
+                .flex_row()
+                .gap(px(10.))
+                .child(paper_button(
+                    &paper,
+                    "permission-help-done",
+                    tr::permission::help::done(),
+                    true,
+                    true,
+                    cx.listener(|this, _, window, cx| this.close(window, cx)),
+                ))
+                .child(paper_button(
+                    &paper,
+                    "permission-help-open",
+                    tr::permission::onboarding::open_settings_again(),
+                    false,
+                    true,
+                    cx.listener(|this, _, window, cx| this.open_settings(window, cx)),
+                ))
         } else if granted {
             div().child(paper_button(
                 &paper,
@@ -568,7 +655,7 @@ mod tests {
 
     #[test]
     fn keystroke_steps_follow_the_macos_version() {
-        let plus = steps(&Need::Keystrokes, true);
+        let plus = steps(&Need::Keystrokes, true, false);
         assert_eq!(
             plus,
             vec![
@@ -577,7 +664,7 @@ mod tests {
                 "Choose Cap and enter your Mac password.",
             ]
         );
-        let before = steps(&Need::Keystrokes, false);
+        let before = steps(&Need::Keystrokes, false, false);
         assert_eq!(
             before,
             vec![
@@ -594,6 +681,7 @@ mod tests {
                 app: Some("Safari".into()),
             },
             true,
+            false,
         );
         assert_eq!(named.len(), 4);
         assert_eq!(named[2], "Pick Choose Apps, then add Safari.");
@@ -602,14 +690,44 @@ mod tests {
             "Set it to At Any Time so macOS doesn't ask again every day."
         );
 
-        let unnamed = steps(&Need::WindowControl { app: None }, true);
+        let unnamed = steps(&Need::WindowControl { app: None }, true, false);
         assert_eq!(
             unnamed[2],
             "Pick Choose Apps, then add the app you're recording."
         );
 
-        let before = steps(&Need::WindowControl { app: None }, false);
+        let before = steps(&Need::WindowControl { app: None }, false, false);
         assert_eq!(before.len(), 2);
+    }
+
+    #[test]
+    fn a_held_grant_starts_from_caps_existing_row() {
+        let held = steps(
+            &Need::WindowControl {
+                app: Some("Calculator".into()),
+            },
+            true,
+            true,
+        );
+        assert_eq!(
+            held,
+            vec![
+                "Click Open System Settings below.",
+                "Click ⓘ next to Cap.",
+                "Click + and add Calculator.",
+                "Set it to At Any Time so macOS doesn't ask again every day.",
+            ]
+        );
+        assert_eq!(steps(&Need::Keystrokes, true, true).len(), 3);
+    }
+
+    #[test]
+    fn a_held_grant_leaves_the_window_choice_to_the_user() {
+        let window = Need::WindowControl { app: None };
+        assert!(!watches_grant(&window, true));
+        assert!(watches_grant(&window, false));
+        assert!(watches_grant(&Need::Keystrokes, true));
+        assert!(watches_grant(&Need::Keystrokes, false));
     }
 
     #[test]

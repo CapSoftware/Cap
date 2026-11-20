@@ -19,6 +19,7 @@ pub(super) fn is_dialogs_surface_key(key: &str) -> bool {
 
 const FORMATTED: &[&str] = &[
     "permission.help.window_step_choose_app",
+    "permission.help.window_step_add_app",
     "dialog.teleprompter.words_per_minute",
     "diagnostics.error.create_folder",
     "diagnostics.error.exited",
@@ -746,6 +747,14 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::permission::help::done(), "Done"),
         (
+            tr::permission::help::window_step_info(),
+            "Click ⓘ next to Cap.",
+        ),
+        (
+            tr::permission::help::window_step_add_apps(),
+            "Click + and add the app you're recording.",
+        ),
+        (
             tr::permission::help::relaunch_keystrokes(),
             "macOS turns on keystrokes once Cap restarts.",
         ),
@@ -1191,6 +1200,10 @@ fn assembled_dialog_messages_match_the_code_they_replaced() {
     assert_eq!(
         tr::permission::help::window_step_choose_app("Safari"),
         "Pick Choose Apps, then add Safari."
+    );
+    assert_eq!(
+        tr::permission::help::window_step_add_app("Safari"),
+        "Click + and add Safari."
     );
 }
 

@@ -44,8 +44,6 @@ pub static CURSOR: Doodle = Doodle {
     ],
 };
 
-/// Keystrokes: a keyboard with one key going down and its keycap floating
-/// up, the way Cap shows key presses in a recording.
 pub static KEYBOARD: Doodle = Doodle {
     view: (120., 104.),
     strokes: &[
