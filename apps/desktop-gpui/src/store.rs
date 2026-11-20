@@ -109,6 +109,26 @@ pub struct PersistedState {
     pub screenshot_crop_snap_to_ratio: Option<bool>,
     #[serde(default)]
     pub editor_window: Option<EditorWindowMemory>,
+    #[serde(default)]
+    pub meeting_indicator: Option<MeetingIndicatorMemory>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MeetingIndicatorMemory {
+    #[serde(default)]
+    pub last_display: Option<String>,
+    #[serde(default)]
+    pub docks: Vec<RememberedIndicatorDock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RememberedIndicatorDock {
+    pub display: String,
+    pub right: bool,
+    pub y: f64,
+    /// Where across the display, 0 to 1. Older files only knew the edge.
+    #[serde(default)]
+    pub x: Option<f64>,
 }
 
 /// Where the editor window last sat on each display, keyed by display UUID.
@@ -1856,7 +1876,9 @@ where
 
 /// `deriveGeneralSettings(store).transcriptionHints ?? []`: the stored array
 /// as-is when the key exists (normalisation happens on write, not read), the
-/// four defaults when it does not.
+/// four defaults when it does not. Reading goes through the dictionary now;
+/// the tests keep pinning the stored shape.
+#[cfg(test)]
 pub fn transcription_hints() -> Vec<String> {
     match store_section(GENERAL_SETTINGS).get("transcriptionHints") {
         Some(Value::Array(entries)) => entries
@@ -1870,6 +1892,35 @@ pub fn transcription_hints() -> Vec<String> {
             .map(|hint| (*hint).to_string())
             .collect(),
     }
+}
+
+/// The caption words exactly as saved, or `None` when nobody ever saved any.
+pub fn transcription_hints_saved() -> Option<Vec<String>> {
+    match store_section(GENERAL_SETTINGS).get("transcriptionHints") {
+        Some(Value::Array(entries)) => Some(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The one dictionary's spellings, written where the caption settings and
+/// the older app read them, whenever the dictionary changes.
+pub fn mirror_transcription_hints(spellings: &[String]) {
+    set_store_setting(
+        GENERAL_SETTINGS,
+        "transcriptionHints",
+        Value::Array(
+            normalize_transcription_hints(spellings)
+                .into_iter()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
 }
 
 // -- The auth section -----------------------------------------------------------
