@@ -4,6 +4,9 @@ import {
 	authChallenges,
 	directoryUsers,
 	emailChangeRequests,
+	organizationInvites,
+	organizationMembers,
+	organizations,
 	sessions,
 	users,
 } from "@cap/database/schema";
@@ -40,6 +43,9 @@ const fixture = vi.hoisted(() => ({
 	}[],
 	stripeFails: false as false | "down" | "missing",
 	failLoops: false,
+	onStripeUpdate: null as null | (() => Promise<void>),
+	workosDown: false,
+	workosDomains: new Map<string, { domain: string; state: string }[]>(),
 	limitedAddress: null as string | null,
 }));
 
@@ -74,6 +80,9 @@ vi.mock("@cap/utils", async (importOriginal) => ({
 				}
 				if (fixture.stripeFails) throw new Error("Stripe is down");
 				fixture.stripeUpdates.push({ id, params, options });
+				const hook = fixture.onStripeUpdate;
+				fixture.onStripeUpdate = null;
+				await hook?.();
 				return { id };
 			},
 		},
@@ -102,6 +111,19 @@ vi.mock("@/lib/email-code-rate-limit", () => ({
 	isEmailCodeVerifyLimited: async (email: string) =>
 		email === fixture.limitedAddress,
 }));
+vi.mock("../../../../packages/database/auth/sso", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../packages/database/auth/sso")
+	>()),
+	getWorkOS: () => ({
+		organizations: {
+			getOrganization: async (id: string) => {
+				if (fixture.workosDown) throw new Error("WorkOS is down");
+				return { id, domains: fixture.workosDomains.get(id) ?? [] };
+			},
+		},
+	}),
+}));
 vi.mock("@cap/database/loops/queue", () => ({
 	enqueueLoopsSync: async () => {
 		if (fixture.failLoops) throw new Error("Loops queue is down");
@@ -110,6 +132,8 @@ vi.mock("@cap/database/loops/queue", () => ({
 
 const databaseUrl = process.env.CAP_PASSKEYS_TEST_DATABASE_URL;
 const createdUsers: User.UserId[] = [];
+const createdOrganizations: Organisation.OrganisationId[] = [];
+const createdInvites: string[] = [];
 
 function database() {
 	if (!fixture.database) throw new Error("Test database is not connected.");
@@ -213,9 +237,26 @@ describe.runIf(Boolean(databaseUrl))(
 			fixture.stripeFails = false;
 			fixture.failLoops = false;
 			fixture.limitedAddress = null;
+			fixture.workosDown = false;
+			fixture.onStripeUpdate = null;
 		});
 
 		afterAll(async () => {
+			if (fixture.database && createdInvites.length > 0) {
+				await database()
+					.delete(organizationInvites)
+					.where(inArray(organizationInvites.id, createdInvites));
+			}
+			if (fixture.database && createdOrganizations.length > 0) {
+				await database()
+					.delete(organizationMembers)
+					.where(
+						inArray(organizationMembers.organizationId, createdOrganizations),
+					);
+				await database()
+					.delete(organizations)
+					.where(inArray(organizations.id, createdOrganizations));
+			}
 			if (fixture.database && createdUsers.length > 0) {
 				await database()
 					.delete(emailChangeRequests)
@@ -372,10 +413,6 @@ describe.runIf(Boolean(databaseUrl))(
 				await finishEmailChange(code === otherCode ? "000000" : code),
 			).toEqual({ status: "invalid" });
 			expect((await reload(other.id))?.email).toBe(other.email);
-			expect(await finishEmailChange(otherCode)).toMatchObject({
-				status: "changed",
-				email: otherEmail,
-			});
 			fixture.currentUser = user;
 			expect(await finishEmailChange(code)).toMatchObject({
 				status: "changed",
@@ -412,7 +449,7 @@ describe.runIf(Boolean(databaseUrl))(
 			expect((await reload(later.id))?.email).toBe(later.email);
 		});
 
-		it("allows a right code after two wrong ones", async () => {
+		it("burns the request on a wrong code, like sign-in codes", async () => {
 			const { finishEmailChange } = await actions();
 			const user = await makeUser();
 			const newEmail = address();
@@ -420,23 +457,8 @@ describe.runIf(Boolean(databaseUrl))(
 			const code = lastCode(newEmail);
 			const wrong = code === "000000" ? "111111" : "000000";
 			expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
-			expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
-			expect(await finishEmailChange(code)).toMatchObject({
-				status: "changed",
-			});
-		});
-
-		it("refuses a right code after three wrong ones", async () => {
-			const { finishEmailChange } = await actions();
-			const user = await makeUser();
-			const newEmail = address();
-			await start(user, newEmail);
-			const code = lastCode(newEmail);
-			const wrong = code === "000000" ? "111111" : "000000";
-			for (let attempt = 0; attempt < 3; attempt++) {
-				expect(await finishEmailChange(wrong)).toEqual({ status: "invalid" });
-			}
 			expect(await finishEmailChange(code)).toEqual({ status: "invalid" });
+			expect((await reload(user.id))?.email).toBe(user.email);
 		});
 
 		it("limits guesses per target address across accounts", async () => {
@@ -454,7 +476,7 @@ describe.runIf(Boolean(databaseUrl))(
 			});
 		});
 
-		it("burns the request after three wrong codes, even when guesses race", async () => {
+		it("burns the request even when wrong guesses race", async () => {
 			const { finishEmailChange } = await actions();
 			const user = await makeUser();
 			const newEmail = address();
@@ -487,12 +509,17 @@ describe.runIf(Boolean(databaseUrl))(
 					.from(emailChangeRequests)
 					.where(eq(emailChangeRequests.userId, user.id)),
 			).toHaveLength(1);
-			expect(await finishEmailChange(lastCode(first))).toEqual({
-				status: "invalid",
-			});
+			const [pending] = await database()
+				.select({ newEmail: emailChangeRequests.newEmail })
+				.from(emailChangeRequests)
+				.where(eq(emailChangeRequests.userId, user.id));
+			expect(pending?.newEmail).toBe(second);
 			expect(await finishEmailChange(lastCode(second))).toMatchObject({
 				status: "changed",
 				email: second,
+			});
+			expect(await finishEmailChange(lastCode(first))).toEqual({
+				status: "invalid",
 			});
 		});
 
@@ -741,6 +768,193 @@ describe.runIf(Boolean(databaseUrl))(
 				status: "changed",
 			});
 			expect((await reload(user.id))?.email).toBe(newEmail);
+		});
+
+		it("keeps members on their organization's SSO domain", async () => {
+			const domain = `corp-${id()}.example`;
+			const owner = await makeUser();
+			const organizationId = Organisation.OrganisationId.make(id());
+			const workosOrganizationId = `org_${id()}`;
+			await database().insert(organizations).values({
+				id: organizationId,
+				ownerId: owner.id,
+				name: "SSO domain fixture",
+				workosOrganizationId,
+			});
+			createdOrganizations.push(organizationId);
+			const member = await makeUser(`member-${id()}@${domain}`);
+			await database().insert(organizationMembers).values({
+				id: id(),
+				organizationId,
+				userId: member.id,
+				role: "member",
+			});
+
+			fixture.workosDomains.set(workosOrganizationId, [
+				{ domain, state: "pending" },
+			]);
+			expect((await start(member, address())).status).toBe("sent");
+
+			await database()
+				.delete(emailChangeRequests)
+				.where(eq(emailChangeRequests.userId, member.id));
+			fixture.workosDomains.set(workosOrganizationId, [
+				{ domain: domain.toUpperCase(), state: "verified" },
+			]);
+			expect(await start(member, address())).toEqual({ status: "managed" });
+
+			const outsider = await makeUser(`outsider-${id()}@${domain}`);
+			expect((await start(outsider, address())).status).toBe("sent");
+
+			fixture.workosDown = true;
+			await expect(start(member, address())).rejects.toThrow("WorkOS is down");
+		});
+
+		it("refuses a change confirmed after the address became managed by SSO", async () => {
+			const { finishEmailChange } = await actions();
+			const domain = `corp-${id()}.example`;
+			const owner = await makeUser();
+			const organizationId = Organisation.OrganisationId.make(id());
+			const workosOrganizationId = `org_${id()}`;
+			await database().insert(organizations).values({
+				id: organizationId,
+				ownerId: owner.id,
+				name: "SSO domain fixture",
+				workosOrganizationId,
+			});
+			createdOrganizations.push(organizationId);
+			const member = await makeUser(`member-${id()}@${domain}`);
+			await database().insert(organizationMembers).values({
+				id: id(),
+				organizationId,
+				userId: member.id,
+				role: "member",
+			});
+			const newEmail = address();
+			await start(member, newEmail);
+			fixture.workosDomains.set(workosOrganizationId, [
+				{ domain, state: "verified" },
+			]);
+			expect(await finishEmailChange(lastCode(newEmail))).toEqual({
+				status: "managed",
+			});
+			expect((await reload(member.id))?.email).toBe(member.email);
+		});
+
+		it("refuses a change when SSO links the account mid-change, and puts billing back", async () => {
+			const { finishEmailChange } = await actions();
+			const user = await makeUser(address(), {
+				stripeCustomerId: `cus_${id()}`,
+			});
+			const newEmail = address();
+			await start(user, newEmail);
+			fixture.onStripeUpdate = async () => {
+				await database()
+					.insert(accounts)
+					.values({
+						id: id(),
+						userId: user.id,
+						type: "oauth",
+						provider: "workos",
+						providerAccountId: `prof_${id()}`,
+					});
+			};
+			expect(await finishEmailChange(lastCode(newEmail))).toEqual({
+				status: "managed",
+			});
+			expect((await reload(user.id))?.email).toBe(user.email);
+			expect(
+				fixture.stripeUpdates
+					.filter((update) => update.id === user.stripeCustomerId)
+					.map((update) => update.params.email),
+			).toEqual([newEmail, user.email]);
+		});
+
+		it("drops pending invites to the old address", async () => {
+			const { finishEmailChange } = await actions();
+			const inviter = await makeUser();
+			const user = await makeUser();
+			const organizationId = Organisation.OrganisationId.make(id());
+			const inviteId = id();
+			const acceptedId = id();
+			await database()
+				.insert(organizationInvites)
+				.values([
+					{
+						id: inviteId,
+						organizationId,
+						invitedEmail: user.email,
+						invitedByUserId: inviter.id,
+						role: "admin",
+					},
+					{
+						id: acceptedId,
+						organizationId,
+						invitedEmail: user.email,
+						invitedByUserId: inviter.id,
+						role: "member",
+						status: "accepted",
+					},
+				]);
+			createdInvites.push(inviteId, acceptedId);
+			const newEmail = address();
+			await start(user, newEmail);
+			expect((await finishEmailChange(lastCode(newEmail))).status).toBe(
+				"changed",
+			);
+			const remaining = await database()
+				.select({ id: organizationInvites.id })
+				.from(organizationInvites)
+				.where(inArray(organizationInvites.id, [inviteId, acceptedId]));
+			expect(remaining.map((row) => row.id)).toEqual([acceptedId]);
+		});
+
+		it("refuses to accept an invite that is no longer pending", async () => {
+			const { POST } = await import("@/app/api/invite/accept/route");
+			const inviter = await makeUser();
+			const user = await makeUser();
+			const organizationId = Organisation.OrganisationId.make(id());
+			const inviteId = id();
+			await database().insert(organizationInvites).values({
+				id: inviteId,
+				organizationId,
+				invitedEmail: user.email,
+				invitedByUserId: inviter.id,
+				role: "admin",
+				status: "accepted",
+			});
+			createdInvites.push(inviteId);
+			fixture.currentUser = user;
+			const response = await POST(
+				new Request("https://cap.test/api/invite/accept", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ inviteId }),
+				}) as never,
+			);
+			expect(response.status).toBe(404);
+			expect(
+				await database()
+					.select()
+					.from(organizationMembers)
+					.where(eq(organizationMembers.userId, user.id)),
+			).toHaveLength(0);
+		});
+
+		it("sees an account stored with the Unicode spelling of a domain as taken", async () => {
+			const { finishEmailChange } = await actions();
+			const local = `legacy-${id()}`;
+			const owner = await makeUser(`${local}@bücher.de`);
+			const user = await makeUser();
+			const requested = `${local}@xn--bcher-kva.de`;
+			expect(await start(user, requested)).toEqual({
+				status: "sent",
+				email: requested,
+			});
+			expect(await finishEmailChange(lastCode(requested))).toEqual({
+				status: "taken",
+			});
+			expect((await reload(owner.id))?.email).toBe(owner.email);
 		});
 
 		it("treats the trusted-proxy account as managed", async () => {
