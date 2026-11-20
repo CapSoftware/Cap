@@ -3827,6 +3827,8 @@ try_failed = "无法开始录音。请检查麦克风后重试。"
 
 [documents]
 untitled = "未命名"
+meeting_at = "{time} 的会议"
+app_at = "{time} 的 {app}"
 
 [documents.toolbar]
 toggle_sidebar = "显示或隐藏边栏"

@@ -3827,6 +3827,8 @@ try_failed = "Die Aufnahme konnte nicht starten. Prüfen Sie das Mikrofon und ve
 
 [documents]
 untitled = "Ohne Titel"
+meeting_at = "Meeting um {time}"
+app_at = "{app} um {time}"
 
 [documents.toolbar]
 toggle_sidebar = "Seitenleiste ein- oder ausblenden"

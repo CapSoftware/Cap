@@ -3829,6 +3829,8 @@ try_failed = "The recording could not start. Check the microphone and try again.
 
 [documents]
 untitled = "Untitled"
+meeting_at = { text = "Meeting at {time}", context = "Title of a new meeting note until it is named. {time} is the start time, for example 5:46 PM." }
+app_at = { text = "{app} at {time}", context = "Title of a new meeting note recorded from a call app until it is named. {app} is the app, for example Zoom; {time} is the start time." }
 
 [documents.toolbar]
 toggle_sidebar = "Show or hide the sidebar"

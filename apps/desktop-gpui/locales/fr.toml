@@ -3827,6 +3827,8 @@ try_failed = "L'enregistrement n'a pas pu démarrer. Vérifiez le micro et rées
 
 [documents]
 untitled = "Sans titre"
+meeting_at = "Réunion à {time}"
+app_at = "{app} à {time}"
 
 [documents.toolbar]
 toggle_sidebar = "Afficher ou masquer la barre latérale"

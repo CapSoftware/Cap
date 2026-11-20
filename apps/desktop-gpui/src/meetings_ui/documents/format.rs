@@ -110,6 +110,21 @@ pub fn countdown(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+/// The title a new meeting gets until it is named: the call app it came
+/// from, or "Meeting", at its local start time, in the app's language and
+/// with the same clock as the rest of the page.
+pub fn meeting_title(app_name: Option<&str>, at: NaiveDateTime) -> String {
+    let time = clock(at);
+    let app = app_name
+        .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|name| !name.is_empty())
+        .map(|name| name.chars().take(120).collect::<String>());
+    match app {
+        Some(app) => tr::documents::app_at(app, time),
+        None => tr::documents::meeting_at(time),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +134,57 @@ mod tests {
             .unwrap()
             .and_hms_opt(h, m, 0)
             .unwrap()
+    }
+
+    #[test]
+    fn a_new_meetings_title_reads_the_time_like_the_page_does() {
+        const CHILD: &str = "CAP_GPUI_TEST_MEETING_TITLE";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "meetings_ui::documents::format::tests::a_new_meetings_title_reads_the_time_like_the_page_does",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env_remove(i18n::LOCALE_ENV)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        for (locale, plain, app) in [
+            (
+                Locale::En,
+                "Meeting at 5:46\u{202f}PM",
+                "Google Meet at 9:05\u{202f}AM",
+            ),
+            (Locale::De, "Meeting um 17:46", "Google Meet um 09:05"),
+            (Locale::Es, "Reunión a las 17:46", "Google Meet a las 09:05"),
+            (Locale::Fr, "Réunion à 17:46", "Google Meet à 09:05"),
+            (
+                Locale::Hi,
+                "5:46\u{202f}PM की मीटिंग",
+                "9:05\u{202f}AM की Google Meet कॉल",
+            ),
+            (Locale::Ja, "17:46の会議", "09:05のGoogle Meet"),
+            (Locale::ZhCn, "17:46 的会议", "09:05 的 Google Meet"),
+        ] {
+            i18n::init(Some(locale.code()));
+            assert_eq!(meeting_title(None, at(17, 46)), plain, "{locale:?}");
+            assert_eq!(meeting_title(Some("  "), at(17, 46)), plain, "{locale:?}");
+            assert_eq!(
+                meeting_title(Some(" Google \n Meet "), at(9, 5)),
+                app,
+                "{locale:?}"
+            );
+        }
+        i18n::init(Some(Locale::En.code()));
     }
 
     #[test]

@@ -3827,6 +3827,8 @@ try_failed = "録音を開始できませんでした。マイクを確認して
 
 [documents]
 untitled = "無題"
+meeting_at = "{time}の会議"
+app_at = "{time}の{app}"
 
 [documents.toolbar]
 toggle_sidebar = "サイドバーを表示または非表示"

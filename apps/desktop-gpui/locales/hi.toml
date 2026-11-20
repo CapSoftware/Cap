@@ -3827,6 +3827,8 @@ try_failed = "रिकॉर्डिंग शुरू नहीं हो �
 
 [documents]
 untitled = "बिना शीर्षक"
+meeting_at = "{time} की मीटिंग"
+app_at = "{time} की {app} कॉल"
 
 [documents.toolbar]
 toggle_sidebar = "साइडबार दिखाएँ या छिपाएँ"

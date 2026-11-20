@@ -1623,13 +1623,20 @@ impl Meetings {
         let mut meta = library
             .create(DocKind::Meeting, now, persist::entropy())
             .map_err(|e| MeetingError::Library(e.to_string()))?;
-        let local_start = chrono::Local::now().naive_local();
-        meta.title = auto_title_from(&TitleHint {
-            event_title: event.as_ref().map(|e| e.title.as_str()),
-            notes_markdown: None,
-            app_name: origin.app_name.as_deref(),
-            local_start: Some(local_start),
-        });
+        let event_title = event
+            .as_ref()
+            .map(|e| e.title.as_str())
+            .filter(|title| !title.trim().is_empty());
+        meta.title = match event_title {
+            Some(title) => auto_title_from(&TitleHint {
+                event_title: Some(title),
+                ..TitleHint::default()
+            }),
+            None => crate::meetings_ui::documents::format::meeting_title(
+                origin.app_name.as_deref(),
+                chrono::Local::now().naive_local(),
+            ),
+        };
         meta.title_is_auto = event.as_ref().is_none_or(|e| e.title.trim().is_empty());
         meta.template_id = Some(default_template);
         meta.meeting = Some(MeetingDetails {
