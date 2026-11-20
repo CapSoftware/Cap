@@ -1053,6 +1053,7 @@ export const userPasskeys = mysqlTable(
 		transports: json("transports").$type<string[]>(),
 		deviceType: varchar("deviceType", { length: 32 }).notNull(),
 		backedUp: boolean("backedUp").notNull().default(false),
+		confirmsIdentity: boolean("confirmsIdentity").notNull().default(true),
 		aaguid: varchar("aaguid", { length: 36 }),
 		name: varchar("name", { length: 64 }).notNull(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),

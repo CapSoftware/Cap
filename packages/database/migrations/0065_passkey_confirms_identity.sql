@@ -1,0 +1,1 @@
+ALTER TABLE `user_passkeys` ADD `confirmsIdentity` boolean DEFAULT true NOT NULL;

@@ -456,6 +456,13 @@
 			"when": 1795202295715,
 			"tag": "0064_email_change_requests",
 			"breakpoints": true
+		},
+		{
+			"idx": 65,
+			"version": "5",
+			"when": 1795216422426,
+			"tag": "0065_passkey_confirms_identity",
+			"breakpoints": true
 		}
 	]
 }
