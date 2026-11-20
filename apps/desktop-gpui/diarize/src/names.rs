@@ -108,6 +108,12 @@ impl SpeakerNames {
         }
     }
 
+    /// The number each told-apart voice was given (its "Person n"). A voice
+    /// keeps it through renames.
+    pub fn numbers(&self) -> &BTreeMap<SpeakerId, u32> {
+        &self.numbers
+    }
+
     pub fn label(&self, id: SpeakerId) -> Option<Label> {
         if let Some(name) = self.renames.get(&id) {
             return Some(Label::Named(name.clone()));

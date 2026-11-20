@@ -157,7 +157,7 @@ impl Palette {
     }
 
     pub fn speaker(&self, index: usize) -> Hsla {
-        const HUES: [f32; 6] = [262., 160., 24., 316., 196., 44.];
+        const HUES: [f32; SPEAKER_COLOURS] = [262., 160., 24., 316., 196., 44.];
         let hue = HUES[index % HUES.len()] / 360.;
         if self.dark {
             hsla(hue, 0.55, 0.70, 1.)
@@ -299,6 +299,9 @@ pub fn heading(palette: &Palette, title: impl Into<SharedString>, shown_at: Inst
             10.,
         )))
 }
+
+/// How many speakers can be told apart by colour (see [`Palette::speaker`]).
+pub const SPEAKER_COLOURS: usize = 6;
 
 pub fn ink_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
     use gpui::InteractiveElement;

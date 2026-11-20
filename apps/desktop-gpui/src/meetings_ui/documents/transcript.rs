@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use cap_diarize::SpeakerId;
 use cap_meetings::{
     library::DocMeta,
     transcript::{Source, SpeakerLabel, Transcript, format_timestamp},
@@ -69,8 +70,8 @@ pub fn build_rows(
     started_at: Option<DateTime<Utc>>,
     self_name: Option<&str>,
     hidden: &HashSet<String>,
-    colors: &mut HashMap<String, usize>,
 ) -> Vec<TRow> {
+    let colours = SpeakerColours::new(transcript, self_name);
     let filtered;
     let transcript = if hidden.is_empty() {
         transcript
@@ -101,12 +102,7 @@ pub fn build_rows(
                 SpeakerLabel::User => self_name.is_none_or(|n| n.trim().is_empty()),
                 SpeakerLabel::Person(_) | SpeakerLabel::Others => true,
             };
-            let mine = who == SpeakerLabel::User;
-            let key = color_key(&turn, &label);
-            let color = (!mine).then(|| {
-                let next = colors.len();
-                *colors.entry(key).or_insert(next)
-            });
+            let color = colours.of(&turn, &who);
             rows.push(TRow::Turn(TurnRow {
                 source: turn.source,
                 speaker: turn.speaker.clone(),
@@ -127,12 +123,88 @@ pub fn build_rows(
     rows
 }
 
-/// A voice keeps its colour through renames; lines without one are coloured
-/// by name.
-fn color_key(turn: &cap_meetings::transcript::Turn, label: &str) -> String {
-    match (turn.speaker.as_deref(), turn.speaker_id) {
-        (None, Some(id)) => format!("\u{1}{id}"),
-        _ => label.to_string(),
+/// Which colour each speaker in one meeting gets. It is worked out from what
+/// the meeting saved (its voices' numbers, their names, the lines' names),
+/// never from the order lines arrived in, so a speaker has the same colour
+/// live, after Stop and after a relaunch, in the transcript, the name chips
+/// and the Ask sheet.
+///
+/// Slot 0 is "them": the computer's audio before voices are told apart, and
+/// the one calendar attendee's voice. Told-apart voices take 1, 2, 3... in
+/// the order they were numbered, without gaps; a line moved to a name takes
+/// the colour of the voice or person with that name, and a name nobody else
+/// has takes the slots from the top down. So no two speakers share a colour
+/// until there are more speakers than colours. The user is never coloured.
+pub struct SpeakerColours {
+    voices: HashMap<u32, Option<usize>>,
+    names: HashMap<String, Option<usize>>,
+}
+
+impl SpeakerColours {
+    pub fn new(transcript: &Transcript, self_name: Option<&str>) -> Self {
+        let key = |name: &str| name.trim().to_lowercase();
+        let mut voices: HashMap<u32, Option<usize>> = HashMap::new();
+        let mut names: HashMap<String, Option<usize>> = HashMap::new();
+        for name in [self_name, transcript.speaker_label_for_source(Source::Mic)]
+            .into_iter()
+            .flatten()
+            .filter(|name| !name.trim().is_empty())
+        {
+            names.insert(key(name), None);
+        }
+        if let Some(known) = transcript.names() {
+            if let Some(user) = known.user() {
+                voices.insert(user.0, None);
+            }
+            let mut numbered: Vec<(u32, SpeakerId)> =
+                known.numbers().iter().map(|(id, n)| (*n, *id)).collect();
+            numbered.sort();
+            for (rank, (_, id)) in numbered.into_iter().enumerate() {
+                voices.entry(id.0).or_insert(Some(rank + 1));
+            }
+            for (id, name) in known.renames() {
+                if let Some(slot) = voices.get(&id.0) {
+                    names.entry(key(name)).or_insert(*slot);
+                }
+            }
+            for id in transcript.utterances().iter().filter_map(|u| u.speaker_id) {
+                if !voices.contains_key(&id)
+                    && let Some(cap_diarize::Label::Named(name)) = known.label(SpeakerId(id))
+                {
+                    names.entry(key(&name)).or_insert(Some(0));
+                }
+            }
+        }
+        let mut alone = 0;
+        for utterance in transcript.utterances() {
+            let Some(name) = utterance.speaker.as_deref().filter(|n| !n.trim().is_empty()) else {
+                continue;
+            };
+            names.entry(key(name)).or_insert_with(|| {
+                let slot = style::SPEAKER_COLOURS - 1 - alone % style::SPEAKER_COLOURS;
+                alone += 1;
+                Some(slot)
+            });
+        }
+        Self { voices, names }
+    }
+
+    pub fn of(&self, turn: &cap_meetings::transcript::Turn, who: &SpeakerLabel) -> Option<usize> {
+        if *who == SpeakerLabel::User {
+            return None;
+        }
+        if let Some(name) = turn.speaker.as_deref().filter(|n| !n.trim().is_empty()) {
+            return self
+                .names
+                .get(&name.trim().to_lowercase())
+                .copied()
+                .unwrap_or(Some(0));
+        }
+        match turn.speaker_id {
+            Some(id) => self.voices.get(&id).copied().unwrap_or(Some(0)),
+            None if turn.source == Source::Mic => None,
+            None => Some(0),
+        }
     }
 }
 
@@ -164,7 +236,6 @@ pub struct TranscriptView {
     focus: FocusHandle,
     list: ListState,
     rows: Rc<Vec<TRow>>,
-    colors: HashMap<String, usize>,
     live: bool,
     loaded: bool,
     hidden: HashSet<String>,
@@ -351,7 +422,6 @@ impl TranscriptView {
             focus: cx.focus_handle(),
             list,
             rows: Rc::new(Vec::new()),
-            colors: HashMap::new(),
             live: false,
             loaded: false,
             hidden: HashSet::new(),
@@ -428,7 +498,6 @@ impl TranscriptView {
         self.hidden.clear();
         self.doc_id = id;
         self.rows = Rc::new(Vec::new());
-        self.colors.clear();
         self.selection = None;
         self.renaming = None;
         self.find = None;
@@ -505,15 +574,12 @@ impl TranscriptView {
                     return None;
                 }
                 let transcript = m.transcript(&id)?;
-                let mut colors = std::mem::take(&mut self.colors);
                 let rows = build_rows(
                     &transcript,
                     started_at,
                     self_name.as_deref(),
                     &self.hidden,
-                    &mut colors,
                 );
-                self.colors = colors;
                 Some(rows)
             })
         });
@@ -544,15 +610,12 @@ impl TranscriptView {
                 if this.doc_id.as_deref() != Some(id.as_str()) {
                     return;
                 }
-                let mut colors = std::mem::take(&mut this.colors);
                 let rows = build_rows(
                     &transcript,
                     started_at,
                     self_name.as_deref(),
                     &this.hidden,
-                    &mut colors,
                 );
-                this.colors = colors;
                 this.loaded = true;
                 let suggestions: HashMap<u32, String> = this
                     .meta
@@ -639,9 +702,7 @@ impl TranscriptView {
     /// Tests: show these lines as if loaded from the library.
     #[cfg(test)]
     pub(super) fn load_for_test(&mut self, transcript: &Transcript, cx: &mut Context<Self>) {
-        let mut colors = std::mem::take(&mut self.colors);
-        let rows = build_rows(transcript, self.started_at(), None, &self.hidden, &mut colors);
-        self.colors = colors;
+        let rows = build_rows(transcript, self.started_at(), None, &self.hidden);
         self.loaded = true;
         self.apply(rows, cx);
     }
@@ -1383,11 +1444,6 @@ impl TranscriptView {
             && let (Some(doc), Some(meetings)) = (self.doc_id.clone(), Meetings::try_global(cx))
         {
             let speaker = rename_target(&turn);
-            if !matches!(speaker, SpeakerRef::Id(_))
-                && let Some(index) = self.colors.remove(&turn.label)
-            {
-                self.colors.insert(name.clone(), index);
-            }
             let undo = meetings.update(cx, |m, cx| m.rename_speaker(&doc, speaker, &name, cx));
             if let Some(undo) = undo {
                 let action: super::window::ToastAction = Rc::new(move |_, cx| {

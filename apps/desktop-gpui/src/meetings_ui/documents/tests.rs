@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use cap_meetings::{
     library::{DocKind, DocMeta, Library, MeetingDetails},
@@ -114,14 +114,65 @@ fn utterance(id: &str, source: Source, start_ms: u64, text: &str, is_final: bool
     }
 }
 
+fn voice(id: u32, track: cap_diarize::Track, first_ms: u64, is_user: bool) -> cap_diarize::SpeakerInfo {
+    cap_diarize::SpeakerInfo {
+        id: cap_diarize::SpeakerId(id),
+        track,
+        first_ms,
+        speech_ms: 10_000,
+        is_user,
+    }
+}
+
+fn voiced(id: &str, source: Source, start_ms: u64, text: &str, speaker: u32) -> LogLine {
+    let LogLine::Upsert { mut utterance } = utterance(id, source, start_ms, text, true) else {
+        unreachable!()
+    };
+    utterance.speaker_id = Some(speaker);
+    LogLine::Upsert { utterance }
+}
+
+fn named_line(id: &str, source: Source, start_ms: u64, name: &str, speaker: Option<u32>) -> LogLine {
+    let LogLine::Upsert { mut utterance } = utterance(id, source, start_ms, "Words.", true) else {
+        unreachable!()
+    };
+    utterance.speaker = Some(name.into());
+    utterance.speaker_id = speaker;
+    LogLine::Upsert { utterance }
+}
+
+/// Each speaker the transcript shows, by label, with their colour.
+fn speaker_colours(t: &Transcript, self_name: Option<&str>) -> Vec<(String, Option<usize>)> {
+    let mut out: Vec<(String, Option<usize>)> = Vec::new();
+    for row in transcript_rows(t, None, self_name, &HashSet::new()) {
+        if let TRow::Turn(turn) = row
+            && !out.iter().any(|(label, _)| *label == turn.label)
+        {
+            out.push((turn.label, turn.color));
+        }
+    }
+    out
+}
+
+/// How many different colours the coloured speakers have.
+fn distinct_colours(speakers: &[(String, Option<usize>)]) -> (usize, usize) {
+    let slots: Vec<usize> = speakers
+        .iter()
+        .filter_map(|(_, colour)| colour.map(|c| c % super::style::SPEAKER_COLOURS))
+        .collect();
+    let mut distinct = slots.clone();
+    distinct.sort();
+    distinct.dedup();
+    (slots.len(), distinct.len())
+}
+
 #[test]
 fn transcript_rows_mark_you_partial_lines_and_stable_colours() {
     let mut t = Transcript::new();
     t.apply(utterance("a", Source::Mic, 0, "Hello", true));
     t.apply(utterance("b", Source::System, 5_000, "Hi there", true));
     t.apply(utterance("c", Source::System, 65_000, "Next minute", false));
-    let mut colors = HashMap::new();
-    let rows = transcript_rows(&t, None, None, &HashSet::new(), &mut colors);
+    let rows = transcript_rows(&t, None, None, &HashSet::new());
     assert!(matches!(&rows[0], TRow::Minute { minute: 0, .. }));
     let TRow::Turn(you) = &rows[1] else {
         panic!("expected a turn")
@@ -147,7 +198,7 @@ fn transcript_rows_mark_you_partial_lines_and_stable_colours() {
 
     let mut hidden = HashSet::new();
     hidden.insert("b".to_string());
-    let rows = transcript_rows(&t, None, None, &hidden, &mut colors);
+    let rows = transcript_rows(&t, None, None, &hidden);
     assert!(
         !rows
             .iter()
@@ -155,16 +206,195 @@ fn transcript_rows_mark_you_partial_lines_and_stable_colours() {
     );
 }
 
+/// Person 1 was one colour live and another after a relaunch: the colour
+/// came from the order lines first appeared in, and live the computer's
+/// audio arrives as "Others" before its voices are told apart. A speaker's
+/// colour must be the same live, through a rename, after Stop and after the
+/// note is loaded from disk again.
+#[test]
+fn speaker_colours_are_the_same_live_and_after_a_relaunch() {
+    use cap_diarize::{SpeakerId, SpeakerNames, Track};
+    let info = voice;
+    let colours = |t: &Transcript| -> Vec<(Option<u32>, String, Option<usize>)> {
+        transcript_rows(t, None, None, &HashSet::new())
+            .into_iter()
+            .filter_map(|row| match row {
+                TRow::Turn(turn) => Some((turn.speaker_id, turn.label, turn.color)),
+                _ => None,
+            })
+            .collect()
+    };
+    let colour_of = |rows: &[(Option<u32>, String, Option<usize>)], id: u32| {
+        rows.iter()
+            .find(|(speaker, ..)| *speaker == Some(id))
+            .map(|(.., colour)| *colour)
+            .unwrap()
+    };
+
+    let mut live = Transcript::new();
+    let mut log: Vec<LogLine> = Vec::new();
+    let mut say = |live: &mut Transcript, line: LogLine| {
+        live.apply(line.clone());
+        log.push(line);
+    };
+    // Live, before the voices are told apart.
+    say(&mut live, utterance("m1", Source::Mic, 0, "Morning.", true));
+    say(&mut live, utterance("s1", Source::System, 5_000, "Hi, Dana here.", true));
+    say(&mut live, utterance("s2", Source::System, 10_000, "And Sam", false));
+    let early = colours(&live);
+    assert_eq!(early[0].2, None, "the user is the accent");
+    // The voices arrive.
+    say(&mut live, voiced("m1", Source::Mic, 0, "Morning.", 1));
+    say(&mut live, voiced("s1", Source::System, 5_000, "Hi, Dana here.", 2));
+    say(&mut live, voiced("s2", Source::System, 10_000, "And Sam.", 3));
+    say(&mut live, voiced("s3", Source::System, 15_000, "Back to Dana.", 2));
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        info(1, Track::Mic, 0, true),
+        info(2, Track::System, 5_000, false),
+        info(3, Track::System, 10_000, false),
+    ]);
+    say(&mut live, LogLine::SpeakerNames { names: names.clone() });
+    let voices = colours(&live);
+    assert_eq!(voices[1].1, "Person 1");
+    let person_1 = colour_of(&voices, 2);
+    let person_2 = colour_of(&voices, 3);
+    assert!(person_1.is_some() && person_2.is_some());
+    assert_ne!(person_1, person_2);
+    assert_eq!(colour_of(&voices, 1), None, "the user is the accent");
+    // Renamed mid-call: the voice keeps its colour.
+    names.rename(SpeakerId(2), "Dana");
+    say(&mut live, LogLine::SpeakerNames { names });
+    let renamed = colours(&live);
+    assert_eq!(renamed[1].1, "Dana");
+    assert_eq!(colour_of(&renamed, 2), person_1, "a rename keeps the colour");
+    assert_eq!(colour_of(&renamed, 3), person_2);
+
+    // Relaunch: the same note read back from disk, as the live log was
+    // written and as a compacted log.
+    let dir = tempfile::tempdir().unwrap();
+    for (name, lines) in [("live.jsonl", log.clone()), ("compact.jsonl", live.to_log_lines())] {
+        let path = dir.path().join(name);
+        let text: String = lines
+            .iter()
+            .map(|line| serde_json::to_string(line).unwrap() + "\n")
+            .collect();
+        std::fs::write(&path, text).unwrap();
+        let (reloaded, report) = Transcript::load_jsonl(&path).unwrap();
+        assert_eq!(report.skipped, 0);
+        assert_eq!(
+            colours(&reloaded),
+            renamed,
+            "{name}: every speaker has the colour they had live"
+        );
+    }
+}
+
+#[test]
+fn no_two_speakers_share_a_colour_until_the_palette_runs_out() {
+    use cap_diarize::{FinalPass, SpeakerId, SpeakerNames, Track};
+    use super::style::SPEAKER_COLOURS;
+
+    // Live: the computer's audio arrives as "Others" first, then one to
+    // eight told-apart voices.
+    for count in 1..=8u32 {
+        let mut t = Transcript::new();
+        t.apply(utterance("m0", Source::Mic, 0, "Hi all.", true));
+        t.apply(utterance("o0", Source::System, 1_000, "Hello.", true));
+        let mut voices = vec![voice(1, Track::Mic, 0, true)];
+        for n in 0..count {
+            let id = n + 2;
+            let at = 5_000 + u64::from(n) * 5_000;
+            t.apply(voiced(&format!("s{id}"), Source::System, at, "Words.", id));
+            voices.push(voice(id, Track::System, at, false));
+        }
+        let mut names = SpeakerNames::new(None);
+        names.observe(&voices);
+        t.apply(LogLine::SpeakerNames { names });
+        let speakers = speaker_colours(&t, None);
+        assert_eq!(speakers[0], ("You".to_string(), None));
+        let (coloured, distinct) = distinct_colours(&speakers);
+        assert_eq!(coloured, count as usize + 1, "{speakers:?}");
+        assert_eq!(
+            distinct,
+            coloured.min(SPEAKER_COLOURS),
+            "{count} voices and Others: {speakers:?}"
+        );
+    }
+
+    // A correction after the meeting merges two voices away and finds two
+    // new ones: the numbers have gaps (1, 4, 5, 6, 7), the colours don't.
+    let mut names = SpeakerNames::new(None);
+    let live: Vec<_> = (2..=6)
+        .map(|id| voice(id, Track::System, u64::from(id) * 1_000, false))
+        .collect();
+    names.observe(&live);
+    let mut speakers = vec![voice(2, Track::System, 2_000, false)];
+    speakers.extend((5..=8).map(|id| voice(id, Track::System, u64::from(id) * 1_000, false)));
+    names.apply_late(&FinalPass {
+        merged: vec![(SpeakerId(3), SpeakerId(2)), (SpeakerId(4), SpeakerId(2))],
+        speakers,
+        ..FinalPass::default()
+    });
+    let mut t = Transcript::new();
+    for id in [2u32, 5, 6, 7, 8] {
+        t.apply(voiced(&format!("s{id}"), Source::System, u64::from(id) * 1_000, "Words.", id));
+    }
+    t.apply(LogLine::SpeakerNames { names });
+    let after = speaker_colours(&t, None);
+    assert_eq!(
+        after.iter().map(|(label, _)| label.as_str()).collect::<Vec<_>>(),
+        ["Person 1", "Person 4", "Person 5", "Person 6", "Person 7"]
+    );
+    assert_eq!(distinct_colours(&after), (5, 5), "{after:?}");
+
+    // Lines moved to a name: to a renamed voice they take its colour, to
+    // the user they are the user's, and new names get colours of their own.
+    let mut t = Transcript::new();
+    t.apply(voiced("a", Source::System, 0, "Words.", 2));
+    t.apply(voiced("b", Source::System, 5_000, "Words.", 3));
+    t.apply(voiced("c", Source::System, 10_000, "Words.", 4));
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        voice(2, Track::System, 0, false),
+        voice(3, Track::System, 5_000, false),
+        voice(4, Track::System, 10_000, false),
+    ]);
+    names.rename(SpeakerId(2), "Dana");
+    t.apply(LogLine::SpeakerNames { names });
+    t.apply(named_line("d", Source::System, 15_000, "dana", Some(3)));
+    t.apply(named_line("e", Source::System, 20_000, "Sam", Some(3)));
+    t.apply(named_line("f", Source::System, 25_000, "Lee", None));
+    t.apply(named_line("g", Source::Mic, 30_000, "Richie", None));
+    let moved = speaker_colours(&t, Some("Richie"));
+    let colour = |label: &str| {
+        moved
+            .iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, c)| *c)
+            .unwrap_or_else(|| panic!("no {label} in {moved:?}"))
+    };
+    assert_eq!(colour("dana"), colour("Dana"), "{moved:?}");
+    assert_eq!(colour("Richie"), None, "{moved:?}");
+    let (coloured, distinct) = distinct_colours(
+        &moved
+            .iter()
+            .filter(|(label, _)| label != "dana")
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(coloured, distinct, "Dana, Person 2, Person 3, Sam, Lee: {moved:?}");
+}
+
 #[test]
 fn transcript_updates_keep_the_unchanged_prefix() {
     let mut t = Transcript::new();
     t.apply(utterance("a", Source::Mic, 0, "One", true));
     t.apply(utterance("b", Source::System, 5_000, "Two", false));
-    let mut colors = HashMap::new();
-    let before = transcript_rows(&t, None, None, &HashSet::new(), &mut colors);
+    let before = transcript_rows(&t, None, None, &HashSet::new());
     t.apply(utterance("b", Source::System, 5_000, "Two words", true));
     t.apply(utterance("c", Source::Mic, 9_000, "Three", true));
-    let after = transcript_rows(&t, None, None, &HashSet::new(), &mut colors);
+    let after = transcript_rows(&t, None, None, &HashSet::new());
     assert_eq!(common_prefix(&before, &after), 2);
     assert_eq!(after.len(), 4);
 }
@@ -893,8 +1123,7 @@ fn a_named_speaker_is_not_a_stand_in() {
     }
     t.apply(named);
     t.apply(utterance("b", Source::Mic, 3_000, "Hi", true));
-    let mut colors = HashMap::new();
-    let rows = transcript_rows(&t, None, Some("Richie"), &HashSet::new(), &mut colors);
+    let rows = transcript_rows(&t, None, Some("Richie"), &HashSet::new());
     let turns: Vec<&TurnRow> = rows
         .iter()
         .filter_map(|r| match r {
