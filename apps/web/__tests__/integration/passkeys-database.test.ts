@@ -44,6 +44,9 @@ const fixture = vi.hoisted(() => ({
 		GOOGLE_CLIENT_ID: "google-client",
 		GOOGLE_CLIENT_SECRET: "google-secret",
 	} as Record<string, string | undefined>,
+	currentUser: null as unknown,
+	securityCodes: [] as { email: string; code: string }[],
+	passkeyNotices: [] as { email: string; name: string }[],
 }));
 
 vi.mock("@cap/database", () => ({
@@ -55,6 +58,26 @@ vi.mock("@cap/database", () => ({
 vi.mock("@cap/env", () => ({
 	serverEnv: () => fixture.env,
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "false" },
+}));
+
+vi.mock("@cap/database/auth/session", () => ({
+	getCurrentUser: async () => fixture.currentUser,
+}));
+vi.mock("@cap/database/auth/security-emails", () => ({
+	sendAccountSecurityCode: async (email: string, code: string) => {
+		fixture.securityCodes.push({ email, code });
+	},
+	sendPasskeyAddedNotice: async (email: string, name: string) => {
+		fixture.passkeyNotices.push({ email, name });
+	},
+}));
+vi.mock("@/lib/rate-limit", () => ({
+	isRateLimited: async () => false,
+	RATE_LIMIT_IDS: {
+		AUTH_PASSKEY: "rl_auth_passkey",
+		AUTH_OTP_SEND: "rl_auth_otp_send",
+		AUTH_OTP_VERIFY: "rl_auth_otp_verify",
+	},
 }));
 
 const databaseUrl = process.env.CAP_PASSKEYS_TEST_DATABASE_URL;
@@ -557,6 +580,27 @@ describe.runIf(Boolean(databaseUrl))(
 				).toBeNull();
 			});
 
+			it("keeps the highest counter when sign-ins race", async () => {
+				const user = await makeUser();
+				const authenticator = await registerPasskey(user);
+				const counters = [4, 9, 1, 12, 7, 3, 10, 2, 8, 5, 11, 6];
+				const assertions = [];
+				for (const counter of counters) {
+					assertions.push(
+						authenticator.assert(await signInChallenge(), { counter }),
+					);
+				}
+				const results = await Promise.all(
+					assertions.map((assertion) => verifyPasskeySignIn(assertion)),
+				);
+				expect(results[counters.indexOf(12)]?.id).toBe(user.id);
+				const [stored] = await database()
+					.select({ counter: userPasskeys.counter })
+					.from(userPasskeys)
+					.where(eq(userPasskeys.userId, user.id));
+				expect(stored?.counter).toBe(12);
+			});
+
 			it("refuses a counter that went backwards", async () => {
 				const user = await makeUser();
 				const authenticator = await registerPasskey(user);
@@ -639,6 +683,153 @@ describe.runIf(Boolean(databaseUrl))(
 						credentials: {},
 					}),
 				).toBe("/login?error=SignupBlocked");
+			});
+		});
+
+		describe("server actions", () => {
+			async function actions() {
+				return import("@/actions/auth/passkeys");
+			}
+
+			it("refuses to start registration without a confirmation for this account", async () => {
+				const {
+					getPasskeyRegistrationOptions,
+					sendSecurityCode,
+					verifySecurityCode,
+				} = await actions();
+				const user = await makeUser();
+				const other = await makeUser();
+				fixture.currentUser = user;
+				expect(await getPasskeyRegistrationOptions("")).toEqual({
+					status: "verify",
+				});
+				expect(
+					await getPasskeyRegistrationOptions(b64url(randomBytes(32))),
+				).toEqual({ status: "verify" });
+
+				fixture.currentUser = other;
+				expect(await sendSecurityCode()).toEqual({ status: "sent" });
+				const otherCode = fixture.securityCodes.at(-1);
+				expect(otherCode?.email).toBe(other.email);
+				const otherGrant = await verifySecurityCode(otherCode?.code ?? "");
+				if (otherGrant.status !== "ok") throw new Error("No grant.");
+				fixture.currentUser = user;
+				expect(await getPasskeyRegistrationOptions(otherGrant.grant)).toEqual({
+					status: "verify",
+				});
+				expect(await verifySecurityCode(otherCode?.code ?? "")).toEqual({
+					status: "invalid",
+				});
+
+				const expired = await issueStepUpGrant(user.id);
+				await database()
+					.update(authChallenges)
+					.set({ expiresAt: new Date(Date.now() - 1000) })
+					.where(
+						eq(
+							authChallenges.secretHash,
+							createHash("sha256").update(expired).digest("hex"),
+						),
+					);
+				expect(await getPasskeyRegistrationOptions(expired)).toEqual({
+					status: "verify",
+				});
+				expect(await listPasskeys(user.id)).toHaveLength(0);
+			});
+
+			it("adds a passkey after an emailed code, and tells the account", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptions,
+					listMyPasskeys,
+					sendSecurityCode,
+					verifySecurityCode,
+				} = await actions();
+				const user = await makeUser();
+				fixture.currentUser = user;
+				expect(await verifySecurityCode("123456")).toEqual({
+					status: "invalid",
+				});
+				expect(await sendSecurityCode()).toEqual({ status: "sent" });
+				expect((await sendSecurityCode()).status).toBe("cooldown");
+				const sent = fixture.securityCodes.at(-1);
+				expect(sent?.email).toBe(user.email);
+				const confirmed = await verifySecurityCode(sent?.code ?? "");
+				if (confirmed.status !== "ok") throw new Error("No grant.");
+				const options = await getPasskeyRegistrationOptions(confirmed.grant);
+				if (options.status !== "ok") throw new Error("No options.");
+				expect(options.options.authenticatorSelection).toMatchObject({
+					residentKey: "required",
+					userVerification: "required",
+				});
+				expect(options.options.rp.id).toBe(RP_ID);
+				const authenticator = new SoftwareAuthenticator(user.id);
+				const result = await completePasskeyRegistration(
+					JSON.stringify(authenticator.register(options.options.challenge)),
+				);
+				expect(result.status).toBe("registered");
+				expect(fixture.passkeyNotices.at(-1)).toEqual({
+					email: user.email,
+					name: "iCloud Keychain",
+				});
+				expect(await listMyPasskeys()).toHaveLength(1);
+			});
+
+			it("confirms with an existing passkey and nobody else's", async () => {
+				const { getPasskeyStepUpOptions, verifyPasskeyForStepUp } =
+					await actions();
+				const user = await makeUser();
+				const other = await makeUser();
+				const authenticator = await registerPasskey(user);
+				const otherAuthenticator = await registerPasskey(other);
+				fixture.currentUser = user;
+				const options = await getPasskeyStepUpOptions();
+				if (options.status !== "ok") throw new Error("No options.");
+				expect(
+					await verifyPasskeyForStepUp(
+						otherAuthenticator.assert(options.options.challenge),
+					),
+				).toEqual({ status: "invalid" });
+				const retry = await getPasskeyStepUpOptions();
+				if (retry.status !== "ok") throw new Error("No options.");
+				const confirmed = await verifyPasskeyForStepUp(
+					authenticator.assert(retry.options.challenge),
+				);
+				expect(confirmed.status).toBe("ok");
+			});
+
+			it("removes only the signed-in account's passkeys", async () => {
+				const { removePasskey } = await actions();
+				const user = await makeUser();
+				const other = await makeUser();
+				await registerPasskey(other);
+				const [otherPasskey] = await listPasskeys(other.id);
+				if (!otherPasskey) throw new Error("Missing passkey.");
+				fixture.currentUser = user;
+				expect(await removePasskey(otherPasskey.id)).toEqual({
+					removed: false,
+				});
+				expect(await listPasskeys(other.id)).toHaveLength(1);
+			});
+
+			it("rejects every action without a session", async () => {
+				const passkeyActions = await actions();
+				fixture.currentUser = null;
+				for (const call of [
+					() => passkeyActions.sendSecurityCode(),
+					() => passkeyActions.verifySecurityCode("123456"),
+					() => passkeyActions.getPasskeyStepUpOptions(),
+					() => passkeyActions.verifyPasskeyForStepUp("{}"),
+					() => passkeyActions.getPasskeyRegistrationOptions("x"),
+					() => passkeyActions.completePasskeyRegistration("{}"),
+					() => passkeyActions.listMyPasskeys(),
+					() => passkeyActions.removePasskey("x"),
+				]) {
+					await expect(call()).rejects.toThrow("Unauthorized");
+				}
+				expect((await passkeyActions.getPasskeySignInOptions()).status).toBe(
+					"ok",
+				);
 			});
 		});
 
@@ -731,6 +922,26 @@ describe.runIf(Boolean(databaseUrl))(
 					STEP_UP_CODE_MAX_ATTEMPTS,
 				);
 				expect(await verifyStepUpCode(user.id, issued.code)).toBe(false);
+			});
+
+			it("issues one code when requests race", async () => {
+				const user = await makeUser();
+				const results = await Promise.all(
+					Array.from({ length: 6 }, () => issueStepUpCode(user.id)),
+				);
+				expect(
+					results.filter((result) => result.status === "issued"),
+				).toHaveLength(1);
+				const rows = await database()
+					.select()
+					.from(authChallenges)
+					.where(
+						and(
+							eq(authChallenges.userId, user.id),
+							eq(authChallenges.purpose, "step_up_email_code"),
+						),
+					);
+				expect(rows).toHaveLength(1);
 			});
 
 			it("refuses an expired code and rate limits new codes", async () => {
