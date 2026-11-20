@@ -171,6 +171,18 @@ async function handler(
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
 	if (
+		nextauth[0] === "callback" &&
+		nextauth[1] === "passkey" &&
+		(await isRateLimited(RATE_LIMIT_IDS.AUTH_PASSKEY, {
+			headers: request.headers,
+		}))
+	) {
+		return NextResponse.json(
+			{ url: authErrorUrl("CredentialsSignin") },
+			{ status: 429 },
+		);
+	}
+	if (
 		nextauth[1] === GOOGLE_ONE_TAP_PROVIDER_ID &&
 		nextauth[0] === "callback"
 	) {

@@ -1038,6 +1038,51 @@ export const authApiKeys = mysqlTable(
 	}),
 );
 
+export const userPasskeys = mysqlTable(
+	"user_passkeys",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		credentialId: varchar("credentialId", { length: 1400 }).notNull(),
+		credentialIdHash: varchar("credentialIdHash", { length: 64 }).notNull(),
+		publicKey: text("publicKey").notNull(),
+		counter: bigint("counter", { mode: "number", unsigned: true })
+			.notNull()
+			.default(0),
+		transports: json("transports").$type<string[]>(),
+		deviceType: varchar("deviceType", { length: 32 }).notNull(),
+		backedUp: boolean("backedUp").notNull().default(false),
+		aaguid: varchar("aaguid", { length: 36 }),
+		name: varchar("name", { length: 64 }).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		lastUsedAt: timestamp("lastUsedAt"),
+	},
+	(table) => ({
+		credentialIdHashIndex: uniqueIndex("credential_id_hash_idx").on(
+			table.credentialIdHash,
+		),
+		userIdIndex: index("user_id_idx").on(table.userId),
+	}),
+);
+
+export const authChallenges = mysqlTable(
+	"auth_challenges",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		purpose: varchar("purpose", { length: 32 }).notNull(),
+		secretHash: varchar("secretHash", { length: 64 }).notNull(),
+		attempts: int("attempts").notNull().default(0),
+		expiresAt: datetime("expiresAt").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		secretHashIndex: uniqueIndex("secret_hash_idx").on(table.secretHash),
+		userPurposeIndex: index("user_purpose_idx").on(table.userId, table.purpose),
+		expiresAtIndex: index("expires_at_idx").on(table.expiresAt),
+	}),
+);
+
 export const mobilePushTokens = mysqlTable(
 	"mobile_push_tokens",
 	{
