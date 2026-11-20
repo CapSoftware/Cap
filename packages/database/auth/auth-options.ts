@@ -31,6 +31,7 @@ import {
 	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { verifyPasskeySignIn } from "./passkeys.ts";
 import {
 	provisionSsoMembership,
 	type SsoAuthContext,
@@ -300,6 +301,23 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							}),
 						]
 					: []),
+				CredentialsProvider({
+					id: "passkey",
+					name: "Passkey",
+					credentials: {},
+					async authorize(credentials) {
+						const user = await verifyPasskeySignIn(
+							(credentials as Record<string, unknown> | undefined)?.response,
+						);
+						if (!user) return null;
+						return {
+							id: user.id,
+							email: user.email,
+							name: user.name,
+							image: user.image,
+						};
+					},
+				}),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
