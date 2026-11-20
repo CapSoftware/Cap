@@ -630,6 +630,7 @@ fn permissions_snapshot() -> Value {
         "camera": permission_status_str(check.camera),
         "microphone": permission_status_str(check.microphone),
         "accessibility": permission_status_str(check.accessibility),
+        "inputMonitoring": permission_status_str(check.input_monitoring),
     })
 }
 

@@ -2381,6 +2381,32 @@ fn reveal_main_after_picker_cancel(
     hidden_for_picker && idle && (was_visible || !keep_hidden)
 }
 
+/// Drop the picker overlays under macOS's own prompts while one is asking
+/// the user something (they sit one level above the menu bar, over every
+/// alert), then put them back.
+pub fn lower_target_overlays(lowered: bool, cx: &mut App) {
+    let overlays: Vec<_> = cx
+        .global::<AppWindows>()
+        .overlays
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
+    let level = if lowered {
+        0
+    } else {
+        platform::target_overlay_level()
+    };
+    for handle in overlays {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        if let Some(native) = native {
+            platform::set_panel_level(&native, level);
+        }
+    }
+}
+
 /// Close the overlays and disarm the cursor probe, leaving the main window's
 /// selection alone.
 pub fn close_target_overlays(cx: &mut App) {

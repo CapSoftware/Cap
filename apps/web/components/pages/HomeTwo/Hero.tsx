@@ -147,7 +147,7 @@ export const Hero = () => {
 					className={`ht-rise [--d:0.16s] ${BODY_TEXT} mt-8 max-w-[660px] text-balance text-[16.5px] leading-[1.5] text-[rgba(17,17,17,0.78)] sm:text-[19px] md:mt-10`}
 				>
 					Record your screen, then share it as a link the moment you stop or
-					polish it in the built-in editor. Trusted by over 80,000 teams and
+					polish it in the built-in editor. Trusted by 100,000+ teams and
 					creators, and free to start.
 				</p>
 

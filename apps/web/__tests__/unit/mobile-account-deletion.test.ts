@@ -153,7 +153,12 @@ describe("mobile account deletion request", () => {
 	it("signs the account out of every session, app key and agent key", async () => {
 		expect((await request()).status).toBe(200);
 
-		expect(mocks.deletes).toEqual(["sessions", "auth_api_keys"]);
+		expect(mocks.deletes).toEqual([
+			"sessions",
+			"auth_api_keys",
+			"user_passkeys",
+			"auth_challenges",
+		]);
 		expect(mocks.updates.map(({ table }) => table)).toEqual([
 			"users",
 			"agent_api_keys",
