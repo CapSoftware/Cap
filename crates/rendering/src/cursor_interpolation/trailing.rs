@@ -235,15 +235,32 @@ impl SpeedBump {
 struct Speed<'a> {
     committed: &'a [SpeedBump],
     candidate: Option<&'a SpeedBump>,
+    /// The longest committed speed-up. They are sorted by start, so one that
+    /// starts more than this long before a moment has ended by it, and a
+    /// lookup stops there instead of scanning every earlier speed-up.
+    longest: f64,
 }
 
-impl Speed<'_> {
+impl<'a> Speed<'a> {
+    fn new(committed: &'a [SpeedBump], candidate: Option<&'a SpeedBump>) -> Self {
+        let longest = committed
+            .iter()
+            .map(|bump| bump.ramp_out_end - bump.ramp_in_start)
+            .fold(0.0, f64::max);
+        Self {
+            committed,
+            candidate,
+            longest,
+        }
+    }
+
     fn at(&self, t: f64) -> f64 {
         let covering = self.committed[..self
             .committed
             .partition_point(|bump| bump.ramp_in_start <= t)]
             .iter()
             .rev()
+            .take_while(|bump| bump.ramp_in_start >= t - self.longest)
             .chain(self.candidate)
             .filter(|bump| bump.covers(t))
             .map(|bump| bump.log_speed_at(t));
@@ -601,10 +618,7 @@ impl<'a> GroupPlan<'a> {
         let mut from = self.window_start.max(start.floor());
         let mut state = self.committed_state_at(from);
         let lead = Lead::new(self.lead, &knots);
-        let speed_schedule = Speed {
-            committed: self.speed,
-            candidate: bump.as_ref(),
-        };
+        let speed_schedule = Speed::new(self.speed, bump.as_ref());
         let mut worst: f64 = 0.0;
         for &(time, tolerance) in &self.group.points {
             state = self
@@ -632,10 +646,7 @@ impl<'a> GroupPlan<'a> {
         if self.committed_states.is_none() {
             let decay = lead_decay(self.path(), self.anchor_ms, self.anchor_lead_ms);
             let lead = Lead::new(self.lead, &decay);
-            let speed = Speed {
-                committed: self.speed,
-                candidate: None,
-            };
+            let speed = Speed::new(self.speed, None);
             let first = self.spring.run(
                 lead,
                 speed,
@@ -799,10 +810,7 @@ pub(super) fn build_trailing_timeline(
     let (lead, speed) = plan(&spring, group_points(points), origin);
 
     let lead_view = Lead::new(&lead, &[]);
-    let speed_view = Speed {
-        committed: &speed,
-        candidate: None,
-    };
+    let speed_view = Speed::new(&speed, None);
     let initial = State::resting_at(path.position_at(origin + lead_view.at(origin)));
 
     let settle_deadline = end_time_ms + SPRING_SETTLE_TIMEOUT_MS;
@@ -987,6 +995,34 @@ mod tests {
     }
 
     #[test]
+    fn a_speed_lookup_skipping_ended_speed_ups_reads_the_same() {
+        let bumps: Vec<SpeedBump> = (0..400)
+            .map(|index| {
+                let start = index as f64 * 37.0 + (index % 7) as f64 * 11.0;
+                let group = Group {
+                    start,
+                    end: start + 20.0 + (index % 5) as f64 * 90.0,
+                    points: vec![],
+                };
+                SpeedBump::new(&group, start - 400.0, 1.0 + (index % 9) as f64 * 0.4)
+            })
+            .collect();
+        let mut sorted = bumps.clone();
+        sorted.sort_by(|a, b| a.ramp_in_start.total_cmp(&b.ramp_in_start));
+        let speed = Speed::new(&sorted, None);
+        for step in 0..4000 {
+            let t = step as f64 * 4.0;
+            let full = sorted
+                .iter()
+                .filter(|bump| bump.covers(t))
+                .map(|bump| bump.log_speed_at(t))
+                .fold(0.0_f64, f64::max)
+                .exp();
+            assert_eq!(speed.at(t), full, "{t}");
+        }
+    }
+
+    #[test]
     fn speed_bumps_blend_on_a_log_scale() {
         let group = Group {
             start: 1000.0,
@@ -994,10 +1030,7 @@ mod tests {
             points: vec![],
         };
         let bump = SpeedBump::new(&group, 0.0, 4.0);
-        let speed = Speed {
-            committed: &[],
-            candidate: Some(&bump),
-        };
+        let speed = Speed::new(&[], Some(&bump));
         assert_eq!(speed.at(500.0), 1.0);
         assert!((speed.at(875.0) - 2.0).abs() < 1e-9);
         assert!((speed.at(1050.0) - 4.0).abs() < 1e-9);
