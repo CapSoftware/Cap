@@ -304,6 +304,7 @@ open_link = "लिंक खोलें"
 retry_upload = "फिर से अपलोड करें"
 show_all = "सभी दिखाएँ"
 title = "रिकॉर्डिंग"
+save_audio = "ऑडियो सेव करें"
 
 [settings.recordings.empty]
 all = "कोई रिकॉर्डिंग नहीं"
@@ -394,16 +395,19 @@ cancelling_description = "शॉर्टकट या Cap आइकन से �
 cancelling_title = "रद्द करना"
 closing_editor_description = "स्क्रीनशॉट एडिटर और वीडियो एडिटर के लिए।"
 closing_editor_title = "एडिटर बंद करना"
+conflict = "“{shortcut}” पहले से इसे इस्तेमाल कर रहा है।"
 needs_modifier_macos = "⌘, ⌃ या ⌥ शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
 needs_modifier_other = "Ctrl, Alt या Win शामिल करें ताकि शॉर्टकट टाइपिंग में बाधा न बने।"
-record_shortcut = "शॉर्टकट सेट करें"
+not_set = "सेट नहीं है"
 recording_description = "पहले Cap खोले बिना रिकॉर्डिंग शुरू करें।"
 recording_hint = "जिन कीज़ का इस्तेमाल करना है उन्हें दबाएँ। Esc रद्द करता है, Delete इसे हटाता है।"
 recording_title = "रिकॉर्डिंग"
+replace = "बदलें"
 saved = "सेव हो गया। किसी भी ऐप में {keys} दबाएँ और {effect}।"
 saved_moved = "सेव हो गया। किसी भी ऐप में {keys} दबाएँ और {effect}। “{shortcut}” से हटा दिया गया।"
 screenshots_description = "शॉर्टकट किसी भी ऐप में काम करते हैं। बदलने के लिए किसी पर क्लिक करें।"
 screenshots_title = "स्क्रीनशॉट"
+shared = "“{shortcut}” जैसी ही कुंजियाँ, इसलिए दोनों चलेंगे।"
 type_shortcut = "शॉर्टकट दबाएँ…"
 unavailable = "कोई दूसरा ऐप या सिस्टम पहले से यह शॉर्टकट इस्तेमाल कर रहा है। कोई दूसरा चुनने के लिए क्लिक करें।"
 unsupported_key = "यह कुंजी शॉर्टकट में इस्तेमाल नहीं हो सकती। कोई अक्षर, संख्या या F-कुंजी आज़माएँ।"
@@ -472,6 +476,7 @@ screenshot_area = "क्षेत्र का स्क्रीनशॉट �
 screenshot_display = "डिस्प्ले का स्क्रीनशॉट लें"
 screenshot_window = "विंडो का स्क्रीनशॉट लें"
 start_instant = "Instant रिकॉर्डिंग शुरू करें"
+start_selected = "चुने गए मोड में शुरू करें"
 start_studio = "Studio रिकॉर्डिंग शुरू करें"
 stop = "रिकॉर्डिंग रोकें"
 toggle_drawing = "स्क्रीन पर ड्रॉ करें"
@@ -484,13 +489,10 @@ instant_copy_and_open = "चुनी गई स्क्रीन या वि
 open_picker = "Cap खोलकर चुनें कि क्या रिकॉर्ड करना है"
 pause = "मौजूदा रिकॉर्डिंग पॉज़ करें या फिर से शुरू करें"
 picker_area_instant = "क्षेत्र चुनकर उसे Instant मोड में रिकॉर्ड करें"
-picker_area_screenshot = "क्षेत्र चुनकर उसका स्क्रीनशॉट लें"
 picker_area_studio = "क्षेत्र चुनकर उसे Studio मोड में रिकॉर्ड करें"
 picker_display_instant = "डिस्प्ले चुनकर उसे Instant मोड में रिकॉर्ड करें"
-picker_display_screenshot = "डिस्प्ले चुनकर उसका स्क्रीनशॉट लें"
 picker_display_studio = "डिस्प्ले चुनकर उसे Studio मोड में रिकॉर्ड करें"
 picker_window_instant = "विंडो चुनकर उसे Instant मोड में रिकॉर्ड करें"
-picker_window_screenshot = "विंडो चुनकर उसका स्क्रीनशॉट लें"
 picker_window_studio = "विंडो चुनकर उसे Studio मोड में रिकॉर्ड करें"
 restart = "मौजूदा टेक हटाकर फिर से शुरू करें"
 screenshot_area_copy = "क्षेत्र चुनकर स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें"
@@ -505,6 +507,7 @@ screenshot_window_copy = "पॉइंटर के नीचे की वि�
 screenshot_window_copy_and_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट कॉपी करें और एडिटर खोलें"
 screenshot_window_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट को एडिटर में खोलें"
 screenshot_window_save = "पॉइंटर के नीचे की विंडो कैप्चर करके कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें"
+start_selected = "Cap में चुने गए मोड में रिकॉर्डिंग या स्क्रीनशॉट शुरू करें"
 stop = "मौजूदा रिकॉर्डिंग रोकें"
 studio = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें"
 studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें"
@@ -518,13 +521,10 @@ instant_copy_and_open = "चुनी गई स्क्रीन या वि
 open_picker = "Cap खोलकर चुनें कि क्या रिकॉर्ड करना है।"
 pause = "मौजूदा रिकॉर्डिंग पॉज़ करें या फिर से शुरू करें।"
 picker_area_instant = "क्षेत्र चुनकर उसे Instant मोड में रिकॉर्ड करें।"
-picker_area_screenshot = "क्षेत्र चुनकर उसका स्क्रीनशॉट लें।"
 picker_area_studio = "क्षेत्र चुनकर उसे Studio मोड में रिकॉर्ड करें।"
 picker_display_instant = "डिस्प्ले चुनकर उसे Instant मोड में रिकॉर्ड करें।"
-picker_display_screenshot = "डिस्प्ले चुनकर उसका स्क्रीनशॉट लें।"
 picker_display_studio = "डिस्प्ले चुनकर उसे Studio मोड में रिकॉर्ड करें।"
 picker_window_instant = "विंडो चुनकर उसे Instant मोड में रिकॉर्ड करें।"
-picker_window_screenshot = "विंडो चुनकर उसका स्क्रीनशॉट लें।"
 picker_window_studio = "विंडो चुनकर उसे Studio मोड में रिकॉर्ड करें।"
 restart = "मौजूदा टेक हटाकर फिर से शुरू करें।"
 screenshot_area_copy = "क्षेत्र चुनकर स्क्रीनशॉट को क्लिपबोर्ड पर कॉपी करें।"
@@ -539,6 +539,7 @@ screenshot_window_copy = "पॉइंटर के नीचे की वि�
 screenshot_window_copy_and_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट कॉपी करें और एडिटर खोलें।"
 screenshot_window_open_editor = "पॉइंटर के नीचे की विंडो कैप्चर करके स्क्रीनशॉट को एडिटर में खोलें।"
 screenshot_window_save = "पॉइंटर के नीचे की विंडो कैप्चर करके कुछ खोले बिना स्क्रीनशॉट को अपनी लाइब्रेरी में सेव करें।"
+start_selected = "Cap में चुने गए मोड में रिकॉर्डिंग या स्क्रीनशॉट शुरू करें।"
 stop = "मौजूदा रिकॉर्डिंग रोकें।"
 studio = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें।"
 studio_open_editor = "चुनी गई स्क्रीन या विंडो को Studio मोड में रिकॉर्ड करें, फिर रोकने पर एडिटर खोलें।"
@@ -1044,6 +1045,7 @@ off = "बंद"
 on = "चालू"
 
 [main.error]
+audio_only_needs_audio = "सिर्फ़ ऑडियो रिकॉर्डिंग के लिए कोई माइक्रोफ़ोन चुनें या सिस्टम ऑडियो चालू करें।"
 camera_only_needs_camera = "सिर्फ़ कैमरा रिकॉर्डिंग के लिए कोई कैमरा चुना होना ज़रूरी है।"
 copy = "त्रुटि कॉपी करें"
 devices_not_ready = "रिकॉर्डिंग डिवाइस तैयार नहीं हैं। रिकॉर्डर खोलें और फिर से कोशिश करें।"
@@ -1153,6 +1155,7 @@ title = "स्टोरेज कम है"
 
 [main.target]
 area = "क्षेत्र"
+audio_only = "सिर्फ़ ऑडियो"
 camera_only = "सिर्फ़ कैमरा"
 choose_display = "डिस्प्ले चुनें"
 choose_window = "विंडो चुनें"
@@ -1535,12 +1538,14 @@ placeholder = "अपनी स्क्रिप्ट पेस्ट कर�
 words_per_minute = "{wpm} शब्द/मिनट"
 
 [import]
+audio_failed = "ऑडियो इंपोर्ट नहीं हो सका: {error}"
 error_title = "इम्पोर्ट त्रुटि"
 image_failed = "इमेज इम्पोर्ट नहीं हो सकी: {error}"
 unsupported = "यह मीडिया फ़ाइल समर्थित नहीं है।"
 video_failed = "वीडियो इम्पोर्ट नहीं हो सका: {error}"
 
 [import.filter]
+audio = "ऑडियो फ़ाइलें"
 image = "इमेज फ़ाइलें"
 media = "मीडिया फ़ाइलें"
 video = "वीडियो फ़ाइलें"
@@ -1582,6 +1587,13 @@ unlock_title = "क्षेत्र अनलॉक करें"
 unlock_body = "क्षेत्र को फिर से खिसकाने, उसका साइज़ बदलने या नया बनाने दें।"
 locked_title = "क्षेत्र लॉक है"
 locked_body = "अनलॉक करने के लिए क्लिक करें, ताकि इसे खिसकाया, इसका साइज़ बदला या फिर से बनाया जा सके।"
+
+[overlay.audio_only]
+choose_source = "कोई माइक्रोफ़ोन चुनें या सिस्टम ऑडियो चालू करें"
+description = "स्क्रीन या कैमरा के बिना अपना माइक्रोफ़ोन और कंप्यूटर की आवाज़ रिकॉर्ड करें"
+meter_hint = "लेवल जांचने के लिए कुछ बोलें"
+system_audio = "सिस्टम ऑडियो"
+system_audio_only = "सिर्फ़ सिस्टम ऑडियो रिकॉर्ड होगा"
 
 [overlay.camera_only]
 description = "सिर्फ़ अपने कैमरा और माइक्रोफ़ोन से रिकॉर्ड करें"
@@ -1840,6 +1852,20 @@ change_hint = "इस सेगमेंट के लिए कोई दूस
 change_title = "ऑडियो बदलें"
 done = "हो गया"
 import = "फ़ाइल इम्पोर्ट करें"
+
+[editor.audio_only]
+add_visuals = "विज़ुअल जोड़ें"
+body = "इस रिकॉर्डिंग में वीडियो नहीं है। आवाज़ को MP3 या WAV के रूप में एक्सपोर्ट करें, या इसे वीडियो बनाने के लिए विज़ुअल जोड़ें।"
+export_audio = "ऑडियो एक्सपोर्ट करें"
+show_visuals = "विज़ुअल दिखाएं"
+size_large = "बड़ा"
+size_medium = "मध्यम"
+size_small = "छोटा"
+style_bars = "बार"
+style_circle = "गोला"
+style_wave = "वेव"
+title = "सिर्फ़ ऑडियो"
+visuals = "विज़ुअल"
 
 [editor.color]
 apply_to_cursor = "कर्सर पर लागू करें"
@@ -2255,6 +2281,7 @@ manual_help = "मैनुअल ज़ूम नीचे चुनी गई 
 mixed = "मिश्रित"
 mode = "ज़ूम मोड"
 positions_mixed = "सेगमेंट अलग-अलग जगहों पर ज़ूम करते हैं। सभी को एक ही जगह ले जाने के लिए ड्रैग करें।"
+start_early = "ज़ूम पहले शुरू करें"
 title = "ज़ूम {number}"
 
 [editor.side_panel]
@@ -2359,6 +2386,7 @@ background_blur = "बैकग्राउंड ब्लर"
 custom_position = "कस्टम स्क्रीन पोज़िशन (कैनवास पर ड्रैग की गई)"
 motion_blur = "मोशन ब्लर"
 padding = "पैडिंग"
+padding_style = "पैडिंग शैली"
 rounded_corners = "गोल कोने"
 title = "लेआउट"
 
@@ -2437,11 +2465,13 @@ mp4_filter = "MP4 वीडियो"
 prepare_controls_failed = "रिकॉर्डिंग कंट्रोल तैयार नहीं हो सके: {error}"
 record = "रिकॉर्ड करें"
 record_new = "नई क्लिप रिकॉर्ड करें"
+removed_media = "{name} (हटाई गई क्लिप)"
 save_before_recording_failed = "रिकॉर्डिंग से पहले मौजूदा प्रोजेक्ट सेव नहीं हो सका: {error}"
 split = "हिस्सा {number}"
 title = "क्लिप"
 
 [editor.clips.error]
+audio_only_mix = "सिर्फ़ ऑडियो रिकॉर्डिंग और वीडियो क्लिप एक प्रोजेक्ट में नहीं जोड़ी जा सकतीं"
 cancelled = "इम्पोर्ट रद्द किया गया"
 cannot_decode = "वीडियो {path} डिकोड नहीं हो सका: {error}"
 in_use = "यह रिकॉर्डिंग उपयोग में होने पर इम्पोर्ट नहीं हो सकता: {error}"
@@ -2482,6 +2512,15 @@ upgrade_message = "इस फ़ीचर के लिए अपग्रेड
 upgrade_title = "अपग्रेड ज़रूरी है"
 upload_failed = "रिकॉर्डिंग अपलोड नहीं हो सकी"
 
+[editor.export.audio]
+cta = "ऑडियो एक्सपोर्ट करें"
+exported = "ऑडियो एक्सपोर्ट हो गया"
+exporting = "ऑडियो एक्सपोर्ट हो रहा है"
+file_type = "फ़ाइल का प्रकार"
+format = "ऑडियो"
+mp3_description = "छोटी फ़ाइल, हर जगह चलती है। 192 kb/s स्टीरियो।"
+wav_description = "लॉसलेस 16-बिट, 48 kHz। आगे एडिट करने के लिए सबसे अच्छा।"
+
 [editor.export.advanced]
 bits_per_pixel = "बिट्स प्रति पिक्सल"
 cursor_only = "केवल कर्सर एक्सपोर्ट करें"
@@ -2514,6 +2553,10 @@ open_link = "लिंक खोलें"
 retry_copy = "फिर से कॉपी करें"
 reuploaded = "आपका नया संपादन उसी लिंक पर तैयार है"
 uploaded = "आपका Cap सफलतापूर्वक अपलोड हो गया"
+
+[editor.export.enhance]
+description = "रिकॉर्डिंग ज़ूम इन या छोटी होने पर टेक्स्ट और बारीक विवरण को शार्प करता है। एक्सपोर्ट में अधिक समय लग सकता है।"
+title = "क्वालिटी बेहतर करें"
 
 [editor.export.estimate]
 gigabytes = "~{value} GB"
@@ -2803,6 +2846,7 @@ rounded = "गोल"
 squircle = "स्क्वर्कल"
 
 [editor.tabs.cursor]
+follow_hover = "होवर हाइलाइट का अनुसरण करें"
 friction = "घर्षण"
 hide_when_idle = "निष्क्रिय होने पर छिपाएँ"
 inactivity_delay = "निष्क्रियता देरी"
@@ -2856,6 +2900,10 @@ timeline_unavailable = "प्रोजेक्ट टाइमलाइन उ
 timeline_unreadable = "प्रोजेक्ट टाइमलाइन पढ़ी नहीं जा सकी।"
 title = "कीबोर्ड दिखाएँ"
 uppercase = "बड़े अक्षर"
+
+[editor.tabs.padding]
+even = "समान"
+proportional = "आनुपातिक"
 
 [editor.tabs.position]
 bottom_center = "नीचे बीच में"
@@ -3246,7 +3294,11 @@ wipe_down = "नीचे वाइप"
 zoom = "ज़ूम"
 
 [editor.window.transport]
+compare = "तुलना करें"
+compare_tooltip = "मूल देखने के लिए दबाकर रखें"
 done_splitting = "विभाजन पूरा"
+enhance = "बेहतर करें"
+enhance_tooltip = "रुके हुए फ़्रेम को बेहतर रूप में दिखाएँ"
 play_pause = "वीडियो चलाएँ/रोकें"
 speed = "प्रीव्यू की स्पीड"
 split = "विभाजित करें"
@@ -3387,6 +3439,7 @@ changed_after = "अपलोड के बाद लोकल रिकॉर�
 already_queued = "यह रिकॉर्डिंग पहले से अपलोड की कतार में है"
 paused = "अपलोड रुका हुआ है; लोकल रिकॉर्डिंग सुरक्षित है"
 worker_failed = "अपलोड प्रक्रिया विफल हुई; लोकल रिकॉर्डिंग सुरक्षित है"
+deleted_on_web = "यह रिकॉर्डिंग वेब पर हटा दी गई; लोकल रिकॉर्डिंग सुरक्षित है"
 empty = "सेव की गई रिकॉर्डिंग खाली है"
 no_resumable_state = "इस रिकॉर्डिंग का कोई ऐसा अपलोड नहीं है जिसे फिर से शुरू किया जा सके"
 verification_failed = "रिकॉर्डिंग की जाँच विफल हुई: {status}"

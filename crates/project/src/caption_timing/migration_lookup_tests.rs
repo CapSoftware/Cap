@@ -28,6 +28,7 @@ fn fixture(clips: usize, words_per_clip: usize) -> (ProjectConfiguration, Vec<f6
             end: words.last().unwrap().end,
             text: caption_text_from_words(words),
             words: words.to_vec(),
+            recording_clip: None,
         })
         .collect();
     (
@@ -250,6 +251,7 @@ fn baseline_synchronize(project: &mut ProjectConfiguration, recording_durations:
                     end,
                     text: caption.text.clone(),
                     words,
+                    recording_clip: None,
                 })
             })
             .collect();

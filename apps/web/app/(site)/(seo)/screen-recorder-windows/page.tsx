@@ -8,13 +8,13 @@ const ogImage = ogImageUrl({
 });
 
 export const metadata: Metadata = {
-	title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
+	title: "Free screen recorder for Windows 10 and 11 PCs | Cap",
 	description:
-		"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks. Works on Windows 10 & 11.",
+		"Record your screen on Windows 10 and 11 with Cap, a free, open source screen recorder for PC. Share a link the moment you stop, or edit and export in 4K.",
 	openGraph: {
-		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
+		title: "Free screen recorder for Windows 10 and 11 PCs | Cap",
 		description:
-			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks. Works on Windows 10 & 11.",
+			"Record your screen on Windows 10 and 11 with Cap, a free, open source screen recorder for PC. Share a link the moment you stop, or edit and export in 4K.",
 		url: "https://cap.so/screen-recorder-windows",
 		siteName: "Cap",
 		images: [
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
 				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Cap: Best Free Screen Recorder for Windows",
+				alt: "Cap: free screen recorder for Windows 10 and 11",
 			},
 		],
 		locale: "en_US",
@@ -30,9 +30,9 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "Best Free Screen Recorder for Windows 10 & 11 | Cap",
+		title: "Free screen recorder for Windows 10 and 11 PCs | Cap",
 		description:
-			"Record your screen on Windows with Cap — free, open-source screen recorder with HD video, audio, webcam overlay, and instant sharing. No watermarks.",
+			"Record your screen on Windows 10 and 11 with Cap, a free, open source screen recorder for PC. Share a link the moment you stop, or edit and export in 4K.",
 		images: [ogImage],
 	},
 	alternates: {

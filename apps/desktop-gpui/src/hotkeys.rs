@@ -37,6 +37,7 @@ use crate::{
 /// camelCase store keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
+    StartRecording,
     StartStudioRecording,
     StartInstantRecording,
     StopRecording,
@@ -54,7 +55,8 @@ pub enum HotkeyAction {
     ToggleDrawing,
 }
 
-const ACTION_KEYS: [(&str, HotkeyAction); 15] = [
+const ACTION_KEYS: [(&str, HotkeyAction); 16] = [
+    ("startRecording", HotkeyAction::StartRecording),
     ("startStudioRecording", HotkeyAction::StartStudioRecording),
     ("startInstantRecording", HotkeyAction::StartInstantRecording),
     ("stopRecording", HotkeyAction::StopRecording),
@@ -107,6 +109,49 @@ impl HotkeyAction {
     /// their combos are never taken from other apps the rest of the time.
     fn recording_scoped(self) -> bool {
         matches!(self, Self::AddRecordingMarker | Self::ToggleDrawing)
+    }
+}
+
+/// What a shortcut does with the recording mode. Only the cycle shortcut
+/// changes the mode selected in the main window; every other shortcut that
+/// captures does so in its own mode, or the selected one, for that capture
+/// only (#3597).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ModePlan {
+    Start(Mode),
+    Picker(TargetType, Mode),
+    Capture,
+    Select(Mode),
+    Unrelated,
+}
+
+pub(crate) fn mode_plan(action: HotkeyAction, selected: Mode) -> ModePlan {
+    match action {
+        HotkeyAction::StartRecording => ModePlan::Start(selected),
+        HotkeyAction::StartStudioRecording => ModePlan::Start(Mode::Studio),
+        HotkeyAction::StartInstantRecording => ModePlan::Start(Mode::Instant),
+        HotkeyAction::OpenRecordingPickerDisplay => {
+            ModePlan::Picker(TargetType::Display, selected.for_recording())
+        }
+        HotkeyAction::OpenRecordingPickerWindow => {
+            ModePlan::Picker(TargetType::Window, selected.for_recording())
+        }
+        HotkeyAction::OpenRecordingPickerArea => {
+            ModePlan::Picker(TargetType::Area, selected.for_recording())
+        }
+        HotkeyAction::ScreenshotArea => ModePlan::Picker(TargetType::Area, Mode::Screenshot),
+        HotkeyAction::ScreenshotDisplay | HotkeyAction::ScreenshotWindow => ModePlan::Capture,
+        HotkeyAction::CycleRecordingMode => ModePlan::Select(match selected {
+            Mode::Studio => Mode::Instant,
+            Mode::Instant => Mode::Screenshot,
+            Mode::Screenshot => Mode::Studio,
+        }),
+        HotkeyAction::StopRecording
+        | HotkeyAction::RestartRecording
+        | HotkeyAction::TogglePauseRecording
+        | HotkeyAction::OpenRecordingPicker
+        | HotkeyAction::AddRecordingMarker
+        | HotkeyAction::ToggleDrawing => ModePlan::Unrelated,
     }
 }
 
@@ -967,7 +1012,12 @@ fn unregister_scoped(cx: &mut App) {
 /// reason every other `CAP_GPUI_AUTO_*` hook exists).
 pub fn dispatch_for_harness(key: &str, cx: &mut App) {
     match HotkeyAction::from_store_key(key) {
-        Some(action) => dispatch(action, std::time::Instant::now(), cx),
+        Some(action) => {
+            let main = cx.global::<app_windows::AppWindows>().main;
+            let selected = main.read(cx).map(|view| view.mode()).ok();
+            tracing::info!(key, ?selected, "CAP_GPUI_AUTO_HOTKEY");
+            dispatch(action, std::time::Instant::now(), cx);
+        }
         None => tracing::error!(key, "CAP_GPUI_AUTO_HOTKEY: unknown action"),
     }
 }
@@ -1002,14 +1052,40 @@ fn actions_for(bindings: &[(HotKey, HotkeyAction)], id: u32) -> Vec<HotkeyAction
 /// Tauri commands' own early returns.
 fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) {
     tracing::info!(?action, "global hotkey");
+    match mode_plan(action, selected_mode(action, cx)) {
+        ModePlan::Start(mode) => start_from_hotkey(mode, cx),
+        ModePlan::Picker(kind, mode) => app_windows::arm_picker(kind, mode, cx),
+        ModePlan::Select(mode) => app_windows::set_recording_mode(mode, cx),
+        ModePlan::Capture | ModePlan::Unrelated => dispatch_without_mode(action, pressed_at, cx),
+    }
+}
+
+/// The mode a shortcut reads: the one the user selected. The cycle shortcut
+/// steps from the mode on screen instead, since a picker a shortcut opened
+/// shows that shortcut's mode, not the selected one. An editor's armed
+/// "Record new" flow only records in Studio, so the selected-mode start
+/// does too.
+fn selected_mode(action: HotkeyAction, cx: &mut App) -> Mode {
+    let editor_flow = RecordingSession::global(cx)
+        .read(cx)
+        .editor_recording_target()
+        .is_some();
+    let main = cx.global::<app_windows::AppWindows>().main;
+    main.update(cx, |view, _window, cx| match action {
+        HotkeyAction::CycleRecordingMode => view.effective_mode(cx),
+        HotkeyAction::StartRecording if editor_flow => Mode::Studio,
+        _ => view.mode(),
+    })
+    .unwrap_or_else(|_| Mode::from_store())
+}
+
+fn dispatch_without_mode(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) {
     match action {
         HotkeyAction::AddRecordingMarker => {
             RecordingSession::global(cx)
                 .update(cx, |session, cx| session.add_marker(pressed_at, cx));
         }
         HotkeyAction::ToggleDrawing => crate::live_draw::toggle(cx),
-        HotkeyAction::StartStudioRecording => start_from_hotkey(Mode::Studio, cx),
-        HotkeyAction::StartInstantRecording => start_from_hotkey(Mode::Instant, cx),
         HotkeyAction::StopRecording => {
             RecordingSession::global(cx).update(cx, |session, cx| session.stop(cx));
         }
@@ -1019,26 +1095,10 @@ fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) 
         HotkeyAction::TogglePauseRecording => {
             RecordingSession::global(cx).update(cx, |session, cx| session.toggle_pause(cx));
         }
-        HotkeyAction::CycleRecordingMode => {
-            // `Studio -> Instant -> Screenshot -> Studio` (`hotkeys.rs:262`).
-            let next = match Mode::from_store() {
-                Mode::Studio => Mode::Instant,
-                Mode::Instant => Mode::Screenshot,
-                Mode::Screenshot => Mode::Studio,
-            };
-            app_windows::set_recording_mode(next, cx);
-        }
         HotkeyAction::OpenRecordingPicker => {
             app_windows::show_main_window(cx);
             cx.activate(true);
         }
-        HotkeyAction::OpenRecordingPickerDisplay => {
-            app_windows::arm_target_mode(TargetType::Display, cx)
-        }
-        HotkeyAction::OpenRecordingPickerWindow => {
-            app_windows::arm_target_mode(TargetType::Window, cx)
-        }
-        HotkeyAction::OpenRecordingPickerArea => app_windows::arm_target_mode(TargetType::Area, cx),
         HotkeyAction::ScreenshotDisplay => {
             let display = scap_targets::Display::get_containing_cursor()
                 .unwrap_or_else(scap_targets::Display::primary);
@@ -1058,11 +1118,15 @@ fn dispatch(action: HotkeyAction, pressed_at: std::time::Instant, cx: &mut App) 
                 None => tracing::warn!("no window under the cursor to screenshot"),
             }
         }
-        HotkeyAction::ScreenshotArea => {
-            // `set_mode(Screenshot)` + the area picker (`hotkeys.rs:311-323`):
-            // the grab happens when the drawn area is released.
-            app_windows::set_recording_mode(Mode::Screenshot, cx);
-            app_windows::arm_target_mode(TargetType::Area, cx);
+        HotkeyAction::StartRecording
+        | HotkeyAction::StartStudioRecording
+        | HotkeyAction::StartInstantRecording
+        | HotkeyAction::CycleRecordingMode
+        | HotkeyAction::OpenRecordingPickerDisplay
+        | HotkeyAction::OpenRecordingPickerWindow
+        | HotkeyAction::OpenRecordingPickerArea
+        | HotkeyAction::ScreenshotArea => {
+            tracing::error!(?action, "mode shortcut reached the modeless dispatch");
         }
     }
 }
@@ -1084,16 +1148,24 @@ fn microphone_available(name: &str) -> bool {
 /// without a working microphone, then record. Mic/camera come off the main
 /// window's current selections through its ordinary start path.
 ///
-/// The mode is set through [`app_windows::set_recording_mode`] first, so the
-/// pill, the tray tick and the shared store all follow the hotkey; the Tauri
-/// listener hands the mode straight to the engine and leaves the setting
-/// where it was. Deliberate: this app's start path reads the window's mode,
-/// and a recording visibly in Studio mode with the pill saying Instant is the
-/// worse mismatch.
+/// The mode goes to this one start and the selected mode stays as it is, the
+/// way the Tauri listener hands it straight to the engine. Setting it here
+/// once left a Start Studio press switching the main window to Studio for
+/// good (#3597). In Screenshot mode the same target is captured instead.
 fn start_from_hotkey(mode: Mode, cx: &mut App) {
-    app_windows::set_recording_mode(mode, cx);
     let main = cx.global::<app_windows::AppWindows>().main;
-    let armed = main.read(cx).ok().and_then(|view| view.armed_target());
+    let screenshot = mode == Mode::Screenshot;
+    let armed = main
+        .read(cx)
+        .ok()
+        .and_then(|view| view.armed_target())
+        .filter(|target| {
+            !(screenshot
+                && matches!(
+                    target,
+                    ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+                ))
+        });
     let stored = stored_target();
 
     // `is_recording_active_or_pending` (`hotkeys.rs:162-170` over there): an
@@ -1101,7 +1173,7 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
     // `start_recording_with_target`'s phase check here and `start_recording`'s
     // over there.
     let idle = RecordingSession::global(cx).read(cx).phase == Phase::Idle;
-    let confirm = idle && store::GeneralSettings::load().confirm_without_microphone;
+    let confirm = !screenshot && idle && store::GeneralSettings::load().confirm_without_microphone;
     let mic_name = main.read(cx).ok().and_then(|view| {
         view.microphone_selection()
             .map(|microphone| microphone.name.clone())
@@ -1180,13 +1252,20 @@ fn start_from_hotkey(mode: Mode, cx: &mut App) {
 /// unplugged display used to fail the start with "target_display_crop:
 /// Display not found". A stored camera-only target is skipped: without a
 /// camera selected it cannot start, so only an explicit choice records it.
+/// A stored audio-only target is skipped too: a shortcut that records the
+/// screen should not quietly record sound alone because the last one did.
 fn pick_hotkey_target(
     armed: Option<ScreenCaptureTarget>,
     stored: Option<ScreenCaptureTarget>,
     is_live: impl Fn(&ScreenCaptureTarget) -> bool,
     fallback_display: impl FnOnce() -> scap_targets::DisplayId,
 ) -> ScreenCaptureTarget {
-    let stored = stored.filter(|target| !matches!(target, ScreenCaptureTarget::CameraOnly));
+    let stored = stored.filter(|target| {
+        !matches!(
+            target,
+            ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly
+        )
+    });
     [armed, stored]
         .into_iter()
         .flatten()
@@ -1205,7 +1284,7 @@ fn target_is_live(target: &ScreenCaptureTarget) -> bool {
         ScreenCaptureTarget::Area { screen, .. } => {
             scap_targets::Display::from_id(screen).is_some()
         }
-        ScreenCaptureTarget::CameraOnly => true,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => true,
     }
 }
 
@@ -1215,14 +1294,12 @@ fn start_now(
     target: ScreenCaptureTarget,
     cx: &mut App,
 ) {
-    // The start waited on the target lookup (and maybe the microphone
-    // prompt); another Start or Cycle shortcut can change the mode meanwhile,
-    // and the start path reads the window's mode.
-    if RecordingSession::global(cx).read(cx).phase == Phase::Idle {
-        app_windows::set_recording_mode(mode, cx);
+    if mode == Mode::Screenshot {
+        crate::screenshot::take_screenshot(target, cx);
+        return;
     }
     main.update(cx, |view, window, cx| {
-        view.start_recording_with_target(target, Vec::new(), window, cx)
+        view.start_recording_in_mode(target, mode, window, cx)
     })
     .ok();
 }
@@ -1408,11 +1485,94 @@ mod tests {
         ]));
     }
 
+    const MODES: [Mode; 3] = [Mode::Studio, Mode::Instant, Mode::Screenshot];
+
+    /// Every action against every selected mode (#3597): a shortcut tied to
+    /// a mode runs in that mode, the generic ones follow the selected mode,
+    /// and only the cycle shortcut changes it.
+    #[test]
+    fn every_shortcut_respects_the_selected_mode() {
+        for selected in MODES {
+            let recording = if selected == Mode::Instant {
+                Mode::Instant
+            } else {
+                Mode::Studio
+            };
+            for (key, action) in ACTION_KEYS {
+                let expected = match action {
+                    HotkeyAction::StartRecording => ModePlan::Start(selected),
+                    HotkeyAction::StartStudioRecording => ModePlan::Start(Mode::Studio),
+                    HotkeyAction::StartInstantRecording => ModePlan::Start(Mode::Instant),
+                    HotkeyAction::OpenRecordingPickerArea => {
+                        ModePlan::Picker(TargetType::Area, recording)
+                    }
+                    HotkeyAction::OpenRecordingPickerWindow => {
+                        ModePlan::Picker(TargetType::Window, recording)
+                    }
+                    HotkeyAction::OpenRecordingPickerDisplay => {
+                        ModePlan::Picker(TargetType::Display, recording)
+                    }
+                    HotkeyAction::ScreenshotArea => {
+                        ModePlan::Picker(TargetType::Area, Mode::Screenshot)
+                    }
+                    HotkeyAction::ScreenshotWindow | HotkeyAction::ScreenshotDisplay => {
+                        ModePlan::Capture
+                    }
+                    HotkeyAction::CycleRecordingMode => ModePlan::Select(match selected {
+                        Mode::Studio => Mode::Instant,
+                        Mode::Instant => Mode::Screenshot,
+                        Mode::Screenshot => Mode::Studio,
+                    }),
+                    HotkeyAction::StopRecording
+                    | HotkeyAction::RestartRecording
+                    | HotkeyAction::TogglePauseRecording
+                    | HotkeyAction::OpenRecordingPicker
+                    | HotkeyAction::AddRecordingMarker
+                    | HotkeyAction::ToggleDrawing => ModePlan::Unrelated,
+                };
+                assert_eq!(
+                    mode_plan(action, selected),
+                    expected,
+                    "{key} in {selected:?}"
+                );
+                assert_eq!(
+                    matches!(mode_plan(action, selected), ModePlan::Select(_)),
+                    action == HotkeyAction::CycleRecordingMode,
+                    "{key} in {selected:?}"
+                );
+            }
+        }
+    }
+
+    /// The report's steps: Studio selected, "Screenshot an area", then
+    /// "Record an area". The selected mode never moves, so the second
+    /// shortcut still records.
+    #[test]
+    fn a_screenshot_shortcut_leaves_the_next_record_shortcut_recording() {
+        let mut selected = Mode::Studio;
+        for action in [
+            HotkeyAction::ScreenshotArea,
+            HotkeyAction::StartStudioRecording,
+            HotkeyAction::StartInstantRecording,
+            HotkeyAction::StartRecording,
+        ] {
+            if let ModePlan::Select(mode) = mode_plan(action, selected) {
+                selected = mode;
+            }
+        }
+        assert_eq!(selected, Mode::Studio);
+        assert_eq!(
+            mode_plan(HotkeyAction::OpenRecordingPickerArea, selected),
+            ModePlan::Picker(TargetType::Area, Mode::Studio)
+        );
+    }
+
     /// Every store key the Tauri `HotkeyAction`'s camelCase serde produces
     /// maps to a variant here, and an unknown key registers nothing.
     #[test]
     fn action_keys_match_the_tauri_serde_names() {
         for key in [
+            "startRecording",
             "startStudioRecording",
             "startInstantRecording",
             "stopRecording",
@@ -1509,6 +1669,24 @@ mod tests {
             || display_id("3"),
         );
         assert!(matches!(picked, ScreenCaptureTarget::CameraOnly));
+    }
+
+    #[test]
+    fn a_stored_audio_only_target_never_starts_a_shortcut_recording() {
+        let picked = pick_hotkey_target(
+            None,
+            Some(ScreenCaptureTarget::AudioOnly),
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(same(&picked, &display("3")));
+        let picked = pick_hotkey_target(
+            Some(ScreenCaptureTarget::AudioOnly),
+            None,
+            |_| true,
+            || display_id("3"),
+        );
+        assert!(matches!(picked, ScreenCaptureTarget::AudioOnly));
     }
 
     /// What the main window writes on every start is what the shortcut reads

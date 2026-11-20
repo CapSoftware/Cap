@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "e9ca8642-a24d-4577-90b1-4dfee38f9a2a",
+	"id": "ed3db4f5-17d1-4fa4-8d31-a2d5c1217e4d",
 	"prevId": "45632039-82de-46d3-b9b4-96c0a5a6b756",
 	"tables": {
 		"accounts": {
@@ -3305,85 +3305,6 @@
 			"uniqueConstraints": {},
 			"checkConstraint": {}
 		},
-		"meeting_notes_trial_uses": {
-			"name": "meeting_notes_trial_uses",
-			"columns": {
-				"userId": {
-					"name": "userId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"meetingId": {
-					"name": "meetingId",
-					"type": "varchar(64)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"slot": {
-					"name": "slot",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"notesRuns": {
-					"name": "notesRuns",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 1
-				},
-				"askRuns": {
-					"name": "askRuns",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"startedAt": {
-					"name": "startedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"completedAt": {
-					"name": "completedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				}
-			},
-			"indexes": {
-				"user_slot_idx": {
-					"name": "user_slot_idx",
-					"columns": ["userId", "slot"],
-					"isUnique": true
-				}
-			},
-			"foreignKeys": {},
-			"compositePrimaryKeys": {
-				"meeting_notes_trial_uses_userId_meetingId_pk": {
-					"name": "meeting_notes_trial_uses_userId_meetingId_pk",
-					"columns": ["userId", "meetingId"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
 		"messenger_conversations": {
 			"name": "messenger_conversations",
 			"columns": {
@@ -4998,6 +4919,13 @@
 					"notNull": true,
 					"autoincrement": false,
 					"default": "(now())"
+				},
+				"position": {
+					"name": "position",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
 				}
 			},
 			"indexes": {
@@ -6277,6 +6205,13 @@
 					"autoincrement": false,
 					"default": false
 				},
+				"archivedAt": {
+					"name": "archivedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
 				"awsRegion": {
 					"name": "awsRegion",
 					"type": "varchar(255)",
@@ -6367,6 +6302,17 @@
 				"org_effective_created_idx": {
 					"name": "org_effective_created_idx",
 					"columns": ["orgId", "effectiveCreatedAt"],
+					"isUnique": false
+				},
+				"org_owner_folder_archived_effective_idx": {
+					"name": "org_owner_folder_archived_effective_idx",
+					"columns": [
+						"orgId",
+						"ownerId",
+						"folderId",
+						"archivedAt",
+						"effectiveCreatedAt"
+					],
 					"isUnique": false
 				},
 				"screenshot_transcription_created_idx": {

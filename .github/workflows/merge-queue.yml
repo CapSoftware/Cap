@@ -1,0 +1,46 @@
+name: Merge queue
+
+# "Merge queue" is the check to require. In the merge queue it waits for every
+# workflow that declares merge_group (scripts/ci/merge_queue.py expected) to
+# finish on the queued commit and fails as soon as one fails, so a workflow
+# added to the queue is a merge gate without another ruleset change. On pull
+# requests it only checks the queue helpers: the queue run is the one that
+# decides.
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+
+concurrency:
+  group: merge-queue-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Merge queue
+    # GitHub-hosted, because this job only waits on the API for up to the
+    # length of the slowest queue workflow.
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+
+      - name: Check the queue helpers
+        run: python3 scripts/ci/merge_queue.py test
+
+      - name: Wait for the queue workflows
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py gate --head "$HEAD"
