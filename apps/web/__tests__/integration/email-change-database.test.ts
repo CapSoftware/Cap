@@ -863,6 +863,44 @@ describe.runIf(Boolean(databaseUrl))(
 			}
 		});
 
+		it("refuses a change still in flight when the owner signs out of all devices", async () => {
+			const { finishEmailChange } = await actions();
+			const { signOutAllDevices } = await import(
+				"@/app/(org)/dashboard/settings/account/server"
+			);
+			const user = await makeUser(address(), {
+				stripeCustomerId: `cus_${id()}`,
+			});
+			const newEmail = address();
+			await start(user, newEmail);
+			fixture.onStripeUpdate = async () => {
+				await database()
+					.update(users)
+					.set({ authSessionVersion: user.authSessionVersion + 1 })
+					.where(eq(users.id, user.id));
+			};
+			expect(await finishEmailChange(lastCode(newEmail))).toEqual({
+				status: "invalid",
+			});
+			expect((await reload(user.id))?.email).toBe(user.email);
+			expect(
+				fixture.stripeUpdates
+					.filter((update) => update.id === user.stripeCustomerId)
+					.map((update) => update.params.email),
+			).toEqual([newEmail, user.email]);
+
+			const second = address();
+			fixture.currentUser = await reload(user.id);
+			await start(user, second);
+			await signOutAllDevices();
+			expect(
+				await database()
+					.select()
+					.from(emailChangeRequests)
+					.where(eq(emailChangeRequests.userId, user.id)),
+			).toHaveLength(0);
+		});
+
 		it("puts billing back when the change does not commit", async () => {
 			const { finishEmailChange } = await actions();
 			const user = await makeUser(address(), {
