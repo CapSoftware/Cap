@@ -528,7 +528,7 @@ fn key_preview(
         .into_any_element()
 }
 
-/// What was pasted into Type Keys as one line: a script's line breaks and
+/// What was pasted into Add Keystrokes as one line: a script's line breaks and
 /// runs of spaces become single spaces.
 pub(crate) fn key_prompt_text(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -3421,7 +3421,7 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// The Type Keys panel, in place of the sidebar while it is open: paste a
+    /// The Add Keystrokes panel, in place of the sidebar while it is open: paste a
     /// sentence, a script or a transcript, or a shortcut like cmd+shift+p,
     /// and Add turns it into key presses on the timeline, typed out from
     /// where the panel was opened.
@@ -3520,7 +3520,7 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// Opens Type Keys, to add key presses from `at` on.
+    /// Opens Add Keystrokes, to add key presses from `at` on.
     pub(crate) fn open_key_prompt(&mut self, at: f64, window: &mut Window, cx: &mut Context<Self>) {
         self.set_selection(None, cx);
         self.audio_picker = None;
@@ -3539,7 +3539,7 @@ impl EditorWindow {
         cx.notify();
     }
 
-    /// Closes Type Keys. Focus left on its text box or buttons, which are no
+    /// Closes Add Keystrokes. Focus left on its text box or buttons, which are no
     /// longer drawn, would keep Space and every other editor shortcut off, so
     /// it goes back to the editor.
     pub(crate) fn close_key_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {

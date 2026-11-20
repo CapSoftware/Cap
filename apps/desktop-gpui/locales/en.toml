@@ -2954,8 +2954,8 @@ theme_retro = "Retro"
 timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
-type_keys = "Type Keys"
-type_keys_button = "Type Keys…"
+type_keys = "Add Keystrokes"
+type_keys_button = "Add Keystrokes…"
 type_keys_hint = { text = "Paste a sentence, a script or a transcript, or a shortcut like cmd+shift+p. It types out as key presses from where you opened this.", context = "cmd+shift+p is typed as is and must stay in English." }
 type_keys_placeholder = { text = "A sentence, or a shortcut like cmd+k", context = "Placeholder in a text box; cmd+k is typed as is and must stay in English." }
 type_keys_summary = { text = "About {seconds} s of typing", context = "{seconds} is a number of seconds, like 4.2." }
@@ -3042,7 +3042,7 @@ title = { text = "Timeline", context = "Label above the timeline while the edito
 
 [editor.timeline.empty]
 add_audio = "Add audio"
-add_key = "Add a key press"
+add_key = "Add keystrokes"
 add_scene = "Add scene"
 audio = "Add background music or import your own audio"
 captions = "No captions"
@@ -3220,7 +3220,7 @@ drop_failed = "That sound file could not be added"
 drop_unsupported = "Drop a video, image or sound file to add it"
 image = "Add an image"
 image_detail = "Logos, screenshots, overlays"
-keys = "Type keys"
+keys = "Add keystrokes"
 keys_detail = "Show typing or shortcuts on screen"
 music = "Add music"
 music_detail = "From the library or a file"

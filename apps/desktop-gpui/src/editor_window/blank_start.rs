@@ -348,7 +348,7 @@ impl EditorWindow {
 
     /// The side panel and its grip. The slate hides them, since nothing on
     /// it has a picture to act on yet, unless a flow the actions start lives
-    /// there (Type Keys, the music library); when they come back they
+    /// there (Add Keystrokes, the music library); when they come back they
     /// open out rather than jumping in.
     pub(super) fn render_side_panel_slot(
         &mut self,

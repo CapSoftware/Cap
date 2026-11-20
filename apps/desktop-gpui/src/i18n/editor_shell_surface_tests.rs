@@ -284,13 +284,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::keyboard::style_windows(), "Windows"),
         (tr::editor::tabs::keyboard::style_linux(), "Linux"),
         (tr::editor::tabs::keyboard::style_mechanical(), "Mechanical"),
-        (tr::editor::tabs::keyboard::type_keys(), "Type Keys"),
+        (tr::editor::tabs::keyboard::type_keys(), "Add Keystrokes"),
         (
             tr::editor::tabs::keyboard::type_keys_placeholder(),
             "A sentence, or a shortcut like cmd+k",
         ),
         (tr::editor::tabs::keyboard::show_as(), "Show As"),
-        (tr::editor::tabs::keyboard::type_keys_button(), "Type Keys…"),
+        (
+            tr::editor::tabs::keyboard::type_keys_button(),
+            "Add Keystrokes…",
+        ),
         (
             tr::editor::tabs::keyboard::add_to_timeline(),
             "Add to Timeline",
@@ -1088,7 +1091,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Pick something to add, or drop files here.",
         ),
         (tr::editor::window::blank_start::clips(), "Add clips"),
-        (tr::editor::window::blank_start::keys(), "Type keys"),
+        (tr::editor::window::blank_start::keys(), "Add keystrokes"),
         (
             tr::editor::window::blank_start::keys_detail(),
             "Show typing or shortcuts on screen",
@@ -1365,7 +1368,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::no_room_for_key(),
             "No room for another key press here",
         ),
-        (tr::editor::timeline::empty::add_key(), "Add a key press"),
+        (tr::editor::timeline::empty::add_key(), "Add keystrokes"),
         (
             tr::editor::window::open::damaged(),
             "This recording's video tracks could not be opened. The bundle looks damaged.",

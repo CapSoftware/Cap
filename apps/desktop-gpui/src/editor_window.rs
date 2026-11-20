@@ -2100,7 +2100,7 @@ pub struct EditorWindow {
     add_track: Option<AddTrackMenu>,
     add_track_opens: usize,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
-    /// Type Keys is open, to add key presses from this time on.
+    /// Add Keystrokes is open, to add key presses from this time on.
     pub(crate) key_prompt: Option<f64>,
     pub(crate) audio_picker_generation: u64,
     pub(crate) audio_import_pending: Option<u64>,
@@ -5751,7 +5751,7 @@ impl EditorWindow {
                         self.view.preview_time = None;
                     }
                 } else if kind == TrackKind::Keyboard {
-                    // Type Keys opens where the track was pressed.
+                    // Add Keystrokes opens where the track was pressed.
                     cx.stop_propagation();
                     self.seek_to_time(press_time, cx);
                     self.view.preview_time = None;
