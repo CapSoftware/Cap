@@ -141,21 +141,21 @@ fn placement(cx: &App) -> Bounds<Pixels> {
 pub fn open(doc_id: Option<String>, cx: &mut App) {
     crate::app_windows::hide_main_for_meeting_window(cx);
     if let Some(handle) = MeetingWindows::get(cx).documents {
-        let native = handle
-            .update(cx, |root, window, cx| {
-                if let Ok(root) = root.downcast::<DocumentsWindow>() {
-                    root.update(cx, |root, cx| root.reveal(doc_id.clone(), cx));
-                }
-                window.activate_window();
-                platform::native_window(window)
-            })
-            .ok()
-            .flatten();
-        match native {
-            Some(native) => cx
+        let revealed = handle.update(cx, |root, window, cx| {
+            if let Ok(root) = root.downcast::<DocumentsWindow>() {
+                root.update(cx, |root, cx| root.reveal(doc_id.clone(), cx));
+            }
+            window.activate_window();
+            platform::native_window(window)
+        });
+        match revealed {
+            Ok(Some(native)) => cx
                 .spawn(async move |_| platform::show_native(&native))
                 .detach(),
-            None => {
+            // Off macOS there is no native handle to raise: the open window
+            // is already revealed and activated, and is the only one.
+            Ok(None) => {}
+            Err(_) => {
                 MeetingWindows::get(cx).documents = None;
                 open_new(doc_id, cx);
             }
@@ -294,9 +294,16 @@ impl DocumentsWindow {
                 this.flush(cx);
                 async {}
             }),
-            cx.on_release(|_, cx| {
-                let windows = MeetingWindows::get(cx);
-                windows.documents = None;
+            cx.on_release({
+                let this_window = window.window_handle();
+                move |_, cx| {
+                    // Only this window's own slot: a newer notes window
+                    // stays the one every open() reveals.
+                    let windows = MeetingWindows::get(cx);
+                    if windows.documents == Some(this_window) {
+                        windows.documents = None;
+                    }
+                }
             }),
             cx.observe_window_activation(window, |_, window, cx| {
                 if window.is_window_active()
@@ -935,5 +942,68 @@ impl Render for DocumentsWindow {
 impl DocumentsWindow {
     pub fn debug_toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.toggle_sidebar(&ToggleSidebar, window, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::TestAppContext;
+
+    use crate::meetings_ui::MeetingWindows;
+
+    fn notes_windows(cx: &mut TestAppContext) -> usize {
+        cx.update(|cx| {
+            cx.windows()
+                .into_iter()
+                .filter(|w| w.downcast::<super::DocumentsWindow>().is_some())
+                .count()
+        })
+    }
+
+    /// Opening the notes window while it is open raises that window. It
+    /// never stacks a second one, on any platform (off macOS there is no
+    /// native window handle, which used to read as "the window is gone").
+    #[gpui::test]
+    fn opening_the_notes_window_again_raises_the_one_open(cx: &mut TestAppContext) {
+        cx.update(|cx| super::open(None, cx));
+        cx.run_until_parked();
+        let first = cx.update(|cx| MeetingWindows::get(cx).documents);
+        assert!(first.is_some());
+        for _ in 0..3 {
+            cx.update(|cx| super::open(None, cx));
+            cx.run_until_parked();
+        }
+        assert_eq!(notes_windows(cx), 1);
+        assert_eq!(cx.update(|cx| MeetingWindows::get(cx).documents), first);
+    }
+
+    /// A notes window that goes away clears only its own slot, so a newer
+    /// window stays the one the next open() raises.
+    #[gpui::test]
+    fn a_closed_notes_window_does_not_forget_a_newer_one(cx: &mut TestAppContext) {
+        cx.update(|cx| super::open(None, cx));
+        cx.run_until_parked();
+        let old = cx.update(|cx| MeetingWindows::get(cx).documents).unwrap();
+        let newer = cx
+            .add_empty_window()
+            .update(|window, _| window.window_handle());
+        cx.update(|cx| MeetingWindows::get(cx).documents = Some(newer));
+        old.update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|cx| MeetingWindows::get(cx).documents),
+            Some(newer)
+        );
+
+        cx.update(|cx| MeetingWindows::get(cx).documents = None);
+        cx.update(|cx| super::open(None, cx));
+        cx.run_until_parked();
+        let reopened = cx.update(|cx| MeetingWindows::get(cx).documents).unwrap();
+        reopened
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| MeetingWindows::get(cx).documents), None);
     }
 }
