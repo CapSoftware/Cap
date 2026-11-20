@@ -273,7 +273,15 @@ impl EditorWindow {
                     .children(SECONDARY.into_iter().enumerate().map(|(index, action)| {
                         self.render_blank_start_row(action, index > 0, window, cx)
                     })),
-            );
+            )
+            .children(self.sidebar.image_import_error.clone().map(|error| {
+                div()
+                    .mt(px(12.))
+                    .text_center()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.red_9))
+                    .child(error)
+            }));
 
         let surface = div()
             .id("blank-start-slate")
@@ -329,18 +337,16 @@ impl EditorWindow {
     }
 
     /// The side panel and its grip. The slate hides them, since nothing on
-    /// it has a picture to act on yet, unless a flow the tiles start lives
-    /// there (Type Keys, the music library, an image error); when they come
-    /// back they open out rather than jumping in.
+    /// it has a picture to act on yet, unless a flow the actions start lives
+    /// there (Type Keys, the music library); when they come back they open
+    /// out rather than jumping in.
     pub(super) fn render_side_panel_slot(
         &mut self,
         viewport_width: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let panel_flow = self.key_prompt.is_some()
-            || self.audio_picker.is_some()
-            || self.sidebar.image_import_error.is_some();
+        let panel_flow = self.key_prompt.is_some() || self.audio_picker.is_some();
         let hidden = self.blank_start_shown() && self.project_ready() && !panel_flow;
         if self.blank_panel.hidden && !hidden && !cx.reduce_motion() {
             self.blank_panel.reveals += 1;
