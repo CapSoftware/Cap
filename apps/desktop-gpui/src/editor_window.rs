@@ -7461,11 +7461,8 @@ impl EditorWindow {
         true
     }
 
-    /// Turns what was typed into Type Keys into key presses from `at`,
-    /// sized to strike every key and be read, then moves the playhead past
-    /// it so the next entry follows on. A sentence pops up a word at a time,
-    /// a key at a time, or whole, as the tab's "Show as" says; `cmd+shift+p`
-    /// always shows as its keys.
+    /// A shortcut written out (`cmd+shift+p`) always shows as its keys,
+    /// whatever "Show as" says.
     pub(crate) fn add_typed_keys(
         &mut self,
         input: &str,
