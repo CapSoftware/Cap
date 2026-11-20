@@ -468,6 +468,10 @@ impl NotesEditor {
         cx.notify();
     }
 
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
         if self.read_only == read_only {
             return;

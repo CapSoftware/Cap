@@ -107,6 +107,10 @@ struct SaveState {
     /// Counts the user's edits, so a load that started before one never
     /// replaces it.
     edits: u64,
+    /// The open note's saved payload has loaded (or there was none). Until
+    /// then the editor is read-only and nothing is written, so a page that
+    /// has not loaded can never be saved over the file.
+    loaded: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -752,10 +756,13 @@ impl Pane {
             .update(cx, |t, cx| t.update_meta(meta.clone(), cx));
         if trashed_changed {
             let read_only = meta.is_trashed();
-            self.notes
-                .update(cx, |e, cx| e.set_read_only(read_only, cx));
+            let (notes_ro, enhanced_ro) = (
+                read_only || !self.notes_save.loaded,
+                read_only || !self.enhanced_save.loaded,
+            );
+            self.notes.update(cx, |e, cx| e.set_read_only(notes_ro, cx));
             self.enhanced
-                .update(cx, |e, cx| e.set_read_only(read_only, cx));
+                .update(cx, |e, cx| e.set_read_only(enhanced_ro, cx));
         }
         if has_enhanced_now && !had_enhanced && !self.streaming {
             self.settle_enhanced(cx);
@@ -825,17 +832,20 @@ impl Pane {
         self.enhanced_save.doc_id = Some(id.clone());
         self.sync_title(&meta, true, window, cx);
         let read_only = meta.is_trashed();
+        // Both editors wait, read-only, for the saved text (a few ms).
+        self.notes_save.loaded = false;
+        self.enhanced_save.loaded = false;
         self.notes_save.suppress += 1;
         self.notes.update(cx, |e, cx| {
             e.set_document(Document::new(), cx);
-            e.set_read_only(read_only, cx);
+            e.set_read_only(true, cx);
             e.set_placeholder(tr::documents::editor::placeholder(), cx);
         });
         self.notes_placeholder = tr::documents::editor::placeholder();
         self.enhanced_save.suppress += 1;
         self.enhanced.update(cx, |e, cx| {
             e.set_document(Document::new(), cx);
-            e.set_read_only(read_only, cx);
+            e.set_read_only(true, cx);
         });
         let recording = Meetings::try_global(cx)
             .and_then(|m| m.read(cx).active().map(|a| a.doc_id == id))
@@ -890,39 +900,67 @@ impl Pane {
             }
         }
         let Some(library) = self.library(cx) else {
+            // Nothing on disk to protect.
+            self.notes_save.loaded = true;
+            self.enhanced_save.loaded = true;
+            self.notes.update(cx, |e, cx| e.set_read_only(read_only, cx));
+            self.enhanced.update(cx, |e, cx| e.set_read_only(read_only, cx));
             return;
         };
         let want_enhanced = has_enhanced && !self.streaming;
+        if !want_enhanced {
+            // No saved summary to read: Cap is writing it (the stream is the
+            // page) or there is none yet.
+            self.enhanced_save.loaded = true;
+            self.enhanced.update(cx, |e, cx| e.set_read_only(read_only, cx));
+        }
         let started = self.switch_started;
-        // The editors are live while this loads: whatever is typed meanwhile
-        // wins over the saved text.
-        let (notes_edits, enhanced_edits) = (self.notes_save.edits, self.enhanced_save.edits);
         self.load = Some(cx.spawn(async move |this, cx| {
             let doc_id = id.clone();
             let (notes, enhanced) = cx
                 .background_executor()
                 .spawn(async move {
                     let (notes, enhanced) = store::read_payloads(&library, &doc_id, want_enhanced);
-                    (
-                        notes.and_then(|json| Document::from_json(&json).ok()),
-                        enhanced.and_then(|json| Document::from_json(&json).ok()),
-                    )
+                    (parse_payload(notes), parse_payload(enhanced))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.doc_id().as_deref() != Some(id.as_str()) {
                     return;
                 }
-                if let Some(document) = notes
-                    && this.notes_save.edits == notes_edits
-                {
-                    this.notes_save.suppress += 1;
-                    this.notes.update(cx, |e, cx| e.set_document(document, cx));
+                let trashed = this.is_trashed();
+                match notes {
+                    Ok(document) => {
+                        if let Some(document) = document {
+                            this.notes_save.suppress += 1;
+                            this.notes.update(cx, |e, cx| e.set_document(document, cx));
+                        }
+                        this.notes_save.loaded = true;
+                        this.notes.update(cx, |e, cx| e.set_read_only(trashed, cx));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "could not load the notes; kept read-only");
+                        this.notes.update(cx, |e, cx| {
+                            e.set_placeholder(tr::documents::editor::load_failed(), cx)
+                        });
+                    }
                 }
-                if let Some(document) = enhanced
-                    && this.enhanced_save.edits == enhanced_edits
-                {
-                    this.set_enhanced(document, cx);
+                if want_enhanced {
+                    match enhanced {
+                        Ok(document) => {
+                            if let Some(document) = document {
+                                this.set_enhanced(document, cx);
+                            }
+                            this.enhanced_save.loaded = true;
+                            this.enhanced.update(cx, |e, cx| e.set_read_only(trashed, cx));
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "could not load the summary; kept read-only");
+                            this.enhanced.update(cx, |e, cx| {
+                                e.set_placeholder(tr::documents::editor::load_failed(), cx)
+                            });
+                        }
+                    }
                 }
                 if this.view == View::Generated
                     && !this.has_enhanced()
@@ -964,28 +1002,39 @@ impl Pane {
         let (Some(id), Some(library)) = (self.doc_id(), self.library(cx)) else {
             return;
         };
-        let edits = self.enhanced_save.edits;
+        // Read-only and never saved until the saved summary is back.
+        self.enhanced_save.loaded = false;
+        self.enhanced.update(cx, |e, cx| e.set_read_only(true, cx));
         self.load = Some(cx.spawn(async move |this, cx| {
             let doc_id = id.clone();
             let document = cx
                 .background_executor()
                 .spawn(async move {
-                    library
-                        .read_enhanced(&doc_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|json| Document::from_json(&json).ok())
+                    parse_payload(library.read_enhanced(&doc_id).map_err(|e| e.to_string()))
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if this.doc_id().as_deref() == Some(id.as_str())
-                    && this.enhanced_save.edits == edits
-                    && let Some(document) = document
-                {
-                    this.set_enhanced(document, cx);
-                    this.sync_bar(cx);
-                    cx.notify();
+                if this.doc_id().as_deref() != Some(id.as_str()) {
+                    return;
                 }
+                let trashed = this.is_trashed();
+                match document {
+                    Ok(document) => {
+                        if let Some(document) = document {
+                            this.set_enhanced(document, cx);
+                        }
+                        this.enhanced_save.loaded = true;
+                        this.enhanced.update(cx, |e, cx| e.set_read_only(trashed, cx));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "could not load the summary; kept read-only");
+                        this.enhanced.update(cx, |e, cx| {
+                            e.set_placeholder(tr::documents::editor::load_failed(), cx)
+                        });
+                    }
+                }
+                this.sync_bar(cx);
+                cx.notify();
             })
             .ok();
         }));
@@ -1127,7 +1176,8 @@ impl Pane {
     }
 
     fn sync_placeholder(&mut self, cx: &mut Context<Self>) {
-        if !self.is_meeting() {
+        // Loading, or kept read-only after a failed load (its own message).
+        if !self.is_meeting() || !self.notes_save.loaded {
             return;
         }
         let text = match ai_note::placeholder(self.access, self.note_state(cx)) {
@@ -1429,7 +1479,8 @@ impl Pane {
         let Some(meta) = self.doc.clone() else {
             return;
         };
-        if meta.is_trashed() {
+        // An empty-looking page whose saved text never loaded is not empty.
+        if meta.is_trashed() || !self.notes_save.loaded {
             return;
         }
         let recording = Meetings::try_global(cx).is_some_and(|m| {
@@ -2218,6 +2269,10 @@ impl Pane {
         };
         state.task = None;
         if state.dirty_since.take().is_none() {
+            return;
+        }
+        if !state.loaded {
+            // Its saved text never loaded: writing now would replace it.
             return;
         }
         let Some(id) = state.doc_id.clone() else {
@@ -5085,6 +5140,18 @@ impl Render for HeaderView {
                 .children(header)
                 .child(probe),
         )
+    }
+}
+
+/// A saved payload as a page: `Ok(None)` when there is none, `Err` when it
+/// exists but cannot be read or understood (it must then be kept, not saved
+/// over).
+fn parse_payload(payload: Result<Option<String>, String>) -> Result<Option<Document>, String> {
+    match payload? {
+        None => Ok(None),
+        Some(json) => Document::from_json(&json)
+            .map(Some)
+            .map_err(|e| format!("unreadable page: {e}")),
     }
 }
 

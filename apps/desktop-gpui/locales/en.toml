@@ -3953,6 +3953,7 @@ placeholder = "Start writing"
 meeting_placeholder = "Cap writes the notes when the meeting ends. Anything you type here is kept."
 own_placeholder = "Type your own notes. They're kept with the transcript."
 generated_placeholder = "The summary appears here"
+load_failed = { text = "This note couldn't be opened, so it's read-only and nothing in it changes.", context = "Shown in place of a note whose saved text could not be read. The note stays read-only so it is never saved over." }
 template_item = { text = "Template: {name}", context = "A slash menu item that inserts a template's headings. {name} is the template name." }
 heading = "Heading"
 plain_text = "Text"

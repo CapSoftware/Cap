@@ -647,14 +647,18 @@ pub fn crate_entropy() -> u64 {
         ^ COUNTER.fetch_add(0x9e37_79b9, Ordering::Relaxed)
 }
 
+/// A note's saved notes and (when asked) its summary. `Err` when a payload
+/// exists but could not be read: the caller must not let anything replace it.
 pub fn read_payloads(
     library: &Library,
     id: &str,
     enhanced: bool,
-) -> (Option<String>, Option<String>) {
-    let notes = library.read_notes(id).ok().flatten();
-    let enhanced = enhanced
-        .then(|| library.read_enhanced(id).ok().flatten())
-        .flatten();
+) -> (Result<Option<String>, String>, Result<Option<String>, String>) {
+    let notes = library.read_notes(id).map_err(|e| e.to_string());
+    let enhanced = if enhanced {
+        library.read_enhanced(id).map_err(|e| e.to_string())
+    } else {
+        Ok(None)
+    };
     (notes, enhanced)
 }

@@ -1365,31 +1365,246 @@ fn a_title_sent_with_notes_that_failed_goes_back_to_the_saved_one(cx: &mut TestA
     assert_ne!(kept, "Meeting at 5:46 PM");
 }
 
-#[gpui::test]
-fn typing_before_the_saved_note_loads_is_never_erased(cx: &mut TestAppContext) {
-    let (f, cx) = fixture(cx);
-    let second = f.store.read_with(cx, |s, _| s.snapshot.docs[1].id.clone());
-    f.store.update(cx, |s, cx| s.open(Some(second.clone()), cx));
-    // The note is open and editable, but its saved text has not loaded yet.
-    f.pane.update_in(cx, |pane, _, cx| {
-        pane.notes.update(cx, |e, cx| {
-            e.apply(
-                |ed| {
-                    ed.select_all();
-                    ed.insert_text("Typed while loading")
-                },
+/// A library of notes on disk, open in a window that draws the pane, so keys
+/// go through the editors' real input path.
+fn drawn_pane<'a>(
+    cx: &'a mut TestAppContext,
+    docs: &[(DocKind, &str, Option<&str>)],
+) -> (
+    tempfile::TempDir,
+    Library,
+    Vec<String>,
+    Entity<Pane>,
+    Entity<DocStore>,
+    &'a mut VisualTestContext,
+) {
+    use gpui::{px, size};
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let now = Utc::now();
+    let mut ids = Vec::new();
+    for (i, (kind, notes, summary)) in docs.iter().enumerate() {
+        let mut meta = library
+            .create(kind.clone(), now - ChronoDuration::minutes(i as i64), i as u64)
+            .unwrap();
+        // A note written "untitled: ..." is left without a title.
+        let (title, notes) = match notes.strip_prefix("untitled: ") {
+            Some(body) => (String::new(), body),
+            None => (format!("Doc {i}"), *notes),
+        };
+        meta.title_is_auto = title.is_empty();
+        meta.title = title;
+        if *kind == DocKind::Meeting {
+            meta.meeting = Some(MeetingDetails {
+                started_at: Some(now),
+                duration_ms: 60_000,
+                has_enhanced: summary.is_some(),
+                ..MeetingDetails::default()
+            });
+        }
+        library.save(&meta).unwrap();
+        library
+            .write_notes(&meta.id, &Document::from_markdown(notes).to_json())
+            .unwrap();
+        if let Some(summary) = summary {
+            let mut page = Document::from_markdown(summary);
+            for block in &mut page.blocks {
+                block.origin = cap_notes::Origin::Generated;
+            }
+            library.write_enhanced(&meta.id, &page.to_json()).unwrap();
+        }
+        ids.push(meta.id.clone());
+    }
+    let lib = library.clone();
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        let store = cx.new(|cx| DocStore::with_library(Some(lib), cx));
+        let pane = cx.new(|cx| {
+            Pane::new(
+                store.clone(),
+                gpui::WeakEntity::new_invalid(),
+                &Theme::light(),
+                window,
                 cx,
             )
         });
+        PaneHost { pane, store }
     });
+    cx.simulate_resize(size(px(1000.), px(700.)));
     cx.run_until_parked();
-    f.pane.read_with(cx, |pane, cx| {
+    let (pane, store) = host.read_with(cx, |h, _| (h.pane.clone(), h.store.clone()));
+    (dir, library, ids, pane, store, cx)
+}
+
+fn summary_markdown(library: &Library, id: &str) -> String {
+    library
+        .read_enhanced(id)
+        .unwrap()
+        .and_then(|json| Document::from_json(&json).ok())
+        .map(|d| d.to_markdown())
+        .unwrap_or_default()
+}
+
+/// Each way the open note gets saved: the typing pause, leaving the field,
+/// switching notes, closing the window.
+fn every_save_trigger(
+    pane: &Entity<Pane>,
+    store: &Entity<DocStore>,
+    other: &str,
+    cx: &mut VisualTestContext,
+    check: &dyn Fn(&mut VisualTestContext, &str),
+) {
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(900));
+    cx.run_until_parked();
+    check(cx, "after the typing pause");
+    pane.update_in(cx, |p, window, cx| p.focus_title(window, cx));
+    cx.run_until_parked();
+    check(cx, "after leaving the field");
+    store.update(cx, |s, cx| s.open(Some(other.to_string()), cx));
+    cx.run_until_parked();
+    check(cx, "after switching notes");
+    pane.update(cx, |p, cx| p.closing(cx));
+    cx.run_until_parked();
+    check(cx, "after closing");
+}
+
+#[gpui::test]
+fn a_key_typed_before_the_saved_note_loads_never_costs_the_saved_text(cx: &mut TestAppContext) {
+    let (_dir, library, ids, pane, store, cx) = drawn_pane(
+        cx,
+        &[
+            (DocKind::Note, "First note", None),
+            (DocKind::Note, "The saved second note", None),
+        ],
+    );
+    store.update(cx, |s, cx| s.open(Some(ids[0].clone()), cx));
+    cx.run_until_parked();
+    pane.update_in(cx, |p, window, cx| p.focus_body(window, cx));
+    cx.run_until_parked();
+    // Switch, and type one key before the saved text has loaded.
+    store.update(cx, |s, cx| s.open(Some(ids[1].clone()), cx));
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    let notes = pane.read_with(cx, |p, _| p.notes.clone());
+    assert_eq!(
+        notes.read_with(cx, |e, _| e.document().to_markdown().trim().to_string()),
+        "The saved second note",
+        "the page shows the saved text"
+    );
+    let (lib, id) = (library.clone(), ids[1].clone());
+    every_save_trigger(&pane, &store, &ids[0], cx, &|_, when| {
         assert_eq!(
-            pane.notes.read(cx).document().to_markdown().trim(),
-            "Typed while loading",
-            "the late load must not replace what was typed"
+            notes_markdown(&lib, &id).trim(),
+            "The saved second note",
+            "the saved text is still on disk {when}"
         );
     });
+}
+
+#[gpui::test]
+fn a_key_typed_before_the_saved_summary_loads_never_costs_the_saved_summary(
+    cx: &mut TestAppContext,
+) {
+    let (_dir, library, ids, pane, store, cx) = drawn_pane(
+        cx,
+        &[
+            (DocKind::Meeting, "", Some("The first summary.")),
+            (DocKind::Meeting, "", Some("The saved second summary.")),
+        ],
+    );
+    store.update(cx, |s, cx| s.open(Some(ids[0].clone()), cx));
+    cx.run_until_parked();
+    pane.update_in(cx, |p, window, cx| {
+        p.show_view(View::Generated, window, cx);
+        p.focus_body(window, cx);
+    });
+    cx.run_until_parked();
+    store.update(cx, |s, cx| s.open(Some(ids[1].clone()), cx));
+    cx.simulate_input("x");
+    cx.run_until_parked();
+    let enhanced = pane.read_with(cx, |p, _| p.enhanced.clone());
+    assert_eq!(
+        enhanced.read_with(cx, |e, _| e.document().to_markdown().trim().to_string()),
+        "The saved second summary.",
+        "the page shows the saved summary"
+    );
+    let (lib, id) = (library.clone(), ids[1].clone());
+    every_save_trigger(&pane, &store, &ids[0], cx, &|_, when| {
+        assert_eq!(
+            summary_markdown(&lib, &id).trim(),
+            "The saved second summary.",
+            "the saved summary is still on disk {when}"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_note_that_fails_to_load_stays_read_only_and_is_never_saved_over(cx: &mut TestAppContext) {
+    let (_dir, library, ids, pane, store, cx) = drawn_pane(
+        cx,
+        &[
+            (DocKind::Note, "First note", None),
+            (DocKind::Note, "Second note", None),
+        ],
+    );
+    // Its saved notes exist but cannot be understood.
+    let path = library
+        .doc_dir(&ids[1])
+        .unwrap()
+        .join(cap_meetings::library::NOTES_FILE);
+    std::fs::write(&path, "{ not a page").unwrap();
+    store.update(cx, |s, cx| s.open(Some(ids[0].clone()), cx));
+    cx.run_until_parked();
+    pane.update_in(cx, |p, window, cx| p.focus_body(window, cx));
+    cx.run_until_parked();
+    store.update(cx, |s, cx| s.open(Some(ids[1].clone()), cx));
+    cx.run_until_parked();
+    cx.simulate_input("typed");
+    cx.run_until_parked();
+    let notes = pane.read_with(cx, |p, _| p.notes.clone());
+    assert!(
+        notes.read_with(cx, |e, _| e.is_read_only()),
+        "a page that did not load is read-only"
+    );
+    assert_eq!(
+        notes.read_with(cx, |e, _| e.document().to_markdown().trim().to_string()),
+        "",
+        "nothing typed lands on it"
+    );
+    every_save_trigger(&pane, &store, &ids[0], cx, &|_, when| {
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{ not a page",
+            "the unreadable file is untouched {when}"
+        );
+    });
+}
+
+#[gpui::test]
+fn leaving_an_untitled_note_before_it_loads_never_deletes_it(cx: &mut TestAppContext) {
+    let (_dir, library, ids, pane, store, cx) = drawn_pane(
+        cx,
+        &[
+            (DocKind::Note, "Titled note", None),
+            (DocKind::Note, "untitled: Untitled but written", None),
+        ],
+    );
+    store.update(cx, |s, cx| s.open(Some(ids[0].clone()), cx));
+    cx.run_until_parked();
+    // Open it and leave again before its text has loaded.
+    store.update(cx, |s, cx| s.open(Some(ids[1].clone()), cx));
+    pane.read_with(cx, |p, cx| {
+        let doc = p.doc.as_ref().expect("open");
+        assert!(doc.title.is_empty() && doc.title_is_auto, "untitled");
+        assert!(p.title.read(cx).text().is_empty());
+    });
+    store.update(cx, |s, cx| s.open(Some(ids[0].clone()), cx));
+    cx.run_until_parked();
+    assert_eq!(
+        notes_markdown(&library, &ids[1]).trim(),
+        "Untitled but written",
+        "a note left before it loaded is kept, not tidied away"
+    );
 }
 
 #[gpui::test]
