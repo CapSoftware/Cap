@@ -330,8 +330,10 @@ impl PermissionHelp {
             return;
         }
         if !watches_grant(&self.need, self.held_at_open) {
-            self.poll = Some(cx.spawn_in(window, async move |_, cx| {
+            self.poll = Some(cx.spawn_in(window, async move |this, cx| {
                 come_back_after_settings(cx).await;
+                // Done: "Open System Settings again" must be able to re-arm.
+                this.update(cx, |this, _| this.poll = None).ok();
             }));
             return;
         }
