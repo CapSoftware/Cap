@@ -714,6 +714,13 @@ pub fn spawn_cursor_recorder(
         let mut last_window_position = None;
         #[cfg(any(windows, target_os = "macos"))]
         let mut last_window_crop: Option<CursorCropBounds> = None;
+        // device_query's `DeviceState::new` asserts Accessibility trust on
+        // macOS (and prompts for it). From macOS 27.3 Cap no longer needs that
+        // grant: cursor position and mouse buttons read fine without it, and
+        // held keys of other apps just read as released (issue #4410).
+        #[cfg(target_os = "macos")]
+        let device_state = DeviceState;
+        #[cfg(not(target_os = "macos"))]
         let device_state = DeviceState::new();
         // Reading the held keys asks the OS about every key it knows (two
         // CoreGraphics queries per key on macOS, 256 GetAsyncKeyState calls
