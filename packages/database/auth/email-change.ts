@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { buildEnv, serverEnv } from "@cap/env";
 import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
 import type { User } from "@cap/web-domain";
-import { and, desc, eq, gt, lt, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
 import { nanoId } from "../helpers.ts";
 import { db } from "../index.ts";
 import { enqueueLoopsSync } from "../loops/queue.ts";
@@ -22,7 +22,7 @@ import {
 } from "./domain-utils.ts";
 
 export const EMAIL_CHANGE_CODE_TTL_MS = 10 * 60 * 1000;
-export const EMAIL_CHANGE_MAX_ATTEMPTS = 5;
+export const EMAIL_CHANGE_MAX_ATTEMPTS = 3;
 export const EMAIL_CHANGE_RESEND_COOLDOWN_MS = 30 * 1000;
 
 export type EmailChangeRefusal = "invalid" | "same" | "not_allowed" | "managed";
@@ -77,14 +77,27 @@ function isDuplicateKeyError(error: unknown) {
  * here: SSO sign-in requires the account email to equal the IdP's email, and
  * directory sync matches people by address.
  */
-export async function isEmailManagedByOrganization(userId: User.UserId) {
+export async function isEmailManagedByOrganization(
+	user: { id: User.UserId; email: string },
+	database: Pick<ReturnType<typeof db>, "select"> = db(),
+) {
+	const userId = user.id;
+	const env = serverEnv();
+	if (
+		env.TRUSTED_PROXY_AUTH_HEADER &&
+		env.TRUSTED_PROXY_AUTH_SECRET?.trim() &&
+		env.TRUSTED_PROXY_AUTH_EMAIL?.trim().toLowerCase() ===
+			user.email.trim().toLowerCase()
+	) {
+		return true;
+	}
 	const [[ssoAccount], [directoryUser]] = await Promise.all([
-		db()
+		database
 			.select({ id: accounts.id })
 			.from(accounts)
 			.where(and(eq(accounts.userId, userId), eq(accounts.provider, "workos")))
 			.limit(1),
-		db()
+		database
 			.select({ id: directoryUsers.id })
 			.from(directoryUsers)
 			.where(
@@ -125,7 +138,7 @@ export async function requestEmailChange(
 	user: { id: User.UserId; email: string },
 	rawEmail: unknown,
 ): Promise<EmailChangeRequestResult> {
-	if (await isEmailManagedByOrganization(user.id)) return { status: "managed" };
+	if (await isEmailManagedByOrganization(user)) return { status: "managed" };
 	const checked = await checkNewEmail(rawEmail, user.email);
 	if ("status" in checked) return checked;
 
@@ -158,9 +171,18 @@ export async function requestEmailChange(
 				};
 			}
 		}
-		await tx
-			.delete(emailChangeRequests)
+		const previous = await tx
+			.select({ id: emailChangeRequests.id })
+			.from(emailChangeRequests)
 			.where(eq(emailChangeRequests.userId, user.id));
+		if (previous.length > 0) {
+			await tx.delete(emailChangeRequests).where(
+				inArray(
+					emailChangeRequests.id,
+					previous.map((row) => row.id),
+				),
+			);
+		}
 		await tx.insert(emailChangeRequests).values({
 			id,
 			userId: user.id,
@@ -172,23 +194,68 @@ export async function requestEmailChange(
 	});
 }
 
-async function syncStripeCustomerEmail(
+function isMissingStripeCustomer(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { code?: unknown }).code === "resource_missing"
+	);
+}
+
+async function setStripeCustomerEmail(
 	user: { id: User.UserId; stripeCustomerId: string | null },
 	email: string,
 ) {
-	if (!user.stripeCustomerId || !STRIPE_AVAILABLE()) return;
-	await stripe().customers.update(
-		user.stripeCustomerId,
-		{ email, metadata: { userId: user.id } },
-		{ idempotencyKey: `cap-email-change-${user.id}-${email}` },
-	);
+	if (!user.stripeCustomerId || !STRIPE_AVAILABLE()) return false;
+	try {
+		await stripe().customers.update(user.stripeCustomerId, {
+			email,
+			metadata: { userId: user.id },
+		});
+		return true;
+	} catch (error) {
+		if (isMissingStripeCustomer(error)) return false;
+		throw error;
+	}
+}
+
+async function restoreStripeCustomerEmail(user: {
+	id: User.UserId;
+	stripeCustomerId: string | null;
+	email: string;
+}) {
+	try {
+		await setStripeCustomerEmail(user, user.email);
+	} catch (error) {
+		console.error("[email-change] Failed to restore the Stripe customer", {
+			userId: user.id,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+export async function pendingEmailChangeAddress(userId: User.UserId) {
+	const [request] = await db()
+		.select({ newEmail: emailChangeRequests.newEmail })
+		.from(emailChangeRequests)
+		.where(
+			and(
+				eq(emailChangeRequests.userId, userId),
+				gt(emailChangeRequests.expiresAt, new Date()),
+			),
+		)
+		.orderBy(desc(emailChangeRequests.expiresAt))
+		.limit(1);
+	return request?.newEmail ?? null;
 }
 
 /**
  * Applies a pending email change once the code sent to the new address is
  * confirmed. Every guess is counted before comparing, the request is claimed
- * in the same transaction that changes the email, and every existing session
- * is signed out by bumping the session version.
+ * in the same transaction that changes the email, and every web session is
+ * signed out by bumping the session version. Stripe is updated first, because
+ * webhooks and sign-up fall back to matching customers by email, and is put
+ * back if the change does not commit.
  */
 export async function confirmEmailChange(
 	userId: User.UserId,
@@ -243,7 +310,7 @@ export async function confirmEmailChange(
 		.where(eq(users.id, userId))
 		.limit(1);
 	if (!user) return { status: "invalid" };
-	if (await isEmailManagedByOrganization(userId)) return { status: "managed" };
+	if (await isEmailManagedByOrganization(user)) return { status: "managed" };
 	const checked = await checkNewEmail(request.newEmail, user.email);
 	if ("status" in checked || checked.email !== request.newEmail) {
 		return {
@@ -261,8 +328,9 @@ export async function confirmEmailChange(
 		.limit(1);
 	if (owner) return { status: "taken" };
 
+	let stripeUpdated: boolean;
 	try {
-		await syncStripeCustomerEmail(user, request.newEmail);
+		stripeUpdated = await setStripeCustomerEmail(user, request.newEmail);
 	} catch (error) {
 		console.error("[email-change] Failed to update the Stripe customer", {
 			userId,
@@ -271,8 +339,16 @@ export async function confirmEmailChange(
 		return { status: "failed" };
 	}
 
+	let outcome: "changed" | "invalid" | "managed" | "taken";
 	try {
-		const changed = await db().transaction(async (tx) => {
+		outcome = await db().transaction(async (tx) => {
+			const [locked] = await tx
+				.select({ email: users.email })
+				.from(users)
+				.where(eq(users.id, userId))
+				.for("update");
+			if (!locked || locked.email !== user.email) return "invalid";
+			if (await isEmailManagedByOrganization(user, tx)) return "managed";
 			const claimed = await tx
 				.delete(emailChangeRequests)
 				.where(
@@ -281,13 +357,7 @@ export async function confirmEmailChange(
 						eq(emailChangeRequests.codeHash, request.codeHash),
 					),
 				);
-			if (getAffectedRows(claimed) !== 1) return false;
-			const [locked] = await tx
-				.select({ email: users.email })
-				.from(users)
-				.where(eq(users.id, userId))
-				.for("update");
-			if (!locked || locked.email !== user.email) return false;
+			if (getAffectedRows(claimed) !== 1) return "invalid";
 			await tx
 				.update(users)
 				.set({
@@ -296,18 +366,42 @@ export async function confirmEmailChange(
 					authSessionVersion: sql`${users.authSessionVersion} + 1`,
 				})
 				.where(eq(users.id, userId));
-			await tx
-				.delete(emailChangeRequests)
+			const pending = await tx
+				.select({ id: emailChangeRequests.id })
+				.from(emailChangeRequests)
 				.where(eq(emailChangeRequests.userId, userId));
+			if (pending.length > 0) {
+				await tx.delete(emailChangeRequests).where(
+					inArray(
+						emailChangeRequests.id,
+						pending.map((row) => row.id),
+					),
+				);
+			}
+			const challenges = await tx
+				.select({ id: authChallenges.id })
+				.from(authChallenges)
+				.where(eq(authChallenges.userId, userId));
+			if (challenges.length > 0) {
+				await tx.delete(authChallenges).where(
+					inArray(
+						authChallenges.id,
+						challenges.map((row) => row.id),
+					),
+				);
+			}
 			await tx.delete(sessions).where(eq(sessions.userId, userId));
-			await tx.delete(authChallenges).where(eq(authChallenges.userId, userId));
 			await enqueueLoopsSync(tx, userId);
-			return true;
+			return "changed";
 		});
-		if (!changed) return { status: "invalid" };
 	} catch (error) {
+		if (stripeUpdated) await restoreStripeCustomerEmail(user);
 		if (isDuplicateKeyError(error)) return { status: "taken" };
 		throw error;
+	}
+	if (outcome !== "changed") {
+		if (stripeUpdated) await restoreStripeCustomerEmail(user);
+		return { status: outcome };
 	}
 
 	return {
