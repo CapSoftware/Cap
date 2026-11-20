@@ -1740,7 +1740,15 @@ impl Pane {
             .and_then(|m| m.meeting.as_ref())
             .filter(|m| m.duration_ms > 0)
             .map(|m| format::duration(m.duration_ms));
-        let offer = self.transcript.update(cx, |t, cx| t.render_names_offer(cx));
+        let collapsed = self.transcript.read(cx).collapsed();
+        let offer = (!collapsed)
+            .then(|| self.transcript.update(cx, |t, cx| t.render_names_offer(cx)))
+            .flatten();
+        let toggle_label = if collapsed {
+            tr::documents::transcript_toggle::show()
+        } else {
+            tr::documents::transcript_toggle::hide()
+        };
         div()
             .w_full()
             .flex()
@@ -1757,23 +1765,55 @@ impl Pane {
                     .items_center()
                     .gap(px(2.))
                     .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_baseline()
-                            .gap(px(6.))
-                            .text_size(px(14.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(palette.text)
-                                    .child(tr::documents::tabs::transcript()),
-                            )
-                            .children(length.map(|length| {
-                                div()
-                                    .text_color(palette.faint)
-                                    .child(format!("\u{00b7} {length}"))
-                            })),
+                        div().flex_1().min_w_0().flex().child(
+                            div()
+                                .id("page-transcript-toggle")
+                                .ml(px(-8.))
+                                .h(px(28.))
+                                .pl(px(4.))
+                                .pr(px(10.))
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .rounded_full()
+                                .text_size(px(14.))
+                                .cursor_pointer()
+                                .hover(move |s| s.bg(palette.hover))
+                                .active(move |s| s.bg(palette.selected))
+                                .tooltip(move |_, cx| {
+                                    crate::ui::Tooltip::new(
+                                        &Theme::new(crate::theme::Appearance::Dark),
+                                        toggle_label,
+                                    )
+                                    .view(cx)
+                                })
+                                .child(
+                                    svg()
+                                        .path(if collapsed {
+                                            "icons/chevron-right.svg"
+                                        } else {
+                                            "icons/chevron-down.svg"
+                                        })
+                                        .size(px(14.))
+                                        .text_color(palette.muted),
+                                )
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(palette.text)
+                                        .child(tr::documents::tabs::transcript()),
+                                )
+                                .children(length.map(|length| {
+                                    div()
+                                        .ml(px(2.))
+                                        .text_color(palette.faint)
+                                        .child(format!("\u{00b7} {length}"))
+                                }))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.transcript
+                                        .update(cx, |t, cx| t.toggle_collapsed(window, cx))
+                                })),
+                        ),
                     )
                     .child(
                         tool(

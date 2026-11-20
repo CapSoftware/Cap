@@ -4374,3 +4374,7 @@ trash_empty_body = "हटाए गए नोट्स 30 दिनों त�
 up_next_in = "{minutes} मिनट में"
 value_placeholder = "कोई शब्द या नाम लिखें"
 yes = "हाँ"
+
+[documents.transcript_toggle]
+hide = "ट्रांसक्रिप्ट छिपाएँ"
+show = "ट्रांसक्रिप्ट दिखाएँ"

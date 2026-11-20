@@ -4374,3 +4374,7 @@ trash_empty_body = "Las notas eliminadas se quedan aquí 30 días."
 up_next_in = "En {minutes} min"
 value_placeholder = "Escribe una palabra o un nombre"
 yes = "sí"
+
+[documents.transcript_toggle]
+hide = "Ocultar transcripción"
+show = "Mostrar transcripción"

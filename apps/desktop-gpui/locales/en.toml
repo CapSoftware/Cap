@@ -4376,3 +4376,7 @@ trash_empty_body = "Deleted notes stay here for 30 days."
 up_next_in = "In {minutes} min"
 value_placeholder = "Type a word or name"
 yes = "yes"
+
+[documents.transcript_toggle]
+hide = "Hide transcript"
+show = "Show transcript"

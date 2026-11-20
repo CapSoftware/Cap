@@ -4374,3 +4374,7 @@ trash_empty_body = "Gelöschte Notizen bleiben 30 Tage hier."
 up_next_in = "In {minutes} Min."
 value_placeholder = "Wort oder Namen eingeben"
 yes = "ja"
+
+[documents.transcript_toggle]
+hide = "Transkript ausblenden"
+show = "Transkript einblenden"

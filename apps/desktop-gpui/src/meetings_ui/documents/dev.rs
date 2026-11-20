@@ -650,6 +650,27 @@ async fn apply_state(state: &str, handle: WindowHandle<DocumentsWindow>, cx: &mu
         sleep(cx, arg.parse().unwrap_or(1000)).await;
         return;
     }
+    if name == "hover"
+        && let Some((x, y)) = arg.split_once('x')
+        && let (Ok(x), Ok(y)) = (x.parse::<f32>(), y.parse::<f32>())
+    {
+        let any: gpui::AnyWindowHandle = handle.into();
+        cx.update(|cx| {
+            any.update(cx, |_, window, cx| {
+                window.dispatch_event(
+                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                        position: gpui::point(gpui::px(x), gpui::px(y)),
+                        pressed_button: None,
+                        modifiers: gpui::Modifiers::default(),
+                    }),
+                    cx,
+                );
+                window.refresh();
+            })
+            .ok();
+        });
+        return;
+    }
     if name == "key" || name == "click" {
         let any: gpui::AnyWindowHandle = handle.into();
         cx.update(|cx| {
@@ -832,6 +853,10 @@ async fn apply_state(state: &str, handle: WindowHandle<DocumentsWindow>, cx: &mu
                     .update(cx, |p, cx| p.toggle_transcript(window, cx)),
                 "bar" => root.pane.update(cx, |p, cx| p.debug_bar(&arg, cx)),
                 "find" => root.pane.update(cx, |p, cx| p.debug_find(&arg, window, cx)),
+                "fold" => {
+                    let transcript = root.pane.read(cx).transcript.clone();
+                    transcript.update(cx, |t, cx| t.toggle_collapsed(window, cx));
+                }
                 "turns" => root.pane.update(cx, |p, cx| p.debug_select_turns(cx)),
                 "calendar" => {
                     if let Some(meetings) = Meetings::try_global(cx) {

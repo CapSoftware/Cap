@@ -4374,3 +4374,7 @@ trash_empty_body = "削除したメモは30日間ここに残ります。"
 up_next_in = "{minutes}分後"
 value_placeholder = "語句または名前を入力"
 yes = "はい"
+
+[documents.transcript_toggle]
+hide = "文字起こしを隠す"
+show = "文字起こしを表示"

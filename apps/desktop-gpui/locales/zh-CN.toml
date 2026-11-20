@@ -4374,3 +4374,7 @@ trash_empty_body = "删除的笔记会在这里保留 30 天。"
 up_next_in = "{minutes} 分钟后"
 value_placeholder = "输入词语或名字"
 yes = "是"
+
+[documents.transcript_toggle]
+hide = "隐藏转写"
+show = "显示转写"

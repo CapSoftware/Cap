@@ -2,6 +2,8 @@ mod ask;
 mod audio;
 mod bar;
 mod cap_ai;
+#[cfg(test)]
+mod collapse_tests;
 mod commands;
 #[cfg(debug_assertions)]
 pub mod dev;

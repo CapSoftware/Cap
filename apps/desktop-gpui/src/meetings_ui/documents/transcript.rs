@@ -275,6 +275,10 @@ pub struct TranscriptView {
     lines_drawn: Rc<Cell<Option<u64>>>,
     #[cfg(any(test, debug_assertions))]
     lead_resizes: Rc<Cell<usize>>,
+    /// The page shows only the transcript's heading. Saved per user when
+    /// toggled; a source clicked, Find or Show Transcript opens it for the
+    /// page in view without changing what is saved.
+    collapsed: bool,
     /// Lines a point in the notes came from, lit while it is hovered.
     lit: Option<Lit>,
     lit_serial: u64,
@@ -451,6 +455,7 @@ impl TranscriptView {
             lines_drawn: Rc::new(Cell::new(None)),
             #[cfg(any(test, debug_assertions))]
             lead_resizes: Rc::new(Cell::new(0)),
+            collapsed: saved_collapsed(),
             lit: None,
             lit_serial: 0,
             #[cfg(debug_assertions)]
@@ -510,6 +515,7 @@ impl TranscriptView {
             self.debug_live = false;
         }
         self.lit = None;
+        self.collapsed = saved_collapsed();
         self.list
             .reset(self.lead_count() + usize::from(self.lead.is_some()));
         self.load_player(cx);
@@ -589,11 +595,12 @@ impl TranscriptView {
         if let Some(rows) = live_rows {
             if recording != self.live {
                 self.live = recording;
-                self.list.set_follow_mode(if recording {
-                    gpui::FollowMode::Tail
-                } else {
-                    gpui::FollowMode::Normal
-                });
+                self.list
+                    .set_follow_mode(if recording && !self.collapsed() {
+                        gpui::FollowMode::Tail
+                    } else {
+                        gpui::FollowMode::Normal
+                    });
             }
             self.loaded = true;
             self.apply(rows, cx);
@@ -644,8 +651,10 @@ impl TranscriptView {
             return;
         }
         let lead = self.lead_count();
-        self.list
-            .splice(lead + prefix..lead + old_len, rows.len() - prefix);
+        if !self.collapsed() {
+            self.list
+                .splice(lead + prefix..lead + old_len, rows.len() - prefix);
+        }
         self.rows = Rc::new(rows);
         if let Some((a, b)) = self.selection
             && (a.max(b) >= self.rows.len())
@@ -658,7 +667,7 @@ impl TranscriptView {
 
     pub fn reveal(&mut self, cx: &mut Context<Self>) {
         self.shown_at = std::time::Instant::now();
-        if self.live {
+        if self.live && !self.collapsed() {
             self.list.set_follow_mode(gpui::FollowMode::Tail);
             self.list.scroll_to_end();
         }
@@ -721,6 +730,7 @@ impl TranscriptView {
     pub fn set_lead(&mut self, lead: Option<(usize, LeadRender, f32)>, cx: &mut Context<Self>) {
         let old = self.lead_count();
         let old_tail = usize::from(self.lead.is_some());
+        let old_shown = self.listed_rows();
         let new = lead.as_ref().map_or(0, |(count, _, _)| *count);
         let new_tail = usize::from(lead.is_some());
         if lead.is_some() && self.lines.is_none() {
@@ -736,9 +746,13 @@ impl TranscriptView {
             render,
             tail,
         });
-        let rows = self.rows.len();
+        let new_shown = self.listed_rows();
         if old_tail != new_tail {
-            self.list.splice(old + rows..old + rows + old_tail, new_tail);
+            self.list
+                .splice(old + old_shown..old + old_shown + old_tail, new_tail);
+        }
+        if old_shown != new_shown {
+            self.list.splice(old..old + old_shown, new_shown);
         }
         if old != new {
             self.list.splice(0..old, new);
@@ -821,6 +835,7 @@ impl TranscriptView {
         let Some(row) = ids.iter().find_map(|id| self.row_of(id)) else {
             return;
         };
+        self.set_collapsed(false, false, cx);
         self.list.scroll_to(gpui::ListOffset {
             item_ix: self.lead_count() + row.saturating_sub(2),
             offset_in_item: px(0.),
@@ -830,11 +845,53 @@ impl TranscriptView {
 
     /// Scroll the page so the transcript's first line sits at the top.
     pub fn reveal_start(&mut self, cx: &mut Context<Self>) {
+        self.set_collapsed(false, false, cx);
         let lead = self.lead_count();
         self.list.scroll_to(gpui::ListOffset {
             item_ix: lead.saturating_sub(1),
             offset_in_item: px(0.),
         });
+        self.changed(cx);
+    }
+
+    /// Whether the page shows only the heading. Only the page collapses;
+    /// the side panel shows its lines whatever was saved.
+    pub fn collapsed(&self) -> bool {
+        self.collapsed && self.lead.is_some()
+    }
+
+    /// How many lines the list holds after the page's items.
+    fn listed_rows(&self) -> usize {
+        if self.collapsed() { 0 } else { self.rows.len() }
+    }
+
+    /// The heading's toggle: the choice is saved for every note.
+    pub fn toggle_collapsed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let collapsed = !self.collapsed();
+        if collapsed && self.find.is_some() {
+            self.close_find(window, cx);
+        }
+        self.set_collapsed(collapsed, true, cx);
+    }
+
+    pub fn set_collapsed(&mut self, collapsed: bool, remember: bool, cx: &mut Context<Self>) {
+        if remember {
+            save_collapsed(collapsed);
+        }
+        if self.collapsed == collapsed {
+            return;
+        }
+        let old_shown = self.listed_rows();
+        self.collapsed = collapsed;
+        let new_shown = self.listed_rows();
+        if old_shown != new_shown {
+            let lead = self.lead_count();
+            self.list.splice(lead..lead + old_shown, new_shown);
+        }
+        if collapsed {
+            self.selection = None;
+            self.list.set_follow_mode(gpui::FollowMode::Normal);
+        }
         self.changed(cx);
     }
 
@@ -881,6 +938,9 @@ impl TranscriptView {
     }
 
     fn step(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
+        if self.collapsed() {
+            return;
+        }
         let turns: Vec<usize> = self
             .rows
             .iter()
@@ -1549,6 +1609,7 @@ impl TranscriptView {
     }
 
     pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_collapsed(false, false, cx);
         if let Some(find) = self.find.as_ref() {
             let input = find.input.clone();
             input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
@@ -1897,7 +1958,10 @@ impl TranscriptView {
     fn sticky_label(&self) -> Option<String> {
         let top = self.list.logical_scroll_top();
         let lead = self.lead_count();
-        if top.item_ix < lead || (top.item_ix == 0 && top.offset_in_item <= px(0.5)) {
+        if self.collapsed()
+            || top.item_ix < lead
+            || (top.item_ix == 0 && top.offset_in_item <= px(0.5))
+        {
             return None;
         }
         let top_row = top.item_ix - lead;
@@ -2173,7 +2237,7 @@ impl TranscriptView {
                 if index < *count {
                     return render(index, window, cx);
                 }
-                if index - count >= entity.read(cx).rows.len() {
+                if index - count >= entity.read(cx).listed_rows() {
                     return div().h(px(*tail)).into_any_element();
                 }
             }
@@ -2492,7 +2556,7 @@ impl Render for TranscriptView {
                                 .child(label),
                         )
                 }))
-                .when(self.is_live() && !following, |el| {
+                .when(self.is_live() && !following && !self.collapsed(), |el| {
                     el.child(
                         div()
                             .absolute()
@@ -2565,6 +2629,46 @@ impl Render for TranscriptView {
 }
 
 const NAMES_OFFER_KEY: &str = "meetingsSpeakerNamesOfferDismissed";
+#[cfg_attr(test, allow(dead_code))]
+const COLLAPSED_SECTION: &str = "documentsWindow";
+#[cfg_attr(test, allow(dead_code))]
+const COLLAPSED_KEY: &str = "transcriptCollapsed";
+
+#[cfg(test)]
+thread_local! {
+    // Tests share one store file per process; each keeps its own choice.
+    static SAVED_COLLAPSED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn saved_collapsed() -> bool {
+    #[cfg(test)]
+    {
+        SAVED_COLLAPSED.get()
+    }
+    #[cfg(not(test))]
+    {
+        crate::store::store_section(COLLAPSED_SECTION)
+            .get(COLLAPSED_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+}
+
+fn save_collapsed(collapsed: bool) {
+    #[cfg(test)]
+    SAVED_COLLAPSED.set(collapsed);
+    #[cfg(not(test))]
+    crate::store::set_store_setting(
+        COLLAPSED_SECTION,
+        COLLAPSED_KEY,
+        serde_json::json!(collapsed),
+    );
+}
+
+#[cfg(test)]
+pub(super) fn saved_collapsed_for_test() -> bool {
+    saved_collapsed()
+}
 
 impl TranscriptView {
     /// After a call in a meeting app, while voices are still "Person n" and

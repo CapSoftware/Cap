@@ -4374,3 +4374,7 @@ trash_empty_body = "Les notes supprimées restent ici 30 jours."
 up_next_in = "Dans {minutes} min"
 value_placeholder = "Saisissez un mot ou un nom"
 yes = "oui"
+
+[documents.transcript_toggle]
+hide = "Masquer la transcription"
+show = "Afficher la transcription"
