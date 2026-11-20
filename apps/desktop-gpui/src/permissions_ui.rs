@@ -100,8 +100,10 @@ impl PermissionsState {
         match permission {
             OSPermission::ScreenRecording => self.attempted.screen = true,
             OSPermission::Accessibility => self.attempted.accessibility = true,
-            // AV reports notDetermined vs denied itself; nothing to record.
-            OSPermission::Microphone | OSPermission::Camera => return,
+            // AV and IOHID report notDetermined vs denied themselves.
+            OSPermission::InputMonitoring | OSPermission::Microphone | OSPermission::Camera => {
+                return;
+            }
         }
         self.reclassify();
     }
@@ -141,7 +143,9 @@ impl PermissionsState {
 
     fn can_prompt(&self, permission: OSPermission) -> bool {
         match permission {
-            OSPermission::ScreenRecording | OSPermission::Accessibility => !self.settings_only,
+            OSPermission::ScreenRecording
+            | OSPermission::Accessibility
+            | OSPermission::InputMonitoring => !self.settings_only,
             OSPermission::Microphone | OSPermission::Camera => true,
         }
     }
@@ -244,6 +248,7 @@ fn parse_fake(spec: &str) -> Option<RawPermissions> {
     let mut raw = RawPermissions {
         screen_granted: true,
         accessibility_granted: true,
+        input_monitoring: MediaAuthorization::Authorized,
         microphone: MediaAuthorization::Authorized,
         camera: MediaAuthorization::Authorized,
     };
@@ -260,6 +265,7 @@ fn parse_fake(spec: &str) -> Option<RawPermissions> {
         match key {
             "screen" => raw.screen_granted = value == "granted",
             "ax" => raw.accessibility_granted = value == "granted",
+            "im" => raw.input_monitoring = media,
             "mic" => raw.microphone = media,
             "cam" => raw.camera = media,
             _ => {}
@@ -319,6 +325,7 @@ mod tests {
         Some(RawPermissions {
             screen_granted: screen,
             accessibility_granted: ax,
+            input_monitoring: MediaAuthorization::NotDetermined,
             microphone: mic,
             camera,
         })
@@ -351,10 +358,20 @@ mod tests {
             Some(RowAction::Request)
         );
         assert_eq!(state.action(OSPermission::Camera), Some(RowAction::Request));
+        assert_eq!(
+            state.action(OSPermission::InputMonitoring),
+            Some(RowAction::OpenSettings)
+        );
+        assert!(!OSPermission::InputMonitoring.required());
         assert!(
             state
                 .shown()
                 .all(|(permission, _)| permission != OSPermission::Accessibility)
+        );
+        assert!(
+            state
+                .shown()
+                .any(|(permission, _)| permission == OSPermission::InputMonitoring)
         );
         assert!(!state.necessary_granted());
 
@@ -365,13 +382,18 @@ mod tests {
             MediaAuthorization::NotDetermined,
         ));
         assert!(granted.necessary_granted());
-        assert_eq!(granted.granted_counts(), (1, 3));
+        assert_eq!(granted.granted_counts(), (1, 4));
     }
 
     #[test]
     fn fresh_rows_all_offer_request() {
         let state = fresh_ungranted();
-        for &permission in OSPermission::ALL {
+        assert!(
+            state
+                .shown()
+                .all(|(permission, _)| permission != OSPermission::InputMonitoring)
+        );
+        for (permission, _) in state.shown() {
             assert_eq!(state.action(permission), Some(RowAction::Request));
         }
         assert_eq!(state.granted_counts(), (0, 4));
@@ -453,7 +475,10 @@ mod tests {
 
     #[test]
     fn stale_request_is_skipped_when_permission_was_already_granted() {
-        for &permission in OSPermission::ALL {
+        for &permission in OSPermission::ALL
+            .iter()
+            .filter(|&&permission| permission != OSPermission::InputMonitoring)
+        {
             let mut state = fresh_ungranted();
             assert_eq!(state.action(permission), Some(RowAction::Request));
 
