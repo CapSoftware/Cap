@@ -389,7 +389,33 @@ pub fn input_sound_events(
             .enumerate()
             .filter(|(_, segment)| crate::keyboard::is_manual_keyboard_segment(segment))
         {
-            for key in &segment.keys {
+            // Typed text strikes once per code point, but a character a reader
+            // sees as one (an emoji with a skin tone, an accented letter)
+            // sounds once, on the press that shows it.
+            let code_points = segment.display_text.chars().count();
+            let typed = segment.keys.len() == code_points
+                && !segment.display_text.contains(['⌘', '⌥', '⌃']);
+            let mut sounding = vec![true; segment.keys.len()];
+            if typed {
+                let mut at = 0;
+                for piece in crate::keyboard::typed_characters(&segment.display_text) {
+                    let length = piece.chars().count();
+                    for inside in sounding
+                        .iter_mut()
+                        .skip(at + 1)
+                        .take(length.saturating_sub(1))
+                    {
+                        *inside = false;
+                    }
+                    at += length;
+                }
+            }
+            for (key, _) in segment
+                .keys
+                .iter()
+                .zip(&sounding)
+                .filter(|(_, sounds)| **sounds)
+            {
                 let down = segment.start + key.time_offset / 1000.0;
                 if !down.is_finite() || down >= segment.end {
                     continue;

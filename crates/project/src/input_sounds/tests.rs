@@ -630,3 +630,36 @@ fn a_key_added_by_hand_sounds_only_its_own_keys_over_recorded_typing() {
     assert_eq!(downs.len(), 2, "{downs:?}");
     assert!(downs.iter().all(|time| (*time - 2.2).abs() > 1e-6));
 }
+
+#[test]
+fn a_joined_character_typed_by_hand_sounds_once() {
+    let keyboard = KeyboardEvents { presses: vec![] };
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    let mut project = project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let mut typed = shown(1.0, 3.0);
+    typed.id = format!("{}1", crate::keyboard::MANUAL_KEYBOARD_PREFIX);
+    typed.display_text = "a👍🏽b".into();
+    typed.keys = crate::keyboard::manual_key_presses("a👍🏽b");
+    assert_eq!(typed.keys.len(), 4);
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![typed];
+
+    let events = input_sound_events(&project, &takes);
+    let downs = key_times(&events, true);
+    // "a", the thumb (its skin tone silent), then "b".
+    assert_eq!(downs.len(), 3, "{downs:?}");
+    assert!((downs[0] - 1.0).abs() < 1e-9);
+    assert!((downs[1] - 1.11).abs() < 1e-9);
+    assert!((downs[2] - 1.33).abs() < 1e-9);
+    assert_eq!(key_times(&events, false).len(), 3);
+}
