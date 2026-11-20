@@ -1924,6 +1924,7 @@ impl RenderOnce for TextInput {
             .unwrap_or(px((f32::from(self.text_size) * 1.35).round()));
 
         let body = TextBody {
+            view: Some(window.current_view()),
             layout: state.read(cx).shared_layout(),
             state: state.clone(),
             fit_content: self.fit_content,
@@ -1937,7 +1938,6 @@ impl RenderOnce for TextInput {
             selection_color: self.selection_color,
             multi_line,
             focused,
-            view: Some(window.current_view()),
         };
 
         let border = if focused {
@@ -2044,7 +2044,8 @@ struct TextBody {
     selection_color: Hsla,
     multi_line: bool,
     focused: bool,
-    /// The view rendering the field, told to redraw on every change.
+    /// The view drawing the field, taken while the element is built (always
+    /// inside a draw). `None` for a body drawn outside any view.
     view: Option<EntityId>,
 }
 
