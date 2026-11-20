@@ -2704,32 +2704,8 @@ impl EditorWindow {
 /// panel's `p-4`. Fixed, because the column is `w-104 min-w-104 flex-none`.
 const SIDEBAR_INSET: f32 = 20.;
 const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
-/// The background sources sit three to a row.
-const SOURCE_COLUMNS: usize = 3;
-const SOURCE_GAP: f32 = 6.;
 const SWATCH_SOURCE_GAP: f32 = 6.;
 const SWATCH_SOURCE_HEIGHT: f32 = 34.;
-
-/// Which background source picker to draw. Two alternatives to the grid are
-/// kept side by side while one is chosen; only screenshots select them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SourcePicker {
-    Grid,
-    Swatches,
-    Tabs,
-}
-
-fn source_picker() -> SourcePicker {
-    static PICKER: std::sync::LazyLock<SourcePicker> =
-        std::sync::LazyLock::new(
-            || match std::env::var("CAP_GPUI_SOURCE_PICKER").as_deref() {
-                Ok("swatches") => SourcePicker::Swatches,
-                Ok("tabs") => SourcePicker::Tabs,
-                _ => SourcePicker::Grid,
-            },
-        );
-    *PICKER
-}
 
 const WALLPAPER_COLUMNS: f32 = 4.;
 const WALLPAPER_GAP: f32 = 8.;
@@ -2994,11 +2970,7 @@ impl EditorWindow {
                     this.select_source_tab(SourceTab::None, window, cx);
                 }),
             ))
-            .child(match source_picker() {
-                SourcePicker::Grid => self.render_source_tiles(tab, cx).into_any_element(),
-                SourcePicker::Swatches => self.render_source_swatches(tab, cx).into_any_element(),
-                SourcePicker::Tabs => self.render_source_tabs(tab, cx).into_any_element(),
-            })
+            .child(self.render_source_swatches(tab, cx))
             .child(match tab {
                 SourceTab::Desktop => self.render_desktop_pane(cx).into_any_element(),
                 SourceTab::Wallpaper => self.render_wallpaper_pane(cx).into_any_element(),
@@ -3010,84 +2982,6 @@ impl EditorWindow {
                 }
                 SourceTab::None => div().into_any_element(),
             })
-    }
-
-    /// The background sources, three to a row so every one shows in full.
-    fn render_source_tiles(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let editor = theme.editor;
-        let chip = |item: SourceTab, cx: &mut Context<Self>| {
-            let selected = tab == item;
-            let ink = Hsla::from(if selected {
-                editor.text_1
-            } else {
-                editor.text_2
-            });
-            let glyph = match item {
-                SourceTab::Gradient => div()
-                    .size(px(13.))
-                    .rounded(px(3.))
-                    .bg(gpui::linear_gradient(
-                        135.,
-                        gpui::linear_color_stop(ink, 0.),
-                        gpui::linear_color_stop(ink.opacity(0.15), 1.),
-                    ))
-                    .into_any_element(),
-                _ => svg()
-                    .path(match item {
-                        SourceTab::Desktop => "icons/monitor-outline.svg",
-                        SourceTab::Wallpaper => "icons/image.svg",
-                        SourceTab::Image => "icons/folder-open.svg",
-                        SourceTab::Color => "icons/palette.svg",
-                        _ => "icons/square-play.svg",
-                    })
-                    .size(px(14.))
-                    .text_color(ink)
-                    .into_any_element(),
-            };
-            div()
-                .id(SharedString::from(format!("background-source-{item:?}")))
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .flex_row()
-                .items_center()
-                .justify_center()
-                .gap(px(7.))
-                .h(px(32.))
-                .px(px(8.))
-                .rounded(px(10.))
-                .text_size(px(13.))
-                .text_color(ink)
-                .map(|this| {
-                    if selected {
-                        this.bg(editor.choice_selected_fill())
-                            .shadow(editor.choice_pill_shadow())
-                    } else {
-                        this.bg(editor.choice_fill())
-                            .shadow(editor.choice_ring())
-                            .cursor_pointer()
-                            .hover(move |this| this.bg(editor.choice_hover_fill()))
-                    }
-                })
-                .child(div().flex_none().child(glyph))
-                .child(div().min_w_0().truncate().child(item.label()))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_source_tab(item, window, cx);
-                }))
-        };
-        div()
-            .id("background-sources")
-            .flex()
-            .flex_col()
-            .gap(px(SOURCE_GAP))
-            .children(SourceTab::PICKER.chunks(SOURCE_COLUMNS).map(|row| {
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(SOURCE_GAP))
-                    .children(row.iter().map(|item| chip(*item, cx)))
-            }))
     }
 
     /// The background sources as one row of small previews of what each gives,
@@ -3271,53 +3165,9 @@ impl EditorWindow {
         }
     }
 
-    /// The background sources as one quiet row of text tabs.
-    fn render_source_tabs(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
-        let editor = self.theme.editor;
-        div()
-            .id("background-sources")
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .children(SourceTab::PICKER.map(|item| {
-                let selected = tab == item;
-                // Sized to its label and sharing out the spare width, so no
-                // label is cut short; a longer translation wraps the row.
-                div()
-                    .id(SharedString::from(format!("background-source-{item:?}")))
-                    .flex_auto()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(28.))
-                    .px(px(6.))
-                    .rounded(px(8.))
-                    .text_size(px(12.))
-                    .whitespace_nowrap()
-                    .child(item.label())
-                    .map(|this| {
-                        if selected {
-                            this.bg(Hsla::from(editor.ctl_hover))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(editor.text_1))
-                        } else {
-                            this.text_color(Hsla::from(editor.text_2))
-                                .cursor_pointer()
-                                .hover(|this| this.text_color(Hsla::from(editor.text_1)))
-                        }
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_source_tab(item, window, cx);
-                    }))
-            }))
-    }
-
     /// Small decodes of the chosen image and the imported desktop picture for
     /// their source swatches, off the render path and once per file.
     fn ensure_source_thumbs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if source_picker() != SourcePicker::Swatches {
-            return;
-        }
         let image = match &self.style_background().source {
             BackgroundSource::Image { path: Some(path) } => Some(PathBuf::from(path)),
             _ => None,
