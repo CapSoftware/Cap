@@ -106,6 +106,10 @@ impl Render for EnhanceCard {
                     .line_height(px(16.))
                     .text_color(Hsla::from(editor.text_2))
                     .child(row(
+                        "icons/laptop.svg",
+                        tr::editor::window::transport::enhance_card_local().into(),
+                    ))
+                    .child(row(
                         "icons/upload-arrow.svg",
                         tr::editor::window::transport::enhance_card_export().into(),
                     ))

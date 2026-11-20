@@ -147,6 +147,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Audio only recordings and video clips cannot be combined in one project",
         ),
         (
+            tr::editor::clips::error::blank_source(),
+            "This project has no recording to add as a clip",
+        ),
+        (
             tr::editor::clips::error::no_duration(),
             "Imported video has no valid duration",
         ),
@@ -1481,11 +1485,15 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::window::transport::enhance_off(), "Off"),
         (
             tr::editor::window::transport::enhance_card_body(),
-            "Sharpens small text and fine detail, so your video stays crisp when it is zoomed in or scaled down.",
+            "Uses an AI model to sharpen small text and fine detail in every frame, so your video stays crisp when it is zoomed in or scaled down.",
         ),
         (
             tr::editor::window::transport::enhance_card_export(),
             "Applies to your export, which can take a little longer.",
+        ),
+        (
+            tr::editor::window::transport::enhance_card_local(),
+            "Runs on this computer, so nothing is uploaded.",
         ),
         (
             tr::editor::window::transport::enhance_card_preview(),

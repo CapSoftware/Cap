@@ -3431,6 +3431,11 @@ pub(crate) fn append_cap_project_to_editor(
         }
         StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux => {}
     }
+    // A blank project's only recording is its hidden placeholder canvas;
+    // copied in as a clip it would play as a stretch of black.
+    if source_studio_meta.is_blank() {
+        return Err(tr::editor::clips::error::blank_source().to_string());
+    }
 
     let target_audio_only = RecordingMeta::load_for_project(target_project_path)
         .ok()
@@ -4841,6 +4846,23 @@ mod tests {
                 source_version.unwrap_or(0)
             );
         }
+    }
+
+    #[test]
+    fn a_blank_project_is_refused_as_a_clip_source() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("blank.cap");
+        cap_export::audio_project::create_blank_project(&source, "Blank").unwrap();
+        let before = std::fs::read(target.project.join("recording-meta.json")).unwrap();
+
+        let error = append_cap_project_to_editor(&target.project, &source).unwrap_err();
+
+        assert_eq!(error, tr::editor::clips::error::blank_source());
+        assert_eq!(
+            std::fs::read(target.project.join("recording-meta.json")).unwrap(),
+            before,
+            "the target project is untouched"
+        );
     }
 
     #[test]
