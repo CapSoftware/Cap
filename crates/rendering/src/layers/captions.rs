@@ -743,6 +743,7 @@ impl CaptionsLayer {
         constants: &RenderVideoConstants,
     ) {
         self.has_caption = false;
+        self.text_atlas.trim();
         self.active_layout = None;
         self.frame_box = None;
         self.background_scissor = None;
