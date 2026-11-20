@@ -6,12 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	signIn: vi.fn(),
+	getSession: vi.fn(async () => ({ user: { id: "user" } }) as unknown),
 	trackEvent: vi.fn(),
 	captureException: vi.fn(),
 	toastError: vi.fn(),
 }));
 
-vi.mock("next-auth/react", () => ({ signIn: mocks.signIn }));
+vi.mock("next-auth/react", () => ({
+	signIn: mocks.signIn,
+	getSession: mocks.getSession,
+}));
 vi.mock("@/app/utils/analytics", () => ({ trackEvent: mocks.trackEvent }));
 vi.mock("@sentry/nextjs", () => ({ captureException: mocks.captureException }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
@@ -277,6 +281,32 @@ describe("signInWithGoogleOneTap", () => {
 			is_signup: false,
 			auth_surface: "login",
 		});
+	});
+
+	it("does not navigate when NextAuth reports success but no session exists", async () => {
+		const assign = vi.fn();
+		vi.stubGlobal("location", { ...window.location, assign });
+		mocks.getSession.mockResolvedValueOnce(null);
+		mocks.signIn
+			.mockResolvedValueOnce({
+				ok: true,
+				error: null,
+				status: 200,
+				url: "https://cap.so/api/auth/signin?csrf=true",
+			})
+			.mockResolvedValueOnce(undefined);
+		await signInWithGoogleOneTap({
+			credential,
+			nextPath: "/dashboard/caps",
+			isSignup: false,
+			authSurface: "login",
+		});
+		expect(assign).not.toHaveBeenCalled();
+		expect(mocks.signIn).toHaveBeenLastCalledWith(
+			"google",
+			{ callbackUrl: "/dashboard/caps" },
+			expect.anything(),
+		);
 	});
 
 	it("falls back to the Google redirect flow with a login hint", async () => {

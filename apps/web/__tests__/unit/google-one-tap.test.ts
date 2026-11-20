@@ -5,6 +5,7 @@ import {
 	GOOGLE_ONE_TAP_MAX_CREDENTIAL_LENGTH,
 	GOOGLE_ONE_TAP_PROVIDER_ID,
 	GoogleOneTapProvider,
+	googleOneTapNonceForSecret,
 	googleOneTapNonceSetCookie,
 	issueGoogleOneTapNonce,
 	readCookie,
@@ -132,6 +133,7 @@ vi.mock("../../../../packages/database/auth/disposable-signup", () => ({
 
 const CLIENT_ID = "cap-web.apps.googleusercontent.com";
 const NONCE = "n0nce_value-0123456789abcdefABCDEF0123456";
+const GOOGLE_NONCE = googleOneTapNonceForSecret(NONCE);
 const COOKIE_NAME = "__Host-cap-google-one-tap";
 const SUB = "109876543210987654321";
 const USER: LinkedUser = {
@@ -172,7 +174,7 @@ async function token(
 		sub: SUB,
 		email: USER.email,
 		email_verified: true,
-		nonce: NONCE,
+		nonce: GOOGLE_NONCE,
 		...claims,
 	})
 		.setProtectedHeader({ alg: "RS256", kid: "google-key", typ: "JWT" })
@@ -205,7 +207,10 @@ beforeEach(() => {
 });
 
 describe("verifyGoogleOneTapCredential", () => {
-	const verify = (credential: unknown, expectedNonce: string | null = NONCE) =>
+	const verify = (
+		credential: unknown,
+		expectedNonce: string | null = GOOGLE_NONCE,
+	) =>
 		verifyGoogleOneTapCredential({
 			credential,
 			expectedNonces: expectedNonce === null ? [] : [expectedNonce],
@@ -273,7 +278,7 @@ describe("verifyGoogleOneTapCredential", () => {
 
 	it("rejects a nonce that does not match the browser cookie", async () => {
 		await expect(
-			verify(await token({ nonce: `${NONCE.slice(0, -1)}X` })),
+			verify(await token({ nonce: `${GOOGLE_NONCE.slice(0, -1)}X` })),
 		).resolves.toBeNull();
 		await expect(verify(await token({ nonce: undefined }))).resolves.toBeNull();
 	});
@@ -419,6 +424,28 @@ describe("authorizeGoogleOneTap", () => {
 		).resolves.toBeNull();
 	});
 
+	it("refuses a cookie rebuilt from the nonce inside a stolen token", async () => {
+		const stolen = await token();
+		const forged = `other=1; ${COOKIE_NAME}=${encodeURIComponent(
+			`${GOOGLE_NONCE}.${Math.floor(Date.now() / 1000) - 5}`,
+		)}`;
+		for (let attempt = 0; attempt < 3; attempt++) {
+			await expect(authorizeGoogleOneTap(stolen, forged)).resolves.toBeNull();
+		}
+		await expect(
+			authorizeGoogleOneTap(stolen, cookieHeader()),
+		).resolves.toMatchObject({ id: USER.id });
+	});
+
+	it("never sends the stored secret to Google", () => {
+		const { nonce, cookieValue } = issueGoogleOneTapNonce(null);
+		const [entry] = readGoogleOneTapNonces(cookieValue);
+		expect(entry).toBeDefined();
+		expect(nonce).not.toBe(entry?.nonce);
+		expect(cookieValue).not.toContain(nonce);
+		expect(nonce).toBe(googleOneTapNonceForSecret(entry?.nonce ?? ""));
+	});
+
 	it("reads the nonce from the request cookie header in the provider", async () => {
 		const { authorize } = GoogleOneTapProvider().options as CredentialsConfig;
 		const credential = await token();
@@ -486,7 +513,7 @@ describe("Google One Tap nonce cookie", () => {
 		const first = issueGoogleOneTapNonce(null, NOW);
 		const second = issueGoogleOneTapNonce(first.cookieValue, NOW + 1000);
 		const nonces = readGoogleOneTapNonces(second.cookieValue, NOW + 2000).map(
-			(entry) => entry.nonce,
+			(entry) => googleOneTapNonceForSecret(entry.nonce),
 		);
 		expect(nonces).toEqual([first.nonce, second.nonce]);
 		for (const nonce of nonces) {
@@ -520,7 +547,9 @@ describe("Google One Tap nonce cookie", () => {
 			issued.push(next.nonce);
 		}
 		expect(
-			readGoogleOneTapNonces(cookieValue, NOW + 10).map((e) => e.nonce),
+			readGoogleOneTapNonces(cookieValue, NOW + 10).map((e) =>
+				googleOneTapNonceForSecret(e.nonce),
+			),
 		).toEqual(issued.slice(-5));
 	});
 
@@ -586,7 +615,10 @@ describe("Google One Tap nonce route", () => {
 		const { nonce } = (await first.json()) as { nonce: string };
 		expect(nonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		const cookie = first.headers.get("set-cookie") ?? "";
-		expect(cookie).toMatch(new RegExp(`^${COOKIE_NAME}=${nonce}\\.\\d+;`));
+		const [stored] = readGoogleOneTapNonces(readCookie(cookie, COOKIE_NAME));
+		expect(stored).toBeDefined();
+		expect(cookie).not.toContain(nonce);
+		expect(googleOneTapNonceForSecret(stored?.nonce ?? "")).toBe(nonce);
 		expect(cookie).toContain("Path=/;");
 		expect(cookie).toContain("Max-Age=300");
 		expect(cookie).toContain("HttpOnly");
@@ -598,10 +630,11 @@ describe("Google One Tap nonce route", () => {
 		const { nonce: next } = (await second.json()) as { nonce: string };
 		expect(next).not.toBe(nonce);
 		const value = readCookie(second.headers.get("set-cookie"), COOKIE_NAME);
-		expect(readGoogleOneTapNonces(value).map((e) => e.nonce)).toEqual([
-			nonce,
-			next,
-		]);
+		expect(
+			readGoogleOneTapNonces(value).map((e) =>
+				googleOneTapNonceForSecret(e.nonce),
+			),
+		).toEqual([nonce, next]);
 	});
 
 	it("is not available when Google auth is not configured", async () => {
