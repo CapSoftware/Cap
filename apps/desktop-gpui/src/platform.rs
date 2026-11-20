@@ -1521,10 +1521,13 @@ mod mac {
     /// started (see [`install_occlusion_shim`]) evaluates the gate again. gpui
     /// windows are their own delegate, so the selector lives on the window.
     pub fn kick_display_link(window: &Window) {
+        // No native window, nothing to kick: the process-wide shim waits
+        // for a real window.
+        let Some(ns_window) = ns_window(window) else {
+            return;
+        };
         install_occlusion_shim();
-        if let Some(ns_window) = ns_window(window) {
-            rerun_occlusion_handler(&ns_window);
-        }
+        rerun_occlusion_handler(&ns_window);
     }
 
     fn rerun_occlusion_handler(ns_window: &NSWindow) {
