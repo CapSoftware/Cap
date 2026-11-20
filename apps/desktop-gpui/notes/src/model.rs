@@ -327,8 +327,14 @@ fn split_tagged(value: Value) -> (String, Map<String, Value>, Value) {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let mut rest = object.clone();
-            rest.remove("type");
+            // Copied rather than `remove`d: with serde_json's `preserve_order`
+            // (which gpui turns on in the app) `remove` swaps the last field
+            // into the gap, so a newer app's fields would come back reordered.
+            let rest = object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "type")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
             (tag, rest, Value::Object(object))
         }
         Value::String(tag) => (tag.clone(), Map::new(), Value::String(tag)),
