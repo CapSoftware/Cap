@@ -36,7 +36,7 @@
 //! that locks `instance.state` runs on the tokio runtime ([`run_transport`]).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     path::PathBuf,
     rc::Rc,
@@ -80,6 +80,7 @@ use crate::{
 };
 
 mod blank_start;
+mod enhance;
 mod frame;
 mod loading;
 mod markers;
@@ -2092,6 +2093,11 @@ pub struct EditorWindow {
     pub(crate) preview_enhance: bool,
     /// Compare is held down: the paused preview shows the original.
     preview_comparing: bool,
+    /// The Enhance chip's bounds, for anchoring its card.
+    enhance_chip_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
+    enhance_hovered: bool,
+    enhance_card: Option<Entity<enhance::EnhanceCard>>,
+    enhance_card_task: Option<gpui::Task<()>>,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
@@ -2800,6 +2806,10 @@ impl EditorWindow {
             preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance
                 || crate::editor_export::ExportUi::load().enhance_quality,
             preview_comparing: false,
+            enhance_chip_bounds: Rc::new(Cell::new(None)),
+            enhance_hovered: false,
+            enhance_card: None,
+            enhance_card_task: None,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             text_menu: None,
@@ -13172,123 +13182,6 @@ impl EditorWindow {
             )
     }
 
-    /// The Enhance toggle and, while it is on, Compare: hold it to see the
-    /// paused frame without enhancement.
-    fn render_preview_enhance(&self, labels: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let ready = self.project_ready();
-        let editor = theme.editor;
-        let on = self.preview_enhance;
-        // One switch for the video: the export is enhanced, and so is the
-        // paused frame here, so what you see is what you get.
-        let enhance = div()
-            .id("transport-enhance")
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(7.))
-            .h(px(28.))
-            .pl(px(9.))
-            .pr(px(5.))
-            .rounded(px(9.))
-            .bg(Hsla::from(editor.ctl))
-            .shadow(editor.trough_ring())
-            .text_size(px(12.))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(Hsla::from(if on { editor.text_1 } else { editor.text_2 }))
-            .when(ready, |this| {
-                this.cursor_pointer()
-                    .hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_preview_enhance(window, cx);
-                    }))
-            })
-            .child(
-                svg()
-                    .path("icons/scan-text.svg")
-                    .size(px(14.))
-                    .text_color(Hsla::from(if on {
-                        editor.accent_ink
-                    } else {
-                        editor.text_2
-                    })),
-            )
-            .when(labels, |this| {
-                this.child(tr::editor::window::transport::enhance())
-            })
-            .child(
-                ui::Toggle::plain(&theme, "transport-enhance-switch", on)
-                    .size(ui::ToggleSize::Mini)
-                    .disabled(&theme, !ready),
-            );
-        let comparing = self.preview_comparing;
-        let can_compare = ready && !self.playing;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(4.))
-            .child(
-                div()
-                    .id("transport-enhance-tooltip")
-                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-                    .tooltip(move |_, cx| {
-                        ui::Tooltip::new(&theme, tr::editor::window::transport::enhance_tooltip())
-                            .view(cx)
-                    })
-                    .child(enhance),
-            )
-            .children(self.preview_enhance.then(|| {
-                div()
-                    .id("transport-compare")
-                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-                    .tooltip(move |_, cx| {
-                        ui::Tooltip::new(&theme, tr::editor::window::transport::compare_tooltip())
-                            .view(cx)
-                    })
-                    .when(can_compare, |this| {
-                        this.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                this.set_preview_comparing(true, cx);
-                            }),
-                        )
-                    })
-                    // Release always ends Compare, even once playback has
-                    // disabled the button under the held mouse.
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                            this.set_preview_comparing(false, cx);
-                        }),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                            this.set_preview_comparing(false, cx);
-                        }),
-                    )
-                    .child(
-                        ui::Button::editor(
-                            &theme,
-                            "transport-compare-button",
-                            if comparing {
-                                ui::ButtonVariant::Primary
-                            } else {
-                                ui::ButtonVariant::Gray
-                            },
-                            ui::ButtonSize::Sm,
-                        )
-                        .icon("icons/columns-2.svg")
-                        .when(labels, |button| {
-                            button.label(tr::editor::window::transport::compare())
-                        })
-                        .radius(px(7.))
-                        .disabled(!can_compare),
-                    )
-            }))
-    }
-
     fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
@@ -14976,6 +14869,7 @@ impl Render for EditorWindow {
             .children(self.render_style_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
             .children(self.render_marker_overlays(window, cx))
+            .children(self.render_enhance_card())
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))

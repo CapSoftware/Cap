@@ -1477,9 +1477,23 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Click a segment to split. Esc to finish.",
         ),
         (tr::editor::window::transport::enhance(), "Enhance"),
+        (tr::editor::window::transport::enhance_on(), "On"),
+        (tr::editor::window::transport::enhance_off(), "Off"),
         (
-            tr::editor::window::transport::enhance_tooltip(),
-            "Sharpens text and fine detail in your export. Pause to see it here.",
+            tr::editor::window::transport::enhance_card_body(),
+            "Sharpens small text and fine detail, so your video stays crisp when it is zoomed in or scaled down.",
+        ),
+        (
+            tr::editor::window::transport::enhance_card_export(),
+            "Applies to your export, which can take a little longer.",
+        ),
+        (
+            tr::editor::window::transport::enhance_card_preview(),
+            "Pause the video to see it in the preview.",
+        ),
+        (
+            tr::editor::window::transport::enhance_card_compare(),
+            "Hold Compare to see the original.",
         ),
         (tr::editor::window::transport::compare(), "Compare"),
         (

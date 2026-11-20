@@ -130,7 +130,7 @@ pub use text_input::{
 };
 #[allow(unused_imports)]
 pub use glass_switch::Switch as GlassSwitch;
-pub use toggle::{Toggle, ToggleSize};
+pub use toggle::Toggle;
 #[allow(unused_imports)]
 pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip, TooltipStyle};
 #[cfg(target_os = "windows")]
