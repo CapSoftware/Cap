@@ -3,6 +3,10 @@ import {
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
 import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
+import {
+	GOOGLE_ONE_TAP_PROVIDER_ID,
+	googleOneTapNonceCookieForWebUrl,
+} from "@cap/database/auth/google-one-tap";
 import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
@@ -136,6 +140,18 @@ async function handler(
 	const { nextauth } = await context.params;
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
+	if (
+		nextauth[1] === GOOGLE_ONE_TAP_PROVIDER_ID &&
+		nextauth[0] === "callback"
+	) {
+		const response: Response = await NextAuth(request, context, authOptions());
+		const cookie = googleOneTapNonceCookieForWebUrl(serverEnv().WEB_URL);
+		response.headers.append(
+			"set-cookie",
+			`${cookie.name}=; Path=${cookie.options.path}; HttpOnly; SameSite=Lax; Max-Age=0${cookie.options.secure ? "; Secure" : ""}`,
+		);
+		return response;
+	}
 	if (nextauth[1] !== "workos") {
 		return NextAuth(
 			withSignInEmailIdentifier(request, nextauth),
