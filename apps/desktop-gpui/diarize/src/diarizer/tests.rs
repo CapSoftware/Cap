@@ -1132,6 +1132,38 @@ fn the_computer_audio_dropping_out_never_turns_the_call_into_a_person() {
 }
 
 #[test]
+fn the_call_louder_than_the_user_is_never_echo_of_the_user() {
+    // The user talks first. Then a remote whose voice sounds like the
+    // user's (voice 4) talks, louder than the user, and the laptop speakers
+    // play them into the microphone a little later; that copy closes first
+    // and joins the user's voice. The call's own words are not the user sent
+    // back by the far end: the microphone follows the call, not the reverse.
+    let mut table = speakers(4);
+    table.push(near(1, 2, 0.75));
+    let mut d = diarizer(table);
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    for i in 0..3u64 {
+        let t = 8_000 + i * 6_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(4, t, 5_000, 20 + i, 2, 1.0));
+        let call = push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(4, t, 5_000, 20 + i, 0, 1.0),
+        );
+        assert!(
+            call.spans.iter().all(|s| !s.echo && s.speaker != user),
+            "{call:?}"
+        );
+    }
+}
+
+#[test]
 fn quieter_chatter_in_the_room_heard_through_the_call_never_takes_the_user() {
     // A cafe: other people's chatter, about 10 dB under the user, fills the
     // microphone the whole time the call talks; the user speaks less but

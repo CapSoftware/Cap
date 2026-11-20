@@ -801,9 +801,15 @@ impl MeetingDiarizer {
         let other = self
             .best_overlapping(other_track(track), embedding, start_ms, end_ms)
             .filter(|(id, _)| track == Track::Mic || Some(*id) == self.user);
+        // A stretch of the call whose copy the microphone is hearing through
+        // the speakers is the call itself, never the user sent back: when
+        // the call is louder than the user, its copy can sound like them.
+        let call_heard_in_the_room =
+            || track == Track::System && self.leak(start_ms, end_ms) >= Some(self.config.leak);
         if let Some((id, sim)) = other
             && sim >= self.config.assign
             && own.is_none_or(|(_, own)| sim > own)
+            && !call_heard_in_the_room()
         {
             return Decision::Echo(id);
         }
