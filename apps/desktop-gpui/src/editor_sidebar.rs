@@ -4628,6 +4628,59 @@ impl EditorWindow {
 mod tests {
     use super::*;
 
+    /// A style segment's own background image is decoded when its Background
+    /// group opens, so the Image swatch and preview show it rather than the
+    /// empty folder.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn opening_a_style_background_decodes_its_own_image(cx: &mut gpui::TestAppContext) {
+        let project = tempfile::tempdir().unwrap();
+        let image_path = project.path().join("style-background.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([40, 90, 200, 255]))
+            .save(&image_path)
+            .unwrap();
+        let project_path = project.path().to_path_buf();
+        let (editor, cx) = cx.add_window_view(move |window, cx| {
+            crate::editor_window::EditorWindow::new(project_path.clone(), window, cx)
+        });
+        let style_image = image_path.to_string_lossy().into_owned();
+        editor.update_in(cx, |editor, window, cx| {
+            let mut config = editor.project.clone();
+            config.timeline = Some(cap_project::TimelineConfiguration {
+                segments: Vec::new(),
+                transitions: Vec::new(),
+                zoom_segments: Vec::new(),
+                scene_segments: Vec::new(),
+                mask_segments: Vec::new(),
+                text_segments: Vec::new(),
+                caption_segments: Vec::new(),
+                keyboard_segments: Vec::new(),
+                audio_segments: Vec::new(),
+                image_segments: Vec::new(),
+                shape_segments: Vec::new(),
+                camera3d_segments: Vec::new(),
+                style_segments: vec![cap_project::StyleSegment {
+                    overrides: cap_project::StyleOverrides {
+                        background: Some(cap_project::BackgroundConfiguration {
+                            source: BackgroundSource::Image {
+                                path: Some(style_image.clone()),
+                            },
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+            });
+            editor.project = config;
+            editor.open_style_group(0, StyleGroup::Background, window, cx);
+        });
+        cx.run_until_parked();
+        editor.update(cx, |editor, _| {
+            assert!(editor.sidebar.source_thumbs.contains_key(&image_path));
+        });
+    }
+
     #[test]
     fn a_new_grain_step_retires_the_old_texture_for_atlas_eviction() {
         let mut noise = NoiseCache::default();
@@ -5090,6 +5143,9 @@ impl EditorWindow {
         self.sidebar.cursor_ripple_open.set_open(ripple_enabled);
         self.sidebar.source_tab = initial_source_tab(&self.style_control_project());
         self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
+        // The style's own background image needs its swatch and preview
+        // decoded; the project's was decoded when the sidebar loaded.
+        self.ensure_preview(window, cx);
         cx.notify();
         window.refresh();
     }
@@ -5148,6 +5204,7 @@ impl EditorWindow {
                                 this.close_color_picker(cx);
                                 this.sidebar.menu = None;
                                 this.sidebar.style_target = None;
+                                this.ensure_preview(window, cx);
                                 cx.notify();
                                 window.refresh();
                             })),
