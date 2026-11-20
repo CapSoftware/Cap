@@ -3273,12 +3273,6 @@ impl EditorWindow {
                     .text_color(Hsla::from(editor.text_1))
                     .cursor_pointer()
                     .hover(move |this| this.bg(editor.choice_hover_fill()))
-                    .child(
-                        svg()
-                            .path("icons/keyboard.svg")
-                            .size(px(15.))
-                            .text_color(Hsla::from(editor.text_2)),
-                    )
                     .child(tr::editor::tabs::keyboard::type_keys_button())
                     .on_click(cx.listener(|this, _, window, cx| {
                         let at = this.playhead;
@@ -4249,8 +4243,10 @@ impl EditorWindow {
         let theme = self.theme;
         let active = settings.preset.clone();
 
+        let editor = theme.editor;
         let tile = |index: usize, preset: &CaptionPreset, cx: &mut Context<Self>| {
             let selected = active == preset.id;
+            // Painted like the cursor, key and sound tiles.
             div()
                 .id(SharedString::from(format!("caption-preset-{}", preset.id)))
                 // Two across the column, however wide it is.
@@ -4258,33 +4254,31 @@ impl EditorWindow {
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(6.))
+                .items_center()
+                .gap(px(8.))
                 .p(px(6.))
-                .rounded(px(8.))
-                .bg(self.panel_bg())
-                .border_1()
-                .border_color(if selected {
-                    Hsla::from(theme.blue_9)
-                } else {
-                    Hsla::from(theme.gray_3)
-                })
-                // `ring-1 ring-blue-9`, painted behind an opaque card.
-                .when(selected, |this| {
-                    this.shadow(vec![gpui::BoxShadow {
-                        color: Hsla::from(theme.blue_9),
-                        offset: gpui::point(px(0.), px(0.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(1.),
-                        inset: false,
-                    }])
+                .pb(px(9.))
+                .rounded(px(12.))
+                .map(|this| {
+                    if selected {
+                        this.bg(editor.choice_selected_fill())
+                            .shadow(editor.choice_selected_shadow())
+                    } else {
+                        this.bg(editor.choice_fill())
+                            .shadow(editor.choice_ring())
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(editor.choice_hover_fill()))
+                    }
                 })
                 .child(self.caption_preset_preview(preset))
                 .child(
                     div()
-                        .px(px(2.))
                         .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.gray_12))
+                        .text_color(Hsla::from(if selected {
+                            editor.text_1
+                        } else {
+                            editor.text_2
+                        }))
                         .child((preset.label)()),
                 )
                 .tooltip({
