@@ -698,6 +698,29 @@ impl EditorWindow {
                 self.scene_mode_at(self.preview_or_playhead()),
                 SceneMode::CameraOnly
             )
+            && !self.blank_canvas_at(self.preview_or_playhead())
+    }
+
+    /// A blank project's starting canvas draws no screen, so there is none to
+    /// select or move while it is on screen.
+    fn blank_canvas_at(&self, time: f64) -> bool {
+        if !self.summary().is_some_and(|summary| summary.blank) {
+            return false;
+        }
+        self.timeline
+            .clips
+            .iter()
+            .find(|clip| time >= clip.start && time < clip.end)
+            .or_else(|| self.timeline.clips.last())
+            .is_some_and(|clip| {
+                matches!(
+                    clip.detail,
+                    crate::editor_timeline::SegmentDetail::Clip {
+                        recording_clip: 0,
+                        ..
+                    }
+                )
+            })
     }
 
     fn show_camera(&self) -> bool {
