@@ -1273,7 +1273,7 @@ impl CursorConfiguration {
 
     /// New projects' cursor size: the arrow stands about 49 pt tall on a
     /// 982 pt tall display.
-    pub const NEW_PROJECT_SIZE: u32 = 128;
+    pub const NEW_PROJECT_SIZE: u32 = 127;
 
     /// New projects' cursor spring: quick to respond, lightly damped, and
     /// kept from overshooting by the trailing follow's clamp.
