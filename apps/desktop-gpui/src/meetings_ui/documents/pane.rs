@@ -2568,10 +2568,28 @@ impl Pane {
         self.stopped = None;
         self.view = View::Generated;
         let options = options.unwrap_or_default();
-        let task = meetings.update(cx, |m, cx| m.generate_notes(&id, options, cx));
+        let task = self.after_saves(cx, move |cx| {
+            meetings.update(cx, |m, cx| m.generate_notes(&id, options, cx))
+        });
         self.generation = Some(task);
         self.sync_bar(cx);
         cx.notify();
+    }
+
+    /// Starts `start` once every save queued so far has landed: writing
+    /// notes reads the notes and the last summary back from disk, so it must
+    /// not run ahead of the edits just flushed.
+    pub(super) fn after_saves<T: 'static>(
+        &mut self,
+        cx: &mut Context<Self>,
+        start: impl FnOnce(&mut App) -> Task<T> + 'static,
+    ) -> Task<T> {
+        let saved = writer::run(|| ());
+        cx.spawn(async move |_, cx| {
+            saved.await;
+            let task = cx.update(start);
+            task.await
+        })
     }
 
     fn stop_generation(&mut self, cx: &mut Context<Self>) {

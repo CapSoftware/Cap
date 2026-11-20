@@ -1356,3 +1356,40 @@ fn typing_before_the_saved_note_loads_is_never_erased(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn notes_are_written_from_what_was_typed_not_a_save_still_queued(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let first = f.store.read_with(cx, |s, _| s.open.clone().unwrap());
+    f.pane.update_in(cx, |pane, _, cx| {
+        pane.notes.update(cx, |e, cx| {
+            e.apply(
+                |ed| {
+                    ed.select_all();
+                    ed.insert_text("Typed just now")
+                },
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    // Write is clicked while the flushed save is still queued on the writer.
+    super::writer::hold();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+    f.pane.update_in(cx, |pane, _, cx| {
+        pane.flush_saves(cx);
+        let (seen, library, id) = (seen.clone(), f.library.clone(), first.clone());
+        pane.after_saves(cx, move |_| {
+            *seen.borrow_mut() = Some(notes_markdown(&library, &id));
+            gpui::Task::ready(())
+        })
+        .detach();
+    });
+    super::writer::release();
+    cx.run_until_parked();
+    assert_eq!(
+        seen.borrow().as_deref().map(str::trim),
+        Some("Typed just now"),
+        "writing starts from the notes as typed"
+    );
+}

@@ -28,8 +28,41 @@ pub fn submit(job: impl FnOnce() + Send + 'static) {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Jobs held back by [`hold`], so a test can see what the app does while
+    /// a save is still queued.
+    static HELD: std::cell::RefCell<Option<Vec<Box<dyn FnOnce()>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
 pub fn submit(job: impl FnOnce() + Send + 'static) {
-    job();
+    let job: Box<dyn FnOnce()> = Box::new(job);
+    let job = HELD.with(|held| match held.borrow_mut().as_mut() {
+        Some(queue) => {
+            queue.push(job);
+            None
+        }
+        None => Some(job),
+    });
+    if let Some(job) = job {
+        job();
+    }
+}
+
+/// Tests: queue jobs instead of running them, until [`release`].
+#[cfg(test)]
+pub fn hold() {
+    HELD.with(|held| *held.borrow_mut() = Some(Vec::new()));
+}
+
+/// Tests: run the held jobs in order and stop holding.
+#[cfg(test)]
+pub fn release() {
+    let jobs = HELD.with(|held| held.borrow_mut().take()).unwrap_or_default();
+    for job in jobs {
+        job();
+    }
 }
 
 pub async fn run<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> Option<T> {
