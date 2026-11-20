@@ -728,3 +728,40 @@ fn typing_hidden_under_a_shortcut_stays_silent() {
     );
     assert!(key_times(&events, true).len() > 2, "shown typing sounds");
 }
+
+#[test]
+fn a_split_between_a_modifier_and_its_key_keeps_both_sounds() {
+    let mut project = project(
+        serde_json::json!({
+            "segments": [
+                { "start": 0.0, "end": 0.99, "timescale": 1.0, "recordingSegment": 0 },
+                { "start": 0.99, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 }
+            ],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let keyboard = KeyboardEvents {
+        presses: vec![
+            press("LMeta", 980.0, true),
+            press("K", 1000.0, true),
+            press("K", 1060.0, false),
+            press("LMeta", 1100.0, false),
+        ],
+    };
+    let settings = project.keyboard.as_ref().unwrap().settings.clone();
+    let timeline = project.timeline.as_mut().unwrap();
+    timeline.keyboard_segments =
+        crate::keyboard::project_keyboard_events(&[(keyboard.clone(), 0.0)], timeline, &settings);
+    let events = input_sound_events(
+        &project,
+        &[InputSoundTake {
+            keyboard: &keyboard,
+            keyboard_offset_secs: 0.0,
+            clicks: &[],
+        }],
+    );
+    assert_eq!(key_times(&events, true), [0.98, 1.0]);
+    assert_eq!(key_times(&events, false), [1.06, 1.1]);
+}

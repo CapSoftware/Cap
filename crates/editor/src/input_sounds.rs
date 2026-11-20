@@ -468,8 +468,17 @@ fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         .map(|keyboard| &keyboard.settings)
         .filter(|_| keys);
     let timeline = project.timeline.as_ref();
+    // With typing hidden, a recorded key sounds only where its segment lists
+    // it, so those keys count too.
+    let shortcuts_only = settings.is_some_and(|settings| !settings.show_typing);
     serde_json::to_vec(&(
-        settings.map(|settings| (settings.key_sound_type, settings.key_sound_volume)),
+        settings.map(|settings| {
+            (
+                settings.key_sound_type,
+                settings.key_sound_volume,
+                settings.show_typing,
+            )
+        }),
         keys.then(|| {
             timeline.map(|timeline| {
                 timeline
@@ -481,13 +490,14 @@ fn input_sound_inputs(project: &ProjectConfiguration) -> Option<Vec<u8>> {
                             segment.end,
                             // A key added by hand sounds the keys its text
                             // strikes.
-                            cap_project::is_manual_keyboard_segment(segment).then(|| {
-                                segment
-                                    .keys
-                                    .iter()
-                                    .map(|key| (key.key.as_str(), key.time_offset))
-                                    .collect::<Vec<_>>()
-                            }),
+                            (shortcuts_only || cap_project::is_manual_keyboard_segment(segment))
+                                .then(|| {
+                                    segment
+                                        .keys
+                                        .iter()
+                                        .map(|key| (key.key.as_str(), key.time_offset))
+                                        .collect::<Vec<_>>()
+                                }),
                         )
                     })
                     .collect::<Vec<_>>()

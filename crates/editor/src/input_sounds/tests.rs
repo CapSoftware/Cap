@@ -340,3 +340,12 @@ fn the_ceiling_is_smooth_bounded_and_exact_below_the_knee() {
     assert!((0.99..1.0).contains(&over_loud), "{over_loud}");
     assert_eq!(add_under_ceiling(1.2, 0.1), 1.2);
 }
+
+#[test]
+fn showing_or_hiding_typing_rebuilds_the_sounds() {
+    let before = key_project(0.6);
+    let mut after = before.clone();
+    let settings = &mut after.keyboard.as_mut().unwrap().settings;
+    settings.show_typing = !settings.show_typing;
+    assert!(input_sounds_changed(&before, &after));
+}
