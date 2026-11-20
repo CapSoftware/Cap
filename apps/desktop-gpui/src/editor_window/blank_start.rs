@@ -325,7 +325,7 @@ impl EditorWindow {
                 )
                 .into_any_element();
         }
-        surface
+        let slate = surface
             .drag_over::<ExternalPaths>(move |style, _, _, _| {
                 style
                     .border_color(Hsla::from(editor.accent))
@@ -337,7 +337,11 @@ impl EditorWindow {
             })
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.import_dropped(paths.paths(), window, cx);
-            }))
+            }));
+        if cx.reduce_motion() {
+            return slate.into_any_element();
+        }
+        slate
             .with_animation(
                 "blank-start-enter",
                 Animation::new(ENTER),
@@ -573,7 +577,7 @@ impl EditorWindow {
                         let landed = this.update_in(cx, |this, window, cx| match imported {
                             Ok(imported) => {
                                 let lane = this.free_audio_lane();
-                                this.commit_audio_import(lane, imported, window, cx);
+                                this.commit_audio_import(lane, at, imported, window, cx);
                             }
                             Err(error) => {
                                 tracing::error!("importing dropped audio failed: {error}");

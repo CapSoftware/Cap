@@ -7144,7 +7144,7 @@ impl EditorWindow {
         };
         match request.picker {
             crate::editor_audio::AudioPicker::Add { lane } => {
-                self.commit_audio_import(lane, imported, window, cx);
+                self.commit_audio_import(lane, self.playhead, imported, window, cx);
             }
             crate::editor_audio::AudioPicker::Replace { index } => {
                 self.replace_audio_segment(
@@ -10174,6 +10174,7 @@ impl EditorWindow {
     fn commit_audio_import(
         &mut self,
         lane: u32,
+        at: f64,
         imported: ImportedAudio,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -10187,7 +10188,7 @@ impl EditorWindow {
             source_duration
         }));
         let max_start = (total - length).max(0.0);
-        let start = self.playhead.max(0.0).min(max_start);
+        let start = at.max(0.0).min(max_start);
         let end = start + length;
         let path = imported.path.clone();
         let inserted = self.edit(
