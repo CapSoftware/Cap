@@ -235,7 +235,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 		color = neutral + (color - neutral) * vibrance;
 	}
 	// A dither is its own texture: grain would only blur its cells.
-	let grain = (grain_value(input.uv) - 0.5) * u.texture.x * 0.18 * select(1.0, 0.0, dither);
-	color += vec3<f32>(grain);
+	if (!dither) {
+		let grain = (grain_value(input.uv) - 0.5) * u.texture.x * 0.18;
+		color += vec3<f32>(grain);
+	}
 	return vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
