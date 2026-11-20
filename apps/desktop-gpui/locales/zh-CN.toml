@@ -4142,7 +4142,7 @@ tag = "Cap Pro"
 get_pro = "获取 Cap Pro"
 not_now = "以后再说"
 sign_in = "登录"
-spent_title = { other = "Cap AI 已为你最近的 {count} 场会议写好纪要" }
+spent_title = "你的 Cap AI 免费次数已用完"
 title = "让 Cap AI 来写纪要"
 title_call = { other = "把你的 {count} 分钟通话整理成笔记" }
 title_people = { other = "把你与 {names} 的 {count} 分钟通话整理成笔记" }

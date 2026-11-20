@@ -4142,7 +4142,7 @@ tag = "Cap Pro"
 get_pro = "Cap Proにする"
 not_now = "今はしない"
 sign_in = "サインイン"
-spent_title = { other = "Cap AIが直近{count}件の会議をまとめました" }
+spent_title = "Cap AIの無料枠を使い切りました"
 title = "Cap AIにまとめてもらう"
 title_call = { other = "{count}分の通話をメモにまとめる" }
 title_people = { other = "{names}との{count}分の通話をメモにまとめる" }

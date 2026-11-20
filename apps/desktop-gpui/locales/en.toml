@@ -4144,7 +4144,7 @@ tag = { text = "Cap Pro", context = "Small tag next to the suggested questions f
 get_pro = "Get Cap Pro"
 not_now = "Not now"
 sign_in = "Sign in"
-spent_title = { one = "Cap AI wrote up your last meeting", other = "Cap AI wrote up your last {count} meetings" }
+spent_title = { text = "You've used your free Cap AI notes", context = "Card on a meeting note when the free Cap AI notes on this account are used up, next to a Get Cap Pro button." }
 title = "Let Cap AI write this up"
 title_call = { one = "Turn your {count} minute call into notes", other = "Turn your {count} minute call into notes" }
 title_people = { one = "Turn your {count} minute call with {names} into notes", other = "Turn your {count} minute call with {names} into notes" }

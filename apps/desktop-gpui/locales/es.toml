@@ -4142,7 +4142,7 @@ tag = "Cap Pro"
 get_pro = "Obtener Cap Pro"
 not_now = "Ahora no"
 sign_in = "Iniciar sesión"
-spent_title = { one = "Cap AI redactó tu última reunión", other = "Cap AI redactó tus últimas {count} reuniones" }
+spent_title = "Ya usaste tus notas gratis de Cap AI"
 title = "Deja que Cap AI lo redacte"
 title_call = { one = "Convierte tu llamada de {count} minuto en notas", other = "Convierte tu llamada de {count} minutos en notas" }
 title_people = { one = "Convierte tu llamada de {count} minuto con {names} en notas", other = "Convierte tu llamada de {count} minutos con {names} en notas" }

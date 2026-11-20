@@ -10,10 +10,7 @@ use super::{
     ask::AskChip,
     style::{self, Palette},
 };
-use crate::{
-    i18n::tr,
-    meetings::{AiAccess, access::TRIAL_MEETINGS},
-};
+use crate::{i18n::tr, meetings::AiAccess};
 
 pub const DISMISSED_KEY: &str = "capAiCardDismissed";
 pub const LIVE_DISMISSED_KEY: &str = "capAiLiveLineDismissed";
@@ -178,7 +175,7 @@ pub type Handler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 /// offer is about this call rather than a feature list.
 pub fn card_title(kind: CardKind, minutes: Option<u64>, people: Option<String>) -> String {
     match kind {
-        CardKind::Spent => tr::cap_ai::card::spent_title(TRIAL_MEETINGS as usize),
+        CardKind::Spent => tr::cap_ai::card::spent_title().into(),
         CardKind::Unavailable => tr::cap_ai::card::unavailable_title().into(),
         _ => match (minutes, people) {
             (Some(minutes), Some(names)) => tr::cap_ai::card::title_people(minutes as usize, names),
@@ -409,6 +406,15 @@ mod tests {
             ..ended(false)
         };
         assert_eq!(chip(AiAccess::Ready, empty), None);
+    }
+
+    /// The server sets how many meetings are free and may have spent them on
+    /// another computer, so the spent card states only that they are used.
+    #[test]
+    fn the_spent_card_claims_no_count_of_meetings() {
+        let title = card_title(CardKind::Spent, Some(42), Some("Ana".into()));
+        assert!(!title.chars().any(|c| c.is_ascii_digit()), "{title}");
+        assert_eq!(title, "You've used your free Cap AI notes");
     }
 
     #[test]
