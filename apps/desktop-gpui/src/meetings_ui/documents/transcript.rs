@@ -188,15 +188,15 @@ pub struct TranscriptView {
     hover: Rc<Cell<Option<(usize, usize)>>>,
     spell: Option<Spell>,
     /// Items the page puts ahead of the lines (its title, the summary), so
-    /// the note and its transcript share one scroll. The first is laid over
-    /// a spacer by [`PageScroll`] rather than drawn by the list.
+    /// the note and its transcript share one scroll. All but the last are
+    /// laid over spacers by [`PageScroll`] rather than drawn by the list.
     lead: Option<Lead>,
     /// The lines of the page's one scroll as a view of their own, so a key
     /// typed in the summary above them does not repaint them.
     lines: Option<Entity<LinesView>>,
-    /// Height of the page's first item (title and summary), which floats
-    /// over a spacer of this height at the top of the lines.
-    lead_height: Rc<Cell<Pixels>>,
+    /// Heights of the page's items that float over the lines (all but the
+    /// last), each over a spacer of its height at the top of the list.
+    lead_height: Spacers,
     /// Width the page's first item is laid out at.
     lead_width: Rc<Cell<Pixels>>,
     /// Bumped on every change, so the lines know when to repaint.
@@ -213,6 +213,9 @@ pub struct TranscriptView {
 }
 
 pub type LeadRender = Rc<dyn Fn(usize, &mut Window, &mut App) -> AnyElement>;
+
+/// Heights of the page's floating items, by index.
+type Spacers = Rc<std::cell::RefCell<Vec<Pixels>>>;
 
 struct Lead {
     count: usize,
@@ -372,7 +375,7 @@ impl TranscriptView {
             spell: None,
             lead: None,
             lines: None,
-            lead_height: Rc::new(Cell::new(px(0.))),
+            lead_height: Rc::new(std::cell::RefCell::new(Vec::new())),
             lead_width: Rc::new(Cell::new(px(0.))),
             revision: 0,
             lines_drawn: Rc::new(Cell::new(None)),
@@ -633,6 +636,16 @@ impl TranscriptView {
         out
     }
 
+    /// Tests: show these lines as if loaded from the library.
+    #[cfg(test)]
+    pub(super) fn load_for_test(&mut self, transcript: &Transcript, cx: &mut Context<Self>) {
+        let mut colors = std::mem::take(&mut self.colors);
+        let rows = build_rows(transcript, self.started_at(), None, &self.hidden, &mut colors);
+        self.colors = colors;
+        self.loaded = true;
+        self.apply(rows, cx);
+    }
+
     /// Changes whenever the lines do.
     pub fn rows_revision(&self) -> usize {
         Rc::as_ptr(&self.rows) as usize
@@ -676,6 +689,12 @@ impl TranscriptView {
     /// drawn (set before it is built).
     pub fn lead_width(&self) -> Pixels {
         self.lead_width.get()
+    }
+
+    /// The last measured height of the page's n-th floating item (zero
+    /// until it has been laid out).
+    pub fn float_height(&self, index: usize) -> Pixels {
+        self.lead_height.borrow().get(index).copied().unwrap_or_default()
     }
 
     /// Room after the page's last line, so it clears whatever floats over
@@ -2081,18 +2100,19 @@ fn input_theme(palette: &Palette) -> Theme {
 
 impl TranscriptView {
     /// The lines (after the page's own items, if any) in one list. With a
-    /// page, its first item is only a spacer: [`PageScroll`] lays the title
-    /// and summary over it.
+    /// page, all but its last item are only spacers: [`PageScroll`] lays the
+    /// title and the summary over them.
     fn render_list(
         entity: Entity<Self>,
         list: ListState,
         lead: Option<(usize, LeadRender, f32)>,
-        spacer: Rc<Cell<Pixels>>,
+        spacers: Spacers,
     ) -> gpui::List {
         gpui::list(list, move |index, window, cx| {
             if let Some((count, render, tail)) = &lead {
-                if index == 0 {
-                    return div().h(spacer.get()).into_any_element();
+                if index + 1 < *count {
+                    let height = spacers.borrow().get(index).copied().unwrap_or_default();
+                    return div().h(height).into_any_element();
                 }
                 if index < *count {
                     return render(index, window, cx);
@@ -2158,15 +2178,17 @@ impl Render for LinesView {
     }
 }
 
-/// The page's one scroll: the lines as a cached view, with the title and
-/// summary laid over the spacer at their top. A key typed in the summary
+/// The page's one scroll: the lines as a cached view, with the title and the
+/// summary laid over the spacers at their top. A key typed in the summary
 /// repaints the summary only; the lines repaint when they change, scroll,
-/// or the summary grows or shrinks.
+/// or a floating item grows or shrinks.
 struct PageScroll {
     lines: Entity<LinesView>,
     lead: LeadRender,
+    /// How many of the page's items float (all but the last).
+    floats: usize,
     list: ListState,
-    height: Rc<Cell<Pixels>>,
+    heights: Spacers,
     width: Rc<Cell<Pixels>>,
     revision: u64,
     drawn: Rc<Cell<Option<u64>>>,
@@ -2184,7 +2206,7 @@ impl IntoElement for PageScroll {
 
 impl Element for PageScroll {
     type RequestLayoutState = ();
-    type PrepaintState = (AnyElement, Option<AnyElement>);
+    type PrepaintState = (AnyElement, Vec<AnyElement>);
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -2217,24 +2239,40 @@ impl Element for PageScroll {
         cx: &mut App,
     ) -> Self::PrepaintState {
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            // Laid out first, so a new height reaches the spacer this frame.
-            let shown = self.list.logical_scroll_top().item_ix == 0;
             self.width.set(bounds.size.width);
-            let mut lead = shown.then(|| (self.lead)(0, window, cx));
             let mut fresh = self.drawn.get() != Some(self.revision);
-            if let Some(lead) = lead.as_mut() {
-                let space = size(
-                    AvailableSpace::Definite(bounds.size.width),
-                    AvailableSpace::MinContent,
-                );
-                let height = lead.layout_as_root(space, window, cx).height;
-                if height != self.height.get() {
-                    #[cfg(any(test, debug_assertions))]
-                    self.resizes.set(self.resizes.get() + 1);
-                    self.height.set(height);
-                    self.list.remeasure_items(0..1);
-                    fresh = true;
+            // Each floating item is built only while some of it shows, as the
+            // list does with its own items, and laid out before the lines so
+            // a new height reaches its spacer this frame.
+            let top = self.list.logical_scroll_top();
+            // Never borrowed across building an item: the page reads these
+            // heights while it builds them (its header's last height).
+            self.heights.borrow_mut().resize(self.floats, px(0.));
+            let mut y = -top.offset_in_item;
+            let mut built: Vec<(usize, AnyElement)> = Vec::new();
+            for index in top.item_ix..self.floats {
+                let known = self.heights.borrow()[index];
+                if y >= bounds.size.height {
+                    break;
                 }
+                let shows = known == px(0.) || y + known > px(0.);
+                if shows {
+                    let mut item = (self.lead)(index, window, cx);
+                    let space = size(
+                        AvailableSpace::Definite(bounds.size.width),
+                        AvailableSpace::MinContent,
+                    );
+                    let height = item.layout_as_root(space, window, cx).height;
+                    if height != known {
+                        #[cfg(any(test, debug_assertions))]
+                        self.resizes.set(self.resizes.get() + 1);
+                        self.heights.borrow_mut()[index] = height;
+                        self.list.remeasure_items(index..index + 1);
+                        fresh = true;
+                    }
+                    built.push((index, item));
+                }
+                y += self.heights.borrow()[index];
             }
             self.drawn.set(Some(self.revision));
             let view = AnyView::from(self.lines.clone());
@@ -2246,21 +2284,29 @@ impl Element for PageScroll {
             };
             lines.layout_as_root(bounds.size.into(), window, cx);
             lines.prepaint_at(bounds.origin, window, cx);
-            // Placed after the lines, where the list put the spacer, and
-            // above them so its clicks and hovers come first, as before.
-            let lead = match (lead, self.list.bounds_for_item(0)) {
-                (Some(mut lead), Some(at)) => {
-                    lead.prepaint_at(at.origin, window, cx);
-                    Some(lead)
+            // Placed after the lines, where the list put their spacers, and
+            // above them so their clicks and hovers come first, as before.
+            let mut placed = Vec::with_capacity(built.len());
+            let mut shown = Vec::with_capacity(built.len());
+            for (index, mut item) in built {
+                if let Some(at) = self.list.bounds_for_item(index) {
+                    item.prepaint_at(at.origin, window, cx);
+                    placed.push(item);
+                    shown.push(index);
                 }
-                (None, Some(_)) => {
-                    // The list scrolled back to its top while laying out.
-                    window.request_animation_frame();
-                    None
-                }
-                _ => None,
-            };
-            (lines, lead)
+            }
+            let missed = (0..self.floats).any(|index| {
+                !shown.contains(&index)
+                    && self
+                        .list
+                        .bounds_for_item(index)
+                        .is_some_and(|at| at.intersects(&bounds))
+            });
+            if missed {
+                // The list scrolled back to the items while laying out.
+                window.request_animation_frame();
+            }
+            (lines, placed)
         })
     }
 
@@ -2270,14 +2316,14 @@ impl Element for PageScroll {
         _: Option<&gpui::InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut (),
-        (lines, lead): &mut Self::PrepaintState,
+        (lines, placed): &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             lines.paint(window, cx);
-            if let Some(lead) = lead {
-                lead.paint(window, cx);
+            for item in placed {
+                item.paint(window, cx);
             }
         });
     }
@@ -2345,8 +2391,9 @@ impl Render for TranscriptView {
                 (Some(lead), Some(lines)) => PageScroll {
                     lines: lines.clone(),
                     lead: lead.render.clone(),
+                    floats: lead.count.saturating_sub(1),
                     list: self.list.clone(),
-                    height: self.lead_height.clone(),
+                    heights: self.lead_height.clone(),
                     width: self.lead_width.clone(),
                     revision: self.revision,
                     drawn: self.lines_drawn.clone(),

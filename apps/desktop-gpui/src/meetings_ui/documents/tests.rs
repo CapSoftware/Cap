@@ -1165,6 +1165,8 @@ impl gpui::Render for PageHost {
 struct PageSummary {
     tall: bool,
     renders: usize,
+    selector: &'static str,
+    height: f32,
 }
 
 impl gpui::Render for PageSummary {
@@ -1175,10 +1177,11 @@ impl gpui::Render for PageSummary {
     ) -> impl gpui::IntoElement {
         use gpui::{InteractiveElement as _, Styled as _, div, px};
         self.renders += 1;
+        let selector = self.selector;
         div()
-            .debug_selector(|| "page-summary".into())
+            .debug_selector(move || selector.into())
             .w_full()
-            .h(px(if self.tall { 120. } else { 40. }))
+            .h(px(if self.tall { self.height * 3. } else { self.height }))
     }
 }
 
@@ -1192,32 +1195,43 @@ fn typing_in_the_page_summary_leaves_the_lines_alone(cx: &mut TestAppContext) {
         }),
     });
     let transcript = host.read_with(cx, |h, _| h.transcript.clone());
-    let summary = cx.update(|_, cx| {
-        cx.new(|_| PageSummary {
-            tall: false,
-            renders: 0,
+    let view = |selector: &'static str, height: f32, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            cx.new(|_| PageSummary {
+                tall: false,
+                renders: 0,
+                selector,
+                height,
+            })
         })
+    };
+    let header = view("page-header", 50., cx);
+    let summary = view("page-summary", 40., cx);
+    let (h, s) = (header.clone(), summary.clone());
+    let render: super::transcript::LeadRender = std::rc::Rc::new(move |index, _, _| match index {
+        0 => div().w_full().child(h.clone()).into_any_element(),
+        1 => div().w_full().child(s.clone()).into_any_element(),
+        _ => div().w_full().h(px(30.)).into_any_element(),
     });
-    let page = summary.clone();
-    let render: super::transcript::LeadRender = std::rc::Rc::new(move |index, _, _| {
-        if index == 0 {
-            div().w_full().child(page.clone()).into_any_element()
-        } else {
-            div().w_full().h(px(30.)).into_any_element()
-        }
-    });
-    transcript.update(cx, |t, cx| t.set_lead(Some((2, render, 100.)), cx));
+    // Room after the lines so the page is taller than the window and can
+    // scroll past its header.
+    transcript.update(cx, |t, cx| t.set_lead(Some((3, render, 1000.)), cx));
     cx.simulate_resize(gpui::size(px(800.), px(600.)));
     cx.run_until_parked();
     let lines = |cx: &mut VisualTestContext| transcript.read_with(cx, |t, cx| t.lines_renders(cx));
     let heading = |cx: &mut VisualTestContext| {
         transcript
-            .read_with(cx, |t, _| t.list_state().bounds_for_item(1))
+            .read_with(cx, |t, _| t.list_state().bounds_for_item(2))
             .expect("the heading is laid out")
     };
     let placed = |cx: &mut VisualTestContext| cx.debug_bounds("page-summary").expect("drawn");
     let drawn = lines(cx);
     assert!(drawn > 0);
+    assert_eq!(
+        cx.debug_bounds("page-header").expect("drawn").bottom(),
+        placed(cx).top(),
+        "the summary follows the header"
+    );
     assert_eq!(
         heading(cx).top(),
         placed(cx).bottom(),
@@ -1254,6 +1268,27 @@ fn typing_in_the_page_summary_leaves_the_lines_alone(cx: &mut TestAppContext) {
     transcript.update(cx, |t, cx| t.set_width(500., cx));
     cx.run_until_parked();
     assert!(lines(cx) > drawn, "a change to the lines repaints them");
+
+    // Scrolled past the header: like the list's own items, it is no longer
+    // built, while the summary still shows.
+    transcript.update(cx, |t, cx| {
+        t.list_state().scroll_to(gpui::ListOffset {
+            item_ix: 1,
+            offset_in_item: px(0.),
+        });
+        t.changed(cx);
+    });
+    cx.run_until_parked();
+    let header_renders = header.read_with(cx, |h, _| h.renders);
+    summary.update(cx, |_, cx| cx.notify());
+    header.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        header.read_with(cx, |h, _| h.renders),
+        header_renders,
+        "a header scrolled out of view is not drawn"
+    );
+    assert_eq!(placed(cx).top(), px(0.), "the summary sits at the top");
 }
 
 #[test]
@@ -1391,5 +1426,101 @@ fn notes_are_written_from_what_was_typed_not_a_save_still_queued(cx: &mut TestAp
         seen.borrow().as_deref().map(str::trim),
         Some("Typed just now"),
         "writing starts from the notes as typed"
+    );
+}
+
+struct PaneHost {
+    pane: Entity<Pane>,
+    store: Entity<DocStore>,
+}
+
+impl gpui::Render for PaneHost {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement as _, Styled as _, div};
+        div().size_full().child(self.pane.clone())
+    }
+}
+
+/// The real page: a finished meeting with Cap's notes and its lines, drawn in
+/// a window. Its header and summary float over the lines; a key in the
+/// summary redraws neither the lines nor the header, a key in the title
+/// redraws the header.
+#[gpui::test]
+fn the_real_page_header_and_summary_float_over_the_lines(cx: &mut TestAppContext) {
+    use gpui::{px, size};
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let now = Utc::now();
+    let mut meta = library.create(DocKind::Meeting, now, 0).unwrap();
+    meta.title = "Weekly sync".into();
+    meta.title_is_auto = false;
+    meta.meeting = Some(MeetingDetails {
+        started_at: Some(now),
+        duration_ms: 60_000,
+        has_enhanced: true,
+        ..MeetingDetails::default()
+    });
+    library.save(&meta).unwrap();
+    let mut summary = Document::from_markdown("### Summary\n\nWe shipped the page.");
+    for block in &mut summary.blocks {
+        block.origin = cap_notes::Origin::Generated;
+    }
+    library.write_enhanced(&meta.id, &summary.to_json()).unwrap();
+    let mut lines = Transcript::new();
+    lines.apply(utterance("u1", Source::Mic, 0, "We shipped the page today.", true));
+    lines.apply(utterance("u2", Source::System, 4_000, "Great work, everyone.", true));
+    let lib = library.clone();
+    let (host, cx) = cx.add_window_view(|window, cx| {
+        let store = cx.new(|cx| DocStore::with_library(Some(lib), cx));
+        let pane = cx.new(|cx| {
+            Pane::new(
+                store.clone(),
+                gpui::WeakEntity::new_invalid(),
+                &Theme::light(),
+                window,
+                cx,
+            )
+        });
+        PaneHost { pane, store }
+    });
+    cx.simulate_resize(size(px(1000.), px(700.)));
+    cx.run_until_parked();
+    let (pane, store) = host.read_with(cx, |h, _| (h.pane.clone(), h.store.clone()));
+    store.update(cx, |s, cx| s.open(Some(meta.id.clone()), cx));
+    cx.run_until_parked();
+    let transcript = pane.read_with(cx, |p, _| p.transcript.clone());
+    transcript.update(cx, |t, cx| t.load_for_test(&lines, cx));
+    pane.update_in(cx, |p, window, cx| p.show_view(View::Generated, window, cx));
+    cx.run_until_parked();
+    assert!(
+        pane.read_with(cx, |p, _| p.page_mode()),
+        "a finished meeting with notes and lines shows as one page"
+    );
+    let (header_h, summary_h) =
+        transcript.read_with(cx, |t, _| (t.float_height(0), t.float_height(1)));
+    assert!(header_h > px(0.) && summary_h > px(0.), "both float over the lines");
+
+    let lines = |cx: &mut VisualTestContext| transcript.read_with(cx, |t, cx| t.lines_renders(cx));
+    let headers = |cx: &mut VisualTestContext| pane.read_with(cx, |p, cx| p.header_renders(cx));
+    let (lines_before, headers_before) = (lines(cx), headers(cx));
+    let enhanced = pane.read_with(cx, |p, _| p.enhanced.clone());
+    enhanced.update(cx, |e, cx| e.apply(|ed| ed.insert_text("Also "), cx));
+    cx.run_until_parked();
+    assert_eq!(lines(cx), lines_before, "a summary key leaves the lines alone");
+    assert_eq!(headers(cx), headers_before, "and the header");
+
+    pane.update_in(cx, |p, window, cx| p.focus_title(window, cx));
+    cx.run_until_parked();
+    let headers_before = headers(cx);
+    cx.simulate_input("!");
+    cx.run_until_parked();
+    assert!(headers(cx) > headers_before, "a title key redraws the header");
+    assert_eq!(
+        pane.read_with(cx, |p, cx| p.title.read(cx).text().to_string()),
+        "Weekly sync!"
     );
 }

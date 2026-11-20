@@ -61,7 +61,7 @@ const CAPTION_IN: Duration = Duration::from_millis(220);
 const RELINK_AFTER: Duration = Duration::from_millis(700);
 /// Items the page puts ahead of the transcript lines: the header, the note
 /// and the transcript's heading.
-const PAGE_LEAD: usize = 2;
+const PAGE_LEAD: usize = 3;
 const TYPED_RECENTLY: Duration = Duration::from_secs(20);
 /// Room under inline content so its last line clears the bottom dock.
 const DOCK_CLEARANCE: f32 = 78.;
@@ -336,6 +336,9 @@ pub struct Pane {
     /// The dock's banner height as last drawn (it wraps), so the page keeps
     /// room for it.
     banner_height: Rc<Cell<f32>>,
+    /// The page's header as its own view, so a key typed in the summary
+    /// below does not rebuild it (made when the page first shows).
+    header_view: Option<Entity<HeaderView>>,
     #[cfg(debug_assertions)]
     debug_stream_text: String,
     _subscriptions: Vec<Subscription>,
@@ -626,6 +629,7 @@ impl Pane {
             sheet_task: None,
             page_width: 800.,
             banner_height: Rc::new(Cell::new(0.)),
+            header_view: None,
             #[cfg(debug_assertions)]
             debug_stream_text: String::new(),
             _subscriptions: subscriptions,
@@ -1516,6 +1520,11 @@ impl Pane {
         self.page_mode
     }
 
+    #[cfg(test)]
+    pub(super) fn header_renders(&self, cx: &App) -> usize {
+        self.header_view.as_ref().map_or(0, |h| h.read(cx).renders)
+    }
+
     fn set_page_mode(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.page_mode == on {
             return;
@@ -1587,9 +1596,9 @@ impl Pane {
             .into_any_element()
     }
 
-    /// The page's own items in its one scroll: the header and the note
-    /// (one item, laid over the lines so typing in it leaves them alone),
-    /// then the transcript's heading.
+    /// The page's own items in its one scroll: the header, the note (both
+    /// laid over the lines so typing in them leaves the lines alone), then
+    /// the transcript's heading.
     fn render_lead(
         &mut self,
         index: usize,
@@ -1598,7 +1607,8 @@ impl Pane {
     ) -> AnyElement {
         let width = self.page_width;
         match index {
-            0 => {
+            0 => self.render_page_header(width, cx),
+            1 => {
                 // Cached at its measured height, so a key typed in the title
                 // or Ask does not lay the summary out again.
                 let page = self.transcript.read(cx).lead_width();
@@ -1616,21 +1626,52 @@ impl Pane {
                 });
                 div()
                     .w_full()
+                    .pt(px(6.))
                     .flex()
                     .flex_col()
-                    .child(self.render_header(width, cx))
-                    .child(
-                        div()
-                            .w_full()
-                            .pt(px(6.))
-                            .flex()
-                            .flex_col()
-                            .children(self.render_generated_status(width, cx))
-                            .children(editor),
-                    )
+                    .children(self.render_generated_status(width, cx))
+                    .children(editor)
                     .into_any_element()
             }
             _ => self.render_transcript_head(width, cx),
+        }
+    }
+
+    /// The header over the page's lines: drawn cached at its last height,
+    /// and afresh (measuring its height again) whenever it changed, its width
+    /// changed, or it has not been laid out yet.
+    fn render_page_header(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        let header = match &self.header_view {
+            Some(header) => header.clone(),
+            None => {
+                let pane = cx.entity();
+                let header = cx.new(|cx| HeaderView::new(pane, cx));
+                self.header_view = Some(header.clone());
+                header
+            }
+        };
+        let known = self.transcript.read(cx).float_height(0);
+        let fresh = {
+            let view = header.read(cx);
+            // Each check runs every frame (no short-circuit): the width must
+            // be recorded even when another reason already draws it afresh,
+            // or the next frame sees a resize that never happened.
+            let stale = view.stale.replace(false);
+            let resized = view.width.replace(width) != width;
+            let unknown = known <= px(0.);
+            let drifted = view.measured.get() != known;
+            let fresh = stale || resized || unknown || drifted;
+            // Drawn afresh, its height is measured by the page this frame;
+            // only a cached draw at a fixed height can drift from it.
+            view.known.set(if fresh { px(0.) } else { known });
+            fresh
+        };
+        let view = gpui::AnyView::from(header);
+        if fresh {
+            view.into_any_element()
+        } else {
+            view.cached(StyleRefinement::default().w_full().h(known))
+                .into_any_element()
         }
     }
 
@@ -4966,3 +5007,84 @@ pub fn notes_follow_stop(
 ) -> bool {
     access.writes_notes() && auto_generate && !has_notes && long_enough
 }
+
+/// The page's header (title, details, speakers) as a view of its own. The
+/// page draws it cached, so typing in the summary below leaves it alone; it
+/// is drawn afresh when it changes: a key in the title (the field notifies
+/// the view that drew it), or anything on the pane.
+pub(super) struct HeaderView {
+    pane: WeakEntity<Pane>,
+    /// Set by any change, cleared when the page next draws it afresh.
+    stale: Cell<bool>,
+    width: Cell<f32>,
+    /// The height the page drew it at when cached (zero when drawn afresh),
+    /// and the height it last measured itself; when they differ the next
+    /// frame draws it afresh.
+    known: Rc<Cell<Pixels>>,
+    measured: Rc<Cell<Pixels>>,
+    #[cfg(test)]
+    pub(super) renders: usize,
+    _subscriptions: [Subscription; 2],
+}
+
+impl HeaderView {
+    fn new(pane: Entity<Pane>, cx: &mut Context<Self>) -> Self {
+        let on_pane = cx.observe(&pane, |this: &mut Self, _, cx| {
+            this.stale.set(true);
+            cx.notify();
+        });
+        let on_self = cx.observe_self(|this: &mut Self, _| this.stale.set(true));
+        Self {
+            pane: pane.downgrade(),
+            stale: Cell::new(true),
+            width: Cell::new(0.),
+            known: Rc::new(Cell::new(px(0.))),
+            measured: Rc::new(Cell::new(px(0.))),
+            #[cfg(test)]
+            renders: 0,
+            _subscriptions: [on_pane, on_self],
+        }
+    }
+}
+
+impl Render for HeaderView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
+        let header = self
+            .pane
+            .update(cx, |pane, cx| {
+                let width = pane.page_width;
+                pane.render_header(width, cx)
+            })
+            .ok();
+        let (known, measured) = (self.known.clone(), self.measured.clone());
+        // Measures the header's own height even when the page lays the view
+        // out at its last one; a mismatch asks for a fresh draw next frame.
+        let probe = gpui::canvas(
+            move |bounds, window, _| {
+                let height = bounds.size.height;
+                measured.set(height);
+                let fixed = known.get();
+                if fixed > px(0.) && height != fixed {
+                    window.request_animation_frame();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        div().w_full().flex().flex_col().child(
+            div()
+                .w_full()
+                .relative()
+                .children(header)
+                .child(probe),
+        )
+    }
+}
+
