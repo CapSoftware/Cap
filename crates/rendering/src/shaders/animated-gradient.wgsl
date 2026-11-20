@@ -167,25 +167,31 @@ fn bayer8(cell: vec2<u32>) -> f32 {
 // one stop or the other, more of the nearer one, so only the palette's own
 // colours are ever drawn.
 fn dithered_palette(position: f32, threshold: f32) -> vec3<f32> {
-	let count = u32(clamp(round(u.output.z), 2.0, 5.0));
 	let first = u.stops[0];
 	if (position <= first.w) {
 		return first.rgb;
 	}
+	let count = u32(clamp(round(u.output.z), 2.0, 5.0));
 	var previous = first;
-	for (var index = 1u; index < 5u; index = index + 1u) {
-		if (index >= count) {
-			break;
-		}
-		let current = u.stops[index];
-		if (position <= current.w) {
-			let interval = max(current.w - previous.w, 0.00001);
-			let progress = clamp((position - previous.w) / interval, 0.0, 1.0);
-			return select(previous.rgb, current.rgb, progress > threshold);
-		}
+	var current = u.stops[1];
+	if (position > current.w && count > 2u) {
 		previous = current;
+		current = u.stops[2];
+		if (position > current.w && count > 3u) {
+			previous = current;
+			current = u.stops[3];
+			if (position > current.w && count > 4u) {
+				previous = current;
+				current = u.stops[4];
+			}
+		}
 	}
-	return previous.rgb;
+	if (position > current.w) {
+		return current.rgb;
+	}
+	let interval = max(current.w - previous.w, 0.00001);
+	let progress = clamp((position - previous.w) / interval, 0.0, 1.0);
+	return select(previous.rgb, current.rgb, progress > threshold);
 }
 
 fn hash_u32(input: u32) -> u32 {
