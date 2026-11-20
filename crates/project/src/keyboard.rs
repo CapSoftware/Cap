@@ -1278,7 +1278,7 @@ const SHORTCUT_LEAD_MS: f64 = 100.0;
 const SHORTCUT_GAP_MS: f64 = 120.0;
 /// However close the next shortcut, a label stays this long after its last
 /// press, and the next one waits for it.
-const SHORTCUT_MIN_VISIBLE_MS: f64 = 250.0;
+pub(crate) const SHORTCUT_MIN_VISIBLE_MS: f64 = 250.0;
 /// Plain keys this close together are someone typing, not single-key
 /// shortcuts.
 const TYPING_GAP_MS: f64 = 1000.0;

@@ -204,9 +204,16 @@ fn shown_key_ranges(project: &ProjectConfiguration) -> Vec<(f64, f64)> {
 /// each recorded key it lists, at its output time, and the ranges of older
 /// segments saved without their keys.
 struct ShownShortcuts<'a> {
-    keys: Vec<(f64, &'a str)>,
+    /// Each listed key's output time, its key, and how much earlier its press
+    /// may have been: a label that waited for the one before it to stay up
+    /// starts after its own press, so its first key is listed at the label's
+    /// start rather than at the press.
+    keys: Vec<(f64, &'a str, f64)>,
     unlisted: Vec<(f64, f64)>,
 }
+
+/// The longest a generated label can start after its own press.
+const SHOWN_KEY_DEFERRAL_SECS: f64 = crate::keyboard::SHORTCUT_MIN_VISIBLE_MS / 1000.0;
 
 /// How far a listed key's time may sit from its press: both come from the
 /// same output mapping, so only rounding separates them.
@@ -230,12 +237,18 @@ impl<'a> ShownShortcuts<'a> {
             if segment.keys.is_empty() {
                 shown.unlisted.push((segment.start, segment.end));
             }
-            shown.keys.extend(
-                segment
-                    .keys
-                    .iter()
-                    .map(|key| (segment.start + key.time_offset / 1000.0, key.key.as_str())),
-            );
+            shown.keys.extend(segment.keys.iter().map(|key| {
+                let deferral = if key.time_offset <= 0.0 {
+                    SHOWN_KEY_DEFERRAL_SECS
+                } else {
+                    0.0
+                };
+                (
+                    segment.start + key.time_offset / 1000.0,
+                    key.key.as_str(),
+                    deferral,
+                )
+            }));
         }
         shown.keys.sort_by(|a, b| a.0.total_cmp(&b.0));
         shown
@@ -244,11 +257,17 @@ impl<'a> ShownShortcuts<'a> {
     fn shows(&self, key: &str, time: f64) -> bool {
         let first = self
             .keys
-            .partition_point(|(at, _)| *at < time - SHOWN_KEY_TOLERANCE_SECS);
+            .partition_point(|(at, _, _)| *at < time - SHOWN_KEY_TOLERANCE_SECS);
         self.keys[first..]
             .iter()
-            .take_while(|(at, _)| *at <= time + SHOWN_KEY_TOLERANCE_SECS)
-            .any(|(_, shown)| *shown == key)
+            .take_while(|(at, _, _)| {
+                *at <= time + SHOWN_KEY_DEFERRAL_SECS + SHOWN_KEY_TOLERANCE_SECS
+            })
+            .any(|(at, shown, deferral)| {
+                *shown == key
+                    && time >= at - deferral - SHOWN_KEY_TOLERANCE_SECS
+                    && time <= at + SHOWN_KEY_TOLERANCE_SECS
+            })
             || self
                 .unlisted
                 .iter()

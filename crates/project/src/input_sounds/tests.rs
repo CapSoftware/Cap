@@ -730,6 +730,47 @@ fn typing_hidden_under_a_shortcut_stays_silent() {
 }
 
 #[test]
+fn a_shortcut_whose_label_waits_for_the_one_before_still_sounds() {
+    let mut project = project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        true,
+        false,
+    );
+    let presses = vec![
+        press("LMeta", 950.0, true),
+        press("C", 1000.0, true),
+        press("C", 1050.0, false),
+        press("V", 1200.0, true),
+        press("V", 1250.0, false),
+        press("LMeta", 1300.0, false),
+    ];
+    let keyboard = KeyboardEvents { presses };
+    let settings = project.keyboard.as_ref().unwrap().settings.clone();
+    assert!(!settings.show_typing);
+    let timeline = project.timeline.as_mut().unwrap();
+    timeline.keyboard_segments =
+        crate::keyboard::project_keyboard_events(&[(keyboard.clone(), 0.0)], timeline, &settings);
+    assert_eq!(timeline.keyboard_segments.len(), 2);
+    let paste = &timeline.keyboard_segments[1];
+    assert!(paste.start > 1.2, "the second label waits for the first");
+    assert_eq!(paste.keys[0].time_offset, 0.0);
+
+    let events = input_sound_events(
+        &project,
+        &[InputSoundTake {
+            keyboard: &keyboard,
+            keyboard_offset_secs: 0.0,
+            clicks: &[],
+        }],
+    );
+    assert_eq!(key_times(&events, true), [0.95, 1.0, 1.2]);
+    assert_eq!(key_times(&events, false), [1.05, 1.25, 1.3]);
+}
+
+#[test]
 fn a_split_between_a_modifier_and_its_key_keeps_both_sounds() {
     let mut project = project(
         serde_json::json!({
