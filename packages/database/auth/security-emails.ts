@@ -71,6 +71,50 @@ export async function sendPasskeyRemovedNotice(
 		});
 	} catch (error) {
 		console.error("[passkeys] Failed to send passkey removed notice", {
+export async function sendEmailChangeCode(email: string, code: string) {
+	const emailStatus = getEmailDeliveryStatus();
+	if (!emailStatus.configured) {
+		if (
+			process.env.NODE_ENV === "production" &&
+			buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+		) {
+			throw new Error(emailStatus.reason);
+		}
+		console.log(
+			`\n🔐 EMAIL CHANGE CODE (email delivery disabled)\nℹ️  ${emailStatus.reason}\n📧 Email: ${email}\n🔢 Code: ${code}\n⏱  Expires in: 10 minutes\n`,
+		);
+		return;
+	}
+	const { EmailChangeCodeEmail } = await import("../emails/email-change-code");
+	const delivery = await sendEmail({
+		email,
+		subject: "Confirm your new Cap email address",
+		react: EmailChangeCodeEmail({ email, code }),
+	});
+	if (delivery?.error) {
+		throw new Error(
+			`Failed to send email change code: ${delivery.error.message}`,
+		);
+	}
+}
+
+export async function sendEmailChangedNotice(
+	previousEmail: string,
+	newEmail: string,
+) {
+	if (!getEmailDeliveryStatus().configured) return;
+	try {
+		const { EmailChangedEmail } = await import("../emails/email-changed");
+		await sendEmail({
+			email: previousEmail,
+			subject: "Your Cap email address was changed",
+			react: EmailChangedEmail({ email: previousEmail, newEmail }),
+			...(buildEnv.NEXT_PUBLIC_IS_CAP === "true"
+				? { replyTo: "hello@cap.so" }
+				: {}),
+		});
+	} catch (error) {
+		console.error("[email-change] Failed to send email changed notice", {
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
