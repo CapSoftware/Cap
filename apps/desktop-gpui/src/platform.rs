@@ -1953,6 +1953,11 @@ mod mac {
 
     /// The `NSWindow` behind a gpui window.
     pub fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
+        // Test builds only ever have gpui's test windows, which panic when
+        // asked for a platform handle instead of returning an error.
+        if cfg!(test) {
+            return None;
+        }
         // Fully qualified: `Window` also has an inherent `window_handle()`
         // returning gpui's own `AnyWindowHandle`.
         let handle = HasWindowHandle::window_handle(window).ok()?;
