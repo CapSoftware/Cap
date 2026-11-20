@@ -79,7 +79,7 @@ impl Action {
 /// nothing was edited in this window yet. On opening, a restyled background
 /// or a lengthened, trimmed or split canvas still counts as untouched; any
 /// clip, overlay, sound, key, caption, zoom or annotation does not.
-fn blank_canvas_untouched(
+pub(crate) fn blank_canvas_untouched(
     config: &ProjectConfiguration,
     blank: bool,
     audio_only: bool,

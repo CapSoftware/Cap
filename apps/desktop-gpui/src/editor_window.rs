@@ -88,6 +88,8 @@ mod snap;
 mod style_preset_ui;
 mod transitions;
 
+pub(crate) use blank_start::blank_canvas_untouched;
+
 // ---------------------------------------------------------------------------
 // Window geometry
 // ---------------------------------------------------------------------------

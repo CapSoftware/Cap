@@ -2011,6 +2011,7 @@ impl PreparedMp4Import {
             );
         }
         let mut config = latest.clone();
+        clear_untouched_canvas(&self.meta, &mut config);
         let inner = ensure_multiple_segments(&mut self.meta)?;
         let index = u32::try_from(inner.segments.len()).map_err(|error| error.to_string())?;
         inner.segments.push(self.segment.clone());
@@ -2478,6 +2479,33 @@ fn source_asset_path(
     }
 
     Ok(Some(canonical))
+}
+
+/// A blank project that still holds only the canvas it started with gives
+/// the canvas's place to the first clip imported into it, so the video starts
+/// with that clip. The canvas stays in the recording, unused, and the
+/// background stays the project's background.
+fn clear_untouched_canvas(meta: &RecordingMeta, config: &mut ProjectConfiguration) {
+    let Some(studio) = meta.studio_meta() else {
+        return;
+    };
+    let recording_clips = match studio {
+        StudioRecordingMeta::SingleSegment { .. } => 1,
+        StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+    };
+    if !crate::editor_window::blank_canvas_untouched(
+        config,
+        studio.is_blank(),
+        studio.is_audio_only(),
+        recording_clips,
+        false,
+    ) {
+        return;
+    }
+    if let Some(timeline) = config.timeline.as_mut() {
+        timeline.segments.clear();
+        timeline.transitions.clear();
+    }
 }
 
 /// `ensure_multiple_segments` (`import.rs:273-303`): normalise a
@@ -3438,6 +3466,7 @@ pub(crate) fn append_cap_project_to_editor(
         inner.status = Some(StudioRecordingStatus::Complete);
         inner.segments.clone()
     };
+    clear_untouched_canvas(&target_meta, &mut config);
     ensure_project_timeline(&mut config, target_project_path, &existing_segments)?;
 
     let (base_index, copied_segments, source_to_target_index) = {
@@ -4029,6 +4058,103 @@ mod tests {
         let changed = fixture.project_bytes();
         assert!(prepared.commit(&fixture.config).is_err());
         assert_eq!(fixture.project_bytes(), changed);
+    }
+
+    fn blank_target(root: &Path, with_text: bool) -> (PathBuf, ProjectConfiguration) {
+        let project = root.join("blank.cap");
+        cap_export::audio_project::create_blank_project(&project, "Blank").unwrap();
+        let mut config = ProjectConfiguration::load(&project).unwrap();
+        if with_text {
+            config
+                .timeline
+                .as_mut()
+                .unwrap()
+                .text_segments
+                .push(crate::style_presets::new_text_segment(1.0, 3.0, 0));
+            config.write(&project).unwrap();
+        }
+        (project, config)
+    }
+
+    fn clip_order(project: &Path) -> Vec<u32> {
+        ProjectConfiguration::load(project)
+            .unwrap()
+            .timeline
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.recording_clip)
+            .collect()
+    }
+
+    #[test]
+    fn the_first_video_takes_an_untouched_blank_canvas_place() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let (project, config) = blank_target(&fixture.root, false);
+        let prepared = PreparedMp4Import::prepare(
+            &project,
+            &fixture.source,
+            &config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        )
+        .unwrap();
+        let committed = prepared.commit(&config).unwrap();
+        assert_eq!(clip_order(&project), vec![1]);
+        let timeline = committed.timeline.unwrap();
+        assert_eq!(timeline.segments.len(), 1);
+        assert!(
+            timeline.duration() < cap_export::audio_project::BLANK_PROJECT_CLIP.as_secs_f64(),
+            "{}",
+            timeline.duration()
+        );
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        assert!(meta.studio_meta().unwrap().is_blank());
+        assert!(matches!(
+            committed.background.source,
+            cap_project::BackgroundSource::AnimatedGradient { .. }
+        ));
+    }
+
+    #[test]
+    fn a_video_imported_over_content_on_the_canvas_goes_after_it() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let (project, config) = blank_target(&fixture.root, true);
+        let prepared = PreparedMp4Import::prepare(
+            &project,
+            &fixture.source,
+            &config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        )
+        .unwrap();
+        prepared.commit(&config).unwrap();
+        assert_eq!(clip_order(&project), vec![0, 1]);
+    }
+
+    #[test]
+    fn an_existing_recording_takes_an_untouched_blank_canvas_place() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let (project, _) = blank_target(&fixture.root, false);
+        assert_eq!(
+            append_cap_project_to_editor(&project, &fixture.project).unwrap(),
+            1
+        );
+        assert_eq!(clip_order(&project), vec![1]);
+
+        let other = fixture.root.join("other");
+        std::fs::create_dir(&other).unwrap();
+        let (project, _) = blank_target(&other, true);
+        append_cap_project_to_editor(&project, &fixture.project).unwrap();
+        assert_eq!(clip_order(&project), vec![0, 1]);
+    }
+
+    #[test]
+    fn importing_into_a_recording_keeps_its_clips() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+        prepared.commit(&fixture.config).unwrap();
+        assert_eq!(clip_order(&fixture.project), vec![0, 1]);
     }
 
     #[test]
