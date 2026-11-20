@@ -258,8 +258,6 @@ fn conv(pa: vec2<i32>, pb: vec2<i32>) -> Quad {
     return Quad(a0, a1, b0, b1);
 }
 
-// Middle layers: store the features and add this layer's readout to the
-// residual.
 @compute @workgroup_size(8, 8)
 fn body(@builtin(global_invocation_id) id: vec3<u32>, @builtin(workgroup_id) group: vec3<u32>) {
     if !tile_needed(vec2<i32>(group.xy)) {
@@ -307,8 +305,8 @@ fn finish_pixel(p: vec2<i32>, r: vec4<f32>) {
     }
 }
 
-// Last layer: adds its readout to the residual and writes the output.
-// Flat tiles keep the bilinear result.
+// The last layer's features are only read by its own readout, so they are
+// never stored. Flat tiles keep the bilinear result.
 @compute @workgroup_size(8, 8)
 fn last(@builtin(global_invocation_id) id: vec3<u32>, @builtin(workgroup_id) group: vec3<u32>) {
     let pa = vec2<i32>(i32(id.x) * 2, i32(id.y));
