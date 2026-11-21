@@ -10,6 +10,7 @@ export type AuthChallengePurpose =
 	| "passkey_sign_in"
 	| "passkey_step_up"
 	| "passkey_registration"
+	| "passkey_first_registration"
 	| "step_up_email_code"
 	| "step_up_email_code_sent"
 	| "step_up_grant";
@@ -321,6 +322,7 @@ export async function spendPasskeySetup(
 				inArray(authChallenges.purpose, [
 					"step_up_grant",
 					"passkey_registration",
+					"passkey_first_registration",
 				]),
 			),
 		);

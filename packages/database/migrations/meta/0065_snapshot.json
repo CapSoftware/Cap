@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "888141ff-e478-49dd-a76d-5018080def10",
+	"id": "b303592d-54ac-4370-ae15-4f84f46fefc9",
 	"prevId": "8ac84ca4-d730-45c1-82f8-48ed8ca42cf5",
 	"tables": {
 		"accounts": {
@@ -3240,6 +3240,11 @@
 					"name": "expires_at_idx",
 					"columns": ["expiresAt"],
 					"isUnique": false
+				},
+				"user_consumed_idx": {
+					"name": "user_consumed_idx",
+					"columns": ["userId", "consumedAt"],
+					"isUnique": false
 				}
 			},
 			"foreignKeys": {},
@@ -3393,6 +3398,11 @@
 					"columns": ["familyId"],
 					"isUnique": false
 				},
+				"user_revoked_idx": {
+					"name": "user_revoked_idx",
+					"columns": ["userId", "revokedAt"],
+					"isUnique": false
+				},
 				"client_active_idx": {
 					"name": "client_active_idx",
 					"columns": ["clientId", "revokedAt", "refreshExpiresAt"],
@@ -3459,85 +3469,6 @@
 				"media_processing_budgets_id": {
 					"name": "media_processing_budgets_id",
 					"columns": ["id"]
-				}
-			},
-			"uniqueConstraints": {},
-			"checkConstraint": {}
-		},
-		"meeting_notes_trial_uses": {
-			"name": "meeting_notes_trial_uses",
-			"columns": {
-				"userId": {
-					"name": "userId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"meetingId": {
-					"name": "meetingId",
-					"type": "varchar(64)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"slot": {
-					"name": "slot",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"notesRuns": {
-					"name": "notesRuns",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 1
-				},
-				"askRuns": {
-					"name": "askRuns",
-					"type": "int",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": 0
-				},
-				"startedAt": {
-					"name": "startedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"completedAt": {
-					"name": "completedAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "datetime",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				}
-			},
-			"indexes": {
-				"user_slot_idx": {
-					"name": "user_slot_idx",
-					"columns": ["userId", "slot"],
-					"isUnique": true
-				}
-			},
-			"foreignKeys": {},
-			"compositePrimaryKeys": {
-				"meeting_notes_trial_uses_userId_meetingId_pk": {
-					"name": "meeting_notes_trial_uses_userId_meetingId_pk",
-					"columns": ["userId", "meetingId"]
 				}
 			},
 			"uniqueConstraints": {},
@@ -5697,6 +5628,14 @@
 					"notNull": true,
 					"autoincrement": false,
 					"default": false
+				},
+				"confirmsIdentity": {
+					"name": "confirmsIdentity",
+					"type": "boolean",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": true
 				},
 				"aaguid": {
 					"name": "aaguid",

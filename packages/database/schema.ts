@@ -123,6 +123,7 @@ export const users = mysqlTable(
 				dashboard?: {
 					pageSize?: number;
 				};
+				passkeyPromptDismissedAt?: string;
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
@@ -1052,6 +1053,7 @@ export const userPasskeys = mysqlTable(
 		transports: json("transports").$type<string[]>(),
 		deviceType: varchar("deviceType", { length: 32 }).notNull(),
 		backedUp: boolean("backedUp").notNull().default(false),
+		confirmsIdentity: boolean("confirmsIdentity").notNull().default(true),
 		aaguid: varchar("aaguid", { length: 36 }),
 		name: varchar("name", { length: 64 }).notNull(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1247,6 +1249,7 @@ export const mcpOAuthCodes = mysqlTable(
 	(table) => [
 		uniqueIndex("code_hash_idx").on(table.codeHash),
 		index("expires_at_idx").on(table.expiresAt),
+		index("user_consumed_idx").on(table.userId, table.consumedAt),
 	],
 );
 
@@ -1269,6 +1272,7 @@ export const mcpOAuthTokens = mysqlTable(
 		uniqueIndex("access_hash_idx").on(table.accessHash),
 		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
 		index("family_id_idx").on(table.familyId),
+		index("user_revoked_idx").on(table.userId, table.revokedAt),
 		index("client_active_idx").on(
 			table.clientId,
 			table.revokedAt,

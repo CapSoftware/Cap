@@ -64,6 +64,7 @@ export type PasskeySummary = {
 	createdAt: Date;
 	lastUsedAt: Date | null;
 	backedUp: boolean;
+	confirmsIdentity: boolean;
 };
 
 export function passkeyRelyingParty() {
@@ -255,7 +256,12 @@ export async function createPasskeyStepUpOptions(
 			transports: userPasskeys.transports,
 		})
 		.from(userPasskeys)
-		.where(eq(userPasskeys.userId, userId));
+		.where(
+			and(
+				eq(userPasskeys.userId, userId),
+				eq(userPasskeys.confirmsIdentity, true),
+			),
+		);
 	if (passkeys.length === 0) return null;
 	const { rpID } = passkeyRelyingParty();
 	const options = await generateAuthenticationOptions({
@@ -305,6 +311,7 @@ async function verifyPasskeyAssertion(
 			.for("update");
 		if (!passkey || passkey.credentialId !== response.id) return null;
 		if (userId && passkey.userId !== userId) return null;
+		if (purpose === "passkey_step_up" && !passkey.confirmsIdentity) return null;
 
 		const [user] = await tx
 			.select()
@@ -379,12 +386,15 @@ export async function countPasskeys(userId: User.UserId) {
 	return row?.total ?? 0;
 }
 
-export async function createPasskeyRegistrationOptions(user: {
-	id: User.UserId;
-	email: string;
-	name: string | null;
-	lastName: string | null;
-}): Promise<PublicKeyCredentialCreationOptionsJSON | null> {
+export async function createPasskeyRegistrationOptions(
+	user: {
+		id: User.UserId;
+		email: string;
+		name: string | null;
+		lastName: string | null;
+	},
+	options: { firstPasskeyOnly?: boolean } = {},
+): Promise<PublicKeyCredentialCreationOptionsJSON | null> {
 	const existing = await db()
 		.select({
 			credentialId: userPasskeys.credentialId,
@@ -393,11 +403,13 @@ export async function createPasskeyRegistrationOptions(user: {
 		.from(userPasskeys)
 		.where(eq(userPasskeys.userId, user.id));
 	if (existing.length >= MAX_PASSKEYS_PER_USER) return null;
+	const { firstPasskeyOnly = false } = options;
+	if (firstPasskeyOnly && existing.length > 0) return null;
 
 	const { rpID, rpName } = passkeyRelyingParty();
 	const displayName =
 		[user.name, user.lastName].filter(Boolean).join(" ").trim() || user.email;
-	const options = await generateRegistrationOptions({
+	const registration = await generateRegistrationOptions({
 		rpName,
 		rpID,
 		userID: webAuthnUserId(user.id),
@@ -416,11 +428,13 @@ export async function createPasskeyRegistrationOptions(user: {
 		supportedAlgorithmIDs: [-8, -7, -257],
 	});
 	await storeChallenge({
-		purpose: "passkey_registration",
-		challenge: options.challenge,
+		purpose: firstPasskeyOnly
+			? "passkey_first_registration"
+			: "passkey_registration",
+		challenge: registration.challenge,
 		userId: user.id,
 	});
-	return options;
+	return registration;
 }
 
 export type PasskeyRegistrationResult =
@@ -429,9 +443,16 @@ export type PasskeyRegistrationResult =
 	| { status: "duplicate" }
 	| { status: "limit" };
 
+/**
+ * `allowFirstPasskey` lets a challenge from the no-code route (a fresh
+ * sign-in) be claimed. Passkeys added that way can sign in but never confirm
+ * identity, so a briefly stolen session cannot escalate into an account
+ * change.
+ */
 export async function verifyPasskeyRegistration(
 	userId: User.UserId,
 	raw: unknown,
+	options: { allowFirstPasskey?: boolean } = {},
 ): Promise<PasskeyRegistrationResult> {
 	const response = parseRegistrationResponse(raw);
 	if (!response) return { status: "invalid" };
@@ -473,6 +494,7 @@ export async function verifyPasskeyRegistration(
 	const createdAt = new Date();
 	const name = KNOWN_PASSKEY_PROVIDERS[info.aaguid] ?? "Passkey";
 
+	let confirmsIdentity = false;
 	try {
 		const inserted = await db().transaction(async (tx) => {
 			const [locked] = await tx
@@ -483,21 +505,30 @@ export async function verifyPasskeyRegistration(
 			if (locked?.authSessionVersion !== account.authSessionVersion) {
 				return "reset";
 			}
-			if (
-				!(await consumeChallenge({
-					purpose: "passkey_registration",
+			const claimedSetup = await consumeChallenge({
+				purpose: "passkey_registration",
+				challenge,
+				userId,
+				database: tx,
+			});
+			const claimedFirst =
+				!claimedSetup &&
+				options.allowFirstPasskey === true &&
+				(await consumeChallenge({
+					purpose: "passkey_first_registration",
 					challenge,
 					userId,
 					database: tx,
-				}))
-			) {
-				return "reset";
-			}
+				}));
+			if (!claimedSetup && !claimedFirst) return "reset";
+			confirmsIdentity = claimedSetup;
 			const [row] = await tx
 				.select({ total: count() })
 				.from(userPasskeys)
 				.where(eq(userPasskeys.userId, userId));
-			if ((row?.total ?? 0) >= MAX_PASSKEYS_PER_USER) return "limit";
+			const existing = row?.total ?? 0;
+			if (claimedFirst && existing > 0) return "reset";
+			if (existing >= MAX_PASSKEYS_PER_USER) return "limit";
 			await tx.insert(userPasskeys).values({
 				id,
 				userId,
@@ -508,6 +539,7 @@ export async function verifyPasskeyRegistration(
 				transports: storedTransports(response.response.transports) ?? [],
 				deviceType: info.credentialDeviceType,
 				backedUp: info.credentialBackedUp,
+				confirmsIdentity,
 				aaguid: info.aaguid,
 				name,
 				createdAt,
@@ -530,6 +562,7 @@ export async function verifyPasskeyRegistration(
 			createdAt,
 			lastUsedAt: null,
 			backedUp: info.credentialBackedUp,
+			confirmsIdentity,
 		},
 	};
 }
@@ -558,6 +591,7 @@ export async function listPasskeys(
 			createdAt: userPasskeys.createdAt,
 			lastUsedAt: userPasskeys.lastUsedAt,
 			backedUp: userPasskeys.backedUp,
+			confirmsIdentity: userPasskeys.confirmsIdentity,
 		})
 		.from(userPasskeys)
 		.where(eq(userPasskeys.userId, userId))

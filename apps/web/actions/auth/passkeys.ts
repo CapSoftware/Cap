@@ -1,11 +1,13 @@
 "use server";
 
+import { db } from "@cap/database";
 import {
 	hasStepUpGrant,
 	issueStepUpCode,
 	issueStepUpGrant,
 	verifyStepUpCode,
 } from "@cap/database/auth/auth-challenges";
+import { canAddFirstPasskeyWithoutCode } from "@cap/database/auth/fresh-sign-in";
 import {
 	createPasskeyRegistrationOptions,
 	createPasskeySignInOptions,
@@ -20,12 +22,15 @@ import {
 	sendPasskeyAddedNotice,
 	sendPasskeyRemovedNotice,
 } from "@cap/database/auth/security-emails";
-import { getCurrentUser } from "@cap/database/auth/session";
+import { getCurrentUser, getSession } from "@cap/database/auth/session";
+import { users } from "@cap/database/schema";
 import type {
 	PublicKeyCredentialCreationOptionsJSON,
 	PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
+import { eq, sql } from "drizzle-orm";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 
 export type PasskeyListItem = {
 	id: string;
@@ -33,7 +38,12 @@ export type PasskeyListItem = {
 	createdAt: string;
 	lastUsedAt: string | null;
 	backedUp: boolean;
+	confirmsIdentity: boolean;
 };
+
+async function hasFreshSignIn(userId: string) {
+	return canAddFirstPasskeyWithoutCode(await getSession(), userId);
+}
 
 async function requireUser() {
 	const user = await getCurrentUser();
@@ -140,7 +150,9 @@ export async function completePasskeyRegistration(
 > {
 	const user = await requireUser();
 	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
-	const result = await verifyPasskeyRegistration(user.id, response);
+	const result = await verifyPasskeyRegistration(user.id, response, {
+		allowFirstPasskey: await hasFreshSignIn(user.id),
+	});
 	if (result.status !== "registered") return { status: result.status };
 	await sendPasskeyAddedNotice(user.email, result.passkey.name);
 	return {
@@ -163,9 +175,37 @@ export async function listMyPasskeys(): Promise<PasskeyListItem[]> {
 	}));
 }
 
-export async function removePasskey(passkeyId: string) {
+export async function removePasskey(
+	passkeyId: string,
+	grant: string,
+): Promise<{ status: "removed" | "missing" | "verify" }> {
 	const user = await requireUser();
+	if (!(await hasStepUpGrant(user.id, grant))) return { status: "verify" };
 	const removed = await deletePasskey(user.id, passkeyId);
-	if (removed) await sendPasskeyRemovedNotice(user.email, removed.name);
-	return { removed: removed !== null };
+	if (!removed) return { status: "missing" };
+	await sendPasskeyRemovedNotice(user.email, removed.name);
+	return { status: "removed" };
+}
+
+export async function getPasskeyRegistrationOptionsAfterSignIn(): Promise<
+	| { status: "ok"; options: PublicKeyCredentialCreationOptionsJSON }
+	| { status: "verify" | "limit" | "rate_limited" }
+> {
+	const user = await requireUser();
+	if (await isPasskeyLimited(user.id)) return { status: "rate_limited" };
+	if (!(await hasFreshSignIn(user.id))) return { status: "verify" };
+	const options = await createPasskeyRegistrationOptions(user, {
+		firstPasskeyOnly: true,
+	});
+	return options ? { status: "ok", options } : { status: "verify" };
+}
+
+export async function dismissPasskeyPrompt() {
+	const user = await requireUser();
+	await db()
+		.update(users)
+		.set({
+			preferences: sql`JSON_SET(${userPreferencesObject()}, '$.passkeyPromptDismissedAt', ${new Date().toISOString()})`,
+		})
+		.where(eq(users.id, user.id));
 }
