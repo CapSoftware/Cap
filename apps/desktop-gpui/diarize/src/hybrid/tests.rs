@@ -140,6 +140,37 @@ fn the_user_keeps_their_id_when_a_room_voice_is_cut_out() {
 }
 
 #[test]
+fn the_user_follows_their_own_voice_when_chatter_was_folded_into_them() {
+    // cafe chatter the whole time the call talks, folded into the user's id (1) with the user's own
+    // words in the call's pauses; the model hears the two apart and the chatter is the bigger voice
+    let mut mic = Vec::new();
+    let mut sys = Vec::new();
+    let mut turns = Vec::new();
+    for i in 0..6u64 {
+        let t = i * 22_000;
+        mic.push(seg(Track::Mic, t, vec![span(t, t + 12_000, 1)]));
+        mic.push(seg(
+            Track::Mic,
+            t + 13_000,
+            vec![span(t + 13_000, t + 20_000, 1)],
+        ));
+        sys.push(seg(Track::System, t, vec![span(t, t + 12_000, 2)]));
+        turns.push((t, t + 12_000, 0));
+        turns.push((t + 13_000, t + 20_000, 1));
+    }
+    mic.extend(sys);
+    let mut p = pass(mic, Some(1));
+    let st = apply(&mut p, &[voices(132_000, &turns), TrackVoices::default()]);
+    assert_eq!(st.new_voices, 1);
+    let own = ids(&p, Track::Mic)
+        .iter()
+        .find(|s| s.0 == 13_000)
+        .map(|s| s.2);
+    assert_eq!(p.user.map(|u| u.0), own, "{:?}", ids(&p, Track::Mic));
+    assert_ne!(p.user, Some(SpeakerId(1)), "the chatter is not the user");
+}
+
+#[test]
 fn when_the_counts_agree_nothing_moves() {
     // two remote people; the model gives most of the second one's speech to the first (the room-1 failure of a
     // per-span relabel): with both counting two people the embedding labels stand

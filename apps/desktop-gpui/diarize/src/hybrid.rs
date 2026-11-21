@@ -53,6 +53,13 @@ pub fn person_ms(track_ms: u64) -> u64 {
     ((track_ms as f64 * PERSON_SHARE) as u64).clamp(MIN_PERSON_MS, BIG_MS)
 }
 
+/// A microphone voice heard this share of its time while the call is talking
+/// (the call's spans widened by `CALL_SLACK_MS`) is chatter or the call in
+/// the room, never the user: the same test the speaker model's end-of-meeting
+/// choice of the user makes.
+const HEARD_WITH_CALL: f64 = 0.6;
+const CALL_SLACK_MS: u64 = 1_000;
+
 /// Shortest piece a microphone span is cut into.
 const MIN_PIECE_MS: u64 = 300;
 const SPEAKERS: usize = crate::nemotron::cache::SPEAKERS;
@@ -202,7 +209,61 @@ fn relabel_track(pass: &mut FinalPass, tv: &TrackVoices, track: Track, next_id: 
                 }
                 seg.spans = join_spans(out);
             }
+            // The user's id held two voices: the user stays with the part
+            // that talks when the call is quiet, not with chatter heard over it.
+            if track == Track::Mic
+                && pass.user == Some(holder)
+                && heard_with_call(pass, holder) >= HEARD_WITH_CALL
+                && heard_with_call(pass, new) < HEARD_WITH_CALL
+            {
+                pass.user = Some(new);
+            }
         }
+    }
+}
+
+/// Share of a microphone id's speech the call is talking through.
+fn heard_with_call(pass: &FinalPass, id: SpeakerId) -> f64 {
+    let mut call: Vec<(u64, u64)> = pass
+        .segments
+        .iter()
+        .filter(|s| s.track == Track::System)
+        .flat_map(|s| s.spans.iter())
+        .filter(|s| !s.echo && s.end_ms > s.start_ms)
+        .map(|s| {
+            (
+                s.start_ms.saturating_sub(CALL_SLACK_MS),
+                s.end_ms + CALL_SLACK_MS,
+            )
+        })
+        .collect();
+    call.sort_unstable();
+    let (mut covered, mut total) = (0u64, 0u64);
+    for sp in pass
+        .segments
+        .iter()
+        .filter(|s| s.track == Track::Mic)
+        .flat_map(|s| s.spans.iter())
+        .filter(|s| !s.echo && s.speaker == id && s.end_ms > s.start_ms)
+    {
+        total += sp.end_ms - sp.start_ms;
+        let mut until = sp.start_ms;
+        for &(a, b) in &call {
+            if a >= sp.end_ms {
+                break;
+            }
+            let from = a.max(until);
+            let to = b.min(sp.end_ms);
+            if to > from {
+                covered += to - from;
+                until = to;
+            }
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        covered as f64 / total as f64
     }
 }
 
