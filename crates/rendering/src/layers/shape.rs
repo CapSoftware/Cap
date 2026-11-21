@@ -44,7 +44,7 @@ pub(crate) struct ShapeInstance {
     stroke: [f32; 4],
     fill: [f32; 4],
     params: [f32; 4],
-    shadow: [f32; 4],
+    opacity_shadow: [f32; 4],
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -68,12 +68,12 @@ pub(crate) fn shape_instance(shape: &PreparedShape) -> Option<ShapeInstance> {
         shape.stroke_color[0],
         shape.stroke_color[1],
         shape.stroke_color[2],
-        if width > 0.0 { alpha } else { 0.0 },
+        if width > 0.0 { 1.0 } else { 0.0 },
     ];
     let shadow_alpha = shape.shadow.clamp(0.0, 1.0) * 0.5;
     let shadow_offset = 2.0 * unit + 0.15 * width;
     let shadow_blur = 5.0 * unit + 0.25 * width;
-    let shadow = [0.0, shadow_blur, shadow_alpha, shadow_offset];
+    let opacity_shadow = [alpha, shadow_blur, shadow_alpha, shadow_offset];
     let shadow_pad = if shadow_alpha > 0.0 {
         shadow_offset + shadow_blur * 1.5
     } else {
@@ -170,7 +170,7 @@ pub(crate) fn shape_instance(shape: &PreparedShape) -> Option<ShapeInstance> {
                 stroke,
                 fill: [0.0; 4],
                 params: [KIND_LINE, width, 0.0, draw],
-                shadow,
+                opacity_shadow,
             }
         }
         ShapeKind::Rectangle | ShapeKind::Ellipse | ShapeKind::Highlight | ShapeKind::Badge => {
@@ -178,7 +178,7 @@ pub(crate) fn shape_instance(shape: &PreparedShape) -> Option<ShapeInstance> {
             let half = [(right - left) * 0.5, (bottom - top) * 0.5];
             let center = [(left + right) * 0.5, (top + bottom) * 0.5];
             let fill = shape.fill.map_or([0.0; 4], |[r, g, b, a]| {
-                let a = a * alpha * smoothstep(0.0, 1.0, draw);
+                let a = a * smoothstep(0.0, 1.0, draw);
                 [r * a, g * a, b * a, a]
             });
             if fill[3] <= 0.0 && (stroke[3] <= 0.0 || draw <= 0.001) {
@@ -204,7 +204,7 @@ pub(crate) fn shape_instance(shape: &PreparedShape) -> Option<ShapeInstance> {
                 stroke,
                 fill,
                 params: [kind, width, radius, draw],
-                shadow,
+                opacity_shadow,
             }
         }
     };
@@ -502,8 +502,8 @@ mod tests {
         shadowed.shadow = 1.0;
         let shadowed = shape_instance(&shadowed).unwrap();
         assert!(shadowed.quad[3] > plain.quad[3]);
-        assert_eq!(shadowed.shadow[2], 0.5);
-        assert_eq!(plain.shadow[2], 0.0);
+        assert_eq!(shadowed.opacity_shadow[2], 0.5);
+        assert_eq!(plain.opacity_shadow[2], 0.0);
     }
 
     #[test]

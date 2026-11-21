@@ -13,7 +13,7 @@ struct Instance {
     @location(5) stroke: vec4<f32>,
     @location(6) fill: vec4<f32>,
     @location(7) params: vec4<f32>,
-    @location(8) shadow: vec4<f32>,
+    @location(8) opacity_shadow: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -25,7 +25,7 @@ struct VertexOutput {
     @location(4) @interpolate(flat) stroke: vec4<f32>,
     @location(5) @interpolate(flat) fill: vec4<f32>,
     @location(6) @interpolate(flat) params: vec4<f32>,
-    @location(7) @interpolate(flat) shadow: vec4<f32>,
+    @location(7) @interpolate(flat) opacity_shadow: vec4<f32>,
 };
 
 const PI: f32 = 3.14159265;
@@ -57,7 +57,7 @@ fn vs_main(@builtin(vertex_index) index: u32, instance: Instance) -> VertexOutpu
     out.stroke = instance.stroke;
     out.fill = instance.fill;
     out.params = instance.params;
-    out.shadow = instance.shadow;
+    out.opacity_shadow = instance.opacity_shadow;
     return out;
 }
 
@@ -274,16 +274,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let shape = vec4<f32>(in.stroke.rgb * stroke_cover, stroke_cover)
         + in.fill * fill_cover * (1.0 - stroke_cover);
 
-    let shadow_alpha = in.shadow.z;
+    let opacity = in.opacity_shadow.x;
+    let shadow_alpha = in.opacity_shadow.z;
     if (shadow_alpha <= 0.0) {
-        return shape;
+        return shape * opacity;
     }
-    let blur = max(in.shadow.y, 0.5);
-    let shifted = shape_distance(p - vec2<f32>(in.shadow.x, in.shadow.w), in);
+    let blur = max(in.opacity_shadow.y, 0.5);
+    let shifted = shape_distance(p - vec2<f32>(0.0, in.opacity_shadow.w), in);
     let shadow_stroke = (1.0 - smoothstep(-blur, blur, distance_or_far(shifted.x))) * in.stroke.a;
     let shadow_fill = (1.0 - smoothstep(-blur, blur, distance_or_far(shifted.y))) * in.fill.a;
     let shadow = max(shadow_stroke, shadow_fill) * shadow_alpha;
-    return shape + vec4<f32>(0.0, 0.0, 0.0, shadow) * (1.0 - shape.a);
+    return (shape + vec4<f32>(0.0, 0.0, 0.0, shadow) * (1.0 - shape.a)) * opacity;
 }
 
 fn distance_or_far(distance: f32) -> f32 {

@@ -1045,6 +1045,69 @@ async fn every_shape_kind_draws_its_outline_and_leaves_the_rest() {
 }
 
 #[tokio::test]
+async fn shape_opacity_fades_the_composited_stroke_fill_and_shadow() {
+    use cap_project::ShapeKind;
+
+    let directory = tempfile::tempdir().unwrap();
+    let constants = constants(directory.path()).await;
+    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let resolution = XY::new(320, 240);
+    let base = render_frame(&constants, &mut layers, &project(), resolution).await;
+    let mut failures = Vec::new();
+    for kind in [
+        ShapeKind::Rectangle,
+        ShapeKind::Ellipse,
+        ShapeKind::Highlight,
+        ShapeKind::Arrow,
+        ShapeKind::Line,
+    ] {
+        for fill_opacity in [0.0, 0.4, 1.0] {
+            for shadow in [0.0, 1.0] {
+                let mut shape = red_shape(kind, (0.25, 0.25), (0.75, 0.75));
+                shape.fill = true;
+                shape.fill_opacity = fill_opacity;
+                shape.shadow = shadow;
+                let opaque = render_frame(
+                    &constants,
+                    &mut layers,
+                    &with_shapes(vec![shape.clone()]),
+                    resolution,
+                )
+                .await;
+                assert_ne!(opaque.pixels, base.pixels);
+                for opacity in [0.25, 0.5, 0.75] {
+                    shape.opacity = opacity;
+                    let faded = render_frame(
+                        &constants,
+                        &mut layers,
+                        &with_shapes(vec![shape.clone()]),
+                        resolution,
+                    )
+                    .await;
+                    let worst = faded
+                        .pixels
+                        .iter()
+                        .zip(&opaque.pixels)
+                        .zip(&base.pixels)
+                        .map(|((&actual, &opaque), &base)| {
+                            let expected = (f32::from(opaque) * opacity
+                                + f32::from(base) * (1.0 - opacity))
+                                .round() as u8;
+                            actual.abs_diff(expected)
+                        })
+                        .max()
+                        .unwrap();
+                    if worst > 2 {
+                        failures.push(format!("{kind:?} fill {fill_opacity} shadow {shadow} opacity {opacity}: worst channel error {worst}/255"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[tokio::test]
 async fn a_circle_centred_on_a_pixel_leaves_its_centre_clear() {
     use cap_project::ShapeKind;
     let directory = tempfile::tempdir().unwrap();
