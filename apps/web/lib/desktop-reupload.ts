@@ -4,6 +4,7 @@ import {
 } from "@aws-sdk/client-cloudfront";
 import type { db } from "@cap/database";
 import {
+	videoEdits,
 	videoProcessingJobs,
 	videos,
 	videoUploads,
@@ -72,6 +73,7 @@ export async function prepareDesktopReupload(
 		videoId: video.id,
 		userId: video.ownerId,
 	});
+	await tx.delete(videoEdits).where(eq(videoEdits.videoId, video.id));
 	const metadata = { ...(locked.metadata ?? {}) };
 	delete metadata.desktopRecordingUpload;
 	delete metadata.summary;
