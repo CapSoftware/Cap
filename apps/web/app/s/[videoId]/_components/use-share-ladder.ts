@@ -614,6 +614,31 @@ export function useShareLadder({
 		if (qualityRef.current === "auto") void switchToHls("auto");
 	}, [finishMeasurement, switchToHls]);
 
+	const firstFrameTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+		undefined,
+	);
+
+	// Safari reports enough data and fires "playing" while it holds the first
+	// frame on a line too slow for the MP4, so only the clock moving counts as
+	// a first frame.
+	const armFirstFrame = useCallback(() => {
+		clearTimeout(firstFrameTimerRef.current);
+		firstFrameTimerRef.current = setTimeout(() => {
+			firstFrameTimerRef.current = undefined;
+			const video = videoRef.current;
+			if (
+				video &&
+				engineRef.current === "mp4" &&
+				!framedRef.current &&
+				!video.paused &&
+				!video.ended &&
+				!video.error
+			) {
+				callForLadder();
+			}
+		}, FIRST_FRAME_SWITCH_MS);
+	}, [callForLadder, videoRef]);
+
 	useEffect(() => {
 		const video = videoRef.current;
 		const current = ladderRef.current;
@@ -621,7 +646,6 @@ export function useShareLadder({
 		if (!current || !ladderKey || !active || !deviceEngine || !video) return;
 		if (engine !== "mp4" || disabled) return;
 
-		let firstFrameTimer: ReturnType<typeof setTimeout> | undefined;
 		let stallTimer: ReturnType<typeof setTimeout> | undefined;
 		const clearStall = () => {
 			clearTimeout(stallTimer);
@@ -629,9 +653,12 @@ export function useShareLadder({
 		};
 
 		const onPlayRequested = () => {
+			if (!framedRef.current) {
+				playStartRef.current = video.currentTime;
+				armFirstFrame();
+			}
 			if (playRequestedRef.current) return;
 			playRequestedRef.current = true;
-			playStartRef.current = video.currentTime;
 			measurementRef.current = {
 				startAt: performance.now(),
 				startBuffered: bufferedSeconds(video),
@@ -647,21 +674,7 @@ export function useShareLadder({
 			if (lineCallsForLadder()) {
 				lineCalledRef.current = true;
 				void switchToHls("auto");
-				return;
 			}
-			// Safari reports enough data and fires "playing" while it holds the
-			// first frame on a line too slow for the MP4, so only the clock moving
-			// counts as a first frame.
-			firstFrameTimer = setTimeout(() => {
-				if (
-					!framedRef.current &&
-					!video.paused &&
-					!video.ended &&
-					!video.error
-				) {
-					callForLadder();
-				}
-			}, FIRST_FRAME_SWITCH_MS);
 		};
 
 		const onTimeUpdate = () => {
@@ -675,7 +688,7 @@ export function useShareLadder({
 				return;
 			}
 			framedRef.current = true;
-			clearTimeout(firstFrameTimer);
+			clearTimeout(firstFrameTimerRef.current);
 			void warm();
 		};
 
@@ -715,6 +728,7 @@ export function useShareLadder({
 
 		const onPause = () => {
 			clearStall();
+			clearTimeout(firstFrameTimerRef.current);
 			viewerPause();
 		};
 
@@ -733,7 +747,7 @@ export function useShareLadder({
 		if (!video.paused) onPlayRequested();
 
 		return () => {
-			clearTimeout(firstFrameTimer);
+			clearTimeout(firstFrameTimerRef.current);
 			clearStall();
 			video.removeEventListener("play", onPlayRequested);
 			video.removeEventListener("timeupdate", onTimeUpdate);
@@ -746,6 +760,7 @@ export function useShareLadder({
 		};
 	}, [
 		active,
+		armFirstFrame,
 		callForLadder,
 		deviceEngine,
 		disabled,
@@ -778,7 +793,17 @@ export function useShareLadder({
 				void switchToHls(next);
 				return;
 			}
-			if (engineRef.current !== "hls") return;
+			if (engineRef.current !== "hls") {
+				const video = videoRef.current;
+				if (!playRequestedRef.current || !video || video.paused) return;
+				if (lineCalledRef.current || lineCallsForLadder()) {
+					lineCalledRef.current = true;
+					void switchToHls("auto");
+					return;
+				}
+				if (!framedRef.current) armFirstFrame();
+				return;
+			}
 			if (lineCalledRef.current || lineCallsForLadder()) {
 				lineCalledRef.current = true;
 				applyLevel("auto");
@@ -786,7 +811,14 @@ export function useShareLadder({
 			}
 			switchToMp4();
 		},
-		[applyLevel, lineCallsForLadder, switchToHls, switchToMp4],
+		[
+			applyLevel,
+			armFirstFrame,
+			lineCallsForLadder,
+			switchToHls,
+			switchToMp4,
+			videoRef,
+		],
 	);
 
 	const qualityMenu = useMemo<ShareLadderQualityMenu | undefined>(() => {
