@@ -2228,7 +2228,7 @@ export async function runTranscodeCommand(
 			stderr: "pipe",
 		}),
 	);
-	lowerProcessPriority(proc.pid, niceness);
+	lowerProcessPriority(proc, niceness);
 	let abortCleanup: (() => void) | undefined;
 	if (abortSignal) {
 		abortCleanup = () => {

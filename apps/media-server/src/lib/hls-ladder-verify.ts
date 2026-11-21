@@ -152,7 +152,7 @@ async function runMediaTool(
 	const proc = registerSubprocess(
 		spawn({ cmd, stdin: "ignore", stdout: "pipe", stderr: "pipe" }),
 	);
-	lowerProcessPriority(proc.pid, options.niceness);
+	lowerProcessPriority(proc, options.niceness);
 	const stop = () => {
 		void terminateProcess(proc);
 	};
