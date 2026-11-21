@@ -31,6 +31,7 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "./RecordingInProgress";
+import type { ShareLadderPlayback } from "./share-ladder-playback";
 import { useContinueFromUpNext } from "./up-next-playback";
 import {
 	isRecordingUpload,
@@ -139,6 +140,7 @@ export const ShareVideo = forwardRef<
 		viewerIsOwner?: boolean;
 		callToAction?: ShareCallToAction | null;
 		upNext?: Promise<SpaceUpNext | null> | null;
+		ladder?: ShareLadderPlayback;
 	}
 >(
 	(
@@ -166,6 +168,7 @@ export const ShareVideo = forwardRef<
 			viewerIsOwner = false,
 			callToAction = null,
 			upNext = null,
+			ladder,
 		},
 		ref,
 	) => {
@@ -629,6 +632,7 @@ export const ShareVideo = forwardRef<
 							canRetryProcessing={canRetryProcessing}
 							callToAction={callToAction}
 							posterUrl={posterUrl}
+							ladder={ladder}
 						/>
 					) : (
 						<HLSVideoPlayer

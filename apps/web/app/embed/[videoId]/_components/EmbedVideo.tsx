@@ -21,6 +21,7 @@ import {
 	PreparingVideoOverlay,
 	RecordingInProgressOverlay,
 } from "@/app/s/[videoId]/_components/RecordingInProgress";
+import type { ShareLadderPlayback } from "@/app/s/[videoId]/_components/share-ladder-playback";
 import type { UploadProgress } from "@/app/s/[videoId]/_components/upload-progress";
 import { formatChaptersAsVTT } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { type PlayerBrand, playerBrandAttributes } from "@/lib/player-brand";
@@ -79,6 +80,7 @@ export const EmbedVideo = forwardRef<
 		viewerSettings?: ViewerSettings | null;
 		showPlaybackStatusBadge?: boolean;
 		callToAction?: ShareCallToAction | null;
+		ladder?: ShareLadderPlayback;
 	}
 >(
 	(
@@ -102,6 +104,7 @@ export const EmbedVideo = forwardRef<
 			viewerSettings,
 			showPlaybackStatusBadge = false,
 			callToAction = null,
+			ladder,
 		},
 		ref,
 	) => {
@@ -313,6 +316,7 @@ export const EmbedVideo = forwardRef<
 							hasActiveUpload={data.hasActiveUpload}
 							callToAction={callToAction}
 							posterUrl={posterUrl}
+							ladder={ladder}
 						/>
 					) : (
 						<HLSVideoPlayer
