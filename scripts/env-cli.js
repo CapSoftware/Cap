@@ -137,6 +137,8 @@ async function main() {
 			envs.CAP_AWS_BUCKET = DOCKER_S3_ENVS.bucket;
 			envs.CAP_AWS_REGION = DOCKER_S3_ENVS.region;
 			envs.CAP_AWS_ENDPOINT = DOCKER_S3_ENVS.endpoint;
+			// Presigning has no part body; avoid checksums for an empty payload.
+			envs.AWS_REQUEST_CHECKSUM_CALCULATION = "WHEN_REQUIRED";
 		}
 
 		envs.NEXT_PUBLIC_WEB_URL = envs.WEB_URL;
