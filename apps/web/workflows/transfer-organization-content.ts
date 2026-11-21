@@ -25,6 +25,7 @@ import {
 	MAX_CONTENT_TRANSFER_VIDEOS,
 	moveContentTransferSourceKeys,
 } from "@/lib/content-transfer";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -639,6 +640,10 @@ export async function transferOneVideo(
 		storageIntegrationOrganizationId: current.storageIntegrationOrganizationId,
 	});
 	if (storageBlockReason) throw new FatalError(storageBlockReason);
+
+	if (item.sourceOwnerId !== payload.targetUserId) {
+		await discardShareLadderSafely(videoId, "Recording changed owner");
+	}
 
 	const ownerChanged = current.ownerId !== payload.targetUserId;
 	const copied =

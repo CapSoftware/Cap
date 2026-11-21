@@ -57,6 +57,9 @@ vi.mock("@cap/web-domain", () => ({
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: { getAccessForVideo: mocks.getAccess },
 }));
+vi.mock("@/lib/share-ladder-discard", () => ({
+	discardShareLadderSafely: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/workflow-runtime", () => ({
 	runWorkflowPromise: (effect: Effect.Effect<unknown>) =>
 		Effect.runPromise(effect),
@@ -86,6 +89,7 @@ vi.mock("@/lib/loom-media-dispatch", () => ({
 	isLoomMediaJobFailed: mocks.mediaJobFailed,
 }));
 
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { transcribeVideo } from "@/lib/transcribe";
 import { importLoomVideoWorkflow } from "@/workflows/import-loom-video";
 import { processVideoWorkflow } from "@/workflows/process-video";
@@ -201,6 +205,10 @@ describe("media processing workflows", () => {
 		expect(mocks.fetch).toHaveBeenCalledOnce();
 		expect(mocks.sleep.mock.calls).toEqual([[5_000], [10_000]]);
 		expect(mocks.remove).toHaveBeenCalledWith(payload.rawFileKey);
+		expect(discardShareLadderSafely).toHaveBeenCalledWith(
+			"video",
+			"Recording was processed again",
+		);
 	});
 
 	describe("transcription after processing", () => {

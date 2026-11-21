@@ -12,10 +12,10 @@ import { AwsCredentials, Storage } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
-
 import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import { MESSENGER_ADMIN_EMAIL } from "@/lib/messenger/constants";
 import { runPromise } from "@/lib/server";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 async function requireAdmin() {
@@ -100,6 +100,8 @@ export async function invalidateVideoCache(videoId: string) {
 			.where(eq(videos.id, video.id));
 		await tx.delete(videoUploads).where(eq(videoUploads.videoId, video.id));
 	});
+
+	await discardShareLadderSafely(video.id, "Recording was replaced");
 
 	if (video.bucket) {
 		return;

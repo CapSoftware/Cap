@@ -125,6 +125,9 @@ vi.mock("@cap/env", () => ({
 		NEXTAUTH_SECRET: "test-secret",
 	}),
 }));
+vi.mock("@/lib/share-ladder-discard", () => ({
+	discardShareLadderSafely: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/loom-csv-import", () => ({
 	processLoomCsvRows: mocks.process,
 }));
