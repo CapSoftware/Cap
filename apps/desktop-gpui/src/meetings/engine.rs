@@ -65,9 +65,11 @@ const SWEEP_COVERED: f64 = 0.3;
 /// of one line are heard too.
 const SWEEP_HEARD_SLACK_MS: u64 = 400;
 const SWEEP_PAD_SAMPLES: u64 = timeline::RATE as u64 / 4;
-/// Audio before a repaired segment the local model hears with it: a short
-/// gap that starts mid-word is too little to recognise on its own.
-const REPAIR_CONTEXT_SAMPLES: u64 = timeline::RATE as u64 * 2;
+/// Audio before a repaired segment the local model hears with it. None: given
+/// context, the local model can go silent for a whole long segment it
+/// transcribes fully on its own, which loses far more words than the short
+/// mid-word tails context recovers.
+const REPAIR_CONTEXT_SAMPLES: u64 = 0;
 const SWEEP_MAX_SAMPLES: u64 = timeline::RATE as u64 * 25;
 const SWEEP_READ_SAMPLES: u64 = timeline::RATE as u64 * 30;
 

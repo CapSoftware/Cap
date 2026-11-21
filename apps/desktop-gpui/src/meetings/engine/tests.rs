@@ -1129,8 +1129,8 @@ fn after_stop_the_saved_audio_is_read_again_from_the_finished_file() {
     b.worker.repair_after_stop();
     assert_eq!(
         heard.load(Ordering::SeqCst),
-        32_000 + 24_000,
-        "2 s of context and the whole stretch, not what the early reader saw"
+        24_000,
+        "the whole stretch, not what the early reader saw"
     );
     let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
     assert!(transcript.gaps().is_empty());
@@ -1139,10 +1139,11 @@ fn after_stop_the_saved_audio_is_read_again_from_the_finished_file() {
 }
 
 #[test]
-fn a_short_tail_gap_that_starts_mid_word_gets_its_words() {
+fn a_short_tail_gap_the_model_cannot_hear_alone_gets_no_guessed_words() {
     // The meeting stopped mid-sentence: the sweep's gap holds the last 1.2 s,
-    // starting inside a word. On its own that is too little for the model;
-    // with the 2 s before it, it hears the words, and only the gap's are kept.
+    // starting inside a word. The repair hears the segment alone, as context
+    // costs far more words elsewhere; a model that hears nothing in it writes
+    // nothing, so no guess at the cut ever reaches the transcript.
     let start = START * 10;
     let gap = tail_gap(start, 19_360);
     let mut b = bench(gap, Vec::new());
@@ -1162,9 +1163,8 @@ fn a_short_tail_gap_that_starts_mid_word_gets_its_words() {
     b.worker.finishing = true;
     b.worker.repair_after_stop();
     let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    assert!(transcript.get(&utterance_id(Source::System, start)).is_none(), "nothing is guessed");
     assert!(transcript.gaps().is_empty(), "{:?}", transcript.gaps());
-    let repaired = transcript.get(&utterance_id(Source::System, start)).expect("the tail got its words");
-    assert_eq!(repaired.text, "revelation lighted");
 }
 
 /// A track whose first writer failed at 3 s; the next file starts at 4 s.
@@ -1205,7 +1205,7 @@ fn a_segment_just_after_a_new_audio_file_is_repaired_from_that_file() {
     }));
     b.worker.finishing = true;
     b.worker.repair_after_stop();
-    assert_eq!(heard.load(Ordering::SeqCst), 8_000 + 16_000, "context only from the second file");
+    assert_eq!(heard.load(Ordering::SeqCst), 16_000, "the segment alone, nothing from the first file");
     let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
     assert!(transcript.gaps().is_empty(), "{:?}", transcript.gaps());
     assert_eq!(
