@@ -71,6 +71,7 @@
 		"./auth/security-emails": "./auth/security-emails.ts",
 		"./auth/google-one-tap": "./auth/google-one-tap.ts",
 		"./auth/request-site": "./auth/request-site.ts",
+		"./auth/revoke-credentials": "./auth/revoke-credentials.ts",
 		"./auth/session": "./auth/session.ts",
 		"./auth/sso": "./auth/sso.ts",
 		"./auth/sso-state": "./auth/sso-state.ts",

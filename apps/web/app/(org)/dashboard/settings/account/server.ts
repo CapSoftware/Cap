@@ -1,23 +1,17 @@
 "use server";
 
 import { db } from "@cap/database";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import {
 	agentApiKeys,
-	authApiKeys,
-	authChallenges,
-	emailChangeRequests,
-	mcpOAuthCodes,
-	mcpOAuthTokens,
 	organizationMembers,
 	organizations,
-	sessions,
-	userPasskeys,
 	users,
 } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import {
 	agentScopeProfiles,
@@ -208,48 +202,5 @@ export async function signOutAllDevices() {
 	const currentUser = await getCurrentUser();
 	if (!currentUser) throw new Error("Unauthorized");
 
-	await db().transaction(async (tx) => {
-		await tx
-			.update(users)
-			.set({ authSessionVersion: sql`${users.authSessionVersion} + 1` })
-			.where(eq(users.id, currentUser.id));
-		await tx.delete(sessions).where(eq(sessions.userId, currentUser.id));
-		await tx.delete(authApiKeys).where(eq(authApiKeys.userId, currentUser.id));
-		await tx
-			.delete(userPasskeys)
-			.where(eq(userPasskeys.userId, currentUser.id));
-		await tx
-			.delete(emailChangeRequests)
-			.where(eq(emailChangeRequests.userId, currentUser.id));
-		await tx
-			.delete(authChallenges)
-			.where(eq(authChallenges.userId, currentUser.id));
-		await tx
-			.update(mcpOAuthTokens)
-			.set({ revokedAt: new Date() })
-			.where(
-				and(
-					eq(mcpOAuthTokens.userId, currentUser.id),
-					isNull(mcpOAuthTokens.revokedAt),
-				),
-			);
-		await tx
-			.update(mcpOAuthCodes)
-			.set({ consumedAt: new Date() })
-			.where(
-				and(
-					eq(mcpOAuthCodes.userId, currentUser.id),
-					isNull(mcpOAuthCodes.consumedAt),
-				),
-			);
-		await tx
-			.update(agentApiKeys)
-			.set({ revokedAt: new Date() })
-			.where(
-				and(
-					eq(agentApiKeys.userId, currentUser.id),
-					isNull(agentApiKeys.revokedAt),
-				),
-			);
-	});
+	await db().transaction((tx) => revokeAllCredentials(tx, currentUser.id));
 }
