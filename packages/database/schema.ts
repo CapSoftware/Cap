@@ -1271,6 +1271,7 @@ export const mcpOAuthTokens = mysqlTable(
 		uniqueIndex("access_hash_idx").on(table.accessHash),
 		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
 		index("family_id_idx").on(table.familyId),
+		index("user_revoked_idx").on(table.userId, table.revokedAt),
 		index("client_active_idx").on(
 			table.clientId,
 			table.revokedAt,

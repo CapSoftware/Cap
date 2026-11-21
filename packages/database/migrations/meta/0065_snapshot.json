@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "de8d211d-65bf-4a95-8871-3f391d31e5d0",
+	"id": "20f6d4bd-01f4-42f4-acad-195abcebd6d9",
 	"prevId": "8ac84ca4-d730-45c1-82f8-48ed8ca42cf5",
 	"tables": {
 		"accounts": {
@@ -3391,6 +3391,11 @@
 				"family_id_idx": {
 					"name": "family_id_idx",
 					"columns": ["familyId"],
+					"isUnique": false
+				},
+				"user_revoked_idx": {
+					"name": "user_revoked_idx",
+					"columns": ["userId", "revokedAt"],
 					"isUnique": false
 				},
 				"client_active_idx": {
