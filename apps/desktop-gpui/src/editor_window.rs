@@ -4665,6 +4665,17 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// The pointer moving onto a timeline lane, as the row's hover handler
+    /// reports it.
+    pub(crate) fn bench_hover_lane(
+        &mut self,
+        lane: TrackKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_hovered_track(Some(lane), window, cx);
+    }
+
     fn capture_playback_key(
         &mut self,
         event: &gpui::KeyDownEvent,

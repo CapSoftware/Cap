@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 use gpui::{AsyncApp, Context, Window, WindowHandle};
 
 use crate::{
-    draw_bench, editor_panels::FieldKey, editor_sidebar::SidebarTab, editor_timeline,
+    draw_bench,
+    editor_panels::FieldKey,
+    editor_sidebar::SidebarTab,
+    editor_timeline::{self, TrackKind},
     editor_window::EditorWindow,
 };
 
@@ -33,6 +36,7 @@ enum Scenario {
     Clean,
     CaptionDownload,
     TickFields,
+    LaneHover,
 }
 
 impl Scenario {
@@ -45,6 +49,7 @@ impl Scenario {
             Self::Clean => "clean",
             Self::CaptionDownload => "caption-download",
             Self::TickFields => "tick-fields",
+            Self::LaneHover => "lane-hover",
         }
     }
 
@@ -76,7 +81,7 @@ impl Scenario {
                 view.seek_fraction(FOLLOW_START_FRACTION, window, cx);
                 view.toggle_play(window, cx);
             }
-            Self::Clean => {
+            Self::Clean | Self::LaneHover => {
                 if view.playing {
                     view.stop_for_measurement(cx);
                 }
@@ -120,6 +125,14 @@ impl Scenario {
                 view.timeline_hover(x, window, cx);
             }
             Self::Clean => {}
+            Self::LaneHover => {
+                let lane = if iteration.is_multiple_of(2) {
+                    TrackKind::Clip
+                } else {
+                    TrackKind::Zoom
+                };
+                view.bench_hover_lane(lane, window, cx);
+            }
             Self::CaptionDownload if self.control(iteration) => cx.notify(),
             Self::CaptionDownload => view.repaint_caption_download(cx),
         }
@@ -225,6 +238,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         Scenario::Clean,
         Scenario::CaptionDownload,
         Scenario::TickFields,
+        Scenario::LaneHover,
     ] {
         if handle
             .update(cx, |view, window, cx| scenario.prepare(view, window, cx))
