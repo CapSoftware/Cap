@@ -1211,6 +1211,7 @@ fn schedule_idle_release<T: Send + 'static>(
             drop(released);
             if was_cached {
                 tracing::info!("Released idle Parakeet TDT model");
+                return_freed_memory();
             }
             was_cached
         })
@@ -2470,9 +2471,23 @@ fn preload_parakeet(_model_dir: &str) -> Result<(), String> {
 }
 
 pub(crate) fn release_live_models() {
-    let _guard = lock_transcription_worker_slot();
-    release_whisper_context_after_transcription();
-    release_parakeet_now();
+    {
+        let _guard = lock_transcription_worker_slot();
+        release_whisper_context_after_transcription();
+        release_parakeet_now();
+    }
+    return_freed_memory();
+}
+
+/// Hands memory the allocator still holds after a model is dropped back to
+/// the system. On Linux glibc keeps freed memory in its per-thread arenas (a
+/// few hundred MB once the meeting models are gone) until it is trimmed.
+pub(crate) fn return_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only walks the allocator's own free lists.
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }
 
 // A live meeting transcribes a segment every few seconds; scheduling the idle

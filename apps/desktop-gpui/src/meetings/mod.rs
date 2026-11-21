@@ -2411,7 +2411,11 @@ impl Meetings {
         let chars = finishing.transcript.stats().total_chars;
         let engine = finishing.engine;
         cx.background_executor()
-            .spawn(async move { engine.join() })
+            .spawn(async move {
+                engine.join();
+                // the speaker model and the engine's buffers are gone now
+                crate::transcription::return_freed_memory();
+            })
             .detach();
         // Nemotron's after-Stop labels come through this pump after the drain;
         // it ends by itself once the engine and that pass have let go

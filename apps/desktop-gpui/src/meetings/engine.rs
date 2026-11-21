@@ -1093,7 +1093,10 @@ impl Worker {
             let spawned = std::thread::Builder::new()
                 .name("cap-meeting-late-voices".into())
                 .spawn(move || {
-                    if let Some(late) = late.resolve() {
+                    let late = late.resolve();
+                    // Nemotron is gone once it has answered
+                    crate::transcription::return_freed_memory();
+                    if let Some(late) = late {
                         let _ = events.send(EngineEvent::LateSpeakers {
                             doc_id,
                             late: Box::new(late),

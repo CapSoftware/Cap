@@ -554,6 +554,9 @@ impl NemoRunner {
                                     Ok([a.voices, b.voices])
                                 }
                             };
+                            // the model goes before the answer, so what it held
+                            // is free once the caller hears back
+                            drop(model);
                             let _ = reply.send(out);
                             return;
                         }
