@@ -1096,6 +1096,14 @@ pub struct OpenMenu {
     pub state: ui::MenuState,
 }
 
+/// The timeline as keyboard generation saw it, to tell whether it changed.
+fn project_timeline_fingerprint(project: &ProjectConfiguration) -> Option<Vec<u8>> {
+    project
+        .timeline
+        .as_ref()
+        .and_then(|timeline| serde_json::to_vec(timeline).ok())
+}
+
 /// Whether the recorded keys on the track (keys added by hand aside) are
 /// exactly `generated`, so nothing the user changed would be lost.
 fn recorded_keys_match(
@@ -2731,6 +2739,7 @@ impl EditorWindow {
     fn wait_out_gesture_then_generate(
         &mut self,
         unedited_from: Option<KeyboardSettings>,
+        requested_on: Vec<u8>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2749,6 +2758,17 @@ impl EditorWindow {
             }
             this.update_in(cx, |this, window, cx| {
                 this.generating_keyboard = false;
+                // The gesture may have edited the timeline after the wait
+                // began (trimming a key, say); that edit stands over the run
+                // that was asked for before it.
+                if project_timeline_fingerprint(&this.project).as_deref() != Some(&requested_on[..])
+                {
+                    this.keyboard_generation_message =
+                        Some(tr::editor::tabs::keyboard::changed_during_generation().into());
+                    cx.notify();
+                    window.refresh();
+                    return;
+                }
                 this.generate_keyboard_segments(unedited_from, window, cx);
             })
             .ok();
@@ -2876,14 +2896,15 @@ impl EditorWindow {
                 // only if it left the timeline alone: a drag that edits it
                 // (trimming a key, say) makes this result stale, and the guard
                 // below drops it without touching that edit.
-                let timeline_untouched = this
-                    .project
-                    .timeline
-                    .as_ref()
-                    .and_then(|timeline| serde_json::to_vec(timeline).ok())
-                    .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
+                let timeline_untouched = project_timeline_fingerprint(&this.project).as_deref()
+                    == Some(&timeline_fingerprint[..]);
                 if this.history.is_paused() && timeline_untouched {
-                    this.wait_out_gesture_then_generate(retry_from, window, cx);
+                    this.wait_out_gesture_then_generate(
+                        retry_from,
+                        timeline_fingerprint,
+                        window,
+                        cx,
+                    );
                     return;
                 }
                 let mut apply = |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
@@ -6217,5 +6238,96 @@ mod tests {
             "slider_edit timeline_segments=2000 samples=10 iterations_per_sample=10 \
              skipped_rebuild_us={skipped:.3}"
         );
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows,
+    // which the editor needs.
+    #[cfg(target_os = "linux")]
+    mod keyboard_gesture_wait {
+        use super::*;
+
+        fn editor_with_a_clip(
+            cx: &mut gpui::TestAppContext,
+        ) -> (
+            gpui::Entity<EditorWindow>,
+            &mut gpui::VisualTestContext,
+            tempfile::TempDir,
+        ) {
+            let project = tempfile::tempdir().unwrap();
+            let project_path = project.path().to_path_buf();
+            let (editor, cx) = cx.add_window_view(move |window, cx| {
+                EditorWindow::new(project_path.clone(), window, cx)
+            });
+            cx.run_until_parked();
+            let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                    ],
+                    "zoomSegments": []
+                }
+            }))
+            .unwrap();
+            editor.update(cx, |editor, _| editor.project.timeline = config.timeline);
+            (editor, cx, project)
+        }
+
+        /// Keys that finish generating during a drag wait for it to end. A
+        /// trim made during that wait stands, and the run is dropped.
+        #[gpui::test]
+        fn a_trim_during_the_wait_keeps_its_edit(cx: &mut gpui::TestAppContext) {
+            let (editor, cx, _project) = editor_with_a_clip(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                let requested = project_timeline_fingerprint(&editor.project).unwrap();
+                editor.history.pause();
+                editor.wait_out_gesture_then_generate(None, requested, window, cx);
+                editor.project.timeline.as_mut().unwrap().segments[0].end = 8.0;
+                let config = editor.project.clone();
+                editor.history.resume(&config);
+            });
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(150));
+            cx.run_until_parked();
+            let changed: String = tr::editor::tabs::keyboard::changed_during_generation().into();
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.generating_keyboard);
+                assert_eq!(
+                    editor.keyboard_generation_message.as_deref(),
+                    Some(changed.as_str())
+                );
+                assert_eq!(
+                    editor.project.timeline.as_ref().unwrap().segments[0].end,
+                    8.0
+                );
+            });
+        }
+
+        /// A drag that leaves the timeline alone still gets its keys once it
+        /// ends.
+        #[gpui::test]
+        fn an_untouched_timeline_generates_after_the_gesture(cx: &mut gpui::TestAppContext) {
+            let (editor, cx, _project) = editor_with_a_clip(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                let requested = project_timeline_fingerprint(&editor.project).unwrap();
+                editor.history.pause();
+                editor.wait_out_gesture_then_generate(None, requested, window, cx);
+                let config = editor.project.clone();
+                editor.history.resume(&config);
+            });
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(150));
+            cx.run_until_parked();
+            let changed: String = tr::editor::tabs::keyboard::changed_during_generation().into();
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.generating_keyboard);
+                // This project has no recording, so generation itself reports
+                // that; what matters is that it ran.
+                assert!(editor.keyboard_generation_message.is_some());
+                assert_ne!(
+                    editor.keyboard_generation_message.as_deref(),
+                    Some(changed.as_str())
+                );
+            });
+        }
     }
 }
