@@ -1,6 +1,6 @@
 import type { VideoId } from "@cap/recorder-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_KEY } from "../shared/storage";
+import { AUTH_KEY, defaultSettings, SETTINGS_KEY } from "../shared/storage";
 import { RECORDING_STATE_KEY } from "../shared/storage-keys";
 import type {
 	BootstrapData,
@@ -510,5 +510,62 @@ describe("canceling a start after a worker restart", () => {
 			{ target: "offscreen", type: "stop-recording" },
 			expect.any(Function),
 		);
+	});
+});
+
+describe("closing the camera preview", () => {
+	const send = async (message: object) => {
+		let response: ServiceWorkerResponse | undefined;
+		onMessage(message, {}, (value: ServiceWorkerResponse) => {
+			response = value;
+		});
+		await vi.waitFor(() => {
+			while (contextReplies.length > 0) answerContexts(false);
+			expect(response).toBeDefined();
+		});
+		return response;
+	};
+
+	it("turns the camera off so the next recorder opens without it", async () => {
+		stored[SETTINGS_KEY] = {
+			...defaultSettings,
+			webcam: {
+				...defaultSettings.webcam,
+				enabled: true,
+				deviceId: "facetime",
+			},
+		};
+
+		const response = await send({
+			target: "service-worker",
+			type: "close-webcam-preview",
+		});
+
+		expect(stored[SETTINGS_KEY]).toMatchObject({
+			webcam: { enabled: false, deviceId: null },
+			capture: { camera: null },
+		});
+		expect(response).toMatchObject({
+			ok: true,
+			settings: { webcam: { enabled: false } },
+		});
+	});
+
+	it("keeps the camera in camera-only mode, where it is the recording", async () => {
+		stored[SETTINGS_KEY] = {
+			...defaultSettings,
+			capture: { ...defaultSettings.capture, recordingMode: "camera" },
+			webcam: {
+				...defaultSettings.webcam,
+				enabled: true,
+				deviceId: "facetime",
+			},
+		};
+
+		await send({ target: "service-worker", type: "close-webcam-preview" });
+
+		expect(stored[SETTINGS_KEY]).toMatchObject({
+			webcam: { enabled: true, deviceId: "facetime" },
+		});
 	});
 });
