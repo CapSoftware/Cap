@@ -214,11 +214,7 @@ export default function FolderVideosSection({
 										isSelected={selectedCaps.includes(video.id)}
 										anyCapSelected={selectedCaps.length > 0}
 										isDeleting={isDeletingCaps || isDeletingCap}
-										onSelectToggle={
-											canSelect
-												? (options) => selection.toggle(video.id, options)
-												: undefined
-										}
+										onSelectToggle={canSelect ? selection.toggle : undefined}
 										onArchiveToggle={
 											canArchive
 												? () =>
