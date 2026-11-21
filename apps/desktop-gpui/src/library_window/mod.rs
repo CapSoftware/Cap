@@ -477,8 +477,6 @@ impl LibraryWindow {
         let library = crate::meetings_ui::documents::store::library(cx);
         self.load_up_next(cx);
         let first = self.last_scan.is_none();
-        let member_paths = store::member_paths(&self.file);
-        let members = member_paths.len();
         self.load_task = Some(cx.spawn(async move |this, cx| {
             if !first {
                 cx.background_executor()
@@ -487,21 +485,12 @@ impl LibraryWindow {
             }
             let started = Instant::now();
             let for_scan = library.clone();
-            let (scan, gone) = cx
+            let scan = cx
                 .background_executor()
-                .spawn(async move {
-                    // Disk checks for folder members happen here, off the main
-                    // thread: a slow or missing volume must not stall the UI.
-                    let gone: std::collections::BTreeSet<PathBuf> = member_paths
-                        .into_iter()
-                        .filter(|p| store::confirmed_gone(p))
-                        .collect();
-                    (load::scan(for_scan), gone)
-                })
+                .spawn(async move { load::scan(for_scan) })
                 .await;
             tracing::info!(
                 items = scan.items.len(),
-                members,
                 ms = started.elapsed().as_secs_f64() * 1000.,
                 "library scanned"
             );
@@ -510,8 +499,8 @@ impl LibraryWindow {
                 this.last_scan = Some(Instant::now());
                 this.scan = Rc::new(scan);
                 this.thumbs.forget_failures();
-                this.prune_members(&gone);
                 this.reevaluate(cx);
+                this.check_members(cx);
                 this.index_people(library, cx);
                 if std::mem::take(&mut this.reload_again) {
                     this.reload(cx);
@@ -519,6 +508,38 @@ impl LibraryWindow {
             })
             .ok();
         }));
+    }
+
+    /// After a scan, off the main thread and after the list is on screen:
+    /// which folder members are confirmed gone on disk. A slow or missing
+    /// volume delays only this, never the first paint.
+    fn check_members(&mut self, cx: &mut Context<Self>) {
+        let paths = store::member_paths(&self.file);
+        if paths.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            let count = paths.len();
+            let gone = cx
+                .background_spawn(async move { store::confirmed_gone_all(&paths) })
+                .await;
+            tracing::info!(
+                members = count,
+                gone = gone.len(),
+                ms = started.elapsed().as_secs_f64() * 1000.,
+                "library members checked"
+            );
+            if gone.is_empty() {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                this.prune_members(&gone);
+                this.reevaluate(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Second pass after a scan: speaker names from transcripts, cached.

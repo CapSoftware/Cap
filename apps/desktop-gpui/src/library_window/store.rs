@@ -220,6 +220,7 @@ fn write_atomic(dir: &Path, file: &LibraryFile) -> std::io::Result<()> {
 /// Whether a file is known to be gone: its folder is there and readable and
 /// the file itself is not. An unplugged drive (no folder), a folder we may not
 /// read, or any other error is "don't know", and "don't know" never deletes.
+#[cfg(test)]
 pub fn confirmed_gone(path: &Path) -> bool {
     let Some(parent) = path.parent() else {
         return false;
@@ -231,6 +232,29 @@ pub fn confirmed_gone(path: &Path) -> bool {
         std::fs::symlink_metadata(path),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound
     )
+}
+
+/// `confirmed_gone` for many paths, opening each parent folder once. Members
+/// usually share one or two folders, so this is a handful of directory opens
+/// instead of one per member.
+pub fn confirmed_gone_all(paths: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
+    let mut readable: std::collections::HashMap<&Path, bool> = std::collections::HashMap::new();
+    paths
+        .iter()
+        .filter(|path| {
+            let Some(parent) = path.parent() else {
+                return false;
+            };
+            let ok = *readable
+                .entry(parent)
+                .or_insert_with(|| std::fs::read_dir(parent).is_ok());
+            ok && matches!(
+                std::fs::symlink_metadata(path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 /// Every `path:` member, for a background `confirmed_gone` pass.
@@ -480,6 +504,34 @@ mod tests {
             .filter(|p| confirmed_gone(p))
             .collect();
         prune_members(file, folders, |p| gone.contains(p))
+    }
+
+    #[test]
+    fn checking_many_members_matches_checking_each_and_is_fast() {
+        let dir = scratch("many");
+        let shots = dir.join("screenshots");
+        std::fs::create_dir_all(&shots).unwrap();
+        for i in 0..1700 {
+            std::fs::create_dir(shots.join(format!("s{i}.cap"))).unwrap();
+        }
+        let mut paths: Vec<PathBuf> = (0..300)
+            .map(|i| shots.join(format!("s{}.cap", i * 5)))
+            .collect();
+        paths.extend((0..20).map(|i| shots.join(format!("gone{i}.cap"))));
+        paths.push(PathBuf::from("/Volumes/Not Plugged In/x.cap"));
+        let started = std::time::Instant::now();
+        let each: std::collections::BTreeSet<PathBuf> = paths
+            .iter()
+            .filter(|p| confirmed_gone(p))
+            .cloned()
+            .collect();
+        let per_member = started.elapsed();
+        let started = std::time::Instant::now();
+        let once = confirmed_gone_all(&paths);
+        let per_parent = started.elapsed();
+        eprintln!("gone check 321 members: per member {per_member:?}, per parent {per_parent:?}");
+        assert_eq!(each, once);
+        assert_eq!(once.len(), 20);
     }
 
     #[test]
