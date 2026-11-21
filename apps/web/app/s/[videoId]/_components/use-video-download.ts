@@ -4,7 +4,9 @@ import type { Video } from "@cap/web-domain";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
+	getVideoAudioDownloadInfo,
 	getVideoDownloadInfo,
+	type VideoDownloadInfo,
 	type VideoDownloadVariant,
 } from "@/actions/videos/download";
 import { startBrowserDownload } from "@/lib/start-browser-download";
@@ -19,13 +21,16 @@ import { startBrowserDownload } from "@/lib/start-browser-download";
 export function useVideoDownload(videoId: Video.VideoId) {
 	const [isDownloading, setIsDownloading] = useState(false);
 
-	const download = useCallback(
-		(variant: VideoDownloadVariant) => {
+	const start = useCallback(
+		(
+			getInfo: () => Promise<VideoDownloadInfo>,
+			messages: { loading: string; fallbackError: string },
+		) => {
 			if (isDownloading) return;
 			setIsDownloading(true);
 
 			const run = async () => {
-				const result = await getVideoDownloadInfo(videoId, variant);
+				const result = await getInfo();
 				if (!result.success) {
 					throw new Error(result.error);
 				}
@@ -35,15 +40,33 @@ export function useVideoDownload(videoId: Video.VideoId) {
 
 			const promise = run();
 			toast.promise(promise, {
-				loading: "Preparing download...",
+				loading: messages.loading,
 				success: "Download started",
 				error: (error) =>
-					error instanceof Error ? error.message : "Failed to download video",
+					error instanceof Error ? error.message : messages.fallbackError,
 			});
 			promise.catch(() => undefined).finally(() => setIsDownloading(false));
 		},
-		[videoId, isDownloading],
+		[isDownloading],
 	);
 
-	return { download, isDownloading };
+	const download = useCallback(
+		(variant: VideoDownloadVariant) =>
+			start(() => getVideoDownloadInfo(videoId, variant), {
+				loading: "Preparing download...",
+				fallbackError: "Failed to download video",
+			}),
+		[start, videoId],
+	);
+
+	const downloadAudio = useCallback(
+		() =>
+			start(() => getVideoAudioDownloadInfo(videoId), {
+				loading: "Preparing audio...",
+				fallbackError: "Failed to download audio",
+			}),
+		[start, videoId],
+	);
+
+	return { download, downloadAudio, isDownloading };
 }
