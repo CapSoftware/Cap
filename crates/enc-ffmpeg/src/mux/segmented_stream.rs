@@ -334,6 +334,7 @@ pub struct SegmentedVideoEncoderConfig {
     /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
     /// to the software-frame path. Ignored on other platforms.
     pub prefer_videotoolbox_hw_input: bool,
+    pub realtime_videotoolbox_keyframe_interval: Option<Duration>,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -344,6 +345,7 @@ impl Default for SegmentedVideoEncoderConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             prefer_videotoolbox_hw_input: false,
+            realtime_videotoolbox_keyframe_interval: None,
         }
     }
 }
@@ -441,6 +443,9 @@ impl SegmentedVideoEncoder {
             .with_bpp(config.bpp);
         if let Some(priority) = encoder_priority {
             builder = builder.with_encoder_priority_override(priority);
+        }
+        if let Some(interval) = config.realtime_videotoolbox_keyframe_interval {
+            builder = builder.with_realtime_videotoolbox_keyframe_interval(interval);
         }
 
         if let Some((width, height)) = config.output_size {
@@ -1999,6 +2004,60 @@ mod tests {
             "assembled output must carry the full 6.6s of content, got {duration:.2}s"
         );
         assert!(crate::remux::probe_video_can_decode(&remuxed_path).unwrap_or(false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn realtime_videotoolbox_keyframe_interval_keeps_two_second_segments() {
+        ffmpeg::init().ok();
+        let encode = |interval: Option<Duration>| {
+            let temp = tempfile::tempdir().unwrap();
+            let base_path = temp.path().to_path_buf();
+            let mut encoder = SegmentedVideoEncoder::init(
+                base_path.clone(),
+                test_video_info(),
+                SegmentedVideoEncoderConfig {
+                    realtime_videotoolbox_keyframe_interval: interval,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            if encoder.encoder.codec_name() != "h264_videotoolbox" {
+                return None;
+            }
+            for i in 0..200u64 {
+                let mut frame = create_test_frame(320, 240);
+                frame.data_mut(0)[(i as usize * 7) % 76_800] = (i % 251) as u8;
+                encoder
+                    .queue_frame(frame, Duration::from_nanos(i * 33_333_333))
+                    .unwrap();
+            }
+            encoder.finish().unwrap();
+            let segments = std::fs::read_dir(&base_path)
+                .unwrap()
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|ext| ext == "m4s"))
+                .count();
+            let track = recorded_track(&base_path);
+            let mut input = format::input(&track).unwrap();
+            let index = input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .unwrap()
+                .index();
+            let keyframes = input
+                .packets()
+                .filter(|(stream, packet)| stream.index() == index && packet.is_key())
+                .count();
+            Some((segments, keyframes, temp))
+        };
+        let Some((segments_default, keyframes_default, _a)) = encode(None) else {
+            return;
+        };
+        let (segments_1s, keyframes_1s, _b) = encode(Some(Duration::from_secs(1))).unwrap();
+        assert_eq!(segments_default, segments_1s);
+        assert!(keyframes_default >= 15, "{keyframes_default}");
+        assert!((6..=8).contains(&keyframes_1s), "{keyframes_1s}");
     }
 
     fn recorded_track(base_path: &Path) -> PathBuf {

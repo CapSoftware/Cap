@@ -5,7 +5,10 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-use crate::output_pipeline::{MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig};
+use crate::output_pipeline::{
+    MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig,
+    STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL,
+};
 #[cfg(windows)]
 use crate::output_pipeline::{WindowsFragmentedM4SMuxer, WindowsFragmentedM4SMuxerConfig};
 use anyhow::anyhow;
@@ -178,6 +181,11 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     .with_start_gate(start_gate.clone())
                     .build::<MacOSFragmentedM4SMuxer>(MacOSFragmentedM4SMuxerConfig {
                         timed_fragments: true,
+                        // Ultra keeps the 12-frame GOP for now: with longer GOPs
+                        // VideoToolbox reaches Ultra's much higher bitrate target
+                        // on motion and those recordings grow instead of shrink.
+                        realtime_videotoolbox_keyframe_interval: (!ultra)
+                            .then_some(STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL),
                         preset,
                         bpp,
                         output_size,

@@ -38,6 +38,7 @@ pub struct H264EncoderBuilder {
     is_export: bool,
     crf: Option<u8>,
     software_tuning: Option<SoftwareEncoderTuning>,
+    realtime_videotoolbox_keyframe_interval: Option<Duration>,
 }
 
 /// libx264 settings for an export split across several encoders running at
@@ -114,6 +115,7 @@ impl H264EncoderBuilder {
             is_export: false,
             crf: None,
             software_tuning: None,
+            realtime_videotoolbox_keyframe_interval: None,
         }
     }
 
@@ -158,6 +160,14 @@ impl H264EncoderBuilder {
         self
     }
 
+    /// Keyframe interval for realtime `h264_videotoolbox` recording. Without
+    /// it VideoToolbox gets FFmpeg's default GOP of 12 frames. No other
+    /// encoder, and no export, reads this.
+    pub fn with_realtime_videotoolbox_keyframe_interval(mut self, interval: Duration) -> Self {
+        self.realtime_videotoolbox_keyframe_interval = Some(interval);
+        self
+    }
+
     pub fn with_crf(mut self, crf: u8) -> Self {
         self.crf = Some(crf);
         self
@@ -196,6 +206,7 @@ impl H264EncoderBuilder {
             self.encoder_priority_override,
             self.is_export,
             self.crf,
+            self.realtime_videotoolbox_keyframe_interval,
         );
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
@@ -423,6 +434,7 @@ impl H264EncoderBuilder {
             Some(&["libx264"]),
             self.is_export,
             self.crf,
+            self.realtime_videotoolbox_keyframe_interval,
         )
         .into_iter()
         .next()
@@ -511,6 +523,7 @@ impl H264EncoderBuilder {
             Some(&["h264_videotoolbox"]),
             self.is_export,
             None,
+            self.realtime_videotoolbox_keyframe_interval,
         )
         .into_iter()
         .next()
@@ -615,6 +628,7 @@ impl H264EncoderBuilder {
             self.encoder_priority_override,
             self.is_export,
             self.crf,
+            self.realtime_videotoolbox_keyframe_interval,
         );
         if candidates.is_empty() {
             return Err(H264EncoderError::CodecNotFound);
@@ -1661,6 +1675,7 @@ fn get_codec_and_options(
     encoder_priority_override: Option<&'static [&'static str]>,
     is_export: bool,
     crf: Option<u8>,
+    realtime_videotoolbox_keyframe_interval: Option<Duration>,
 ) -> Vec<(Codec, Dictionary<'static>)> {
     let keyframe_interval_secs = DEFAULT_KEYFRAME_INTERVAL_SECS;
     let denominator = config.frame_rate.denominator();
@@ -1701,6 +1716,10 @@ fn get_codec_and_options(
                     options.set("realtime", "true");
                     options.set("prio_speed", "true");
                     options.set("profile", "main");
+                    if let Some(interval) = realtime_videotoolbox_keyframe_interval {
+                        let frames = (interval.as_secs_f64() * frames_per_sec).round().max(1.0);
+                        options.set("g", &(frames as i32).to_string());
+                    }
                 }
             }
             "h264_nvenc" => {
@@ -2213,6 +2232,95 @@ mod self_test_tests {
             .expect("healthy encoder passes the round trip");
     }
 
+    fn options_by_encoder(
+        config: &VideoInfo,
+        is_export: bool,
+        interval: Option<Duration>,
+    ) -> Vec<(String, Vec<(String, String)>)> {
+        let names: &'static [&'static str] = &[
+            "h264_videotoolbox",
+            "h264_nvenc",
+            "h264_qsv",
+            "h264_amf",
+            "h264_mf",
+            "h264_vaapi",
+            "libx264",
+        ];
+        get_codec_and_options(
+            config,
+            H264Preset::Ultrafast,
+            Some(names),
+            is_export,
+            None,
+            interval,
+        )
+        .into_iter()
+        .map(|(codec, options)| {
+            (
+                codec.name().to_string(),
+                options
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn realtime_keyframe_interval_only_changes_realtime_videotoolbox() {
+        ffmpeg::init().ok();
+        let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1920, 1080, 60);
+        let interval = Some(Duration::from_secs(1));
+        for is_export in [false, true] {
+            let without = options_by_encoder(&config, is_export, None);
+            let with = options_by_encoder(&config, is_export, interval);
+            assert_eq!(
+                without.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+                with.iter().map(|(n, _)| n).collect::<Vec<_>>()
+            );
+            for ((name, base), (_, head)) in without.iter().zip(with.iter()) {
+                if name == "h264_videotoolbox" && !is_export {
+                    continue;
+                }
+                assert_eq!(base, head, "{name} export={is_export}");
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn realtime_videotoolbox_keyframe_interval_sets_gop_in_frames() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().ok();
+        let realtime_gop = |fps: u32, interval: Option<Duration>| {
+            let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1920, 1080, fps);
+            options_by_encoder(&config, false, interval)
+                .into_iter()
+                .find(|(name, _)| name == "h264_videotoolbox")
+                .expect("VideoToolbox encoder is available on macOS")
+                .1
+                .into_iter()
+                .find(|(k, _)| k == "g")
+                .map(|(_, v)| v)
+        };
+        assert_eq!(realtime_gop(60, None), None);
+        assert_eq!(
+            realtime_gop(60, Some(Duration::from_secs(1))).as_deref(),
+            Some("60")
+        );
+        assert_eq!(
+            realtime_gop(30, Some(Duration::from_secs(1))).as_deref(),
+            Some("30")
+        );
+        assert_eq!(
+            realtime_gop(60, Some(Duration::from_secs(2))).as_deref(),
+            Some("120")
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn videotoolbox_export_uses_the_default_keyframe_interval() {
@@ -2227,6 +2335,7 @@ mod self_test_tests {
                 H264Preset::Medium,
                 Some(&["h264_videotoolbox"]),
                 is_export,
+                None,
                 None,
             )
             .into_iter()
@@ -2328,6 +2437,7 @@ mod self_test_tests {
                     Some(&["h264_mf"]),
                     false,
                     None,
+                    None,
                 )
                 .into_iter()
                 .next()
@@ -2423,6 +2533,7 @@ mod self_test_tests {
             Some(linux_encoder_priority(true, true)),
             true,
             Some(23),
+            None,
         );
 
         assert_eq!(codecs.len(), 1);
@@ -2446,6 +2557,7 @@ mod self_test_tests {
             H264Preset::Ultrafast,
             Some(&["h264_nvenc", "libx264"]),
             false,
+            None,
             None,
         )
         .into_iter()
@@ -2474,6 +2586,7 @@ mod self_test_tests {
             H264Preset::Ultrafast,
             Some(&["h264_vaapi", "libx264"]),
             false,
+            None,
             None,
         )
         .into_iter()

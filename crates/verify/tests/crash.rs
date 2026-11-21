@@ -151,7 +151,8 @@ mod source {
     use super::*;
     use cap_recording::{
         MacOSFragmentedM4SMuxer, MacOSFragmentedM4SMuxerConfig, OutOfProcessFragmentedM4SMuxer,
-        OutOfProcessFragmentedM4SMuxerConfig, screen_capture,
+        OutOfProcessFragmentedM4SMuxerConfig, STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL,
+        screen_capture,
     };
     use cidre::cm;
 
@@ -218,6 +219,9 @@ mod source {
                     .build::<ObservedMuxer<MacOSFragmentedM4SMuxer>>(
                         MacOSFragmentedM4SMuxerConfig {
                             timed_fragments: true,
+                            realtime_videotoolbox_keyframe_interval: Some(
+                                STUDIO_DISPLAY_VIDEOTOOLBOX_KEYFRAME_INTERVAL,
+                            ),
                             ..Default::default()
                         },
                     )
