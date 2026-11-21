@@ -149,6 +149,23 @@ const bufferedAhead = (video: HTMLVideoElement) => {
 	return 0;
 };
 
+// Safari lists a seek target as a zero-length played range, so only a range
+// that was actually played through counts.
+const atPlayedEdge = (video: HTMLVideoElement) => {
+	for (let index = 0; index < video.played.length; index++) {
+		const start = video.played.start(index);
+		const end = video.played.end(index);
+		if (
+			end - start >= 0.25 &&
+			start - 0.25 <= video.currentTime &&
+			video.currentTime <= end + 0.25
+		) {
+			return true;
+		}
+	}
+	return false;
+};
+
 const playerSize = (video: HTMLVideoElement) => {
 	const scale = window.devicePixelRatio || 1;
 	return {
@@ -848,8 +865,12 @@ export function useShareLadder({
 			if (start === "framed") {
 				onFirstFrame();
 				// A stall that began while this chunk loaded fired its "waiting"
-				// before these listeners existed.
-				if (!video.paused && video.readyState < HAVE_FUTURE_DATA) onWaiting();
+				// before these listeners existed. Away from anything played, it
+				// came from a seek, which only gets the seek rescue.
+				if (!video.paused && video.readyState < HAVE_FUTURE_DATA) {
+					seekPending = !atPlayedEdge(video);
+					onWaiting();
+				}
 			} else if (!video.paused) callForLadder();
 		} else if (!video.paused) {
 			onPlayRequested();
