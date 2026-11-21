@@ -3,10 +3,12 @@ import {
 	isShareLadderEligible,
 	isShareLadderOutputKey,
 	isShareLadderPlaylistFile,
+	isShareLadderRetryLater,
 	rewriteShareLadderMaster,
 	rewriteShareLadderRendition,
 	shareLadderMediaFiles,
 	shareLadderOutputPrefix,
+	shareLadderStepToken,
 	shareLadderUploads,
 } from "@/lib/share-ladder-policy";
 
@@ -183,5 +185,42 @@ describe("playlist rewriting", () => {
 				(file) => file,
 			),
 		).toThrow();
+	});
+});
+
+describe("isShareLadderRetryLater", () => {
+	it("retries a job the farm stopped for other work", () => {
+		expect(
+			isShareLadderRetryLater({ phase: "error", errorCode: "idle-preempted" }),
+		).toBe(true);
+		expect(
+			isShareLadderRetryLater({
+				phase: "error",
+				errorCode: "processing-unavailable",
+			}),
+		).toBe(true);
+	});
+
+	it("fails every other ending", () => {
+		expect(
+			isShareLadderRetryLater({ phase: "error", errorCode: "source-invalid" }),
+		).toBe(false);
+		expect(isShareLadderRetryLater({ phase: "error" })).toBe(false);
+		expect(
+			isShareLadderRetryLater({
+				phase: "cancelled",
+				errorCode: "idle-preempted",
+			}),
+		).toBe(false);
+		expect(isShareLadderRetryLater({ phase: "complete" })).toBe(false);
+	});
+});
+
+describe("shareLadderStepToken", () => {
+	it("gives a step's retries the same folder and other steps a new one", () => {
+		const token = shareLadderStepToken("step_01");
+		expect(token).toMatch(/^[0-9a-f]{16}$/);
+		expect(shareLadderStepToken("step_01")).toBe(token);
+		expect(shareLadderStepToken("step_02")).not.toBe(token);
 	});
 });

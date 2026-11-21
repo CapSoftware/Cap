@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { SHARE_LADDER_OUTPUT_FILES } from "@cap/web-backend/src/S3Buckets/cloudfront-invalidation";
 
 export const SHARE_LADDER_MAX_TIER = "1080p";
@@ -36,6 +37,30 @@ export function isShareLadderEligible(facts: ShareLadderSourceFacts): boolean {
 	const shortSide =
 		facts.width && facts.height ? Math.min(facts.width, facts.height) : 0;
 	return shortSide > 1080 && bitsPerSecond >= ABOVE_1080P_BITRATE;
+}
+
+// The farm stops an idle ladder the moment other work needs its slot, or when
+// the box gets busy. Those jobs come back later instead of failing.
+const SHARE_LADDER_RETRY_LATER_CODES: ReadonlySet<string> = new Set([
+	"idle-preempted",
+	"processing-unavailable",
+]);
+
+export function isShareLadderRetryLater(
+	progress: Record<string, unknown>,
+): boolean {
+	return (
+		progress.phase === "error" &&
+		typeof progress.errorCode === "string" &&
+		SHARE_LADDER_RETRY_LATER_CODES.has(progress.errorCode)
+	);
+}
+
+export function shareLadderStepToken(stepId: string): string {
+	return createHash("sha256")
+		.update(`share-ladder:${stepId}`)
+		.digest("hex")
+		.slice(0, 16);
 }
 
 export function shareLadderOutputPrefix(
