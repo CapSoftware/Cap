@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bump when detection changes so cached results from older detectors are
 /// analysed again.
-pub const DETECTOR_VERSION: u32 = 2;
+pub const DETECTOR_VERSION: u32 = 3;
 
 const CACHE_FILE: &str = "cursor-hover.json";
 
@@ -98,47 +98,25 @@ pub fn analyze(
     let mut context = ffmpeg::codec::Context::from_parameters(stream.parameters())
         .map_err(|e| format!("video params: {e}"))?;
     context.set_threading(ffmpeg::threading::Config::count(ANALYSIS_DECODE_THREADS));
-    let mut decoder = context
-        .decoder()
-        .video()
-        .map_err(|e| format!("video decoder: {e}"))?;
+    let mut decoder = context.decoder();
+    decoder.skip_loop_filter(ffmpeg::Discard::All);
+    let mut decoder = decoder.video().map_err(|e| format!("video decoder: {e}"))?;
     decoder.set_packet_time_base(time_base);
 
-    let width = ((decoder.width() / 2).clamp(320, 720) / 2) * 2;
-    let height = ((u64::from(decoder.height()) * u64::from(width) / u64::from(decoder.width()))
-        .max(2) as u32
-        / 2)
-        * 2;
-    let mut scaler = ffmpeg::software::scaling::context::Context::get(
-        decoder.format(),
-        decoder.width(),
-        decoder.height(),
-        ffmpeg::format::Pixel::GRAY8,
-        width,
-        height,
-        ffmpeg::software::scaling::flag::Flags::AREA,
-    )
-    .map_err(|e| format!("create scaler: {e}"))?;
+    let mut downscale = Downscale::new(decoder.format(), decoder.width(), decoder.height())?;
+    let (width, height) = (downscale.width(), downscale.height());
 
     let pointer = PointerTrack::new(cursor);
     let mut detector = HoverDetector::new(width as usize, height as usize);
     let mut decoded = ffmpeg::frame::Video::empty();
-    let mut gray = ffmpeg::frame::Video::empty();
     let mut drain = |decoder: &mut ffmpeg::decoder::Video,
                      detector: &mut HoverDetector|
      -> Result<(), String> {
         while decoder.receive_frame(&mut decoded).is_ok() {
-            scaler
-                .run(&decoded, &mut gray)
-                .map_err(|e| format!("scale frame: {e}"))?;
+            let luma = downscale.run(&decoded)?;
             let ticks = decoded.timestamp().or_else(|| decoded.pts()).unwrap_or(0);
             let video_secs = ticks as f64 * seconds_per_tick;
             let time_ms = video_secs * 1000.0 + cursor_offset_ms;
-            let stride = gray.stride(0);
-            let mut luma = Vec::with_capacity(width as usize * height as usize);
-            for row in gray.data(0).chunks(stride).take(height as usize) {
-                luma.extend_from_slice(&row[..width as usize]);
-            }
             let position = pointer.position(time_ms).and_then(|(x, y)| {
                 let (px, py) = (x * f64::from(width), y * f64::from(height));
                 (px >= 0.0 && py >= 0.0 && px < f64::from(width) && py < f64::from(height))
@@ -171,6 +149,208 @@ pub fn analyze(
     let changes = detector.finish();
     write_cache(display, &changes)?;
     Ok(Some(changes))
+}
+
+enum Downscale {
+    Luma(LumaBox),
+    Scaler {
+        scaler: ffmpeg::software::scaling::context::Context,
+        gray: ffmpeg::frame::Video,
+        width: u32,
+        height: u32,
+    },
+}
+
+const MAX_ANALYSIS_WIDTH: u32 = 720;
+
+impl Downscale {
+    fn new(format: ffmpeg::format::Pixel, width: u32, height: u32) -> Result<Self, String> {
+        use ffmpeg::format::Pixel;
+
+        let factor = [1, 2, 4, 8]
+            .into_iter()
+            .find(|factor| width / factor <= MAX_ANALYSIS_WIDTH)
+            .unwrap_or(8);
+        let out_width = (width / factor / 2 * 2).max(2);
+        let out_height = (height / factor / 2 * 2).max(2);
+        let full_range = match format {
+            Pixel::YUVJ420P | Pixel::YUVJ422P | Pixel::YUVJ444P | Pixel::GRAY8 => true,
+            Pixel::YUV420P | Pixel::YUV422P | Pixel::YUV444P | Pixel::NV12 | Pixel::NV21 => false,
+            _ => {
+                let scaler = ffmpeg::software::scaling::context::Context::get(
+                    format,
+                    width,
+                    height,
+                    Pixel::GRAY8,
+                    out_width,
+                    out_height,
+                    ffmpeg::software::scaling::flag::Flags::AREA,
+                )
+                .map_err(|e| format!("create scaler: {e}"))?;
+                return Ok(Self::Scaler {
+                    scaler,
+                    gray: ffmpeg::frame::Video::empty(),
+                    width: out_width,
+                    height: out_height,
+                });
+            }
+        };
+        Ok(Self::Luma(LumaBox::new(
+            (width, height),
+            factor as usize,
+            (out_width as usize, out_height as usize),
+            full_range,
+        )))
+    }
+
+    fn width(&self) -> u32 {
+        match self {
+            Self::Luma(luma) => luma.width as u32,
+            Self::Scaler { width, .. } => *width,
+        }
+    }
+
+    fn height(&self) -> u32 {
+        match self {
+            Self::Luma(luma) => luma.height as u32,
+            Self::Scaler { height, .. } => *height,
+        }
+    }
+
+    fn run(&mut self, frame: &ffmpeg::frame::Video) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Luma(luma) => {
+                if (frame.width(), frame.height()) != luma.source {
+                    return Err(format!(
+                        "frame size changed to {}x{}",
+                        frame.width(),
+                        frame.height()
+                    ));
+                }
+                Ok(luma.reduce(frame.data(0), frame.stride(0)))
+            }
+            Self::Scaler {
+                scaler,
+                gray,
+                width,
+                height,
+            } => {
+                scaler
+                    .run(frame, gray)
+                    .map_err(|e| format!("scale frame: {e}"))?;
+                let (width, height) = (*width as usize, *height as usize);
+                let mut luma = Vec::with_capacity(width * height);
+                for row in gray.data(0).chunks(gray.stride(0)).take(height) {
+                    luma.extend_from_slice(&row[..width]);
+                }
+                Ok(luma)
+            }
+        }
+    }
+}
+
+/// Averages `factor` x `factor` blocks of an 8-bit luma plane, eight source
+/// pixels per u64: release builds optimise for size, which leaves a per-byte
+/// loop unvectorised and slower than swscale.
+struct LumaBox {
+    source: (u32, u32),
+    factor: usize,
+    width: usize,
+    height: usize,
+    lanes: Vec<(u64, u64)>,
+    levels: Vec<u8>,
+}
+
+const EVEN_BYTES: u64 = 0x00FF_00FF_00FF_00FF;
+const EVEN_PAIRS: u64 = 0x0000_FFFF_0000_FFFF;
+const LOW_HALF: u64 = 0x0000_0000_FFFF_FFFF;
+
+impl LumaBox {
+    fn new(source: (u32, u32), factor: usize, size: (usize, usize), full_range: bool) -> Self {
+        let area = (factor * factor) as f64;
+        let levels = (0..=factor * factor * 255)
+            .map(|sum| {
+                let mean = sum as f64 / area;
+                let level = if full_range {
+                    mean
+                } else {
+                    (mean - 16.0) * 255.0 / 219.0
+                };
+                level.round().clamp(0.0, 255.0) as u8
+            })
+            .collect();
+        Self {
+            source,
+            factor,
+            width: size.0,
+            height: size.1,
+            lanes: vec![(0, 0); (size.0 * factor).div_ceil(8)],
+            levels,
+        }
+    }
+
+    fn reduce(&mut self, plane: &[u8], stride: usize) -> Vec<u8> {
+        let factor = self.factor;
+        let span = self.width * factor;
+        let levels = self.levels.as_slice();
+        let mut luma = Vec::with_capacity(self.width * self.height);
+        for out_row in 0..self.height {
+            self.lanes.fill((0, 0));
+            for row in out_row * factor..(out_row + 1) * factor {
+                let start = row * stride;
+                accumulate_row(&mut self.lanes, &plane[start..start + span]);
+            }
+            let row_start = luma.len();
+            for &(even, odd) in &self.lanes {
+                match factor {
+                    1 => {
+                        for lane in 0..4 {
+                            luma.push(levels[(even >> (lane * 16)) as u16 as usize]);
+                            luma.push(levels[(odd >> (lane * 16)) as u16 as usize]);
+                        }
+                    }
+                    2 => {
+                        let pairs = even + odd;
+                        for lane in 0..4 {
+                            luma.push(levels[(pairs >> (lane * 16)) as u16 as usize]);
+                        }
+                    }
+                    4 => {
+                        let quads = fold_pairs(even + odd);
+                        luma.push(levels[(quads & LOW_HALF) as usize]);
+                        luma.push(levels[(quads >> 32) as usize]);
+                    }
+                    _ => {
+                        let quads = fold_pairs(even + odd);
+                        luma.push(levels[((quads & LOW_HALF) + (quads >> 32)) as usize]);
+                    }
+                }
+            }
+            luma.truncate(row_start + self.width);
+        }
+        luma
+    }
+}
+
+fn fold_pairs(pairs: u64) -> u64 {
+    (pairs & EVEN_PAIRS) + ((pairs >> 16) & EVEN_PAIRS)
+}
+
+fn accumulate_row(lanes: &mut [(u64, u64)], row: &[u8]) {
+    let (words, rest) = row.as_chunks::<8>();
+    for (lane, word) in lanes.iter_mut().zip(words) {
+        add_word(lane, u64::from_le_bytes(*word));
+    }
+    if !rest.is_empty() {
+        let mut word = [0; 8];
+        word[..rest.len()].copy_from_slice(rest);
+        add_word(&mut lanes[words.len()], u64::from_le_bytes(word));
+    }
+}
+
+fn add_word(lane: &mut (u64, u64), word: u64) {
+    lane.0 += word & EVEN_BYTES;
+    lane.1 += (word >> 8) & EVEN_BYTES;
 }
 
 /// Background priority for the calling thread, so the analysis only uses
@@ -770,5 +950,127 @@ mod tests {
         ]));
         assert!(track.busy(2000.0));
         assert!(!track.busy(3400.0));
+    }
+    fn noise(len: usize, seed: u32) -> Vec<u8> {
+        let mut state = seed;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn luma_box_averages_every_block_including_a_partial_last_word() {
+        for (factor, width, height) in [(1, 718, 6), (2, 362, 5), (4, 98, 4), (8, 50, 3)] {
+            let stride = width * factor + 40;
+            let plane = noise(stride * height * factor, factor as u32);
+            let mut luma = LumaBox::new(
+                ((width * factor) as u32, (height * factor) as u32),
+                factor,
+                (width, height),
+                true,
+            );
+            let expected: Vec<u8> = (0..height)
+                .flat_map(|y| (0..width).map(move |x| (x, y)))
+                .map(|(x, y)| {
+                    let sum: u32 = (0..factor)
+                        .flat_map(|dy| (0..factor).map(move |dx| (dx, dy)))
+                        .map(|(dx, dy)| {
+                            u32::from(plane[(y * factor + dy) * stride + x * factor + dx])
+                        })
+                        .sum();
+                    (f64::from(sum) / (factor * factor) as f64).round() as u8
+                })
+                .collect();
+            assert_eq!(luma.reduce(&plane, stride), expected, "factor {factor}");
+        }
+    }
+
+    #[test]
+    fn luma_box_expands_limited_range_like_swscale() {
+        ffmpeg::init().unwrap();
+        let (width, height) = (1280, 720);
+        let mut downscale = Downscale::new(ffmpeg::format::Pixel::YUV420P, width, height).unwrap();
+        assert!(matches!(downscale, Downscale::Luma(_)));
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            ffmpeg::format::Pixel::YUV420P,
+            width,
+            height,
+            ffmpeg::format::Pixel::GRAY8,
+            downscale.width(),
+            downscale.height(),
+            ffmpeg::software::scaling::flag::Flags::AREA,
+        )
+        .unwrap();
+        let mut gray = ffmpeg::frame::Video::empty();
+        for level in [0, 16, 17, 64, 126, 200, 235, 236, 255] {
+            let mut frame =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, width, height);
+            frame.data_mut(0).fill(level);
+            frame.data_mut(1).fill(128);
+            frame.data_mut(2).fill(128);
+            scaler.run(&frame, &mut gray).unwrap();
+            let luma = downscale.run(&frame).unwrap();
+            assert_eq!(
+                luma.len(),
+                (downscale.width() * downscale.height()) as usize
+            );
+            assert!(
+                luma.iter()
+                    .all(|&value| value.abs_diff(gray.data(0)[0]) <= 1),
+                "level {level}: box {} swscale {}",
+                luma[0],
+                gray.data(0)[0]
+            );
+        }
+    }
+
+    #[test]
+    fn analysis_frames_stay_within_720_columns() {
+        use ffmpeg::format::Pixel;
+
+        for ((width, height), expected) in [
+            ((640, 480), (640, 480)),
+            ((1280, 720), (640, 360)),
+            ((1920, 1080), (480, 270)),
+            ((2560, 1440), (640, 360)),
+            ((3024, 1964), (378, 244)),
+            ((3840, 2160), (480, 270)),
+            ((5120, 2880), (640, 360)),
+        ] {
+            let downscale = Downscale::new(Pixel::NV12, width, height).unwrap();
+            assert!(matches!(downscale, Downscale::Luma(_)));
+            assert_eq!((downscale.width(), downscale.height()), expected);
+        }
+        ffmpeg::init().unwrap();
+        let fallback = Downscale::new(Pixel::YUV420P10LE, 2560, 1440).unwrap();
+        assert!(matches!(fallback, Downscale::Scaler { .. }));
+        assert_eq!((fallback.width(), fallback.height()), (640, 360));
+    }
+
+    #[test]
+    fn caches_from_older_detectors_are_analysed_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let display = dir.path().join("display.mp4");
+        std::fs::write(&display, b"video").unwrap();
+
+        write_cache(&display, &[600.0]).unwrap();
+        assert_eq!(cached_changes(&display), Some(vec![600.0]));
+        assert!(!needs_analysis(&display));
+
+        let stale = HoverCache {
+            version: DETECTOR_VERSION - 1,
+            display_bytes: display_bytes(&display).unwrap(),
+            changes_ms: vec![600.0],
+        };
+        std::fs::write(
+            cache_path(&display).unwrap(),
+            serde_json::to_vec(&stale).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cached_changes(&display), None);
+        assert!(needs_analysis(&display));
     }
 }
