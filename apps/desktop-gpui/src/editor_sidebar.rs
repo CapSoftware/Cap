@@ -2115,11 +2115,10 @@ const WALLPAPER_TILE_MAX: u32 = 128;
 
 /// One wallpaper tile, through the persistent cache. The bundled assets are
 /// immutable in practice, so after the first-ever run every theme switch is
-/// eighteen ~3KB JPEG reads instead of eighteen 4000x2500 decodes; the
-/// version (mtime plus length) in the key still invalidates if an app update
-/// ever replaces them.
+/// eighteen ~3KB JPEG reads; the version (mtime plus length) in the key still
+/// invalidates if an app update ever replaces them.
 pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
-    let path = wallpaper_path(id)?;
+    let path = wallpaper_tile_source(wallpaper_path(id)?);
     // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
     // stays a file name rather than a subdirectory.
     let slot = library::CacheSlot::keyed(
@@ -2139,6 +2138,22 @@ pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
         slot.store(&rgba);
     }
     Some(library::rgba_to_render_image(rgba))
+}
+
+/// The 256px `-thumbnail.jpg` that `scripts/generate-background-thumbnails.mjs`
+/// writes beside each wallpaper, which the Tauri editor's tiles also use.
+/// Decoding the full wallpaper instead allocates its progressive coefficients
+/// at full resolution (~20MB per 4000x2500 image), and macOS keeps those freed
+/// buffers resident for the life of the process.
+fn wallpaper_tile_source(wallpaper: PathBuf) -> PathBuf {
+    let thumbnail = wallpaper
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| wallpaper.with_file_name(format!("{stem}-thumbnail.jpg")));
+    match thumbnail {
+        Some(thumbnail) if thumbnail.is_file() => thumbnail,
+        _ => wallpaper,
+    }
 }
 
 /// `write_desktop_background_snapshot` (`recording.rs:437-522`): `sips` first,
@@ -4745,6 +4760,45 @@ mod tests {
             (image.width() as f64 / image.height() as f64 - width as f64 / height as f64).abs()
                 < 0.025
         );
+    }
+
+    #[test]
+    fn every_wallpaper_tile_decodes_from_its_bundled_thumbnail() {
+        for id in WALLPAPER_NAMES {
+            let wallpaper = wallpaper_path(id).unwrap();
+            let source = wallpaper_tile_source(wallpaper.clone());
+            assert_ne!(source, wallpaper, "{id} has no -thumbnail.jpg");
+            let (width, height) = image::image_dimensions(&wallpaper).unwrap();
+            let image = decode_scaled_rgba(&source, WALLPAPER_TILE_MAX).unwrap();
+            assert_eq!(
+                image.width().max(image.height()),
+                WALLPAPER_TILE_MAX,
+                "{id}"
+            );
+            assert!(
+                (image.width() as f64 / image.height() as f64 - width as f64 / height as f64).abs()
+                    < 0.025,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wallpaper_without_a_thumbnail_tiles_from_the_full_image() {
+        let root = std::env::temp_dir().join(format!(
+            "cap-gpui-wallpaper-tile-source-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let wallpaper = root.join("plain.jpg");
+        std::fs::write(&wallpaper, b"wallpaper").unwrap();
+        assert_eq!(wallpaper_tile_source(wallpaper.clone()), wallpaper);
+
+        let thumbnail = root.join("plain-thumbnail.jpg");
+        std::fs::write(&thumbnail, b"thumbnail").unwrap();
+        assert_eq!(wallpaper_tile_source(wallpaper), thumbnail);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
