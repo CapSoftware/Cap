@@ -3505,7 +3505,14 @@ interface CaptionOption {
 	name: string;
 }
 
+interface MediaPlayerQualityMenu {
+	options: { id: string; label: string }[];
+	selected: string;
+	onSelect: (id: string) => void;
+}
+
 interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
+	quality?: MediaPlayerQualityMenu;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	enhancedAudioEnabled?: boolean;
 	setEnhancedAudioEnabled?: (enabled: boolean) => void;
@@ -3527,6 +3534,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		modal = false,
 		className,
 		disabled,
+		quality,
 		enhancedAudioStatus,
 		enhancedAudioEnabled,
 		setEnhancedAudioEnabled,
@@ -3688,7 +3696,35 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						{enhancedAudioEnabled && <CheckIcon />}
 					</DropdownMenuItem>
 				)}
-				{context.isVideo && mediaRenditionList.length > 0 && (
+				{context.isVideo && quality && (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger>
+							<span className="flex-1">Quality</span>
+							<Badge variant="outline" className="rounded">
+								{quality.selected === "original"
+									? "Original"
+									: (quality.options.find(
+											(option) => option.id === quality.selected,
+										)?.label ?? "Auto")}
+							</Badge>
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent>
+							{quality.options.map((option) => (
+								<DropdownMenuItem
+									key={option.id}
+									className="justify-between"
+									onSelect={() => quality.onSelect(option.id)}
+								>
+									{option.id === "original"
+										? `Original (${option.label})`
+										: option.label}
+									{option.id === quality.selected && <CheckIcon />}
+								</DropdownMenuItem>
+							))}
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				)}
+				{context.isVideo && !quality && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>
 							<span className="flex-1">Quality</span>
@@ -3924,4 +3960,4 @@ export {
 	useStoreSelector as useMediaPlayerStore,
 };
 
-export type { CaptionOption, CaptionLanguage };
+export type { CaptionOption, CaptionLanguage, MediaPlayerQualityMenu };
