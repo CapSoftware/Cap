@@ -66,7 +66,7 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font, FontWeight, GlobalElementId,
+    EntityId, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font, FontWeight, GlobalElementId,
     Hsla, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, RenderOnce, SharedString, Size,
     Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, WeakEntity, Window,
@@ -552,6 +552,8 @@ pub struct TextInputState {
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
     last_group: Option<UndoGroup>,
+    /// The view the field was last drawn in, written back by the element.
+    painted_in: Option<EntityId>,
 
     /// Fires `Blurred` so commit-on-blur has somewhere to live.
     _blur: gpui::Subscription,
@@ -584,7 +586,18 @@ impl TextInputState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_group: None,
+            painted_in: None,
             _blur: blur,
+        }
+    }
+
+    /// Every change ends here. The field is drawn by the view that holds it,
+    /// and a cached view keeps reusing its last paint until that view is told
+    /// to redraw, so notifying this state alone left typed text off screen.
+    fn changed(&self, cx: &mut Context<Self>) {
+        cx.notify();
+        if let Some(view) = self.painted_in {
+            App::notify(cx, view);
         }
     }
 
@@ -635,7 +648,7 @@ impl TextInputState {
     pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
         if self.disabled != disabled {
             self.disabled = disabled;
-            cx.notify();
+            self.changed(cx);
         }
     }
 
@@ -659,7 +672,7 @@ impl TextInputState {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.last_group = None;
-        cx.notify();
+        self.changed(cx);
     }
 
     pub fn clear_history(&mut self) {
@@ -671,14 +684,14 @@ impl TextInputState {
     pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
-        cx.notify();
+        self.changed(cx);
     }
 
     pub fn move_to_end(&mut self, cx: &mut Context<Self>) {
         let end = self.content.len();
         self.selected_range = end..end;
         self.selection_reversed = false;
-        cx.notify();
+        self.changed(cx);
     }
 
     pub fn has_selection(&self) -> bool {
@@ -734,7 +747,7 @@ impl TextInputState {
         self.selected_range = offset..offset;
         self.selection_reversed = false;
         self.last_group = None;
-        cx.notify();
+        self.changed(cx);
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -744,7 +757,7 @@ impl TextInputState {
         self.selected_range = range;
         self.selection_reversed = reversed;
         self.last_group = None;
-        cx.notify();
+        self.changed(cx);
     }
 
     fn clamp_to_boundary(&self, offset: usize) -> usize {
@@ -826,7 +839,7 @@ impl TextInputState {
         self.invalidate_layout();
         self.goal_x = None;
         cx.emit(TextInputEvent::Changed);
-        cx.notify();
+        self.changed(cx);
     }
 
     fn restore(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
@@ -839,7 +852,7 @@ impl TextInputState {
         self.goal_x = None;
         self.last_group = None;
         cx.emit(TextInputEvent::Changed);
-        cx.notify();
+        self.changed(cx);
     }
 
     // -- Action handlers ------------------------------------------------------
@@ -1229,7 +1242,7 @@ impl TextInputState {
                 self.selected_range = range.clone();
                 self.selection_reversed = false;
                 self.drag = Some((DragGranularity::Word, range));
-                cx.notify();
+                self.changed(cx);
             }
             _ => {
                 let range =
@@ -1237,7 +1250,7 @@ impl TextInputState {
                 self.selected_range = range.clone();
                 self.selection_reversed = false;
                 self.drag = Some((DragGranularity::Line, range));
-                cx.notify();
+                self.changed(cx);
             }
         }
     }
@@ -1263,7 +1276,7 @@ impl TextInputState {
         let end = anchor.end.max(extent.end);
         self.selection_reversed = extent.start < anchor.start;
         self.selected_range = start..end;
-        cx.notify();
+        self.changed(cx);
     }
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -1415,7 +1428,7 @@ impl EntityInputHandler for TextInputState {
         self.invalidate_layout();
         self.goal_x = None;
         cx.emit(TextInputEvent::Changed);
-        cx.notify();
+        self.changed(cx);
     }
 
     /// Where the IME's candidate window should sit.
@@ -1767,6 +1780,12 @@ impl TextInput {
         }
     }
 
+    /// The search chrome without the magnifier, for plain one-line fields.
+    pub fn without_icon(mut self) -> Self {
+        self.icon = None;
+        self
+    }
+
     pub fn placeholder_color(mut self, color: Hsla) -> Self {
         self.muted = color;
         self
@@ -1911,6 +1930,7 @@ impl RenderOnce for TextInput {
             .unwrap_or(px((f32::from(self.text_size) * 1.35).round()));
 
         let body = TextBody {
+            view: Some(window.current_view()),
             layout: state.read(cx).shared_layout(),
             state: state.clone(),
             fit_content: self.fit_content,
@@ -2030,6 +2050,9 @@ struct TextBody {
     selection_color: Hsla,
     multi_line: bool,
     focused: bool,
+    /// The view drawing the field, taken while the element is built (always
+    /// inside a draw). `None` for a body drawn outside any view.
+    view: Option<EntityId>,
 }
 
 struct BodyPrepaint {
@@ -2476,8 +2499,12 @@ impl Element for TextBody {
             ElementInputHandler::new(bounds, self.state.clone()),
             cx,
         );
+        let view = self.view;
         self.state.update(cx, |state, _| {
             state.scroll_x = prepaint.scroll_x;
+            if view.is_some() {
+                state.painted_in = view;
+            }
         });
 
         for quad in prepaint.selection.drain(..) {
@@ -2776,6 +2803,64 @@ mod tests {
             cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
             Some("pasted from the clipboard".to_string())
         );
+    }
+
+    struct CachedHost {
+        field: Entity<FieldView>,
+    }
+
+    impl Render for CachedHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                gpui::AnyView::from(self.field.clone())
+                    .cached(gpui::StyleRefinement::default().size_full()),
+            )
+        }
+    }
+
+    struct FieldView {
+        state: Entity<TextInputState>,
+        renders: usize,
+    }
+
+    impl Render for FieldView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            self.renders += 1;
+            div().size_full().child(TextInput::settings(
+                &Theme::light(),
+                "cached-field",
+                &self.state,
+            ))
+        }
+    }
+
+    /// Typed text never showed in a field inside a cached view (the notes
+    /// window's title and Ask): the state notified only itself, so the view
+    /// that drew the field kept reusing its last paint. Each key must redraw
+    /// that view.
+    #[gpui::test]
+    fn each_key_redraws_the_view_that_holds_the_field(cx: &mut gpui::TestAppContext) {
+        let (host, cx) = cx.add_window_view(|window, cx| {
+            let state = cx.new(|cx| TextInputState::single_line(window, cx));
+            CachedHost {
+                field: cx.new(|_| FieldView { state, renders: 0 }),
+            }
+        });
+        cx.simulate_resize(gpui::size(gpui::px(400.), gpui::px(200.)));
+        let field = host.read_with(cx, |host, _| host.field.clone());
+        let state = field.read_with(cx, |field, _| field.state.clone());
+        cx.update(|window, cx| window.focus(&state.read(cx).focus_handle(), cx));
+        cx.run_until_parked();
+        for key in ["a", "b", "c"] {
+            let before = field.read_with(cx, |field, _| field.renders);
+            cx.simulate_input(key);
+            cx.run_until_parked();
+            assert!(
+                field.read_with(cx, |field, _| field.renders) > before,
+                "typing {key} redraws the view that holds the field"
+            );
+        }
+        assert_eq!(state.read_with(cx, |state, _| state.text().to_string()), "abc");
     }
 
     // -- Word navigation ------------------------------------------------------
@@ -3113,6 +3198,7 @@ mod tests {
             selection_color: gpui::black(),
             multi_line: true,
             focused: false,
+            view: None,
         }
     }
 

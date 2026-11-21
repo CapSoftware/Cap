@@ -711,7 +711,38 @@ fn quit_phase(phase: Phase, ui_cleanup_pending: bool) -> Phase {
     }
 }
 
+/// Quitting from the menu or tray while a meeting records asks first: the
+/// rest of the meeting would not be recorded. Cap itself, the system and
+/// updates quit without asking.
+fn confirms_meeting(source: QuitSource, cx: &App) -> bool {
+    matches!(source, QuitSource::AppMenu | QuitSource::Tray)
+        && crate::meetings::Meetings::try_global(cx).is_some_and(|m| m.read(cx).is_recording())
+}
+
 pub fn quit(source: QuitSource, cx: &mut App) {
+    if confirms_meeting(source, cx) {
+        tracing::info!(?source, "quit requested during a meeting; asking first");
+        cx.spawn(async move |cx| {
+            let quit = platform::confirm_dialog(
+                tr::dialog::quit::meeting_title(),
+                tr::dialog::quit::meeting_message(),
+                tr::dialog::quit::meeting_quit(),
+                tr::dialog::quit::meeting_keep(),
+                false,
+            );
+            if quit {
+                let _ = cx.update(|cx| quit_now(source, cx));
+            } else {
+                tracing::info!("quit canceled to keep recording the meeting");
+            }
+        })
+        .detach();
+        return;
+    }
+    quit_now(source, cx);
+}
+
+fn quit_now(source: QuitSource, cx: &mut App) {
     tracing::info!(?source, "quit requested");
     let session = RecordingSession::global(cx);
     if !cx.has_global::<QuitCoordinator>() {
@@ -971,16 +1002,20 @@ fn visible_window_classes(cx: &mut App) -> (bool, bool) {
         })
         .unwrap_or(false);
 
+    let meeting_panel = !crate::meetings_ui::MeetingWindows::panel_windows(cx).is_empty();
+    let meeting_dock = !crate::meetings_ui::MeetingWindows::dock_windows(cx).is_empty();
     let windows = cx.global::<AppWindows>();
     let panel = windows.camera.is_some()
         || windows.controls.is_some()
         || !windows.overlays.is_empty()
-        || teleprompter_visible;
+        || teleprompter_visible
+        || meeting_panel;
     let dock = main_visible
         || windows.settings.is_some()
         || windows.onboarding.is_some()
         || windows.mode_select.is_some()
-        || !windows.editors.is_empty();
+        || !windows.editors.is_empty()
+        || meeting_dock;
     (panel, dock)
 }
 

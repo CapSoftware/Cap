@@ -239,7 +239,7 @@ pub fn grants_are_settings_only() -> bool {
     }
 }
 
-fn version_has_settings_only_grants(version: &str) -> bool {
+pub(crate) fn version_has_settings_only_grants(version: &str) -> bool {
     let mut parts = version
         .trim()
         .split('.')

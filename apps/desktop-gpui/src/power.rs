@@ -197,6 +197,7 @@ mod macos {
         match event {
             PowerEvent::WillSleep(notification) => {
                 tracing::info!("system going to sleep");
+                crate::meetings::Meetings::system_will_sleep(cx);
                 let started = Instant::now();
                 cx.spawn(async move |cx| {
                     let mut dispatched = false;
@@ -227,6 +228,7 @@ mod macos {
             }
             PowerEvent::DidWake => {
                 tracing::info!("system woke from sleep");
+                crate::meetings::Meetings::system_did_wake(cx);
                 session.update(cx, |session, cx| session.woke_from_sleep(cx));
             }
         }

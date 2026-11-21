@@ -29,8 +29,8 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::{
-        Arc, LazyLock, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, LazyLock, Mutex, PoisonError, TryLockError,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -148,6 +148,11 @@ const PARAKEET_LANGUAGES: [&str; 25] = [
 ];
 
 const PARAKEET_UNSUPPORTED_LANGUAGE: &str = "Parakeet cannot transcribe language";
+
+/// Whether parakeet-tdt-0.6b-v3 writes `language` (a code, or "auto").
+pub fn parakeet_writes(language: &str) -> bool {
+    language == "auto" || PARAKEET_LANGUAGES.contains(&language)
+}
 
 /// The model that transcribes `language`: a Parakeet model hands a language
 /// it cannot write to a downloaded Whisper model, larger first.
@@ -1206,6 +1211,7 @@ fn schedule_idle_release<T: Send + 'static>(
             drop(released);
             if was_cached {
                 tracing::info!("Released idle Parakeet TDT model");
+                return_freed_memory();
             }
             was_cached
         })
@@ -1226,6 +1232,24 @@ fn schedule_parakeet_release() {
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn schedule_parakeet_release() {}
+
+/// Drops the cached Parakeet now and cancels any idle release still waiting.
+/// Call with the transcription slot held.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn release_parakeet_now() {
+    PARAKEET_LAST_USE.fetch_add(1, Ordering::AcqRel);
+    let released = PARAKEET_CONTEXT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if released.is_some() {
+        drop(released);
+        tracing::info!("Released Parakeet TDT model after the meeting");
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn release_parakeet_now() {}
 
 // ---------------------------------------------------------------------------
 // Audio extraction
@@ -1814,7 +1838,7 @@ fn cached_parakeet(model_dir: &str) -> Result<Arc<Mutex<ParakeetTDT>>, String> {
     };
 
     if let Some(model) = cached_model {
-        tracing::info!("Reusing cached Parakeet TDT model");
+        tracing::debug!("Reusing cached Parakeet TDT model");
         return Ok(model);
     }
     tracing::info!("Loading Parakeet TDT model from: {model_dir}");
@@ -1839,9 +1863,32 @@ fn cached_parakeet(model_dir: &str) -> Result<Arc<Mutex<ParakeetTDT>>, String> {
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn load_parakeet(model_dir: &str, threads: Option<usize>) -> Result<ParakeetTDT, String> {
     cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
-    let config =
-        threads.map(|threads| parakeet_rs::ExecutionConfig::default().with_intra_threads(threads));
-    ParakeetTDT::from_pretrained(model_dir, config).map_err(|e| format!("{e}"))
+    // Once per install: the encoder's weights move to a side file ONNX
+    // Runtime maps, which halves what the loaded model holds. A failure
+    // keeps the file as downloaded. Test builds never rewrite a model
+    // folder unless asked (the eval tests read the developer's own models).
+    if (!cfg!(test) || std::env::var_os("CAP_PARAKEET_SPLIT_IN_TESTS").is_some())
+        && let Err(error) = crate::parakeet_split::ensure_split(
+            Path::new(model_dir),
+            crate::meetings::health::free_bytes,
+        )
+    {
+        tracing::warn!(%error, "Parakeet encoder kept as downloaded");
+    }
+    // ONNX Runtime's workers spin between runs by default. A meeting runs the
+    // model for a moment every couple of seconds, so they spun in between and
+    // kept about two cores busy for the whole meeting. The speaker and aligner
+    // sessions already turn spinning off.
+    let config = parakeet_rs::ExecutionConfig::default().with_custom_configure(|builder| {
+        Ok(builder
+            .with_intra_op_spinning(false)?
+            .with_inter_op_spinning(false)?)
+    });
+    let config = match threads {
+        Some(threads) => config.with_intra_threads(threads),
+        None => config,
+    };
+    ParakeetTDT::from_pretrained(model_dir, Some(config)).map_err(|e| format!("{e}"))
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -1902,7 +1949,7 @@ fn process_with_parakeet(
             options.parakeet_subword_words,
         )?);
     }
-    tracing::info!("Parakeet produced {} words", words.len());
+    tracing::debug!("Parakeet produced {} words", words.len());
     Ok(vec![words])
 }
 
@@ -2278,9 +2325,228 @@ fn transcribe_project_first_pass(
             &TUNING,
             &AtomicBool::new(false),
         );
+        let mut groups = groups;
+        spell_caption_groups(&caption_corrector(), &mut groups);
         Ok(caption_segments_from_groups(groups, language))
     })
 }
+
+/// The user's dictionary, as the meetings settings hold it.
+pub(crate) fn caption_corrector() -> cap_meetings::dictionary::Corrector {
+    cap_meetings::dictionary::Corrector::new(
+        crate::meetings::persist::load_settings()
+            .transcription
+            .entries(),
+    )
+}
+
+/// Spell caption words with the dictionary. Words keep their own times
+/// unless a fix changes how many there are; an empty dictionary does
+/// nothing at all.
+pub(crate) fn spell_caption_groups(
+    corrector: &cap_meetings::dictionary::Corrector,
+    groups: &mut [Vec<CaptionWord>],
+) {
+    if corrector.is_empty() {
+        return;
+    }
+    let ms = |w: &CaptionWord| {
+        (
+            (f64::from(w.start.max(0.0)) * 1000.0).round() as u64,
+            (f64::from(w.end.max(0.0)) * 1000.0).round() as u64,
+        )
+    };
+    for group in groups {
+        corrector.apply_timed(
+            group,
+            |w| w.text.as_str(),
+            |w, text, start, end| {
+                let (same_start, same_end) = ms(w);
+                CaptionWord {
+                    text,
+                    start: if start == same_start {
+                        w.start
+                    } else {
+                        start as f32 / 1000.0
+                    },
+                    end: if end == same_end {
+                        w.end
+                    } else {
+                        end as f32 / 1000.0
+                    },
+                }
+            },
+            ms,
+        );
+    }
+}
+
+pub(crate) fn live_model_ready(model: &str, language: &str) -> Result<(), String> {
+    let resolved = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
+    if model_files_present(resolved) && !hub().downloading(resolved) {
+        Ok(())
+    } else {
+        Err(format!(
+            "The {resolved} transcription model is not downloaded"
+        ))
+    }
+}
+
+pub(crate) fn transcribe_samples_blocking(
+    model: &str,
+    language: &str,
+    samples: &[f32],
+    hints: &[String],
+) -> Result<Vec<CaptionWord>, String> {
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+    let model = transcription_model(model, language, |model| {
+        model_files_present(model) && !hub().downloading(model)
+    })?;
+    if !model_files_present(model) {
+        return Err(format!("The {model} transcription model is not downloaded"));
+    }
+    let model_file = model_path(model);
+    let options = VerbatimOptions {
+        whisper_filler_prompt: false,
+        ..VerbatimOptions::default()
+    }
+    .first_pass();
+
+    let _guard = lock_transcription_worker_slot();
+    let groups = if is_parakeet_model(model) {
+        keep_parakeet_loaded();
+        process_with_parakeet(samples, &model_file.to_string_lossy(), &options)?
+    } else {
+        let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+        process_with_whisper(samples, context, language, hints, &options)?
+    };
+    Ok(finish_words_tuned(
+        groups,
+        samples,
+        &options,
+        None,
+        &TUNING,
+        &AtomicBool::new(false),
+    )
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
+/// Loads a meeting's live Parakeet model into the cache now, before the first
+/// speech, so the first caption never waits for the load. Nothing for other
+/// models; a load that fails here is tried again by the first pass.
+pub(crate) fn preload_live_model(model: &str, language: &str) {
+    let downloaded = |model: &str| model_files_present(model) && !hub().downloading(model);
+    let Ok(resolved) = transcription_model(model, language, downloaded) else {
+        return;
+    };
+    if !is_parakeet_model(resolved) || !downloaded(resolved) {
+        return;
+    }
+    let _guard = lock_transcription_worker_slot();
+    keep_parakeet_loaded();
+    let started = std::time::Instant::now();
+    match preload_parakeet(&model_path(resolved).to_string_lossy()) {
+        Ok(()) => tracing::info!(
+            ms = started.elapsed().as_millis() as u64,
+            "Parakeet TDT model ready for the meeting"
+        ),
+        Err(error) => tracing::warn!(%error, "could not load Parakeet before the meeting"),
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn preload_parakeet(model_dir: &str) -> Result<(), String> {
+    cached_parakeet(model_dir).map(|_| ())
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn preload_parakeet(_model_dir: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub(crate) fn release_live_models() {
+    {
+        let _guard = lock_transcription_worker_slot();
+        release_whisper_context_after_transcription();
+        release_parakeet_now();
+    }
+    return_freed_memory();
+}
+
+/// Meeting engines running now: the last one to drain lets the live model go
+/// before its after-Stop speaker pass starts.
+static LIVE_MEETINGS: AtomicUsize = AtomicUsize::new(0);
+
+/// One running meeting engine, counted until it drains or goes away.
+pub(crate) struct LiveMeeting {
+    counted: bool,
+}
+
+impl LiveMeeting {
+    pub(crate) fn start() -> Self {
+        LIVE_MEETINGS.fetch_add(1, Ordering::AcqRel);
+        Self { counted: true }
+    }
+
+    /// This meeting no longer needs the live model; true when it was the
+    /// last one running.
+    pub(crate) fn finish(&mut self) -> bool {
+        std::mem::replace(&mut self.counted, false)
+            && LIVE_MEETINGS.fetch_sub(1, Ordering::AcqRel) == 1
+    }
+}
+
+impl Drop for LiveMeeting {
+    fn drop(&mut self) {
+        if self.counted {
+            LIVE_MEETINGS.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// `release_live_models` without waiting: nothing happens while another
+/// transcription holds the slot (the release after the drain still runs).
+pub(crate) fn release_live_models_if_idle() -> bool {
+    let guard = match TRANSCRIPTION_LOCK.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => return false,
+    };
+    release_whisper_context_after_transcription();
+    release_parakeet_now();
+    drop(guard);
+    return_freed_memory();
+    true
+}
+
+/// Hands memory the allocator still holds after a model is dropped back to
+/// the system. On Linux glibc keeps freed memory in its per-thread arenas (a
+/// few hundred MB once the meeting models are gone) until it is trimmed.
+pub(crate) fn return_freed_memory() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: malloc_trim only walks the allocator's own free lists.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+// A live meeting transcribes a segment every few seconds; scheduling the idle
+// release per call parked one sleeping thread per segment for a minute. The
+// meeting instead cancels any pending release while it runs and schedules a
+// single one from `release_live_models` when it ends.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn keep_parakeet_loaded() {
+    PARAKEET_LAST_USE.fetch_add(1, Ordering::AcqRel);
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn keep_parakeet_loaded() {}
 
 /// The first pass's captions, shown at once, and what refines them.
 pub struct Transcript {
@@ -2924,6 +3190,124 @@ mod verify_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn heard_word(text: &str, start: f32, end: f32) -> CaptionWord {
+        CaptionWord {
+            text: text.into(),
+            start,
+            end,
+        }
+    }
+
+    /// Measurement, not a check: `Y_EVAL_LIST` names 16 kHz mono wavs; each is
+    /// transcribed in 30 s pieces with the meeting path's Parakeet call, then
+    /// spelled with Cap's built-in entry and with `Y_EVAL_DICT` (one entry
+    /// per line, `spelling|form|form`). Every change and the corrector's time
+    /// per line go to `Y_EVAL_OUT` as JSON lines.
+    #[test]
+    #[ignore]
+    fn dictionary_changes_on_eval_audio() {
+        use cap_meetings::dictionary::{Corrector, Entry, builtins};
+        use std::io::Write;
+        let list = std::env::var("Y_EVAL_LIST").expect("Y_EVAL_LIST");
+        let out = std::env::var("Y_EVAL_OUT").expect("Y_EVAL_OUT");
+        let entries: Vec<Entry> = std::fs::read_to_string(std::env::var("Y_EVAL_DICT").unwrap())
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let mut parts = l.split('|');
+                let spelling = parts.next().unwrap().trim();
+                let forms: Vec<&str> = parts.map(str::trim).collect();
+                Entry::new(spelling).with_sounds_like(&forms)
+            })
+            .collect();
+        let dictionaries = [
+            ("empty", Corrector::new(&[])),
+            ("builtin", Corrector::new(&builtins())),
+            ("realistic", Corrector::new(&entries)),
+        ];
+        let mut out = std::fs::File::create(out).unwrap();
+        for path in std::fs::read_to_string(list)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.is_empty())
+        {
+            let samples = read_wav_16k_mono(Path::new(path)).unwrap();
+            let mut words_total = 0usize;
+            let mut lines = 0usize;
+            let mut spent = [std::time::Duration::ZERO; 3];
+            for piece in samples.chunks(16_000 * 30) {
+                let words = transcribe_samples_blocking("best", "en", piece, &[]).unwrap();
+                let words: Vec<String> = words
+                    .iter()
+                    .map(|w| w.text.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                words_total += words.len();
+                lines += 1;
+                for (k, (name, corrector)) in dictionaries.iter().enumerate() {
+                    let mut fixed = words.clone();
+                    let started = std::time::Instant::now();
+                    corrector.apply_strings(&mut fixed);
+                    spent[k] += started.elapsed();
+                    if fixed != words {
+                        for fix in corrector.fixes(&words) {
+                            let before = words[fix.start..fix.start + fix.len].join(" ");
+                            let context = words[fix.start.saturating_sub(4)
+                                ..(fix.start + fix.len + 4).min(words.len())]
+                                .join(" ");
+                            writeln!(
+                                out,
+                                "{}",
+                                serde_json::json!({"file": path, "dict": name, "before": before, "after": fix.words.join(" "), "context": context})
+                            )
+                            .unwrap();
+                        }
+                    }
+                }
+            }
+            writeln!(
+                out,
+                "{}",
+                serde_json::json!({
+                    "file": path, "words": words_total, "pieces": lines,
+                    "us_per_piece": spent.iter().map(|d| d.as_micros() as f64 / lines.max(1) as f64).collect::<Vec<_>>(),
+                })
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn caption_words_follow_the_dictionary_and_keep_their_times() {
+        let corrector =
+            cap_meetings::dictionary::Corrector::new(&cap_meetings::dictionary::builtins());
+        let heard = vec![
+            heard_word("Kap", 0.123, 0.456),
+            heard_word("records", 0.5, 0.9),
+            heard_word("my", 1.0, 1.1),
+            heard_word("cap.", 1.2, 1.4),
+        ];
+        let flat = |words: &[CaptionWord]| -> Vec<(String, u32, u32)> {
+            words
+                .iter()
+                .map(|w| (w.text.clone(), w.start.to_bits(), w.end.to_bits()))
+                .collect()
+        };
+        let mut groups = vec![heard.clone()];
+        spell_caption_groups(&corrector, &mut groups);
+        let mut expected = flat(&heard);
+        expected[0].0 = "Cap".into();
+        assert_eq!(flat(&groups[0]), expected);
+
+        let mut untouched = vec![heard.clone()];
+        spell_caption_groups(
+            &cap_meetings::dictionary::Corrector::new(&[]),
+            &mut untouched,
+        );
+        assert_eq!(flat(&untouched[0]), flat(&heard));
+    }
 
     #[test]
     fn parakeet_keeps_the_languages_it_can_write() {

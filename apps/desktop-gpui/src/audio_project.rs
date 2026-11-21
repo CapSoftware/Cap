@@ -15,7 +15,20 @@ use crate::{app_windows, i18n::tr, platform};
 /// opens it in the editor. The work runs off the UI thread; a failure is
 /// reported in a dialog.
 pub fn open_audio_in_editor(sources: AudioProjectSources, pretty_name: String, cx: &mut App) {
+    open_prepared_audio_in_editor(move || Ok((sources, ())), pretty_name, cx);
+}
+
+/// [`open_audio_in_editor`] for sources that take work to produce, such as a
+/// note recorded in several pieces. `prepare` runs off the UI thread, and
+/// what it returns beside the sources (a scratch folder, say) is dropped once
+/// the project has its own copies.
+pub fn open_prepared_audio_in_editor<Keep: Send + 'static>(
+    prepare: impl FnOnce() -> Result<(AudioProjectSources, Keep), String> + Send + 'static,
+    pretty_name: String,
+    cx: &mut App,
+) {
     let created = cx.background_executor().spawn(async move {
+        let (sources, _keep) = prepare()?;
         let recordings_dir = crate::recording::recordings_dir();
         std::fs::create_dir_all(&recordings_dir).map_err(|error| error.to_string())?;
         let folder = sanitize_filename::sanitize(&pretty_name);
@@ -55,6 +68,18 @@ pub fn save_audio_as(project_path: PathBuf, window: &mut Window, cx: &mut App) {
     let pretty_name = cap_project::RecordingMeta::load_for_project(&project_path)
         .map(|meta| meta.pretty_name)
         .unwrap_or_else(|_| "Cap Recording".into());
+    save_prepared_audio_as(pretty_name, move || Ok((project_path, ())), window, cx);
+}
+
+/// [`save_audio_as`] for a project made only once a place is chosen.
+/// `prepare` runs off the UI thread after the save panel closes, and what it
+/// returns beside the project path is kept until the file is written.
+pub fn save_prepared_audio_as<Keep: Send + 'static>(
+    pretty_name: String,
+    prepare: impl FnOnce() -> Result<(PathBuf, Keep), String> + Send + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
     window
         .spawn(cx, async move |cx| {
             let default = crate::editor_export::export_file_name(&pretty_name, "mp3");
@@ -76,6 +101,19 @@ pub fn save_audio_as(project_path: PathBuf, window: &mut Window, cx: &mut App) {
                 .and_then(AudioExportFormat::from_extension)
                 .unwrap_or(AudioExportFormat::Mp3);
             let output = output.with_extension(format.extension());
+            let Ok(prepared) =
+                cx.update(|_, cx| cx.background_executor().spawn(async move { prepare() }))
+            else {
+                return;
+            };
+            let (project_path, _keep) = match prepared.await {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    tracing::error!(error, "could not prepare audio to save");
+                    crate::import::show_error_dialog(error);
+                    return;
+                }
+            };
             let Ok(export) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(
                     cx,
