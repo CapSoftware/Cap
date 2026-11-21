@@ -16,7 +16,6 @@ import {
 	useState,
 } from "react";
 import {
-	type ConnectionHint,
 	FIRST_FRAME_SWITCH_MS,
 	isExpiredMediaStatus,
 	type LadderEngine,
@@ -30,6 +29,7 @@ import {
 	pickStartRendition,
 	type QualityOption,
 	qualityOptions,
+	rememberedLineIsSlow,
 	SHARE_QUALITY_KEY,
 	SHARE_THROUGHPUT_KEY,
 	type ShareLadderPlayback,
@@ -37,7 +37,6 @@ import {
 	STALL_SWITCH_MS,
 	serializeRememberedLine,
 	serializeShareQuality,
-	shouldStartOnLadder,
 	switchesOnViewerPause,
 	type ThroughputWindow,
 	WARM_PLAYLIST_MAX_AGE_MS,
@@ -110,9 +109,6 @@ const absoluteUrl = (url: string, base?: string) => {
 		return url;
 	}
 };
-
-const connectionHint = () =>
-	(navigator as Navigator & { connection?: ConnectionHint }).connection;
 
 const bufferedSeconds = (video: HTMLVideoElement) => {
 	let total = 0;
@@ -610,17 +606,14 @@ export function useShareLadder({
 		[videoRef],
 	);
 
-	const lineCallsForLadder = useCallback(() => {
+	const rememberedSlow = useCallback(() => {
 		const current = ladderRef.current;
 		if (!current) return false;
-		return shouldStartOnLadder({
-			connection: connectionHint(),
-			rememberedBitsPerSecond: parseRememberedLine(
-				readStorage(SHARE_THROUGHPUT_KEY),
-				Date.now(),
-			),
-			sourceBitsPerSecond: current.source.bitsPerSecond,
-		});
+		return rememberedLineIsSlow(
+			throughputRef.current ??
+				parseRememberedLine(readStorage(SHARE_THROUGHPUT_KEY), Date.now()),
+			current.source.bitsPerSecond,
+		);
 	}, []);
 
 	const callForLadder = useCallback(() => {
@@ -680,16 +673,6 @@ export function useShareLadder({
 				progressSeen: false,
 				done: false,
 			};
-			const picked = qualityRef.current;
-			if (typeof picked === "number") {
-				void switchToHls(picked);
-				return;
-			}
-			if (picked === "original") return;
-			if (lineCallsForLadder()) {
-				lineCalledRef.current = true;
-				void switchToHls("auto");
-			}
 		};
 
 		const onTimeUpdate = () => {
@@ -704,6 +687,18 @@ export function useShareLadder({
 			}
 			framedRef.current = true;
 			clearTimeout(firstFrameTimerRef.current);
+			// The MP4 always reaches its first frame before a saved rendition or
+			// a remembered slow line moves playback to the ladder.
+			const picked = qualityRef.current;
+			if (typeof picked === "number") {
+				void switchToHls(picked);
+				return;
+			}
+			if (picked === "auto" && rememberedSlow()) {
+				lineCalledRef.current = true;
+				void switchToHls("auto");
+				return;
+			}
 			void warm();
 		};
 
@@ -786,8 +781,8 @@ export function useShareLadder({
 		engine,
 		finishMeasurement,
 		ladderKey,
-		lineCallsForLadder,
 		mediaKey,
+		rememberedSlow,
 		switchToHls,
 		videoRef,
 		warm,
@@ -815,15 +810,17 @@ export function useShareLadder({
 			if (engineRef.current !== "hls") {
 				const video = videoRef.current;
 				if (!playRequestedRef.current || !video || video.paused) return;
-				if (lineCalledRef.current || lineCallsForLadder()) {
-					lineCalledRef.current = true;
-					void switchToHls("auto");
+				if (!framedRef.current) {
+					armFirstFrame();
 					return;
 				}
-				if (!framedRef.current) armFirstFrame();
+				if (lineCalledRef.current || rememberedSlow()) {
+					lineCalledRef.current = true;
+					void switchToHls("auto");
+				}
 				return;
 			}
-			if (lineCalledRef.current || lineCallsForLadder()) {
+			if (lineCalledRef.current || rememberedSlow()) {
 				lineCalledRef.current = true;
 				applyLevel("auto");
 				return;
@@ -833,7 +830,7 @@ export function useShareLadder({
 		[
 			applyLevel,
 			armFirstFrame,
-			lineCallsForLadder,
+			rememberedSlow,
 			switchToHls,
 			switchToMp4,
 			videoRef,

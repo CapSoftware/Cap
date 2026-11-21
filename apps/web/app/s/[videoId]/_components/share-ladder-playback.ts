@@ -16,11 +16,6 @@ export type ShareQuality = "auto" | "original" | number;
 
 export type LadderEngine = "hlsjs" | "native";
 
-export type ConnectionHint = {
-	saveData?: boolean;
-	effectiveType?: string;
-};
-
 export type QualityOption = { id: string; label: string };
 
 export const SHARE_QUALITY_KEY = "cap-share-quality";
@@ -37,8 +32,6 @@ export const MEASURE_AHEAD_SECONDS = 10;
 export const MEASURE_WINDOW_MS = 10_000;
 export const MEASURE_MIN_MS = 1000;
 export const WARM_PLAYLIST_MAX_AGE_MS = 30 * 60 * 1000;
-
-const SLOW_CONNECTION_TYPES = new Set(["slow-2g", "2g", "3g"]);
 
 export const qualityLabel = (size: { width: number; height: number }) =>
 	`${Math.min(size.width, size.height)}p`;
@@ -84,16 +77,6 @@ export const lineIsSlow = (
 	sourceBitsPerSecond > 0 &&
 	bitsPerSecond < LINE_HEADROOM * sourceBitsPerSecond;
 
-// Chrome's downlink estimate is left out: it reads under 2 Mbps on fast lines
-// too, which would move every Chrome viewer off the MP4.
-export function connectionCallsForLadder(
-	connection: ConnectionHint | null | undefined,
-): boolean {
-	if (!connection) return false;
-	if (connection.saveData === true) return true;
-	return SLOW_CONNECTION_TYPES.has(connection.effectiveType ?? "");
-}
-
 export function parseRememberedLine(
 	raw: string | null | undefined,
 	now: number,
@@ -119,18 +102,12 @@ export function parseRememberedLine(
 export const serializeRememberedLine = (bitsPerSecond: number, now: number) =>
 	JSON.stringify({ bitsPerSecond: Math.round(bitsPerSecond), measuredAt: now });
 
-export function shouldStartOnLadder(input: {
-	connection: ConnectionHint | null | undefined;
-	rememberedBitsPerSecond: number | null;
-	sourceBitsPerSecond: number;
-}): boolean {
-	if (!(input.sourceBitsPerSecond > 0)) return false;
-	if (connectionCallsForLadder(input.connection)) return true;
-	return (
-		input.rememberedBitsPerSecond !== null &&
-		lineIsSlow(input.rememberedBitsPerSecond, input.sourceBitsPerSecond)
-	);
-}
+export const rememberedLineIsSlow = (
+	rememberedBitsPerSecond: number | null,
+	sourceBitsPerSecond: number,
+) =>
+	rememberedBitsPerSecond !== null &&
+	lineIsSlow(rememberedBitsPerSecond, sourceBitsPerSecond);
 
 export type ThroughputWindow = {
 	gainedSeconds: number;

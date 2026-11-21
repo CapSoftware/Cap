@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	connectionCallsForLadder,
 	FIRST_FRAME_SWITCH_MS,
 	levelIndexForHeight,
 	MEASURE_WINDOW_MS,
@@ -13,10 +12,10 @@ import {
 	pickStartRendition,
 	qualityOptions,
 	REMEMBERED_LINE_MAX_AGE_MS,
+	rememberedLineIsSlow,
 	type ShareLadderPlayback,
 	serializeRememberedLine,
 	serializeShareQuality,
-	shouldStartOnLadder,
 	switchesOnViewerPause,
 	throughputWindowDone,
 } from "@/app/s/[videoId]/_components/share-ladder-playback";
@@ -86,30 +85,6 @@ describe("quality menu entries", () => {
 	});
 });
 
-describe("connection hint", () => {
-	it("calls for the ladder on save data or a slow connection type", () => {
-		expect(connectionCallsForLadder({ saveData: true })).toBe(true);
-		for (const effectiveType of ["slow-2g", "2g", "3g"]) {
-			expect(connectionCallsForLadder({ effectiveType })).toBe(true);
-		}
-		expect(connectionCallsForLadder({ effectiveType: "4g" })).toBe(false);
-		expect(connectionCallsForLadder(undefined)).toBe(false);
-		expect(connectionCallsForLadder({})).toBe(false);
-	});
-
-	it("keeps a fast line on the MP4 when Chrome reports a low downlink", () => {
-		const fastChrome = { downlink: 1.75, effectiveType: "4g", saveData: false };
-		expect(connectionCallsForLadder(fastChrome)).toBe(false);
-		expect(
-			shouldStartOnLadder({
-				connection: fastChrome,
-				rememberedBitsPerSecond: null,
-				sourceBitsPerSecond: SOURCE_BPS,
-			}),
-		).toBe(false);
-	});
-});
-
 describe("switch timing", () => {
 	it("waits past the slowest measured MP4 first frame before rescuing", () => {
 		expect(FIRST_FRAME_SWITCH_MS).toBeGreaterThan(8700);
@@ -145,42 +120,12 @@ describe("remembered line", () => {
 	});
 });
 
-describe("starting on the ladder", () => {
-	it("starts a remembered slow line on the ladder", () => {
-		expect(
-			shouldStartOnLadder({
-				connection: undefined,
-				rememberedBitsPerSecond: 40_000_000,
-				sourceBitsPerSecond: SOURCE_BPS,
-			}),
-		).toBe(true);
-		expect(
-			shouldStartOnLadder({
-				connection: undefined,
-				rememberedBitsPerSecond: 50_000_000,
-				sourceBitsPerSecond: SOURCE_BPS,
-			}),
-		).toBe(false);
-	});
-
-	it("starts on the MP4 with nothing known about the line", () => {
-		expect(
-			shouldStartOnLadder({
-				connection: undefined,
-				rememberedBitsPerSecond: null,
-				sourceBitsPerSecond: SOURCE_BPS,
-			}),
-		).toBe(false);
-	});
-
-	it("never calls for the ladder without a source bitrate", () => {
-		expect(
-			shouldStartOnLadder({
-				connection: { saveData: true },
-				rememberedBitsPerSecond: 1,
-				sourceBitsPerSecond: 0,
-			}),
-		).toBe(false);
+describe("remembered slow line", () => {
+	it("calls for the ladder only under 1.5x the source", () => {
+		expect(rememberedLineIsSlow(40_000_000, SOURCE_BPS)).toBe(true);
+		expect(rememberedLineIsSlow(50_000_000, SOURCE_BPS)).toBe(false);
+		expect(rememberedLineIsSlow(null, SOURCE_BPS)).toBe(false);
+		expect(rememberedLineIsSlow(1, 0)).toBe(false);
 	});
 });
 
