@@ -20,6 +20,9 @@ import { getVideoViewCount } from "@/lib/video-view-count";
 import { buildShareLadderWorkflow } from "@/workflows/build-share-ladder";
 
 const VIEW_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+// Longer than a build can take: a day of waiting for the farm plus the job
+// deadline. A row older than this lost its workflow and is offered again.
+const STALLED_BUILD_MS = 30 * 60 * 60 * 1000;
 
 export type ShareLadderVideo = {
 	id: Video.VideoId;
@@ -94,6 +97,23 @@ export async function recordShareLadderView(
 		return;
 	}
 
+	if (
+		(existing.state === "queued" || existing.state === "encoding") &&
+		existing.updatedAt.getTime() < Date.now() - STALLED_BUILD_MS
+	) {
+		await db()
+			.update(shareLadders)
+			.set({ state: "candidate", viewsCheckedAt: null, updatedAt: new Date() })
+			.where(
+				and(
+					eq(shareLadders.videoId, video.id),
+					eq(shareLadders.state, existing.state),
+					eq(shareLadders.updatedAt, existing.updatedAt),
+				),
+			);
+		return;
+	}
+
 	if (existing.state !== "candidate") return;
 
 	await db()
@@ -140,7 +160,20 @@ export async function recordShareLadderView(
 			),
 		);
 	if (queued.affectedRows !== 1) return;
-	await start(buildShareLadderWorkflow, [{ videoId: video.id }]);
+	try {
+		await start(buildShareLadderWorkflow, [{ videoId: video.id }]);
+	} catch (error) {
+		await db()
+			.update(shareLadders)
+			.set({ state: "candidate", viewsCheckedAt: null, updatedAt: new Date() })
+			.where(
+				and(
+					eq(shareLadders.videoId, video.id),
+					eq(shareLadders.state, "queued"),
+				),
+			);
+		throw error;
+	}
 }
 
 export type ShareLadderPlaybackRow = {
