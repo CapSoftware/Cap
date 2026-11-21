@@ -1,7 +1,15 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+} from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import app from "../../app";
 import { getContainerCpuUsageMicros } from "../../lib/container-cpu";
 import {
 	idleProcessCpuMicros,
@@ -14,6 +22,7 @@ import {
 	cpuPressureOverWindow,
 	createJob,
 	deleteJob,
+	followLoadAverage,
 	generateJobId,
 	getActiveHeavyLadderCount,
 	getActiveInfraHeavyLadderCount,
@@ -29,9 +38,51 @@ import {
 	preemptIdleJobs,
 } from "../../lib/job-manager";
 import { isDraining, setDraining } from "../../lib/lifecycle";
+import {
+	registerMediaOperation,
+	unregisterMediaOperation,
+	withMediaOperation,
+} from "../../lib/media-operations";
 import { tryAcquireDirectVideoProcessSlot } from "../../lib/video-capacity";
 
+const SECRET = "test-secret";
+const HEADERS = {
+	"Content-Type": "application/json",
+	"x-media-server-secret": SECRET,
+};
+const FIXTURE = join(import.meta.dir, "..", "fixtures", "test-with-audio.mp4");
 const created: string[] = [];
+let server: ReturnType<typeof Bun.serve>;
+let baseUrl = "";
+let previousSecret: string | undefined;
+
+beforeAll(() => {
+	previousSecret = process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+	process.env.MEDIA_SERVER_WEBHOOK_SECRET = SECRET;
+	const fixture = readFileSync(FIXTURE);
+	server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request) {
+			if (new URL(request.url).pathname !== "/fixture.mp4")
+				return new Response(null, { status: 404 });
+			return new Response(fixture, {
+				headers: {
+					"Content-Type": "video/mp4",
+					"Content-Length": String(fixture.byteLength),
+				},
+			});
+		},
+	});
+	baseUrl = `http://127.0.0.1:${server.port}`;
+});
+
+afterAll(() => {
+	server?.stop(true);
+	if (previousSecret === undefined)
+		delete process.env.MEDIA_SERVER_WEBHOOK_SECRET;
+	else process.env.MEDIA_SERVER_WEBHOOK_SECRET = previousSecret;
+});
 
 function addJob(options: { idle?: boolean } = {}): Job {
 	const jobId = generateJobId();
@@ -175,19 +226,97 @@ describe("preemption", () => {
 		expect(preemptIdleJobs("test")).toBe(0);
 		expect(job.phase).toBe("processing");
 	});
+
+	test("an idle job that is uploading finishes", () => {
+		const { job, abort } = addIdleJob();
+		job.phase = "uploading";
+		addJob();
+		expect(abort.signal.aborted).toBe(false);
+		expect(job.phase).toBe("uploading");
+	});
+
+	test("an audio operation stops the idle job and a probe does not", async () => {
+		const probed = addIdleJob();
+		await withMediaOperation("probe", async () => {});
+		expect(probed.abort.signal.aborted).toBe(false);
+		expect(probed.job.phase).toBe("processing");
+
+		await withMediaOperation("audio", async () => {});
+		expectPreempted(probed.job, probed.abort);
+
+		const registered = addIdleJob();
+		const handle = registerMediaOperation("audio", () => {});
+		unregisterMediaOperation(handle);
+		expectPreempted(registered.job, registered.abort);
+	});
+
+	test("a thumbnail stops the idle job once its source is probed", async () => {
+		const { job, abort } = addIdleJob();
+		const response = await app.request("/video/thumbnail", {
+			method: "POST",
+			headers: HEADERS,
+			body: JSON.stringify({ videoUrl: `${baseUrl}/fixture.mp4` }),
+		});
+		expect(response.status).toBe(200);
+		expectPreempted(job, abort);
+	});
+
+	test("an admitted recording preverification stops the idle job", async () => {
+		const { job, abort } = addIdleJob();
+		const source = {
+			url: `${baseUrl}/missing.m4s`,
+			objectIdentity: '"segment"',
+			size: 1,
+		};
+		const response = await app.request("/video/preverify-segments", {
+			method: "POST",
+			headers: HEADERS,
+			body: JSON.stringify({
+				videoId: "video-preverify",
+				init: source,
+				segments: [source],
+				resultUploadUrl: `${baseUrl}/result`,
+			}),
+		});
+		expect(response.status).toBe(202);
+		expectPreempted(job, abort);
+	});
 });
 
 describe("idleYieldReason", () => {
-	test("yields at 0.7 CPU or 0.75 memory", () => {
+	test("yields when other work reaches 0.7 CPU or memory reaches 0.75", () => {
 		expect(
-			idleYieldReason({ totalCpuPressure: 0.69, memoryPressure: 0.74 }),
+			idleYieldReason({ otherCpuPressure: 0.69, memoryPressure: 0.74 }),
 		).toBeNull();
 		expect(
-			idleYieldReason({ totalCpuPressure: 0.7, memoryPressure: 0 }),
+			idleYieldReason({ otherCpuPressure: 0.7, memoryPressure: 0 }),
 		).toContain("CPU");
 		expect(
-			idleYieldReason({ totalCpuPressure: 0, memoryPressure: 0.75 }),
+			idleYieldReason({ otherCpuPressure: 0, memoryPressure: 0.75 }),
 		).toContain("memory");
+	});
+});
+
+describe("followLoadAverage", () => {
+	function stepFor(start: number, cores: number, seconds: number): number {
+		let estimate = start;
+		for (let second = 0; second < seconds; second++) {
+			estimate = followLoadAverage(estimate, cores, 1);
+		}
+		return estimate;
+	}
+
+	test("follows a 3-core step the way the kernel's 1-minute average does", () => {
+		expect(stepFor(0, 3, 10)).toBeCloseTo(0.46, 2);
+		expect(stepFor(0, 3, 60)).toBeCloseTo(1.9, 2);
+		expect(stepFor(0, 3, 180)).toBeCloseTo(2.85, 2);
+		expect(followLoadAverage(0, 3, 10)).toBeCloseTo(stepFor(0, 3, 10), 9);
+	});
+
+	test("decays after the idle job stops", () => {
+		const running = stepFor(0, 3, 180);
+		expect(stepFor(running, 0, 60)).toBeCloseTo(running * Math.exp(-1), 9);
+		expect(stepFor(running, 0, 600)).toBeLessThan(0.001);
 	});
 });
 
