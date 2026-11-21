@@ -31,6 +31,9 @@ const normalizeRangeDays = (rangeDays?: number) => {
 
 export interface VideoViewCountOptions {
 	rangeDays?: number;
+	// Runs the Tinybird query outside the request runtime, which reads
+	// cookies and so cannot run inside `after()`.
+	run?: <A>(effect: Effect.Effect<A, never, Tinybird>) => Promise<A>;
 }
 
 export async function getVideoViewCount(
@@ -45,7 +48,8 @@ export async function getVideoViewCount(
 		.where(eq(videos.id, Video.VideoId.make(videoId)))
 		.limit(1);
 
-	return runPromise(
+	const run = options?.run ?? runPromise;
+	return run(
 		Effect.gen(function* () {
 			const tinybird = yield* Tinybird;
 

@@ -1,7 +1,9 @@
 import { db } from "@cap/database";
 import { type ShareLadderRendition, shareLadders } from "@cap/database/schema";
+import { Tinybird } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { ManagedRuntime } from "effect";
 import { start } from "workflow/api";
 import { discardShareLadder } from "@/lib/share-ladder-discard";
 import {
@@ -20,6 +22,12 @@ import { getVideoViewCount } from "@/lib/video-view-count";
 import { buildShareLadderWorkflow } from "@/workflows/build-share-ladder";
 
 const VIEW_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+let tinybird: ManagedRuntime.ManagedRuntime<Tinybird, never> | undefined;
+const tinybirdRuntime = () => {
+	tinybird ??= ManagedRuntime.make(Tinybird.Default);
+	return tinybird;
+};
 // Longer than a build can take: a day of waiting for the farm plus the job
 // deadline. A row older than this lost its workflow and is offered again.
 const STALLED_BUILD_MS = 30 * 60 * 60 * 1000;
@@ -146,7 +154,9 @@ export async function recordShareLadderView(
 		);
 	if (claim.affectedRows !== 1) return;
 
-	const { count } = await getVideoViewCount(video.id);
+	const { count } = await getVideoViewCount(video.id, {
+		run: (effect) => tinybirdRuntime().runPromise(effect),
+	});
 	if (count < SHARE_LADDER_TRIGGER_VIEWS) return;
 
 	const [queued] = await db()
