@@ -27,19 +27,19 @@ use crate::i18n::tr;
 use crate::screenshot_annotations::{self as annotations, Rect};
 use crate::screenshot_editor::has_no_visible_background;
 
-/// One export-resolution GPU render, plus the size the *preview* renders the
-/// same config at. Annotations live in preview-frame space
-/// (`AnnotationLayer.tsx`'s viewBox), so the compositor's scale factors are
-/// `export / base` -- exactly `canvas.width / frame.width` over there, where
-/// `frame` is `latestFrame()` after `waitForSyncedPreview`.
+/// One export-resolution GPU render, plus the frame-space size of the same
+/// config. Annotations live in frame space (`AnnotationLayer.tsx`'s viewBox),
+/// so the compositor's scale factors are `export / base` -- exactly
+/// `canvas.width / frame.width` over there, where `frame` is `latestFrame()`
+/// after `waitForSyncedPreview`.
 pub struct RawFrame {
     /// Tight RGBA, straight alpha -- the wgpu row padding already stripped.
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
-    /// What `ProjectUniforms::get_output_size` yields for the preview's own
-    /// `get_base_size` resolution -- i.e. the dimensions the preview frame for
-    /// this config actually has.
+    /// What `ProjectUniforms::get_output_size` yields for the config's own
+    /// `get_base_size` resolution -- the dimensions of a full-resolution
+    /// preview frame, whatever resolution the on-screen preview renders at.
     pub base_width: u32,
     pub base_height: u32,
 }

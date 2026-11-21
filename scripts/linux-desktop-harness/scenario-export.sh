@@ -60,12 +60,32 @@ gif_frames_and_seconds() {
 import sys
 
 data = open(sys.argv[1], "rb").read()
+
+
+def skip_sub_blocks(at):
+    while data[at]:
+        at += data[at] + 1
+    return at + 1
+
+
 if data[:6] in (b"GIF87a", b"GIF89a"):
-    frames, centiseconds, at = 0, 0, data.find(b"\x21\xf9\x04")
-    while at != -1 and at + 6 <= len(data):
-        frames += 1
-        centiseconds += data[at + 4] | data[at + 5] << 8
-        at = data.find(b"\x21\xf9\x04", at + 8)
+    frames, centiseconds, delay = 0, 0, 0
+    flags = data[10]
+    at = 13 + (3 << ((flags & 7) + 1) if flags & 0x80 else 0)
+    while at < len(data) and data[at] != 0x3B:
+        if data[at] == 0x21:
+            if data[at + 1] == 0xF9:
+                delay = data[at + 4] | data[at + 5] << 8
+            at = skip_sub_blocks(at + 2)
+        elif data[at] == 0x2C:
+            frames += 1
+            centiseconds += delay
+            delay = 0
+            local = data[at + 9]
+            at += 10 + (3 << ((local & 7) + 1) if local & 0x80 else 0)
+            at = skip_sub_blocks(at + 1)
+        else:
+            break
     print(frames, f"{centiseconds / 100:.2f}")
 PY
 }

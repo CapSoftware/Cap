@@ -36,6 +36,7 @@ fn requests(count: usize, pixelate: bool, event: usize) -> Vec<MaskRequest> {
                 frame: MaskFrame {
                     revision: 1,
                     size: SIZE,
+                    scale: [1_f64, 1_f64].map(f64::to_bits),
                     content: content.map(f64::to_bits),
                     padding: 0_f64.to_bits(),
                     crop: None,
