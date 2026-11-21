@@ -415,6 +415,7 @@ impl LibraryWindow {
         self.load_up_next(cx);
         let first = self.last_scan.is_none();
         let member_paths = store::member_paths(&self.file);
+        let members = member_paths.len();
         self.load_task = Some(cx.spawn(async move |this, cx| {
             if !first {
                 cx.background_executor()
@@ -437,6 +438,7 @@ impl LibraryWindow {
                 .await;
             tracing::info!(
                 items = scan.items.len(),
+                members,
                 ms = started.elapsed().as_secs_f64() * 1000.,
                 "library scanned"
             );
@@ -557,12 +559,9 @@ impl LibraryWindow {
 
     /// Forgets folder entries that are known to be stale: files confirmed
     /// gone on disk, and folders the notes library no longer has (only when
-    /// it loaded). Never from made-up items, never when the file is read-only.
+    /// it loaded). Never when the file is read-only.
     fn prune_members(&mut self, gone: &std::collections::BTreeSet<PathBuf>) {
-        if self.file.members.is_empty()
-            || self.outcome == store::LoadOutcome::ReadOnly
-            || std::env::var_os("CAP_GPUI_LIBRARY_SEED").is_some()
-        {
+        if self.file.members.is_empty() || self.outcome == store::LoadOutcome::ReadOnly {
             return;
         }
         let folders: Option<std::collections::BTreeSet<String>> = self
