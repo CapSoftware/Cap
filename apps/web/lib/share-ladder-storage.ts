@@ -1,7 +1,7 @@
 import { AwsCredentials } from "@cap/web-backend/src/Aws";
 import {
 	invalidateCloudFrontPaths,
-	shareLadderCdnPath,
+	shareLadderCdnPaths,
 } from "@cap/web-backend/src/S3Buckets/cloudfront-invalidation";
 import { S3Buckets } from "@cap/web-backend/src/S3Buckets/index";
 import { Effect, ManagedRuntime, Option } from "effect";
@@ -156,12 +156,9 @@ export async function listShareObjectPrefixes(base: string): Promise<string[]> {
 	);
 }
 
-export async function purgeShareLadderCdn(
-	ownerId: string,
-	videoId: string,
-): Promise<void> {
+export async function purgeShareLadderCdn(outputPrefix: string): Promise<void> {
 	await Effect.runPromise(
-		invalidateCloudFrontPaths([shareLadderCdnPath(ownerId, videoId)]).pipe(
+		invalidateCloudFrontPaths(shareLadderCdnPaths(outputPrefix)).pipe(
 			Effect.provide(AwsCredentials.Default),
 		),
 	);

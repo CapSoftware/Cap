@@ -34,11 +34,9 @@ export async function discardShareLadder(
 	if (row.jobId && (row.state === "encoding" || row.state === "queued")) {
 		await cancelMediaServerVideoJob(row.jobId).catch(() => "failed");
 	}
-	const deleted = await deleteShareObjectsUnder(
-		shareLadderVideoPrefix(row.ownerId, videoId),
-	);
-	if (deleted > 0 || row.outputPrefix) {
-		await purgeShareLadderCdn(row.ownerId, videoId).catch((error) => {
+	await deleteShareObjectsUnder(shareLadderVideoPrefix(row.ownerId, videoId));
+	if (row.state === "ready" && row.outputPrefix) {
+		await purgeShareLadderCdn(row.outputPrefix).catch((error) => {
 			console.error("[share-ladder] CDN purge failed", { videoId, error });
 		});
 	}

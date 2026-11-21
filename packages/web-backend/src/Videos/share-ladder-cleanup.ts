@@ -6,14 +6,14 @@ import { AwsCredentials } from "../Aws.ts";
 import type { Database } from "../Database.ts";
 import {
 	invalidateCloudFrontPaths,
-	shareLadderCdnPath,
+	shareLadderCdnPaths,
 } from "../S3Buckets/cloudfront-invalidation.ts";
 
-// CloudFront allows 15 wildcard paths in progress at once.
-const CLOUDFRONT_PATHS_PER_INVALIDATION = 15;
-
 // The ladder files live under the video's folder, so the caller's folder
-// delete removes them. This drops the rows and purges the CDN copies.
+// delete removes them. This purges the CDN copies of every published ladder,
+// then drops the rows. A purge that still fails after its retries is logged:
+// ladder media is only reachable through signed URLs that expire within an
+// hour, the same as the MP4.
 export const forgetShareLadders = (
 	db: Database,
 	videoIds: readonly Video.VideoId[],
@@ -24,12 +24,21 @@ export const forgetShareLadders = (
 			db
 				.select({
 					videoId: Db.shareLadders.videoId,
-					ownerId: Db.shareLadders.ownerId,
+					outputPrefix: Db.shareLadders.outputPrefix,
 				})
 				.from(Db.shareLadders)
 				.where(Dz.inArray(Db.shareLadders.videoId, [...videoIds])),
 		);
 		if (rows.length === 0) return;
+		const paths = rows.flatMap((row) =>
+			row.outputPrefix ? shareLadderCdnPaths(row.outputPrefix) : [],
+		);
+		yield* invalidateCloudFrontPaths(paths).pipe(
+			Effect.provide(AwsCredentials.Default),
+			Effect.catchAllCause((cause) =>
+				Effect.logError("Failed to purge share ladders from the CDN", cause),
+			),
+		);
 		yield* db.use((db) =>
 			db.delete(Db.shareLadders).where(
 				Dz.inArray(
@@ -38,20 +47,7 @@ export const forgetShareLadders = (
 				),
 			),
 		);
-		const paths = rows.map((row) =>
-			shareLadderCdnPath(row.ownerId, row.videoId),
-		);
-		for (
-			let index = 0;
-			index < paths.length;
-			index += CLOUDFRONT_PATHS_PER_INVALIDATION
-		) {
-			yield* invalidateCloudFrontPaths(
-				paths.slice(index, index + CLOUDFRONT_PATHS_PER_INVALIDATION),
-			);
-		}
 	}).pipe(
-		Effect.provide(AwsCredentials.Default),
 		Effect.catchAllCause((cause) =>
 			Effect.logError("Failed to forget share ladders", cause),
 		),

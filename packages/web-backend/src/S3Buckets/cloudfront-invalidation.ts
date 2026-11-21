@@ -2,8 +2,23 @@ import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
-import { Config, Effect, Option } from "effect";
+import { Config, Effect, Option, Schedule } from "effect";
 import { AwsCredentials } from "../Aws.ts";
+
+// CloudFront allows 3,000 exact paths in progress at once, but only 15
+// wildcard paths, so ladder purges name every file.
+const PATHS_PER_INVALIDATION = 3000;
+
+export const SHARE_LADDER_OUTPUT_FILES = [
+	"master.m3u8",
+	...["1080p", "720p", "360p", "audio"].flatMap((name) => [
+		`${name}.m3u8`,
+		`${name}.m4s`,
+	]),
+] as const;
+
+export const shareLadderCdnPaths = (outputPrefix: string) =>
+	SHARE_LADDER_OUTPUT_FILES.map((file) => `/${outputPrefix}${file}`);
 
 export const invalidateCloudFrontPaths = (paths: readonly string[]) =>
 	Effect.gen(function* () {
@@ -19,21 +34,36 @@ export const invalidateCloudFrontPaths = (paths: readonly string[]) =>
 		yield* Effect.acquireUseRelease(
 			Effect.sync(() => new CloudFrontClient({ region, credentials })),
 			(client) =>
-				Effect.tryPromise(() =>
-					client.send(
-						new CreateInvalidationCommand({
-							DistributionId: distributionId.value,
-							InvalidationBatch: {
-								CallerReference: crypto.randomUUID(),
-								Paths: { Quantity: paths.length, Items: [...paths] },
-							},
-						}),
+				Effect.forEach(
+					Array.from(
+						{ length: Math.ceil(paths.length / PATHS_PER_INVALIDATION) },
+						(_, index) =>
+							paths.slice(
+								index * PATHS_PER_INVALIDATION,
+								(index + 1) * PATHS_PER_INVALIDATION,
+							),
 					),
+					(batch) =>
+						Effect.tryPromise(() =>
+							client.send(
+								new CreateInvalidationCommand({
+									DistributionId: distributionId.value,
+									InvalidationBatch: {
+										CallerReference: crypto.randomUUID(),
+										Paths: { Quantity: batch.length, Items: [...batch] },
+									},
+								}),
+							),
+						).pipe(
+							Effect.retry(
+								Schedule.exponential("2 seconds").pipe(
+									Schedule.intersect(Schedule.recurs(4)),
+								),
+							),
+						),
+					{ discard: true },
 				),
 			(client) => Effect.sync(() => client.destroy()),
 		);
 		return true;
 	});
-
-export const shareLadderCdnPath = (ownerId: string, videoId: string) =>
-	`/${ownerId}/${videoId}/.recording/outputs/ladder-*`;

@@ -1,6 +1,6 @@
+import { SHARE_LADDER_OUTPUT_FILES } from "@cap/web-backend/src/S3Buckets/cloudfront-invalidation";
+
 export const SHARE_LADDER_MAX_TIER = "1080p";
-export const SHARE_LADDER_TIERS = ["1080p", "720p", "360p"] as const;
-export const SHARE_LADDER_AUDIO = "audio";
 export const SHARE_LADDER_MASTER = "master.m3u8";
 export const SHARE_LADDER_MIN_DURATION_SECONDS = 60;
 export const SHARE_LADDER_TRIGGER_VIEWS = 2;
@@ -57,14 +57,12 @@ export function isShareLadderOutputKey(
 export type ShareLadderUpload = { name: string; contentType: string };
 
 export function shareLadderUploads(): ShareLadderUpload[] {
-	const playlist = "application/vnd.apple.mpegurl";
-	return [
-		{ name: SHARE_LADDER_MASTER, contentType: playlist },
-		...[...SHARE_LADDER_TIERS, SHARE_LADDER_AUDIO].flatMap((name) => [
-			{ name: `${name}.m3u8`, contentType: playlist },
-			{ name: `${name}.m4s`, contentType: "video/mp4" },
-		]),
-	];
+	return SHARE_LADDER_OUTPUT_FILES.map((name) => ({
+		name,
+		contentType: name.endsWith(".m4s")
+			? "video/mp4"
+			: "application/vnd.apple.mpegurl",
+	}));
 }
 
 const PLAYLIST_FILE = /^(master|audio|[0-9]{3,4}p)\.m3u8$/;
