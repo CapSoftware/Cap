@@ -20,10 +20,10 @@ import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
 import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
-	AVC_LEVEL_IOS_HARDWARE_CEILING,
 	createLevelPatchedMp4ObjectUrl,
 	isIosSafari,
-	probeAvcLevelFromUrl,
+	probeAvcFromUrl,
+	shouldPatchAvcLevelForIos,
 } from "./mp4-level-patch";
 import {
 	type ResolvedPlaybackSource,
@@ -344,13 +344,12 @@ export function CapVideoPlayer({
 		let createdUrl: string | null = null;
 
 		(async () => {
-			const observedLevel = await probeAvcLevelFromUrl(resolvedUrl, {
+			const probe = await probeAvcFromUrl(resolvedUrl, {
 				signal: controller.signal,
 			});
 
 			if (cancelled) return;
-			if (observedLevel === null) return;
-			if (observedLevel <= AVC_LEVEL_IOS_HARDWARE_CEILING) return;
+			if (!shouldPatchAvcLevelForIos(probe)) return;
 
 			const patched = await createLevelPatchedMp4ObjectUrl(resolvedUrl, {
 				signal: controller.signal,
