@@ -6,7 +6,6 @@ import {
 	DropdownMenuSubContent,
 	DropdownMenuSubTrigger,
 } from "@cap/ui";
-import { CheckIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect } from "react";
 import type { ShareLadderPlayback } from "./share-ladder-playback";
 import {
@@ -14,7 +13,33 @@ import {
 	type ShareLadderQualityMenu,
 	useShareLadder,
 } from "./use-share-ladder";
-import { Badge } from "./video/badge";
+
+// The outline Badge from ./video/badge and lucide's CheckIcon, as they render
+// in the settings menu. Importing either here made Turbopack move it out of
+// the shared player chunk into a copy in every player route's chunk, which
+// grew shares without a ladder.
+const BADGE_CLASS =
+	"inline-flex items-center border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground rounded";
+
+function CheckMark() {
+	return (
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			width="24"
+			height="24"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className="lucide lucide-check"
+			aria-hidden="true"
+		>
+			<path d="M20 6 9 17l-5-5" />
+		</svg>
+	);
+}
 
 function QualitySubmenu({ menu }: { menu: ShareLadderQualityMenu }) {
 	const selected =
@@ -26,9 +51,7 @@ function QualitySubmenu({ menu }: { menu: ShareLadderQualityMenu }) {
 		<DropdownMenuSub>
 			<DropdownMenuSubTrigger>
 				<span className="flex-1">Quality</span>
-				<Badge variant="outline" className="rounded">
-					{selected}
-				</Badge>
+				<div className={BADGE_CLASS}>{selected}</div>
 			</DropdownMenuSubTrigger>
 			<DropdownMenuSubContent>
 				{menu.options.map((option) => (
@@ -40,7 +63,7 @@ function QualitySubmenu({ menu }: { menu: ShareLadderQualityMenu }) {
 						{option.id === "original"
 							? `Original (${option.label})`
 							: option.label}
-						{option.id === menu.selected && <CheckIcon />}
+						{option.id === menu.selected && <CheckMark />}
 					</DropdownMenuItem>
 				))}
 			</DropdownMenuSubContent>
