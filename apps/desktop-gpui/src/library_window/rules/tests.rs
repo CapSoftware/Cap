@@ -315,3 +315,46 @@ fn ten_thousand_items_and_twenty_folders_evaluate_in_a_few_milliseconds() {
         "{best:?}"
     );
 }
+
+#[test]
+fn cycling_fields_comes_back_to_a_text_field_that_keeps_its_text() {
+    let mut rule = title(TextOp::Contains, "standup");
+    let mut seen_text_fields = 0;
+    for _ in 0..7 {
+        let text = match &rule {
+            Rule::Title { value, .. } | Rule::Person { value, .. } | Rule::App { value, .. } => {
+                value.clone()
+            }
+            _ => String::new(),
+        };
+        rule = rule.next_field(text);
+        if rule.takes_text() {
+            seen_text_fields += 1;
+        }
+    }
+    // Title -> Person -> App -> Kind -> Date -> Length -> Has -> Title.
+    assert_eq!(seen_text_fields, 3);
+    assert!(matches!(rule, Rule::Title { .. }));
+    assert!(rule.takes_text());
+    // Person and App carried the text; after the non-text fields it starts
+    // empty and is finished by typing, as any new rule is.
+    let person = title(TextOp::Is, "Ana").next_field("Ana".into());
+    assert_eq!(
+        person,
+        Rule::Person {
+            op: TextOp::Is,
+            value: "Ana".into()
+        }
+    );
+    let typed = match rule {
+        Rule::Title { op, .. } => Rule::Title {
+            op,
+            value: "retro".into(),
+        },
+        other => other,
+    };
+    let saved: SmartFolder =
+        serde_json::from_value(serde_json::to_value(folder(Matching::All, vec![typed])).unwrap())
+            .unwrap();
+    assert_eq!(saved.rules, vec![title(TextOp::Contains, "retro")]);
+}

@@ -139,6 +139,48 @@ impl<'de> Deserialize<'de> for Rule {
 }
 
 impl Rule {
+    /// Whether the rule's value is typed text (and so needs a text field).
+    pub fn takes_text(&self) -> bool {
+        matches!(
+            self,
+            Rule::Title { .. } | Rule::Person { .. } | Rule::App { .. }
+        )
+    }
+
+    /// The next field in the sheet's field menu, keeping the typed text when
+    /// both fields take text. The cycle comes back round to Title.
+    pub fn next_field(&self, text: String) -> Rule {
+        match self {
+            Rule::Title { op, .. } => Rule::Person {
+                op: *op,
+                value: text,
+            },
+            Rule::Person { op, .. } => Rule::App {
+                op: *op,
+                value: text,
+            },
+            Rule::App { .. } => Rule::Kind {
+                op: IsOp::Is,
+                value: ItemKind::Meeting,
+            },
+            Rule::Kind { .. } => Rule::Date {
+                range: DateRange::LastDays { days: 7 },
+            },
+            Rule::Date { .. } => Rule::Length {
+                op: LengthOp::LongerThan,
+                minutes: 30,
+            },
+            Rule::Length { .. } => Rule::Has {
+                what: Content::Transcript,
+                value: true,
+            },
+            _ => Rule::Title {
+                op: TextOp::Contains,
+                value: text,
+            },
+        }
+    }
+
     /// A rule still being written (no text yet) takes no part in matching.
     pub fn is_complete(&self) -> bool {
         match self {

@@ -2105,7 +2105,7 @@ impl LibraryWindow {
         id: impl Into<SharedString>,
         label: impl Into<SharedString>,
         cx: &mut Context<Self>,
-        on: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        on: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
         let p = self.palette;
         let dark = p.dark;
@@ -2132,7 +2132,7 @@ impl LibraryWindow {
                     .size(px(11.))
                     .text_color(p.muted),
             )
-            .on_click(cx.listener(move |this, _, _, cx| on(this, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| on(this, window, cx)))
             .into_any_element()
     }
 
@@ -2183,7 +2183,7 @@ impl LibraryWindow {
                     format!("rule-kind-{index}"),
                     kind_word(*value),
                     cx,
-                    move |this, cx| {
+                    move |this, _window, cx| {
                         if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
                             && let Rule::Kind { value, .. } = &mut row.rule
                         {
@@ -2211,7 +2211,7 @@ impl LibraryWindow {
                         }
                     },
                     cx,
-                    move |this, cx| {
+                    move |this, _window, cx| {
                         if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
                             && let Rule::Date { range } = &mut row.rule
                         {
@@ -2240,7 +2240,7 @@ impl LibraryWindow {
                     format!("rule-len-{index}"),
                     tr::library::minutes(minutes).to_string(),
                     cx,
-                    move |this, cx| {
+                    move |this, _window, cx| {
                         if let Some(row) = this.editor.as_mut().and_then(|e| e.rows.get_mut(index))
                             && let Rule::Length { minutes, .. } = &mut row.rule
                         {
@@ -2310,17 +2310,19 @@ impl LibraryWindow {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(
-                self.pill(format!("rule-field-{index}"), field, cx, move |this, cx| {
-                    this.cycle_field(index, cx)
-                }),
-            )
+            .child(self.pill(
+                format!("rule-field-{index}"),
+                field,
+                cx,
+                move |this, window, cx| this.cycle_field(index, window, cx),
+            ))
             .when(!op.is_empty(), |el| {
-                el.child(
-                    self.pill(format!("rule-op-{index}"), op, cx, move |this, cx| {
-                        this.cycle_op(index, cx)
-                    }),
-                )
+                el.child(self.pill(
+                    format!("rule-op-{index}"),
+                    op,
+                    cx,
+                    move |this, _window, cx| this.cycle_op(index, cx),
+                ))
             })
             .child(div().flex_1().min_w_0().flex().child(value))
             .child(
@@ -2354,11 +2356,10 @@ impl LibraryWindow {
             .into_any_element()
     }
 
-    fn cycle_field(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(editor) = self.editor.as_mut() else {
-            return;
-        };
-        let Some(row) = editor.rows.get_mut(index) else {
+    /// The field pill: next field, and a text box whenever the new field
+    /// takes text (one is made if the row had none, as after Length or Has).
+    fn cycle_field(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.editor.as_ref().and_then(|e| e.rows.get(index)) else {
             return;
         };
         let text = row
@@ -2366,45 +2367,19 @@ impl LibraryWindow {
             .as_ref()
             .map(|v| v.read(cx).text().to_string())
             .unwrap_or_default();
-        let next = match &row.rule {
-            Rule::Title { op, .. } => Rule::Person {
-                op: *op,
-                value: text,
-            },
-            Rule::Person { op, .. } => Rule::App {
-                op: *op,
-                value: text,
-            },
-            Rule::App { .. } => Rule::Kind {
-                op: IsOp::Is,
-                value: ItemKind::Meeting,
-            },
-            Rule::Kind { .. } => Rule::Date {
-                range: DateRange::LastDays { days: 7 },
-            },
-            Rule::Date { .. } => Rule::Length {
-                op: LengthOp::LongerThan,
-                minutes: 30,
-            },
-            Rule::Length { .. } => Rule::Has {
-                what: Content::Transcript,
-                value: true,
-            },
-            _ => Rule::Title {
-                op: TextOp::Contains,
-                value: text,
-            },
-        };
-        let keeps_input = matches!(
-            next,
-            Rule::Title { .. } | Rule::Person { .. } | Rule::App { .. }
-        );
-        row.rule = next;
-        if !keeps_input {
-            row.value = None;
+        let next = row.rule.next_field(text);
+        let needs_input = next.takes_text() && row.value.is_none();
+        let input =
+            needs_input.then(|| Self::text_input("", tr::library::value_placeholder(), window, cx));
+        if let Some(row) = self.editor.as_mut().and_then(|e| e.rows.get_mut(index)) {
+            if !next.takes_text() {
+                row.value = None;
+            }
+            if let Some(input) = input {
+                row.value = Some(input);
+            }
+            row.rule = next;
         }
-        let needs_input = keeps_input && row.value.is_none();
-        let _ = needs_input;
         self.refresh_editor_count(cx);
     }
 
@@ -2532,7 +2507,7 @@ impl LibraryWindow {
                             tr::library::match_any()
                         },
                         cx,
-                        |this, cx| {
+                        |this, _window, cx| {
                             if let Some(editor) = this.editor.as_mut() {
                                 editor.matching = if editor.matching == Matching::All {
                                     Matching::Any
