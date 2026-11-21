@@ -1888,6 +1888,9 @@ pub struct EditorWindow {
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
+    /// What the transport bar last drew from the playhead: it shows whole
+    /// seconds, so most playhead ticks leave it as it is.
+    transport_drawn: Cell<Option<TransportClock>>,
     sidebar_view: Entity<EditorSectionView>,
     pub(crate) sidebar_rail_view: Entity<EditorSectionView>,
     /// The blank slate a new blank project opens on, a section of its own so
@@ -2754,6 +2757,7 @@ impl EditorWindow {
             header,
             toolbar,
             transport_controls,
+            transport_drawn: Cell::new(None),
             sidebar_view,
             sidebar_rail_view,
             blank_start_view,
@@ -4294,7 +4298,7 @@ impl EditorWindow {
                             return true;
                         }
                         this.invalidate_playhead_layer(cx);
-                        this.transport_controls.update(cx, |_, cx| cx.notify());
+                        this.invalidate_transport_clock(cx);
                         true
                     })
                     .unwrap_or(false);
@@ -5253,7 +5257,7 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         self.invalidate_playhead_layer(cx);
-        self.transport_controls.update(cx, |_, cx| cx.notify());
+        self.invalidate_transport_clock(cx);
         // While playing, nothing else the parent renders reads the playhead:
         // the canvas overlay is hidden (`canvas_overlay_visible`) and the
         // scene-mode pane gates on it too. Notifying the parent here would
@@ -5464,7 +5468,19 @@ impl EditorWindow {
     /// [`timeline_rows_key`].
     fn invalidate_playhead_chrome(&mut self, cx: &mut Context<Self>) {
         self.invalidate_playhead_layer(cx);
-        self.transport_controls.update(cx, |_, cx| cx.notify());
+        self.invalidate_transport_clock(cx);
+    }
+
+    fn transport_clock(&self) -> TransportClock {
+        transport_clock(self.view, self.playhead, !self.playing || self.is_at_end())
+    }
+
+    /// Redraws the transport bar only when the clock, the play button or the
+    /// zoom slider it draws would change.
+    fn invalidate_transport_clock(&mut self, cx: &mut Context<Self>) {
+        if self.transport_drawn.get() != Some(self.transport_clock()) {
+            self.transport_controls.update(cx, |_, cx| cx.notify());
+        }
     }
 
     /// The timeline layer that draws the playhead: the overlay, or the rows
@@ -13012,6 +13028,7 @@ impl EditorWindow {
     /// The player's transport bar: the clock on the left, the transport cluster
     /// centred across the row, split and zoom on the right.
     fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.transport_drawn.set(Some(self.transport_clock()));
         let theme = self.theme;
         let editor = theme.editor;
         let player_width = self.player_width(f32::from(window.viewport_size().width));
@@ -14358,6 +14375,24 @@ fn timeline_layer() -> gpui::Div {
         .pl(px(TIMELINE_PADDING))
         .pr(px(TIMELINE_PADDING))
         .pb(px(TIMELINE_BOTTOM_PADDING))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TransportClock {
+    seconds: u64,
+    shows_play: bool,
+    zoom: f64,
+}
+
+/// What the transport bar draws from the playhead: the clock, which reads the
+/// hover time when there is one and shows whole seconds, the play button and
+/// the zoom slider.
+fn transport_clock(view: TimelineView, playhead: f64, shows_play: bool) -> TransportClock {
+    TransportClock {
+        seconds: view.preview_time.unwrap_or(playhead).max(0.0).floor() as u64,
+        shows_play,
+        zoom: view.transform.zoom,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18691,6 +18726,29 @@ mod tests {
 
         view.transform.position += 1.0;
         assert_ne!(timeline_rows_key(view, false), built);
+    }
+
+    #[test]
+    fn the_transport_redraws_only_for_what_it_shows() {
+        let view = TimelineView {
+            transform: Transform {
+                zoom: 20.0,
+                position: 0.0,
+            },
+            ..TimelineView::default()
+        };
+        let drawn = transport_clock(view, 12.1, false);
+        assert_eq!(transport_clock(view, 12.9, false), drawn);
+        assert_ne!(transport_clock(view, 13.0, false), drawn);
+        assert_ne!(transport_clock(view, 12.5, true), drawn);
+
+        let mut hovered = view;
+        hovered.preview_time = Some(4.2);
+        assert_ne!(transport_clock(hovered, 12.5, false), drawn);
+
+        let mut zoomed = view;
+        zoomed.transform.zoom /= 1.1;
+        assert_ne!(transport_clock(zoomed, 12.5, false), drawn);
     }
 
     #[test]
