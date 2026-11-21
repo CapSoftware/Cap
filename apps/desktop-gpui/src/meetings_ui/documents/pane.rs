@@ -916,7 +916,11 @@ impl Pane {
             self.enhanced.update(cx, |e, cx| e.set_read_only(read_only, cx));
         }
         let started = self.switch_started;
+        // The saves just flushed may be this note's own edits (left and
+        // opened again): read it back only once they have landed.
+        let saved = writer::run(|| ());
         self.load = Some(cx.spawn(async move |this, cx| {
+            saved.await;
             let doc_id = id.clone();
             let (notes, enhanced) = cx
                 .background_executor()

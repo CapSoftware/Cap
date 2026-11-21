@@ -1873,6 +1873,44 @@ fn notes_are_written_from_what_was_typed_not_a_save_still_queued(cx: &mut TestAp
     );
 }
 
+#[gpui::test]
+fn reopening_a_note_waits_for_its_queued_save(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let (first, second) = f.store.read_with(cx, |s, _| {
+        (s.snapshot.docs[0].id.clone(), s.snapshot.docs[1].id.clone())
+    });
+    f.pane.update_in(cx, |pane, _, cx| {
+        pane.notes.update(cx, |e, cx| {
+            e.apply(
+                |ed| {
+                    ed.select_all();
+                    ed.insert_text("Typed before leaving")
+                },
+                cx,
+            )
+        });
+    });
+    // Leave and come back while the save made on leaving is still queued.
+    super::writer::hold();
+    f.store.update(cx, |s, cx| s.open(Some(second), cx));
+    cx.run_until_parked();
+    f.store.update(cx, |s, cx| s.open(Some(first.clone()), cx));
+    cx.run_until_parked();
+    super::writer::release();
+    cx.run_until_parked();
+    f.pane.read_with(cx, |pane, cx| {
+        assert_eq!(
+            pane.notes.read(cx).document().to_markdown().trim(),
+            "Typed before leaving",
+            "the note opens with the edits made just before leaving it"
+        );
+    });
+    assert_eq!(
+        notes_markdown(&f.library, &first).trim(),
+        "Typed before leaving"
+    );
+}
+
 struct PaneHost {
     pane: Entity<Pane>,
     store: Entity<DocStore>,
