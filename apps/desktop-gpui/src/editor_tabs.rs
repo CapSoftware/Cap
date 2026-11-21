@@ -2763,8 +2763,18 @@ impl EditorWindow {
                 // that was asked for before it.
                 if project_timeline_fingerprint(&this.project).as_deref() != Some(&requested_on[..])
                 {
+                    // A setting changed during the wait runs again only with
+                    // its check against edited keys, which keeps the trim.
+                    if std::mem::take(&mut this.keyboard_refresh_pending)
+                        && unedited_from.is_some()
+                        && keyboard_settings(&this.project).enabled
+                    {
+                        this.generate_keyboard_segments(unedited_from, window, cx);
+                        return;
+                    }
                     this.keyboard_generation_message =
                         Some(tr::editor::tabs::keyboard::changed_during_generation().into());
+                    this.finish_keyboard_refresh(None);
                     cx.notify();
                     window.refresh();
                     return;
@@ -6281,6 +6291,9 @@ mod tests {
                 let requested = project_timeline_fingerprint(&editor.project).unwrap();
                 editor.history.pause();
                 editor.wait_out_gesture_then_generate(None, requested, window, cx);
+                // A setting changed during the wait queued another run.
+                editor.keyboard_refresh_step = Some(editor.history.entry_count());
+                editor.keyboard_refresh_pending = true;
                 editor.project.timeline.as_mut().unwrap().segments[0].end = 8.0;
                 let config = editor.project.clone();
                 editor.history.resume(&config);
@@ -6299,6 +6312,10 @@ mod tests {
                     editor.project.timeline.as_ref().unwrap().segments[0].end,
                     8.0
                 );
+                // The dropped run settles what it was carrying, so nothing
+                // later runs or folds an undo step on its behalf.
+                assert!(!editor.keyboard_refresh_pending);
+                assert_eq!(editor.keyboard_refresh_step, None);
             });
         }
 
