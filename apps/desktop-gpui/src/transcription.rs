@@ -2418,6 +2418,39 @@ pub(crate) fn transcribe_samples_blocking(
     .collect())
 }
 
+/// Loads a meeting's live Parakeet model into the cache now, before the first
+/// speech, so the first caption never waits for the load. Nothing for other
+/// models; a load that fails here is tried again by the first pass.
+pub(crate) fn preload_live_model(model: &str, language: &str) {
+    let downloaded = |model: &str| model_files_present(model) && !hub().downloading(model);
+    let Ok(resolved) = transcription_model(model, language, downloaded) else {
+        return;
+    };
+    if !is_parakeet_model(resolved) || !downloaded(resolved) {
+        return;
+    }
+    let _guard = lock_transcription_worker_slot();
+    keep_parakeet_loaded();
+    let started = std::time::Instant::now();
+    match preload_parakeet(&model_path(resolved).to_string_lossy()) {
+        Ok(()) => tracing::info!(
+            ms = started.elapsed().as_millis() as u64,
+            "Parakeet TDT model ready for the meeting"
+        ),
+        Err(error) => tracing::warn!(%error, "could not load Parakeet before the meeting"),
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn preload_parakeet(model_dir: &str) -> Result<(), String> {
+    cached_parakeet(model_dir).map(|_| ())
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn preload_parakeet(_model_dir: &str) -> Result<(), String> {
+    Ok(())
+}
+
 pub(crate) fn release_live_models() {
     let _guard = lock_transcription_worker_slot();
     release_whisper_context_after_transcription();

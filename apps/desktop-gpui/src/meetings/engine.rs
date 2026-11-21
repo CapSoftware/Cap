@@ -745,6 +745,7 @@ impl Worker {
     }
 
     fn run(&mut self) {
+        self.preload_live_model();
         loop {
             while let Ok(command) = self.commands.try_recv() {
                 self.command(command);
@@ -1185,6 +1186,21 @@ impl Worker {
 
     /// The local model that gives live captions: the meeting's own in Local,
     /// the downloaded one in Cloud (the cloud only sends final words).
+    /// Live captions load their model as the meeting starts, while capture
+    /// gathers the first speech, rather than on the first caption.
+    fn preload_live_model(&self) {
+        if !self.config.live {
+            return;
+        }
+        #[cfg(test)]
+        if self.hooks.local.is_some() {
+            return;
+        }
+        if let Some(local) = self.live_model() {
+            crate::transcription::preload_live_model(&local.model, &local.language);
+        }
+    }
+
     fn live_model(&self) -> Option<LocalModel> {
         match &self.mode {
             EngineMode::Local(local) => Some(local.clone()),
