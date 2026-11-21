@@ -117,6 +117,10 @@ beforeEach(async () => {
 				};
 			}
 
+			resume() {
+				return Promise.resolve();
+			}
+
 			close() {
 				return Promise.resolve();
 			}

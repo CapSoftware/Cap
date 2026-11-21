@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { targetDefine } from "./vite.target";
 
 export default defineConfig({
+	define: targetDefine,
 	plugins: [react()],
 	build: {
 		emptyOutDir: false,
@@ -15,7 +17,7 @@ export default defineConfig({
 				welcome: resolve(__dirname, "welcome.html"),
 				"how-it-works": resolve(__dirname, "how-it-works.html"),
 				uploading: resolve(__dirname, "uploading.html"),
-				offscreen: resolve(__dirname, "offscreen.html"),
+				recorder: resolve(__dirname, "recorder.html"),
 				"camera-preview": resolve(__dirname, "camera-preview.html"),
 				"camera-permission": resolve(__dirname, "camera-permission.html"),
 				"service-worker": resolve(

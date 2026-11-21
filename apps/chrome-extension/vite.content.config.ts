@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
+import { targetDefine } from "./vite.target";
 
 // Chrome runs manifest content scripts as classic scripts, so this entry
 // must be a single self-contained IIFE with no ES module imports. Only the
@@ -7,6 +8,7 @@ import { defineConfig } from "vite";
 // real overlay UI (built by vite.content-overlay.config.ts) from
 // web_accessible_resources when a tab actually needs it.
 export default defineConfig({
+	define: targetDefine,
 	build: {
 		emptyOutDir: false,
 		outDir: "dist",

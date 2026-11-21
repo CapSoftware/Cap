@@ -25,6 +25,7 @@
 		"vite.config.ts",
 		"vite.content.config.ts",
 		"vite.content-overlay.config.ts",
+		"vite.target.ts",
 		"playwright.config.ts"
 	],
 	"references": [{ "path": "../../packages/recorder-core" }]
