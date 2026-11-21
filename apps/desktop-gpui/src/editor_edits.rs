@@ -199,6 +199,21 @@ impl ProjectHistory {
         }
     }
 
+    /// How many states the history holds.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Folds the newest entry into the one before it, so a single undo goes
+    /// back past both. Only when nothing has been undone, so redo is never
+    /// touched.
+    pub fn fold_into_previous(&mut self) {
+        if self.count == 0 && self.entries.len() >= 3 {
+            let previous = self.entries.len() - 2;
+            self.entries.remove(previous);
+        }
+    }
+
     /// `projectHistory.pause()`.
     pub fn pause(&mut self) {
         self.paused += 1;
@@ -3393,6 +3408,28 @@ mod tests {
         clicked.pause();
         clicked.resume(&with_zoom_count(0));
         assert!(clicked.is_untouched());
+    }
+
+    /// A folded step undoes in one go; nothing folds once something has been
+    /// undone, so redo stays intact.
+    #[test]
+    fn history_folds_a_step_into_the_one_before() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        history.record(&with_zoom_count(1));
+        history.record(&with_zoom_count(2));
+        assert_eq!(history.entry_count(), 3);
+        history.fold_into_previous();
+        assert_eq!(history.entry_count(), 2);
+        assert_eq!(zoom_len(history.undo().unwrap()), 0);
+        assert!(!history.can_undo());
+
+        let mut undone = ProjectHistory::new(with_zoom_count(0));
+        undone.record(&with_zoom_count(1));
+        undone.record(&with_zoom_count(2));
+        undone.undo();
+        undone.fold_into_previous();
+        assert_eq!(undone.entry_count(), 3);
+        assert!(undone.can_redo());
     }
 
     #[test]

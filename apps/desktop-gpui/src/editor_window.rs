@@ -1965,9 +1965,9 @@ pub struct EditorWindow {
     pub(crate) keyboard_generation_message: Option<String>,
     /// A setting changed while keys were generating; generate again after.
     pub(crate) keyboard_refresh_pending: bool,
-    /// History is held so a key setting and its regenerated keys are one
-    /// undo step.
-    pub(crate) keyboard_refresh_paused: bool,
+    /// The history length right after a key setting changed, so the keys it
+    /// regenerates can join that undo step.
+    pub(crate) keyboard_refresh_step: Option<usize>,
     clip_speed: Option<ClipSpeedMenu>,
     markers: markers::MarkersState,
     transition_popover: Option<TransitionPopover>,
@@ -2755,7 +2755,7 @@ impl EditorWindow {
             generating_keyboard: false,
             keyboard_generation_message: None,
             keyboard_refresh_pending: false,
-            keyboard_refresh_paused: false,
+            keyboard_refresh_step: None,
             clip_speed: None,
             markers: markers_state,
             transition_popover: None,

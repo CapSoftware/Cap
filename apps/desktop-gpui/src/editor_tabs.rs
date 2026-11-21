@@ -2703,7 +2703,8 @@ impl EditorWindow {
 
     /// A setting that changes which recorded keys show takes effect at once
     /// while keys are on: the recording's keys are generated again, keys added
-    /// by hand stay, and one undo puts back both the setting and the keys.
+    /// by hand stay, and one undo puts back both the setting and the keys
+    /// unless another edit came in between.
     /// Recorded keys the user has edited are kept as they are (see
     /// `generate_keyboard_segments`).
     pub(crate) fn change_shown_keys(
@@ -2718,25 +2719,30 @@ impl EditorWindow {
             self.set_keyboard_setting(reason, window, cx, change);
             return;
         }
-        // The setting and the keys it regenerates are one undo step: history
-        // holds until the generation lands (see `finish_keyboard_refresh`).
-        if !self.keyboard_refresh_paused {
-            self.history.pause();
-            self.keyboard_refresh_paused = true;
-        }
         self.set_keyboard_setting(reason, window, cx, change);
+        // The setting's undo step, which its regenerated keys join when they
+        // land straight after it (see `finish_keyboard_refresh`).
+        self.keyboard_refresh_step = Some(self.history.entry_count());
         self.generate_keyboard_segments(Some(previous), window, cx);
         // Generation that could not start leaves nothing to wait for.
-        self.finish_keyboard_refresh();
+        self.finish_keyboard_refresh(None);
     }
 
-    /// Closes the undo step a setting change opened, once its keys are in.
-    fn finish_keyboard_refresh(&mut self) {
-        if self.keyboard_refresh_paused && !self.generating_keyboard {
-            self.keyboard_refresh_paused = false;
-            let project = self.project.clone();
-            self.history.resume(&project);
+    /// Joins regenerated keys to the setting change that asked for them, as
+    /// one undo step, when they were recorded right after it. Any other edit
+    /// in between keeps them as separate steps, so it is never undone with
+    /// them.
+    fn finish_keyboard_refresh(&mut self, recorded_at: Option<usize>) {
+        if self.generating_keyboard {
+            return;
         }
+        if let (Some(step), Some(recorded)) = (self.keyboard_refresh_step, recorded_at)
+            && recorded == step + 1
+            && self.history.entry_count() == recorded
+        {
+            self.history.fold_into_previous();
+        }
+        self.keyboard_refresh_step = None;
     }
 
     /// Turning keys on for a recording that has none on its timeline yet
@@ -2828,7 +2834,12 @@ impl EditorWindow {
 
             this.update_in(cx, |this, window, cx| {
                 this.generating_keyboard = false;
-                if std::mem::take(&mut this.keyboard_refresh_pending) {
+                // A queued change runs again only while keys are still on; if
+                // they were switched off meanwhile, that choice stands and this
+                // run's own guard below drops its result.
+                if std::mem::take(&mut this.keyboard_refresh_pending)
+                    && keyboard_settings(&this.project).enabled
+                {
                     this.generate_keyboard_segments(retry_from, window, cx);
                     return;
                 }
@@ -2923,8 +2934,10 @@ impl EditorWindow {
                         window.refresh();
                     }
                 };
+                let before = this.history.entry_count();
                 apply(this, window, cx);
-                this.finish_keyboard_refresh();
+                let after = this.history.entry_count();
+                this.finish_keyboard_refresh((after > before).then_some(after));
             })
             .ok();
         })
