@@ -60,6 +60,13 @@ fn speeds_match(config: &mut ProjectConfiguration) {
     speeds(config, Some(ClipSpeedAudioMode::MatchSpeed));
 }
 
+fn custom_speed_all(config: &mut ProjectConfiguration) {
+    common::set_cuts(config, &[(0.3, 3.4, 1.2), (3.4, 5.0, 1.2), (5.5, 7.8, 1.2)]);
+    for segment in &mut config.timeline.as_mut().expect("timeline").segments {
+        segment.speed_audio_mode = Some(ClipSpeedAudioMode::MatchSpeed);
+    }
+}
+
 /// Mic at -6 dB, system audio at the -30 dB mute floor, clip volume 0.5 on
 /// the second segment and 0 on the third.
 fn levels(config: &mut ProjectConfiguration) {
@@ -133,6 +140,10 @@ fn variants() -> Vec<Variant> {
         Variant {
             edit: "speeds-match",
             apply: speeds_match,
+        },
+        Variant {
+            edit: "speed-custom-all",
+            apply: custom_speed_all,
         },
         Variant {
             edit: "levels",
