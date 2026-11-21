@@ -205,9 +205,32 @@ describe("the webhooks guide", () => {
 			).toBe(400);
 			expect((await post(signWebhookBody(secret, body, now))).status).toBe(200);
 			expect((await post(signWebhookBody(secret, body, now))).status).toBe(200);
-			await new Promise((resolve) => setTimeout(resolve, 100));
+			// The receiver prints in order, so once a later event is printed any
+			// second line for the repeated one would already be in the output.
+			const later = JSON.stringify({
+				id: "evt_2",
+				type: "video.ready",
+				data: { id: "video-2", hlsUrl: "https://play/later.m3u8" },
+			});
+			const laterLine = "ready video-2 https://play/later.m3u8\n";
+			const laterPrinted = new Promise<void>((resolve) => {
+				const check = () => {
+					if (!output.includes(laterLine)) return;
+					child.stdout.off("data", check);
+					resolve();
+				};
+				child.stdout.on("data", check);
+			});
+			const laterResponse = await fetch(url, {
+				method: "POST",
+				headers: { "Cap-Signature": signWebhookBody(secret, later, now) },
+				body: later,
+			});
+			expect(laterResponse.status).toBe(200);
+			await laterPrinted;
 			expect(output.trim().split("\n")).toEqual([
 				"ready video-1 https://play/master.m3u8",
+				"ready video-2 https://play/later.m3u8",
 			]);
 		} finally {
 			child.kill();

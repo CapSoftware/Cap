@@ -17,37 +17,18 @@
 				"allow": {
 					"apps/media-server/src/__tests__/lib/encode-stall.test.ts": 5,
 					"apps/media-server/src/__tests__/lib/isolated-worker-pool.test.ts": 1,
-					"apps/media-server/src/__tests__/lib/job-manager.test.ts": 2,
-					"apps/media-server/src/__tests__/lib/lifecycle.test.ts": 7,
-					"apps/media-server/src/__tests__/lib/live-transcribe.test.ts": 3,
-					"apps/media-server/src/__tests__/lib/media-audio.integration.test.ts": 1,
-					"apps/media-server/src/__tests__/lib/media-probe.integration.test.ts": 1,
-					"apps/media-server/src/__tests__/lib/media-routes-real-world.integration.test.ts": 2,
-					"apps/media-server/src/__tests__/lib/media-video.integration.test.ts": 2,
-					"apps/media-server/src/__tests__/lib/memory-leak.test.ts": 6,
+					"apps/media-server/src/__tests__/lib/memory-leak.test.ts": 2,
 					"apps/media-server/src/__tests__/lib/recording-verification.integration.test.ts": 3,
-					"apps/media-server/src/__tests__/lib/storage-upload.test.ts": 1,
-					"apps/media-server/src/__tests__/lib/video-input-validation.integration.test.ts": 2,
-					"apps/media-server/src/__tests__/loom-importer/app.test.ts": 1,
-					"apps/media-server/src/__tests__/loom-importer/rejections.test.ts": 2,
-					"apps/media-server/src/__tests__/routes/live-transcribe.test.ts": 1,
-					"apps/render-farm/src/coordinator.test.ts": 3,
 					"apps/web/__tests__/integration/developer-transcripts-database.test.ts": 1,
 					"apps/web/__tests__/integration/infra-auto-top-up-database.test.ts": 3,
 					"apps/web/__tests__/integration/infra-first-month-auto-top-up-database.test.ts": 1,
 					"apps/web/__tests__/integration/infra-upload-round-trips-database.test.ts": 1,
 					"apps/web/__tests__/integration/loom-concierge-database.test.ts": 1,
-					"apps/web/__tests__/unit/cap-player-messages.test.ts": 1,
-					"apps/web/__tests__/unit/cap-player-source.test.ts": 1,
-					"apps/web/__tests__/unit/developer-transcribe-download.test.ts": 2,
-					"apps/web/__tests__/unit/developer-webhook-docs.test.ts": 1,
 					"apps/web/__tests__/unit/embed-page-round-trips.test.ts": 1,
 					"apps/web/__tests__/unit/infra-video-import.test.ts": 2,
 					"apps/web/__tests__/unit/share-page-round-trips.test.ts": 1,
-					"apps/web/__tests__/unit/trimming-tool-effect.test.ts": 1,
 					"packages/infra-mcp/__tests__/limits.test.ts": 2,
 					"packages/infra-mcp/__tests__/recovery.test.ts": 1,
-					"packages/infra-mcp/__tests__/stdio.test.ts": 1,
 					"packages/infra-mcp/__tests__/upload.test.ts": 1
 				}
 			}
@@ -56,8 +37,6 @@
 			"error",
 			{
 				"allow": {
-					"apps/chrome-extension/src/popup/account-cache.test.ts": 1,
-					"apps/chrome-extension/src/popup/settings-sync.test.ts": 1,
 					"apps/media-server/src/__tests__/lib/audio-levels.integration.test.ts": 1,
 					"apps/media-server/src/__tests__/lib/audio-only-source.integration.test.ts": 3,
 					"apps/media-server/src/__tests__/lib/audio-quality-formats.integration.test.ts": 3,
@@ -95,9 +74,6 @@
 					"apps/web/__tests__/integration/developer-transcripts-database.test.ts": 1,
 					"apps/web/__tests__/integration/infra-first-month-database.test.ts": 1,
 					"apps/web/__tests__/unit/dashboard-analytics-load.test.ts": 1,
-					"apps/web/__tests__/unit/developer-api-cold-path.test.ts": 1,
-					"apps/web/__tests__/unit/infra-delivery-metering.test.ts": 1,
-					"apps/web/__tests__/unit/live-transcribe-core.test.ts": 3,
 					"apps/web/__tests__/unit/segment-playback.test.ts": 1,
 					"apps/web/__tests__/unit/share-comments-rendering.test.ts": 1,
 					"apps/web/__tests__/unit/share-transcript-rendering.test.ts": 1,
@@ -106,33 +82,7 @@
 				}
 			}
 		],
-		"landmines-testing/no-unsignaled-poll": [
-			"error",
-			{
-				"allow": {
-					"apps/chrome-extension/src/background/service-worker.test.ts": 9,
-					"apps/web/__tests__/unit/analytics-track-route.test.ts": 1,
-					"apps/web/__tests__/unit/cap-player-messages.test.ts": 1,
-					"apps/web/__tests__/unit/cap-player-source.test.ts": 3,
-					"apps/web/__tests__/unit/desktop-recording-source.test.ts": 2,
-					"apps/web/__tests__/unit/desktop-video-create.test.ts": 1,
-					"apps/web/__tests__/unit/developer-video-cancel.test.ts": 1,
-					"apps/web/__tests__/unit/developer-video-dispatch-parts.test.ts": 2,
-					"apps/web/__tests__/unit/developer-video-processing.test.ts": 2,
-					"apps/web/__tests__/unit/developer-video-sliced-processing.test.ts": 2,
-					"apps/web/__tests__/unit/developer-video-start.test.ts": 2,
-					"apps/web/__tests__/unit/infra-storage-latest-day.test.ts": 1,
-					"apps/web/__tests__/unit/mobile-cap-view-notification.test.ts": 1,
-					"apps/web/__tests__/unit/mobile-push.test.ts": 1,
-					"apps/web/__tests__/unit/recording-complete.test.ts": 1,
-					"apps/web/__tests__/unit/recording-storage-lifecycle.test.ts": 2,
-					"apps/web/__tests__/unit/share-player-expired-url.test.ts": 1,
-					"apps/web/__tests__/unit/share-player-server-source-real.test.ts": 1,
-					"apps/web/__tests__/unit/share-player-server-source.test.ts": 1,
-					"apps/web/__tests__/unit/video-download-permissions.test.ts": 1
-				}
-			}
-		],
+		"landmines-testing/no-unsignaled-poll": "error",
 		"landmines-testing/strict-msw": "error"
 	},
 	"overrides": [

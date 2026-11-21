@@ -121,15 +121,18 @@ describe("runningDeveloperVideoJobIds", () => {
 describe("cancelDeveloperVideoJobs", () => {
 	it("cancels every job at once", async () => {
 		const pending: (() => void)[] = [];
+		const bothAsked = Promise.withResolvers<void>();
 		mocks.cancelJob.mockImplementation(
 			() =>
 				new Promise((resolve) => {
 					pending.push(() => resolve("cancelled"));
+					if (pending.length === 2) bothAsked.resolve();
 				}),
 		);
 
 		const done = cancelDeveloperVideoJobs("video-1", ["job-1", "job-2"]);
-		await vi.waitFor(() => expect(mocks.cancelJob).toHaveBeenCalledTimes(2));
+		await bothAsked.promise;
+		expect(mocks.cancelJob).toHaveBeenCalledTimes(2);
 		for (const resolve of pending) resolve();
 		await done;
 	});

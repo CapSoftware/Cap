@@ -419,14 +419,19 @@ const attach = (
 	options: { autoPlay?: boolean; startAt?: number } = {},
 ) => {
 	const onFatal = vi.fn();
-	const onLevels = vi.fn();
+	const relisted = Promise.withResolvers<void>();
+	let listings = 0;
+	const onLevels = vi.fn((_levels: unknown) => {
+		listings += 1;
+		if (listings === 2) relisted.resolve();
+	});
 	const attached = attachSource(video as unknown as HTMLVideoElement, source, {
 		autoPlay: options.autoPlay ?? false,
 		startAt: options.startAt,
 		onFatal,
 		onLevels,
 	});
-	return { ...attached, onFatal, onLevels };
+	return { ...attached, onFatal, onLevels, relisted: relisted.promise };
 };
 
 const hlsFor = async () => {
@@ -1565,7 +1570,8 @@ describe("native HLS renditions", () => {
 		const attached = attach(video, { hls: HLS, mp4: MP4 });
 		expect(fetchMaster).not.toHaveBeenCalled();
 		video.reach(30);
-		await vi.waitFor(() => expect(attached.onLevels).toHaveBeenCalledTimes(2));
+		await attached.relisted;
+		expect(attached.onLevels).toHaveBeenCalledTimes(2);
 		const levels = attached.onLevels.mock.calls[1]?.[0] as ReturnType<
 			typeof listLevels
 		>;
@@ -1746,9 +1752,10 @@ describe("native HLS renditions", () => {
 			vi.fn(async () => new Response("nope", { status: 404 })),
 		);
 		const video = new FakeVideo(true);
-		const { onLevels } = attach(video, { hls: HLS });
+		const { onLevels, relisted } = attach(video, { hls: HLS });
 		video.reach(30);
-		await vi.waitFor(() => expect(onLevels).toHaveBeenCalledTimes(2));
+		await relisted;
+		expect(onLevels).toHaveBeenCalledTimes(2);
 
 		expect(onLevels.mock.calls[1]?.[0]).toEqual([]);
 	});
@@ -1756,11 +1763,25 @@ describe("native HLS renditions", () => {
 	it("stops listing once detached", async () => {
 		iphone(true);
 		let release: (response: Response) => void = () => undefined;
+		// Every promise derived from the fetch is a Listing, so the test can
+		// await the end of the chain the player builds on it.
+		const listing: Promise<unknown>[] = [];
+		class Listing<T> extends Promise<T> {
+			constructor(
+				executor: (
+					resolve: (value: T | PromiseLike<T>) => void,
+					reject: (reason?: unknown) => void,
+				) => void,
+			) {
+				super(executor);
+				listing.push(this);
+			}
+		}
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(
 				() =>
-					new Promise<Response>((resolve) => {
+					new Listing<Response>((resolve) => {
 						release = resolve;
 					}),
 			),
@@ -1770,7 +1791,7 @@ describe("native HLS renditions", () => {
 		video.reach(30);
 		stop();
 		release(new Response(MASTER));
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await Promise.allSettled([...listing]);
 
 		expect(onLevels).toHaveBeenCalledTimes(1);
 	});
@@ -1831,7 +1852,8 @@ describe("events sent from Safari's own HLS player", () => {
 
 	const loaded = async (player: Awaited<ReturnType<typeof iosPlayer>>) => {
 		player.video.reach(30);
-		await vi.waitFor(() => expect(player.onLevels).toHaveBeenCalledTimes(2));
+		await player.relisted;
+		expect(player.onLevels).toHaveBeenCalledTimes(2);
 		const levels = player.onLevels.mock.calls[1]?.[0] as ReturnType<
 			typeof listLevels
 		>;

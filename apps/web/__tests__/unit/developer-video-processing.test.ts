@@ -711,8 +711,13 @@ describe("quiet encode jobs", () => {
 
 	it("does not send a lost job twice when two checks find it missing", async () => {
 		const answers: Array<(job: { status: "missing" }) => void> = [];
+		const bothRead = Promise.withResolvers<void>();
 		mocks.readJob.mockImplementation(
-			() => new Promise((resolve) => answers.push(resolve)),
+			() =>
+				new Promise((resolve) => {
+					answers.push(resolve);
+					if (answers.length === 2) bothRead.resolve();
+				}),
 		);
 		mocks.startJob.mockResolvedValue({ status: "started", jobId: "job-2" });
 		mocks.store.video = developerVideo({
@@ -724,7 +729,8 @@ describe("quiet encode jobs", () => {
 
 		const first = check("mp4");
 		const second = check("mp4");
-		await vi.waitFor(() => expect(answers).toHaveLength(2));
+		await bothRead.promise;
+		expect(answers).toHaveLength(2);
 		answers[0]?.({ status: "missing" });
 		expect(await first).toBe("requeued");
 		answers[1]?.({ status: "missing" });
@@ -1448,17 +1454,20 @@ describe("developer video dispatch", () => {
 
 	it("probes a file once when two callers prepare it at the same time", async () => {
 		let finish: (value: unknown) => void = () => undefined;
-		mocks.probe.mockReturnValue(
-			new Promise((resolve) => {
+		const probing = Promise.withResolvers<void>();
+		mocks.probe.mockImplementationOnce(() => {
+			probing.resolve();
+			return new Promise((resolve) => {
 				finish = resolve;
-			}),
-		);
+			});
+		});
 		mocks.store.video = developerVideo({
 			processing: processingState({ probe: null }),
 		});
 
 		const first = prepareDeveloperVideoProcessing("video-1", "encode-1");
-		await vi.waitFor(() => expect(mocks.probe).toHaveBeenCalledTimes(1));
+		await probing.promise;
+		expect(mocks.probe).toHaveBeenCalledTimes(1);
 
 		expect(await prepareDeveloperVideoProcessing("video-1", "encode-1")).toBe(
 			"probing",

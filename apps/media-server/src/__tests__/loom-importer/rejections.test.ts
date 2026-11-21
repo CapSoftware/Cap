@@ -76,6 +76,7 @@ describe("Loom importer job runner", () => {
 		const brokenGate = new Promise<void>((resolve) => {
 			releaseBroken = resolve;
 		});
+		const nextFinished = Promise.withResolvers<void>();
 		const run = spyOn(importJob, "runLoomImport").mockImplementation(
 			async (job, request) => {
 				runs.push(request.videoId);
@@ -84,6 +85,7 @@ describe("Loom importer job runner", () => {
 					throw new Error("import rejected after cleanup");
 				}
 				updateJob(job.jobId, { phase: "complete", progress: 100 });
+				if (request.videoId === "next") nextFinished.resolve();
 			},
 		);
 		const errors = spyOn(console, "error").mockImplementation(() => {});
@@ -119,10 +121,8 @@ describe("Loom importer job runner", () => {
 			const nextId = await post("next");
 			expect(importer.stats()).toEqual({ running: 1, queued: 1 });
 			releaseBroken();
-			const deadline = Date.now() + 5_000;
-			while (getJob(nextId)?.phase !== "complete" && Date.now() < deadline)
-				await Bun.sleep(10);
-			await Bun.sleep(20);
+			await nextFinished.promise;
+			await new Promise<void>((resolve) => setImmediate(resolve));
 
 			expect(runs).toEqual(["broken", "next"]);
 			expect(getJob(brokenId)).toMatchObject({

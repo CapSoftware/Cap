@@ -226,6 +226,7 @@ type Origin = {
 	server: Server;
 	finishedAt: number | null;
 	closedEarly: boolean;
+	closed: Promise<void>;
 	served: number;
 };
 
@@ -239,6 +240,7 @@ const serve = async (options: {
 	stopAfterChunks?: number;
 	head?: Uint8Array;
 }) => {
+	const closed = Promise.withResolvers<void>();
 	const state: Origin = {
 		server: createServer((_request, response) => {
 			response.writeHead(200, {
@@ -272,11 +274,13 @@ const serve = async (options: {
 			};
 			response.on("close", () => {
 				if (state.finishedAt === null) state.closedEarly = true;
+				closed.resolve();
 			});
 			tick();
 		}),
 		finishedAt: null,
 		closedEarly: false,
+		closed: closed.promise,
 		served: 0,
 	};
 	await new Promise<void>((resolve) =>
@@ -395,7 +399,7 @@ describe("downloading a URL source from a slow server", () => {
 			billedMicroCredits: 0,
 		});
 		expect(Date.now() - started).toBeLessThan(3_500);
-		await new Promise((resolve) => setTimeout(resolve, 300));
+		await server.closed;
 		expect(server.closedEarly).toBe(true);
 		expect(server.served).toBeLessThan(40_000);
 		expect(context.filePuts).toEqual([]);
@@ -485,7 +489,7 @@ describe("downloading a URL source from a slow server", () => {
 				expect(context.filePuts).toEqual([]);
 				expect(context.objects.has(SOURCE_KEY)).toBe(false);
 				expect(context.extract).not.toHaveBeenCalled();
-				await new Promise((resolve) => setTimeout(resolve, 50));
+				await server.closed;
 				expect(server.closedEarly).toBe(true);
 				expect(server.served).toBeLessThan(2 * 1024 * 1024);
 			},

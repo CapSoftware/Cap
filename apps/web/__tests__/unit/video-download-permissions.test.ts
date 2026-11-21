@@ -105,14 +105,17 @@ describe("canUserDownloadVideo", () => {
 
 	it("checks both memberships in one round trip without loading share lists", async () => {
 		const pending: Array<() => void> = [];
+		const bothAsked = Promise.withResolvers<void>();
 		mocks.query.mockImplementation(
 			() =>
 				new Promise((resolve) => {
 					pending.push(() => resolve({ rows: [] }));
+					if (pending.length === 2) bothAsked.resolve();
 				}),
 		);
 		const result = call();
-		await vi.waitFor(() => expect(pending).toHaveLength(2));
+		await bothAsked.promise;
+		expect(pending).toHaveLength(2);
 		for (const release of pending) release();
 		expect(await result).toBe(false);
 		expect(mocks.query).toHaveBeenCalledTimes(2);

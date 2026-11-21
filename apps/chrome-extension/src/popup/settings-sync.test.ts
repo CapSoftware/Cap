@@ -2,7 +2,15 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { AUTH_KEY, defaultSettings, SETTINGS_KEY } from "../shared/storage";
 import type { ExtensionSettings } from "../shared/types";
 
@@ -27,6 +35,16 @@ const writeSettingsFromAnotherPage = (settings: ExtensionSettings) => {
 		listener({ [SETTINGS_KEY]: { newValue: settings } }, "local");
 	}
 };
+
+// The first import of the popup transforms its whole module graph. Doing it
+// here, without mounting, keeps that one-off cost out of the tests.
+beforeAll(async () => {
+	vi.mocked(createRoot).mockReturnValueOnce({
+		render: () => undefined,
+		unmount: () => undefined,
+	} as unknown as ReturnType<typeof createRoot>);
+	await import("./main");
+});
 
 beforeEach(() => {
 	vi.resetModules();
@@ -109,5 +127,5 @@ describe("popup settings sync", () => {
 
 		expect(storedSettings().systemAudio.enabled).toBe(false);
 		expect(storedSettings().microphone.enabled).toBe(false);
-	}, 15_000);
+	});
 });
