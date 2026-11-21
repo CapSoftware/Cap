@@ -227,7 +227,7 @@ let previousContainerIdleCpuMicros = 0;
 let containerCpuPressure: CpuPressure = { total: 0, withoutIdle: 0 };
 let previousIdleCpuMicros = 0;
 let previousIdleSampleAt = 0;
-let idleCpuCores = 0;
+let idleLoadEstimate = 0;
 
 export interface CpuPressure {
 	total: number;
@@ -259,37 +259,56 @@ export function cpuPressureOverWindow(input: {
 	return { total, withoutIdle: Math.max(0, total - idle) };
 }
 
-// Without a cgroup the load average stands in, and the idle processes' recent
-// CPU cores come off it. The load average trails by a minute while the idle
-// cores are measured over the last sample, so this is approximate; the farm
-// reads the cgroup.
+// Without a cgroup the load average stands in, and the idle processes' share
+// of it comes off. The kernel's 1-minute load average is an EWMA over 5 s
+// ticks (decay e^(-5/60) = 0.920 per tick): it holds 15% of a step after 10 s,
+// 63% after 60 s and 95% after 180 s. Taking the idle cores off at once would
+// under-report other load while an idle job starts (3 idle cores on 16 CPUs
+// at 10 s is 0.16 of pressure too low) and, after a preemption, count the idle
+// job's lingering share against real work for minutes. So what comes off is an
+// estimate that follows the kernel's own decay. The farm reads the cgroup;
+// this path only matters without one.
+export function followLoadAverage(
+	estimate: number,
+	idleCores: number,
+	elapsedSeconds: number,
+): number {
+	return (
+		estimate + (idleCores - estimate) * (1 - Math.exp(-elapsedSeconds / 60))
+	);
+}
+
 export function loadPressureWithoutIdle(
 	loadAvg1m: number,
-	idleCores: number,
+	idleLoad: number,
 	cpuCapacity: number,
 ): CpuPressure {
 	return {
 		total: loadAvg1m / cpuCapacity,
-		withoutIdle: Math.max(0, loadAvg1m - idleCores) / cpuCapacity,
+		withoutIdle: Math.max(0, loadAvg1m - idleLoad) / cpuCapacity,
 	};
 }
 
-function sampleIdleCpuCores(now: number): number {
+function sampleIdleLoad(now: number): number {
 	if (previousIdleSampleAt === 0) {
 		previousIdleCpuMicros = idleProcessCpuMicros();
 		previousIdleSampleAt = now;
 	} else if (now - previousIdleSampleAt >= CPU_SAMPLE_MIN_INTERVAL_MS) {
 		const micros = idleProcessCpuMicros();
-		idleCpuCores = Math.max(
+		const elapsedSeconds = (now - previousIdleSampleAt) / 1000;
+		const idleCores = Math.max(
 			0,
-			(micros - previousIdleCpuMicros) /
-				1_000_000 /
-				((now - previousIdleSampleAt) / 1000),
+			(micros - previousIdleCpuMicros) / 1_000_000 / elapsedSeconds,
+		);
+		idleLoadEstimate = followLoadAverage(
+			idleLoadEstimate,
+			idleCores,
+			elapsedSeconds,
 		);
 		previousIdleCpuMicros = micros;
 		previousIdleSampleAt = now;
 	}
-	return idleCpuCores;
+	return idleLoadEstimate;
 }
 
 function getCpuPressure(cpuCapacity: number, loadAvg1m: number): CpuPressure {
@@ -320,11 +339,7 @@ function getCpuPressure(cpuCapacity: number, loadAvg1m: number): CpuPressure {
 		return containerCpuPressure;
 	}
 
-	return loadPressureWithoutIdle(
-		loadAvg1m,
-		sampleIdleCpuCores(now),
-		cpuCapacity,
-	);
+	return loadPressureWithoutIdle(loadAvg1m, sampleIdleLoad(now), cpuCapacity);
 }
 
 function isActivePhase(phase: JobPhase): boolean {
@@ -597,18 +612,21 @@ export function canAcceptNewIdleVideoProcess(draining: boolean): boolean {
 	});
 }
 
-// A running idle job gives way before it can push the worker towards the CPU
-// throttle at 0.8 or the memory throttle at 0.85 that other jobs would feel.
+// A running idle job gives way when the rest of the worker gets busy, before
+// that work nears the 0.8 CPU throttle, and before memory, which the idle job
+// does share, nears the 0.85 memory throttle. The CPU check leaves the idle
+// job's own CPU out: a software ladder alone measured 9.0 of 10 cores, so a
+// check on the total would stop every idle encode within a second.
 const IDLE_YIELD_CPU_PRESSURE = 0.7;
 const IDLE_YIELD_MEMORY_PRESSURE = 0.75;
 const IDLE_WATCH_INTERVAL_MS = 1_000;
 
 export function idleYieldReason(input: {
-	totalCpuPressure: number;
+	otherCpuPressure: number;
 	memoryPressure: number;
 }): string | null {
-	if (input.totalCpuPressure >= IDLE_YIELD_CPU_PRESSURE)
-		return `Idle job yielded: CPU ${input.totalCpuPressure.toFixed(2)}`;
+	if (input.otherCpuPressure >= IDLE_YIELD_CPU_PRESSURE)
+		return `Idle job yielded: other work at CPU ${input.otherCpuPressure.toFixed(2)}`;
 	if (input.memoryPressure >= IDLE_YIELD_MEMORY_PRESSURE)
 		return `Idle job yielded: memory ${input.memoryPressure.toFixed(2)}`;
 	return null;
@@ -622,10 +640,10 @@ export function checkIdleJobs(): string | null {
 		idleWatchdog = null;
 		return null;
 	}
-	const { resources, totalCpuPressure } = readSystemResources();
+	const { cpuPressure, memoryPressure } = getSystemResources();
 	const reason = idleYieldReason({
-		totalCpuPressure,
-		memoryPressure: resources.memoryPressure,
+		otherCpuPressure: cpuPressure,
+		memoryPressure,
 	});
 	if (reason) preemptIdleJobs(reason);
 	return reason;
@@ -638,11 +656,15 @@ function watchIdleJobs(): void {
 }
 
 // GPU encoder sessions are shared whatever the niceness, so an idle job stops
-// as soon as any other work is admitted rather than run beside it.
+// as soon as any other work is admitted rather than run beside it. One that is
+// already uploading finishes instead: uploads cannot be taken back, so
+// stopping there would leave part of a ladder in storage, and the upload uses
+// no encoder.
 export function preemptIdleJobs(reason: string): number {
 	let preempted = 0;
 	for (const job of jobs.values()) {
-		if (!job.idle || !isActivePhase(job.phase)) continue;
+		if (!job.idle || !isActivePhase(job.phase) || job.phase === "uploading")
+			continue;
 		job.abortController?.abort(new Error(reason));
 		const ended = updateJob(job.jobId, {
 			phase: "error",
