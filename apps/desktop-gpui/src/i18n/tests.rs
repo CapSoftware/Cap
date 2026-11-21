@@ -43,6 +43,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::file::open_prompt(), "Open Recording".into()),
         (tr::menu::file::open_recent(), "Open Recent".into()),
         (tr::menu::file::import_media(), "Import Media…".into()),
+        (tr::menu::file::export(), "Export…".into()),
         (tr::menu::file::title(), "File".into()),
         (tr::menu::edit::copy(), "Copy".into()),
         (tr::menu::edit::cut(), "Cut".into()),
@@ -61,7 +62,7 @@ fn english_matches_the_literals_it_replaced() {
         (tr::menu::window::title(), "Window".into()),
         (tr::menu::window::zoom(), "Zoom".into()),
         (tr::menu::help::title(), "Help".into()),
-        (tr::menu::help::feedback(), "Give Feedback…".into()),
+        (tr::menu::help::feedback(), "Send Feedback to Cap…".into()),
         (tr::menu::help::changelog(), "Changelog".into()),
         (
             tr::menu::about::licensed(),
