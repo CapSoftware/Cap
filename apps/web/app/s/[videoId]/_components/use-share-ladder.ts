@@ -729,6 +729,10 @@ export function useShareLadder({
 		const onPause = () => {
 			clearStall();
 			clearTimeout(firstFrameTimerRef.current);
+			// A paused element may stop fetching, so time spent paused would
+			// read as a slow line.
+			const measurement = measurementRef.current;
+			if (measurement) measurement.done = true;
 			viewerPause();
 		};
 
