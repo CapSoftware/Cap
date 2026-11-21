@@ -42,6 +42,42 @@ describe("formatTimestamp", () => {
 });
 
 describe("formatToWebVTT", () => {
+	it("breaks at real speaker changes even without punctuation or silence", () => {
+		const vtt = formatToWebVTT({
+			words: [
+				{ text: "hello", start: 0, end: 100, speaker: "A" },
+				{ text: "there", start: 100, end: 200, speaker: "A" },
+				{ text: "yes", start: 200, end: 300, speaker: "B" },
+				{ text: "thanks", start: 300, end: 400, speaker: "A" },
+			],
+		});
+		expect(vtt).toBe(
+			"WEBVTT\n\n1\n00:00:00.000 --> 00:00:00.200\n<v A>hello there</v>\n\n2\n00:00:00.200 --> 00:00:00.300\n<v B>yes</v>\n\n3\n00:00:00.300 --> 00:00:00.400\n<v A>thanks</v>\n\n",
+		);
+	});
+
+	it("does not attribute unlabeled words to the previous speaker", () => {
+		const vtt = formatToWebVTT({
+			words: [
+				{ text: "hello", start: 0, end: 100, speaker: "A" },
+				{ text: "unknown", start: 100, end: 200, speaker: null },
+				{ text: "again", start: 200, end: 300, speaker: "A" },
+			],
+		});
+		expect(vtt).toContain("<v A>hello</v>");
+		expect(vtt).toContain("00:00:00.100 --> 00:00:00.200\nunknown\n");
+		expect(vtt).toContain("<v A>again</v>");
+	});
+
+	it("does not interpolate unsafe speaker IDs into VTT markup", () => {
+		const vtt = formatToWebVTT({
+			words: [{ text: "hello", start: 0, end: 100, speaker: "A>\nmalicious" }],
+		});
+		expect(vtt).not.toContain("<v");
+		expect(vtt).not.toContain("malicious");
+		expect(vtt).toContain("\nhello\n");
+	});
+
 	it("matches the completed AssemblyAI response shape", () => {
 		expect(realAssemblyAIResponse).toMatchObject({
 			status: "completed",

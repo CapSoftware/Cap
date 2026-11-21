@@ -139,6 +139,9 @@ function createServerEnv() {
 
 			/// AI providers
 			ASSEMBLY_API_KEY: z.string().optional().describe("Audio transcription"),
+			ASSEMBLY_SPEAKER_LABELS: boolString(false).describe(
+				"Opt in to paid speaker diarization for completed recordings. Live chunks remain unlabeled and require a separate full final transcription pass. Default false.",
+			),
 			ASSEMBLY_BASE_URL: z
 				.string()
 				.optional()

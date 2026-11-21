@@ -376,6 +376,7 @@ export function editTranscriptWordsToCaptionVtt(
 				text: word.text,
 				start: word.startMs,
 				end: word.endMs,
+				speaker: word.speaker,
 			})),
 	});
 }
@@ -439,10 +440,7 @@ export function groupEditTranscriptWords(
 		const punctuationBreak = /[.!?]$/.test(word.text);
 		const silenceBreak = nextWord ? nextWord.startMs - word.endMs >= 800 : true;
 		const speakerBreak =
-			nextWord !== undefined &&
-			word.speaker !== null &&
-			nextWord.speaker !== null &&
-			word.speaker !== nextWord.speaker;
+			nextWord !== undefined && word.speaker !== nextWord.speaker;
 
 		if (
 			nextWord &&

@@ -21,8 +21,10 @@ import {
 	isCompleteTranslation,
 	joinTranslationChunks,
 	readCachedTranslation,
+	restoreTranslationVoices,
 	sourceDigest,
 	splitTranslationChunks,
+	translationTextOnly,
 	withSourceFingerprint,
 } from "./translation-vtt";
 
@@ -433,6 +435,8 @@ async function translateVttContent(
 
 	const translations: string[] = [];
 	for (const chunk of chunks) {
+		const textOnly = translationTextOnly(chunk);
+		if (!textOnly) return null;
 		const prompt = `Translate the following WebVTT subtitle file to ${targetLanguageName}.
 
 IMPORTANT RULES:
@@ -443,10 +447,11 @@ IMPORTANT RULES:
 5. Preserve all newlines and formatting
 6. Do not add any explanations or comments
 7. Return ONLY the translated VTT content
+8. Do not introduce voice annotations or other markup; preserve escaped text entities
 
 VTT content to translate:
 
-${chunk}`;
+${textOnly}`;
 
 		try {
 			const translatedChunk = await runWithAiProviders(
@@ -461,12 +466,15 @@ ${chunk}`;
 
 					if (
 						response.finishReason === "length" ||
-						!isCompleteTranslation(chunk, response.text)
+						!isCompleteTranslation(textOnly, response.text)
 					) {
 						throw new Error("translation response has missing or changed cues");
 					}
 
-					return response.text.trim();
+					const restored = restoreTranslationVoices(chunk, response.text);
+					if (!restored)
+						throw new Error("translation response changed speaker attribution");
+					return restored;
 				},
 			);
 			translations.push(translatedChunk);
