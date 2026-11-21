@@ -1,5 +1,6 @@
 use crate::{ConversionConfig, ConvertError, FrameConverter, VideoFramePool, create_converter};
 use ffmpeg::frame;
+use parking_lot::Mutex;
 use std::{
     sync::{
         Arc,
@@ -69,6 +70,7 @@ struct PoolStats {
     frames_received: AtomicU64,
     frames_converted: AtomicU64,
     frames_dropped: AtomicU64,
+    frames_finished: AtomicU64,
 }
 
 impl Default for PoolStats {
@@ -77,6 +79,7 @@ impl Default for PoolStats {
             frames_received: AtomicU64::new(0),
             frames_converted: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
+            frames_finished: AtomicU64::new(0),
         }
     }
 }
@@ -138,6 +141,7 @@ impl AsyncConverterPool {
         let (output_tx, output_rx) = flume::bounded(config.output_capacity);
         let shutdown = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(PoolStats::default());
+        let output_order = Arc::new(Mutex::new(None));
 
         let mut workers = Vec::with_capacity(config.worker_count);
         let factory = Arc::new(factory);
@@ -146,6 +150,8 @@ impl AsyncConverterPool {
             let factory = Arc::clone(&factory);
             let input_rx = input_rx.clone();
             let output_tx = output_tx.clone();
+            let output_rx = output_rx.clone();
+            let output_order = Arc::clone(&output_order);
             let shutdown = Arc::clone(&shutdown);
             let stats = Arc::clone(&stats);
             let drop_strategy = config.drop_strategy;
@@ -166,6 +172,8 @@ impl AsyncConverterPool {
                         converter,
                         input_rx,
                         output_tx,
+                        output_rx,
+                        output_order,
                         shutdown,
                         stats,
                         drop_strategy,
@@ -214,6 +222,7 @@ impl AsyncConverterPool {
             Ok(()) => Ok(()),
             Err(flume::TrySendError::Full(_)) => {
                 self.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                self.stats.frames_finished.fetch_add(1, Ordering::Relaxed);
                 let dropped = self.stats.frames_dropped.load(Ordering::Relaxed);
                 if dropped.is_multiple_of(30) {
                     warn!(
@@ -281,10 +290,11 @@ impl AsyncConverterPool {
                     drained += 1;
                 }
                 Err(flume::RecvTimeoutError::Timeout) => {
-                    let stats = self.stats();
-                    let pending = stats
+                    let pending = self
+                        .stats
                         .frames_received
-                        .saturating_sub(stats.frames_converted + stats.frames_dropped);
+                        .load(Ordering::Relaxed)
+                        .saturating_sub(self.stats.frames_finished.load(Ordering::Relaxed));
                     if pending == 0 {
                         break;
                     }
@@ -333,10 +343,62 @@ struct WorkerContext {
     converter: Arc<dyn FrameConverter>,
     input_rx: flume::Receiver<InputFrame>,
     output_tx: flume::Sender<ConvertedFrame>,
+    output_rx: flume::Receiver<ConvertedFrame>,
+    output_order: Arc<Mutex<Option<u64>>>,
     shutdown: Arc<AtomicBool>,
     stats: Arc<PoolStats>,
     drop_strategy: DropStrategy,
     frame_pool: Option<Arc<VideoFramePool>>,
+}
+
+struct FullOutputOutcome {
+    evicted: Option<ConvertedFrame>,
+    rejected: Option<ConvertedFrame>,
+}
+
+fn try_send_frame(
+    output_tx: &flume::Sender<ConvertedFrame>,
+    frame: ConvertedFrame,
+) -> Option<ConvertedFrame> {
+    match output_tx.try_send(frame) {
+        Ok(()) => None,
+        Err(flume::TrySendError::Full(frame) | flume::TrySendError::Disconnected(frame)) => {
+            Some(frame)
+        }
+    }
+}
+
+fn handle_full_output(
+    output_tx: &flume::Sender<ConvertedFrame>,
+    output_rx: &flume::Receiver<ConvertedFrame>,
+    drop_strategy: DropStrategy,
+    frame: ConvertedFrame,
+) -> FullOutputOutcome {
+    if matches!(drop_strategy, DropStrategy::DropNewest) {
+        return FullOutputOutcome {
+            evicted: None,
+            rejected: Some(frame),
+        };
+    }
+
+    match output_rx.try_recv() {
+        // Callers hold `output_order`, so queued frames are in sequence order
+        // and the head is always the oldest.
+        Ok(queued) => FullOutputOutcome {
+            evicted: Some(queued),
+            rejected: try_send_frame(output_tx, frame),
+        },
+        // The consumer drained the queue between the failed send and this
+        // receive, so the frame fits after all; retry rather than drop it.
+        Err(flume::TryRecvError::Empty) => FullOutputOutcome {
+            evicted: None,
+            rejected: try_send_frame(output_tx, frame),
+        },
+        Err(flume::TryRecvError::Disconnected) => FullOutputOutcome {
+            evicted: None,
+            rejected: Some(frame),
+        },
+    }
 }
 
 fn worker_loop(ctx: WorkerContext) {
@@ -377,23 +439,56 @@ fn worker_loop(ctx: WorkerContext) {
                         let conversion_duration = convert_start.elapsed();
                         local_converted += 1;
                         ctx.stats.frames_converted.fetch_add(1, Ordering::Relaxed);
+                        ctx.stats.frames_finished.fetch_add(1, Ordering::Relaxed);
 
-                        match ctx.output_tx.try_send(ConvertedFrame {
+                        let converted = ConvertedFrame {
                             frame: converted,
                             sequence,
                             submit_time,
                             conversion_duration,
-                        }) {
-                            Ok(()) => {}
-                            Err(flume::TrySendError::Full(dropped_frame)) => {
-                                match ctx.drop_strategy {
-                                    DropStrategy::DropOldest | DropStrategy::DropNewest => {
-                                        ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                        };
+
+                        let mut newest_queued = match ctx.drop_strategy {
+                            DropStrategy::DropOldest => Some(ctx.output_order.lock()),
+                            DropStrategy::DropNewest => None,
+                        };
+
+                        // Workers can finish out of submission order. A frame
+                        // older than one already queued would only be skipped
+                        // by the FIFO consumer, so drop it before it displaces
+                        // a newer frame or rotates the queue.
+                        let stale = match newest_queued.as_deref() {
+                            Some(Some(newest)) => sequence < *newest,
+                            _ => false,
+                        };
+                        if stale {
+                            drop(newest_queued);
+                            ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                            if let Some(ref pool) = ctx.frame_pool {
+                                pool.put(converted.frame);
+                            }
+                            continue;
+                        }
+
+                        let delivered = match ctx.output_tx.try_send(converted) {
+                            Ok(()) => true,
+                            Err(flume::TrySendError::Full(rejected_frame)) => {
+                                let outcome = handle_full_output(
+                                    &ctx.output_tx,
+                                    &ctx.output_rx,
+                                    ctx.drop_strategy,
+                                    rejected_frame,
+                                );
+                                let delivered = outcome.rejected.is_none();
+                                for frame in
+                                    [outcome.evicted, outcome.rejected].into_iter().flatten()
+                                {
+                                    ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                                    if let Some(ref pool) = ctx.frame_pool {
+                                        pool.put(frame.frame);
                                     }
                                 }
-                                if let Some(ref pool) = ctx.frame_pool {
-                                    pool.put(dropped_frame.frame);
-                                }
+                                delivered
                             }
                             Err(flume::TrySendError::Disconnected(dropped_frame)) => {
                                 if let Some(ref pool) = ctx.frame_pool {
@@ -401,9 +496,15 @@ fn worker_loop(ctx: WorkerContext) {
                                 }
                                 break;
                             }
+                        };
+
+                        if delivered && let Some(newest) = newest_queued.as_mut() {
+                            **newest = Some(sequence);
                         }
                     }
                     Err(e) => {
+                        ctx.stats.frames_dropped.fetch_add(1, Ordering::Relaxed);
+                        ctx.stats.frames_finished.fetch_add(1, Ordering::Relaxed);
                         local_errors += 1;
                         if local_errors % 10 == 1 {
                             warn!(
@@ -432,5 +533,254 @@ fn worker_loop(ctx: WorkerContext) {
 impl Drop for AsyncConverterPool {
     fn drop(&mut self) {
         self.do_shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ConverterBackend;
+    use ffmpeg::format::Pixel;
+
+    struct SlowConverter(Duration);
+
+    impl FrameConverter for SlowConverter {
+        fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
+            thread::sleep(self.0);
+            Ok(input)
+        }
+
+        fn name(&self) -> &'static str {
+            "slow-test"
+        }
+
+        fn backend(&self) -> ConverterBackend {
+            ConverterBackend::Passthrough
+        }
+    }
+
+    struct PtsDelayConverter;
+
+    impl FrameConverter for PtsDelayConverter {
+        fn convert(&self, input: frame::Video) -> Result<frame::Video, ConvertError> {
+            if input.pts() == Some(0) {
+                thread::sleep(Duration::from_millis(300));
+            }
+            Ok(input)
+        }
+
+        fn name(&self) -> &'static str {
+            "pts-delay-test"
+        }
+
+        fn backend(&self) -> ConverterBackend {
+            ConverterBackend::Passthrough
+        }
+    }
+
+    struct ErrorConverter;
+
+    impl FrameConverter for ErrorConverter {
+        fn convert(&self, _: frame::Video) -> Result<frame::Video, ConvertError> {
+            Err(ConvertError::ConversionFailed("test".to_string()))
+        }
+
+        fn name(&self) -> &'static str {
+            "error-test"
+        }
+
+        fn backend(&self) -> ConverterBackend {
+            ConverterBackend::Passthrough
+        }
+    }
+
+    fn test_frame() -> frame::Video {
+        frame::Video::new(Pixel::RGB8, 4, 4)
+    }
+
+    fn wait_for_converted(pool: &AsyncConverterPool, converted: u64, dropped: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let stats = pool.stats();
+            if stats.frames_converted >= converted && stats.frames_dropped >= dropped {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("pool never reached converted={converted} dropped={dropped}");
+    }
+
+    fn drained_sequences(drop_strategy: DropStrategy, expected_dropped: u64) -> (Vec<u64>, u64) {
+        let config = ConverterPoolConfig {
+            worker_count: 1,
+            input_capacity: 16,
+            output_capacity: 2,
+            drop_strategy,
+            frame_pool_capacity: 0,
+        };
+        let mut pool =
+            AsyncConverterPool::new(Arc::new(SlowConverter(Duration::from_millis(20))), config);
+        for sequence in 0..4u64 {
+            pool.submit(test_frame(), sequence).unwrap();
+        }
+        wait_for_converted(&pool, 4 - expected_dropped, expected_dropped);
+
+        let sequences = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&sequences);
+        let drained = pool.drain_with_timeout(
+            move |frame| sink.lock().unwrap().push(frame.sequence),
+            Duration::from_secs(5),
+        );
+        let sequences = Arc::try_unwrap(sequences).unwrap().into_inner().unwrap();
+        assert_eq!(drained, sequences.len());
+        (sequences, pool.stats().frames_dropped)
+    }
+
+    fn converted_frame(sequence: u64) -> ConvertedFrame {
+        ConvertedFrame {
+            frame: test_frame(),
+            sequence,
+            submit_time: Instant::now(),
+            conversion_duration: Duration::ZERO,
+        }
+    }
+
+    fn rejected_by_full_queue(
+        output_tx: &flume::Sender<ConvertedFrame>,
+        frame: ConvertedFrame,
+    ) -> ConvertedFrame {
+        match output_tx.try_send(frame) {
+            Err(flume::TrySendError::Full(frame)) => frame,
+            _ => panic!("expected the output queue to be full"),
+        }
+    }
+
+    #[test]
+    fn drop_oldest_evicts_the_queued_head_before_retrying() {
+        let (output_tx, output_rx) = flume::bounded(1);
+        output_tx.send(converted_frame(1)).unwrap();
+        let rejected = rejected_by_full_queue(&output_tx, converted_frame(2));
+
+        let outcome =
+            handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, rejected);
+
+        assert_eq!(outcome.evicted.unwrap().sequence, 1);
+        assert!(outcome.rejected.is_none());
+        assert_eq!(output_rx.recv().unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn drop_oldest_drops_a_late_frame_instead_of_reordering_the_queue() {
+        let config = ConverterPoolConfig {
+            worker_count: 2,
+            input_capacity: 8,
+            output_capacity: 8,
+            drop_strategy: DropStrategy::DropOldest,
+            frame_pool_capacity: 0,
+        };
+        let mut pool = AsyncConverterPool::new(Arc::new(PtsDelayConverter), config);
+
+        let mut delayed = test_frame();
+        delayed.set_pts(Some(0));
+        pool.submit(delayed, 0).unwrap();
+        for sequence in 1..3u64 {
+            let mut frame = test_frame();
+            frame.set_pts(Some(sequence as i64));
+            pool.submit(frame, sequence).unwrap();
+        }
+
+        wait_for_converted(&pool, 3, 1);
+        let sequences = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&sequences);
+        pool.drain_with_timeout(
+            move |frame| sink.lock().unwrap().push(frame.sequence),
+            Duration::from_secs(5),
+        );
+
+        assert_eq!(*sequences.lock().unwrap(), vec![1, 2]);
+        assert_eq!(pool.stats().frames_dropped, 1);
+    }
+
+    #[test]
+    fn drop_oldest_retries_the_send_when_the_consumer_drained_the_queue() {
+        let (output_tx, output_rx) = flume::bounded(1);
+        output_tx.send(converted_frame(1)).unwrap();
+        let rejected = rejected_by_full_queue(&output_tx, converted_frame(2));
+        assert_eq!(output_rx.recv().unwrap().sequence, 1);
+
+        let outcome =
+            handle_full_output(&output_tx, &output_rx, DropStrategy::DropOldest, rejected);
+
+        assert!(outcome.evicted.is_none());
+        assert!(outcome.rejected.is_none());
+        assert_eq!(output_rx.recv().unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn drop_oldest_evicts_the_queued_head_to_keep_the_freshest_frames() {
+        let (sequences, dropped) = drained_sequences(DropStrategy::DropOldest, 2);
+        assert_eq!(sequences, vec![2, 3]);
+        assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn drop_newest_keeps_the_stale_queued_frames() {
+        let (sequences, dropped) = drained_sequences(DropStrategy::DropNewest, 2);
+        assert_eq!(sequences, vec![0, 1]);
+        assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn drain_keeps_waiting_after_converted_frames_were_dropped() {
+        let config = ConverterPoolConfig {
+            worker_count: 1,
+            input_capacity: 8,
+            output_capacity: 1,
+            drop_strategy: DropStrategy::DropNewest,
+            frame_pool_capacity: 0,
+        };
+        let mut pool =
+            AsyncConverterPool::new(Arc::new(SlowConverter(Duration::from_millis(100))), config);
+
+        for sequence in 0..3u64 {
+            pool.submit(test_frame(), sequence).unwrap();
+            wait_for_converted(&pool, sequence + 1, sequence);
+        }
+        for sequence in 3..6u64 {
+            pool.submit(test_frame(), sequence).unwrap();
+        }
+
+        let sequences = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&sequences);
+        pool.drain_with_timeout(
+            move |frame| sink.lock().unwrap().push(frame.sequence),
+            Duration::from_secs(5),
+        );
+
+        assert_eq!(*sequences.lock().unwrap(), vec![0, 3, 4, 5]);
+        assert_eq!(pool.stats().frames_dropped, 2);
+    }
+
+    #[test]
+    fn conversion_errors_are_counted_as_dropped() {
+        let config = ConverterPoolConfig {
+            worker_count: 1,
+            input_capacity: 8,
+            output_capacity: 8,
+            drop_strategy: DropStrategy::DropOldest,
+            frame_pool_capacity: 0,
+        };
+        let mut pool = AsyncConverterPool::new(Arc::new(ErrorConverter), config);
+        for sequence in 0..3u64 {
+            pool.submit(test_frame(), sequence).unwrap();
+        }
+
+        let drained = pool.drain_with_timeout(|_| {}, Duration::from_secs(5));
+
+        assert_eq!(drained, 0);
+        let stats = pool.stats();
+        assert_eq!(stats.frames_received, 3);
+        assert_eq!(stats.frames_converted, 0);
+        assert_eq!(stats.frames_dropped, 3);
     }
 }
