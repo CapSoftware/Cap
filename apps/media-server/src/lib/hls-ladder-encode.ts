@@ -9,6 +9,7 @@ import {
 	type HlsLadderRange,
 	type HlsLadderRendition,
 	type HlsLadderTierName,
+	hlsLadderFrameRate,
 	hlsLadderSourceFps,
 	hlsRenditionsAreAligned,
 	parseHlsLadderMaster,
@@ -60,6 +61,7 @@ export interface EncodedHlsLadder {
 	// The largest rendition and the length of video in it. A poster taken from
 	// it has the colours viewers see, where the source may still be HDR.
 	poster: { path: string; durationSeconds: number };
+	frameRate: string;
 	cleanup: () => Promise<void>;
 }
 
@@ -67,6 +69,7 @@ export interface EncodeHlsLadderOptions {
 	maxTier?: HlsLadderTierName;
 	range?: HlsLadderRange | null;
 	includeAudio?: boolean;
+	niceness?: number;
 }
 
 async function ladderFile(
@@ -185,6 +188,8 @@ export async function encodeHlsLadder(
 					timeoutMs,
 					onProgress,
 					signal,
+					undefined,
+					options.niceness,
 				);
 				recordNvencAttempt("process");
 				return "nvenc";
@@ -213,6 +218,8 @@ export async function encodeHlsLadder(
 			timeoutMs,
 			onProgress,
 			signal,
+			undefined,
+			options.niceness,
 		);
 		return "libx264";
 	};
@@ -237,6 +244,8 @@ export async function encodeHlsLadder(
 							getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
 							undefined,
 							signal,
+							undefined,
+							options.niceness,
 						),
 					)
 				: Promise.resolve();
@@ -305,6 +314,7 @@ export async function encodeHlsLadder(
 			files,
 			result: { encoder, renditions, audio },
 			poster: { path: posterFile.path, durationSeconds: sliceSeconds },
+			frameRate: hlsLadderFrameRate(argsInput.sourceFps),
 			cleanup,
 		};
 	} catch (error) {

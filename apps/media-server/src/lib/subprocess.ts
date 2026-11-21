@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { Subprocess } from "bun";
 
 const PROCESS_EXIT_WAIT_MS = 5_000;
@@ -21,6 +22,16 @@ export function unregisterSubprocess(proc: ManagedSubprocess): void {
 
 export function getActiveSubprocessCount(): number {
 	return activeSubprocesses.size;
+}
+
+export function lowerProcessPriority(
+	pid: number,
+	niceness: number | undefined,
+): void {
+	if (niceness === undefined) return;
+	try {
+		os.setPriority(pid, niceness);
+	} catch {}
 }
 
 async function waitForProcessExit(
