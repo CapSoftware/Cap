@@ -15,9 +15,11 @@ import {
 } from "./lib/media-transfer";
 import { installUnhandledRejectionGuard } from "./lib/process-guards";
 import { hideServerFromChildren } from "./lib/process-hardening";
+import { assertSecureStartup } from "./lib/startup-checks";
 import { removeOwnTempDir, startTempDirMaintenance } from "./lib/temp-files";
 
 installUnhandledRejectionGuard();
+assertSecureStartup();
 
 const port = Number(process.env.PORT) || 3456;
 
