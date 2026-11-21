@@ -8,6 +8,7 @@ import nodeCrypto, {
 	webcrypto,
 } from "node:crypto";
 import {
+	agentApiAuthorizationCodes,
 	authChallenges,
 	mcpOAuthClients,
 	mcpOAuthCodes,
@@ -1040,6 +1041,7 @@ describe.runIf(Boolean(databaseUrl))(
 				fixture.currentUser = user;
 				fixture.session = {
 					user: { id: user.id },
+					authMethod: "email",
 					authTime: Math.floor(Date.now() / 1000) - 30,
 				};
 				const options = await getPasskeyRegistrationOptionsAfterSignIn();
@@ -1107,10 +1109,18 @@ describe.runIf(Boolean(databaseUrl))(
 				const user = await makeUser();
 				fixture.currentUser = user;
 				const now = Math.floor(Date.now() / 1000);
-				fixture.session = { user: { id: user.id }, authTime: now - 30 };
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
 				const options = await getPasskeyRegistrationOptionsAfterSignIn();
 				if (options.status !== "ok") throw new Error("No options.");
-				fixture.session = { user: { id: user.id }, authTime: now - 11 * 60 };
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 11 * 60,
+				};
 				expect(
 					(
 						await completePasskeyRegistration(
@@ -1146,6 +1156,69 @@ describe.runIf(Boolean(databaseUrl))(
 					).status,
 				).toBe("invalid");
 				expect(await listPasskeys(user.id)).toHaveLength(1);
+			});
+
+			it("a passkey sign-in can't reopen the no-code route after its passkey is removed", async () => {
+				const {
+					completePasskeyRegistration,
+					getPasskeyRegistrationOptionsAfterSignIn,
+				} = await actions();
+				const { shouldOfferPasskey } = await import("@/lib/passkey-prompt");
+				const user = await makeUser();
+				fixture.currentUser = user;
+				const now = Math.floor(Date.now() / 1000);
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
+				const first = await getPasskeyRegistrationOptionsAfterSignIn();
+				if (first.status !== "ok") throw new Error("No options.");
+				const attacker = new SoftwareAuthenticator(user.id);
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(attacker.register(first.options.challenge)),
+						)
+					).status,
+				).toBe("registered");
+				expect(
+					(await verifyPasskeySignIn(attacker.assert(await signInChallenge())))
+						?.id,
+				).toBe(user.id);
+				await database()
+					.delete(userPasskeys)
+					.where(eq(userPasskeys.userId, user.id));
+				const leftover = await getPasskeyRegistrationOptionsAfterSignIn();
+				if (leftover.status !== "ok") throw new Error("No options.");
+
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "passkey",
+					authTime: now - 30,
+				};
+				expect(await shouldOfferPasskey(user)).toBe(false);
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+				expect(
+					(
+						await completePasskeyRegistration(
+							JSON.stringify(
+								new SoftwareAuthenticator(user.id).register(
+									leftover.options.challenge,
+								),
+							),
+						)
+					).status,
+				).not.toBe("registered");
+
+				fixture.session = { user: { id: user.id }, authTime: now - 30 };
+				expect(await shouldOfferPasskey(user)).toBe(false);
+				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
+					status: "verify",
+				});
+				expect(await listPasskeys(user.id)).toHaveLength(0);
 			});
 
 			it("signing out of all devices also revokes connected MCP apps", async () => {
@@ -1256,6 +1329,35 @@ describe.runIf(Boolean(databaseUrl))(
 					await signOutAllDevices();
 					expect(await exchangeMcpCode(params)).toBeNull();
 					expect(await liveTokens(user.id)).toBe(0);
+				});
+
+				it("signing out of all devices voids pending CLI login codes", async () => {
+					const { signOutAllDevices } = await import(
+						"@/app/(org)/dashboard/settings/account/server"
+					);
+					const user = await makeUser();
+					const codeId = id();
+					await database()
+						.insert(agentApiAuthorizationCodes)
+						.values({
+							id: codeId,
+							userId: user.id,
+							codeHash: randomUUID().replaceAll("-", ""),
+							codeChallenge: "c".repeat(43),
+							redirectUri: "http://127.0.0.1:53682/callback",
+							scopes: ["caps:read"],
+							expiresAt: new Date(Date.now() + 5 * 60_000),
+						});
+					fixture.currentUser = user;
+					await signOutAllDevices();
+					const [code] = await database()
+						.select({ consumedAt: agentApiAuthorizationCodes.consumedAt })
+						.from(agentApiAuthorizationCodes)
+						.where(eq(agentApiAuthorizationCodes.id, codeId));
+					expect(code?.consumedAt).toBeInstanceOf(Date);
+					await database()
+						.delete(agentApiAuthorizationCodes)
+						.where(eq(agentApiAuthorizationCodes.id, codeId));
 				});
 
 				it("a code can't be issued from a session that was signed out", async () => {
@@ -1399,7 +1501,11 @@ describe.runIf(Boolean(databaseUrl))(
 				fixture.currentUser = user;
 				const now = Math.floor(Date.now() / 1000);
 
-				fixture.session = { user: { id: user.id }, authTime: now - 11 * 60 };
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 11 * 60,
+				};
 				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
 					status: "verify",
 				});
@@ -1407,16 +1513,28 @@ describe.runIf(Boolean(databaseUrl))(
 				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
 					status: "verify",
 				});
-				fixture.session = { user: { id: user.id }, authTime: now + 600 };
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now + 600,
+				};
 				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
 					status: "verify",
 				});
-				fixture.session = { user: { id: other.id }, authTime: now };
+				fixture.session = {
+					user: { id: other.id },
+					authMethod: "email",
+					authTime: now,
+				};
 				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
 					status: "verify",
 				});
 
-				fixture.session = { user: { id: user.id }, authTime: now - 60 };
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 60,
+				};
 				const options = await getPasskeyRegistrationOptionsAfterSignIn();
 				if (options.status !== "ok") throw new Error("No options.");
 				const result = await completePasskeyRegistration(
@@ -1440,7 +1558,11 @@ describe.runIf(Boolean(databaseUrl))(
 				const owner = await makeUser();
 				await registerPasskey(owner);
 				fixture.currentUser = owner;
-				fixture.session = { user: { id: owner.id }, authTime: now - 30 };
+				fixture.session = {
+					user: { id: owner.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
 				expect(await getPasskeyRegistrationOptionsAfterSignIn()).toEqual({
 					status: "verify",
 				});
@@ -1448,7 +1570,11 @@ describe.runIf(Boolean(databaseUrl))(
 
 				const late = await makeUser();
 				fixture.currentUser = late;
-				fixture.session = { user: { id: late.id }, authTime: now - 30 };
+				fixture.session = {
+					user: { id: late.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
 				const pending = await getPasskeyRegistrationOptionsAfterSignIn();
 				if (pending.status !== "ok") throw new Error("No options.");
 				await registerPasskey(late);
@@ -1467,7 +1593,11 @@ describe.runIf(Boolean(databaseUrl))(
 
 				const racing = await makeUser();
 				fixture.currentUser = racing;
-				fixture.session = { user: { id: racing.id }, authTime: now - 30 };
+				fixture.session = {
+					user: { id: racing.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
 				const challenges = [];
 				for (let index = 0; index < 3; index++) {
 					const options = await getPasskeyRegistrationOptionsAfterSignIn();
@@ -1496,11 +1626,19 @@ describe.runIf(Boolean(databaseUrl))(
 				const { shouldOfferPasskey } = await import("@/lib/passkey-prompt");
 				const user = await makeUser();
 				const now = Math.floor(Date.now() / 1000);
-				const fresh = { user: { id: user.id }, authTime: now - 30 };
+				const fresh = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
 
 				fixture.session = fresh;
 				expect(await shouldOfferPasskey(await reloadUser(user.id))).toBe(true);
-				fixture.session = { user: { id: user.id }, authTime: now - 11 * 60 };
+				fixture.session = {
+					user: { id: user.id },
+					authMethod: "email",
+					authTime: now - 11 * 60,
+				};
 				expect(await shouldOfferPasskey(await reloadUser(user.id))).toBe(false);
 				fixture.session = null;
 				expect(await shouldOfferPasskey(await reloadUser(user.id))).toBe(false);
@@ -1516,13 +1654,18 @@ describe.runIf(Boolean(databaseUrl))(
 				const later = Date.now() + 31 * 24 * 60 * 60 * 1000;
 				fixture.session = {
 					user: { id: user.id },
+					authMethod: "email",
 					authTime: Math.floor(later / 1000) - 30,
 				};
 				expect(await shouldOfferPasskey(snoozed, later)).toBe(true);
 
 				const withPasskey = await makeUser();
 				await registerPasskey(withPasskey);
-				fixture.session = { user: { id: withPasskey.id }, authTime: now - 30 };
+				fixture.session = {
+					user: { id: withPasskey.id },
+					authMethod: "email",
+					authTime: now - 30,
+				};
 				expect(await shouldOfferPasskey(await reloadUser(withPasskey.id))).toBe(
 					false,
 				);

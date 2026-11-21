@@ -754,16 +754,19 @@ describe("authOptions", () => {
 		const after = Math.floor(Date.now() / 1000);
 		expect(signedIn.authTime).toBeGreaterThanOrEqual(before);
 		expect(signedIn.authTime).toBeLessThanOrEqual(after);
+		expect(signedIn.authMethod).toBe("google");
 
 		const refreshed = await callbacks.jwt({ token: { ...signedIn } } as never);
 		expect(refreshed.authTime).toBe(signedIn.authTime);
+		expect(refreshed.authMethod).toBe("google");
 
 		const updated = await callbacks.jwt({
 			token: { ...signedIn },
 			trigger: "update",
-			session: { authTime: after + 100_000 },
+			session: { authTime: after + 100_000, authMethod: "email" },
 		} as never);
 		expect(updated.authTime).toBe(signedIn.authTime);
+		expect(updated.authMethod).toBe("google");
 
 		const legacy = await callbacks.jwt({
 			token: { email: AUTHENTICATED_USER.email },
@@ -772,9 +775,10 @@ describe("authOptions", () => {
 
 		const session = await options.callbacks?.session?.({
 			session: { user: {}, expires: "" },
-			token: { id: AUTHENTICATED_USER.id, authTime: 1234 },
+			token: { id: AUTHENTICATED_USER.id, authTime: 1234, authMethod: "email" },
 		} as never);
 		expect((session as { authTime?: number }).authTime).toBe(1234);
+		expect((session as { authMethod?: string }).authMethod).toBe("email");
 	});
 
 	it.each(["workos", "google", "apple"])(
