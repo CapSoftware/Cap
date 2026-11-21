@@ -3,6 +3,7 @@ import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { MySql2Database } from "drizzle-orm/mysql2";
 import { describe, expect, it } from "vitest";
 import { DrizzleAdapter } from "../../../../packages/database/auth/drizzle-adapter";
+import { bindVerificationToken } from "../../../../packages/database/crypto";
 
 type TokenRow = { identifier: string; token: string; expires: Date };
 
@@ -59,7 +60,7 @@ describe("useVerificationToken", () => {
 	const identifier = "person@example.com";
 	const validRow: TokenRow = {
 		identifier,
-		token: "111111",
+		token: bindVerificationToken(identifier, "111111"),
 		expires: new Date(Date.now() + 60_000),
 	};
 
@@ -91,7 +92,7 @@ describe("useVerificationToken", () => {
 			token: "111111",
 		});
 
-		expect(result).toMatchObject({ identifier, token: "111111" });
+		expect(result).toMatchObject({ identifier });
 		expect(getRow()).toBeUndefined();
 	});
 
@@ -124,7 +125,7 @@ describe("useVerificationToken", () => {
 	it("does not delete a resent code that replaced the row a guess read", async () => {
 		const resentRow: TokenRow = {
 			identifier,
-			token: "222222",
+			token: bindVerificationToken(identifier, "222222"),
 			expires: new Date(Date.now() + 60_000),
 		};
 		const { db, getRow, setRow } = fakeDatabase(
@@ -142,5 +143,18 @@ describe("useVerificationToken", () => {
 
 		expect(wrongGuessAgainstStaleCode).toBeNull();
 		expect(getRow()).toEqual(resentRow);
+	});
+
+	it("burns a code stored before tokens were bound to the email", async () => {
+		const { db, getRow } = fakeDatabase({ ...validRow, token: "111111" });
+		const adapter = DrizzleAdapter(db);
+
+		const result = await adapter.useVerificationToken?.({
+			identifier,
+			token: "111111",
+		});
+
+		expect(result).toBeNull();
+		expect(getRow()).toBeUndefined();
 	});
 });

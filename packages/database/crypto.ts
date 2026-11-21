@@ -1,6 +1,6 @@
 // TODO: port this all to Effect
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { serverEnv } from "@cap/env";
 
 const ALGORITHM = { name: "AES-GCM", length: 256 };
@@ -215,3 +215,6 @@ export async function verifyPassword(
 
 	return timingSafeEqual(Buffer.from(hash), Buffer.from(derived));
 }
+
+export const bindVerificationToken = (identifier: string, token: string) =>
+	createHash("sha256").update(`${identifier}:${token}`).digest("hex");
