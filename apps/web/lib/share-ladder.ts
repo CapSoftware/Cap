@@ -235,3 +235,42 @@ export async function readReadyShareLadder(
 export function shareLadderMasterKey(outputPrefix: string) {
 	return `${outputPrefix}${SHARE_LADDER_MASTER}`;
 }
+
+export type ShareLadderPlaybackProp = {
+	masterUrl: string;
+	renditions: {
+		name: string;
+		width: number;
+		height: number;
+		bandwidth: number;
+	}[];
+	source: { width: number; height: number; bitsPerSecond: number };
+	switchOnPause: boolean;
+};
+
+export async function getShareLadderPlayback(
+	video: ShareLadderVideo,
+	fileKey: string,
+): Promise<ShareLadderPlaybackProp | null> {
+	if (!shareLadderApplies(video)) return null;
+	const flag = await readShareLadderFlag();
+	const ready = await readReadyShareLadder(video, fileKey, { flag });
+	if (!ready || !ready.bitsPerSecond || !video.width || !video.height) {
+		return null;
+	}
+	return {
+		masterUrl: `/api/playlist?videoId=${encodeURIComponent(video.id)}&videoType=ladder`,
+		renditions: ready.renditions.map((rendition) => ({
+			name: rendition.name,
+			width: rendition.width,
+			height: rendition.height,
+			bandwidth: rendition.bandwidth,
+		})),
+		source: {
+			width: video.width,
+			height: video.height,
+			bitsPerSecond: ready.bitsPerSecond,
+		},
+		switchOnPause: flag.switchOnPause,
+	};
+}
