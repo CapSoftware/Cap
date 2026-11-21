@@ -9,6 +9,8 @@ const boolString = (_default = false) =>
 		.transform((v) => v === "true")
 		.pipe(z.boolean());
 
+const emptyAsUndefined = (v: unknown) => (v === "" ? undefined : v);
+
 function createServerEnv() {
 	return createEnv({
 		server: {
@@ -41,6 +43,25 @@ function createServerEnv() {
 			CAP_INFRA_BILLING_EMAILS: boolString(false).describe(
 				"Sends the Cap Infra out of credit and failed auto top-up emails when set to 'true'",
 			),
+
+			// Setting SMTP_HOST sends email through this SMTP server instead of Resend
+			SMTP_HOST: z.string().optional(),
+			SMTP_PORT: z.preprocess(
+				emptyAsUndefined,
+				z.coerce.number().int().min(1).max(65535).default(587),
+			),
+			SMTP_SECURE: z
+				.preprocess(emptyAsUndefined, z.enum(["true", "false"]).optional())
+				.transform((v) => (v === undefined ? undefined : v === "true"))
+				.describe(
+					"Use TLS from the start of the connection. Defaults to true on port 465",
+				),
+			SMTP_USER: z.string().optional(),
+			SMTP_PASSWORD: z.string().optional(),
+			SMTP_FROM: z
+				.string()
+				.optional()
+				.describe("Sender address, eg. 'Cap <auth@example.com>'"),
 
 			/// S3 configuration
 			// Though they are prefixed with `CAP_AWS`, these don't have to be
