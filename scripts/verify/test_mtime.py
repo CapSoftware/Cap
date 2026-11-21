@@ -61,10 +61,11 @@ class CacheTest(unittest.TestCase):
         self.git("commit", "-qm", message)
 
     def checkout(self):
-        # A fresh checkout gives every file the current time.
-        time.sleep(0.05)
+        # A fresh checkout gives every file a time after every cached build;
+        # set it an hour ahead rather than waiting for the clock.
+        checked_out = time.time() + 3600
         for path in self.run_in("git", "ls-files").stdout.split():
-            os.utime(self.root / path, None)
+            os.utime(self.root / path, (checked_out, checked_out))
 
     def mtime(self, command):
         return self.run_in(sys.executable, str(MTIME), command, MANIFEST).stdout
