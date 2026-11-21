@@ -163,8 +163,15 @@ pub fn normalize_feed_url(input: &str) -> Result<String, CalendarError> {
             break;
         }
     }
-    let url =
+    let mut url =
         reqwest::Url::parse(&rewritten).map_err(|e| CalendarError::InvalidUrl(e.to_string()))?;
+    // A feed over plain http could be rewritten on the way, planting fake
+    // events and join links, so it is fetched over https. Only a feed on this
+    // machine stays on http.
+    if url.scheme() == "http" && !is_loopback_host(&url) {
+        url.set_scheme("https")
+            .map_err(|()| CalendarError::InvalidUrl("the link can't use https".into()))?;
+    }
     if !matches!(url.scheme(), "http" | "https") {
         return Err(CalendarError::InvalidUrl(
             "only http, https and webcal links are supported".into(),
@@ -174,6 +181,17 @@ pub fn normalize_feed_url(input: &str) -> Result<String, CalendarError> {
         return Err(CalendarError::InvalidUrl("the link has no host".into()));
     }
     Ok(url.to_string())
+}
+
+fn is_loopback_host(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 pub fn event_key(event: &CalendarEvent) -> String {

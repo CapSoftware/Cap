@@ -236,6 +236,34 @@ fn feed_links_are_validated_before_they_are_added() {
     );
 }
 
+#[test]
+fn plain_http_feeds_are_fetched_over_https_except_on_this_machine() {
+    assert_eq!(
+        normalize_feed_url("http://calendar.example.com/a.ics").unwrap(),
+        "https://calendar.example.com/a.ics"
+    );
+    assert_eq!(
+        normalize_feed_url("HTTP://Calendar.Example.com/a.ics").unwrap(),
+        "https://calendar.example.com/a.ics"
+    );
+    assert_eq!(
+        normalize_feed_url("http://127.0.0.1:8080/feed.ics").unwrap(),
+        "http://127.0.0.1:8080/feed.ics"
+    );
+    assert_eq!(
+        normalize_feed_url("http://localhost/feed.ics").unwrap(),
+        "http://localhost/feed.ics"
+    );
+    assert_eq!(
+        normalize_feed_url("http://[::1]:9/feed.ics").unwrap(),
+        "http://[::1]:9/feed.ics"
+    );
+    assert_eq!(
+        normalize_feed_url("http://localhost.example.com/a.ics").unwrap(),
+        "https://localhost.example.com/a.ics"
+    );
+}
+
 fn serve(responses: Vec<(u16, &'static str, String)>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
