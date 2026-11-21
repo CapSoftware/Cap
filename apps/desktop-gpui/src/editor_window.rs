@@ -8836,7 +8836,7 @@ impl EditorWindow {
         timeline::scene_available(&self.project, self.has_camera)
     }
 
-    fn toggle_track(
+    pub(crate) fn toggle_track(
         &mut self,
         kind: TrackKind,
         next: bool,

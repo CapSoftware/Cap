@@ -37,6 +37,7 @@ use serde_json::Value;
 use crate::{
     editor_color::GradeTarget,
     editor_sidebar::{SliderKey, collapsible, dashed_divider},
+    editor_timeline::TrackKind,
     editor_window::EditorWindow,
     i18n::tr,
     store,
@@ -2855,6 +2856,7 @@ impl EditorWindow {
                 .captions
                 .as_ref()
                 .is_some_and(|captions| !captions.segments.is_empty());
+        let can_show_captions = has_captions && !settings.enabled;
 
         self.ensure_captions_init(cx);
         let snapshot = transcription::ui_snapshot(&self.project_path);
@@ -2997,7 +2999,11 @@ impl EditorWindow {
                     ui::Button::plain(
                         &theme,
                         "caption-generate",
-                        ui::ButtonVariant::Primary,
+                        if can_show_captions {
+                            ui::ButtonVariant::Gray
+                        } else {
+                            ui::ButtonVariant::Primary
+                        },
                         ui::ButtonSize::Md,
                     )
                     .label(if generating {
@@ -3097,7 +3103,11 @@ impl EditorWindow {
             let download_button = ui::Button::plain(
                 &theme,
                 "caption-download",
-                ui::ButtonVariant::Primary,
+                if can_show_captions {
+                    ui::ButtonVariant::Gray
+                } else {
+                    ui::ButtonVariant::Primary
+                },
                 ui::ButtonSize::Md,
             )
             .full_width()
@@ -3181,6 +3191,19 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(16.))
+            .children(can_show_captions.then(|| {
+                ui::Button::plain(
+                    &theme,
+                    "caption-show-existing",
+                    ui::ButtonVariant::Primary,
+                    ui::ButtonSize::Md,
+                )
+                .label(tr::editor::tabs::captions::show_existing())
+                .full_width()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_track(TrackKind::Caption, true, window, cx);
+                }))
+            }))
             .child(
                 ui::Subfield::plain(&theme, tr::editor::tabs::captions::model_label())
                     .child(div().w(px(220.)).child(model_trigger)),
