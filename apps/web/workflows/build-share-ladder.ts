@@ -5,13 +5,14 @@ import {
 	videos,
 } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { sleep } from "workflow";
 import {
 	cancelMediaServerVideoJob,
 	readMediaServerVideoJob,
 	startIdleLadderJob,
 } from "@/lib/media-client";
+import { shareLadderVideoPrefix } from "@/lib/share-ladder-discard";
 import {
 	readShareLadderFlag,
 	shareLadderEnabledFor,
@@ -25,6 +26,7 @@ import {
 import {
 	deleteShareObjectsUnder,
 	headShareObject,
+	listShareObjectPrefixes,
 	readShareObjectText,
 	shareObjectReadUrl,
 	shareObjectUploadUrl,
@@ -42,24 +44,28 @@ const BUSY_GIVE_UP_MS = 24 * 60 * 60 * 1000;
 const JOB_DEADLINE_MS = 3 * 60 * 60 * 1000;
 const MAX_LOST_JOBS = 3;
 
-type Prepared =
-	| { status: "stop" }
-	| {
-			status: "ready";
-			ownerId: string;
-			sourceKey: string;
-			sourceEtag: string | null;
-			token: string;
-	  };
+type Build = {
+	videoId: string;
+	orgId: string | null;
+	ownerId: string;
+	sourceKey: string;
+	sourceEtag: string | null;
+	prefix: string;
+};
+
+type Prepared = { status: "stop" } | { status: "ready"; build: Build };
 
 type Dispatch =
 	| { status: "started"; jobId: string }
 	| { status: "busy" }
+	| { status: "unconfirmed" }
+	| { status: "stopped" }
 	| { status: "failed"; message: string };
 
 type Check =
 	| { status: "running" }
 	| { status: "missing" }
+	| { status: "stopped" }
 	| { status: "complete"; progress: Record<string, unknown> }
 	| { status: "failed"; message: string };
 
@@ -68,24 +74,35 @@ export async function buildShareLadderWorkflow(
 ): Promise<{ success: boolean }> {
 	"use workflow";
 
-	const { videoId } = payload;
-	const prepared = await prepareShareLadder(videoId);
+	const prepared = await prepareShareLadder(payload.videoId);
 	if (prepared.status === "stop") return { success: false };
+	let build = prepared.build;
 
 	let lostJobs = 0;
 	let busySince = Date.now();
 	let busyWaitMinutes = FIRST_BUSY_WAIT_MINUTES;
 
 	while (true) {
-		const dispatch = await dispatchShareLadder(videoId, prepared);
-		if (dispatch.status === "failed") {
-			await failShareLadder(videoId, prepared, dispatch.message);
+		const dispatch = await dispatchShareLadder(build);
+		if (dispatch.status === "stopped") {
+			await stopShareLadder(build);
 			return { success: false };
 		}
-		if (dispatch.status === "busy") {
+		if (dispatch.status === "failed") {
+			await failShareLadder(build, dispatch.message);
+			return { success: false };
+		}
+		if (dispatch.status === "busy" || dispatch.status === "unconfirmed") {
 			if (Date.now() - busySince > BUSY_GIVE_UP_MS) {
-				await deferShareLadder(videoId, prepared);
+				await stopShareLadder(build, "Farm stayed busy");
 				return { success: false };
+			}
+			// A start whose answer was lost may still be running. The next start
+			// writes elsewhere, so the two can never overwrite each other.
+			if (dispatch.status === "unconfirmed") {
+				const moved = await moveShareLadderOutput(build);
+				if (!moved) return { success: false };
+				build = moved;
 			}
 			await sleep(`${busyWaitMinutes}m`);
 			busyWaitMinutes = Math.min(MAX_BUSY_WAIT_MINUTES, busyWaitMinutes * 2);
@@ -96,21 +113,24 @@ export async function buildShareLadderWorkflow(
 		let check: Check = { status: "running" };
 		while (check.status === "running" && Date.now() < deadline) {
 			await sleep(`${POLL_SECONDS}s`);
-			check = await checkShareLadder(videoId, dispatch.jobId);
+			check = await checkShareLadder(build, dispatch.jobId);
 		}
 		if (check.status === "running") {
 			await failShareLadder(
-				videoId,
-				prepared,
+				build,
 				"Ladder job ran past its deadline",
 				dispatch.jobId,
 			);
 			return { success: false };
 		}
+		if (check.status === "stopped") {
+			await stopShareLadder(build, undefined, dispatch.jobId);
+			return { success: false };
+		}
 		if (check.status === "missing") {
 			lostJobs++;
 			if (lostJobs > MAX_LOST_JOBS) {
-				await failShareLadder(videoId, prepared, "Ladder job was lost");
+				await failShareLadder(build, "Ladder job was lost");
 				return { success: false };
 			}
 			busySince = Date.now();
@@ -118,12 +138,11 @@ export async function buildShareLadderWorkflow(
 			continue;
 		}
 		if (check.status === "failed") {
-			await failShareLadder(videoId, prepared, check.message);
+			await failShareLadder(build, check.message);
 			return { success: false };
 		}
 		const finished = await finishShareLadder(
-			videoId,
-			prepared,
+			build,
 			dispatch.jobId,
 			check.progress,
 		);
@@ -131,17 +150,30 @@ export async function buildShareLadderWorkflow(
 	}
 }
 
-async function stillWanted(videoId: string, sourceKey: string) {
-	const [row] = await db()
-		.select({ state: shareLadders.state, sourceKey: shareLadders.sourceKey })
-		.from(shareLadders)
-		.where(eq(shareLadders.videoId, videoId as Video.VideoId))
-		.limit(1);
-	return (
-		!!row &&
-		row.sourceKey === sourceKey &&
-		(row.state === "queued" || row.state === "encoding")
+function newToken() {
+	return crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+}
+
+function ownRow(build: Build) {
+	return and(
+		eq(shareLadders.videoId, build.videoId as Video.VideoId),
+		eq(shareLadders.state, "encoding"),
+		eq(shareLadders.outputPrefix, build.prefix),
 	);
+}
+
+async function buildStillWanted(build: Build): Promise<boolean> {
+	const [row] = await db()
+		.select({ id: shareLadders.videoId })
+		.from(shareLadders)
+		.where(ownRow(build))
+		.limit(1);
+	if (!row) return false;
+	const flag = await readShareLadderFlag();
+	return shareLadderEnabledFor(flag, {
+		id: build.videoId,
+		orgId: build.orgId,
+	});
 }
 
 async function prepareShareLadder(videoId: string): Promise<Prepared> {
@@ -160,81 +192,68 @@ async function prepareShareLadder(videoId: string): Promise<Prepared> {
 		.where(eq(shareLadders.videoId, videoId as Video.VideoId))
 		.limit(1);
 	if (!row || row.state !== "queued") return { status: "stop" };
+	const queued = and(
+		eq(shareLadders.videoId, videoId as Video.VideoId),
+		eq(shareLadders.state, "queued"),
+		eq(shareLadders.sourceKey, row.sourceKey),
+	);
 
 	const flag = await readShareLadderFlag();
 	if (!shareLadderEnabledFor(flag, { id: videoId, orgId: row.orgId })) {
 		await db()
 			.update(shareLadders)
-			.set({ state: "candidate", updatedAt: new Date() })
-			.where(
-				and(
-					eq(shareLadders.videoId, videoId as Video.VideoId),
-					eq(shareLadders.state, "queued"),
-				),
-			);
+			.set({ state: "candidate", viewsCheckedAt: null, updatedAt: new Date() })
+			.where(queued);
 		return { status: "stop" };
 	}
 
 	const head = await headShareObject(row.sourceKey);
 	if (!head || (row.sourceEtag && head.etag !== row.sourceEtag)) {
-		await db()
-			.update(shareLadders)
-			.set({ state: "invalid", error: "Source changed", updatedAt: new Date() })
-			.where(eq(shareLadders.videoId, videoId as Video.VideoId));
+		await db().delete(shareLadders).where(queued);
 		return { status: "stop" };
 	}
 
-	const token = crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+	const prefix = shareLadderOutputPrefix(row.ownerId, videoId, newToken());
 	const [claimed] = await db()
 		.update(shareLadders)
 		.set({
 			state: "encoding",
 			sourceEtag: head.etag,
 			sourceBytes: head.bytes,
-			outputPrefix: shareLadderOutputPrefix(row.ownerId, videoId, token),
+			outputPrefix: prefix,
+			jobId: null,
 			attempts: sql`${shareLadders.attempts} + 1`,
 			error: null,
 			updatedAt: new Date(),
 		})
-		.where(
-			and(
-				eq(shareLadders.videoId, videoId as Video.VideoId),
-				eq(shareLadders.state, "queued"),
-			),
-		);
+		.where(queued);
 	if (claimed.affectedRows !== 1) return { status: "stop" };
 	return {
 		status: "ready",
-		ownerId: row.ownerId,
-		sourceKey: row.sourceKey,
-		sourceEtag: head.etag,
-		token,
+		build: {
+			videoId,
+			orgId: row.orgId,
+			ownerId: row.ownerId,
+			sourceKey: row.sourceKey,
+			sourceEtag: head.etag,
+			prefix,
+		},
 	};
 }
 
-async function dispatchShareLadder(
-	videoId: string,
-	prepared: Extract<Prepared, { status: "ready" }>,
-): Promise<Dispatch> {
+async function dispatchShareLadder(build: Build): Promise<Dispatch> {
 	"use step";
 
-	if (!(await stillWanted(videoId, prepared.sourceKey))) {
-		return { status: "failed", message: "Ladder is no longer wanted" };
-	}
-	const prefix = shareLadderOutputPrefix(
-		prepared.ownerId,
-		videoId,
-		prepared.token,
-	);
+	if (!(await buildStillWanted(build))) return { status: "stopped" };
 	const [videoUrl, uploads] = await Promise.all([
-		shareObjectReadUrl(prepared.sourceKey, URL_EXPIRES_SECONDS),
+		shareObjectReadUrl(build.sourceKey, URL_EXPIRES_SECONDS),
 		Promise.all(
 			shareLadderUploads().map(
 				async (upload) =>
 					[
 						upload.name,
 						await shareObjectUploadUrl(
-							`${prefix}${upload.name}`,
+							`${build.prefix}${upload.name}`,
 							upload.contentType,
 							URL_EXPIRES_SECONDS,
 						),
@@ -243,8 +262,8 @@ async function dispatchShareLadder(
 		).then(Object.fromEntries),
 	]);
 	const started = await startIdleLadderJob({
-		videoId,
-		userId: prepared.ownerId,
+		videoId: build.videoId,
+		userId: build.ownerId,
 		videoUrl,
 		inputExtension: ".mp4",
 		maxTier: SHARE_LADDER_MAX_TIER,
@@ -252,21 +271,27 @@ async function dispatchShareLadder(
 		uploads,
 	});
 	switch (started.status) {
-		case "started":
-			await db()
+		case "started": {
+			const [saved] = await db()
 				.update(shareLadders)
 				.set({ jobId: started.jobId, updatedAt: new Date() })
-				.where(eq(shareLadders.videoId, videoId as Video.VideoId));
+				.where(ownRow(build));
+			if (saved.affectedRows !== 1) {
+				await cancelMediaServerVideoJob(started.jobId);
+				return { status: "stopped" };
+			}
 			return { status: "started", jobId: started.jobId };
+		}
 		case "unsupported":
 			await cancelMediaServerVideoJob(started.jobId);
 			return {
 				status: "failed",
 				message: "Media server does not support idle ladders",
 			};
+		case "unconfirmed":
+			return { status: "unconfirmed" };
 		case "busy":
 		case "unreachable":
-		case "unconfirmed":
 			return { status: "busy" };
 		case "unavailable":
 			return { status: "failed", message: "Media server has no ladder route" };
@@ -275,13 +300,26 @@ async function dispatchShareLadder(
 	}
 }
 
-async function checkShareLadder(
-	videoId: string,
-	jobId: string,
-): Promise<Check> {
+async function moveShareLadderOutput(build: Build): Promise<Build | null> {
 	"use step";
 
-	const status = await readMediaServerVideoJob(jobId, videoId);
+	const prefix = shareLadderOutputPrefix(
+		build.ownerId,
+		build.videoId,
+		newToken(),
+	);
+	const [moved] = await db()
+		.update(shareLadders)
+		.set({ outputPrefix: prefix, jobId: null, updatedAt: new Date() })
+		.where(ownRow(build));
+	return moved.affectedRows === 1 ? { ...build, prefix } : null;
+}
+
+async function checkShareLadder(build: Build, jobId: string): Promise<Check> {
+	"use step";
+
+	if (!(await buildStillWanted(build))) return { status: "stopped" };
+	const status = await readMediaServerVideoJob(jobId, build.videoId);
 	if (status.status === "running" || status.status === "unreachable") {
 		return { status: "running" };
 	}
@@ -298,9 +336,7 @@ async function checkShareLadder(
 }
 
 function parseRenditions(progress: Record<string, unknown>) {
-	const ladder = progress.ladder as
-		| { renditions?: unknown; audio?: unknown }
-		| undefined;
+	const ladder = progress.ladder as { renditions?: unknown } | undefined;
 	if (!ladder || !Array.isArray(ladder.renditions)) return null;
 	const renditions: ShareLadderRendition[] = [];
 	for (const entry of ladder.renditions) {
@@ -342,20 +378,14 @@ function masterRenditionNames(master: string): string[] {
 }
 
 async function finishShareLadder(
-	videoId: string,
-	prepared: Extract<Prepared, { status: "ready" }>,
+	build: Build,
 	jobId: string,
 	progress: Record<string, unknown>,
 ): Promise<boolean> {
 	"use step";
 
-	const prefix = shareLadderOutputPrefix(
-		prepared.ownerId,
-		videoId,
-		prepared.token,
-	);
 	const reject = async (message: string) => {
-		await failShareLadderNow(videoId, prepared, message);
+		await failShareLadderNow(build, message);
 		return false;
 	};
 
@@ -365,7 +395,9 @@ async function finishShareLadder(
 	const renditions = parseRenditions(progress);
 	if (!renditions) return reject("Ladder result has no renditions");
 
-	const master = await readShareObjectText(`${prefix}${SHARE_LADDER_MASTER}`);
+	const master = await readShareObjectText(
+		`${build.prefix}${SHARE_LADDER_MASTER}`,
+	);
 	if (!master) return reject("Ladder master playlist is missing");
 	const listed = masterRenditionNames(master).sort();
 	const reported = renditions.map((rendition) => rendition.name).sort();
@@ -374,48 +406,41 @@ async function finishShareLadder(
 	}
 	for (const rendition of renditions) {
 		const [playlist, media] = await Promise.all([
-			headShareObject(`${prefix}${rendition.name}.m3u8`),
-			headShareObject(`${prefix}${rendition.name}.m4s`),
+			headShareObject(`${build.prefix}${rendition.name}.m3u8`),
+			headShareObject(`${build.prefix}${rendition.name}.m4s`),
 		]);
 		if (!playlist || !media || media.bytes !== rendition.bytes) {
 			return reject(`Ladder rendition ${rendition.name} did not upload`);
 		}
 	}
 
-	const source = await headShareObject(prepared.sourceKey);
-	if (!source || source.etag !== prepared.sourceEtag) {
+	const source = await headShareObject(build.sourceKey);
+	if (!source || source.etag !== build.sourceEtag) {
 		return reject("Source changed while the ladder was built");
 	}
 
 	const [ready] = await db()
 		.update(shareLadders)
-		.set({
-			state: "ready",
-			renditions,
-			outputPrefix: prefix,
-			error: null,
-			updatedAt: new Date(),
-		})
-		.where(
-			and(
-				eq(shareLadders.videoId, videoId as Video.VideoId),
-				eq(shareLadders.state, "encoding"),
-				eq(shareLadders.sourceKey, prepared.sourceKey),
-				eq(shareLadders.jobId, jobId),
-			),
-		);
+		.set({ state: "ready", renditions, error: null, updatedAt: new Date() })
+		.where(and(ownRow(build), eq(shareLadders.jobId, jobId)));
 	if (ready.affectedRows !== 1) {
-		await deleteShareObjectsUnder(prefix);
+		await deleteShareObjectsUnder(build.prefix);
 		return false;
 	}
+	await deleteOtherLadderOutputs(build);
 	return true;
 }
 
-async function failShareLadderNow(
-	videoId: string,
-	prepared: Extract<Prepared, { status: "ready" }>,
-	message: string,
-) {
+async function deleteOtherLadderOutputs(build: Build) {
+	const prefixes = await listShareObjectPrefixes(
+		shareLadderVideoPrefix(build.ownerId, build.videoId),
+	);
+	for (const prefix of prefixes) {
+		if (prefix !== build.prefix) await deleteShareObjectsUnder(prefix);
+	}
+}
+
+async function failShareLadderNow(build: Build, message: string) {
 	await db()
 		.update(shareLadders)
 		.set({
@@ -423,51 +448,30 @@ async function failShareLadderNow(
 			error: message.slice(0, 2000),
 			updatedAt: new Date(),
 		})
-		.where(
-			and(
-				eq(shareLadders.videoId, videoId as Video.VideoId),
-				inArray(shareLadders.state, ["queued", "encoding"]),
-				eq(shareLadders.sourceKey, prepared.sourceKey),
-			),
-		);
-	await deleteShareObjectsUnder(
-		shareLadderOutputPrefix(prepared.ownerId, videoId, prepared.token),
-	);
+		.where(ownRow(build));
+	await deleteShareObjectsUnder(build.prefix);
 }
 
-async function failShareLadder(
-	videoId: string,
-	prepared: Extract<Prepared, { status: "ready" }>,
-	message: string,
-	jobId?: string,
-) {
+async function failShareLadder(build: Build, message: string, jobId?: string) {
 	"use step";
 
 	if (jobId) await cancelMediaServerVideoJob(jobId);
-	await failShareLadderNow(videoId, prepared, message);
+	await failShareLadderNow(build, message);
 }
 
-async function deferShareLadder(
-	videoId: string,
-	prepared: Extract<Prepared, { status: "ready" }>,
-) {
+async function stopShareLadder(build: Build, reason?: string, jobId?: string) {
 	"use step";
 
+	if (jobId) await cancelMediaServerVideoJob(jobId);
 	await db()
 		.update(shareLadders)
 		.set({
 			state: "candidate",
 			viewsCheckedAt: null,
-			error: "Farm stayed busy",
+			jobId: null,
+			error: reason ?? null,
 			updatedAt: new Date(),
 		})
-		.where(
-			and(
-				eq(shareLadders.videoId, videoId as Video.VideoId),
-				eq(shareLadders.state, "encoding"),
-			),
-		);
-	await deleteShareObjectsUnder(
-		shareLadderOutputPrefix(prepared.ownerId, videoId, prepared.token),
-	);
+		.where(ownRow(build));
+	await deleteShareObjectsUnder(build.prefix);
 }

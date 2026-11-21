@@ -128,6 +128,34 @@ export async function deleteShareObjectsUnder(prefix: string): Promise<number> {
 	);
 }
 
+export async function listShareObjectPrefixes(base: string): Promise<string[]> {
+	return StorageRuntime.runPromise(
+		bucket.pipe(
+			Effect.flatMap((access) =>
+				Effect.gen(function* () {
+					const prefixes = new Set<string>();
+					let continuationToken: string | undefined;
+					for (let page = 0; page < 100; page++) {
+						const listed = yield* access.listObjects({
+							prefix: base,
+							continuationToken,
+						});
+						for (const object of listed.Contents ?? []) {
+							const key = object.Key;
+							if (!key?.startsWith(base)) continue;
+							const end = key.indexOf("/", base.length);
+							if (end > base.length) prefixes.add(key.slice(0, end + 1));
+						}
+						continuationToken = listed.NextContinuationToken;
+						if (!listed.IsTruncated || !continuationToken) break;
+					}
+					return [...prefixes];
+				}),
+			),
+		),
+	);
+}
+
 export async function purgeShareLadderCdn(
 	ownerId: string,
 	videoId: string,
