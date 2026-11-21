@@ -5516,6 +5516,8 @@ impl EditorWindow {
         self.transcript_view.update(cx, |_, cx| cx.notify());
     }
 
+    /// The lane under the pointer, which only the timeline draws from: its
+    /// row tint and the create ghosts.
     fn set_hovered_track(
         &mut self,
         track: Option<TrackKind>,
@@ -5527,7 +5529,7 @@ impl EditorWindow {
             if track != Some(TrackKind::Scene) {
                 self.scene_preview_time = None;
             }
-            cx.notify();
+            self.invalidate_hover_chrome(cx);
         }
     }
 
@@ -13859,8 +13861,7 @@ impl EditorWindow {
                         {
                             this.hovered_segment = None;
                             this.split_preview = None;
-                            cx.notify();
-                            let _ = window;
+                            this.invalidate_hover_chrome(cx);
                         }
                     }))
                     // The per-segment hover the trim handles' reveal reads,
