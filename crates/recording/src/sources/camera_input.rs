@@ -124,20 +124,20 @@ impl CameraTrackFrame for NativeCameraFrame {
         lock: &CameraFeedLock,
         sender: flume::Sender<Self>,
     ) -> BoxFuture<'static, anyhow::Result<()>> {
-        let actor = (**lock).clone();
+        let feed = (**lock).clone();
+        let request = camera::RemoveNativeSender(sender);
         async move {
-            actor
-                .ask(camera::RemoveNativeSender(sender))
+            feed.ask(request)
                 .await
-                .map_err(|error| anyhow!("{error}"))
+                .map_err(|err| anyhow!("Failed to remove native camera sender: {err}"))
         }
         .boxed()
     }
 }
 
 impl CameraTrackFrame for FFmpegVideoFrame {
-    fn queue_capacity(_: &VideoInfo) -> usize {
-        256
+    fn queue_capacity(info: &VideoInfo) -> usize {
+        super::bounded_camera_channel_capacity(info)
     }
 
     fn add_sender(
@@ -159,12 +159,13 @@ impl CameraTrackFrame for FFmpegVideoFrame {
         lock: &CameraFeedLock,
         sender: flume::Sender<Self>,
     ) -> BoxFuture<'static, anyhow::Result<()>> {
-        let actor = (**lock).clone();
+        let target = (**lock).clone();
+        let msg = camera::RemoveSender(sender);
         async move {
-            actor
-                .ask(camera::RemoveSender(sender))
-                .await
-                .map_err(|error| anyhow!("{error}"))
+            match target.ask(msg).await {
+                Ok(()) => Ok(()),
+                Err(error) => Err(anyhow!("{error}")),
+            }
         }
         .boxed()
     }
