@@ -1,0 +1,10 @@
+{
+	"type": "object",
+	"properties": {
+		"apiBaseUrl": {
+			"title": "Cap URL",
+			"description": "Base URL of the Cap server the extension signs in to and uploads recordings to, e.g. https://cap.example.com. When set, users cannot change it in the extension options.",
+			"type": "string"
+		}
+	}
+}

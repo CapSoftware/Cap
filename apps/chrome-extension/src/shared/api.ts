@@ -82,6 +82,23 @@ export class ApiRequestError extends Error {
 	}
 }
 
+// A key is only ever sent to the Cap server that minted it. Settings and auth
+// are loaded separately and each reads the admin policy on its own, so a
+// policy pushed or lifted between the two reads could otherwise pair a key
+// with another server's URL. Every request that carries a key goes through
+// this check against the exact URL it is about to use.
+export const authTokenFor = (
+	settings: ExtensionSettings,
+	auth: ExtensionAuth,
+) => {
+	if (new URL(settings.apiBaseUrl).origin !== auth.apiOrigin) {
+		throw new Error(
+			"The Cap URL changed while this request was being prepared. Try again.",
+		);
+	}
+	return auth.authApiKey;
+};
+
 const requestJson = async <TResponse>({
 	settings,
 	auth,
@@ -98,7 +115,7 @@ const requestJson = async <TResponse>({
 	const response = await fetch(apiUrl(settings, path), {
 		method,
 		headers: {
-			Authorization: `Bearer ${auth.authApiKey}`,
+			Authorization: `Bearer ${authTokenFor(settings, auth)}`,
 			"Content-Type": "application/json",
 		},
 		body: body === undefined ? undefined : JSON.stringify(body),

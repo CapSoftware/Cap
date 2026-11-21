@@ -179,7 +179,11 @@ const start = async (
 			countdown: { enabled: false, seconds: 3 },
 			...settings,
 		},
-		auth: { authApiKey: "test", userId: "user-test" },
+		auth: {
+			authApiKey: "test",
+			userId: "user-test",
+			apiOrigin: "https://cap.test",
+		},
 		bootstrap: {
 			organization: { id: "org-test" },
 			plan: { isPro: true, maxRecordingSeconds: null },

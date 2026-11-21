@@ -15,6 +15,8 @@ import {
 	RECORDER_OPEN_PARAM,
 } from "../shared/recorder-pages";
 import {
+	addPendingRevocation,
+	bindLegacyAuth,
 	clearAuth,
 	clearAuthError,
 	clearCachedBootstrap,
@@ -24,12 +26,15 @@ import {
 	loadAuthError,
 	loadCachedBootstrap,
 	loadPendingAuth,
+	loadPendingRevocations,
 	loadSettings,
 	loadSharedRecordingState,
 	loadSharedUiState,
+	loadStoredAuth,
 	loadUploadProgressTabId,
 	loadWebcamPreviewDismissed,
 	registerOverlayToken,
+	removePendingRevocation,
 	saveAuth,
 	saveAuthError,
 	saveCachedBootstrap,
@@ -1680,6 +1685,38 @@ const launchWebAuthFlow = (url: string) =>
 // repeat click must not relaunch; the open window stays authoritative.
 let authFlowInFlight = false;
 
+// A key is only revoked on the Cap server that minted it.
+const revokeOnOwnServer = async (auth: ExtensionAuth) =>
+	revokeAuth({ ...(await loadSettings()), apiBaseUrl: auth.apiOrigin }, auth);
+
+// Cap answers 401 when the key is unknown or already revoked, so the key is
+// gone. Any other failure may not have come from Cap at all: a network error,
+// a timeout, a 5xx, or a 403/407/404/429 from an access gateway, proxy or
+// captive portal in front of a server only reachable on another network. The
+// key could still be live there.
+const isDefinitiveRevokeAnswer = (error: unknown) =>
+	error instanceof ApiRequestError && error.status === 401;
+
+let pendingRevocationsInFlight = false;
+
+const retryPendingRevocations = async () => {
+	if (pendingRevocationsInFlight) return;
+	pendingRevocationsInFlight = true;
+	try {
+		for (const auth of await loadPendingRevocations()) {
+			const revoked = await revokeOnOwnServer(auth).then(
+				() => true,
+				isDefinitiveRevokeAnswer,
+			);
+			if (revoked) await removePendingRevocation(auth.authApiKey);
+		}
+	} catch {
+		// Best-effort; whatever is left is retried on the next sign-in or out.
+	} finally {
+		pendingRevocationsInFlight = false;
+	}
+};
+
 const beginAuthFlow = async (settings: ExtensionSettings) => {
 	if (authFlowInFlight) return;
 	// Claimed synchronously: the guard sits before several awaits (storage,
@@ -1707,17 +1744,27 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 	// co-installed extensions can observe.
 	void launchWebAuthFlow(authStart.url)
 		.then(async (responseUrl) => {
-			const auth = parseAuthResponse(responseUrl, authStart.state);
+			const auth = {
+				...parseAuthResponse(responseUrl, authStart.state),
+				apiOrigin: new URL(settings.apiBaseUrl).origin,
+			};
 			// Server-minted keys never expire, so a re-auth would otherwise leave
-			// the previous key live in auth_api_keys forever; revoke it
-			// best-effort before it is forgotten locally.
-			const previousAuth = await loadAuth().catch(() => null);
+			// the previous key live in auth_api_keys forever. That includes a
+			// key loadAuth() withholds because the Cap URL moved to another
+			// server, which may not be reachable right now; a key its server
+			// has not definitely answered for is queued rather than forgotten.
+			const previousAuth = await loadStoredAuth().catch(() => null);
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
-				await revokeAuth(settings, previousAuth).catch(() => undefined);
+				await revokeOnOwnServer(previousAuth).catch(async (error) => {
+					if (!isDefinitiveRevokeAnswer(error)) {
+						await addPendingRevocation(previousAuth);
+					}
+				});
 			}
 			await saveAuth(auth);
 			await resetBootstrapCache();
 			void refreshBootstrap(settings, auth).catch(() => undefined);
+			void retryPendingRevocations();
 		})
 		.catch(async (error: unknown) => {
 			// This rejection has no open message channel to land in; persist it
@@ -1809,18 +1856,15 @@ const handleRequest = async (
 
 	if (message.type === "auth-revoke") {
 		const settings = await loadSettings();
-		const auth = await loadAuth();
+		const auth = await loadStoredAuth();
 		if (auth) {
 			try {
-				await revokeAuth(settings, auth);
+				await revokeOnOwnServer(auth);
 			} catch (error) {
-				// A definitive 4xx means the server saw the request and the key
-				// is unusable or already gone, so clearing local state is right.
-				// Anything else (network failure, timeout, 5xx) leaves a live
-				// key on the server; keep the session and surface the failure
-				// instead of pretending the sign-out worked.
-				const status = error instanceof ApiRequestError ? error.status : null;
-				if (status === null || status >= 500) {
+				// Without a definitive answer the key may still be live on the
+				// server; keep the session and surface the failure instead of
+				// pretending the sign-out worked.
+				if (!isDefinitiveRevokeAnswer(error)) {
 					throw new Error(
 						"Could not reach Cap to revoke this sign-in. Check your connection and try again.",
 					);
@@ -1830,6 +1874,7 @@ const handleRequest = async (
 		await clearAuth();
 		await resetBootstrapCache();
 		await clearPendingAuth();
+		void retryPendingRevocations();
 		return { ok: true, auth: null, settings };
 	}
 
@@ -2182,6 +2227,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
+	void bindLegacyAuth().catch(() => undefined);
+	void retryPendingRevocations();
 	void updateActionForStatus(recordingStatus);
 	void injectOverlayIntoOpenTabs();
 	if (details.reason === "install") {
@@ -2189,6 +2236,10 @@ chrome.runtime.onInstalled.addListener((details) => {
 			() => undefined,
 		);
 	}
+});
+
+chrome.runtime.onStartup.addListener(() => {
+	void retryPendingRevocations();
 });
 
 chrome.action.onClicked.addListener((tab) => {
