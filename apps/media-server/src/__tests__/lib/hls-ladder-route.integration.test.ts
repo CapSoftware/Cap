@@ -338,8 +338,10 @@ describe("POST /video/ladder", () => {
 			await hang.started.promise;
 			const idleJob = getJob(jobId);
 			expect(idleJob?.phase).toBe("uploading");
+			let phaseWhenStopped: string | undefined;
 			void idleJob?.uploadsStopped?.then(() => {
 				uploadsStopped = true;
+				phaseWhenStopped = getJob(jobId)?.phase;
 			});
 
 			const other = await startLadder({
@@ -348,6 +350,7 @@ describe("POST /video/ladder", () => {
 			expect(other.status).toBe(200);
 			await hang.aborted.promise;
 			expect(await terminal.promise).toBe(true);
+			expect(phaseWhenStopped).toBe("uploading");
 			expect(getJob(jobId)?.errorCode).toBe("idle-preempted");
 			const { jobId: otherId } = (await other.json()) as { jobId: string };
 			expect((await waitForTerminalJob(otherId)).phase).toBe("complete");
