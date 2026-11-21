@@ -86,7 +86,10 @@ vi.mock("next/server", async (importOriginal) => ({
 	...(await importOriginal<typeof import("next/server")>()),
 	after: vi.fn(),
 }));
-vi.mock("@/lib/share-ladder", () => ({ recordShareLadderView: vi.fn() }));
+vi.mock("@/lib/share-ladder", () => ({
+	getShareLadderPlayback: async () => null,
+	recordShareLadderView: vi.fn(),
+}));
 vi.mock("@/lib/share-web-url", () => ({
 	resolveShareWebUrl: vi.fn(),
 	resolveForeignShareRedirect: async () => null,

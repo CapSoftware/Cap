@@ -37,6 +37,7 @@ import { RelativeTime } from "./_components/RelativeTime";
 import { ShareVideo } from "./_components/ShareVideo";
 import { type ShareView, ShareViewToggle } from "./_components/ShareViewToggle";
 import { Sidebar } from "./_components/Sidebar";
+import type { ShareLadderPlayback } from "./_components/share-ladder-playback";
 import { Toolbar } from "./_components/Toolbar";
 import { formatTimeAgo } from "./_components/tabs/Activity/utils";
 import { TimelineSkeleton } from "./_components/timeline/TimelineSkeleton";
@@ -190,6 +191,7 @@ interface ShareProps {
 	upNext?: Promise<SpaceUpNext | null> | null;
 	initialPlaybackUrl?: Promise<string | null>;
 	serverPlaybackUrl?: string | null;
+	ladder?: Promise<ShareLadderPlayback | null>;
 	posterUrl?: string | null;
 	comments: MaybePromise<CommentWithAuthor[]>;
 	views: MaybePromise<number>;
@@ -327,6 +329,7 @@ export const Share = ({
 	data,
 	initialPlaybackUrl,
 	serverPlaybackUrl = null,
+	ladder,
 	posterUrl = null,
 	comments,
 	views,
@@ -348,6 +351,21 @@ export const Share = ({
 	dashboardDestination = null,
 	upNext = null,
 }: ShareProps) => {
+	const [ladderPlayback, setLadderPlayback] = useState<ShareLadderPlayback>();
+	useEffect(() => {
+		if (!ladder) return;
+		let live = true;
+		// A promise handed down from the server arrives as a React thenable
+		// whose then() returns nothing, so it is wrapped before chaining.
+		Promise.resolve(ladder)
+			.then((value) => {
+				if (live && value) setLadderPlayback(value);
+			})
+			.catch(() => {});
+		return () => {
+			live = false;
+		};
+	}, [ladder]);
 	const isScreenshot = data.isScreenshot === true;
 	// Memoized: a fresh Date each render would defeat the memoized `data`
 	// objects below and re-render Sidebar's whole tree on every poll tick.
@@ -974,6 +992,7 @@ export const Share = ({
 													<ShareVideo
 														initialPlaybackUrl={initialPlaybackUrl}
 														serverPlaybackUrl={serverPlaybackUrl}
+														ladder={ladderPlayback}
 														posterUrl={posterUrl}
 														data={shareVideoData}
 														comments={comments}
