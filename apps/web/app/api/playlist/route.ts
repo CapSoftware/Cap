@@ -29,6 +29,17 @@ import {
 	totalSegmentDuration,
 } from "@/lib/segment-playback";
 import { apiToHandler } from "@/lib/server";
+import {
+	readShareLadderFlag,
+	shareLadderEnabledFor,
+} from "@/lib/share-ladder-flag";
+import {
+	isShareLadderPlaylistFile,
+	rewriteShareLadderMaster,
+	rewriteShareLadderRendition,
+	SHARE_LADDER_MASTER,
+	shareLadderMediaFiles,
+} from "@/lib/share-ladder-policy";
 import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
@@ -53,11 +64,13 @@ const GetPlaylistParams = Schema.Struct({
 		"segments-video",
 		"segments-audio",
 		"segments-status",
+		"ladder",
 	),
 	requireComplete: Schema.OptionFromUndefinedOr(Schema.String),
 	earlyPlayback: Schema.OptionFromUndefinedOr(Schema.String),
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
 	fileType: Schema.OptionFromUndefinedOr(Schema.String),
+	file: Schema.OptionFromUndefinedOr(Schema.String),
 });
 
 class Api extends HttpApi.make("CapWebApi").add(
@@ -189,6 +202,94 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	});
 
+const LADDER_PLAYLIST_HEADERS = { "Cache-Control": "private, max-age=300" };
+
+const getLadderPlaylistResponse = (
+	video: Video.Video,
+	mp4Key: string,
+	file: string,
+) =>
+	Effect.gen(function* () {
+		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
+		if (
+			!isShareLadderPlaylistFile(file) ||
+			bucket.provider !== "s3" ||
+			Option.isSome(customBucket) ||
+			Option.isSome(video.storageIntegrationId)
+		) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+		const flag = yield* Effect.promise(() => readShareLadderFlag());
+		if (!shareLadderEnabledFor(flag, { id: video.id, orgId: video.orgId })) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+		const db = yield* Database;
+		const [ladder] = yield* db.use((db) =>
+			db
+				.select({
+					state: Db.shareLadders.state,
+					sourceKey: Db.shareLadders.sourceKey,
+					outputPrefix: Db.shareLadders.outputPrefix,
+				})
+				.from(Db.shareLadders)
+				.where(eq(Db.shareLadders.videoId, video.id))
+				.limit(1),
+		);
+		if (
+			!ladder ||
+			ladder.state !== "ready" ||
+			ladder.sourceKey !== mp4Key ||
+			!ladder.outputPrefix
+		) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+		const prefix = ladder.outputPrefix;
+		const text = yield* bucket.getObject(`${prefix}${file}`);
+		if (Option.isNone(text)) {
+			return yield* Effect.fail(new HttpApiError.NotFound());
+		}
+
+		if (file === SHARE_LADDER_MASTER) {
+			const master = yield* Effect.try({
+				try: () =>
+					rewriteShareLadderMaster(
+						text.value,
+						(name) =>
+							`/api/playlist?videoId=${encodeURIComponent(video.id)}&videoType=ladder&file=${encodeURIComponent(name)}`,
+					),
+				catch: () => new HttpApiError.InternalServerError(),
+			});
+			return HttpServerResponse.text(master, {
+				headers: {
+					...LADDER_PLAYLIST_HEADERS,
+					"Content-Type": "application/vnd.apple.mpegurl",
+				},
+			});
+		}
+
+		const media = shareLadderMediaFiles(text.value);
+		const signed = new Map<string, string>();
+		for (const name of media) {
+			signed.set(name, yield* bucket.getSignedObjectUrl(`${prefix}${name}`));
+		}
+		const rendition = yield* Effect.try({
+			try: () =>
+				rewriteShareLadderRendition(text.value, (name) => {
+					const url = signed.get(name);
+					if (!url) throw new Error(`Unsigned ladder media ${name}`);
+					return url;
+				}),
+			catch: () => new HttpApiError.InternalServerError(),
+		});
+		// Vercel's edge compresses text/plain but not the HLS playlist types.
+		return HttpServerResponse.text(rendition, {
+			headers: {
+				...LADDER_PLAYLIST_HEADERS,
+				"Content-Type": "text/plain; charset=utf-8",
+			},
+		});
+	});
+
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
@@ -201,6 +302,14 @@ const getPlaylistResponse = (
 		const mp4Key = isMp4Source
 			? source.getFileKey()
 			: `${video.ownerId}/${video.id}/result.mp4`;
+
+		if (urlParams.videoType === "ladder") {
+			return yield* getLadderPlaylistResponse(
+				video,
+				mp4Key,
+				Option.getOrElse(urlParams.file, () => SHARE_LADDER_MASTER),
+			);
+		}
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
