@@ -11,6 +11,7 @@ services:
     restart: unless-stopped
     environment:
       CAP_CHROME_EXTENSION_ID: ${CAP_CHROME_EXTENSION_ID:-}
+      CAP_FIREFOX_EXTENSION_ID: ${CAP_FIREFOX_EXTENSION_ID:-}
       DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
       WEB_URL: http://localhost:3000
       NEXTAUTH_URL: http://localhost:3000
