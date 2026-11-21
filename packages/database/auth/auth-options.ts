@@ -503,6 +503,9 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 				if (typeof token?.authTime === "number") {
 					(session as { authTime?: number }).authTime = token.authTime;
 				}
+				if (typeof token?.authMethod === "string") {
+					(session as { authMethod?: string }).authMethod = token.authMethod;
+				}
 
 				return session;
 			},
@@ -538,6 +541,7 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						if (user) {
 							token.id = user?.id;
 							token.authTime = signInTimestamp();
+							token.authMethod = account?.provider;
 						}
 						return token;
 					}
@@ -550,9 +554,18 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						picture: dbUser.image,
 						sessionVersion: dbUser.authSessionVersion,
 						...(user
-							? { authTime: signInTimestamp() }
+							? {
+									authTime: signInTimestamp(),
+									authMethod: account?.provider,
+								}
 							: typeof token.authTime === "number"
-								? { authTime: token.authTime }
+								? {
+										authTime: token.authTime,
+										authMethod:
+											typeof token.authMethod === "string"
+												? token.authMethod
+												: undefined,
+									}
 								: {}),
 					};
 				}

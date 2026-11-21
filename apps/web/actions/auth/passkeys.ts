@@ -7,7 +7,7 @@ import {
 	issueStepUpGrant,
 	verifyStepUpCode,
 } from "@cap/database/auth/auth-challenges";
-import { isFreshSignIn } from "@cap/database/auth/fresh-sign-in";
+import { canAddFirstPasskeyWithoutCode } from "@cap/database/auth/fresh-sign-in";
 import {
 	createPasskeyRegistrationOptions,
 	createPasskeySignInOptions,
@@ -42,11 +42,7 @@ export type PasskeyListItem = {
 };
 
 async function hasFreshSignIn(userId: string) {
-	const session = (await getSession()) as {
-		user?: { id?: string };
-		authTime?: number;
-	} | null;
-	return session?.user?.id === userId && isFreshSignIn(session?.authTime);
+	return canAddFirstPasskeyWithoutCode(await getSession(), userId);
 }
 
 async function requireUser() {
