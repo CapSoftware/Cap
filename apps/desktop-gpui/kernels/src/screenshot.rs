@@ -300,6 +300,11 @@ pub fn mask_filter(
     }
 
     let (x0, y0, width, height) = region;
+    if x0.checked_add(width).is_none_or(|end| end > frame_width)
+        || y0.checked_add(height).is_none_or(|end| end > frame_height)
+    {
+        return None;
+    }
     if pixelate {
         let block = (level.round() as u32).max(2);
         return pixelate_region(rgba, stride, region, block);
@@ -1079,5 +1084,28 @@ mod tests {
         }
         assert!(mask_filter(&rgba[..10], 16, 12, (0, 0, 1, 1), true, 8.).is_none());
         assert!(mask_filter(&rgba, 0, 12, (0, 0, 1, 1), true, 8.).is_none());
+    }
+
+    #[test]
+    fn mask_filter_rejects_a_region_past_the_frame() {
+        let rgba: Vec<u8> = (0..16u32 * 12 * 4).map(|value| value as u8).collect();
+        for pixelate in [false, true] {
+            assert!(mask_filter(&rgba, 16, 12, (10, 0, 7, 1), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (0, 11, 1, 2), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (16, 0, 1, 1), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (0, 0, u32::MAX, 1), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (1, 0, u32::MAX, 1), pixelate, 8.).is_none());
+            assert!(mask_filter(&rgba, 16, 12, (0, 1, 1, u32::MAX), pixelate, 8.).is_none());
+            assert!(mask_filter(
+                &rgba,
+                16,
+                12,
+                (u32::MAX, 0, u32::MAX, u32::MAX),
+                pixelate,
+                8.
+            )
+            .is_none());
+        }
+        assert!(mask_filter(&rgba, 16, 12, (0, 0, 16, 12), false, 8.).is_some());
     }
 }

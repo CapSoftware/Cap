@@ -8,6 +8,10 @@ pub fn fit_centered(image: &RgbaImage, target_width: u32, target_height: u32) ->
     let width = image.width();
     let height = image.height();
 
+    if target_width == 0 || target_height == 0 {
+        return RgbaImage::new(target_width, target_height);
+    }
+
     if width == target_width && height == target_height {
         return image.clone();
     }
@@ -41,6 +45,9 @@ pub fn fit_centered_capture(
     target_height: u32,
 ) -> RgbaImage {
     let (width, height) = (image.width(), image.height());
+    if target_width == 0 || target_height == 0 {
+        return RgbaImage::new(target_width, target_height);
+    }
     let channels = match &image {
         DynamicImage::ImageRgb8(_) => 3,
         DynamicImage::ImageRgba8(_) => 4,
@@ -396,6 +403,30 @@ fn lanczos3(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zero_target_does_not_panic() {
+        let image = RgbaImage::from_pixel(8, 6, image::Rgba([1, 2, 3, 255]));
+        assert_eq!(fit_centered(&image, 0, 0).dimensions(), (0, 0));
+        assert_eq!(fit_centered(&image, 0, 180).dimensions(), (0, 180));
+        assert_eq!(fit_centered(&image, 320, 0).dimensions(), (320, 0));
+        assert_eq!(
+            fit_centered_capture(DynamicImage::ImageRgba8(image.clone()), 0, 0).dimensions(),
+            (0, 0)
+        );
+        assert_eq!(
+            fit_centered_capture(DynamicImage::ImageRgba8(image.clone()), 0, 180).dimensions(),
+            (0, 180)
+        );
+        assert_eq!(
+            fit_centered_capture(DynamicImage::ImageRgba8(image.clone()), 320, 0).dimensions(),
+            (320, 0)
+        );
+        assert_eq!(
+            fit_centered_capture(DynamicImage::ImageRgba8(image), 320, 180).dimensions(),
+            (320, 180)
+        );
+    }
 
     fn fit_centered_with_unconditional_resize(
         image: &RgbaImage,
