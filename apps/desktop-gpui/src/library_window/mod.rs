@@ -414,6 +414,7 @@ impl LibraryWindow {
         let library = crate::meetings_ui::documents::store::library(cx);
         self.load_up_next(cx);
         let first = self.last_scan.is_none();
+        let member_paths = store::member_paths(&self.file);
         self.load_task = Some(cx.spawn(async move |this, cx| {
             if !first {
                 cx.background_executor()
@@ -422,9 +423,17 @@ impl LibraryWindow {
             }
             let started = Instant::now();
             let for_scan = library.clone();
-            let scan = cx
+            let (scan, gone) = cx
                 .background_executor()
-                .spawn(async move { load::scan(for_scan) })
+                .spawn(async move {
+                    // Disk checks for folder members happen here, off the main
+                    // thread: a slow or missing volume must not stall the UI.
+                    let gone: std::collections::BTreeSet<PathBuf> = member_paths
+                        .into_iter()
+                        .filter(|p| store::confirmed_gone(p))
+                        .collect();
+                    (load::scan(for_scan), gone)
+                })
                 .await;
             tracing::info!(
                 items = scan.items.len(),
@@ -435,7 +444,7 @@ impl LibraryWindow {
                 this.load_task = None;
                 this.last_scan = Some(Instant::now());
                 this.scan = Rc::new(scan);
-                this.prune_members();
+                this.prune_members(&gone);
                 this.reevaluate(cx);
                 this.index_people(library, cx);
                 if std::mem::take(&mut this.reload_again) {
@@ -448,7 +457,11 @@ impl LibraryWindow {
 
     /// Second pass after a scan: speaker names from transcripts, cached.
     /// The list is already on screen; names arrive a moment later.
-    fn index_people(&mut self, library: Option<cap_meetings::library::Library>, cx: &mut Context<Self>) {
+    fn index_people(
+        &mut self,
+        library: Option<cap_meetings::library::Library>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(library) = library else {
             return;
         };
@@ -458,7 +471,9 @@ impl LibraryWindow {
             .iter()
             .filter(|i| i.kind == ItemKind::Meeting)
             .filter_map(|i| match &i.key {
-                items::ItemKey::Doc(id) => library.transcript_path(id).ok().map(|p| (id.clone(), p)),
+                items::ItemKey::Doc(id) => {
+                    library.transcript_path(id).ok().map(|p| (id.clone(), p))
+                }
                 _ => None,
             })
             .collect();
@@ -540,29 +555,24 @@ impl LibraryWindow {
             });
     }
 
-    /// Forgets folder entries for recordings and screenshots that are gone
-    /// and for folders that were deleted. Only after a full scan, never with
-    /// made-up items mixed in, and never when the file is read-only.
-    fn prune_members(&mut self) {
+    /// Forgets folder entries that are known to be stale: files confirmed
+    /// gone on disk, and folders the notes library no longer has (only when
+    /// it loaded). Never from made-up items, never when the file is read-only.
+    fn prune_members(&mut self, gone: &std::collections::BTreeSet<PathBuf>) {
         if self.file.members.is_empty()
             || self.outcome == store::LoadOutcome::ReadOnly
             || std::env::var_os("CAP_GPUI_LIBRARY_SEED").is_some()
         {
             return;
         }
-        let folders: std::collections::BTreeSet<String> =
-            self.scan.folders.iter().map(|f| f.id.clone()).collect();
-        let live: std::collections::BTreeSet<String> = self
+        let folders: Option<std::collections::BTreeSet<String>> = self
             .scan
-            .items
-            .iter()
-            .filter(|i| !i.kind.is_doc())
-            .map(|i| i.key.stored())
-            .collect();
+            .folders_loaded
+            .then(|| self.scan.folders.iter().map(|f| f.id.clone()).collect());
         let mut probe = self.file.clone();
-        if store::prune_members(&mut probe, &folders, &live)
+        if store::prune_members(&mut probe, folders.as_ref(), |p| gone.contains(p))
             && let Ok(file) = store::update(&self.dir, |file| {
-                store::prune_members(file, &folders, &live);
+                store::prune_members(file, folders.as_ref(), |p| gone.contains(p));
             })
         {
             self.file = file;

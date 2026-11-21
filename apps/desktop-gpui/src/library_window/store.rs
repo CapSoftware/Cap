@@ -211,17 +211,56 @@ fn write_atomic(dir: &Path, file: &LibraryFile) -> std::io::Result<()> {
     })
 }
 
-/// Drops memberships for folders that no longer exist and for items that
-/// are gone. Called after a full scan, never from a partial one.
+/// Whether a file is known to be gone: its folder is there and readable and
+/// the file itself is not. An unplugged drive (no folder), a folder we may not
+/// read, or any other error is "don't know", and "don't know" never deletes.
+pub fn confirmed_gone(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if std::fs::read_dir(parent).is_err() {
+        return false;
+    }
+    matches!(
+        std::fs::symlink_metadata(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
+/// Every `path:` member, for a background `confirmed_gone` pass.
+pub fn member_paths(file: &LibraryFile) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = file
+        .members
+        .values()
+        .flatten()
+        .filter_map(|key| key.strip_prefix("path:").map(PathBuf::from))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Drops memberships that are known to be stale, and nothing else:
+/// - folders only when `folder_ids` is the list of folders that really
+///   loaded (`None` when the notes library could not be read: keep them all);
+/// - `path:` members only when `gone` says that exact file is confirmed gone.
+///
+/// A partial scan (a missing drive, a failed read) can never delete a
+/// membership, because nothing here looks at what a scan found.
 pub fn prune_members(
     file: &mut LibraryFile,
-    folder_ids: &BTreeSet<String>,
-    live_keys: &BTreeSet<String>,
+    folder_ids: Option<&BTreeSet<String>>,
+    gone: impl Fn(&Path) -> bool,
 ) -> bool {
     let before = file.members.clone();
-    file.members.retain(|id, _| folder_ids.contains(id));
+    if let Some(ids) = folder_ids {
+        file.members.retain(|id, _| ids.contains(id));
+    }
     for keys in file.members.values_mut() {
-        keys.retain(|k| live_keys.contains(k));
+        keys.retain(|k| match k.strip_prefix("path:") {
+            Some(path) => !gone(Path::new(path)),
+            None => true,
+        });
     }
     file.members.retain(|_, keys| !keys.is_empty());
     before != file.members
@@ -408,22 +447,78 @@ mod tests {
         assert_eq!(file.smart_folders[0].rules.len(), MAX_RULES);
     }
 
-    #[test]
-    fn pruning_drops_gone_folders_and_items_only() {
+    fn member_file(keys: &[String]) -> LibraryFile {
         let mut file = LibraryFile::default();
-        file.members.insert(
-            "kept".into(),
-            ["path:/a".into(), "path:/gone".into()].into(),
-        );
         file.members
-            .insert("deleted".into(), ["path:/a".into()].into());
-        let changed = prune_members(
-            &mut file,
-            &["kept".to_string()].into(),
-            &["path:/a".to_string()].into(),
+            .insert("folder".into(), keys.iter().cloned().collect());
+        file
+    }
+
+    fn prune_from_disk(file: &mut LibraryFile, folders: Option<&BTreeSet<String>>) -> bool {
+        let gone: BTreeSet<PathBuf> = member_paths(file)
+            .into_iter()
+            .filter(|p| confirmed_gone(p))
+            .collect();
+        prune_members(file, folders, |p| gone.contains(p))
+    }
+
+    #[test]
+    fn a_really_deleted_recording_is_pruned() {
+        let dir = scratch("deleted");
+        let kept = dir.join("kept.cap");
+        let deleted = dir.join("deleted.cap");
+        std::fs::create_dir_all(&kept).unwrap();
+        let mut file = member_file(&[
+            format!("path:{}", kept.display()),
+            format!("path:{}", deleted.display()),
+        ]);
+        assert!(prune_from_disk(&mut file, None));
+        assert_eq!(
+            file.members["folder"].iter().collect::<Vec<_>>(),
+            [&format!("path:{}", kept.display())]
         );
-        assert!(changed);
-        assert_eq!(file.members.len(), 1);
-        assert_eq!(file.members["kept"].len(), 1);
+    }
+
+    #[test]
+    fn an_unplugged_recordings_drive_keeps_every_membership() {
+        let mut file = member_file(&[
+            "path:/Volumes/Not Plugged In/Cap/Demo.cap".into(),
+            "path:/Volumes/Not Plugged In/Cap/Other.cap".into(),
+        ]);
+        let before = file.clone();
+        assert!(!prune_from_disk(&mut file, None));
+        assert_eq!(file, before);
+    }
+
+    #[test]
+    fn an_unreadable_screenshots_folder_keeps_its_memberships() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("unreadable");
+        let shots = dir.join("screenshots");
+        std::fs::create_dir_all(shots.join("a.cap")).unwrap();
+        std::fs::set_permissions(&shots, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut file = member_file(&[
+            format!("path:{}", shots.join("a.cap").display()),
+            format!("path:{}", shots.join("b.cap").display()),
+        ]);
+        let before = file.clone();
+        let changed = prune_from_disk(&mut file, None);
+        std::fs::set_permissions(&shots, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!changed);
+        assert_eq!(file, before);
+    }
+
+    #[test]
+    fn a_notes_library_that_failed_to_open_keeps_folder_memberships() {
+        let dir = scratch("noopen");
+        let kept = dir.join("kept.cap");
+        std::fs::create_dir_all(&kept).unwrap();
+        let mut file = member_file(&[format!("path:{}", kept.display())]);
+        // The folders list is unknown (library did not open): nothing goes.
+        assert!(!prune_from_disk(&mut file, None));
+        assert!(file.members.contains_key("folder"));
+        // Loaded, and the folder really was deleted: its members go.
+        assert!(prune_from_disk(&mut file, Some(&BTreeSet::new())));
+        assert!(file.members.is_empty());
     }
 }

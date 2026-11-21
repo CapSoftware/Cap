@@ -11,6 +11,9 @@ use super::items::{Item, ItemFacts, ItemKey, ItemKind, sort_newest_first};
 pub struct Scan {
     pub items: Vec<Item>,
     pub folders: Vec<Folder>,
+    /// The notes library opened and its folder list was read, so `folders`
+    /// is the whole truth. False means "unknown", never "none".
+    pub folders_loaded: bool,
 }
 
 fn millis_to_utc(ms: f64) -> DateTime<Utc> {
@@ -86,11 +89,15 @@ pub fn scan(library: Option<Library>) -> Scan {
         ));
     }
     let mut folders = Vec::new();
+    let mut folders_loaded = false;
     if let Some(library) = library.as_ref() {
         let snapshot = crate::meetings_ui::documents::store::load_snapshot(library);
         for meta in snapshot.docs.iter().chain(snapshot.trashed.iter()) {
             items.push(doc_item(Some(library), meta));
         }
+        // load_snapshot reads folders leniently (an error is an empty list);
+        // ask again so a failed read is told apart from "no folders".
+        folders_loaded = library.folders().is_ok();
         folders = snapshot.folders;
     }
     if let Some(seed) = seed_from_env() {
@@ -100,7 +107,11 @@ pub fn scan(library: Option<Library>) -> Scan {
         }
     }
     sort_newest_first(&mut items);
-    Scan { items, folders }
+    Scan {
+        items,
+        folders,
+        folders_loaded,
+    }
 }
 
 /// `CAP_GPUI_LIBRARY_SEED=<count>`: a made-up library for screenshots and
@@ -280,7 +291,11 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
         };
         items.push(item);
     }
-    Scan { items, folders }
+    Scan {
+        items,
+        folders,
+        folders_loaded: false,
+    }
 }
 
 fn seed_folder(id: &str, name: &str) -> Folder {
