@@ -128,7 +128,20 @@ impl AACEncoder {
             }
         }
 
-        Self::init(input_config, output)
+        // FFmpeg's mid/side search is ~70% of this encoder's time on Cap's
+        // voice-heavy audio, and at 320 kbps the bits it saves are not needed:
+        // without it the reference recording still round-trips at 58 dB SNR
+        // (60 dB with it). See #4041.
+        let mut options = ffmpeg::Dictionary::new();
+        options.set("aac_ms", "0");
+        Self::init_with_codec(
+            "aac",
+            options,
+            Self::OUTPUT_BITRATE,
+            Priming::Keep,
+            input_config,
+            output,
+        )
     }
 
     fn init_with_codec(
