@@ -51,9 +51,6 @@ pub fn open_audio_in_editor(sources: AudioProjectSources, pretty_name: String, c
     .detach();
 }
 
-/// Creates an empty Studio project in the recordings folder, with nothing
-/// recorded, and opens it in the editor to build a video from a background,
-/// music, keys, text and images. A failure is reported in a dialog.
 pub fn open_blank_in_editor(cx: &mut App) {
     let pretty_name = tr::import::blank_name().to_string();
     let created = cx.background_executor().spawn(async move {

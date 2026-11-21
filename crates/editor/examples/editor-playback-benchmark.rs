@@ -641,8 +641,6 @@ async fn main() {
         let _ = frame_tx.send((bytes, Instant::now()));
     });
 
-    // `--bgra-surface` renders into IOSurfaces the way the desktop editor
-    // does, instead of reading RGBA frames back to the CPU.
     #[cfg(target_os = "macos")]
     let output_format = if args.iter().any(|arg| arg == "--bgra-surface") {
         cap_editor::EditorFrameFormat::BgraSurface
