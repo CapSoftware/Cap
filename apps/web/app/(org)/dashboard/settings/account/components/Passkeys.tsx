@@ -51,6 +51,13 @@ export const Passkeys = ({
 }) => {
 	const router = useRouter();
 	const [passkeys, setPasskeys] = useState(initialPasskeys);
+	// A passkey added elsewhere (the dashboard prompt) arrives through
+	// router.refresh() as a new prop, so take the server's list when it changes.
+	const [syncedPasskeys, setSyncedPasskeys] = useState(initialPasskeys);
+	if (syncedPasskeys !== initialPasskeys) {
+		setSyncedPasskeys(initialPasskeys);
+		setPasskeys(initialPasskeys);
+	}
 	const [supported, setSupported] = useState<boolean | null>(null);
 	const [verifyOpen, setVerifyOpen] = useState(false);
 	const [verifyPurpose, setVerifyPurpose] = useState<"add" | "remove">("add");
