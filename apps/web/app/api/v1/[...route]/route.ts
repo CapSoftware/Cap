@@ -6247,6 +6247,15 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										),
 									);
 								await tx
+									.update(Db.mcpOAuthCodes)
+									.set({ consumedAt: new Date() })
+									.where(
+										and(
+											eq(Db.mcpOAuthCodes.userId, principal.id),
+											isNull(Db.mcpOAuthCodes.consumedAt),
+										),
+									);
+								await tx
 									.update(Db.agentApiKeys)
 									.set({ revokedAt: new Date() })
 									.where(

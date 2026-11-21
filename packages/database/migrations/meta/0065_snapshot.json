@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "20f6d4bd-01f4-42f4-acad-195abcebd6d9",
+	"id": "b303592d-54ac-4370-ae15-4f84f46fefc9",
 	"prevId": "8ac84ca4-d730-45c1-82f8-48ed8ca42cf5",
 	"tables": {
 		"accounts": {
@@ -3239,6 +3239,11 @@
 				"expires_at_idx": {
 					"name": "expires_at_idx",
 					"columns": ["expiresAt"],
+					"isUnique": false
+				},
+				"user_consumed_idx": {
+					"name": "user_consumed_idx",
+					"columns": ["userId", "consumedAt"],
 					"isUnique": false
 				}
 			},

@@ -1249,6 +1249,7 @@ export const mcpOAuthCodes = mysqlTable(
 	(table) => [
 		uniqueIndex("code_hash_idx").on(table.codeHash),
 		index("expires_at_idx").on(table.expiresAt),
+		index("user_consumed_idx").on(table.userId, table.consumedAt),
 	],
 );
 
