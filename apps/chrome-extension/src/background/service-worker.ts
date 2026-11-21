@@ -1065,17 +1065,21 @@ const setUploadProgressTabId = (tabId: number | null) => {
 	void saveUploadProgressTabId(tabId).catch(() => undefined);
 };
 
-const getUploadProgressTabId = async () => {
-	if (uploadProgressTabId !== null) return uploadProgressTabId;
-	const persisted = await loadUploadProgressTabId().catch(() => null);
-	if (persisted === null) return null;
-	const tab = await getTab(persisted);
-	if (!tab) {
-		void saveUploadProgressTabId(null).catch(() => undefined);
+const getUploadProgressTabId = async (videoId?: string) => {
+	const tabId =
+		uploadProgressTabId ?? (await loadUploadProgressTabId().catch(() => null));
+	if (tabId === null) return null;
+	const tab = await getTab(tabId);
+	const url = tab?.pendingUrl ?? tab?.url;
+	if (!url?.startsWith(`${chrome.runtime.getURL("uploading.html")}?`)) {
+		setUploadProgressTabId(null);
 		return null;
 	}
-	uploadProgressTabId = persisted;
-	return persisted;
+
+	uploadProgressTabId = tabId;
+	return videoId === undefined || url === getUploadProgressUrl(videoId)
+		? tabId
+		: null;
 };
 
 const openRecordingDestinationInner = async (status: RecordingStatus) => {
@@ -2157,7 +2161,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 			await saveWebcamPreviewDismissed(true);
 			await broadcastOverlayHide();
 			if (message.status.phase !== "completed") return;
-			const tabId = await getUploadProgressTabId();
+			const tabId = await getUploadProgressTabId(message.status.videoId);
 			if (tabId === null) return;
 			setUploadProgressTabId(null);
 			await updateTab(tabId, message.status.shareUrl);

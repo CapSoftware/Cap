@@ -31,6 +31,7 @@ type MockState = {
 	uploadHeaders: Record<string, string | string[] | undefined>[];
 	videoId: string;
 	bootstrapDelayMs: number;
+	completeGate?: Promise<void>;
 };
 
 type ChromeGlobal = typeof globalThis & {
@@ -299,6 +300,7 @@ const createMockCapServer = async () => {
 				url.pathname === "/api/upload/multipart/complete"
 			) {
 				state.completeBodies.push(await parseJsonBody(request));
+				await state.completeGate;
 				sendJson(response, 200, {
 					success: true,
 					processingStarted: true,
@@ -903,6 +905,59 @@ test.describe("extension recording upload", () => {
 		expect(stopResponse).toMatchObject({ ok: true });
 
 		await expectSuccessfulUpload(messengerPage, mockServer.state);
+	});
+
+	test("keeps the user's navigation when an upload finishes", async () => {
+		if (!extension || !mockServer)
+			throw new Error("Test harness did not start");
+		let finishUpload!: () => void;
+		mockServer.state.completeGate = new Promise<void>((resolve) => {
+			finishUpload = resolve;
+		});
+		try {
+			const worker = await getServiceWorker(extension.context);
+			const { messengerPage } = await startRecording(
+				extension.context,
+				worker,
+				mockServer.origin,
+			);
+			await sendServiceWorkerMessage(messengerPage, {
+				target: "service-worker",
+				type: "stop-recording",
+			});
+			await expect.poll(() => mockServer?.state.completeBodies.length).toBe(1);
+			await expect
+				.poll(() =>
+					extension?.context
+						.pages()
+						.some((page) => page.url().includes("/uploading.html?videoId=")),
+				)
+				.toBe(true);
+			const uploadPage = extension.context
+				.pages()
+				.find((page) => page.url().includes("/uploading.html?videoId="));
+			if (!uploadPage) throw new Error("Upload tab did not open");
+			const destination = `${mockServer.origin}/capture.html?working`;
+			await uploadPage.goto(destination);
+			// The worker publishes completed before checking the tab. Its response
+			// waits for that check, so drive completion while the upload is gated.
+			const completionResponse = await sendServiceWorkerMessage(messengerPage, {
+				target: "recording-status",
+				type: "recording-status-changed",
+				status: {
+					phase: "completed",
+					videoId: mockServer.state.videoId,
+					shareUrl: `${mockServer.origin}/share/${mockServer.state.videoId}`,
+				},
+			});
+			expect(completionResponse).toMatchObject({ ok: true });
+			await expect(uploadPage).toHaveURL(destination);
+			finishUpload();
+			await expectSuccessfulUpload(messengerPage, mockServer.state);
+			await expect(uploadPage).toHaveURL(destination);
+		} finally {
+			finishUpload();
+		}
 	});
 
 	test("records a tab in the tab's own shape", async () => {
