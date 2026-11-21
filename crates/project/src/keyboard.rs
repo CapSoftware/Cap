@@ -1358,16 +1358,12 @@ const SOLO_SHORTCUT_KEYS: &[&str] = &[
 /// A Shift press followed this soon by an unmodified key is typing.
 const SHIFT_TYPING_MS: f64 = 1000.0;
 
-fn is_typed_character(key: &str) -> bool {
-    key.chars().count() == 1 && key.chars().all(|c| c.is_ascii_alphanumeric())
-}
-
 /// Key presses as shortcuts only, the way a demo shows them: every press
 /// with a modifier, unless Shift is held and typing carries on within a
 /// second (a capital, a word in capitals); and, on their own, the
 /// moving, deleting and function keys. With `show_single_keys`, every other
-/// lone key shows too, except letters and digits struck within a second of
-/// each other, which are typing. Pressing the same shortcut again within two
+/// lone key shows too, except characters struck within a second of each
+/// other, which are typing. Pressing the same shortcut again within two
 /// seconds extends its label rather than starting a new one; each press is
 /// kept so the overlay can strike the key again.
 pub fn group_shortcuts(
@@ -1410,9 +1406,12 @@ pub fn group_shortcuts(
     let mut presses: Vec<Press> = Vec::new();
     let mut plain: Vec<(usize, f64)> = Vec::new();
     for (index, (event, held)) in strokes.iter().enumerate() {
-        let shift = held
-            .iter()
-            .any(|key| matches!(key.as_str(), "LShift" | "RShift"));
+        // Only Shift on its own can be typing; Cmd or Ctrl with Shift is a
+        // shortcut even when typing follows (a command palette, then a query).
+        let shift = !held.is_empty()
+            && held
+                .iter()
+                .all(|key| matches!(key.as_str(), "LShift" | "RShift"));
         // Typing carries on when the next key comes within a second with
         // nothing held, or with Shift still held on a character or space
         // (a word in capitals, a question mark and a space).
@@ -1436,7 +1435,7 @@ pub fn group_shortcuts(
                 display: format!("{}{}", modifier_prefix(held), display_key.to_uppercase()),
             });
         } else if show_single_keys || SOLO_SHORTCUT_KEYS.contains(&event.key.as_str()) {
-            if show_single_keys && is_typed_character(&event.key) {
+            if show_single_keys && character {
                 plain.push((presses.len(), event.time_ms));
             }
             presses.push(Press {
@@ -1593,6 +1592,34 @@ mod tests {
         let texts: Vec<&str> = segments.iter().map(|s| s.display_text.as_str()).collect();
         assert_eq!(texts, ["⇧⇥"]);
         assert_eq!(segments[0].keys.len(), 2);
+    }
+
+    /// Cmd or Ctrl with Shift stays a shortcut when typing follows at once,
+    /// and punctuation typed inside a sentence stays hidden with single keys
+    /// on.
+    #[test]
+    fn a_shift_shortcut_before_typing_and_punctuation_in_typing() {
+        let mut presses = Vec::new();
+        presses.extend(shortcut(&["LMeta", "LShift"], "p", 1000.0));
+        presses.extend([key_down("f", 1300.0), key_down("o", 1400.0)]);
+        presses.extend([
+            key_down("h", 5000.0),
+            key_down("i", 5100.0),
+            key_down(",", 5200.0),
+            key_down("y", 5300.0),
+            key_down(".", 5400.0),
+        ]);
+        let events = KeyboardEvents { presses };
+        let texts: Vec<String> = group_shortcuts(&events, 1500.0, false)
+            .into_iter()
+            .map(|s| s.display_text)
+            .collect();
+        assert_eq!(texts, ["⇧⌘P"]);
+        let texts: Vec<String> = group_shortcuts(&events, 1500.0, true)
+            .into_iter()
+            .map(|s| s.display_text)
+            .collect();
+        assert_eq!(texts, ["⇧⌘P"]);
     }
 
     /// Moving, deleting and function keys show on their own; Return,
