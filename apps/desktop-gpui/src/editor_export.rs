@@ -3111,6 +3111,7 @@ impl EditorWindow {
             )
             .stretch()
             .item_height(px(30.))
+            .item_padding(px(6.), px(0.))
             .on_select(cx.listener(|this, index: &usize, window, cx| {
                 let Some(dest) = ui::option_at(ExportDestination::ALL, *index) else {
                     return;
@@ -3821,6 +3822,8 @@ impl EditorWindow {
                             )
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .text_size(px(11.5))
                                     .line_height(px(15.))
                                     .text_color(Hsla::from(editor.text_2))
@@ -4433,8 +4436,9 @@ fn export_stat(
 ) -> impl IntoElement {
     let editor = theme.editor;
     div()
+        .debug_selector(|| label.to_string())
         .flex()
-        .flex_1()
+        .flex_auto()
         .min_w_0()
         .flex_col()
         .justify_center()
@@ -4720,6 +4724,94 @@ fn export_progress(
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Render, VisualTestContext, point, size};
+
+    struct ExportStatsView;
+
+    impl Render for ExportStatsView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::prelude::*;
+
+            let theme = crate::theme::Theme::dark();
+            gpui::div()
+                .w(gpui::px(520.))
+                .h(gpui::px(44.))
+                .flex()
+                .child(super::export_stat(
+                    &theme,
+                    "Duration",
+                    Some("2:47".into()),
+                    false,
+                ))
+                .child(super::export_stat(
+                    &theme,
+                    "Output",
+                    Some("1660×1080 · 30 fps".into()),
+                    true,
+                ))
+                .child(super::export_stat(
+                    &theme,
+                    "Estimated size",
+                    Some("~141 MB".into()),
+                    true,
+                ))
+                .child(super::export_stat(
+                    &theme,
+                    "Export time",
+                    Some("~1.2–1.5 min".into()),
+                    true,
+                ))
+        }
+    }
+
+    #[gpui::test]
+    fn export_values_fit_within_their_stats(cx: &mut gpui::TestAppContext) {
+        use gpui::prelude::*;
+        use gpui::{AvailableSpace, FontWeight, div, px};
+
+        let window = cx.open_window(size(px(520.), px(100.)), |_, _| ExportStatsView);
+        cx.run_until_parked();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        for (label, value) in [
+            ("Duration", "2:47"),
+            ("Output", "1660×1080 · 30 fps"),
+            ("Estimated size", "~141 MB"),
+            ("Export time", "~1.2–1.5 min"),
+        ] {
+            let stat = visual.debug_bounds(label).unwrap();
+            let mut text_width = px(0.);
+            visual.draw(
+                point(px(0.), px(0.)),
+                size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                |window, cx| {
+                    text_width = div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .whitespace_nowrap()
+                        .child(value)
+                        .into_any_element()
+                        .layout_as_root(
+                            size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                            window,
+                            cx,
+                        )
+                        .width;
+                    div()
+                },
+            );
+            let border_width = if label == "Duration" { 0. } else { 1. };
+            assert!(
+                text_width <= stat.size.width - px(32. + border_width),
+                "{label} text width {text_width:?} exceeds cell width {:?}",
+                stat.size.width
+            );
+        }
+    }
+
     #[test]
     fn export_progress_does_not_restart_when_turbo_falls_back() {
         let (tx, rx) = flume::unbounded();
