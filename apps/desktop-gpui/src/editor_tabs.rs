@@ -2684,6 +2684,15 @@ impl EditorWindow {
 
     // -- Keyboard ------------------------------------------------------------
 
+    /// A setting that changes which recorded keys show takes effect at once:
+    /// the recording's keys are generated again (keys added by hand stay),
+    /// and undoable, while keys are on.
+    pub(crate) fn refresh_recorded_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if keyboard_settings(&self.project).enabled {
+            self.generate_keyboard_segments_clicked(window, cx);
+        }
+    }
+
     /// Turning keys on for a recording that has none on its timeline yet
     /// generates them, rather than leaving an empty track behind a button.
     pub(crate) fn generate_keyboard_segments_if_empty(
@@ -3132,13 +3141,7 @@ impl EditorWindow {
                                                 cx,
                                                 move |settings| settings.show_typing = next,
                                             );
-                                            // An empty track fills in; keys
-                                            // already there are kept.
-                                            if next {
-                                                this.generate_keyboard_segments_if_empty(
-                                                    window, cx,
-                                                );
-                                            }
+                                            this.refresh_recorded_keys(window, cx);
                                         },
                                     )),
                                 ),
@@ -3165,6 +3168,7 @@ impl EditorWindow {
                                                 cx,
                                                 move |settings| settings.show_modifiers = next,
                                             );
+                                            this.refresh_recorded_keys(window, cx);
                                         },
                                     )),
                                 ),
@@ -3191,6 +3195,7 @@ impl EditorWindow {
                                             cx,
                                             move |settings| settings.show_special_keys = next,
                                         );
+                                        this.refresh_recorded_keys(window, cx);
                                     },
                                 )),
                             ),
