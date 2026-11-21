@@ -603,9 +603,18 @@ impl Export {
             builder = builder.with_output_path(output_path);
         }
 
-        if settings.cursor_only() {
-            builder = builder.with_config(make_cursor_only_project(meta.project_config()));
-        }
+        // `meta.project_config()` already falls back to a default/new-project
+        // config when `project-config.json` is missing or unreadable (the
+        // same fallback `cap project validate`/`inspect`/`config get` rely
+        // on). Wire it in unconditionally so the exporter never falls through
+        // to `ExporterBuilder`'s own `ProjectConfiguration::load`, which has
+        // no such fallback and turns a missing/corrupt config into a hard
+        // export failure on a project `validate` reports as valid.
+        builder = builder.with_config(if settings.cursor_only() {
+            make_cursor_only_project(meta.project_config())
+        } else {
+            meta.project_config()
+        });
 
         let exporter = settings.prepare(builder).await?;
         let total_frames = exporter.total_frames(settings.fps());
