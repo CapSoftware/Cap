@@ -41,23 +41,10 @@ pub fn reduce_transparency() -> bool {
 /// What the sidebar paints over the window's glass: enough to keep its text
 /// legible over any desktop, little enough that the glass reads as glass.
 pub fn sidebar_wash(dark: bool) -> Hsla {
-    // Dev builds: `CAP_GPUI_NOTES_WASH=<light>,<dark>` overrides the alphas
-    // to tune them against real desktops.
-    static WASH: std::sync::OnceLock<(f32, f32)> = std::sync::OnceLock::new();
-    let (light, dark_alpha) = *WASH.get_or_init(|| {
-        cfg!(debug_assertions)
-            .then(|| std::env::var("CAP_GPUI_NOTES_WASH").ok())
-            .flatten()
-            .and_then(|v| {
-                let (l, d) = v.split_once(',')?;
-                Some((l.parse().ok()?, d.parse().ok()?))
-            })
-            .unwrap_or((0.45, 0.50))
-    });
     if dark {
-        hsla(240. / 360., 0.04, 0.11, dark_alpha)
+        hsla(240. / 360., 0.04, 0.11, 0.50)
     } else {
-        hsla(0., 0., 1., light)
+        hsla(0., 0., 1., 0.45)
     }
 }
 
