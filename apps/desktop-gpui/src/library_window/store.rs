@@ -490,6 +490,8 @@ mod tests {
         assert_eq!(file, before);
     }
 
+    // Unix permissions make the folder unreadable; Windows has no mode bits.
+    #[cfg(unix)]
     #[test]
     fn an_unreadable_screenshots_folder_keeps_its_memberships() {
         use std::os::unix::fs::PermissionsExt as _;
