@@ -103,13 +103,13 @@ pub struct TapHeard {
     pub sound: bool,
 }
 
-/// Whether the call's audio is missing its permission. Before macOS 27.3 a
-/// tap that never asked raises the system prompt itself, so only a refusal
-/// with a tap that never called back counts. From 27.3 nothing prompts (the
-/// grant is added with + in System Settings) and a tap without it records
-/// exact zeros, so anything short of a grant counts while the tap has heard
-/// no sound. The grant alone never decides it there: this process's copy can
-/// lag a grant made in System Settings, and Unknown means it couldn't be read.
+/// Whether the call's audio is missing its permission. Before macOS 27.3
+/// only a refusal with a tap that never called back counts. From 27.3 the
+/// system audio prompt still appears (measured on 27.3 beta 2), but a tap
+/// without the grant records exact zeros, so anything short of a grant counts
+/// while the tap has heard no sound. The grant alone never decides it there:
+/// this process's copy can lag a grant made in System Settings, and Unknown
+/// means it couldn't be read.
 pub fn system_audio_missing(grant: AudioGrant, settings_only: bool, tap: TapHeard) -> bool {
     match grant {
         AudioGrant::Granted => false,
