@@ -982,6 +982,7 @@ impl LibraryWindow {
             "recordings" => self.section = Section::Kind(KindView::Recordings),
             "screenshots" => self.section = Section::Kind(KindView::Screenshots),
             "notes" => self.section = Section::Kind(KindView::Notes),
+            "trash" => self.section = Section::Trash,
             "list" => self.section = Section::Kind(KindView::Notes),
             "editor" => self.open_editor(
                 Some(SmartFolder {
