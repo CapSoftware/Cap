@@ -4,6 +4,7 @@
 
 #[doc(hidden)]
 pub mod bench;
+pub mod index;
 pub mod items;
 pub mod load;
 pub mod people;
@@ -61,7 +62,7 @@ impl Direction {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum KindView {
     Recordings,
     Screenshots,
@@ -102,7 +103,7 @@ impl KindView {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
     Home,
     Kind(KindView),
@@ -214,6 +215,8 @@ pub struct LibraryWindow {
     file: store::LibraryFile,
     outcome: store::LoadOutcome,
     smart_members: HashMap<String, Vec<u32>>,
+    membership: index::Membership,
+    counts: HashMap<Section, usize>,
     visible: Rc<Vec<u32>>,
     search: Entity<TextInputState>,
     query: String,
@@ -414,6 +417,8 @@ impl LibraryWindow {
             file: loaded.file,
             outcome: loaded.outcome,
             smart_members: HashMap::new(),
+            membership: index::Membership::default(),
+            counts: HashMap::new(),
             visible: Rc::new(Vec::new()),
             search,
             query: String::new(),
@@ -657,19 +662,14 @@ impl LibraryWindow {
     }
 
     fn in_folder(&self, id: &str, item: &Item) -> bool {
-        if item.kind.is_doc() {
-            return item.notes_folder.as_deref() == Some(id);
-        }
-        self.file
-            .members
-            .get(id)
-            .is_some_and(|keys| keys.contains(&item.key.stored()))
+        self.membership.holds(id, item)
     }
 
     /// Smart folder counts, then the visible list. Runs on the main thread:
     /// 10k items x 20 folders measures in single milliseconds (see the rules
     /// benchmark test), well under a frame.
     fn reevaluate(&mut self, cx: &mut Context<Self>) {
+        self.membership = index::Membership::from_file(&self.file);
         let folders = self.file.smart_folders.clone();
         let members = {
             let holds = |id: &str, item: &Item| self.in_folder(id, item);
@@ -681,6 +681,12 @@ impl LibraryWindow {
             rules::evaluate_all(&folders, &self.scan.items, &ctx)
         };
         self.smart_members = members;
+        self.counts = index::counts(
+            &self.scan.items,
+            &self.scan.folders,
+            &self.smart_members,
+            &self.membership,
+        );
         self.section = section_after(&self.section, &self.file);
         if let Some(editor) = self.editor.as_mut() {
             editor.count = 0;
@@ -751,21 +757,11 @@ impl LibraryWindow {
         }
     }
 
+    /// Sidebar counts, computed once per change in `reevaluate`.
     fn count_for(&self, section: &Section) -> usize {
-        let items = &self.scan.items;
         match section {
-            Section::Kind(kind) => items
-                .iter()
-                .filter(|i| !i.trashed && kind.holds(i.kind))
-                .count(),
-            Section::Pinned => items.iter().filter(|i| !i.trashed && i.pinned).count(),
-            Section::Folder(id) => items
-                .iter()
-                .filter(|i| !i.trashed && self.in_folder(id, i))
-                .count(),
-            Section::Smart(id) => self.smart_members.get(id).map_or(0, Vec::len),
-            Section::Trash => items.iter().filter(|i| i.trashed).count(),
-            Section::Home => items.len(),
+            Section::Home => self.scan.items.len(),
+            other => self.counts.get(other).copied().unwrap_or(0),
         }
     }
 

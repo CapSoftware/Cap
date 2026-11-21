@@ -36,6 +36,7 @@ pub enum ItemKey {
 
 impl ItemKey {
     /// The string a manual folder stores for this item.
+    #[cfg(test)]
     pub fn stored(&self) -> String {
         match self {
             Self::Doc(id) => format!("doc:{id}"),
