@@ -615,7 +615,6 @@ fn stitch<F: FnMut(u32) -> bool>(
         ),
         None => None,
     };
-    // Faststart, as in the standard export.
     let mut options = ffmpeg::Dictionary::new();
     options.set("movflags", "+faststart");
     output
