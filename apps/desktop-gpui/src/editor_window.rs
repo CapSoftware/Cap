@@ -17628,6 +17628,10 @@ mod tests {
                     editor.set_project(config, window, cx);
                     editor.transport = Some(handle);
                 });
+                // Hover and edits redraw the editor's timeline section, not
+                // the editor itself; this view draws the rows in its place.
+                let rows = editor.read(cx).timeline_view.clone();
+                cx.observe(&rows, |_, _, cx| cx.notify()).detach();
                 ClipRowView {
                     editor,
                     _driver: driver,
