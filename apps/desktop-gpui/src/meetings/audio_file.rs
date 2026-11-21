@@ -12,6 +12,32 @@ use super::timeline::RATE;
 const BIT_RATE: usize = 24_000;
 const FLUSH_EVERY_SAMPLES: u64 = RATE as u64 * 2;
 
+/// Meeting audio is readable by its owner only. The file is made owner-only
+/// before ffmpeg opens it, so ffmpeg's truncating open keeps that mode, and
+/// its folder is closed to other users too.
+#[cfg(unix)]
+fn keep_private(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    if let Some(parent) = path.parent() {
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| e.to_string())?;
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(unix))]
+fn keep_private(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 pub struct OpusOggWriter {
     path: PathBuf,
     output: format::context::Output,
@@ -30,6 +56,7 @@ impl OpusOggWriter {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        keep_private(path)?;
         let mut output = format::output_as(&path, "ogg").map_err(|e| e.to_string())?;
         let codec = encoder::find_by_name("libopus").ok_or("libopus is unavailable")?;
         let mut audio = context::Context::new_with_codec(codec)

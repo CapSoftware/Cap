@@ -659,6 +659,20 @@ fn tone(seconds: f64) -> Vec<f32> {
         .collect()
 }
 
+#[cfg(unix)]
+#[test]
+fn meeting_audio_is_readable_by_its_owner_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audio/you.ogg");
+    let mut writer = OpusOggWriter::create(&path).unwrap();
+    writer.write(&tone(0.5)).unwrap();
+    writer.finish().unwrap();
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&path), 0o600);
+    assert_eq!(mode(path.parent().unwrap()), 0o700);
+}
+
 #[test]
 fn the_opus_file_has_the_right_duration_and_survives_a_crash() {
     let dir = tempfile::tempdir().unwrap();
