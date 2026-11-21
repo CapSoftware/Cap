@@ -58,6 +58,7 @@ vi.mock("@/app/s/[videoId]/_components/mp4-level-patch", () => ({
 }));
 vi.mock("@/app/s/[videoId]/_components/video-frame-thumbnail", () => ({
 	captureVideoFrameDataUrl: () => undefined,
+	shouldCaptureLiveThumbnail: () => true,
 }));
 vi.mock("@/app/s/[videoId]/_components/video/tooltip", async () => {
 	const { createElement } = await import("react");
