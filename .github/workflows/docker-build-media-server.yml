@@ -190,6 +190,7 @@ jobs:
             src/__tests__/lib/hls-ladder-verify.test.ts \
             src/__tests__/lib/hls-ladder-prune.test.ts \
             src/__tests__/lib/idle-capacity.test.ts \
+            src/__tests__/lib/idle-preemption.test.ts \
             src/__tests__/lib/hls-ladder-verify.integration.test.ts
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/media-address-guard.test.ts \
