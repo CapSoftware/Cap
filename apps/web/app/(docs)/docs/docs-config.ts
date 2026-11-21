@@ -63,6 +63,7 @@ export const docsConfig = {
 				{ title: "S3-compatible Storage", slug: "s3-config" },
 				{ title: "S3: AWS", slug: "s3-config/aws-s3" },
 				{ title: "S3: Cloudflare R2", slug: "s3-config/cloudflare-r2" },
+				{ title: "S3: Neon", slug: "s3-config/neon" },
 			],
 		},
 		{
