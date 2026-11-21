@@ -28,7 +28,7 @@ pub fn current() -> Locale {
 pub fn decimal(value: impl std::fmt::Display) -> String {
     let text = value.to_string();
     match current() {
-        Locale::Fr | Locale::Es | Locale::De => text.replace('.', ","),
+        Locale::Fr | Locale::Es | Locale::De | Locale::Ru => text.replace('.', ","),
         _ => text,
     }
 }

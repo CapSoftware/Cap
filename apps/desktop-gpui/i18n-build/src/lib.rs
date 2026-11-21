@@ -182,6 +182,12 @@ pub const LOCALES: &[LocaleSpec] = &[
         plural: ONE_IS_ONE,
     },
     LocaleSpec {
+        code: "ru",
+        ident: "Ru",
+        endonym: "Русский",
+        plural: NO_PLURALS,
+    },
+    LocaleSpec {
         code: "hi",
         ident: "Hi",
         endonym: "हिन्दी",
