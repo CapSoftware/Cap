@@ -59,6 +59,19 @@ pub fn doc_item(library: Option<&Library>, meta: &DocMeta) -> Item {
     )
 }
 
+/// The folder list from exactly one read: the folders sorted by name and
+/// `true`, or nothing and `false` when the read failed. A failure is
+/// "unknown", so callers keep every membership.
+pub fn read_folders_once<E>(read: impl FnOnce() -> Result<Vec<Folder>, E>) -> (Vec<Folder>, bool) {
+    match read() {
+        Ok(mut folders) => {
+            folders.sort_by_key(|f| f.name.to_lowercase());
+            (folders, true)
+        }
+        Err(_) => (Vec::new(), false),
+    }
+}
+
 /// Everything on disk. Each source is read independently: one failing (a
 /// missing notes library, an unreadable recordings folder) leaves the others.
 pub fn scan(library: Option<Library>) -> Scan {
@@ -95,10 +108,10 @@ pub fn scan(library: Option<Library>) -> Scan {
         for meta in snapshot.docs.iter().chain(snapshot.trashed.iter()) {
             items.push(doc_item(Some(library), meta));
         }
-        // load_snapshot reads folders leniently (an error is an empty list);
-        // ask again so a failed read is told apart from "no folders".
-        folders_loaded = library.folders().is_ok();
-        folders = snapshot.folders;
+        // One read of the folder list feeds both the list and whether it is
+        // the whole truth. (`load_snapshot` reads it leniently: an error there
+        // looks like "no folders", which must never drive pruning.)
+        (folders, folders_loaded) = read_folders_once(|| library.folders());
     }
     if let Some(seed) = seed_from_env() {
         items.extend(seed.items);
@@ -305,4 +318,54 @@ fn seed_folder(id: &str, name: &str) -> Folder {
         "createdAt": "2026-11-01T00:00:00Z",
     }))
     .expect("seed folder")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[test]
+    fn a_failed_folder_read_is_unknown_even_if_a_second_read_would_succeed() {
+        let reads = Cell::new(0);
+        // Fails the first time, would succeed after: only the first counts.
+        let flaky = || {
+            reads.set(reads.get() + 1);
+            if reads.get() == 1 {
+                Err("busy")
+            } else {
+                Ok(vec![seed_folder("f-1", "Work")])
+            }
+        };
+        let (folders, loaded) = read_folders_once(flaky);
+        assert_eq!(reads.get(), 1);
+        assert!(folders.is_empty());
+        assert!(!loaded);
+
+        // And unknown folders keep every membership.
+        let mut file = super::super::store::LibraryFile::default();
+        file.members
+            .insert("f-1".into(), ["path:/kept.cap".to_string()].into());
+        let ids: Option<std::collections::BTreeSet<String>> =
+            loaded.then(|| folders.iter().map(|f| f.id.clone()).collect());
+        assert!(!super::super::store::prune_members(
+            &mut file,
+            ids.as_ref(),
+            |_| false
+        ));
+        assert_eq!(file.members["f-1"].len(), 1);
+    }
+
+    #[test]
+    fn a_good_folder_read_is_sorted_by_name() {
+        let (folders, loaded) = read_folders_once(|| {
+            Ok::<_, ()>(vec![seed_folder("b", "beta"), seed_folder("a", "Alpha")])
+        });
+        assert!(loaded);
+        assert_eq!(
+            folders.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            ["Alpha", "beta"]
+        );
+    }
 }
