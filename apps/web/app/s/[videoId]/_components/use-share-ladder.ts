@@ -372,7 +372,9 @@ export function useShareLadder({
 			return;
 		}
 		const index = levelIndexForHeight(hls.levels, target);
-		if (index >= 0 && hls.currentLevel !== index) hls.currentLevel = index;
+		if (index < 0) return;
+		if (hls.currentLevel === index) hls.loadLevel = index;
+		else hls.currentLevel = index;
 	}, []);
 
 	const switchToMp4 = useCallback(() => {
