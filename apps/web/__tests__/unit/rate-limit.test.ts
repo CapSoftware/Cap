@@ -324,9 +324,54 @@ describe("isRateLimited outside production", () => {
 	});
 });
 
-describe("isRateLimited in production", () => {
+describe("isRateLimited in self-hosted production", () => {
 	beforeEach(() => {
 		vi.stubEnv("NODE_ENV", "production");
+	});
+
+	it.each([undefined, "", "0"])(
+		"uses the local authorization limit without probing protected ingress (VERCEL=%s)",
+		async (vercel) => {
+			vi.stubEnv("VERCEL", vercel);
+			mocks.checkRateLimit.mockResolvedValue({
+				rateLimited: true,
+				error: "blocked",
+			});
+			const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+			const approve = (userId: string) =>
+				isRateLimited(RATE_LIMIT_IDS.AGENT_AUTHORIZATION, {
+					key: `agent-authorization:${userId}`,
+				});
+
+			expect(await callTimes(10, () => approve("user-1"))).toEqual(
+				Array(10).fill(false),
+			);
+			expect(await approve("user-1")).toBe(true);
+			expect(await approve("user-2")).toBe(false);
+			expect(mocks.checkRateLimit).not.toHaveBeenCalled();
+		},
+	);
+
+	it("retains per-address limits when no explicit key is supplied", async () => {
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const fromAddress = (ip: string) =>
+			isRateLimited(RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT, {
+				headers: new Headers({ "x-forwarded-for": ip }),
+			});
+
+		expect(await callTimes(30, () => fromAddress("198.51.100.7"))).toEqual(
+			Array(30).fill(false),
+		);
+		expect(await fromAddress("198.51.100.7")).toBe(true);
+		expect(await fromAddress("198.51.100.8")).toBe(false);
+		expect(mocks.checkRateLimit).not.toHaveBeenCalled();
+	});
+});
+
+describe("isRateLimited on Vercel in production", () => {
+	beforeEach(() => {
+		vi.stubEnv("NODE_ENV", "production");
+		vi.stubEnv("VERCEL", "1");
 	});
 
 	it("follows the firewall when its rule answers", async () => {
