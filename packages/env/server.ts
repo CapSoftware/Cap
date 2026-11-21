@@ -224,6 +224,12 @@ function createServerEnv() {
 			/// Tinybird analytics
 			TINYBIRD_HOST: z.string().optional(),
 			TINYBIRD_TOKEN: z.string().optional(),
+			CAP_GEOIP_DATABASE_PATH: z
+				.string()
+				.optional()
+				.describe(
+					"Path to a GeoIP2/GeoLite2 City .mmdb file. Fills the country and city of views when the host does not send Vercel's location headers",
+				),
 			VERCEL_ENV: z
 				.union([
 					z.literal("production"),
