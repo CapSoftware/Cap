@@ -481,6 +481,9 @@ jobs:
           fi
           ls -la /dev/dri
 
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
+
       - name: Hyprland (portal refuses host apps, tray Stop control)
         run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
@@ -545,9 +548,13 @@ jobs:
       - name: Install Linux desktop dependencies
         uses: ./.github/actions/install-desktop-deps
 
-      - name: X11 recording with a camera
+      - name: Install camera test dependencies
+        timeout-minutes: 10
         run: |
           sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+
+      - name: X11 recording with a camera
+        run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
           # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
           # MJPEG (decoded before use).
@@ -679,6 +686,9 @@ jobs:
             sudo modprobe vkms
           fi
           ls -la /dev/dri
+
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
 
       - name: Build niri
         run: |
