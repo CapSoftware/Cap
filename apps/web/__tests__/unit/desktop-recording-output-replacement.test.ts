@@ -50,6 +50,9 @@ vi.mock("@aws-sdk/client-cloudfront", () => ({
 		constructor(readonly input: unknown) {}
 	},
 }));
+vi.mock("@/lib/share-ladder-discard", () => ({
+	discardShareLadderSafely: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/desktop-recording-jobs", () => ({
 	retireDesktopRecordingJobForOutputReplacement: mocks.retire,
 }));
@@ -81,6 +84,7 @@ import {
 	createDesktopReuploadToken,
 	decodeDesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { saveMetadataAndComplete } from "@/workflows/admin-reprocess-video";
 import {
 	saveEditResultAndComplete,
@@ -665,6 +669,10 @@ describe("edited recording publication", () => {
 describe("intentional administrator replacements", () => {
 	it("publishes the replacement even when CloudFront is not configured", async () => {
 		await invalidateVideoCache("video");
+		expect(discardShareLadderSafely).toHaveBeenCalledWith(
+			"video",
+			"Recording was replaced",
+		);
 		expect(video.source).toEqual({ type: "desktopMP4" });
 		expect(video.metadata).not.toHaveProperty("desktopRecordingUpload");
 		expect(events).toContain("delete-uploads");

@@ -24,6 +24,7 @@ import {
 	LOOM_REASSIGN_CLAIM_TTL_MS,
 } from "@/lib/loom-original-key";
 import { runPromise } from "@/lib/server";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 
 export type LoomReassignOptions = {
 	keepSharing?: boolean;
@@ -215,6 +216,7 @@ async function moveClaimedVideo({
 	options: LoomReassignOptions;
 	originalKey: unknown;
 }): Promise<LoomReassignOutcome> {
+	await discardShareLadderSafely(id, "Recording changed owner");
 	const source = await listObjects(videoId, fromUserId, organizationId);
 	if (source.objects.length === 0)
 		return { videoId, status: "failed", reason: "no media found" };
