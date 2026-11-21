@@ -681,7 +681,8 @@ impl ExportUi {
     pub(crate) fn set_destination(&mut self, destination: ExportDestination) {
         let is_link = |destination| destination == ExportDestination::Link;
         if is_link(self.destination) != is_link(destination) {
-            let showing = std::mem::replace(&mut self.other_quality, self.quality());
+            let leaving = self.quality();
+            let showing = std::mem::replace(&mut self.other_quality, leaving);
             self.compression = showing.compression;
             self.custom_bpp = showing.custom_bpp;
         }
