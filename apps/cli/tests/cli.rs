@@ -3189,18 +3189,27 @@ fn mcp_upload_announces_the_video_id_before_a_cancelled_wait() {
 #[cfg(target_os = "linux")]
 struct RecordingServer {
     url: String,
+    address: std::net::SocketAddr,
     requests: Arc<std::sync::Mutex<Vec<String>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 #[cfg(target_os = "linux")]
 impl RecordingServer {
     fn start() -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
+        let address = listener.local_addr().unwrap();
+        let url = format!("http://{address}");
         let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let log = requests.clone();
-        thread::spawn(move || {
+        let stopped = stop.clone();
+        let thread = thread::spawn(move || {
             for stream in listener.incoming() {
+                if stopped.load(Ordering::SeqCst) {
+                    break;
+                }
                 let Ok(mut stream) = stream else { continue };
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut request_line = String::new();
@@ -3249,11 +3258,28 @@ impl RecordingServer {
                 let _ = stream.flush();
             }
         });
-        Self { url, requests }
+        Self {
+            url,
+            address,
+            requests,
+            stop,
+            thread: Some(thread),
+        }
     }
 
     fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RecordingServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = std::net::TcpStream::connect(self.address);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
