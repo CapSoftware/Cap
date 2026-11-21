@@ -165,6 +165,42 @@ struct RuleEditor {
     rows: Vec<RuleRow>,
     count: usize,
     preview: Vec<u32>,
+    /// Set while a save is being written; the sheet stays until it lands.
+    saving: bool,
+    /// Why the last save did not land, shown in the sheet.
+    error: Option<SaveError>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SaveError {
+    ReadOnly,
+    Failed,
+}
+
+impl SaveError {
+    fn from_update(error: &store::UpdateError) -> Self {
+        match error {
+            store::UpdateError::ReadOnly => Self::ReadOnly,
+            store::UpdateError::Io(_) => Self::Failed,
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::ReadOnly => tr::library::save_read_only(),
+            Self::Failed => tr::library::save_failed(),
+        }
+    }
+}
+
+/// The section to show once the smart folders changed: a smart folder that
+/// is no longer in the file (deleted elsewhere, or a save that did not land)
+/// falls back to Home instead of an empty page with no name.
+pub(crate) fn section_after(section: &Section, file: &store::LibraryFile) -> Section {
+    match section {
+        Section::Smart(id) if !file.smart_folders.iter().any(|f| &f.id == id) => Section::Home,
+        other => other.clone(),
+    }
 }
 
 pub struct LibraryWindow {
@@ -645,6 +681,7 @@ impl LibraryWindow {
             rules::evaluate_all(&folders, &self.scan.items, &ctx)
         };
         self.smart_members = members;
+        self.section = section_after(&self.section, &self.file);
         if let Some(editor) = self.editor.as_mut() {
             editor.count = 0;
         }
@@ -825,6 +862,8 @@ impl LibraryWindow {
             rows,
             count: 0,
             preview: Vec::new(),
+            saving: false,
+            error: None,
         });
         self.refresh_editor_count(cx);
         cx.notify();
@@ -903,47 +942,69 @@ impl LibraryWindow {
                 )
             );
         }
-        self.editor = None;
-        self.commit_smart_folder(folder, cx);
+        self.commit_smart_folder(folder, true, cx);
     }
 
-    /// Shows a smart folder at once and writes it in the background (the
-    /// write syncs to disk). The written file, which merges anything another
-    /// window saved meanwhile, replaces ours when it lands; if the write
-    /// fails, the file on disk wins again.
-    fn commit_smart_folder(&mut self, folder: SmartFolder, cx: &mut Context<Self>) {
+    /// Writes a smart folder in the background (the write syncs to disk) and
+    /// shows it only once it is saved: on success the written file, which
+    /// merges anything another window saved meanwhile, replaces ours and the
+    /// sheet closes; on failure the sheet stays open with the typed rule and
+    /// says why. Nothing is shown that is not on disk.
+    fn commit_smart_folder(
+        &mut self,
+        folder: SmartFolder,
+        close_sheet: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.outcome == store::LoadOutcome::ReadOnly {
-            tracing::warn!("smart folders are read only here");
+            if let Some(editor) = self.editor.as_mut() {
+                editor.error = Some(SaveError::ReadOnly);
+            }
+            cx.notify();
             return;
         }
-        let upsert = move |file: &mut store::LibraryFile, folder: &SmartFolder| match file
-            .smart_folders
-            .iter_mut()
-            .find(|f| f.id == folder.id)
-        {
-            Some(existing) => {
-                existing.name = folder.name.clone();
-                existing.matching = folder.matching;
-                existing.rules = folder.rules.clone();
+        if let Some(editor) = self.editor.as_mut() {
+            if editor.saving {
+                return;
             }
-            None => file.smart_folders.push(folder.clone()),
-        };
-        upsert(&mut self.file, &folder);
-        self.section = Section::Smart(folder.id.clone());
-        self.reevaluate(cx);
+            editor.saving = true;
+            editor.error = None;
+        }
         let dir = self.dir.clone();
+        let id = folder.id.clone();
         cx.spawn(async move |this, cx| {
             let written = cx
-                .background_spawn(async move { store::update(&dir, |file| upsert(file, &folder)) })
+                .background_spawn(async move {
+                    store::update(&dir, |file| {
+                        match file.smart_folders.iter_mut().find(|f| f.id == folder.id) {
+                            Some(existing) => {
+                                existing.name = folder.name.clone();
+                                existing.matching = folder.matching;
+                                existing.rules = folder.rules.clone();
+                            }
+                            None => file.smart_folders.push(folder.clone()),
+                        }
+                    })
+                })
                 .await;
             this.update(cx, |this, cx| {
                 match written {
-                    Ok(file) => this.file = file,
+                    Ok(file) => {
+                        this.file = file;
+                        this.section = Section::Smart(id);
+                        if close_sheet {
+                            this.editor = None;
+                        }
+                    }
                     Err(error) => {
                         tracing::warn!("smart folder not saved: {error:?}");
-                        let loaded = store::load(&this.dir);
-                        this.file = loaded.file;
-                        this.outcome = loaded.outcome;
+                        if let Some(editor) = this.editor.as_mut() {
+                            editor.saving = false;
+                            editor.error = Some(SaveError::from_update(&error));
+                        }
+                        if error == store::UpdateError::ReadOnly {
+                            this.outcome = store::LoadOutcome::ReadOnly;
+                        }
                     }
                 }
                 this.reevaluate(cx);
@@ -974,7 +1035,7 @@ impl LibraryWindow {
             extra: Default::default(),
         };
         let _ = id;
-        self.commit_smart_folder(folder, cx);
+        self.commit_smart_folder(folder, false, cx);
     }
 
     fn auto_page(&mut self, page: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -2661,6 +2722,12 @@ impl LibraryWindow {
                     )
                     .children(preview),
             )
+            .children(editor.error.map(|error| {
+                div()
+                    .text_size(px(12.5))
+                    .text_color(p.danger)
+                    .child(error.message())
+            }))
             .child(
                 div()
                     .flex()
@@ -2800,5 +2867,48 @@ impl Render for LibraryWindow {
             })
             .child(main)
             .children(editor)
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    fn folder(id: &str) -> SmartFolder {
+        SmartFolder {
+            id: id.into(),
+            name: id.into(),
+            matching: Matching::All,
+            rules: vec![],
+            extra: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_smart_folder_that_is_gone_sends_the_view_home() {
+        let mut file = store::LibraryFile::default();
+        file.smart_folders.push(folder("kept"));
+        assert_eq!(
+            section_after(&Section::Smart("kept".into()), &file),
+            Section::Smart("kept".into())
+        );
+        assert_eq!(
+            section_after(&Section::Smart("gone".into()), &file),
+            Section::Home
+        );
+        assert_eq!(section_after(&Section::Trash, &file), Section::Trash);
+    }
+
+    #[test]
+    fn read_only_and_failed_saves_say_different_things() {
+        assert_eq!(
+            SaveError::from_update(&store::UpdateError::ReadOnly),
+            SaveError::ReadOnly
+        );
+        assert_eq!(
+            SaveError::from_update(&store::UpdateError::Io("disk full".into())),
+            SaveError::Failed
+        );
+        assert_ne!(SaveError::ReadOnly.message(), SaveError::Failed.message());
     }
 }

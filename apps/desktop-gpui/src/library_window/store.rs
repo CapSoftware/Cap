@@ -433,6 +433,20 @@ mod tests {
         assert_eq!(json["smartFolders"][0]["name"], "Renamed");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_write_that_cannot_land_fails_and_leaves_the_file_as_it_was() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("readonlydir");
+        update(&dir, |f| f.smart_folders.push(folder("a"))).unwrap();
+        let before = std::fs::read(path_in(&dir)).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = update(&dir, |f| f.smart_folders.push(folder("b")));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(result, Err(UpdateError::Io(_))), "{result:?}");
+        assert_eq!(std::fs::read(path_in(&dir)).unwrap(), before);
+    }
+
     #[test]
     fn oversized_input_is_clipped_not_rejected() {
         let dir = scratch("huge");
