@@ -713,6 +713,7 @@ fn export_batch_json_streams_file_events_and_summary() {
 }
 
 #[test]
+#[ignore = "requires ffmpeg and a wgpu adapter"]
 fn export_succeeds_when_project_config_is_missing() {
     // `cap project validate` treats a missing project-config.json as fine
     // (it's reported as an optional check), and `project inspect`/`config get`
@@ -754,6 +755,7 @@ fn export_succeeds_when_project_config_is_missing() {
 }
 
 #[test]
+#[ignore = "requires ffmpeg and a wgpu adapter"]
 fn export_succeeds_when_project_config_is_corrupted() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("recording.cap");
