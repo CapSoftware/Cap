@@ -513,6 +513,24 @@ impl KeyboardTrackSegment {
     }
 }
 
+/// Whether any recording in the project captured key presses, so its keys
+/// can be generated. A blank project gains some when a recording is imported.
+pub fn project_has_keyboard_capture(meta: &crate::RecordingMeta) -> bool {
+    let Some(crate::StudioRecordingMeta::MultipleSegments { inner }) = meta.studio_meta() else {
+        return false;
+    };
+    inner.segments.iter().any(|take| {
+        take.keyboard
+            .as_ref()
+            .is_some_and(|path| meta.path(path).exists())
+            || take.display.path.parent().is_some_and(|directory| {
+                [KEYBOARD_EVENTS_FILE_NAME, LEGACY_KEYBOARD_EVENTS_FILE_NAME]
+                    .into_iter()
+                    .any(|name| meta.path(&directory.join(name)).exists())
+            })
+    })
+}
+
 fn load_project_keyboard_events(
     meta: &crate::RecordingMeta,
 ) -> Result<Vec<(KeyboardEvents, f64)>, String> {
@@ -2373,6 +2391,21 @@ mod timing_tests {
             keyboard_segments_reporting(&[(typed, 0.0)], &trimmed, &shortcuts_only);
         assert!(segments.is_empty());
         assert!(!others_pressed, "trimmed typing is not reported");
+    }
+
+    /// A recording with captured key presses is found, one without is not.
+    #[test]
+    fn keyboard_capture_is_found_only_when_a_recording_has_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut meta: crate::RecordingMeta = serde_json::from_value(serde_json::json!({
+            "pretty_name":"keys", "segments":[{"display":{"path":"display.mp4","fps":30,"start_time":0.0},"keyboard":"keyboard.bin"}],"cursors":{}
+        })).unwrap();
+        meta.project_path = directory.path().to_path_buf();
+        assert!(!project_has_keyboard_capture(&meta));
+        events(&[("a", 1.0)])
+            .write_to_file(&directory.path().join("keyboard.bin"))
+            .unwrap();
+        assert!(project_has_keyboard_capture(&meta));
     }
 
     #[test]

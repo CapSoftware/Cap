@@ -3116,7 +3116,11 @@ impl EditorWindow {
 
     pub(crate) fn render_keyboard_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let blank = self.summary().is_some_and(|summary| summary.blank);
+        // A blank project has no recording to take key presses from until one
+        // is imported; its keys come from the composer and the track.
+        let blank = self
+            .summary()
+            .is_some_and(|summary| summary.blank && !summary.has_keyboard_capture);
         let settings = keyboard_settings(&self.project);
         let enabled = settings.enabled;
         let has_segments = self
@@ -3346,8 +3350,6 @@ impl EditorWindow {
                         ),
                 ),
             )
-            // A blank project has no recording to take key presses from;
-            // its keys come from the composer and the track.
             .when(!blank, |this| {
                 this.child(
                     div().pt(px(8.)).child(

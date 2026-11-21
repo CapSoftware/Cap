@@ -607,6 +607,26 @@ fn manual_run_spans(runs: &[cap_project::ManualKeyRun], start: f64, end: f64) ->
         .collect()
 }
 
+/// A run's key presses, squeezed in step with the run when it was given less
+/// room than it asked for, so every press lands inside it.
+fn manual_run_keys(
+    run: &cap_project::ManualKeyRun,
+    span: f64,
+) -> Vec<cap_project::KeyPressDisplay> {
+    let scale = if run.length > 0.0 {
+        (span / run.length).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    cap_project::manual_key_presses(&run.text)
+        .into_iter()
+        .map(|mut key| {
+            key.time_offset *= scale;
+            key
+        })
+        .collect()
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -673,6 +693,9 @@ pub struct ProjectSummary {
     pub platform: Option<cap_project::Platform>,
     /// Started empty rather than recorded: no key presses to generate from.
     pub blank: bool,
+    /// A recording in the project captured key presses (one imported into a
+    /// blank project counts), so its keys can be generated.
+    pub has_keyboard_capture: bool,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -806,6 +829,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
     Ok(ProjectSummary {
         platform: meta.platform.clone(),
         blank: studio.is_blank(),
+        has_keyboard_capture: cap_project::project_has_keyboard_capture(&meta),
         recordings: recordings.clone(),
         pretty_name: meta.pretty_name.clone(),
         timeline,
@@ -7654,7 +7678,7 @@ impl EditorWindow {
                         start: run_start,
                         end: run_end,
                         display_text: run.text.clone(),
-                        keys: cap_project::manual_key_presses(&run.text),
+                        keys: manual_run_keys(run, run_end - run_start),
                         fade_duration_override: None,
                         position_override: None,
                         color_override: None,
@@ -17228,6 +17252,7 @@ mod tests {
                         ProjectSummary {
                             platform: None,
                             blank: false,
+                            has_keyboard_capture: false,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
@@ -17378,6 +17403,7 @@ mod tests {
                         ProjectSummary {
                             platform: None,
                             blank: false,
+                            has_keyboard_capture: false,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
@@ -18364,6 +18390,35 @@ mod tests {
         // With room to spare, nothing is stretched.
         let roomy = manual_run_spans(&runs, 1.0, 100.0);
         assert!((roomy[0].1 - roomy[0].0 - runs[0].length).abs() < 1e-9);
+    }
+
+    /// A long sentence squeezed into a short span keeps every letter: each
+    /// press lands inside its squeezed key, and none is moved when the run
+    /// had room.
+    #[test]
+    fn squeezed_typed_keys_keep_every_press_inside_their_span() {
+        let runs = cap_project::manual_key_runs("the quick brown fox jumps over", "sentence");
+        let spans = manual_run_spans(&runs, 0.0, 2.0);
+        for (run, &(start, end)) in runs.iter().zip(&spans) {
+            let keys = manual_run_keys(run, end - start);
+            assert_eq!(keys.len(), cap_project::manual_key_presses(&run.text).len());
+            for key in &keys {
+                assert!(
+                    start + key.time_offset / 1000.0 <= end + 1e-9,
+                    "{} past {end}",
+                    start + key.time_offset / 1000.0
+                );
+            }
+        }
+        let run = &runs[0];
+        let unscaled = cap_project::manual_key_presses(&run.text);
+        let roomy = manual_run_keys(run, run.length);
+        assert!(
+            roomy
+                .iter()
+                .zip(&unscaled)
+                .all(|(a, b)| a.time_offset == b.time_offset)
+        );
     }
 
     #[test]
