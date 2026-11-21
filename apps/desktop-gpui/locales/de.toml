@@ -567,7 +567,7 @@ title = "Befehlszeile"
 
 [settings.experimental]
 library_window = "Bibliotheksfenster"
-library_window_description = "Öffnet die Bibliothek in einem eigenen Fenster mit Seitenleiste, intelligenten Ordnern und einer Startseite als Liste oder Magazin."
+library_window_description = "Öffnet die Bibliothek in einem eigenen Fenster mit Seitenleiste, intelligenten Ordnern und einer Ansicht als Liste oder Magazin."
 muxer = "Muxer in separatem Prozess"
 muxer_description = "Führt den Muxer für fragmentiertes MP4 in einem isolierten Unterprozess aus, damit Muxer-Abstürze Ihre Aufnahme nicht beenden. Erfordert das mitgelieferte Programm cap-muxer."
 reliability = "Zuverlässigkeit"
@@ -4323,7 +4323,6 @@ file_read_only = "Intelligente Ordner wurden von einer neueren Cap-Version geän
 file_unreadable = "Ihre intelligenten Ordner konnten nicht gelesen werden. Eine Kopie wurde daneben aufbewahrt."
 folder = "Ordner"
 folders = "Ordner"
-home = "Start"
 kind_meeting = "Meeting"
 kind_note = "Notiz"
 kind_recording = "Aufnahme"

@@ -21,7 +21,6 @@ pub enum Row {
         count: Option<usize>,
         section: Section,
     },
-    Label(&'static str),
     /// The Folders title with its "new smart folder" button.
     FoldersLabel,
     Spacer,
@@ -140,7 +139,6 @@ impl Render for SidebarView {
                             })),
                     )
                 }
-                Row::Label(text) => col.child(self.label(text)),
                 Row::FoldersLabel => col.child(
                     self.label(tr::library::folders()).child(
                         div()

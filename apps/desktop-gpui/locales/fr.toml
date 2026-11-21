@@ -567,7 +567,7 @@ title = "Ligne de commande"
 
 [settings.experimental]
 library_window = "Fenêtre Bibliothèque"
-library_window_description = "Ouvre la bibliothèque dans sa propre fenêtre, avec une barre latérale, des dossiers intelligents et un accueil en liste ou en magazine."
+library_window_description = "Ouvre la bibliothèque dans sa propre fenêtre, avec une barre latérale, des dossiers intelligents et un affichage en liste ou en magazine."
 muxer = "Multiplexeur hors processus"
 muxer_description = "Exécute le multiplexeur MP4 fragmenté dans un sous-processus isolé pour que ses plantages ne fassent pas échouer votre enregistrement. Nécessite le binaire cap-muxer fourni."
 reliability = "Fiabilité"
@@ -4323,7 +4323,6 @@ file_read_only = "Une version plus récente de Cap a modifié les dossiers intel
 file_unreadable = "Vos dossiers intelligents n'ont pas pu être lus. Une copie a été conservée à côté."
 folder = "Dossier"
 folders = "Dossiers"
-home = "Accueil"
 kind_meeting = "Réunion"
 kind_note = "Note"
 kind_recording = "Enregistrement"

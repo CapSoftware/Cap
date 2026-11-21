@@ -569,7 +569,7 @@ title = "Command Line"
 
 [settings.experimental]
 library_window = "Library window"
-library_window_description = "Open the Library button in its own window, with a sidebar, smart folders and a list or magazine home."
+library_window_description = "Open the Library button in its own window, with a sidebar, smart folders and a list or magazine layout."
 muxer = "Out-of-process muxer"
 muxer_description = "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary."
 reliability = "Reliability"
@@ -4325,7 +4325,6 @@ file_read_only = "Smart folders were changed by a newer Cap, so they are read on
 file_unreadable = "Your smart folders could not be read. A copy was kept next to them."
 folder = "Folder"
 folders = "Folders"
-home = "Home"
 kind_meeting = "Meeting"
 kind_note = "Note"
 kind_recording = "Recording"

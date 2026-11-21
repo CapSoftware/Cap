@@ -567,7 +567,7 @@ title = "コマンドライン"
 
 [settings.experimental]
 library_window = "ライブラリウィンドウ"
-library_window_description = "ライブラリを専用のウインドウで開きます。サイドバー、スマートフォルダ、リストまたはマガジン表示のホームがあります。"
+library_window_description = "ライブラリを専用のウインドウで開きます。サイドバー、スマートフォルダ、リストまたはマガジン表示を選べます。"
 muxer = "別プロセスのマルチプレクサ"
 muxer_description = "フラグメント化MP4のマルチプレクサを独立したサブプロセスで実行し、マルチプレクサがクラッシュしても録画が失われないようにします。同梱のcap-muxerバイナリが必要です。"
 reliability = "信頼性"
@@ -4323,7 +4323,6 @@ file_read_only = "スマートフォルダは新しいバージョンのCapで�
 file_unreadable = "スマートフォルダを読み込めませんでした。コピーを横に残しています。"
 folder = "フォルダ"
 folders = "フォルダ"
-home = "ホーム"
 kind_meeting = "会議"
 kind_note = "メモ"
 kind_recording = "録画"

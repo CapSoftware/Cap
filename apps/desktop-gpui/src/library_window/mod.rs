@@ -1246,7 +1246,7 @@ fn meta_line(item: &Item) -> String {
 
 fn section_title(section: &Section, file: &store::LibraryFile, scan: &Scan) -> String {
     match section {
-        Section::Home => tr::library::home().into(),
+        Section::Home => tr::library::title().into(),
         Section::Kind(kind) => kind.label().into(),
         Section::Pinned => tr::library::pinned().into(),
         Section::Folder(id) => scan
@@ -1290,17 +1290,14 @@ impl LibraryWindow {
             count,
             section,
         };
-        let mut rows = vec![
-            nav(
-                "nav-home".into(),
-                "icons/house.svg",
-                Some(p.accent),
-                tr::library::home().into(),
-                None,
-                Section::Home,
-            ),
-            Row::Label(tr::library::title()),
-        ];
+        let mut rows = vec![nav(
+            "nav-home".into(),
+            "icons/layers.svg",
+            None,
+            tr::library::title().into(),
+            None,
+            Section::Home,
+        )];
         for kind in [KindView::Recordings, KindView::Screenshots, KindView::Notes] {
             let section = Section::Kind(kind);
             rows.push(nav(

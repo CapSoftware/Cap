@@ -587,10 +587,13 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             tr::settings::experimental::muxer_description(),
             "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary.",
         ),
-        (tr::settings::experimental::library_window(), "Library window"),
+        (
+            tr::settings::experimental::library_window(),
+            "Library window",
+        ),
         (
             tr::settings::experimental::library_window_description(),
-            "Open the Library button in its own window, with a sidebar, smart folders and a list or magazine home.",
+            "Open the Library button in its own window, with a sidebar, smart folders and a list or magazine layout.",
         ),
         (tr::settings::feedback::title(), "Feedback"),
         (

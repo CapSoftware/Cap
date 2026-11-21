@@ -567,7 +567,7 @@ title = "命令行"
 
 [settings.experimental]
 library_window = "资料库窗口"
-library_window_description = "在独立窗口中打开资料库，包含侧边栏、智能文件夹，以及列表或杂志式主页。"
+library_window_description = "在独立窗口中打开资料库，包含侧边栏、智能文件夹，以及列表或杂志式视图。"
 muxer = "进程外混流器"
 muxer_description = "在独立的子进程中运行分段 MP4 混流器，混流器崩溃时不会影响你的录制。需要内置的 cap-muxer 程序。"
 reliability = "可靠性"
@@ -4323,7 +4323,6 @@ file_read_only = "智能文件夹已被更新版本的 Cap 修改，因此在这
 file_unreadable = "无法读取你的智能文件夹。已在旁边保留一份副本。"
 folder = "文件夹"
 folders = "文件夹"
-home = "主页"
 kind_meeting = "会议"
 kind_note = "笔记"
 kind_recording = "录制"

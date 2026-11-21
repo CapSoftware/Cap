@@ -567,7 +567,7 @@ title = "Línea de comandos"
 
 [settings.experimental]
 library_window = "Ventana de biblioteca"
-library_window_description = "Abre la biblioteca en su propia ventana, con barra lateral, carpetas inteligentes y un inicio en lista o en revista."
+library_window_description = "Abre la biblioteca en su propia ventana, con barra lateral, carpetas inteligentes y una vista en lista o en revista."
 muxer = "Multiplexor fuera de proceso"
 muxer_description = "Ejecuta el multiplexor de MP4 fragmentado en un subproceso aislado para que sus fallos no arruinen tu grabación. Requiere el binario cap-muxer incluido."
 reliability = "Fiabilidad"
@@ -4323,7 +4323,6 @@ file_read_only = "Una versión más nueva de Cap cambió las carpetas inteligent
 file_unreadable = "No se pudieron leer tus carpetas inteligentes. Se guardó una copia junto a ellas."
 folder = "Carpeta"
 folders = "Carpetas"
-home = "Inicio"
 kind_meeting = "Reunión"
 kind_note = "Nota"
 kind_recording = "Grabación"
