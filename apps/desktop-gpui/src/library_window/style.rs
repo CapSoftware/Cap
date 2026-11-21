@@ -11,7 +11,9 @@ pub const DEFAULT_WIDTH: f32 = 1180.;
 pub const DEFAULT_HEIGHT: f32 = 780.;
 pub const MIN_WIDTH: f32 = 720.;
 pub const MIN_HEIGHT: f32 = 480.;
-pub const MATERIAL_RADIUS: f64 = 26.;
+/// AppKit draws a titled window's frame (edge highlight, shadow) at 16 pt on
+/// macOS 27; the content clip must match it or the frame shows as a ring.
+pub const MATERIAL_RADIUS: f64 = 16.;
 pub const PLAIN_WINDOW_RADIUS: f32 = 12.;
 
 pub const SIDEBAR_WIDTH: f32 = 236.;
