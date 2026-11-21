@@ -112,58 +112,88 @@ pub fn gradient_color(position: f32, stops: &[(f32, [f32; 3])]) -> [f32; 3] {
 }
 
 pub fn apply_filter(color: [f32; 3], filter: Filter) -> [f32; 3] {
-    let clamp = |value: f32| value.clamp(0., 1.);
-    let [r, g, b] = color;
-    let out = match filter {
-        Filter::Brightness(amount) => [r * amount, g * amount, b * amount],
-        Filter::Contrast(amount) => [
-            (r - 0.5) * amount + 0.5,
-            (g - 0.5) * amount + 0.5,
-            (b - 0.5) * amount + 0.5,
-        ],
-        Filter::Saturate(amount) | Filter::Grayscale(amount) => {
-            let amount = if matches!(filter, Filter::Grayscale(_)) {
-                1. - amount
-            } else {
-                amount
-            };
-            [
-                (0.213 + 0.787 * amount) * r
-                    + (0.715 - 0.715 * amount) * g
-                    + (0.072 - 0.072 * amount) * b,
-                (0.213 - 0.213 * amount) * r
-                    + (0.715 + 0.285 * amount) * g
-                    + (0.072 - 0.072 * amount) * b,
-                (0.213 - 0.213 * amount) * r
-                    + (0.715 - 0.715 * amount) * g
-                    + (0.072 + 0.928 * amount) * b,
-            ]
+    PreparedFilter::new(filter).apply(color)
+}
+
+enum PreparedFilter {
+    Brightness(f32),
+    Contrast(f32),
+    Matrix([[f32; 3]; 3]),
+}
+
+impl PreparedFilter {
+    fn new(filter: Filter) -> Self {
+        match filter {
+            Filter::Brightness(amount) => Self::Brightness(amount),
+            Filter::Contrast(amount) => Self::Contrast(amount),
+            Filter::Saturate(amount) | Filter::Grayscale(amount) => {
+                let amount = if matches!(filter, Filter::Grayscale(_)) {
+                    1. - amount
+                } else {
+                    amount
+                };
+                Self::Matrix([
+                    [
+                        0.213 + 0.787 * amount,
+                        0.715 - 0.715 * amount,
+                        0.072 - 0.072 * amount,
+                    ],
+                    [
+                        0.213 - 0.213 * amount,
+                        0.715 + 0.285 * amount,
+                        0.072 - 0.072 * amount,
+                    ],
+                    [
+                        0.213 - 0.213 * amount,
+                        0.715 - 0.715 * amount,
+                        0.072 + 0.928 * amount,
+                    ],
+                ])
+            }
+            Filter::Sepia(amount) => {
+                let lerp = |identity: f32, sepia: f32| identity + amount * (sepia - identity);
+                Self::Matrix([
+                    [lerp(1., 0.393), lerp(0., 0.769), lerp(0., 0.189)],
+                    [lerp(0., 0.349), lerp(1., 0.686), lerp(0., 0.168)],
+                    [lerp(0., 0.272), lerp(0., 0.534), lerp(1., 0.131)],
+                ])
+            }
+            Filter::HueRotate(degrees) => {
+                let radians = degrees.to_radians();
+                let (sin, cos) = (radians.sin(), radians.cos());
+                Self::Matrix([
+                    [
+                        0.213 + cos * 0.787 - sin * 0.213,
+                        0.715 - cos * 0.715 - sin * 0.715,
+                        0.072 - cos * 0.072 + sin * 0.928,
+                    ],
+                    [
+                        0.213 - cos * 0.213 + sin * 0.143,
+                        0.715 + cos * 0.285 + sin * 0.140,
+                        0.072 - cos * 0.072 - sin * 0.283,
+                    ],
+                    [
+                        0.213 - cos * 0.213 - sin * 0.787,
+                        0.715 - cos * 0.715 + sin * 0.715,
+                        0.072 + cos * 0.928 + sin * 0.072,
+                    ],
+                ])
+            }
         }
-        Filter::Sepia(amount) => {
-            let lerp = |identity: f32, sepia: f32| identity + amount * (sepia - identity);
-            [
-                lerp(1., 0.393) * r + lerp(0., 0.769) * g + lerp(0., 0.189) * b,
-                lerp(0., 0.349) * r + lerp(1., 0.686) * g + lerp(0., 0.168) * b,
-                lerp(0., 0.272) * r + lerp(0., 0.534) * g + lerp(1., 0.131) * b,
-            ]
-        }
-        Filter::HueRotate(degrees) => {
-            let radians = degrees.to_radians();
-            let (sin, cos) = (radians.sin(), radians.cos());
-            [
-                (0.213 + cos * 0.787 - sin * 0.213) * r
-                    + (0.715 - cos * 0.715 - sin * 0.715) * g
-                    + (0.072 - cos * 0.072 + sin * 0.928) * b,
-                (0.213 - cos * 0.213 + sin * 0.143) * r
-                    + (0.715 + cos * 0.285 + sin * 0.140) * g
-                    + (0.072 - cos * 0.072 - sin * 0.283) * b,
-                (0.213 - cos * 0.213 - sin * 0.787) * r
-                    + (0.715 - cos * 0.715 + sin * 0.715) * g
-                    + (0.072 + cos * 0.928 + sin * 0.072) * b,
-            ]
-        }
-    };
-    [clamp(out[0]), clamp(out[1]), clamp(out[2])]
+    }
+
+    fn apply(&self, [r, g, b]: [f32; 3]) -> [f32; 3] {
+        let out = match self {
+            Self::Brightness(amount) => [r * amount, g * amount, b * amount],
+            Self::Contrast(amount) => [
+                (r - 0.5) * amount + 0.5,
+                (g - 0.5) * amount + 0.5,
+                (b - 0.5) * amount + 0.5,
+            ],
+            Self::Matrix(matrix) => matrix.map(|row| row[0] * r + row[1] * g + row[2] * b),
+        };
+        out.map(|value| value.clamp(0., 1.))
+    }
 }
 
 pub fn apply_filters(color: [f32; 3], filters: &[Filter]) -> [f32; 3] {
@@ -215,33 +245,63 @@ pub fn preset_preview_bgra(
     let (wf, hf) = (w as f32, h as f32);
     let mut rgba = image::RgbaImage::new(w, h);
     let grain_opacity = (grain * 1.2).min(1.);
-
-    for (x, y, pixel) in rgba.enumerate_pixels_mut() {
-        let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
-        let scene = gradient_color(gradient_position(xf, yf, wf, hf, SCENE_ANGLE), &SCENE_STOPS);
-        let mut color = apply_filters(scene, filter);
-
-        if let Some(overlay) = overlay {
-            let position = gradient_position(xf, yf, wf, hf, overlay.angle);
-            let source = [
-                overlay.from[0] + position * (overlay.to[0] - overlay.from[0]),
-                overlay.from[1] + position * (overlay.to[1] - overlay.from[1]),
-                overlay.from[2] + position * (overlay.to[2] - overlay.from[2]),
-                overlay.from[3] + position * (overlay.to[3] - overlay.from[3]),
-            ];
-            color = composite_overlay(color, source);
+    let filters: Vec<_> = filter.iter().copied().map(PreparedFilter::new).collect();
+    let prepare_gradient = |angle: f32| {
+        let radians = angle.to_radians();
+        let (sin, cos) = (radians.sin(), radians.cos());
+        let length = (wf * sin).abs() + (hf * cos).abs();
+        move |x: f32, y: f32| {
+            if length <= 0. {
+                return 0.;
+            }
+            (0.5 + ((x - wf / 2.) * sin - (y - hf / 2.) * cos) / length).clamp(0., 1.)
         }
+    };
+    let scene_position = prepare_gradient(SCENE_ANGLE);
+    let overlay_position = overlay.map(|overlay| prepare_gradient(overlay.angle));
+    let (rx, ry) = (
+        wf / 2. * std::f32::consts::SQRT_2,
+        hf / 2. * std::f32::consts::SQRT_2,
+    );
+    let peak = ((vignette * 0.75) * 1000.).round() / 1000.;
 
-        let shade = 1. - vignette_alpha(xf, yf, wf, hf, vignette);
-        color = [color[0] * shade, color[1] * shade, color[2] * shade];
+    for (y, row) in rgba.rows_mut().enumerate() {
+        for (x, pixel) in row.enumerate() {
+            let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
+            let scene = gradient_color(scene_position(xf, yf), &SCENE_STOPS);
+            let mut color = filters
+                .iter()
+                .fold(scene, |color, filter| filter.apply(color));
 
-        if grain_opacity > 0. {
-            let level = fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2).clamp(0., 1.);
-            color = composite_overlay(color, [level, level, level, grain_opacity]);
+            if let Some((overlay, position)) = overlay.zip(overlay_position.as_ref()) {
+                let position = position(xf, yf);
+                let source = [
+                    overlay.from[0] + position * (overlay.to[0] - overlay.from[0]),
+                    overlay.from[1] + position * (overlay.to[1] - overlay.from[1]),
+                    overlay.from[2] + position * (overlay.to[2] - overlay.from[2]),
+                    overlay.from[3] + position * (overlay.to[3] - overlay.from[3]),
+                ];
+                color = composite_overlay(color, source);
+            }
+
+            let shade = if vignette <= 0. {
+                1.
+            } else {
+                let (dx, dy) = ((xf - wf / 2.) / rx, (yf - hf / 2.) / ry);
+                let distance = (dx * dx + dy * dy).sqrt();
+                1. - (((distance - 0.4) / 0.6).clamp(0., 1.)) * peak
+            };
+            color = [color[0] * shade, color[1] * shade, color[2] * shade];
+
+            if grain_opacity > 0. {
+                let level =
+                    fractal_noise_octaves(xf * 0.9 / 2., yf * 0.9 / 2., 11, 2).clamp(0., 1.);
+                color = composite_overlay(color, [level, level, level, grain_opacity]);
+            }
+
+            let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+            *pixel = image::Rgba([byte(color[2]), byte(color[1]), byte(color[0]), 255]);
         }
-
-        let byte = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
-        *pixel = image::Rgba([byte(color[2]), byte(color[1]), byte(color[0]), 255]);
     }
 
     rgba
