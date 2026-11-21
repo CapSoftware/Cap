@@ -130,6 +130,7 @@ export function OrganizationStorageIntegrations({
 	const runMutation = (
 		action: () => Promise<unknown>,
 		successMessage: string,
+		{ refresh = true }: { refresh?: boolean } = {},
 	) => {
 		if (!requirePro()) return;
 
@@ -137,7 +138,7 @@ export function OrganizationStorageIntegrations({
 			try {
 				await action();
 				toast.success(successMessage);
-				router.refresh();
+				if (refresh) router.refresh();
 			} catch (error) {
 				if (error instanceof Error && error.message === proRequiredMessage) {
 					setUpgradeModalOpen(true);
@@ -177,6 +178,8 @@ export function OrganizationStorageIntegrations({
 					region: s3Config.region,
 				}),
 			"S3 connection verified",
+			// Refreshing re-syncs the form from saved settings, wiping unsaved input.
+			{ refresh: false },
 		);
 
 	const connectDrive = () =>
