@@ -29,8 +29,8 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::{
-        Arc, LazyLock, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, LazyLock, Mutex, PoisonError, TryLockError,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -2477,6 +2477,52 @@ pub(crate) fn release_live_models() {
         release_parakeet_now();
     }
     return_freed_memory();
+}
+
+/// Meeting engines running now: the last one to drain lets the live model go
+/// before its after-Stop speaker pass starts.
+static LIVE_MEETINGS: AtomicUsize = AtomicUsize::new(0);
+
+/// One running meeting engine, counted until it drains or goes away.
+pub(crate) struct LiveMeeting {
+    counted: bool,
+}
+
+impl LiveMeeting {
+    pub(crate) fn start() -> Self {
+        LIVE_MEETINGS.fetch_add(1, Ordering::AcqRel);
+        Self { counted: true }
+    }
+
+    /// This meeting no longer needs the live model; true when it was the
+    /// last one running.
+    pub(crate) fn finish(&mut self) -> bool {
+        std::mem::replace(&mut self.counted, false)
+            && LIVE_MEETINGS.fetch_sub(1, Ordering::AcqRel) == 1
+    }
+}
+
+impl Drop for LiveMeeting {
+    fn drop(&mut self) {
+        if self.counted {
+            LIVE_MEETINGS.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// `release_live_models` without waiting: nothing happens while another
+/// transcription holds the slot (the release after the drain still runs).
+pub(crate) fn release_live_models_if_idle() -> bool {
+    let guard = match TRANSCRIPTION_LOCK.try_lock() {
+        Ok(guard) => guard,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => return false,
+    };
+    release_whisper_context_after_transcription();
+    release_parakeet_now();
+    drop(guard);
+    return_freed_memory();
+    true
 }
 
 /// Hands memory the allocator still holds after a model is dropped back to

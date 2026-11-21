@@ -432,6 +432,8 @@ struct Worker {
     policy: RetryPolicy,
     /// Live captions per track.
     live: [Option<LiveSegment>; 2],
+    /// Counts this meeting among those using the live model.
+    live_meeting: crate::transcription::LiveMeeting,
     #[cfg(test)]
     hooks: TestHooks,
 }
@@ -736,6 +738,7 @@ impl Worker {
             unwritten: Vec::new(),
             policy: RetryPolicy::default(),
             live: [None, None],
+            live_meeting: crate::transcription::LiveMeeting::start(),
             #[cfg(test)]
             hooks: TestHooks::default(),
         };
@@ -836,6 +839,11 @@ impl Worker {
         self.repair_after_stop();
         if self.coverage_sweep() {
             self.repair_after_stop();
+        }
+        // The last meeting lets the live model go before the speaker pass
+        // after Stop starts, so the two never overlap
+        if self.live_meeting.finish() {
+            crate::transcription::release_live_models_if_idle();
         }
         self.finish_voices();
         self.flush_unwritten();
