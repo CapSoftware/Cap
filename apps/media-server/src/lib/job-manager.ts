@@ -180,6 +180,7 @@ export interface Job {
 	verified?: boolean;
 	pruned?: string[];
 	retryable?: boolean;
+	uploadsStopped?: Promise<void>;
 }
 
 const jobs = new Map<string, Job>();
@@ -656,15 +657,14 @@ function watchIdleJobs(): void {
 }
 
 // GPU encoder sessions are shared whatever the niceness, so an idle job stops
-// as soon as any other work is admitted rather than run beside it. One that is
-// already uploading finishes instead: uploads cannot be taken back, so
-// stopping there would leave part of a ladder in storage, and the upload uses
-// no encoder.
+// as soon as any other work is admitted rather than run beside it. That
+// includes uploading: an upload competes for the network and the event loop
+// while the new job downloads its source. The caller removes the part of a
+// ladder already uploaded, and is told only once every upload has stopped.
 export function preemptIdleJobs(reason: string): number {
 	let preempted = 0;
 	for (const job of jobs.values()) {
-		if (!job.idle || !isActivePhase(job.phase) || job.phase === "uploading")
-			continue;
+		if (!job.idle || !isActivePhase(job.phase)) continue;
 		job.abortController?.abort(new Error(reason));
 		const ended = updateJob(job.jobId, {
 			phase: "error",
@@ -683,7 +683,8 @@ export function preemptIdleJobs(reason: string): number {
 				reason,
 			}),
 		);
-		void sendWebhook(job);
+		const uploadsStopped = job.uploadsStopped ?? Promise.resolve();
+		void uploadsStopped.then(() => sendWebhook(job));
 	}
 	return preempted;
 }

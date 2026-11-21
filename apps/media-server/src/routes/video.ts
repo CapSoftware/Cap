@@ -1677,6 +1677,7 @@ async function encodeLadderAsync(
 			);
 		}
 
+		signal.throwIfAborted();
 		updateJob(jobId, {
 			phase: "uploading",
 			progress: 80,
@@ -1715,7 +1716,10 @@ async function encodeLadderAsync(
 							throw error;
 						})
 				: null;
-			const failed = (await Promise.allSettled([...uploads, poster])).find(
+			const settled = Promise.allSettled([...uploads, poster]);
+			const ownJob = getJob(jobId);
+			if (ownJob?.idle) ownJob.uploadsStopped = settled.then(() => {});
+			const failed = (await settled).find(
 				(upload) => upload.status === "rejected",
 			);
 			if (failed?.status === "rejected") throw failed.reason;
