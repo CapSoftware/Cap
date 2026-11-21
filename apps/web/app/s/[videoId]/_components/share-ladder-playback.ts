@@ -26,11 +26,7 @@ export const SHARE_THROUGHPUT_KEY = "cap-share-throughput";
 export const STALL_SWITCH_MS = 1500;
 export const COUNTED_STALL_MS = 250;
 export const REPEAT_STALL_WINDOW_MS = 20_000;
-// Longer than the slowest MP4 first frame measured (Safari at 1.6 Mbps,
-// 8.7 s). At 2.5 s a 1.6 Mbps line switched before the MP4's own first frame
-// and HLS then took longer to start, so the first frame got slower. Weak
-// lines are left to the stall rule once a frame is on screen.
-export const FIRST_FRAME_SWITCH_MS = 10_000;
+export { FIRST_FRAME_SWITCH_MS } from "./share-ladder-timing";
 export const LINE_HEADROOM = 1.5;
 export const REMEMBERED_LINE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MEASURE_AHEAD_SECONDS = 10;

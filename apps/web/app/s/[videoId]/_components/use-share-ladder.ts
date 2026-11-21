@@ -43,6 +43,7 @@ import {
 	type ThroughputWindow,
 	WARM_PLAYLIST_MAX_AGE_MS,
 } from "./share-ladder-playback";
+import type { ShareLadderStart } from "./share-ladder-timing";
 
 type HlsModule = typeof import("hls.js");
 type HlsClass = HlsModule["default"];
@@ -235,6 +236,7 @@ function warmPlaylistLoader(
 }
 
 export function useShareLadder({
+	start,
 	ladder,
 	videoRef,
 	active,
@@ -242,6 +244,7 @@ export function useShareLadder({
 	engine,
 	setEngine,
 }: {
+	start: ShareLadderStart;
 	ladder: ShareLadderPlayback;
 	videoRef: RefObject<HTMLVideoElement | null>;
 	active: boolean;
@@ -619,6 +622,7 @@ export function useShareLadder({
 	}, []);
 
 	const lastStallRef = useRef<number | null>(null);
+	const startedRef = useRef(false);
 
 	const callForLadder = useCallback(() => {
 		lineCalledRef.current = true;
@@ -669,11 +673,7 @@ export function useShareLadder({
 			stallTimer = undefined;
 		};
 
-		const onPlayRequested = () => {
-			if (!framedRef.current) {
-				playStartRef.current = video.currentTime;
-				armFirstFrame();
-			}
+		const startPlayback = () => {
 			if (playRequestedRef.current) return;
 			playRequestedRef.current = true;
 			measurementRef.current = {
@@ -684,16 +684,15 @@ export function useShareLadder({
 			};
 		};
 
-		const onTimeUpdate = () => {
-			finishMeasurement(false);
-			if (
-				!playRequestedRef.current ||
-				framedRef.current ||
-				video.paused ||
-				video.currentTime - playStartRef.current < MOVED_SECONDS
-			) {
-				return;
+		const onPlayRequested = () => {
+			if (!framedRef.current) {
+				playStartRef.current = video.currentTime;
+				armFirstFrame();
 			}
+			startPlayback();
+		};
+
+		const onFirstFrame = () => {
 			framedRef.current = true;
 			clearTimeout(firstFrameTimerRef.current);
 			// The MP4 always reaches its first frame before a saved rendition or
@@ -709,6 +708,19 @@ export function useShareLadder({
 				return;
 			}
 			void warm();
+		};
+
+		const onTimeUpdate = () => {
+			finishMeasurement(false);
+			if (
+				!playRequestedRef.current ||
+				framedRef.current ||
+				video.paused ||
+				video.currentTime - playStartRef.current < MOVED_SECONDS
+			) {
+				return;
+			}
+			onFirstFrame();
 		};
 
 		const onProgress = () => {
@@ -801,7 +813,16 @@ export function useShareLadder({
 		video.addEventListener("pause", onPause);
 		video.addEventListener("seeking", onSeeking);
 		document.addEventListener("visibilitychange", onVisibility);
-		if (!video.paused) onPlayRequested();
+		// The host mounts this once the MP4 has shown its first frame, or once
+		// it has gone FIRST_FRAME_SWITCH_MS without one.
+		if (!startedRef.current) {
+			startedRef.current = true;
+			if (!video.paused) startPlayback();
+			if (start === "framed") onFirstFrame();
+			else if (!video.paused) callForLadder();
+		} else if (!video.paused) {
+			onPlayRequested();
+		}
 
 		return () => {
 			clearTimeout(firstFrameTimerRef.current);
@@ -826,6 +847,7 @@ export function useShareLadder({
 		ladderKey,
 		mediaKey,
 		rememberedSlow,
+		start,
 		switchToHls,
 		videoRef,
 		warm,
@@ -853,7 +875,7 @@ export function useShareLadder({
 			if (engineRef.current !== "hls") {
 				const video = videoRef.current;
 				if (!playRequestedRef.current || !video || video.paused) return;
-				if (!framedRef.current) {
+				if (!framedRef.current && !lineCalledRef.current) {
 					armFirstFrame();
 					return;
 				}

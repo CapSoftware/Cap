@@ -8,6 +8,7 @@ import {
 } from "@cap/ui";
 import { type ReactNode, type RefObject, useEffect } from "react";
 import type { ShareLadderPlayback } from "./share-ladder-playback";
+import type { ShareLadderStart } from "./share-ladder-timing";
 import {
 	type ShareLadderEngine,
 	type ShareLadderQualityMenu,
@@ -72,6 +73,7 @@ function QualitySubmenu({ menu }: { menu: ShareLadderQualityMenu }) {
 }
 
 export default function ShareLadder({
+	start,
 	ladder,
 	videoRef,
 	active,
@@ -80,6 +82,7 @@ export default function ShareLadder({
 	onEngineChange,
 	onQualitySubmenu,
 }: {
+	start: ShareLadderStart;
 	ladder: ShareLadderPlayback;
 	videoRef: RefObject<HTMLVideoElement | null>;
 	active: boolean;
@@ -89,6 +92,7 @@ export default function ShareLadder({
 	onQualitySubmenu: (submenu: ReactNode) => void;
 }) {
 	const menu = useShareLadder({
+		start,
 		ladder,
 		videoRef,
 		active,

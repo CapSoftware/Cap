@@ -33,6 +33,10 @@ import {
 import { replayMissedMediaEvents } from "./replay-missed-media-events";
 import type { ShareLadderPlayback } from "./share-ladder-playback";
 import {
+	FIRST_FRAME_SWITCH_MS,
+	type ShareLadderStart,
+} from "./share-ladder-timing";
+import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
 	shouldDeferPlaybackSource,
@@ -319,6 +323,45 @@ export function CapVideoPlayer({
 		setLadderEngineState(engine);
 	}, []);
 	const [qualitySubmenu, setQualitySubmenu] = useState<React.ReactNode>(null);
+	// The ladder chunk loads only once the MP4 has shown its first frame after
+	// play, or when it never does, so nothing from it competes with that frame.
+	const [ladderStart, setLadderStart] = useState<ShareLadderStart | null>(null);
+	const hasMp4Source = resolvedSrc.data?.type === "mp4";
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!ladder || ladderStart || !hasMp4Source || !video) return;
+		let from = video.currentTime;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const moved = () => !video.paused && video.currentTime > from;
+		const onFrame = () => {
+			if (moved()) setLadderStart("framed");
+			else video.requestVideoFrameCallback?.(onFrame);
+		};
+		const onPlay = () => {
+			from = video.currentTime;
+			clearTimeout(timer);
+			timer = setTimeout(() => {
+				if (!video.paused && !video.ended && !video.error) {
+					setLadderStart("rescue");
+				}
+			}, FIRST_FRAME_SWITCH_MS);
+			video.requestVideoFrameCallback?.(onFrame);
+		};
+		const onTimeUpdate = () => {
+			if (moved()) setLadderStart("framed");
+		};
+		const onPause = () => clearTimeout(timer);
+		video.addEventListener("play", onPlay);
+		video.addEventListener("timeupdate", onTimeUpdate);
+		video.addEventListener("pause", onPause);
+		if (!video.paused) onPlay();
+		return () => {
+			clearTimeout(timer);
+			video.removeEventListener("play", onPlay);
+			video.removeEventListener("timeupdate", onTimeUpdate);
+			video.removeEventListener("pause", onPause);
+		};
+	}, [hasMp4Source, ladder, ladderStart, videoRef]);
 
 	useEffect(() => {
 		void videoSrc;
@@ -836,8 +879,9 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
-			{ladder && (
+			{ladder && ladderStart && (
 				<ShareLadder
+					start={ladderStart}
 					ladder={ladder}
 					videoRef={videoRef}
 					active={
