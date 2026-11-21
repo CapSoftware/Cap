@@ -43,6 +43,7 @@ import {
 	unregisterMediaOperation,
 	withMediaOperation,
 } from "../../lib/media-operations";
+import { probeFastestFrameRate, probeVideoFile } from "../../lib/media-probe";
 import { tryAcquireDirectVideoProcessSlot } from "../../lib/video-capacity";
 
 const SECRET = "test-secret";
@@ -234,19 +235,26 @@ describe("preemption", () => {
 		expectPreempted(job, abort);
 	});
 
-	test("an audio operation stops the idle job and a probe does not", async () => {
-		const probed = addIdleJob();
-		await withMediaOperation("probe", async () => {});
-		expect(probed.abort.signal.aborted).toBe(false);
-		expect(probed.job.phase).toBe("processing");
-
+	test("an audio operation stops the idle job", async () => {
+		const audio = addIdleJob();
 		await withMediaOperation("audio", async () => {});
-		expectPreempted(probed.job, probed.abort);
+		expectPreempted(audio.job, audio.abort);
 
 		const registered = addIdleJob();
 		const handle = registerMediaOperation("audio", () => {});
 		unregisterMediaOperation(handle);
 		expectPreempted(registered.job, registered.abort);
+	});
+
+	test("an outside probe stops the idle job and the idle job's own probes do not", async () => {
+		const { job, abort } = addIdleJob();
+		await probeVideoFile(FIXTURE, undefined, { idle: true });
+		await probeFastestFrameRate(FIXTURE, undefined, { idle: true });
+		expect(abort.signal.aborted).toBe(false);
+		expect(job.phase).toBe("processing");
+
+		await probeVideoFile(FIXTURE);
+		expectPreempted(job, abort);
 	});
 
 	test("a thumbnail stops the idle job once its source is probed", async () => {
