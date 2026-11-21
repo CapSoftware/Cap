@@ -519,9 +519,10 @@ unsafe impl Sync for RetainedImageBuf {}
 /// A decoder recycles a fixed set of IOSurfaces (about 40 per screen reader
 /// and 100 per camera reader), and importing one as new Metal textures for
 /// every frame made each command buffer submission map new GPU resources.
-/// Each native reader owns one of these, shared by the frames it vends, so an
-/// import keeps its IOSurface alive exactly as long as that reader or one of
-/// its frames does.
+/// Each native reader owns one of these and its frames only point at it, so
+/// an import keeps its IOSurface alive exactly as long as that reader: frames
+/// that outlive a reset (holds, the first frame) fall back to a one-off
+/// import rather than pinning the old reader's whole set.
 #[cfg(target_os = "macos")]
 #[derive(Default)]
 pub struct IOSurfaceImports {

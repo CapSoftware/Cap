@@ -900,6 +900,7 @@ impl DisplayLayer {
                     if !self.prefer_cpu_conversion {
                         #[cfg(target_os = "macos")]
                         let converted_into_frame = {
+                            let imports = screen_frame.iosurface_imports();
                             frame_source = screen_frame
                                 .with_image_buf(|image_buf| {
                                     self.yuv_converter
@@ -908,7 +909,7 @@ impl DisplayLayer {
                                             encoder,
                                             image_buf,
                                             &self.frame_texture_views[next_texture],
-                                            screen_frame.iosurface_imports(),
+                                            imports.as_deref(),
                                         )
                                         .ok()
                                 })

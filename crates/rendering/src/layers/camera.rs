@@ -440,6 +440,7 @@ impl CameraLayer {
                 PixelFormat::Nv12 => {
                     #[cfg(target_os = "macos")]
                     let converted_into_frame = {
+                        let imports = camera_frame.iosurface_imports();
                         frame_source = camera_frame
                             .with_image_buf(|image_buf| {
                                 self.yuv_converter
@@ -448,7 +449,7 @@ impl CameraLayer {
                                         encoder,
                                         image_buf,
                                         &self.frame_texture_views[next_texture],
-                                        camera_frame.iosurface_imports(),
+                                        imports.as_deref(),
                                     )
                                     .ok()
                             })

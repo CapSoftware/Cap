@@ -268,7 +268,7 @@ impl CachedFrame {
                         y_stride,
                         uv_stride,
                         image_buf,
-                        Some(imports.clone()),
+                        Some(Arc::downgrade(imports)),
                     )
                 } else {
                     let mut image_buf = image_buf;
