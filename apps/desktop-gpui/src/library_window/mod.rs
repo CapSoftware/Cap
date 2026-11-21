@@ -11,6 +11,7 @@ pub mod rules;
 pub mod store;
 pub mod style;
 pub mod text;
+pub mod thumbs;
 
 use std::{collections::HashMap, path::PathBuf, rc::Rc, time::Instant};
 
@@ -192,6 +193,7 @@ pub struct LibraryWindow {
     reload_again: bool,
     last_scan: Option<Instant>,
     people_task: Option<Task<()>>,
+    thumbs: thumbs::Thumbs,
     list_scroll: gpui::UniformListScrollHandle,
     grid_scroll: gpui::UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -389,6 +391,7 @@ impl LibraryWindow {
             reload_again: false,
             last_scan: None,
             people_task: None,
+            thumbs: thumbs::Thumbs::default(),
             list_scroll: gpui::UniformListScrollHandle::new(),
             grid_scroll: gpui::UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
@@ -446,6 +449,7 @@ impl LibraryWindow {
                 this.load_task = None;
                 this.last_scan = Some(Instant::now());
                 this.scan = Rc::new(scan);
+                this.thumbs.forget_failures();
                 this.prune_members(&gone);
                 this.reevaluate(cx);
                 this.index_people(library, cx);
@@ -576,6 +580,44 @@ impl LibraryWindow {
         {
             self.file = file;
         }
+    }
+
+    /// Decodes the thumbnails the last render asked for, off the main thread,
+    /// and draws again as they land (in batches, not one frame per picture).
+    fn load_thumbs(&mut self, cx: &mut Context<Self>) {
+        let jobs = self.thumbs.take_wanted();
+        if jobs.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let (_workers, results) = crate::library::spawn_decode_pool(
+                cx.background_executor(),
+                jobs,
+                |path: PathBuf| {
+                    let image = crate::library::decode_thumbnail(&path);
+                    Some((path, image))
+                },
+            );
+            while let Ok(first) = results.recv_async().await {
+                let mut batch = vec![first];
+                batch.extend(results.try_iter());
+                let alive = this
+                    .update(cx, |this, cx| {
+                        for (path, image) in batch {
+                            match image {
+                                Some(image) => this.thumbs.insert(path, image),
+                                None => this.thumbs.fail(path),
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     fn in_folder(&self, id: &str, item: &Item) -> bool {
@@ -1457,13 +1499,13 @@ impl LibraryWindow {
             .bg(style::thumb_well(dark));
         match &item.thumbnail {
             Some(path) => base
-                .child(
-                    img(path.clone())
+                .children(self.thumbs.get(path).map(|image| {
+                    img(image)
                         .absolute()
                         .inset_0()
                         .size_full()
-                        .object_fit(ObjectFit::Cover),
-                )
+                        .object_fit(ObjectFit::Cover)
+                }))
                 .when_some(
                     item.duration_ms
                         .filter(|_| item.kind == ItemKind::Recording),
@@ -1657,7 +1699,11 @@ impl LibraryWindow {
                 .rounded(px(7.))
                 .overflow_hidden()
                 .bg(style::thumb_well(dark))
-                .child(img(path.clone()).size_full().object_fit(ObjectFit::Cover))
+                .children(
+                    self.thumbs
+                        .get(path)
+                        .map(|image| img(image).size_full().object_fit(ObjectFit::Cover)),
+                )
                 .into_any_element(),
             None => div()
                 .w(px(64.))
@@ -2042,7 +2088,11 @@ impl LibraryWindow {
                     "library-list",
                     visible.len(),
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                        range.map(|r| this.list_row(visible[r], cx)).collect()
+                        let rows = range.map(|r| this.list_row(visible[r], cx)).collect();
+                        // Rows render during layout, after render(): start
+                        // their pictures here.
+                        this.load_thumbs(cx);
+                        rows
                     }),
                 )
                 .track_scroll(&self.list_scroll)
@@ -2069,7 +2119,9 @@ impl LibraryWindow {
                                     .child(this.grid_rows(&visible[start..end], width, cx))
                                     .into_any_element()
                             })
-                            .collect()
+                            .collect::<Vec<_>>();
+                        this.load_thumbs(cx);
+                        rows
                     }),
                 )
                 .track_scroll(&self.grid_scroll)
@@ -2691,6 +2743,13 @@ impl Render for LibraryWindow {
                 )
                 .into_any_element(),
         };
+        let editor = self.render_editor(cx);
+        // Pictures this frame asked for start decoding now; pictures that
+        // left the cache leave the GPU atlas too.
+        self.load_thumbs(cx);
+        for image in self.thumbs.take_evicted() {
+            window.drop_image(image).ok();
+        }
         div()
             .id("library-window")
             .track_focus(&self.focus)
