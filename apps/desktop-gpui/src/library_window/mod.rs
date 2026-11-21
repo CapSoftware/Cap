@@ -9,6 +9,7 @@ pub mod items;
 pub mod load;
 pub mod people;
 pub mod rules;
+pub mod sidebar;
 pub mod store;
 pub mod style;
 pub mod text;
@@ -216,6 +217,7 @@ pub struct LibraryWindow {
     outcome: store::LoadOutcome,
     smart_members: HashMap<String, Vec<u32>>,
     membership: index::Membership,
+    sidebar: Entity<sidebar::SidebarView>,
     counts: HashMap<Section, usize>,
     visible: Rc<Vec<u32>>,
     search: Entity<TextInputState>,
@@ -369,6 +371,14 @@ impl LibraryWindow {
         });
         let dir = crate::store::app_data_dir();
         let loaded = store::load(&dir);
+        let sidebar = cx.new(|_| {
+            sidebar::SidebarView::new(sidebar::Model {
+                rows: Vec::new(),
+                selected: Section::Home,
+                palette,
+                background: None,
+            })
+        });
         let subscriptions = vec![
             cx.subscribe(&search, |this, input, event: &TextInputEvent, cx| {
                 if matches!(event, TextInputEvent::Changed) {
@@ -392,6 +402,14 @@ impl LibraryWindow {
             }),
         ];
         let mut subscriptions = subscriptions;
+        subscriptions.push(cx.subscribe_in(
+            &sidebar,
+            window,
+            |this, _, event: &sidebar::SidebarEvent, window, cx| match event {
+                sidebar::SidebarEvent::Show(section) => this.show(section.clone(), cx),
+                sidebar::SidebarEvent::NewSmartFolder => this.open_editor(None, window, cx),
+            },
+        ));
         if let Some(meetings) = crate::meetings::Meetings::try_global(cx) {
             subscriptions.push(cx.subscribe(
                 &meetings,
@@ -418,6 +436,7 @@ impl LibraryWindow {
             outcome: loaded.outcome,
             smart_members: HashMap::new(),
             membership: index::Membership::default(),
+            sidebar: sidebar.clone(),
             counts: HashMap::new(),
             visible: Rc::new(Vec::new()),
             search,
@@ -1251,205 +1270,113 @@ impl LibraryWindow {
         self.theme.material.is_some()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn sidebar_row(
-        &self,
-        id: impl Into<SharedString>,
-        icon: &'static str,
-        tint: Option<Hsla>,
-        label: impl Into<SharedString>,
-        count: Option<usize>,
-        section: Section,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let p = self.palette;
-        let active = self.section == section;
-        let label: SharedString = label.into();
-        div()
-            .id(id.into())
-            .mx(px(10.))
-            .h(px(style::ROW_HEIGHT))
-            .px(px(8.))
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .rounded(px(style::ROW_RADIUS))
-            .cursor_pointer()
-            .text_size(px(13.))
-            .text_color(p.text)
-            .role(gpui::Role::Button)
-            .aria_label(label.clone())
-            .aria_selected(active)
-            .when(active, |el| {
-                el.bg(p.selected).font_weight(FontWeight::MEDIUM)
-            })
-            .when(!active, |el| el.hover(move |s| s.bg(p.hover)))
-            .child(
-                svg()
-                    .path(icon)
-                    .size(px(15.))
-                    .flex_shrink_0()
-                    .text_color(tint.unwrap_or(p.muted)),
-            )
-            .child(div().flex_1().min_w_0().truncate().child(label))
-            .children(count.filter(|c| *c > 0).map(|c| {
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(11.5))
-                    .text_color(p.faint)
-                    .child(c.to_string())
-            }))
-            .on_click(cx.listener(move |this, _, _, cx| this.show(section.clone(), cx)))
-            .into_any_element()
-    }
-
-    fn section_label(&self, label: &'static str) -> gpui::Div {
-        div()
-            .mt(px(16.))
-            .mb(px(2.))
-            .h(px(24.))
-            .px(px(20.))
-            .flex()
-            .items_center()
-            .justify_between()
-            .text_size(px(style::SECTION_TITLE_SIZE))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(self.palette.muted)
-            .child(label)
-    }
-
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// What the sidebar shows: built every render (a few small rows, counts
+    /// already computed) and handed to the cached sidebar view, which redraws
+    /// only when it differs.
+    fn sidebar_model(&self) -> sidebar::Model {
+        use sidebar::Row;
         let p = self.palette;
         let dark = p.dark;
-        let mut col = div()
-            .id("library-sidebar")
-            .w(px(style::SIDEBAR_WIDTH))
-            .h_full()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .pt(px(style::TOOLBAR_HEIGHT))
-            .pb(px(10.))
-            .overflow_y_scroll()
-            .when(!self.glass(), |el| el.bg(p.sidebar))
-            .when(self.glass() && self.direction == Direction::Gallery, |el| {
-                el.bg(style::sidebar_wash(dark))
-            });
-        col = col.child(self.sidebar_row(
-            "nav-home",
-            "icons/house.svg",
-            Some(p.accent),
-            tr::library::home(),
-            None,
-            Section::Home,
-            cx,
-        ));
-        col = col.child(self.section_label(tr::library::title()));
+        let nav = |id: SharedString,
+                   icon: &'static str,
+                   tint: Option<Hsla>,
+                   label: SharedString,
+                   count: Option<usize>,
+                   section: Section| Row::Nav {
+            id,
+            icon,
+            tint,
+            label,
+            count,
+            section,
+        };
+        let mut rows = vec![
+            nav(
+                "nav-home".into(),
+                "icons/house.svg",
+                Some(p.accent),
+                tr::library::home().into(),
+                None,
+                Section::Home,
+            ),
+            Row::Label(tr::library::title()),
+        ];
         for kind in [KindView::Recordings, KindView::Screenshots, KindView::Notes] {
             let section = Section::Kind(kind);
-            let count = self.count_for(&section);
-            col = col.child(self.sidebar_row(
+            rows.push(nav(
                 SharedString::from(format!("nav-{}", kind.label())),
                 kind.icon(),
                 Some(style::kind_tint(kind.tint(), dark)),
-                kind.label(),
-                Some(count),
+                kind.label().into(),
+                Some(self.count_for(&section)),
                 section,
-                cx,
             ));
         }
         let pinned = self.count_for(&Section::Pinned);
         if pinned > 0 {
-            col = col.child(self.sidebar_row(
-                "nav-pinned",
+            rows.push(nav(
+                "nav-pinned".into(),
                 "icons/pin.svg",
                 Some(style::kind_tint(ItemKind::Note, dark)),
-                tr::library::pinned(),
+                tr::library::pinned().into(),
                 Some(pinned),
                 Section::Pinned,
-                cx,
             ));
         }
-        col = col.child(
-            self.section_label(tr::library::folders()).child(
-                div()
-                    .id("new-smart-folder")
-                    .size(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .role(gpui::Role::Button)
-                    .aria_label(tr::library::new_smart_folder())
-                    .hover(move |s| s.bg(p.hover))
-                    .child(
-                        svg()
-                            .path("icons/plus.svg")
-                            .size(px(13.))
-                            .text_color(p.muted),
-                    )
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.open_editor(None, window, cx)),
-                    ),
-            ),
-        );
-        let folders = self.scan.folders.clone();
-        for folder in &folders {
+        rows.push(Row::FoldersLabel);
+        for folder in &self.scan.folders {
             let section = Section::Folder(folder.id.clone());
-            let count = self.count_for(&section);
-            col = col.child(self.sidebar_row(
+            rows.push(nav(
                 SharedString::from(format!("nav-folder-{}", folder.id)),
                 "icons/folder.svg",
                 None,
-                folder.name.clone(),
-                Some(count),
+                folder.name.clone().into(),
+                Some(self.count_for(&section)),
                 section,
-                cx,
             ));
         }
-        let smart = self.file.smart_folders.clone();
-        for folder in &smart {
+        for folder in &self.file.smart_folders {
             let section = Section::Smart(folder.id.clone());
-            let count = self.count_for(&section);
-            col = col.child(self.sidebar_row(
+            rows.push(nav(
                 SharedString::from(format!("nav-smart-{}", folder.id)),
                 "icons/sliders-horizontal.svg",
                 Some(p.accent),
-                folder.name.clone(),
-                Some(count),
+                folder.name.clone().into(),
+                Some(self.count_for(&section)),
                 section,
-                cx,
             ));
         }
-        col = col.child(div().flex_1().min_h(px(16.)));
-        let notice = match &self.outcome {
-            store::LoadOutcome::MovedAside(_) => Some(tr::library::file_unreadable()),
-            store::LoadOutcome::ReadOnly => Some(tr::library::file_read_only()),
-            _ => None,
-        };
-        if let Some(notice) = notice {
-            col = col.child(
-                div()
-                    .mx(px(18.))
-                    .mb(px(8.))
-                    .text_size(px(11.5))
-                    .line_height(px(16.))
-                    .text_color(p.muted)
-                    .child(notice),
-            );
+        rows.push(Row::Spacer);
+        match &self.outcome {
+            store::LoadOutcome::MovedAside(_) => {
+                rows.push(Row::Notice(tr::library::file_unreadable()))
+            }
+            store::LoadOutcome::ReadOnly => rows.push(Row::Notice(tr::library::file_read_only())),
+            _ => {}
         }
-        let trash = self.count_for(&Section::Trash);
-        col = col.child(self.sidebar_row(
-            "nav-trash",
+        rows.push(nav(
+            "nav-trash".into(),
             "icons/trash.svg",
             None,
-            tr::library::trash(),
-            Some(trash),
+            tr::library::trash().into(),
+            Some(self.count_for(&Section::Trash)),
             Section::Trash,
-            cx,
         ));
-        col.into_any_element()
+        let background = if !self.glass() || self.direction == Direction::Gallery {
+            Some(if self.glass() {
+                style::sidebar_wash(dark)
+            } else {
+                p.sidebar
+            })
+        } else {
+            None
+        };
+        sidebar::Model {
+            rows,
+            selected: self.section.clone(),
+            palette: p,
+            background,
+        }
     }
 
     fn render_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2817,6 +2744,9 @@ impl Render for LibraryWindow {
                 );
             });
         }
+        let model = self.sidebar_model();
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_model(model, cx));
         let p = self.palette;
         let glass = self.glass();
         let radius = if glass {
@@ -2878,7 +2808,14 @@ impl Render for LibraryWindow {
             .font_family(crate::theme::UI_FONT)
             .locale_font()
             .text_color(p.text)
-            .child(self.render_sidebar(cx))
+            .child(
+                self.sidebar.clone().cached(
+                    gpui::StyleRefinement::default()
+                        .w(px(style::SIDEBAR_WIDTH))
+                        .h_full()
+                        .flex_shrink_0(),
+                ),
+            )
             .when(self.direction == Direction::Gallery, |el| {
                 el.child(div().w(px(1.)).h_full().bg(p.hairline))
             })
