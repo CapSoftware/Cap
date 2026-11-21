@@ -12,8 +12,10 @@ use gpui::{
 
 use super::style::Palette;
 
-/// Window corners over a native material: concentric around a 52 pt toolbar.
-pub const WINDOW_RADIUS: f32 = 26.;
+/// Window corners: the titled window frame's own radius on macOS 26 and 27
+/// (see `platform::install_window_material`). Anything larger leaves the
+/// frame's edge showing outside the content's corners.
+pub const WINDOW_RADIUS: f32 = 16.;
 pub const ROW_HEIGHT: f32 = 28.;
 pub const ROW_RADIUS: f32 = 8.;
 pub const SECTION_TITLE_SIZE: f32 = 11.5;

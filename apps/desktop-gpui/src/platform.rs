@@ -1314,6 +1314,12 @@ mod mac {
     /// *other* Cap windows and is deliberately not reproduced here.
     const NS_GLASS_EFFECT_VIEW_STYLE_REGULAR: isize = 0;
 
+    /// The corner radius AppKit gives a titled window's own frame (its edge
+    /// highlight and shadow) on macOS 26 and 27, with or without a toolbar:
+    /// measured with `-[NSWindow _cornerRadius]` on 27.0 (read once by hand,
+    /// never at runtime: it is private).
+    const TITLED_WINDOW_RADIUS: f64 = 16.;
+
     /// `LIQUID_GLASS_IDENTIFIER`, kept byte-identical to the Tauri app so the
     /// two view hierarchies read the same in a debugger.
     const LIQUID_GLASS_IDENTIFIER: &str = "so.cap.liquid-glass-background";
@@ -1355,6 +1361,23 @@ mod mac {
         // that proven.
         let mtm = MainThreadMarker::new()?;
         let content_view = native.0.contentView()?;
+
+        // A titled window keeps its frame's own corners whatever we draw, so
+        // a material or clip with any other radius leaves that frame showing
+        // as a second edge just outside the content's corners. Titled windows
+        // always take the frame's radius; borderless panels keep theirs.
+        const TITLED: usize = 1 << 0;
+        let mask: usize = unsafe { msg_send![&*native.0, styleMask] };
+        let radius = if mask & TITLED != 0 && (radius - TITLED_WINDOW_RADIUS).abs() > 0.5 {
+            tracing::warn!(
+                asked = radius,
+                used = TITLED_WINDOW_RADIUS,
+                "a titled window's material follows the window's own corners"
+            );
+            TITLED_WINDOW_RADIUS
+        } else {
+            radius
+        };
 
         // Clip the content view to the window's corner radius so the material
         // below cannot paint a square corner outside the shell's own rounded
