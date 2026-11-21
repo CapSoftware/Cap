@@ -1815,6 +1815,7 @@ dependencies = [
  "image 0.25.10",
  "md-5",
  "simd-adler32",
+ "tempfile",
  "tracing",
 ]
 
