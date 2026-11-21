@@ -1946,7 +1946,9 @@ mod stationary_shape_tests {
             STATIONARY_SHAPE_CHECK_INTERVAL
         );
         assert_eq!(
-            stationary_shape_check_interval(STATIONARY_SHAPE_SETTLE - Duration::from_millis(1)),
+            stationary_shape_check_interval(
+                STATIONARY_SHAPE_SETTLE.saturating_sub(Duration::from_millis(1))
+            ),
             STATIONARY_SHAPE_CHECK_INTERVAL
         );
         assert_eq!(
