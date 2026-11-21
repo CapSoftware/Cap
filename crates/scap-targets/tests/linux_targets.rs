@@ -155,12 +155,27 @@ fn partially_offscreen_window_remains_a_recording_target() {
         .check()
         .unwrap();
     assert!(Window::from_id(&target_id).is_none());
+    let offscreen = Window::from_id_direct(&target_id).expect("offscreen window still exists");
+    assert_eq!(offscreen.id(), target_id);
+    assert!(offscreen.display_relative_logical_bounds().is_none());
 
     conn.configure_window(id, &ConfigureWindowAux::new().x(100).y(100))
         .unwrap()
         .check()
         .unwrap();
     assert!(Window::from_id(&target_id).is_some());
+    conn.unmap_window(id).unwrap().check().unwrap();
+    let unmapped = Window::from_id_direct(&target_id).expect("unmapped window still exists");
+    assert!(
+        !unmapped
+            .raw_handle()
+            .selection_metadata()
+            .unwrap()
+            .is_viewable
+    );
+    conn.map_window(id).unwrap().check().unwrap();
+    assert!(Window::from_id(&target_id).is_some());
     conn.destroy_window(id).unwrap().check().unwrap();
+    assert!(Window::from_id_direct(&target_id).is_none());
     assert!(Window::from_id(&target_id).is_none());
 }

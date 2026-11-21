@@ -170,6 +170,16 @@ impl WindowImpl {
         }
     }
 
+    pub fn from_id_direct(id: &WindowIdImpl) -> Option<Self> {
+        if is_wayland_portal_window(id.0) {
+            return wayland_windows()
+                .into_iter()
+                .find(|window| window.0 == id.0);
+        }
+        let window = Self(id.0);
+        window.selection_metadata().map(|_| window)
+    }
+
     pub fn list_containing_cursor() -> Vec<Self> {
         let Some(cursor) = get_cursor_position() else {
             return Vec::new();

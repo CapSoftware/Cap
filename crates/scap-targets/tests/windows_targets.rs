@@ -151,6 +151,8 @@ fn discovers_foreign_top_level_windows_and_preserves_target_filters() {
         .map(|id| id.parse().unwrap())
         .collect();
     assert_eq!(ids.len(), 6);
+    assert!(Window::from_id(&ids[5]).is_none());
+    assert!(Window::from_id_direct(&ids[5]).is_some());
     let own = TestWindow::new(WS_OVERLAPPEDWINDOW | WS_VISIBLE, WINDOW_EX_STYLE(0), None);
     let windows = Window::list();
     let mut cache = WindowListCache::default();
@@ -224,4 +226,5 @@ fn discovers_foreign_top_level_windows_and_preserves_target_filters() {
         .write_all(b"stop\n")
         .unwrap();
     assert!(fixture.0.wait().unwrap().success());
+    assert!(Window::from_id_direct(&ids[5]).is_none());
 }
