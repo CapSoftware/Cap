@@ -1963,9 +1963,6 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
-    /// The last generation found key presses but only typing, with just
-    /// shortcuts shown, so the empty lane can offer to show the typing.
-    pub(crate) keyboard_typing_hidden: bool,
     clip_speed: Option<ClipSpeedMenu>,
     markers: markers::MarkersState,
     transition_popover: Option<TransitionPopover>,
@@ -2752,7 +2749,6 @@ impl EditorWindow {
             hovering_generate_zoom: false,
             generating_keyboard: false,
             keyboard_generation_message: None,
-            keyboard_typing_hidden: false,
             clip_speed: None,
             markers: markers_state,
             transition_popover: None,
@@ -5760,10 +5756,6 @@ impl EditorWindow {
                         self.seek_to_time(press_time, cx);
                         self.view.preview_time = None;
                     }
-                } else if kind == TrackKind::Keyboard && self.keyboard_typing_hidden {
-                    // The recording only has typing: show it.
-                    cx.stop_propagation();
-                    self.show_recorded_typing(window, cx);
                 } else if kind == TrackKind::Keyboard {
                     // Add Keystrokes opens where the track was pressed.
                     cx.stop_propagation();
@@ -13527,22 +13519,10 @@ impl EditorWindow {
                     .pr(px(12.))
                     .rounded(px(8.))
                     .cursor_pointer()
-                    .bg(Hsla::from(theme.editor.accent).opacity(if theme.is_dark() {
-                        0.2
-                    } else {
-                        0.12
-                    }))
-                    .hover(|style| {
-                        style.bg(Hsla::from(theme.editor.accent).opacity(if theme.is_dark() {
-                            0.28
-                        } else {
-                            0.18
-                        }))
-                    })
+                    .map(|this| add_track_paint(this, &theme))
                     .active(|style| style.opacity(0.8))
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.accent_ink))
                     .child(
                         svg()
                             .path(if self.add_track.is_some() {
@@ -13552,7 +13532,7 @@ impl EditorWindow {
                             })
                             .size(px(14.))
                             .flex_none()
-                            .text_color(Hsla::from(theme.editor.accent_ink)),
+                            .text_color(gpui::white()),
                     )
                     .child(
                         div()
@@ -13593,7 +13573,8 @@ impl EditorWindow {
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
-            keyboard_typing_hidden: self.keyboard_typing_hidden,
+            keyboard_shortcuts_only: !crate::editor_tabs::keyboard_settings(&self.project)
+                .show_typing,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.
@@ -18839,4 +18820,26 @@ mod add_caption_ui_tests {
             assert!(editor.notice.is_some());
         });
     }
+}
+
+/// The Add Track button: the timeline's one filled action, white on the
+/// accent fill (5.5:1) in both themes, deepening on hover so the label keeps
+/// its contrast.
+fn add_track_paint(this: gpui::Stateful<gpui::Div>, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    let editor = theme.editor;
+    let hover = Hsla::from(crate::theme::mix(
+        editor.accent_fill,
+        gpui::rgb(0x000000),
+        0.08,
+    ));
+    this.bg(Hsla::from(editor.accent_fill))
+        .text_color(gpui::white())
+        .shadow(vec![gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.22),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        }])
+        .hover(move |style| style.bg(hover))
 }

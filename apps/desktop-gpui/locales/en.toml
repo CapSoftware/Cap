@@ -2972,6 +2972,7 @@ key_theme = "Key Theme"
 linger_duration = "Linger Duration"
 load_failed = "Failed to load recording data: {error}"
 no_presses = "No recorded keyboard presses were found."
+no_shortcuts = "No shortcuts were pressed in this recording."
 permission_action = "Show me how"
 permission_body = "Give Cap your OK so your next recordings include the keys you press."
 permission_title = "Keystrokes aren't being recorded"
@@ -3002,7 +3003,6 @@ type_keys_button = "Add Keystrokes…"
 type_keys_hint = { text = "Paste a sentence, a script or a transcript, or a shortcut like cmd+shift+p. It types out as key presses from where you opened this.", context = "cmd+shift+p is typed as is and must stay in English." }
 type_keys_placeholder = { text = "A sentence, or a shortcut like cmd+k", context = "Placeholder in a text box; cmd+k is typed as is and must stay in English." }
 type_keys_summary = { text = "About {seconds} s of typing", context = "{seconds} is a number of seconds, like 4.2." }
-typing_only = "This recording has typing but no shortcuts. Turn on Show Typing to show what you typed."
 uppercase = "Uppercase"
 
 [editor.tabs.padding]
@@ -3091,9 +3091,8 @@ add_scene = "Add scene"
 audio = "Add background music or import your own audio"
 captions = "No captions"
 keyboard = "No keyboard events"
-keyboard_typing_only = "Only typing in this recording"
+keyboard_shortcuts = "No shortcuts"
 scene = "Switch layouts between your screen and camera"
-show_typing = "Show typing"
 
 [editor.timeline.picker]
 audio = "Add background music or import your own audio."

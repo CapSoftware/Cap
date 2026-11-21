@@ -2107,9 +2107,9 @@ pub struct SegmentUi<'a> {
     /// Which end of the selected 3D shot the panel is editing, for the pose
     /// dots on its box.
     pub camera3d_editing_end: bool,
-    /// The recording's presses are all typing and typing is hidden, so the
-    /// empty keyboard lane offers to show it.
-    pub keyboard_typing_hidden: bool,
+    /// Only shortcuts are shown, so an empty keyboard lane says no
+    /// shortcuts rather than no keys.
+    pub keyboard_shortcuts_only: bool,
 }
 
 impl SegmentUi<'_> {
@@ -2534,7 +2534,7 @@ fn render_track_content(
             row.kind,
             view.hovered_track == Some(row.kind),
             row.kind == TrackKind::Audio && ui.audio_picker_lane == Some(row.lane),
-            ui.keyboard_typing_hidden,
+            ui.keyboard_shortcuts_only,
         )
     {
         content = content.child(empty);
@@ -3005,18 +3005,18 @@ fn render_empty_track(
     kind: TrackKind,
     hovered: bool,
     active: bool,
-    keyboard_typing_hidden: bool,
+    keyboard_shortcuts_only: bool,
 ) -> Option<AnyElement> {
     let (copy, action) = match kind {
-        TrackKind::Keyboard if keyboard_typing_hidden => (
-            tr::editor::timeline::empty::keyboard_typing_only(),
-            Some(tr::editor::timeline::empty::show_typing()),
-        ),
         // `TL/CaptionsTrack.tsx:146-160`.
         TrackKind::Caption => (tr::editor::timeline::empty::captions(), None),
         // `TL/KeyboardTrack.tsx:146-153`.
         TrackKind::Keyboard => (
-            tr::editor::timeline::empty::keyboard(),
+            if keyboard_shortcuts_only {
+                tr::editor::timeline::empty::keyboard_shortcuts()
+            } else {
+                tr::editor::timeline::empty::keyboard()
+            },
             Some(tr::editor::timeline::empty::add_key()),
         ),
         // `TL/AudioTrack.tsx:400-427`, `TL/ThreeDTrack.tsx:319-337`, and the
