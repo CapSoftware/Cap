@@ -6291,7 +6291,6 @@ mod tests {
                 let requested = project_timeline_fingerprint(&editor.project).unwrap();
                 editor.history.pause();
                 editor.wait_out_gesture_then_generate(None, requested, window, cx);
-                // A setting changed during the wait queued another run.
                 editor.keyboard_refresh_step = Some(editor.history.entry_count());
                 editor.keyboard_refresh_pending = true;
                 editor.project.timeline.as_mut().unwrap().segments[0].end = 8.0;
@@ -6312,8 +6311,6 @@ mod tests {
                     editor.project.timeline.as_ref().unwrap().segments[0].end,
                     8.0
                 );
-                // The dropped run settles what it was carrying, so nothing
-                // later runs or folds an undo step on its behalf.
                 assert!(!editor.keyboard_refresh_pending);
                 assert_eq!(editor.keyboard_refresh_step, None);
             });
@@ -6337,8 +6334,6 @@ mod tests {
             let changed: String = tr::editor::tabs::keyboard::changed_during_generation().into();
             editor.read_with(cx, |editor, _| {
                 assert!(!editor.generating_keyboard);
-                // This project has no recording, so generation itself reports
-                // that; what matters is that it ran.
                 assert!(editor.keyboard_generation_message.is_some());
                 assert_ne!(
                     editor.keyboard_generation_message.as_deref(),
