@@ -475,6 +475,10 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 		body: Parameters<S3BucketAccess["putObject"]>[1],
 		fields?: Parameters<S3BucketAccess["putObject"]>[2],
 	) => mapStorageError(s3.putObject(key, body, fields)).pipe(Effect.asVoid),
+	putProbeObject: (key: string, body: Uint8Array) =>
+		mapStorageError(
+			s3.putObject(key, body, { contentType: "application/octet-stream" }),
+		).pipe(Effect.asVoid),
 	putObjectWithETag: (
 		key: string,
 		body: string,
@@ -835,6 +839,7 @@ const makeGoogleDriveAccess = ({
 		key: string,
 		body: string | Uint8Array | ArrayBuffer,
 		fields?: { contentType?: string; contentLength?: number },
+		probe = false,
 	) =>
 		Effect.gen(function* () {
 			const contentType = fields?.contentType ?? "application/octet-stream";
@@ -849,10 +854,13 @@ const makeGoogleDriveAccess = ({
 				{
 					integrationId,
 					ownerId,
-					videoId: parseVideoIdFromObjectKey(key).pipe(
-						Option.map((id) => id as Video.VideoId),
-						Option.getOrNull,
-					),
+					videoId: probe
+						? null
+						: parseVideoIdFromObjectKey(key).pipe(
+								Option.map((id) => id as Video.VideoId),
+								Option.getOrNull,
+							),
+					skipRecordingFolders: probe,
 					key,
 					contentType,
 					contentLength,
@@ -862,11 +870,12 @@ const makeGoogleDriveAccess = ({
 			const uploadBody =
 				body instanceof Uint8Array ? new Uint8Array(body).buffer : body;
 			const response = yield* Effect.tryPromise({
-				try: () =>
+				try: (signal) =>
 					fetch(uploadUrl, {
 						method: "PUT",
 						headers: getGoogleDriveUploadHeaders(contentType, contentLength),
 						body: uploadBody,
+						signal,
 					}),
 				catch: (cause) => new StorageDomain.StorageError({ cause }),
 			});
@@ -1002,6 +1011,8 @@ const makeGoogleDriveAccess = ({
 			body: string | Uint8Array | ArrayBuffer,
 			fields?: { contentType?: string; contentLength?: number },
 		) => putObjectWithChecksum(key, body, fields).pipe(Effect.asVoid),
+		putProbeObject: (key: string, body: Uint8Array) =>
+			putObjectWithChecksum(key, body, undefined, true).pipe(Effect.asVoid),
 		putObjectWithChecksum,
 		copyObject,
 		copyObjectForRecording,

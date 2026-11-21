@@ -72,6 +72,7 @@ mod main_window;
 mod media_access;
 mod menus;
 mod mode_select_window;
+mod network_health;
 mod notifications;
 mod onboarding_audio;
 mod onboarding_doodles;
@@ -421,6 +422,7 @@ fn main() {
         platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);
+        crate::network_health::init(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::media_access::MediaAccess::init(cx);
