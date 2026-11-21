@@ -5,8 +5,8 @@ import {
 	videos,
 } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
-import { and, eq, sql } from "drizzle-orm";
-import { sleep } from "workflow";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { getStepMetadata, sleep } from "workflow";
 import {
 	cancelMediaServerVideoJob,
 	readMediaServerVideoJob,
@@ -22,6 +22,7 @@ import {
 	SHARE_LADDER_MASTER,
 	SHARE_LADDER_MAX_TIER,
 	shareLadderOutputPrefix,
+	shareLadderStepToken,
 	shareLadderUploads,
 } from "@/lib/share-ladder-policy";
 import {
@@ -164,8 +165,11 @@ export async function buildShareLadderWorkflow(
 	}
 }
 
-function newToken() {
-	return crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+// A step that writes a new output folder can run again after its write has
+// landed. The folder comes from the step's id, which stays the same across its
+// retries, so a retry recognises the row it already moved.
+function stepToken() {
+	return shareLadderStepToken(getStepMetadata().stepId);
 }
 
 function ownRow(build: Build) {
@@ -199,13 +203,29 @@ async function prepareShareLadder(videoId: string): Promise<Prepared> {
 			ownerId: shareLadders.ownerId,
 			sourceKey: shareLadders.sourceKey,
 			sourceEtag: shareLadders.sourceEtag,
+			outputPrefix: shareLadders.outputPrefix,
 			orgId: videos.orgId,
 		})
 		.from(shareLadders)
 		.innerJoin(videos, eq(videos.id, shareLadders.videoId))
 		.where(eq(shareLadders.videoId, videoId as Video.VideoId))
 		.limit(1);
-	if (!row || row.state !== "queued") return { status: "stop" };
+	if (!row) return { status: "stop" };
+	const prefix = shareLadderOutputPrefix(row.ownerId, videoId, stepToken());
+	if (row.state === "encoding" && row.outputPrefix === prefix) {
+		return {
+			status: "ready",
+			build: {
+				videoId,
+				orgId: row.orgId,
+				ownerId: row.ownerId,
+				sourceKey: row.sourceKey,
+				sourceEtag: row.sourceEtag,
+				prefix,
+			},
+		};
+	}
+	if (row.state !== "queued") return { status: "stop" };
 	const queued = and(
 		eq(shareLadders.videoId, videoId as Video.VideoId),
 		eq(shareLadders.state, "queued"),
@@ -227,7 +247,6 @@ async function prepareShareLadder(videoId: string): Promise<Prepared> {
 		return { status: "stop" };
 	}
 
-	const prefix = shareLadderOutputPrefix(row.ownerId, videoId, newToken());
 	const [claimed] = await db()
 		.update(shareLadders)
 		.set({
@@ -324,12 +343,18 @@ async function moveShareLadderOutputNow(build: Build): Promise<Build | null> {
 	const prefix = shareLadderOutputPrefix(
 		build.ownerId,
 		build.videoId,
-		newToken(),
+		stepToken(),
 	);
 	const [moved] = await db()
 		.update(shareLadders)
 		.set({ outputPrefix: prefix, jobId: null, updatedAt: new Date() })
-		.where(ownRow(build));
+		.where(
+			and(
+				eq(shareLadders.videoId, build.videoId as Video.VideoId),
+				eq(shareLadders.state, "encoding"),
+				inArray(shareLadders.outputPrefix, [build.prefix, prefix]),
+			),
+		);
 	return moved.affectedRows === 1 ? { ...build, prefix } : null;
 }
 

@@ -8,6 +8,7 @@ import {
 	rewriteShareLadderRendition,
 	shareLadderMediaFiles,
 	shareLadderOutputPrefix,
+	shareLadderStepToken,
 	shareLadderUploads,
 } from "@/lib/share-ladder-policy";
 
@@ -212,5 +213,14 @@ describe("isShareLadderRetryLater", () => {
 			}),
 		).toBe(false);
 		expect(isShareLadderRetryLater({ phase: "complete" })).toBe(false);
+	});
+});
+
+describe("shareLadderStepToken", () => {
+	it("gives a step's retries the same folder and other steps a new one", () => {
+		const token = shareLadderStepToken("step_01");
+		expect(token).toMatch(/^[0-9a-f]{16}$/);
+		expect(shareLadderStepToken("step_01")).toBe(token);
+		expect(shareLadderStepToken("step_02")).not.toBe(token);
 	});
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { SHARE_LADDER_OUTPUT_FILES } from "@cap/web-backend/src/S3Buckets/cloudfront-invalidation";
 
 export const SHARE_LADDER_MAX_TIER = "1080p";
@@ -53,6 +54,13 @@ export function isShareLadderRetryLater(
 		typeof progress.errorCode === "string" &&
 		SHARE_LADDER_RETRY_LATER_CODES.has(progress.errorCode)
 	);
+}
+
+export function shareLadderStepToken(stepId: string): string {
+	return createHash("sha256")
+		.update(`share-ladder:${stepId}`)
+		.digest("hex")
+		.slice(0, 16);
 }
 
 export function shareLadderOutputPrefix(
