@@ -317,11 +317,7 @@ export function useShareLadder({
 		setDeviceEngine(picked);
 	}, [ladderKey]);
 
-	const estimate = useCallback(() => {
-		if (throughputRef.current !== null) return throughputRef.current;
-		const downlink = connectionHint()?.downlink;
-		return typeof downlink === "number" && downlink > 0 ? downlink * 1e6 : null;
-	}, []);
+	const estimate = useCallback(() => throughputRef.current, []);
 
 	const takeWarm = useCallback((url: string) => {
 		const key = absoluteUrl(url);

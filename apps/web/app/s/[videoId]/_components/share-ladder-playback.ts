@@ -19,7 +19,6 @@ export type LadderEngine = "hlsjs" | "native";
 export type ConnectionHint = {
 	saveData?: boolean;
 	effectiveType?: string;
-	downlink?: number;
 };
 
 export type QualityOption = { id: string; label: string };
@@ -81,17 +80,14 @@ export const lineIsSlow = (
 	sourceBitsPerSecond > 0 &&
 	bitsPerSecond < LINE_HEADROOM * sourceBitsPerSecond;
 
+// Chrome's downlink estimate is left out: it reads under 2 Mbps on fast lines
+// too, which would move every Chrome viewer off the MP4.
 export function connectionCallsForLadder(
 	connection: ConnectionHint | null | undefined,
-	sourceBitsPerSecond: number,
 ): boolean {
 	if (!connection) return false;
 	if (connection.saveData === true) return true;
-	if (SLOW_CONNECTION_TYPES.has(connection.effectiveType ?? "")) return true;
-	const downlink = connection.downlink;
-	if (typeof downlink !== "number" || !Number.isFinite(downlink)) return false;
-	if (downlink <= 0) return false;
-	return lineIsSlow(downlink * 1e6, sourceBitsPerSecond);
+	return SLOW_CONNECTION_TYPES.has(connection.effectiveType ?? "");
 }
 
 export function parseRememberedLine(
@@ -125,9 +121,7 @@ export function shouldStartOnLadder(input: {
 	sourceBitsPerSecond: number;
 }): boolean {
 	if (!(input.sourceBitsPerSecond > 0)) return false;
-	if (connectionCallsForLadder(input.connection, input.sourceBitsPerSecond)) {
-		return true;
-	}
+	if (connectionCallsForLadder(input.connection)) return true;
 	return (
 		input.rememberedBitsPerSecond !== null &&
 		lineIsSlow(input.rememberedBitsPerSecond, input.sourceBitsPerSecond)

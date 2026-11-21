@@ -87,29 +87,25 @@ describe("quality menu entries", () => {
 
 describe("connection hint", () => {
 	it("calls for the ladder on save data or a slow connection type", () => {
-		expect(connectionCallsForLadder({ saveData: true }, SOURCE_BPS)).toBe(true);
+		expect(connectionCallsForLadder({ saveData: true })).toBe(true);
 		for (const effectiveType of ["slow-2g", "2g", "3g"]) {
-			expect(connectionCallsForLadder({ effectiveType }, SOURCE_BPS)).toBe(
-				true,
-			);
+			expect(connectionCallsForLadder({ effectiveType })).toBe(true);
 		}
-		expect(connectionCallsForLadder({ effectiveType: "4g" }, SOURCE_BPS)).toBe(
-			false,
-		);
+		expect(connectionCallsForLadder({ effectiveType: "4g" })).toBe(false);
+		expect(connectionCallsForLadder(undefined)).toBe(false);
+		expect(connectionCallsForLadder({})).toBe(false);
 	});
 
-	it("calls for the ladder when the downlink is under 1.5x the source", () => {
-		expect(connectionCallsForLadder({ downlink: 10 }, 7_000_000)).toBe(true);
-		expect(connectionCallsForLadder({ downlink: 10 }, 6_000_000)).toBe(false);
-	});
-
-	it("ignores a missing or unusable downlink", () => {
-		expect(connectionCallsForLadder(undefined, SOURCE_BPS)).toBe(false);
-		expect(connectionCallsForLadder({}, SOURCE_BPS)).toBe(false);
-		expect(connectionCallsForLadder({ downlink: 0 }, SOURCE_BPS)).toBe(false);
-		expect(connectionCallsForLadder({ downlink: Number.NaN }, SOURCE_BPS)).toBe(
-			false,
-		);
+	it("keeps a fast line on the MP4 when Chrome reports a low downlink", () => {
+		const fastChrome = { downlink: 1.75, effectiveType: "4g", saveData: false };
+		expect(connectionCallsForLadder(fastChrome)).toBe(false);
+		expect(
+			shouldStartOnLadder({
+				connection: fastChrome,
+				rememberedBitsPerSecond: null,
+				sourceBitsPerSecond: SOURCE_BPS,
+			}),
+		).toBe(false);
 	});
 });
 
