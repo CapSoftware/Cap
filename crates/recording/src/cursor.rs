@@ -1001,8 +1001,6 @@ pub fn spawn_cursor_recorder(
     }
 }
 
-/// How long a still pointer waits between shape checks, given how long ago it
-/// last moved, clicked or changed shape.
 fn stationary_shape_check_interval(since_activity: std::time::Duration) -> std::time::Duration {
     if since_activity < STATIONARY_SHAPE_SETTLE {
         STATIONARY_SHAPE_CHECK_INTERVAL
