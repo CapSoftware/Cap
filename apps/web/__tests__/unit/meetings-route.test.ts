@@ -1044,8 +1044,8 @@ describe("free meetings for signed-in users", () => {
 			signal: controller.signal,
 		});
 		setTimeout(() => controller.abort(), 20);
+		// The stream ends only after the run has settled the claim.
 		await (await pending).text().catch(() => undefined);
-		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
 	});
 
