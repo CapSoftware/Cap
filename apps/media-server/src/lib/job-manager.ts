@@ -181,6 +181,7 @@ export interface Job {
 	pruned?: string[];
 	retryable?: boolean;
 	uploadsStopped?: Promise<void>;
+	preemptedReason?: string;
 }
 
 const jobs = new Map<string, Job>();
@@ -660,20 +661,15 @@ function watchIdleJobs(): void {
 // as soon as any other work is admitted rather than run beside it. That
 // includes uploading: an upload competes for the network and the event loop
 // while the new job downloads its source. The caller removes the part of a
-// ladder already uploaded, and is told only once every upload has stopped.
+// ladder already uploaded, so an uploading job only turns terminal, in its
+// status and webhooks alike, once every upload has stopped. The idle job is
+// already invisible to admission, so the wait costs other work nothing.
 export function preemptIdleJobs(reason: string): number {
 	let preempted = 0;
 	for (const job of jobs.values()) {
-		if (!job.idle || !isActivePhase(job.phase)) continue;
+		if (!job.idle || !isActivePhase(job.phase) || job.preemptedReason) continue;
+		job.preemptedReason = reason;
 		job.abortController?.abort(new Error(reason));
-		const ended = updateJob(job.jobId, {
-			phase: "error",
-			error: reason,
-			errorCode: IDLE_PREEMPTED,
-			retryable: true,
-			message: "Idle job preempted",
-		});
-		if (!ended) continue;
 		preempted++;
 		console.warn(
 			JSON.stringify({
@@ -683,8 +679,18 @@ export function preemptIdleJobs(reason: string): number {
 				reason,
 			}),
 		);
-		const uploadsStopped = job.uploadsStopped ?? Promise.resolve();
-		void uploadsStopped.then(() => sendWebhook(job));
+		const finish = () => {
+			const ended = updateJob(job.jobId, {
+				phase: "error",
+				error: reason,
+				errorCode: IDLE_PREEMPTED,
+				retryable: true,
+				message: "Idle job preempted",
+			});
+			if (ended) void sendWebhook(ended);
+		};
+		if (job.uploadsStopped) void job.uploadsStopped.then(finish, finish);
+		else finish();
 	}
 	return preempted;
 }

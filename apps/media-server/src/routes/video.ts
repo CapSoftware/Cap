@@ -1738,12 +1738,14 @@ async function encodeLadderAsync(
 		if (!signal.aborted) {
 			console.error(`[video/ladder] Error encoding job ${jobId}:`, err);
 		}
-		const updatedJob = updateJob(jobId, {
-			phase: "error",
-			error: err instanceof Error ? err.message : String(err),
-			message: "Encoding failed",
-		});
-		if (updatedJob) await sendWebhook(updatedJob);
+		if (!getJob(jobId)?.preemptedReason) {
+			const updatedJob = updateJob(jobId, {
+				phase: "error",
+				error: err instanceof Error ? err.message : String(err),
+				message: "Encoding failed",
+			});
+			if (updatedJob) await sendWebhook(updatedJob);
+		}
 	} finally {
 		await cleanupLadder?.();
 		await cleanupTempFiles([inputTempFile]);
