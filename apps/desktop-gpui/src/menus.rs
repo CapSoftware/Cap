@@ -594,6 +594,10 @@ pub enum QuitSource {
     UpdateInstaller,
     UpdateRelaunchFailed,
     Relaunch,
+    #[cfg(unix)]
+    SigTerm,
+    #[cfg(unix)]
+    SigHup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
