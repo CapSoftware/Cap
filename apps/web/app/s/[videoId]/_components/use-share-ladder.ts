@@ -623,7 +623,8 @@ export function useShareLadder({
 	const callForLadder = useCallback(() => {
 		lineCalledRef.current = true;
 		finishMeasurement(true);
-		if (qualityRef.current === "auto") void switchToHls("auto");
+		const picked = qualityRef.current;
+		if (picked !== "original") void switchToHls(picked);
 	}, [finishMeasurement, switchToHls]);
 
 	const firstFrameTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
