@@ -9,6 +9,7 @@ import {
 
 const AAC_FRAME_SAMPLES = 1024;
 const MAX_ERROR_OUTPUT_CHARS = 500;
+const MAX_TOOL_OUTPUT_CHARS = 64 * 1024;
 const TIMESTAMP_ROUNDING_SECONDS = 1e-6;
 
 export interface HlsLadderVerifyOptions {
@@ -23,6 +24,9 @@ const TAIL_PACKETS = 64;
 
 // Packets are counted as they stream out of ffprobe, holding only the latest
 // few timestamps, so a long video is measured without keeping every packet.
+// Packets flagged for discard are not presented: an MP4 cut between keyframes
+// keeps the frames before its first shown one, and AAC keeps its priming
+// frame, and the ladder encodes neither.
 // Some sources (Matroska without block or default durations) give packets no
 // duration. Such a last frame would count as zero length and the source would
 // measure a frame short of a ladder that has every duration, so it is given
@@ -35,9 +39,9 @@ export class PacketSpan {
 	private readonly tail: number[] = [];
 
 	addLine(line: string): void {
-		const [pts, duration] = line.trim().split(",");
+		const [pts, duration, flags] = line.trim().split(",");
 		const time = Number.parseFloat(pts ?? "");
-		if (!Number.isFinite(time)) return;
+		if (!Number.isFinite(time) || flags?.includes("D")) return;
 		const length = Number.parseFloat(duration ?? "");
 		this.add(time, Number.isFinite(length) && length > 0 ? length : null);
 	}
@@ -85,10 +89,11 @@ export function frameSecondsForRate(frameRate: string): number {
 	return 1 / fps;
 }
 
-// The AAC encoder adds a frame of priming the source may not have (a PCM
-// source measures exactly one AAC frame longer after encoding) and pads the
-// last frame, which measured up to 616 of 1024 samples on an AAC source. One
-// AAC frame of tolerance would leave no room for that padding.
+// The ladder's AAC keeps the encoder's 1024 samples of priming, which the
+// presented source does not have, and pads its last frame to 1024 samples, so
+// it runs up to 2047 samples longer than the source (measured 1024 on a PCM
+// source and up to 1980 on AAC sources). One AAC frame of tolerance would fail
+// every ladder; two cover the priming plus the padding.
 export function audioToleranceSeconds(sampleRate: number): number {
 	if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
 		throw new Error("HLS ladder audio has an unreadable sample rate");
@@ -115,21 +120,27 @@ export function durationMismatch(input: {
 	return `${rendition} ${track} lasts ${measuredSeconds.toFixed(3)}s, expected ${expectedSeconds.toFixed(3)}s within ${input.toleranceSeconds.toFixed(3)}s`;
 }
 
-async function readLines(
+async function readOutput(
 	stream: ReadableStream<Uint8Array>,
-	onLine: (line: string) => void,
+	onLine?: (line: string) => void,
 ): Promise<string> {
 	const decoder = new TextDecoder();
+	let kept = "";
 	let buffer = "";
-	for await (const chunk of stream) {
-		buffer += decoder.decode(chunk, { stream: true });
+	const take = (text: string) => {
+		if (kept.length < MAX_TOOL_OUTPUT_CHARS)
+			kept += text.slice(0, MAX_TOOL_OUTPUT_CHARS - kept.length);
+		if (!onLine) return;
+		buffer += text;
 		const lines = buffer.split("\n");
 		buffer = lines.pop() ?? "";
 		for (const line of lines) onLine(line);
-	}
-	buffer += decoder.decode();
-	if (buffer.length > 0) onLine(buffer);
-	return "";
+	};
+	for await (const chunk of stream)
+		take(decoder.decode(chunk, { stream: true }));
+	take(decoder.decode());
+	if (onLine && buffer.length > 0) onLine(buffer);
+	return kept;
 }
 
 async function runMediaTool(
@@ -149,10 +160,8 @@ async function runMediaTool(
 	try {
 		const [stdout, stderr, exitCode] = await withTimeout(
 			Promise.all([
-				onStdoutLine
-					? readLines(proc.stdout as ReadableStream<Uint8Array>, onStdoutLine)
-					: new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-				new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
+				readOutput(proc.stdout as ReadableStream<Uint8Array>, onStdoutLine),
+				readOutput(proc.stderr as ReadableStream<Uint8Array>),
 				proc.exited,
 			]),
 			options.timeoutMs,
@@ -182,7 +191,7 @@ async function measureStreamSeconds(
 			"-select_streams",
 			stream,
 			"-show_entries",
-			"packet=pts_time,duration_time",
+			"packet=pts_time,duration_time,flags",
 			"-of",
 			"csv=p=0",
 			path,

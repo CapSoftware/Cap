@@ -21,9 +21,10 @@ import { runTranscodeCommand } from "../../lib/media-video";
 const directory = mkdtempSync(join(tmpdir(), "cap-ladder-verify-"));
 const source = join(directory, "source.mp4");
 const longer = join(directory, "longer.mp4");
+const trimmed = join(directory, "trimmed.mp4");
 const ladders: EncodedHlsLadder[] = [];
 
-function writeSource(path: string, seconds: number) {
+function writeSource(path: string, seconds: number, gop = "60") {
 	execFileSync("ffmpeg", [
 		"-v",
 		"error",
@@ -39,6 +40,8 @@ function writeSource(path: string, seconds: number) {
 		"libx264",
 		"-preset",
 		"ultrafast",
+		"-g",
+		gop,
 		"-pix_fmt",
 		"yuv420p",
 		"-c:a",
@@ -48,8 +51,8 @@ function writeSource(path: string, seconds: number) {
 	]);
 }
 
-async function encode(): Promise<EncodedHlsLadder> {
-	const ladder = await encodeHlsLadder(source, await probeVideoFile(source));
+async function encode(path = source): Promise<EncodedHlsLadder> {
+	const ladder = await encodeHlsLadder(path, await probeVideoFile(path));
 	ladders.push(ladder);
 	return ladder;
 }
@@ -66,6 +69,20 @@ function verify(ladder: EncodedHlsLadder, sourcePath = source) {
 beforeAll(() => {
 	writeSource(source, 2);
 	writeSource(longer, 3);
+	const uncut = join(directory, "uncut.mp4");
+	writeSource(uncut, 4, "120");
+	execFileSync("ffmpeg", [
+		"-v",
+		"error",
+		"-ss",
+		"1.5",
+		"-i",
+		uncut,
+		"-c",
+		"copy",
+		"-y",
+		trimmed,
+	]);
 });
 
 afterAll(async () => {
@@ -81,6 +98,10 @@ describe("verifyHlsLadder", () => {
 		);
 		expect(ladder.result.audio).not.toBeNull();
 		await verify(ladder);
+	});
+
+	test("measures an MP4 cut between keyframes by the frames it shows", async () => {
+		await verify(await encode(trimmed), trimmed);
 	});
 
 	test("names each rendition that does not match the source length", async () => {
