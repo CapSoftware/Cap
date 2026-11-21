@@ -46,7 +46,8 @@ import {
 type HlsModule = typeof import("hls.js");
 type HlsClass = HlsModule["default"];
 type Target = "auto" | number;
-type Engine = "mp4" | "hls";
+export type ShareLadderEngine = "mp4" | "hls";
+type Engine = ShareLadderEngine;
 
 type Snapshot = {
 	time: number;
@@ -240,13 +241,16 @@ export function useShareLadder({
 	videoRef,
 	active,
 	mediaKey,
+	engine,
+	setEngine,
 }: {
-	ladder: ShareLadderPlayback | undefined;
+	ladder: ShareLadderPlayback;
 	videoRef: RefObject<HTMLVideoElement | null>;
 	active: boolean;
 	mediaKey: string | undefined;
+	engine: Engine;
+	setEngine: (engine: Engine) => void;
 }) {
-	const [engine, setEngine] = useState<Engine>("mp4");
 	const [deviceEngine, setDeviceEngine] = useState<LadderEngine | null>(null);
 	const [quality, setQuality] = useState<ShareQuality>("auto");
 	const [disabled, setDisabled] = useState(false);
@@ -280,16 +284,24 @@ export function useShareLadder({
 	const warmRef = useRef(new Map<string, { text: string; at: number }>());
 	const mountedRef = useRef(true);
 
-	const ladderKey = ladder?.masterUrl;
+	const ladderKey = ladder.masterUrl;
 
 	useEffect(() => {
 		mountedRef.current = true;
+		const video = videoRef.current;
 		return () => {
 			mountedRef.current = false;
 			detachRef.current?.();
 			detachRef.current = null;
+			if (engineRef.current !== "hls") return;
+			engineRef.current = "mp4";
+			if (video?.hasAttribute("src")) {
+				video.removeAttribute("src");
+				video.load();
+			}
+			setEngine("mp4");
 		};
-	}, []);
+	}, [setEngine, videoRef]);
 
 	useEffect(() => {
 		const current = ladderRef.current;
@@ -398,7 +410,7 @@ export function useShareLadder({
 		pendingRef.current = { to: "mp4", snapshot };
 		engineRef.current = "mp4";
 		setEngine("mp4");
-	}, [videoRef]);
+	}, [setEngine, videoRef]);
 
 	const fallBackToMp4 = useCallback(() => {
 		disabledRef.current = true;
@@ -449,7 +461,7 @@ export function useShareLadder({
 			engineRef.current = "hls";
 			setEngine("hls");
 		},
-		[applyLevel],
+		[applyLevel, setEngine],
 	);
 
 	const attachHls = useCallback(
@@ -837,7 +849,5 @@ export function useShareLadder({
 		};
 	}, [active, deviceEngine, disabled, ladder, quality, selectQuality]);
 
-	const playingLadder = useCallback(() => engineRef.current === "hls", []);
-
-	return { engine, playingLadder, qualityMenu };
+	return qualityMenu;
 }

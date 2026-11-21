@@ -39,7 +39,7 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	type UploadProgress,
 } from "./upload-progress";
-import { useShareLadder } from "./use-share-ladder";
+import type { ShareLadderEngine } from "./use-share-ladder";
 import { VideoPoster, VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -69,6 +69,8 @@ import { captureVideoFrameDataUrl } from "./video-frame-thumbnail";
 const UploadProgressTracker = dynamic(() => import("./UploadProgressTracker"), {
 	ssr: false,
 });
+// Only shares with an HLS ladder load the switching logic.
+const ShareLadder = dynamic(() => import("./share-ladder"), { ssr: false });
 
 const { circumference } = getProgressCircleConfig();
 
@@ -309,20 +311,14 @@ export function CapVideoPlayer({
 		retry: false,
 	});
 
-	const {
-		engine: ladderEngine,
-		playingLadder,
-		qualityMenu,
-	} = useShareLadder({
-		ladder,
-		videoRef,
-		active:
-			Boolean(ladder) &&
-			resolvedSrc.data?.type === "mp4" &&
-			!isRefreshingInitialPlaybackSource &&
-			!hasActiveProgress,
-		mediaKey: resolvedSrc.data?.url,
-	});
+	const [ladderEngine, setLadderEngineState] =
+		useState<ShareLadderEngine>("mp4");
+	const ladderEngineRef = useRef<ShareLadderEngine>("mp4");
+	const setLadderEngine = useCallback((engine: ShareLadderEngine) => {
+		ladderEngineRef.current = engine;
+		setLadderEngineState(engine);
+	}, []);
+	const [qualitySubmenu, setQualitySubmenu] = useState<React.ReactNode>(null);
 
 	useEffect(() => {
 		void videoSrc;
@@ -520,7 +516,7 @@ export function CapVideoPlayer({
 
 		const handleError = () => {
 			if (initialPlaybackSourceRetryPending.current) return;
-			if (playingLadder()) return;
+			if (ladderEngineRef.current !== "mp4") return;
 			// A server-rendered source never ran the client probe, so its failure
 			// takes the path a failed probe would: playlist route, then raw.
 			if (
@@ -677,7 +673,6 @@ export function CapVideoPlayer({
 		hasPlayedOnce,
 		hasTriedRawFallback,
 		isRefreshingInitialPlaybackSource,
-		playingLadder,
 		rawFallbackSrc,
 		resolvedSrc.data?.fromInitialUrl,
 		resolvedSrc.data?.fromServer,
@@ -841,6 +836,21 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			{ladder && (
+				<ShareLadder
+					ladder={ladder}
+					videoRef={videoRef}
+					active={
+						resolvedSrc.data?.type === "mp4" &&
+						!isRefreshingInitialPlaybackSource &&
+						!hasActiveProgress
+					}
+					mediaKey={resolvedSrc.data?.url}
+					engine={ladderEngine}
+					onEngineChange={setLadderEngine}
+					onQualitySubmenu={setQualitySubmenu}
+				/>
+			)}
 			{trackUploadProgress && (
 				<UploadProgressTracker
 					videoId={videoId}
@@ -1220,7 +1230,7 @@ export function CapVideoPlayer({
 									availableCaptions={availableCaptions}
 									isCaptionLoading={isCaptionLoading}
 									hasCaptions={hasCaptions}
-									quality={qualityMenu}
+									qualitySubmenu={qualitySubmenu}
 								/>
 								<MediaPlayerPiP
 									className={docked ? "max-sm:hidden" : undefined}
