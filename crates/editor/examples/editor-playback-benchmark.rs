@@ -636,15 +636,27 @@ async fn main() {
             }
             EditorFrameOutput::Rgba(frame) => frame.data.len() + 24,
             #[cfg(target_os = "macos")]
-            EditorFrameOutput::Surface(_) => return,
+            EditorFrameOutput::Surface(_) => 0,
         };
         let _ = frame_tx.send((bytes, Instant::now()));
     });
 
-    let renderer = match Renderer::spawn_with_telemetry(
+    // `--bgra-surface` renders into IOSurfaces the way the desktop editor
+    // does, instead of reading RGBA frames back to the CPU.
+    #[cfg(target_os = "macos")]
+    let output_format = if args.iter().any(|arg| arg == "--bgra-surface") {
+        cap_editor::EditorFrameFormat::BgraSurface
+    } else {
+        cap_editor::EditorFrameFormat::Rgba
+    };
+    #[cfg(not(target_os = "macos"))]
+    let output_format = cap_editor::EditorFrameFormat::Rgba;
+
+    let renderer = match Renderer::spawn_with_format_and_telemetry(
         render_constants.clone(),
         frame_cb,
         layers_rx,
+        output_format,
         Some(telemetry.clone()),
     ) {
         Ok(renderer) => Arc::new(renderer),
