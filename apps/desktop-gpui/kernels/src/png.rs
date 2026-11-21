@@ -67,39 +67,45 @@ fn write_strips<W: std::io::Write>(
         .collect();
 
     let mut filtered = vec![0u8; filtered_len];
-    std::thread::scope(|scope| {
-        let mut rest = filtered.as_mut_slice();
-        for &(start, count) in &ranges {
-            let (strip, tail) = rest.split_at_mut(count * (stride + 1));
-            rest = tail;
-            scope.spawn(move || filter_rows(data, stride, bpp, start, strip));
-        }
-    });
+    let compressed = if ranges.len() == 1 {
+        filter_rows(data, stride, bpp, 0, &mut filtered);
+        compress_strip(&filtered, &[], true).map(|strip| vec![strip])
+    } else {
+        std::thread::scope(|scope| {
+            let mut rest = filtered.as_mut_slice();
+            for &(start, count) in &ranges {
+                let (strip, tail) = rest.split_at_mut(count * (stride + 1));
+                rest = tail;
+                scope.spawn(move || filter_rows(data, stride, bpp, start, strip));
+            }
+        });
 
-    let filtered_rows = filtered.as_slice();
-    let compressed = std::thread::scope(|scope| {
-        let handles: Vec<_> = ranges
-            .iter()
-            .map(|&(start, count)| {
-                scope.spawn(move || {
-                    let from = start * (stride + 1);
-                    let to = from + count * (stride + 1);
-                    let dictionary = &filtered_rows[from.saturating_sub(WINDOW)..from];
-                    compress_strip(
-                        &filtered_rows[from..to],
-                        dictionary,
-                        to == filtered_rows.len(),
-                    )
+        let filtered_rows = filtered.as_slice();
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = ranges
+                .iter()
+                .map(|&(start, count)| {
+                    scope.spawn(move || {
+                        let from = start * (stride + 1);
+                        let to = from + count * (stride + 1);
+                        let dictionary = &filtered_rows[from.saturating_sub(WINDOW)..from];
+                        compress_strip(
+                            &filtered_rows[from..to],
+                            dictionary,
+                            to == filtered_rows.len(),
+                        )
+                    })
                 })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("PNG strip encoder panicked"))
-            .collect::<Result<Vec<_>, _>>()
-    })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("PNG strip encoder panicked"))
+                .collect::<Result<Vec<_>, _>>()
+        })
+    }
     .map_err(image::ImageError::IoError)?;
 
+    let filtered_rows = filtered.as_slice();
     let mut adler = simd_adler32::Adler32::new();
     adler.write(filtered_rows);
     let adler = adler.finish().to_be_bytes();
