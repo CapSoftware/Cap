@@ -3,6 +3,10 @@ import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import {
+	createPersonalOrganization,
+	PERSONAL_ORGANIZATION_NAME,
+} from "@cap/database/personal-organization";
+import {
 	organizationMembers,
 	organizations,
 	users,
@@ -219,28 +223,13 @@ app.get(
 			// being removed from their last org); provision a personal org like
 			// signup does instead of failing every upload.
 			if (userOrganizations.length === 0) {
-				const organizationId = Organisation.OrganisationId.make(nanoId());
-				await db().transaction(async (tx) => {
-					await tx.insert(organizations).values({
-						id: organizationId,
-						ownerId: user.id,
-						name: "My Organization",
-					});
-					await tx.insert(organizationMembers).values({
-						id: nanoId(),
-						organizationId,
-						userId: user.id,
-						role: "owner",
-					});
-					await tx
-						.update(users)
-						.set({
-							activeOrganizationId: organizationId,
-							defaultOrgId: organizationId,
-						})
-						.where(eq(users.id, user.id));
+				const organizationId = await db().transaction((tx) =>
+					createPersonalOrganization(tx, user.id),
+				);
+				userOrganizations.push({
+					id: organizationId,
+					name: PERSONAL_ORGANIZATION_NAME,
 				});
-				userOrganizations.push({ id: organizationId, name: "My Organization" });
 			}
 
 			const userOrgIds = userOrganizations.map((org) => org.id);
