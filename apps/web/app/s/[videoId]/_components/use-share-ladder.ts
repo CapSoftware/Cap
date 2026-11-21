@@ -22,6 +22,8 @@ import {
 	judgeStall,
 	type LadderEngine,
 	levelIndexForHeight,
+	MEASURE_AHEAD_SECONDS,
+	MEASURE_MIN_MS,
 	measuredThroughput,
 	parseMasterAudioUri,
 	parseMasterVariants,
@@ -133,6 +135,17 @@ const fullyBuffered = (video: HTMLVideoElement) => {
 		}
 	}
 	return false;
+};
+
+const bufferedAhead = (video: HTMLVideoElement) => {
+	for (let index = 0; index < video.buffered.length; index++) {
+		const start = video.buffered.start(index);
+		const end = video.buffered.end(index);
+		if (start <= video.currentTime && video.currentTime <= end) {
+			return end - video.currentTime;
+		}
+	}
+	return 0;
 };
 
 const playerSize = (video: HTMLVideoElement) => {
@@ -664,6 +677,7 @@ export function useShareLadder({
 		if (engine !== "mp4" || disabled) return;
 
 		let seekPending = false;
+		let rememberTimer: ReturnType<typeof setTimeout> | undefined;
 		let countTimer: ReturnType<typeof setTimeout> | undefined;
 		let stallTimer: ReturnType<typeof setTimeout> | undefined;
 		const clearStall = () => {
@@ -703,9 +717,21 @@ export function useShareLadder({
 				return;
 			}
 			if (picked === "auto" && rememberedSlow()) {
-				lineCalledRef.current = true;
-				void switchToHls("auto");
-				return;
+				// This visit's own measurement starts here, so give it a moment to
+				// show a faster line than the one remembered before switching.
+				clearTimeout(rememberTimer);
+				rememberTimer = setTimeout(() => {
+					finishMeasurement(true);
+					if (
+						qualityRef.current === "auto" &&
+						rememberedSlow() &&
+						!fullyBuffered(video) &&
+						bufferedAhead(video) < MEASURE_AHEAD_SECONDS
+					) {
+						lineCalledRef.current = true;
+						void switchToHls("auto");
+					}
+				}, MEASURE_MIN_MS);
 			}
 			void warm();
 		};
@@ -826,6 +852,7 @@ export function useShareLadder({
 
 		return () => {
 			clearTimeout(firstFrameTimerRef.current);
+			clearTimeout(rememberTimer);
 			clearStall();
 			video.removeEventListener("play", onPlayRequested);
 			video.removeEventListener("timeupdate", onTimeUpdate);
