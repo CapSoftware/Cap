@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	connectionCallsForLadder,
+	FIRST_FRAME_SWITCH_MS,
 	levelIndexForHeight,
 	MEASURE_WINDOW_MS,
 	measuredThroughput,
@@ -106,6 +107,13 @@ describe("connection hint", () => {
 				sourceBitsPerSecond: SOURCE_BPS,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("switch timing", () => {
+	it("waits past the slowest measured MP4 first frame before rescuing", () => {
+		expect(FIRST_FRAME_SWITCH_MS).toBeGreaterThan(8700);
+		expect(FIRST_FRAME_SWITCH_MS).toBe(10_000);
 	});
 });
 
