@@ -118,6 +118,7 @@ fn messages_follow_the_language() {
         (Locale::Es, "1,5"),
         (Locale::De, "1,5"),
         (Locale::Hi, "1.5"),
+        (Locale::Ru, "1,5"),
     ] {
         init(Some(locale.code()));
         assert_eq!(crate::i18n::decimal(1.5), shown, "{}", locale.code());
