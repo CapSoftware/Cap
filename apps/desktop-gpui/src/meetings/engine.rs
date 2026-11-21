@@ -1696,20 +1696,63 @@ impl Worker {
 
     // Repair
 
-    /// The saved audio of one stretch of a track, from whichever file holds
-    /// it. None when no file covers it (audio not kept, or gone).
+    /// The saved file a moment of a track is in: the last one starting at
+    /// or before it.
+    fn part_at(&self, source: Source, at: u64) -> Option<AudioPart> {
+        self.config
+            .audio
+            .iter()
+            .filter(|p| p.source == source && p.offset_samples <= at)
+            .max_by_key(|p| p.offset_samples)
+            .cloned()
+    }
+
+    /// The saved audio of one stretch of a track, across the files it spans.
+    /// A writer that failed left a stretch between its file and the next one
+    /// unsaved: silence stands in for it. None when no file covers the start
+    /// (audio not kept, or gone); short only where the saved audio ends.
     fn read_audio(&mut self, source: Source, start: u64, len: u64) -> Option<Vec<f32>> {
         #[cfg(test)]
         if let Some(audio) = &self.hooks.audio {
             return audio(source, start, len);
         }
-        let part = self
-            .config
-            .audio
-            .iter()
-            .filter(|p| p.source == source && p.offset_samples <= start)
-            .max_by_key(|p| p.offset_samples)?
-            .clone();
+        let end = start + len;
+        let mut part = self.part_at(source, start)?;
+        let mut out = Vec::new();
+        let mut at = start;
+        loop {
+            let got = self.read_part(&part, at, end - at)?;
+            at += got.len() as u64;
+            out.extend(got);
+            if at >= end {
+                break;
+            }
+            let Some(next) = self
+                .config
+                .audio
+                .iter()
+                .filter(|p| {
+                    p.source == source
+                        && p.offset_samples > part.offset_samples
+                        && p.offset_samples < end
+                })
+                .min_by_key(|p| p.offset_samples)
+                .cloned()
+            else {
+                break;
+            };
+            if next.offset_samples > at {
+                out.resize(out.len() + (next.offset_samples - at) as usize, 0.0);
+                at = next.offset_samples;
+            }
+            part = next;
+        }
+        Some(out)
+    }
+
+    fn read_part(&mut self, part: &AudioPart, at: u64, len: u64) -> Option<Vec<f32>> {
+        let source = part.source;
+        let start = at.max(part.offset_samples);
         let index = source_index(source);
         if self.readers[index].as_ref().is_none_or(|(path, _)| *path != part.path) {
             match TrackReader::open(&part.path) {
@@ -1758,7 +1801,14 @@ impl Worker {
             // forward, and an earlier start decodes the file from the top.
             let mut floor = 0u64;
             for (start, len) in segments {
-                let from = start.saturating_sub(REPAIR_CONTEXT_SAMPLES).max(floor).min(start);
+                // Context only from the file that holds the segment: before
+                // it lies another file's end and an unsaved stretch.
+                let owner = self.part_at(gap.source, start).map_or(0, |p| p.offset_samples);
+                let from = start
+                    .saturating_sub(REPAIR_CONTEXT_SAMPLES)
+                    .max(floor)
+                    .max(owner)
+                    .min(start);
                 floor = from;
                 let mut samples = self.read_audio(gap.source, from, start + len - from)?;
                 let context: Vec<f32> = samples.drain(..((start - from) as usize).min(samples.len())).collect();

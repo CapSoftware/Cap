@@ -1166,3 +1166,76 @@ fn a_short_tail_gap_that_starts_mid_word_gets_its_words() {
     let repaired = transcript.get(&utterance_id(Source::System, start)).expect("the tail got its words");
     assert_eq!(repaired.text, "revelation lighted");
 }
+
+/// A track whose first writer failed at 3 s; the next file starts at 4 s.
+fn split_track(dir: &std::path::Path) -> Vec<AudioPart> {
+    let tone = |hz: f64, secs: usize| -> Vec<f32> {
+        (0..16_000 * secs)
+            .map(|n| (0.3 * (n as f64 * hz * std::f64::consts::TAU / 16_000.0).sin()) as f32)
+            .collect()
+    };
+    let mut parts = Vec::new();
+    for (name, offset, hz) in [("others.ogg", 0u64, 440.0), ("others-2.ogg", 64_000u64, 660.0)] {
+        let path = dir.join("audio").join(name);
+        let mut writer = crate::meetings::audio_file::OpusOggWriter::create(&path).unwrap();
+        writer.write(&tone(hz, 3)).unwrap();
+        writer.finish().unwrap();
+        parts.push(AudioPart { source: Source::System, path, offset_samples: offset });
+    }
+    parts
+}
+
+#[test]
+fn a_segment_just_after_a_new_audio_file_is_repaired_from_that_file() {
+    // 0.5 s into the second file: its context must not reach back into the
+    // first file's end and the unsaved second between them.
+    let dir = tempfile::tempdir().unwrap();
+    let parts = split_track(dir.path());
+    let gap = tail_gap(64_000 + 8_000, 16_000);
+    let mut b = bench(gap.clone(), parts);
+    let jobs = b.worker.gap_jobs(&gap).expect("readable while recording");
+    assert_eq!(jobs[0].samples.len(), 16_000);
+    b.worker.repairing.clear();
+    let heard = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = heard.clone();
+    let words = words_at_end(LOCAL, 1.0);
+    b.worker.hooks.local = Some(Arc::new(move |samples: &[f32]| {
+        seen.store(samples.len(), Ordering::SeqCst);
+        words(samples)
+    }));
+    b.worker.finishing = true;
+    b.worker.repair_after_stop();
+    assert_eq!(heard.load(Ordering::SeqCst), 8_000 + 16_000, "context only from the second file");
+    let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    assert!(transcript.gaps().is_empty(), "{:?}", transcript.gaps());
+    assert_eq!(
+        transcript.get(&utterance_id(Source::System, 72_000)).unwrap().text,
+        "hello from here"
+    );
+}
+
+#[test]
+fn a_segment_across_the_unsaved_stretch_reads_on_into_the_next_file() {
+    // From 3.5 s (unsaved) to 5 s: silence for what was never saved, then
+    // the second file, not a short read that looks like the end.
+    let dir = tempfile::tempdir().unwrap();
+    let parts = split_track(dir.path());
+    let gap = tail_gap(64_000 - 8_000, 24_000);
+    let mut b = bench(gap.clone(), parts);
+    let jobs = b.worker.gap_jobs(&gap).expect("readable while recording");
+    let samples = &jobs[0].samples;
+    assert_eq!(samples.len(), 24_000);
+    assert!(samples[..8_000].iter().all(|x| *x == 0.0), "the unsaved stretch is silence");
+    let loud = samples[8_000..].iter().map(|x| x * x).sum::<f32>() / 16_000.0;
+    assert!(loud > 0.01, "the second file's audio follows: {loud}");
+    b.worker.repairing.clear();
+    b.worker.hooks.local = Some(words_at_end(LOCAL, 1.0));
+    b.worker.finishing = true;
+    b.worker.repair_after_stop();
+    let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    assert!(transcript.gaps().is_empty(), "{:?}", transcript.gaps());
+    assert_eq!(
+        transcript.get(&utterance_id(Source::System, 56_000)).unwrap().text,
+        "hello from here"
+    );
+}
