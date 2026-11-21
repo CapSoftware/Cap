@@ -363,7 +363,10 @@ impl CalendarState {
     }
 
     pub fn agenda(&self, filter: &Filter) -> Agenda {
-        Agenda::new(self.merged.clone(), filter)
+        Agenda::new(
+            self.per_source.values().flatten().cloned().collect(),
+            filter,
+        )
     }
 
     pub fn planner_events(&self, settings: &CalendarSettings) -> Vec<EventInfo> {

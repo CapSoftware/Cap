@@ -147,6 +147,59 @@ fn filters() {
 }
 
 #[test]
+fn hiding_one_calendar_keeps_a_meeting_another_shown_calendar_has() {
+    let google = CalendarEvent {
+        calendar_id: "work-google".to_string(),
+        link: zoom("84512345678"),
+        attendees: vec![guest("a@x.example")],
+        ..ev("g1", "Globex renewal", "2026-03-10T17:00:00Z", 45)
+    };
+    let system = CalendarEvent {
+        source: SourceKind::System,
+        calendar_id: "work-mac".to_string(),
+        link: zoom("84512345678"),
+        ..ev("s1", "Globex renewal", "2026-03-10T17:00:00Z", 45)
+    };
+    let both = vec![google.clone(), system];
+    let shown = Agenda::new(both.clone(), &Filter::default());
+    assert_eq!(ids(&shown.events().iter().collect::<Vec<_>>()), vec!["g1"]);
+
+    let hide_google = Filter {
+        hidden_calendar_ids: HashSet::from(["work-google".to_string()]),
+        ..Filter::default()
+    };
+    let agenda = Agenda::new(both.clone(), &hide_google);
+    assert_eq!(
+        ids(&agenda.events().iter().collect::<Vec<_>>()),
+        vec!["s1"],
+        "the copy on the shown calendar stays"
+    );
+
+    let hide_both = Filter {
+        hidden_calendar_ids: HashSet::from(["work-google".to_string(), "work-mac".to_string()]),
+        ..Filter::default()
+    };
+    assert!(Agenda::new(both, &hide_both).events().is_empty());
+
+    // A decline on the richer copy still hides the meeting.
+    let declined = CalendarEvent {
+        self_response: Response::Declined,
+        ..google
+    };
+    let system = CalendarEvent {
+        source: SourceKind::System,
+        calendar_id: "work-mac".to_string(),
+        link: zoom("84512345678"),
+        ..ev("s1", "Globex renewal", "2026-03-10T17:00:00Z", 45)
+    };
+    assert!(
+        Agenda::new(vec![declined, system], &Filter::default())
+            .events()
+            .is_empty()
+    );
+}
+
+#[test]
 fn current_next_upcoming_and_days() {
     let events = vec![
         ev("a", "Standup", "2026-03-10T09:00:00Z", 15),

@@ -205,8 +205,16 @@ pub struct Agenda {
 }
 
 impl Agenda {
+    /// `events` are every source's own copies, not yet deduped: a hidden
+    /// calendar drops only its copy, so a meeting also on a shown calendar
+    /// stays. The other filters judge the merged meeting, which knows the
+    /// most about it (a decline, its guests).
     pub fn new(events: Vec<CalendarEvent>, filter: &Filter) -> Self {
-        let events = dedupe(events)
+        let shown = events
+            .into_iter()
+            .filter(|e| !filter.hidden_calendar_ids.contains(&e.calendar_id))
+            .collect();
+        let events = dedupe(shown)
             .into_iter()
             .filter(|e| filter.allows(e))
             .collect();
