@@ -382,7 +382,15 @@ fn write_accounts(dir: &Path, file: &AccountsFile) -> std::io::Result<()> {
     persist::atomic_write_private(&accounts_path(dir), &serde_json::to_vec_pretty(file)?)
 }
 
+/// Held for every change to the accounts file and the access token cache, so
+/// a refresh that finishes as its account is removed cannot bring it back.
+fn accounts_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn store_refresh_token(dir: &Path, id: &str, refresh_token: &str) -> std::io::Result<()> {
+    let _held = accounts_lock();
     let mut file = read_accounts(dir);
     file.accounts.insert(
         id.to_string(),
@@ -394,6 +402,7 @@ pub fn store_refresh_token(dir: &Path, id: &str, refresh_token: &str) -> std::io
 }
 
 pub fn forget(dir: &Path, id: &str) {
+    let _held = accounts_lock();
     access_tokens()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -462,10 +471,25 @@ async fn access_token(
             )));
         }
     };
-    if let Some(rotated) = tokens.refresh_token.as_deref().filter(|t| *t != refresh)
-        && let Err(error) = store_refresh_token(dir, id, rotated)
-    {
-        tracing::warn!(%error, "could not save the rotated calendar token");
+    if !keep_refreshed(dir, id, &refresh, &tokens) {
+        return Err(FetchError::SignInAgain);
+    }
+    Ok(tokens.access_token)
+}
+
+/// Saves what a refresh returned, unless the account was removed while it
+/// ran: then nothing is saved or cached and this returns false.
+fn keep_refreshed(dir: &Path, id: &str, refresh: &str, tokens: &oauth::Tokens) -> bool {
+    let _held = accounts_lock();
+    let mut file = read_accounts(dir);
+    let Some(stored) = file.accounts.get_mut(id) else {
+        return false;
+    };
+    if let Some(rotated) = tokens.refresh_token.as_deref().filter(|t| *t != refresh) {
+        stored.refresh_token = rotated.to_string();
+        if let Err(error) = write_accounts(dir, &file) {
+            tracing::warn!(%error, "could not save the rotated calendar token");
+        }
     }
     let lifetime = Duration::from_secs(tokens.expires_in.unwrap_or(600));
     access_tokens()
@@ -478,7 +502,7 @@ async fn access_token(
                 Instant::now() + lifetime.saturating_sub(TOKEN_MARGIN),
             ),
         );
-    Ok(tokens.access_token)
+    true
 }
 
 async fn get_json(
@@ -647,6 +671,62 @@ mod tests {
             move || wait_for_code(&listener, state, &cancel)
         });
         (port, cancel, handle)
+    }
+
+    fn refreshed(access: &str, rotated: Option<&str>) -> oauth::Tokens {
+        oauth::Tokens {
+            access_token: access.to_string(),
+            refresh_token: rotated.map(str::to_string),
+            expires_in: Some(3600),
+            id_token_email: None,
+            scope: None,
+        }
+    }
+
+    fn cached(id: &str) -> bool {
+        access_tokens()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(id)
+    }
+
+    #[test]
+    fn a_refresh_that_finishes_after_the_account_is_removed_saves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "removed-mid-refresh";
+        store_refresh_token(dir.path(), id, "old-refresh").unwrap();
+        forget(dir.path(), id);
+        assert!(!keep_refreshed(
+            dir.path(),
+            id,
+            "old-refresh",
+            &refreshed("access", Some("new-refresh"))
+        ));
+        assert!(
+            refresh_token(dir.path(), id).is_none(),
+            "no token written back"
+        );
+        assert!(!cached(id), "no access token kept");
+    }
+
+    #[test]
+    fn a_refresh_for_a_connected_account_keeps_the_rotated_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "still-connected";
+        store_refresh_token(dir.path(), id, "old-refresh").unwrap();
+        assert!(keep_refreshed(
+            dir.path(),
+            id,
+            "old-refresh",
+            &refreshed("access", Some("new-refresh"))
+        ));
+        assert_eq!(
+            refresh_token(dir.path(), id).as_deref(),
+            Some("new-refresh")
+        );
+        assert!(cached(id));
+        forget(dir.path(), id);
+        assert!(!cached(id));
     }
 
     #[test]
