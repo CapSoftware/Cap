@@ -49,5 +49,4 @@ describe("getGitHubStars", () => {
 		);
 		expect(await settle()).toBe(0);
 	});
-
 });
