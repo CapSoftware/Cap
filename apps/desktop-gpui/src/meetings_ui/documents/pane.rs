@@ -4153,13 +4153,8 @@ impl Pane {
                             .into_any_element(),
                     ));
                 };
-                let calendar = Meetings::try_global(cx).and_then(|m| {
-                    m.read(cx)
-                        .events()
-                        .iter()
-                        .find(|e| crate::meetings::calendar::event_key(e) == event.id)
-                        .cloned()
-                });
+                let calendar = Meetings::try_global(cx)
+                    .and_then(|m| m.read(cx).find_event(&event.id).cloned());
                 let web_url = calendar.as_ref().and_then(|e| e.web_url.clone());
                 let link = event.link.clone().or_else(|| {
                     calendar

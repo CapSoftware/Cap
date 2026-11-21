@@ -328,8 +328,19 @@ impl CalendarState {
         &self.merged
     }
 
+    /// The meeting behind `key`. Keys come from the agenda, where a hidden
+    /// calendar's copy is dropped before merging, so a key can name a copy
+    /// that lost the merge: those are found among the sources' own copies.
     pub fn find(&self, key: &str) -> Option<&CalendarEvent> {
-        self.merged.iter().find(|e| event_key(e) == key)
+        self.merged
+            .iter()
+            .find(|e| event_key(e) == key)
+            .or_else(|| {
+                self.per_source
+                    .values()
+                    .flatten()
+                    .find(|e| event_key(e) == key)
+            })
     }
 
     pub fn source_name(&self, calendar_id: &str) -> Option<String> {

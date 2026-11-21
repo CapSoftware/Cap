@@ -3430,6 +3430,10 @@ impl Meetings {
         self.calendar.events()
     }
 
+    pub fn find_event(&self, key: &str) -> Option<&CalendarEvent> {
+        self.calendar.find(key)
+    }
+
     pub fn agenda(&self) -> Agenda {
         self.calendar
             .agenda(&calendar::filter_for(&self.settings.calendar))

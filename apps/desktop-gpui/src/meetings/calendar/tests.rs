@@ -442,6 +442,60 @@ fn every_entry_point_id_finds_its_calendar_event() {
 }
 
 #[test]
+fn a_meeting_shown_through_its_second_calendar_is_found_by_that_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = CalendarState::in_dir(dir.path().to_path_buf());
+    state.ensure_loaded();
+    let feed = state
+        .add_ics("https://calendar.example.com/team.ics", None)
+        .unwrap();
+    let system = state.add_system().unwrap();
+    let start = Utc
+        .timestamp_opt((Utc::now() + Duration::minutes(3)).timestamp(), 0)
+        .unwrap();
+    let (feed_events, name) = parse(&feed, ics("u1", "Planning", start).as_bytes()).unwrap();
+    let system_fetched = system_fetch(Utc::now(), |_, _| {
+        Ok((calendars(), vec![system_event("E1", "Planning", start)]))
+    })
+    .unwrap();
+    state.apply(vec![
+        RefreshResult {
+            id: feed.clone(),
+            at: Utc::now(),
+            outcome: Ok(Fetched {
+                events: feed_events,
+                name,
+                ..Fetched::default()
+            }),
+        },
+        RefreshResult {
+            id: system,
+            at: Utc::now(),
+            outcome: Ok(system_fetched),
+        },
+    ]);
+    let winner = state.events()[0].clone();
+    assert_eq!(
+        winner.source,
+        SourceKind::System,
+        "the system copy wins the merge"
+    );
+
+    // Hide the winner's calendar: the agenda shows the feed's copy.
+    let settings = CalendarSettings {
+        hidden_calendar_ids: vec![winner.calendar_id.clone()],
+        ..CalendarSettings::default()
+    };
+    let shown = &state.planner_events(&settings)[0];
+    assert_ne!(shown.id, event_key(&winner));
+    assert_eq!(
+        state.find(&shown.id).map(|e| e.title.as_str()),
+        Some("Planning"),
+        "the copy the agenda shows can be opened and linked"
+    );
+}
+
+#[test]
 fn a_manual_start_links_the_meeting_in_progress_or_starting_soon() {
     let now = Utc::now();
     assert!(auto_link(&[], now).is_none());
