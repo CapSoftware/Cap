@@ -2872,8 +2872,17 @@ impl EditorWindow {
                     return;
                 }
                 // A drag in progress holds history; keys landing now would join
-                // its undo step. Generate again once the gesture has ended.
-                if this.history.is_paused() {
+                // its undo step. Generate again once the gesture has ended, but
+                // only if it left the timeline alone: a drag that edits it
+                // (trimming a key, say) makes this result stale, and the guard
+                // below drops it without touching that edit.
+                let timeline_untouched = this
+                    .project
+                    .timeline
+                    .as_ref()
+                    .and_then(|timeline| serde_json::to_vec(timeline).ok())
+                    .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
+                if this.history.is_paused() && timeline_untouched {
                     this.wait_out_gesture_then_generate(retry_from, window, cx);
                     return;
                 }
