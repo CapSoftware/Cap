@@ -280,7 +280,7 @@ impl Sidebar {
         active: bool,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = self.palette;
-        // Coloured glyphs, as the system's own sidebars draw them.
+        // Quiet glyphs: the selection alone says where you are.
         div()
             .id(id)
             .mx(px(10.))
@@ -300,7 +300,7 @@ impl Sidebar {
                     .path(icon)
                     .size(px(15.))
                     .flex_shrink_0()
-                    .text_color(palette.accent),
+                    .text_color(if active { palette.text } else { palette.muted }),
             )
             .child(div().flex_1().min_w_0().truncate().child(label))
     }
@@ -363,7 +363,7 @@ impl Render for Sidebar {
         let mut top = div().flex().flex_col().gap(px(2.)).child(
             self.item(
                 "nav-home".into(),
-                "icons/house.svg",
+                "icons/notebook.svg",
                 tr::documents::home::title().into(),
                 is(&Scope::All),
             )

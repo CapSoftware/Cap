@@ -4174,8 +4174,8 @@ setup_description = "Berechtigungen, Transkription und Kalender noch einmal durc
 trash_count = "Papierkorb · {count}"
 recording_now = "Aufnahme läuft"
 notes = "Notizen"
-title = "Start"
-back = "Zurück zum Start"
+title = "Alle Notizen"
+back = "Zurück zu allen Notizen"
 search = "Notizen und Transkripte durchsuchen"
 search_title = "Suche"
 results = { one = "{count} Treffer", other = "{count} Treffer" }

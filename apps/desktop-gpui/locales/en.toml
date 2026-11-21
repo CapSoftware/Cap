@@ -4176,8 +4176,8 @@ setup_description = "Go through permissions, transcription and calendars again."
 trash_count = { text = "Trash · {count}", context = "Link at the bottom of the notes list. {count} is how many notes are in the trash." }
 recording_now = "Recording"
 notes = "Notes"
-title = "Home"
-back = "Back to home"
+title = "All notes"
+back = "Back to all notes"
 search = "Search notes and transcripts"
 search_title = "Search"
 results = { one = "{count} match", other = "{count} matches" }

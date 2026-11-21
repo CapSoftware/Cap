@@ -4174,8 +4174,8 @@ setup_description = "権限、文字起こし、カレンダーをもう一度�
 trash_count = "ゴミ箱・{count}"
 recording_now = "録音中"
 notes = "メモ"
-title = "ホーム"
-back = "ホームに戻る"
+title = "すべてのメモ"
+back = "すべてのメモに戻る"
 search = "メモと文字起こしを検索"
 search_title = "検索"
 results = { other = "{count}件" }

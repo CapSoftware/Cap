@@ -4174,8 +4174,8 @@ setup_description = "Repasa de nuevo los permisos, la transcripción y los calen
 trash_count = "Papelera · {count}"
 recording_now = "Grabando"
 notes = "Notas"
-title = "Inicio"
-back = "Volver al inicio"
+title = "Todas las notas"
+back = "Volver a todas las notas"
 search = "Buscar en notas y transcripciones"
 search_title = "Búsqueda"
 results = { one = "{count} resultado", other = "{count} resultados" }

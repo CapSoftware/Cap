@@ -4174,8 +4174,8 @@ setup_description = "अनुमतियाँ, ट्रांसक्रि
 trash_count = "ट्रैश · {count}"
 recording_now = "रिकॉर्ड हो रहा है"
 notes = "नोट्स"
-title = "होम"
-back = "होम पर वापस जाएँ"
+title = "सभी नोट्स"
+back = "सभी नोट्स पर वापस जाएँ"
 search = "नोट्स और ट्रांसक्रिप्ट खोजें"
 search_title = "खोज"
 results = { one = "{count} नतीजा", other = "{count} नतीजे" }

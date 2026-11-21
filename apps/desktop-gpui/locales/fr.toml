@@ -4174,8 +4174,8 @@ setup_description = "Revoir les autorisations, la transcription et les calendrie
 trash_count = "Corbeille · {count}"
 recording_now = "Enregistrement"
 notes = "Notes"
-title = "Accueil"
-back = "Retour à l'accueil"
+title = "Toutes les notes"
+back = "Retour à toutes les notes"
 search = "Rechercher dans les notes et les transcriptions"
 search_title = "Recherche"
 results = { one = "{count} résultat", other = "{count} résultats" }
