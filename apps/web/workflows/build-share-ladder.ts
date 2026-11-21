@@ -424,6 +424,25 @@ async function finishShareLadder(
 		.set({ state: "ready", renditions, error: null, updatedAt: new Date() })
 		.where(and(ownRow(build), eq(shareLadders.jobId, jobId)));
 	if (ready.affectedRows !== 1) {
+		// A retry of this step after the ready write lands here too, and must
+		// not delete the ladder it already published.
+		const [current] = await db()
+			.select({
+				state: shareLadders.state,
+				outputPrefix: shareLadders.outputPrefix,
+				jobId: shareLadders.jobId,
+			})
+			.from(shareLadders)
+			.where(eq(shareLadders.videoId, build.videoId as Video.VideoId))
+			.limit(1);
+		if (
+			current?.state === "ready" &&
+			current.outputPrefix === build.prefix &&
+			current.jobId === jobId
+		) {
+			await deleteOtherLadderOutputs(build);
+			return true;
+		}
 		await deleteShareObjectsUnder(build.prefix);
 		return false;
 	}
@@ -432,11 +451,18 @@ async function finishShareLadder(
 }
 
 async function deleteOtherLadderOutputs(build: Build) {
-	const prefixes = await listShareObjectPrefixes(
-		shareLadderVideoPrefix(build.ownerId, build.videoId),
-	);
-	for (const prefix of prefixes) {
-		if (prefix !== build.prefix) await deleteShareObjectsUnder(prefix);
+	try {
+		const prefixes = await listShareObjectPrefixes(
+			shareLadderVideoPrefix(build.ownerId, build.videoId),
+		);
+		for (const prefix of prefixes) {
+			if (prefix !== build.prefix) await deleteShareObjectsUnder(prefix);
+		}
+	} catch (error) {
+		console.error("[share-ladder] Failed to remove superseded outputs", {
+			videoId: build.videoId,
+			error,
+		});
 	}
 }
 
