@@ -4401,7 +4401,11 @@ async fn check_export(rec: &Recorded, case: &mut Case) -> anyhow::Result<()> {
     let fps = rec.max_fps;
     let interval = 1.0 / f64::from(fps);
     let out = rec.project.join("verify-export.mp4");
-    let config = ProjectConfiguration::load(&rec.project).unwrap_or_default();
+    let mut config = ProjectConfiguration::load(&rec.project).unwrap_or_default();
+    // The check reads each frame's screen marker, and the real pointer rests
+    // on it; the cursor's look is covered elsewhere, so it stays out of the
+    // way here.
+    config.cursor.hide = true;
     let base = cap_export::ExporterBase::builder(rec.project.clone())
         .with_config(config)
         .with_output_path(out.clone())
