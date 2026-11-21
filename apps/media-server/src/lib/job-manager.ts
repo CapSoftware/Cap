@@ -167,7 +167,6 @@ export interface Job {
 	// GPU encoder busy on its own.
 	infraHeavyLadder?: boolean;
 	infraMp4?: boolean;
-	// Any ladder whose top rendition is 1440p or 2160p, Infra or not.
 	heavyLadder?: boolean;
 	idle?: boolean;
 	verified?: boolean;
