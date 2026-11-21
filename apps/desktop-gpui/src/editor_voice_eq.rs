@@ -552,7 +552,6 @@ impl EditorWindow {
         let shown = self.shown_voice_eq();
         let voice_eq = shown.unwrap_or_default().sanitized();
         let enabled = shown.is_some_and(|voice_eq| voice_eq.enabled);
-        let accent = Hsla::from(theme.editor.accent);
         let line = Hsla::from(theme.editor.line);
         let clip_count = segment_count(&self.project);
 
@@ -587,7 +586,7 @@ impl EditorWindow {
                                     .path("icons/sliders-horizontal.svg")
                                     .size(px(16.))
                                     .text_color(if enabled {
-                                        accent
+                                        Hsla::from(theme.editor.accent_ink)
                                     } else {
                                         Hsla::from(theme.editor.text_2)
                                     }),
@@ -723,7 +722,7 @@ impl EditorWindow {
                                 .cursor_pointer()
                                 .text_size(px(11.5))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(Hsla::from(theme.editor.accent))
+                                .text_color(Hsla::from(theme.editor.accent_ink))
                                 .hover(|this| this.bg(Hsla::from(theme.editor.ctl_hover)))
                                 .child(tr::editor::tabs::audio::voice_eq::apply_all())
                                 .on_click(cx.listener(|this, _, window, cx| {

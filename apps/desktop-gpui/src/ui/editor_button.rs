@@ -183,7 +183,7 @@ impl EditorButton {
 }
 
 impl RenderOnce for EditorButton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let EditorButton {
             id,
             label,
@@ -226,6 +226,8 @@ impl RenderOnce for EditorButton {
             other => SharedString::from(format!("eb-{other:?}")),
         };
         let icon_hover = (!disabled && !pressed).then_some(hover_text);
+        let (fade, level) =
+            crate::ui::hover_fade(window, cx, SharedString::from(format!("{group}-fade")));
 
         div()
             .id(id)
@@ -250,8 +252,21 @@ impl RenderOnce for EditorButton {
             .when(pressed, |this| this.bg(pressed_bg))
             .when(!disabled && !pressed, |this| {
                 this.cursor_pointer()
-                    .hover(move |this| this.bg(hover_bg).text_color(hover_text))
+                    .when(level > 0., |this| {
+                        this.bg(crate::ui::hover_blend(
+                            hover_bg.opacity(0.),
+                            hover_bg,
+                            level,
+                        ))
+                    })
+                    .hover(move |this| this.text_color(hover_text))
                     .active(move |this| this.bg(active_bg))
+            })
+            .on_hover(move |hovered, _, cx| {
+                fade.update(cx, |fade, cx| {
+                    fade.set_hovered(*hovered);
+                    cx.notify();
+                });
             })
             .children(left_icon.map(|icon| {
                 let group = group.clone();

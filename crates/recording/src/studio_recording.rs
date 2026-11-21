@@ -3322,6 +3322,7 @@ async fn stop_recording(
             status,
             cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
             audio_only,
+            blank: false,
         },
     };
 
@@ -4294,6 +4295,7 @@ fn write_in_progress_meta_for(
                 status: Some(StudioRecordingStatus::InProgress),
                 cursor_shape_version: cap_project::CURSOR_SHAPE_VERSION,
                 audio_only,
+                blank: false,
             },
         })),
         upload: None,
@@ -7805,6 +7807,7 @@ mod tests {
                 status: Some(StudioRecordingStatus::Complete),
                 cursor_shape_version: 0,
                 audio_only: false,
+                blank: false,
             },
         };
         let persisted =
@@ -7947,6 +7950,7 @@ mod clean_stop_receipt_tests {
                     status: Some(StudioRecordingStatus::NeedsRemux),
                     cursor_shape_version: 0,
                     audio_only: false,
+                    blank: false,
                 },
             })),
             upload: None,

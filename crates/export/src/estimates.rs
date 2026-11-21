@@ -305,6 +305,7 @@ async fn estimate(
                 cursor: segment.cursor.clone(),
                 hover_changes: segment.hover_changes.clone(),
                 keyboard: segment.keyboard.clone(),
+                keyboard_offset_secs: segment.keyboard_offset_secs,
                 decoders: sample.decoders.clone(),
             })
             .collect(),

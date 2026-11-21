@@ -199,6 +199,25 @@ impl ProjectHistory {
         }
     }
 
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// A gesture such as a slider drag holds history until it ends.
+    pub fn is_paused(&self) -> bool {
+        self.paused > 0
+    }
+
+    /// Folds the newest entry into the one before it, so a single undo goes
+    /// back past both. Only when nothing has been undone, so redo is never
+    /// touched.
+    pub fn fold_into_previous(&mut self) {
+        if self.count == 0 && self.entries.len() >= 3 {
+            let previous = self.entries.len() - 2;
+            self.entries.remove(previous);
+        }
+    }
+
     /// `projectHistory.pause()`.
     pub fn pause(&mut self) {
         self.paused += 1;
@@ -821,7 +840,12 @@ impl TrackSegmentOps for KeyboardTrackSegment {
     fn split_tail(&self, at: f64) -> Self {
         let mut tail = self.clone();
         tail.start = self.start + at;
-        tail.id = split_id("kb-edit");
+        // Half of a key added by hand is still one added by hand.
+        tail.id = split_id(if cap_project::is_manual_keyboard_segment(self) {
+            "kb-manual"
+        } else {
+            "kb-edit"
+        });
         tail
     }
 }
@@ -1913,7 +1937,12 @@ pub fn split_segment(
         let Some((head, mut tail)) = segment.split_at(segment.start + at) else {
             return false;
         };
-        tail.id = split_id("kb-edit");
+        // Half of a key added by hand is still one added by hand.
+        tail.id = split_id(if cap_project::is_manual_keyboard_segment(&head) {
+            "kb-manual"
+        } else {
+            "kb-edit"
+        });
         timeline.keyboard_segments[index] = head;
         timeline.keyboard_segments.insert(index + 1, tail);
         return true;
@@ -3041,11 +3070,7 @@ pub fn set_clip_segment_timescale(
 }
 
 pub fn clip_is_muted(segment: &TimelineSegment) -> bool {
-    if (segment.timescale - 1.0).abs() < f64::EPSILON {
-        segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
-    } else {
-        segment.speed_audio_mode.unwrap_or(ClipSpeedAudioMode::Mute) == ClipSpeedAudioMode::Mute
-    }
+    segment.speed_audio_muted()
 }
 
 pub fn set_clip_volume(timeline: &mut TimelineConfiguration, index: usize, volume: f64) -> bool {
@@ -3387,6 +3412,38 @@ mod tests {
         clicked.pause();
         clicked.resume(&with_zoom_count(0));
         assert!(clicked.is_untouched());
+    }
+
+    /// A folded step undoes in one go; nothing folds once something has been
+    /// undone, so redo stays intact.
+    #[test]
+    fn history_folds_a_step_into_the_one_before() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        history.record(&with_zoom_count(1));
+        history.record(&with_zoom_count(2));
+        assert_eq!(history.entry_count(), 3);
+        history.fold_into_previous();
+        assert_eq!(history.entry_count(), 2);
+        assert_eq!(zoom_len(history.undo().unwrap()), 0);
+        assert!(!history.can_undo());
+
+        let mut undone = ProjectHistory::new(with_zoom_count(0));
+        undone.record(&with_zoom_count(1));
+        undone.record(&with_zoom_count(2));
+        undone.undo();
+        undone.fold_into_previous();
+        assert_eq!(undone.entry_count(), 3);
+        assert!(undone.can_redo());
+    }
+
+    #[test]
+    fn history_reports_a_gesture_holding_it() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        assert!(!history.is_paused());
+        history.pause();
+        assert!(history.is_paused());
+        history.resume(&with_zoom_count(1));
+        assert!(!history.is_paused());
     }
 
     #[test]
@@ -4617,8 +4674,21 @@ mod tests {
         );
         assert_eq!(left.keys[0].time_offset, 500.0);
         assert_eq!(right.keys[0].time_offset, 500.0);
+        assert!(!cap_project::is_manual_keyboard_segment(right));
         assert_ne!(left.id, right.id);
         assert!(right.id.starts_with("kb-edit-split-"));
+
+        // Half of a key added by hand stays one added by hand, so it keeps
+        // its sounds and survives regenerating from the recording.
+        let manual = &mut timeline.keyboard_segments[1];
+        manual.id = "kb-manual-0".into();
+        manual.display_text = "hi".into();
+        manual.keys = cap_project::manual_key_presses("hi");
+        manual.keys[1].time_offset = 1500.0;
+        assert!(split_segment(timeline, TrackKind::Keyboard, 1, 1.0));
+        assert!(cap_project::is_manual_keyboard_segment(
+            &timeline.keyboard_segments[2]
+        ));
     }
 
     #[test]

@@ -310,7 +310,7 @@ impl Render for EditorModal {
                                         this.border_color(Hsla::from(theme.gray_12))
                                     })
                                     .child(
-                                        ui::Button::plain(
+                                        ui::Button::editor(
                                             &theme,
                                             ("editor-modal-button", index),
                                             if action.is_cancel() {

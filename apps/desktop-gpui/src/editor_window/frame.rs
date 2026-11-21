@@ -409,8 +409,8 @@ impl EditorWindow {
             .overflow_y_scroll()
             .rounded(px(12.))
             .border_1()
-            .border_color(gpui::Hsla::from(theme.editor.line))
-            .bg(gpui::Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .shadow(theme.editor.pop_shadow())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -431,8 +431,10 @@ impl EditorWindow {
                             .child(tr::editor::window::frame::heading()),
                     )
                     .child(
-                        div().text_size(px(11.)).text_color(theme.gray(10)).child(
-                            match &self.frame_controls.style_target {
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.editor.text_3)
+                            .child(match &self.frame_controls.style_target {
                                 Some(target) if !target.matches(&self.project) => {
                                     tr::editor::window::frame::style_changed().to_string()
                                 }
@@ -454,8 +456,7 @@ impl EditorWindow {
                                     tr::editor::window::frame::style_only(target.index + 1)
                                 }
                                 None => tr::editor::window::frame::global().to_string(),
-                            },
-                        ),
+                            }),
                     ),
             )
             .child(div().flex().flex_col().gap(px(2.)).p(px(6.)).children(
@@ -511,7 +512,7 @@ impl EditorWindow {
                                     .child(
                                         div()
                                             .text_size(px(11.))
-                                            .text_color(theme.gray(10))
+                                            .text_color(theme.editor.text_3)
                                             .child(description),
                                     ),
                             )

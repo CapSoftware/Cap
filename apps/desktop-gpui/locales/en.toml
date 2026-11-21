@@ -30,6 +30,7 @@ website = "Website"
 commit = "Commit"
 
 [menu.file]
+new_blank_project = "New Blank Project"
 open_prompt = "Open Recording"
 close_window = "Close Window"
 title = "File"
@@ -139,7 +140,7 @@ description = "Show notifications for clipboard copies, saved files, and more. Y
 label = "System notifications"
 
 [settings.general.recording]
-description = "Behaviour while you record and after you stop."
+description = "Behavior while you record and after you stop."
 title = "Recording"
 
 [settings.general.recording.countdown]
@@ -778,7 +779,7 @@ match_all = "Match all"
 match_any = "Match any"
 name = "Name"
 new = "New automation"
-no_presets = "No presets yet — create one in the editor first."
+no_presets = "No presets yet. Create one in the editor first."
 only_if = { text = "ONLY RUN IF", context = "A small all-caps group label above the conditions." }
 open_in_browser = "Open in browser"
 retry_save = "Retry save"
@@ -1067,6 +1068,7 @@ copy_screenshot_failed = "Could not copy screenshot"
 import_recordings = "Import"
 import_screenshots = "Import image"
 importing = "Importing"
+new_project = { text = "New", context = "Button that starts a new blank project, with no recording, to build a video from backgrounds, music, keys and text." }
 no_matching_recordings = "No matching recordings"
 no_matching_screenshots = "No matching screenshots"
 no_recordings = "No recordings yet"
@@ -1093,7 +1095,7 @@ studio = "Studio Mode"
 
 [main.mode.hover]
 instant = "Instant mode"
-instant_description = "No rendering required — uploads on the fly so you can share the link the moment you stop."
+instant_description = "No rendering required. It uploads on the fly so you can share the link the moment you stop."
 quality_settings = "Quality settings"
 screenshot = "Screenshot mode"
 screenshot_description = "Capture and annotate stills."
@@ -1167,6 +1169,7 @@ no_displays = "No displays found"
 no_matching_displays = "No matching displays"
 no_matching_windows = "No matching windows"
 no_windows = "No windows found"
+solo_title = { text = "Camera or audio only", context = "Title of the panel choosing between camera-only and audio-only recording, and the tooltip on its chevron." }
 window = { text = "Window", max_px = 100, size = 12 }
 
 [recordings_overlay]
@@ -1339,7 +1342,7 @@ answer = "Cap is free for personal use. For teams and commercial use, check out 
 question = "Is Cap free to use?"
 
 [onboarding.faq.instant_vs_studio]
-answer = "Instant mode uploads as you record — stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing."
+answer = "Instant mode uploads as you record. Stop recording and you'll have a shareable link immediately. Studio mode records locally in full quality, letting you edit with backgrounds, effects, and more before sharing."
 question = "What's the difference between Instant and Studio?"
 
 [onboarding.faq.sharing]
@@ -1355,7 +1358,7 @@ answer = "All recordings are stored locally on your computer. In Instant mode, t
 question = "Where are my recordings stored?"
 
 [onboarding.modes.instant]
-description = "Your recording uploads as you capture. Stop recording and instantly get a shareable link — no waiting."
+description = "Your recording uploads as you capture. Stop recording and instantly get a shareable link, no waiting."
 feature_1 = "Instant shareable link"
 feature_2 = "Background uploading"
 feature_3 = "AI transcription & summary"
@@ -1392,7 +1395,7 @@ skip = "Skip the tour"
 start = "Start Using Cap"
 
 [onboarding.overview]
-subtitle = "Whether you need speed, studio quality, or a quick screenshot — Cap has a mode for it."
+subtitle = "Whether you need speed, studio quality, or a quick screenshot, Cap has a mode for it."
 title = "One app, every workflow"
 
 [onboarding.toggle]
@@ -1541,6 +1544,8 @@ words_per_minute = { text = "{wpm} wpm", context = "Teleprompter scroll speed in
 
 [import]
 audio_failed = { text = "Failed to import audio: {error}", context = "{error} is a technical error message, usually in English." }
+blank_failed = { text = "Failed to create a project: {error}", context = "{error} is a technical error message, usually in English." }
+blank_name = { text = "Untitled", context = "The name of a new blank project, made without recording anything." }
 error_title = "Import Error"
 image_failed = { text = "Failed to import image: {error}", context = "{error} is a technical error message, usually in English." }
 unsupported = "Unsupported media file."
@@ -1608,11 +1613,11 @@ microphone_allow = "Allow microphone access…"
 microphone_turn_on = "Turn on microphone access in Settings…"
 
 [overlay.start]
-instant = { text = "Instant Mode — Record shareable link", context = "Second line of the start button, 11px, truncates." }
-instant_sign_in = { text = "Instant Mode — Sign in to record instantly", context = "Second line of the start button, 11px, truncates." }
+instant = { text = "Instant Mode · Record shareable link", context = "Second line of the start button, 11px, truncates." }
+instant_sign_in = { text = "Instant Mode · Sign in to record instantly", context = "Second line of the start button, 11px, truncates." }
 sign_in = "Sign In To Use"
 start_recording = "Start Recording"
-studio = { text = "Studio Mode — Record and edit locally", context = "Second line of the start button, 11px, truncates." }
+studio = { text = "Studio Mode · Record and edit locally", context = "Second line of the start button, 11px, truncates." }
 take_screenshot = "Take Screenshot"
 
 [overlay.window]
@@ -1895,9 +1900,9 @@ done = "Done"
 import = "Import file"
 
 [editor.audio_only]
-add_visuals = "Add Visuals"
 body = "This recording has no video. Export the sound as MP3 or WAV, or add visuals to turn it into a video."
 export_audio = "Export Audio"
+make_video = { text = "Make it a video", context = "Heading over visualiser choices that turn an audio-only recording into a video." }
 show_visuals = "Show visuals"
 size_large = "Large"
 size_medium = "Medium"
@@ -2333,8 +2338,8 @@ desktop_import_failed = { text = "Couldn't import your desktop wallpaper", conte
 importing_image = "Importing image…"
 
 [editor.sidebar.animated_gradient]
-add_colour = "Add a colour"
-colours = "Colours"
+add_colour = "Add a color"
+colours = "Colors"
 delete = "Delete"
 delete_failed = "Could not delete this gradient. Try again."
 fine_tune = "Fine-tune"
@@ -2345,18 +2350,22 @@ name_required = "Enter a name for this gradient."
 presets = "Presets"
 randomize = "Randomize"
 remember_failed = "Could not remember your animated gradient settings."
-remove_colour = "Remove colour"
+remove_colour = "Remove color"
 reset_tooltip = "Reset fine-tune settings"
 save_failed = "Could not save this gradient. Try again."
 save_tooltip = "Save the current gradient"
 saved = "Saved"
 still = { text = "Still", context = "Motion speed readout when the speed is zero." }
+style = "Style"
+style_dither = { text = "Dither", context = "A background style drawn as a fine ordered dither of a few colours, like an old print." }
+style_smooth = "Smooth"
 
 [editor.sidebar.animated_gradient.control]
 contrast = "Contrast"
 curvature = "Curvature"
 detail = "Detail"
 direction = "Direction"
+dither_size = "Dither Size"
 exposure = "Exposure"
 flow_scale = "Flow Scale"
 flow_strength = "Flow Strength"
@@ -2371,7 +2380,7 @@ vibrance = "Vibrance"
 
 [editor.sidebar.animated_gradient.group]
 animation = "Animation"
-colour = "Colour"
+colour = "Color"
 flow = "Flow"
 lighting = "Lighting"
 texture = "Texture"
@@ -2421,6 +2430,23 @@ to = "To"
 
 [editor.sidebar.image]
 prompt = "Click to select or drag and drop image"
+
+[editor.sidebar.input_sounds]
+click_sounds = "Click Sounds"
+deep = "Deep"
+deep_description = "Linear switches with a low, rounded thock."
+key_sounds = "Key Sounds"
+laptop = "Laptop"
+laptop_description = "Soft, shallow laptop keys."
+mechanical = "Mechanical"
+mechanical_description = "Crisp switches with a bright, tactile clack."
+mouse = "Mouse"
+mouse_description = "The press and release of a mouse button."
+trackpad = "Trackpad"
+trackpad_description = "The softer click of a laptop trackpad."
+typewriter = "Typewriter"
+typewriter_description = "Type bars striking, with a carriage return on enter."
+volume = "Volume"
 
 [editor.sidebar.layout]
 background_blur = "Background Blur"
@@ -2479,7 +2505,7 @@ purple = "Purple"
 
 [editor.canvas]
 camera = "Camera"
-camera_follows_zoom = "Camera size follows the zoom — drag to move"
+camera_follows_zoom = "Camera size follows the zoom. Drag to move."
 captions = "Captions"
 edit_zoom = "Edit zoom"
 image = "Image"
@@ -2513,6 +2539,7 @@ title = "Clips"
 
 [editor.clips.error]
 audio_only_mix = "Audio only recordings and video clips cannot be combined in one project"
+blank_source = "This project has no recording to add as a clip"
 cancelled = "Import cancelled"
 cannot_decode = "Cannot decode video {path}: {error}"
 in_use = "Cannot import while this recording is in use: {error}"
@@ -2539,6 +2566,7 @@ frames = { one = "{rendered} / {count} frame", other = "{rendered} / {count} fra
 generating_preview = "Generating preview…"
 link_unavailable_cursor = "Cursor-only exports can only be saved to a file or clipboard."
 link_unavailable_transparent = "Transparent exports can only be saved to a file or clipboard."
+more_formats = { text = "More", context = "Export format option that reveals less common formats, such as separate tracks." }
 organization = "Organization"
 preview = "Preview"
 preview_info = "This is a rendered frame from your video. Adjust the settings to see the quality of the final export."
@@ -2586,7 +2614,9 @@ file = { text = "File", context = "Export destination." }
 link = { text = "Shareable Link", context = "Export destination." }
 
 [editor.export.done]
+copy_file = "Copy to Clipboard"
 copy_link = "Copy link"
+file_copied = "Copied"
 instant_hint = "Use Instant Mode for your next recording if you want a link the moment you stop."
 link_copied = "Link copied"
 open_file = "Open File"
@@ -2681,14 +2711,16 @@ format = { text = "Tracks", context = "Export format: separate screen, camera an
 microphone = "Microphone"
 open_folder = "Open Folder"
 screen = "Screen"
+separate = "Separate tracks"
+separate_description = "Screen, camera and audio, each as its own file"
 studio_only = "Separate tracks are only recorded in Studio Mode."
 system_audio = "System audio"
 video_detail = { text = "MP4 · {width}×{height}", context = "Video track file type and size, for example MP4 · 1920×1080." }
 
 [editor.export.turbo]
 title = "Turbo export"
-description = "Exports much faster using every CPU core and the GPU"
-warning = "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud."
+description = "Finishes exports much faster by using more of your computer's power"
+warning = "Other apps may feel a little slower until the export finishes."
 
 [editor.modal]
 cancel_export = "Cancel export"
@@ -2755,6 +2787,8 @@ advanced_shadow = "Advanced shadow settings"
 background = "Background"
 corner_style = "Corner Style"
 custom_position = "Custom position (dragged on canvas)"
+empty_description = "Choose a camera before you record and you can shape and place it here."
+empty_title = "No camera in this recording"
 hide = "Hide Camera"
 keep_size_during_zoom = "Keep original size during zoom"
 mirror = "Mirror Camera"
@@ -2881,12 +2915,16 @@ minimal = "Minimal"
 minimal_description = "Subtle outlined text with no background."
 pop = "Pop"
 pop_description = "Playful caps that pop in with a vibrant accent."
+soft = "Soft"
+soft_description = "Rounded charcoal card that matches the keys."
 
 [editor.tabs.corner]
 rounded = "Rounded"
 squircle = "Squircle"
 
 [editor.tabs.cursor]
+empty_description = "This recording didn't capture the cursor, so there's nothing to style yet."
+empty_title = "No cursor in this recording"
 follow_hover = "Follow Hover Highlights"
 friction = "Friction"
 hide_when_idle = "Hide When Idle"
@@ -2912,6 +2950,7 @@ smooth = "Smooth"
 smooth_description = "Soft, floaty movement"
 
 [editor.tabs.keyboard]
+add_to_timeline = "Add to Timeline"
 animation = "Animation"
 background_color = "Background Color"
 background_opacity = "Background Opacity"
@@ -2928,21 +2967,46 @@ font_weight = "Font Weight"
 generate = "Generate Keyboard Segments"
 generating = "Generating Keyboard Segments..."
 grouping_threshold = "Grouping Threshold"
+kept_edits = "Your edits to the recorded keys are kept. Regenerate to apply this change to them."
+key_style = "Key Style"
+key_theme = "Key Theme"
 linger_duration = "Linger Duration"
 load_failed = "Failed to load recording data: {error}"
 no_presses = "No recorded keyboard presses were found."
+no_shortcuts = "No shortcuts were pressed in this recording."
 permission_action = "Show me how"
 permission_body = "Give Cap your OK so your next recordings include the keys you press."
 permission_title = "Keystrokes aren't being recorded"
 position = "Position"
 regenerate = "Regenerate Keyboard Segments"
+show_all_keys = "All keys"
+show_all_keys_hint = "Shows shortcuts and everything you type."
+show_as = "Show As"
 show_modifiers = "Show Modifiers"
+show_shortcuts = "Shortcuts"
+show_shortcuts_hint = "Shows key combos such as ⌘C. Typing stays hidden."
 show_special_keys = "Show Special Keys"
 size_label = "Size"
+split_keys = { text = "Keys", context = "How typed text shows: one key per keystroke." }
+split_sentence = { text = "Sentence", context = "How typed text shows: the whole sentence on one key." }
+split_words = { text = "Words", context = "How typed text shows: one key per word." }
+style_classic = "Classic"
+style_linux = "Linux"
+style_macos = "macOS"
+style_mechanical = "Mechanical"
+style_windows = "Windows"
 text_color = "Text Color"
+theme_dark = "Dark"
+theme_light = "Light"
+theme_retro = "Retro"
 timeline_unavailable = "The project timeline is unavailable."
 timeline_unreadable = "The project timeline could not be read."
 title = "Show keyboard"
+type_keys = "Add Keystrokes"
+type_keys_button = "Add Keystrokes…"
+type_keys_hint = { text = "Paste a sentence, a script or a transcript, or a shortcut like cmd+shift+p. It types out as key presses from where you opened this.", context = "cmd+shift+p is typed as is and must stay in English." }
+type_keys_placeholder = { text = "A sentence, or a shortcut like cmd+k", context = "Placeholder in a text box; cmd+k is typed as is and must stay in English." }
+type_keys_summary = { text = "About {seconds} s of typing", context = "{seconds} is a number of seconds, like 4.2." }
 uppercase = "Uppercase"
 
 [editor.tabs.padding]
@@ -2953,7 +3017,10 @@ proportional = "Proportional"
 bottom_center = "Bottom Center"
 bottom_left = "Bottom Left"
 bottom_right = "Bottom Right"
+center = "Center"
 manual = "Manual"
+middle_left = "Middle Left"
+middle_right = "Middle Right"
 top_center = "Top Center"
 top_left = "Top Left"
 top_right = "Top Right"
@@ -3023,10 +3090,12 @@ title = { text = "Timeline", context = "Label above the timeline while the edito
 
 [editor.timeline.empty]
 add_audio = "Add audio"
+add_key = "Add keystrokes"
 add_scene = "Add scene"
 audio = "Add background music or import your own audio"
 captions = "No captions"
 keyboard = "No keyboard events"
+keyboard_shortcuts = "No shortcuts"
 scene = "Switch layouts between your screen and camera"
 
 [editor.timeline.picker]
@@ -3068,6 +3137,7 @@ split_screen = "Split Screen"
 [editor.timeline.segment]
 audio = { text = "Audio", context = "Name of an audio segment that has none." }
 automatic_zoom = "Automatic Zoom"
+canvas = "Canvas"
 caption = { text = "Caption", context = "Caption segment with no text yet." }
 clip = "Clip"
 cursor_hidden = "Cursor hidden"
@@ -3161,6 +3231,7 @@ crop = "Crop"
 crop_tooltip = "Crop Video"
 no_room_for_3d_shot = "No room for another 3D shot"
 no_room_for_caption = "No room for another caption here"
+no_room_for_key = "No room for another key press here"
 redo = "Redo"
 save_failed = { text = "Could not save {path}. Keep the editor open and try again: {error}", context = "{path} is the recording's folder; {error} is a technical message that stays in English." }
 undo = "Undo"
@@ -3190,6 +3261,21 @@ directory_failed = "Failed to create audio directory: {error}"
 no_extension = "Audio file has no extension"
 not_found = "Audio file not found: {path}"
 unsupported = { text = "Unsupported audio format: .{extension}", context = "{extension} is a file extension such as ogg." }
+
+[editor.window.blank_start]
+body = "Pick something to add, or drop files here."
+clips = "Add clips"
+drop_failed = "That sound file could not be added"
+drop_unsupported = "Drop a video, image or sound file to add it"
+image = "Add an image"
+image_detail = "Logos, screenshots, overlays"
+keys = "Add keystrokes"
+keys_detail = "Show typing or shortcuts on screen"
+music = "Add music"
+music_detail = "From the library or a file"
+text_item = "Add text"
+text_item_detail = "Titles and callouts"
+title = { text = "Start your video", context = "Heading over the actions shown in a new, empty project." }
 
 [editor.window.busy]
 clip_import = "Wait for the clip import to finish before closing or deleting this recording."
@@ -3275,6 +3361,27 @@ no_segments = "Recording has no segments. It may need to be recovered first."
 not_found = "Video path {path} not found!"
 not_studio = "Cannot edit non-studio recordings"
 
+[editor.window.looks]
+launch_day = "Launch Day"
+launch_day_description = "A vivid gradient, snappy zooms and bold captions."
+mac_native = "Mac Native"
+mac_native_description = "A macOS window on Tahoe with white Mac keys."
+midnight = "Midnight"
+midnight_description = "A deep, dark backdrop with a crisp edge."
+minimal = "Minimal"
+minimal_description = "A quiet off-white canvas and nothing extra."
+preview_hint = "Hover a look to see it on your video."
+retro_desk = "Retro Desk"
+retro_desk_description = "Warm beige and chunky mechanical keys."
+saved = "Your Presets"
+smooth_demo = "Smooth Demo"
+smooth_demo_description = "A drifting color field, gentle zooms and a big, calm cursor."
+title = "Looks"
+tutorial = "Tutorial"
+tutorial_description = "Slow, steady zooms and keys anyone can follow."
+web_product = "Web Product"
+web_product_description = "A browser window for site and app demos."
+
 [editor.window.presets]
 apply = "Apply"
 create = "Create"
@@ -3338,11 +3445,14 @@ wipe_down = { text = "Wipe down", context = "Transition type: an edge sweeping d
 zoom = { text = "Zoom", context = "Transition type: the picture zooms through the cut into the next clip." }
 
 [editor.window.transport]
-compare = "Compare"
-compare_tooltip = "Hold to see the original"
 done_splitting = "Done splitting"
 enhance = "Enhance"
-enhance_tooltip = "Show the paused frame enhanced"
+enhance_card_body = "Uses an AI model to sharpen small text and fine detail in every frame, so your video stays crisp when it is zoomed in or scaled down."
+enhance_card_export = "Applies to your export, which can take a little longer."
+enhance_card_local = "Runs on this computer, so nothing is uploaded."
+enhance_card_preview = "Pause the video to see it in the preview."
+enhance_off = "Off"
+enhance_on = "On"
 play_pause = "Play/Pause video"
 speed = { text = "Preview speed", context = "Tooltip for the menu in the editor transport bar that sets how fast the preview plays. It never changes the exported video." }
 split = "Split"

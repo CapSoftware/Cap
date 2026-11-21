@@ -240,6 +240,8 @@ pub struct RgbaToNv12Converter {
     surface_output: bool,
     #[cfg(target_os = "macos")]
     surface_ring: Option<Nv12SurfaceRing>,
+    #[cfg(target_os = "macos")]
+    plane_pipeline: Option<Nv12PlanePipeline>,
     #[cfg(all(test, target_os = "macos"))]
     surface_setup_should_fail: bool,
     #[cfg(target_os = "linux")]
@@ -337,6 +339,7 @@ struct Nv12SurfaceSlot {
     surface: arc::R<io::Surf>,
     y_texture: wgpu::Texture,
     uv_texture: wgpu::Texture,
+    plane_bind_groups: Vec<(wgpu::Texture, wgpu::BindGroup)>,
 }
 
 #[cfg(target_os = "macos")]
@@ -347,6 +350,7 @@ struct Nv12SurfaceRing {
     allocation_attributes: arc::R<cf::Dictionary>,
     next: usize,
     size: (u32, u32),
+    plane_writes: bool,
 }
 
 // SAFETY: same contract as RgbaToBgraSurfaceConverter — the CF objects have
@@ -359,7 +363,7 @@ impl Nv12SurfaceRing {
     const SLOTS: usize = 8;
     const MAX_BUFFERS: usize = 32;
 
-    fn new() -> Result<Self, RenderingError> {
+    fn new(plane_writes: bool) -> Result<Self, RenderingError> {
         let texture_cache = IOSurfaceTextureCache::new()
             .ok_or_else(|| RenderingError::Surface("Metal device is unavailable".to_string()))?;
         Ok(Self {
@@ -369,6 +373,7 @@ impl Nv12SurfaceRing {
             allocation_attributes: surface_allocation_attributes(Self::MAX_BUFFERS)?,
             next: 0,
             size: (0, 0),
+            plane_writes,
         })
     }
 
@@ -427,7 +432,7 @@ impl Nv12SurfaceRing {
     async fn next_slot(
         &mut self,
         device: &wgpu::Device,
-    ) -> Result<(arc::R<cv::PixelBuf>, &Nv12SurfaceSlot), RenderingError> {
+    ) -> Result<(arc::R<cv::PixelBuf>, &mut Nv12SurfaceSlot), RenderingError> {
         if self.pool.is_none() {
             return Err(RenderingError::Surface(
                 "NV12 pool is unavailable".to_string(),
@@ -451,9 +456,20 @@ impl Nv12SurfaceRing {
             index
         } else {
             let (width, height) = self.size;
+            let (metal_usage, usage) = if self.plane_writes {
+                (
+                    mtl::TextureUsage::SHADER_WRITE,
+                    wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
+                )
+            } else {
+                (
+                    mtl::TextureUsage::SHADER_READ,
+                    wgpu::TextureUsages::COPY_DST,
+                )
+            };
             let y_metal = self
                 .texture_cache
-                .create_y_texture(io_surface, width, height)
+                .create_y_texture_with_usage(io_surface, width, height, metal_usage)
                 .map_err(|error| RenderingError::Surface(error.to_string()))?;
             let y_texture = import_metal_texture_to_wgpu_with_usage(
                 device,
@@ -461,13 +477,13 @@ impl Nv12SurfaceRing {
                 wgpu::TextureFormat::R8Unorm,
                 width,
                 height,
-                wgpu::TextureUsages::COPY_DST,
+                usage,
                 Some("NV12 IOSurface Y"),
             )
             .map_err(|error| RenderingError::Surface(error.to_string()))?;
             let uv_metal = self
                 .texture_cache
-                .create_uv_texture(io_surface, width, height)
+                .create_uv_texture_with_usage(io_surface, width, height, metal_usage)
                 .map_err(|error| RenderingError::Surface(error.to_string()))?;
             let uv_texture = import_metal_texture_to_wgpu_with_usage(
                 device,
@@ -475,7 +491,7 @@ impl Nv12SurfaceRing {
                 wgpu::TextureFormat::Rg8Unorm,
                 width / 2,
                 height / 2,
-                wgpu::TextureUsages::COPY_DST,
+                usage,
                 Some("NV12 IOSurface UV"),
             )
             .map_err(|error| RenderingError::Surface(error.to_string()))?;
@@ -483,6 +499,7 @@ impl Nv12SurfaceRing {
                 surface: io_surface.retained(),
                 y_texture,
                 uv_texture,
+                plane_bind_groups: Vec::new(),
             };
             if self.slots.len() < Self::SLOTS {
                 self.slots.push(slot);
@@ -494,7 +511,134 @@ impl Nv12SurfaceRing {
                 index
             }
         };
-        Ok((pixel_buffer, &self.slots[index]))
+        Ok((pixel_buffer, &mut self.slots[index]))
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct Nv12PlanePipeline {
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+}
+
+#[cfg(target_os = "macos")]
+impl Nv12PlanePipeline {
+    /// Writing the planes needs r8unorm and rg8unorm storage textures, which
+    /// WebGPU leaves to adapter-specific format features.
+    fn supported(device: &wgpu::Device) -> bool {
+        device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
+    }
+
+    fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("RGBA to NV12 Planes Converter"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shaders/rgba_to_nv12_planes.wgsl"
+            ))),
+        });
+        let storage = |binding, format| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::WriteOnly,
+                format,
+                view_dimension: wgpu::TextureViewDimension::D2,
+            },
+            count: None,
+        };
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("RGBA to NV12 Planes Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                storage(1, wgpu::TextureFormat::R8Unorm),
+                storage(2, wgpu::TextureFormat::Rg8Unorm),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("RGBA to NV12 Planes Pipeline Layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("RGBA to NV12 Planes Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        Self {
+            pipeline,
+            bind_group_layout,
+        }
+    }
+
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        slot: &mut Nv12SurfaceSlot,
+        source_texture: &wgpu::Texture,
+        params_buffer: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        if let Some((_, bind_group)) = slot
+            .plane_bind_groups
+            .iter()
+            .find(|(texture, _)| texture == source_texture)
+        {
+            return bind_group.clone();
+        }
+        let source_view = source_texture.create_view(&Default::default());
+        let y_view = slot.y_texture.create_view(&Default::default());
+        let uv_view = slot.uv_texture.create_view(&Default::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("RGBA to NV12 Planes Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&y_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&uv_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+        if slot.plane_bind_groups.len() >= 2 {
+            slot.plane_bind_groups.remove(0);
+        }
+        slot.plane_bind_groups
+            .push((source_texture.clone(), bind_group.clone()));
+        bind_group
     }
 }
 
@@ -589,6 +733,8 @@ impl RgbaToNv12Converter {
             surface_output: false,
             #[cfg(target_os = "macos")]
             surface_ring: None,
+            #[cfg(target_os = "macos")]
+            plane_pipeline: None,
             #[cfg(all(test, target_os = "macos"))]
             surface_setup_should_fail: false,
             #[cfg(target_os = "linux")]
@@ -629,6 +775,21 @@ impl RgbaToNv12Converter {
         }
     }
 
+    fn plane_writes(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.surface_output
+                && self
+                    .surface_ring
+                    .as_ref()
+                    .is_some_and(|ring| ring.plane_writes)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
     fn nv12_size(&self, width: u32, height: u32) -> u64 {
         let stride = self.aligned_stride(width) as u64;
         let aligned_height = ((height + 1) & !1) as u64;
@@ -649,22 +810,24 @@ impl RgbaToNv12Converter {
                 } else {
                     match self.surface_ring.as_mut() {
                         Some(ring) => ring.ensure_size(device, width, height),
-                        None => Nv12SurfaceRing::new().and_then(|mut ring| {
-                            ring.ensure_size(device, width, height)?;
-                            self.surface_ring = Some(ring);
-                            Ok(())
-                        }),
+                        None => Nv12SurfaceRing::new(Nv12PlanePipeline::supported(device))
+                            .and_then(|mut ring| {
+                                ring.ensure_size(device, width, height)?;
+                                self.surface_ring = Some(ring);
+                                Ok(())
+                            }),
                     }
                 }
                 #[cfg(not(all(test, target_os = "macos")))]
                 {
                     match self.surface_ring.as_mut() {
                         Some(ring) => ring.ensure_size(device, width, height),
-                        None => Nv12SurfaceRing::new().and_then(|mut ring| {
-                            ring.ensure_size(device, width, height)?;
-                            self.surface_ring = Some(ring);
-                            Ok(())
-                        }),
+                        None => Nv12SurfaceRing::new(Nv12PlanePipeline::supported(device))
+                            .and_then(|mut ring| {
+                                ring.ensure_size(device, width, height)?;
+                                self.surface_ring = Some(ring);
+                                Ok(())
+                            }),
                     }
                 }
             };
@@ -677,12 +840,17 @@ impl RgbaToNv12Converter {
                 self.surface_ring = None;
                 self.cached_width = 0;
             }
+            if self.plane_writes() && self.plane_pipeline.is_none() {
+                self.plane_pipeline = Some(Nv12PlanePipeline::new(device));
+            }
         }
 
         let stride = self.aligned_stride(width);
+        let needs_nv12_buffer = !self.plane_writes();
         if self.cached_width == width
             && self.cached_height == height
             && self.cached_stride == stride
+            && self.nv12_buffer.is_some() == needs_nv12_buffer
         {
             #[cfg(target_os = "macos")]
             if self.surface_output {
@@ -694,12 +862,14 @@ impl RgbaToNv12Converter {
         let nv12_size = self.nv12_size(width, height);
         let aligned_size = nv12_size.div_ceil(4) * 4;
 
-        self.nv12_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("NV12 Storage Buffer"),
-            size: aligned_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        }));
+        self.nv12_buffer = needs_nv12_buffer.then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("NV12 Storage Buffer"),
+                size: aligned_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        });
 
         let make_readback = || {
             Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
@@ -780,6 +950,46 @@ impl RgbaToNv12Converter {
 
         self.ensure_buffers(device, width, height);
 
+        let y_stride = self.aligned_stride(width);
+        let uv_stride = self.aligned_stride(width);
+
+        let params = Nv12Params {
+            width,
+            height,
+            y_stride,
+            uv_stride,
+        };
+
+        #[cfg(target_os = "macos")]
+        if self.plane_writes()
+            && let (Some(ring), Some(planes)) =
+                (self.surface_ring.as_mut(), self.plane_pipeline.as_ref())
+        {
+            queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
+            let (pixel_buffer, slot) = ring.next_slot(device).await?;
+            let bind_group = planes.bind_group(device, slot, source_texture, &self.params_buffer);
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("RGBA to NV12 Planes Conversion"),
+                    ..Default::default()
+                });
+                pass.set_pipeline(&planes.pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(width.div_ceil(4 * 8), height.div_ceil(2 * 8), 1);
+            }
+            self.pending = Some(PendingNv12Output::Surface(PendingNv12Surface {
+                pixel_buffer,
+                completed: None,
+                width,
+                height,
+                y_stride,
+                frame_number,
+                frame_rate,
+                export_deadlines: self.export_deadlines,
+            }));
+            return Ok(true);
+        }
+
         let Some(bind_group) = self.source_bind_group(device, source_texture) else {
             return Ok(false);
         };
@@ -790,15 +1000,6 @@ impl RgbaToNv12Converter {
         let readback_idx = self.current_readback;
         self.current_readback = 1 - self.current_readback;
 
-        let y_stride = self.aligned_stride(width);
-        let uv_stride = self.aligned_stride(width);
-
-        let params = Nv12Params {
-            width,
-            height,
-            y_stride,
-            uv_stride,
-        };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
 
         {
@@ -2871,6 +3072,130 @@ mod surface_output_tests {
                     .all(|buffer| buffer.is_none())
             );
             assert_surface_matches_cpu(&cpu_frame, &surface_frame);
+        }
+    }
+
+    fn device_with_adapter_formats() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = crate::create_wgpu_instance_sync();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        let required_features =
+            adapter.features() & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        }))
+        .ok()
+    }
+
+    #[tokio::test]
+    async fn plane_writes_match_the_readback_output() {
+        let Some((device, queue)) = device_with_adapter_formats() else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        if !Nv12PlanePipeline::supported(&device) {
+            eprintln!("adapter has no r8unorm storage textures, skipping");
+            return;
+        }
+
+        for (width, height) in [(1920u32, 1080u32), (1284, 722), (3840, 2160), (642, 361)] {
+            let source = gradient_texture(&device, &queue, width, height);
+            let mut readback_converter = RgbaToNv12Converter::new(&device);
+            let cpu_frame = convert(
+                &device,
+                &queue,
+                &mut readback_converter,
+                &source,
+                width,
+                height,
+            )
+            .await;
+            assert!(cpu_frame.surface.is_none());
+
+            let mut surface_converter = RgbaToNv12Converter::new(&device);
+            surface_converter.enable_surface_output();
+            for _ in 0..3 {
+                let surface_frame = convert(
+                    &device,
+                    &queue,
+                    &mut surface_converter,
+                    &source,
+                    width,
+                    height,
+                )
+                .await;
+                assert!(surface_converter.plane_writes());
+                assert!(surface_converter.nv12_buffer.is_none());
+                assert_eq!(
+                    surface_frame.y_stride,
+                    cpu_frame.y_stride.next_multiple_of(256)
+                );
+                assert_surface_matches_cpu(&cpu_frame, &surface_frame);
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "benchmark: cargo test -p cap-rendering --release nv12_surface_conversion_bench -- --ignored --nocapture"]
+    async fn nv12_surface_conversion_bench() {
+        let Some((device, queue)) = device_with_adapter_formats() else {
+            return;
+        };
+        for (width, height) in [(1920u32, 1080u32), (3840, 2160)] {
+            let source = gradient_texture(&device, &queue, width, height);
+            for planes in [false, true] {
+                let mut converter = RgbaToNv12Converter::new(&device);
+                converter.enable_surface_output();
+                let mut times = Vec::new();
+                for round in 0..260 {
+                    let started = Instant::now();
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    converter.ensure_buffers(&device, width, height);
+                    if !planes && let Some(ring) = converter.surface_ring.as_mut() {
+                        ring.plane_writes = false;
+                        converter.plane_pipeline = None;
+                    }
+                    assert!(
+                        converter
+                            .submit_conversion(
+                                &device,
+                                &queue,
+                                &mut encoder,
+                                &source,
+                                width,
+                                height,
+                                round,
+                                30
+                            )
+                            .await
+                            .unwrap()
+                    );
+                    let submission = queue.submit([encoder.finish()]);
+                    converter.after_submit(&queue, &submission);
+                    let frame = converter
+                        .take_pending()
+                        .unwrap()
+                        .wait_with_pool(&device, None)
+                        .await
+                        .unwrap();
+                    assert_eq!(converter.plane_writes(), planes);
+                    drop(frame);
+                    if round >= 20 {
+                        times.push(started.elapsed().as_secs_f64() * 1000.0);
+                    }
+                }
+                times.sort_by(f64::total_cmp);
+                println!(
+                    "{width}x{height} planes={planes}: p50 {:.3} ms p90 {:.3} ms",
+                    times[times.len() / 2],
+                    times[times.len() * 9 / 10]
+                );
+            }
         }
     }
 

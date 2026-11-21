@@ -26,11 +26,13 @@
 //! export matches playback by construction.
 
 use cap_project::{
-    Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TimelineConfiguration, XY,
-    ZoomMode, ZoomSegment,
+    Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TextLayout,
+    TimelineConfiguration, XY, ZoomMode, ZoomSegment,
 };
 
 use crate::{
+    CAMERA_PADDING, ProjectUniforms, RenderOptions, camera_bubble_size, compute_camera_position,
+    scene::{InterpolatedScene, SceneSegmentsCursor},
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     zoom::{InterpolatedZoom, SegmentBounds},
 };
@@ -50,10 +52,40 @@ const INSTANT_SNAP_WINDOW_SECS: f64 = 0.1;
 /// bound moves the viewport by at most (bound - 1) of the card: sub-pixel.
 const CENTER_PREAIM_MAX_AMOUNT: f32 = 1.0005;
 
-/// Greedy click-cluster bounding-box limits, as a fraction of the visible
-/// zoomed viewport (50% width x 70% height).
-const CLUSTER_WIDTH_RATIO: f64 = 0.5;
-const CLUSTER_HEIGHT_RATIO: f64 = 0.7;
+/// How an auto zoom picks what to frame from the cursor's movement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FollowRule {
+    /// Clusters fit 50% x 70% of the visible view; each frames the middle of
+    /// its bounding box.
+    BoxMiddle,
+    /// Clusters fit 52% x 55% of the visible view; each frames where the
+    /// cursor spent its time, so a pass across the box barely moves the view
+    /// while a dwell pulls it over. Segments start on their first instant.
+    TimeWeighted,
+}
+
+impl FollowRule {
+    fn for_version(screen_motion_version: u32) -> Self {
+        if screen_motion_version >= cap_project::SCREEN_MOTION_VERSION {
+            Self::TimeWeighted
+        } else {
+            Self::BoxMiddle
+        }
+    }
+
+    /// Greedy cluster bounding-box limits, as a fraction of the visible
+    /// zoomed viewport (width, height).
+    fn cluster_ratios(self) -> (f64, f64) {
+        match self {
+            Self::BoxMiddle => (0.5, 0.7),
+            Self::TimeWeighted => (0.52, 0.55),
+        }
+    }
+}
+
+/// How long the last cursor sample of a cluster nobody left counts for in
+/// its time-weighted centre.
+const LAST_SAMPLE_WEIGHT_MS: f64 = 100.0;
 
 /// Fallback focus when a segment has no usable cursor data.
 const FALLBACK_FOCUS: (f64, f64) = (0.5, 0.5);
@@ -185,6 +217,255 @@ impl CursorCropMaps {
     }
 }
 
+/// The part of the screen an auto zoom keeps its focus in so the camera
+/// bubble does not cover it, piecewise over timeline time. Each entry is a
+/// rect `[x0, y0, x1, y1]` in fractions of the display content rect; the
+/// focus's on-screen position is scaled into it, so a centred focus lands in
+/// its middle and focus near the content's edges still reaches them.
+#[derive(Debug, Default, PartialEq)]
+struct CameraClearance {
+    starts: Vec<f64>,
+    free: Vec<[f64; 4]>,
+}
+
+const WHOLE_SCREEN: [f64; 4] = [0.0, 0.0, 1.0, 1.0];
+
+impl CameraClearance {
+    fn from_project(
+        project: &ProjectConfiguration,
+        screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
+    ) -> Option<Self> {
+        let camera_size = camera_size.filter(|size| size.x > 0 && size.y > 0)?;
+        if screen_size.x == 0
+            || screen_size.y == 0
+            || FollowRule::for_version(project.screen_motion_version) != FollowRule::TimeWeighted
+        {
+            return None;
+        }
+        let timeline = project.timeline.as_ref()?;
+        if !timeline
+            .zoom_segments
+            .iter()
+            .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+        {
+            return None;
+        }
+
+        let mut breaks = vec![0.0];
+        for scene in &timeline.scene_segments {
+            breaks.extend([
+                scene.start - scene.transition_in.max(0.0),
+                scene.start,
+                scene.end - scene.transition_out.max(0.0),
+                scene.end,
+            ]);
+        }
+        for style in &timeline.style_segments {
+            if style.overrides.camera.is_some() || style.overrides.background.is_some() {
+                breaks.extend([style.start, style.end]);
+            }
+        }
+        for text in &timeline.text_segments {
+            if text.enabled && text.layout != TextLayout::Overlay {
+                breaks.extend([text.start, text.end]);
+            }
+        }
+        breaks.retain(|time| time.is_finite() && *time >= 0.0);
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup();
+
+        let options = RenderOptions {
+            camera_size: Some(camera_size),
+            screen_size,
+            preserve_screen_alpha: false,
+        };
+        let mut clearance = Self::default();
+        for (index, &start) in breaks.iter().enumerate() {
+            // A fade's later state wins its whole span, so the focus starts
+            // moving aside as the bubble appears and returns as it leaves.
+            let probe = breaks
+                .get(index + 1)
+                .map_or(start + 1.0, |&end| start + (end - start) * 0.75);
+            let free = camera_free_rect_at(project, &options, probe);
+            if clearance.free.last() != Some(&free) {
+                clearance.starts.push(start);
+                clearance.free.push(free);
+            }
+        }
+        clearance
+            .free
+            .iter()
+            .any(|free| *free != WHOLE_SCREEN)
+            .then_some(clearance)
+    }
+
+    fn free_at(&self, timeline_secs: f64) -> [f64; 4] {
+        let index = self.starts.partition_point(|&start| start <= timeline_secs);
+        index
+            .checked_sub(1)
+            .map_or(WHOLE_SCREEN, |index| self.free[index])
+    }
+
+    /// Moves a follow `center` so the focus lands inside the free rect.
+    fn clear_center(
+        &self,
+        timeline_secs: f64,
+        focus: (f64, f64),
+        center: (f64, f64),
+        amount: f64,
+    ) -> (f64, f64) {
+        let free = self.free_at(timeline_secs);
+        let axis = |focus: f64, center: f64, lo: f64, hi: f64| {
+            let on_screen = focus * amount - center * (amount - 1.0);
+            let cleared = lo + on_screen * (hi - lo);
+            (center + (on_screen - cleared) / (amount - 1.0)).clamp(0.0, 1.0)
+        };
+        (
+            axis(focus.0, center.0, free[0], free[2]),
+            axis(focus.1, center.1, free[1], free[3]),
+        )
+    }
+}
+
+/// The free rect at `time`: the whole screen unless the camera bubble sits
+/// over the screen then.
+fn camera_free_rect_at(
+    project: &ProjectConfiguration,
+    options: &RenderOptions,
+    time: f64,
+) -> [f64; 4] {
+    let none = WHOLE_SCREEN;
+    let styled = project.style_at(time);
+    if styled.camera.hide {
+        return none;
+    }
+    let timeline = project.timeline.as_ref();
+    let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+        time,
+        timeline.map_or(&[], |timeline| timeline.scene_segments.as_slice()),
+    ));
+    if scene.regular_camera_transition_opacity() < 0.5 || scene.split_factor >= 0.5 {
+        return none;
+    }
+    if timeline.is_some_and(|timeline| {
+        crate::takeover::InterpolatedTakeover::sample(time, &timeline.text_segments).is_some()
+    }) {
+        return none;
+    }
+    let Some(camera_size) = options.camera_size else {
+        return none;
+    };
+
+    let (base_w, base_h) = ProjectUniforms::get_base_size(options, project);
+    let resolution_base = XY::new(base_w, base_h);
+    let output_size = ProjectUniforms::get_output_size(options, project, resolution_base);
+    let layout = ProjectUniforms::styled_or_base_display_layout(
+        options,
+        project,
+        styled.as_ref(),
+        output_size,
+        resolution_base,
+        options.screen_size,
+    );
+    let output = [output_size.0 as f32, output_size.1 as f32];
+    let camera_padding = CAMERA_PADDING * output[1] / 1080.0;
+    let scale =
+        styled.camera.size / 100.0 * styled.camera.scale_during_zoom * scene.camera_scale as f32;
+    let size = camera_bubble_size(
+        styled.camera.shape,
+        [camera_size.x as f32, camera_size.y as f32],
+        output[0].min(output[1]),
+        scale,
+        camera_padding,
+    );
+    let position = compute_camera_position(&styled.camera, output, size, camera_padding);
+
+    let area = [
+        layout.content_offset.x.max(0.0),
+        layout.content_offset.y.max(0.0),
+        (layout.content_offset.x + layout.content_size.x).min(f64::from(output[0])),
+        (layout.content_offset.y + layout.content_size.y).min(f64::from(output[1])),
+    ];
+    let camera = [
+        f64::from(position[0]),
+        f64::from(position[1]),
+        f64::from(position[0] + size[0]),
+        f64::from(position[1] + size[1]),
+    ];
+    let Some(free) = free_strip(area, camera, f64::from(camera_padding)) else {
+        return none;
+    };
+    let size = XY::new(
+        layout.content_size.x.max(1.0),
+        layout.content_size.y.max(1.0),
+    );
+    let offset = layout.content_offset;
+    let frees_x = free[0] != area[0] || free[2] != area[2];
+    if frees_x {
+        [
+            (free[0] - offset.x) / size.x,
+            0.0,
+            (free[2] - offset.x) / size.x,
+            1.0,
+        ]
+    } else {
+        [
+            0.0,
+            (free[1] - offset.y) / size.y,
+            1.0,
+            (free[3] - offset.y) / size.y,
+        ]
+    }
+}
+
+/// The largest strip of `area` left of, right of, above or below `camera`
+/// grown by `margin`, or `None` when the camera misses the area (or covers
+/// all of it).
+fn free_strip(area: [f64; 4], camera: [f64; 4], margin: f64) -> Option<[f64; 4]> {
+    let camera = [
+        camera[0] - margin,
+        camera[1] - margin,
+        camera[2] + margin,
+        camera[3] + margin,
+    ];
+    let (width, height) = (area[2] - area[0], area[3] - area[1]);
+    if !(width > 0.0 && height > 0.0)
+        || camera[0] >= area[2]
+        || camera[2] <= area[0]
+        || camera[1] >= area[3]
+        || camera[3] <= area[1]
+    {
+        return None;
+    }
+    let strips = [
+        (
+            (camera[0] - area[0]) * height,
+            [area[0], area[1], camera[0], area[3]],
+        ),
+        (
+            (area[2] - camera[2]) * height,
+            [camera[2], area[1], area[2], area[3]],
+        ),
+        (
+            (camera[1] - area[1]) * width,
+            [area[0], area[1], area[2], camera[1]],
+        ),
+        (
+            (area[3] - camera[3]) * width,
+            [area[0], camera[3], area[2], area[3]],
+        ),
+    ];
+    strips
+        .into_iter()
+        .filter(|(size, _)| *size > 0.0)
+        .fold(None::<(f64, [f64; 4])>, |best, strip| match best {
+            Some(best) if best.0 >= strip.0 => Some(best),
+            _ => Some(strip),
+        })
+        .map(|(_, strip)| strip)
+}
+
 struct ClusterCenters {
     clusters: Vec<ClickCluster>,
     time_ordered: bool,
@@ -244,6 +525,7 @@ impl ZoomClusters {
         recording_end: f64,
         segment: &ZoomSegment,
         crops: &CursorCropMaps,
+        rule: FollowRule,
     ) -> Self {
         let build = |crop| {
             ClusterCenters::new(build_clusters(
@@ -253,6 +535,7 @@ impl ZoomClusters {
                 recording_end,
                 segment.amount,
                 crop,
+                rule,
             ))
         };
         let base = build(crops.base);
@@ -321,6 +604,16 @@ pub(crate) struct ClickCluster {
     max_y: f64,
     start_time_ms: f64,
     last_time_ms: f64,
+    /// Latest sample, weighted once the next one (or the cluster's end) says
+    /// how long the cursor stayed there.
+    last_x: f64,
+    last_y: f64,
+    /// Time-weighted centre, set by [`Self::finish`] under
+    /// [`FollowRule::TimeWeighted`].
+    weighted_center: Option<(f64, f64)>,
+    weight_ms: f64,
+    weighted_x: f64,
+    weighted_y: f64,
 }
 
 impl ClickCluster {
@@ -332,7 +625,36 @@ impl ClickCluster {
             max_y: y,
             start_time_ms: time_ms,
             last_time_ms: time_ms,
+            last_x: x,
+            last_y: y,
+            weighted_center: None,
+            weight_ms: 0.0,
+            weighted_x: 0.0,
+            weighted_y: 0.0,
         }
+    }
+
+    /// Counts the latest sample for as long as the cursor stayed on it.
+    fn weigh_last(&mut self, until_ms: f64) {
+        let weight = (until_ms - self.last_time_ms).max(0.0);
+        self.weight_ms += weight;
+        self.weighted_x += self.last_x * weight;
+        self.weighted_y += self.last_y * weight;
+    }
+
+    /// Closes the cluster at `end_ms` (when the next one starts, or a short
+    /// hold after its last sample) and fixes its time-weighted centre.
+    fn finish(&mut self, end_ms: f64) {
+        self.weigh_last(end_ms);
+        let center = if self.weight_ms > 0.0 {
+            (
+                self.weighted_x / self.weight_ms,
+                self.weighted_y / self.weight_ms,
+            )
+        } else {
+            (self.last_x, self.last_y)
+        };
+        self.weighted_center = (center.0.is_finite() && center.1.is_finite()).then_some(center);
     }
 
     fn can_add(&self, x: f64, y: f64, max_w: f64, max_h: f64) -> bool {
@@ -342,18 +664,21 @@ impl ClickCluster {
     }
 
     fn add(&mut self, x: f64, y: f64, time_ms: f64) {
+        self.weigh_last(time_ms);
         self.min_x = self.min_x.min(x);
         self.max_x = self.max_x.max(x);
         self.min_y = self.min_y.min(y);
         self.max_y = self.max_y.max(y);
         self.last_time_ms = time_ms;
+        self.last_x = x;
+        self.last_y = y;
     }
 
     fn center(&self) -> (f64, f64) {
-        (
+        self.weighted_center.unwrap_or((
             (self.min_x + self.max_x) / 2.0,
             (self.min_y + self.max_y) / 2.0,
-        )
+        ))
     }
 }
 
@@ -371,11 +696,14 @@ pub(crate) fn build_clusters(
     segment_end_secs: f64,
     zoom_amount: f64,
     crop: Option<CursorCropMap>,
+    rule: FollowRule,
 ) -> Vec<ClickCluster> {
     let start_ms = segment_start_secs * 1000.0;
     let end_ms = segment_end_secs * 1000.0;
-    let cluster_w = CLUSTER_WIDTH_RATIO / zoom_amount.max(1.0);
-    let cluster_h = CLUSTER_HEIGHT_RATIO / zoom_amount.max(1.0);
+    let (width_ratio, height_ratio) = rule.cluster_ratios();
+    let cluster_w = width_ratio / zoom_amount.max(1.0);
+    let cluster_h = height_ratio / zoom_amount.max(1.0);
+    let time_weighted = rule == FollowRule::TimeWeighted;
     // Clustering happens in CONTENT UV space: dead-zone box limits are
     // fractions of the visible (cropped) viewport, so raw display UVs must be
     // remapped before distances mean what the constants say they mean.
@@ -428,7 +756,11 @@ pub(crate) fn build_clusters(
 
         if let Some(evt) = fallback {
             let (x, y) = map_uv(evt.x, evt.y);
-            return vec![ClickCluster::new(x, y, evt.time_ms)];
+            let mut cluster = ClickCluster::new(x, y, evt.time_ms);
+            if time_weighted {
+                cluster.finish(evt.time_ms + LAST_SAMPLE_WEIGHT_MS);
+            }
+            return vec![cluster];
         }
         return vec![];
     }
@@ -440,16 +772,29 @@ pub(crate) fn build_clusters(
     let mut clusters = Vec::new();
     let first = events.next().unwrap();
     let (first_x, first_y) = map_uv(first.x, first.y);
-    let mut current = ClickCluster::new(first_x, first_y, first.time_ms);
+    // Under the time-weighted rule a position held from before the segment
+    // counts from the segment's start, not from whenever it was reached.
+    let first_time = if time_weighted {
+        first.time_ms.max(start_ms - 1.0)
+    } else {
+        first.time_ms
+    };
+    let mut current = ClickCluster::new(first_x, first_y, first_time);
 
     for evt in events {
         let (x, y) = map_uv(evt.x, evt.y);
         if current.can_add(x, y, cluster_w, cluster_h) {
             current.add(x, y, evt.time_ms);
         } else {
+            if time_weighted {
+                current.finish(evt.time_ms);
+            }
             clusters.push(current);
             current = ClickCluster::new(x, y, evt.time_ms);
         }
+    }
+    if time_weighted {
+        current.finish(current.last_time_ms + LAST_SAMPLE_WEIGHT_MS);
     }
     clusters.push(current);
 
@@ -785,6 +1130,15 @@ impl ZoomSegmentIndex {
         (first_reaching < started).then(|| self.ordered[first_reaching])
     }
 
+    /// Active over [start, end): a segment counts from its first instant.
+    fn active_from(&self, timeline_secs: f64) -> Option<usize> {
+        let started = self.starts.partition_point(|&start| start <= timeline_secs);
+        let first_reaching = self
+            .max_ends
+            .partition_point(|&max_end| max_end <= timeline_secs);
+        (first_reaching < started).then(|| self.ordered[first_reaching])
+    }
+
     fn snaps_at(&self, timeline_secs: f64) -> bool {
         self.instant_windows
             .iter()
@@ -819,6 +1173,8 @@ pub struct ZoomTransformTimeline {
     recording_clip: Option<u32>,
     prefer_outgoing: bool,
     lead_in_secs: f64,
+    follow: FollowRule,
+    camera_clearance: Option<CameraClearance>,
     /// Total number of samples covering [0, duration] plus one lerp partner.
     total_samples: usize,
 }
@@ -851,9 +1207,12 @@ impl ZoomTransformTimeline {
                 recording_clip: None,
                 prefer_outgoing: false,
             },
+            FollowRule::BoxMiddle,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_for_recording_clip(
         zoom_segments: &[ZoomSegment],
         timeline: Option<&TimelineConfiguration>,
@@ -862,6 +1221,8 @@ impl ZoomTransformTimeline {
         duration_secs: f64,
         crops: CursorCropMaps,
         selection: RecordingClipSelection,
+        follow: FollowRule,
+        camera_clearance: Option<CameraClearance>,
     ) -> Self {
         let RecordingClipSelection {
             recording_clip,
@@ -913,6 +1274,7 @@ impl ZoomTransformTimeline {
                         recording_end,
                         segment,
                         &crops,
+                        follow,
                     ))
                 }
                 ZoomMode::Manual { .. } => None,
@@ -944,6 +1306,8 @@ impl ZoomTransformTimeline {
                 recording_clip,
                 prefer_outgoing,
                 lead_in_secs,
+                follow,
+                camera_clearance,
                 total_samples: 1,
             };
         }
@@ -965,6 +1329,8 @@ impl ZoomTransformTimeline {
             recording_clip,
             prefer_outgoing,
             lead_in_secs,
+            follow,
+            camera_clearance,
             total_samples,
         };
 
@@ -1006,6 +1372,7 @@ impl ZoomTransformTimeline {
         before: &ProjectConfiguration,
         after: &ProjectConfiguration,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
     ) -> bool {
         let before_timeline = before.timeline.as_ref();
         let after_timeline = after.timeline.as_ref();
@@ -1026,11 +1393,15 @@ impl ZoomTransformTimeline {
         }
 
         before.screen_movement_spring == after.screen_movement_spring
+            && FollowRule::for_version(before.screen_motion_version)
+                == FollowRule::for_version(after.screen_motion_version)
             && before_timeline.map(TimelineConfiguration::duration)
                 == after_timeline.map(TimelineConfiguration::duration)
             && build_time_map(before_timeline) == build_time_map(after_timeline)
             && CursorCropMaps::from_project(before, screen_size)
                 == CursorCropMaps::from_project(after, screen_size)
+            && CameraClearance::from_project(before, screen_size, camera_size)
+                == CameraClearance::from_project(after, screen_size, camera_size)
     }
 
     /// Convenience constructor pulling zoom segments, edit mapping, spring
@@ -1050,15 +1421,20 @@ impl ZoomTransformTimeline {
             duration_secs,
             screen_size,
             None,
+            None,
             false,
         )
     }
 
+    /// `camera_size` is the recorded camera's size in px
+    /// (`RenderOptions::camera_size`); auto zooms keep their focus clear of
+    /// the camera bubble when it is set.
     pub fn from_project_for_clip(
         project: &ProjectConfiguration,
         cursor_events: &CursorEvents,
         duration_secs: f64,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
         recording_clip: u32,
     ) -> Self {
         Self::from_project_for_recording_clip(
@@ -1066,6 +1442,7 @@ impl ZoomTransformTimeline {
             cursor_events,
             duration_secs,
             screen_size,
+            camera_size,
             Some(recording_clip),
             false,
         )
@@ -1076,6 +1453,7 @@ impl ZoomTransformTimeline {
         cursor_events: &CursorEvents,
         duration_secs: f64,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
         recording_clip: u32,
     ) -> Self {
         Self::from_project_for_recording_clip(
@@ -1083,6 +1461,7 @@ impl ZoomTransformTimeline {
             cursor_events,
             duration_secs,
             screen_size,
+            camera_size,
             Some(recording_clip),
             true,
         )
@@ -1093,6 +1472,7 @@ impl ZoomTransformTimeline {
         cursor_events: &CursorEvents,
         duration_secs: f64,
         screen_size: XY<u32>,
+        camera_size: Option<XY<u32>>,
         recording_clip: Option<u32>,
         prefer_outgoing: bool,
     ) -> Self {
@@ -1111,6 +1491,8 @@ impl ZoomTransformTimeline {
                 recording_clip,
                 prefer_outgoing,
             },
+            FollowRule::for_version(project.screen_motion_version),
+            CameraClearance::from_project(project, screen_size, camera_size),
         )
     }
 
@@ -1272,7 +1654,11 @@ impl ZoomTransformTimeline {
         lead_in_secs: f64,
     ) -> StepTargets {
         let snap = self.segment_index.snaps_at(timeline_secs);
-        let active = self.segment_index.active_at(timeline_secs).or_else(|| {
+        let active = match self.follow {
+            FollowRule::BoxMiddle => self.segment_index.active_at(timeline_secs),
+            FollowRule::TimeWeighted => self.segment_index.active_from(timeline_secs),
+        };
+        let active = active.or_else(|| {
             // An early zoom aims at the upcoming segment's framing; instant
             // segments keep their cut.
             (lead_in_secs > 0.0 && !snap)
@@ -1309,10 +1695,15 @@ impl ZoomTransformTimeline {
                             .as_ref()
                             .and_then(|clusters| clusters.center_at(timeline_secs, recording_ms))
                             .unwrap_or(FALLBACK_FOCUS);
-                        SegmentBounds::calculate_follow_center(
-                            (focus.0.clamp(0.0, 1.0), focus.1.clamp(0.0, 1.0)),
-                            segment.edge_snap_ratio,
-                        )
+                        let focus = (focus.0.clamp(0.0, 1.0), focus.1.clamp(0.0, 1.0));
+                        let center =
+                            SegmentBounds::calculate_follow_center(focus, segment.edge_snap_ratio);
+                        match &self.camera_clearance {
+                            Some(clearance) if amount > 1.0 => {
+                                clearance.clear_center(timeline_secs, focus, center, amount)
+                            }
+                            _ => center,
+                        }
                     }
                 };
 
@@ -1454,14 +1845,104 @@ mod tests {
         (first as f64 * STEP_MS / 1000.0 - start, peak)
     }
 
+    fn timeline_with_rule(
+        segments: &[ZoomSegment],
+        cursor: &CursorEvents,
+        spring: ScreenMovementSpring,
+        duration: f64,
+        rule: FollowRule,
+    ) -> ZoomTransformTimeline {
+        let mut timeline = ZoomTransformTimeline::new_for_recording_clip(
+            segments,
+            None,
+            cursor,
+            spring,
+            duration,
+            CursorCropMaps {
+                base: None,
+                styles: Vec::new(),
+            },
+            RecordingClipSelection {
+                recording_clip: None,
+                prefer_outgoing: false,
+            },
+            rule,
+            None,
+        );
+        timeline.precompute();
+        timeline
+    }
+
+    #[test]
+    fn time_weighted_follow_frames_where_the_cursor_dwells() {
+        // The cursor rests at x 0.30 for two seconds and flicks to 0.40 and
+        // back in a tenth of a second, all inside one cluster box. The box
+        // middle sits halfway; the time-weighted centre stays at the rest.
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.30, 0.5),
+                move_event(2000.0, 0.40, 0.5),
+                move_event(2100.0, 0.30, 0.5),
+            ],
+            clicks: vec![],
+        };
+        let middle = build_clusters(&cursor, true, 0.5, 4.0, 2.0, None, FollowRule::BoxMiddle);
+        let weighted = build_clusters(&cursor, true, 0.5, 4.0, 2.0, None, FollowRule::TimeWeighted);
+        assert_eq!((middle.len(), weighted.len()), (1, 1));
+        assert!((middle[0].center().0 - 0.35).abs() < 1e-9);
+        // 0.30 from 0.5 s to 2.0 s and from 2.1 s for the 100 ms hold; 0.40
+        // for 100 ms.
+        let expected = (0.30 * 1600.0 + 0.40 * 100.0) / 1700.0;
+        assert!(
+            (weighted[0].center().0 - expected).abs() < 1e-3,
+            "weighted centre {:?}",
+            weighted[0].center()
+        );
+    }
+
+    #[test]
+    fn time_weighted_follow_boxes_are_about_half_the_view() {
+        // At 2x the view shows half the frame. A 0.30 tall sweep fits the
+        // 0.35 tall box of the box-middle rule but not the 0.275 tall
+        // time-weighted box, which re-aims instead.
+        let cursor = CursorEvents {
+            moves: vec![move_event(0.0, 0.5, 0.35), move_event(1000.0, 0.5, 0.65)],
+            clicks: vec![],
+        };
+        let middle = build_clusters(&cursor, true, 0.0, 3.0, 2.0, None, FollowRule::BoxMiddle);
+        let weighted = build_clusters(&cursor, true, 0.0, 3.0, 2.0, None, FollowRule::TimeWeighted);
+        assert_eq!(middle.len(), 1);
+        assert_eq!(weighted.len(), 2);
+        assert!((weighted[1].center().1 - 0.65).abs() < 1e-9);
+    }
+
+    #[test]
+    fn time_weighted_follow_starts_a_segment_on_its_first_instant() {
+        // 0.4 s is exactly a precompute step. Under the time-weighted rule
+        // the zoom is already moving on that step; the box-middle rule
+        // treats the start as exclusive and waits a step.
+        let segments = [manual_segment(0.4, 2.0, 2.0, 0.5, 0.5)];
+        let cursor = CursorEvents::default();
+        let spring = ScreenMovementSpring::NEW_PROJECT;
+        let middle = timeline_with_rule(&segments, &cursor, spring, 3.0, FollowRule::BoxMiddle);
+        let weighted =
+            timeline_with_rule(&segments, &cursor, spring, 3.0, FollowRule::TimeWeighted);
+        assert_eq!(amount_at(&middle, 0.4), 1.0);
+        assert!(amount_at(&weighted, 0.4) > 1.0);
+        assert!(
+            (amount_at(&weighted, 0.4) - amount_at(&middle, 0.408)).abs() < 1e-6,
+            "the response is the same, one step earlier"
+        );
+    }
+
     #[test]
     fn new_project_zoom_is_quicker_without_overshoot() {
-        // New projects reach 90% of a zoom by about 317 ms with no
+        // New projects reach 90% of a zoom by about 290 ms with no
         // overshoot; saved projects keep the old spring, about 383 ms.
         let segments = [manual_segment(0.5, 6.0, 2.0, 0.5, 0.5)];
         let fresh = precomputed(&segments, ScreenMovementSpring::NEW_PROJECT, 6.0);
         let (t90, peak) = rise(&fresh, 0.5, 2.0, 0.9);
-        assert!((0.30..=0.33).contains(&t90), "new project t90 {t90}");
+        assert!((0.28..=0.30).contains(&t90), "new project t90 {t90}");
         assert!(peak <= 2.0 + 2e-3, "new project overshoot {peak}");
 
         let saved = precomputed(&segments, ScreenMovementSpring::default(), 6.0);
@@ -1724,6 +2205,7 @@ mod tests {
                             &cursor,
                             duration,
                             XY::new(1920, 1080),
+                            None,
                             clip,
                         )
                     } else {
@@ -1732,6 +2214,7 @@ mod tests {
                             &cursor,
                             duration,
                             XY::new(1920, 1080),
+                            None,
                             clip,
                         )
                     }
@@ -1766,7 +2249,7 @@ mod tests {
             .rounding = 12.0;
         let screen = XY::new(1000, 1000);
         assert!(ZoomTransformTimeline::project_inputs_match(
-            &project, &edited, screen
+            &project, &edited, screen, None
         ));
 
         let cursor = CursorEvents {
@@ -1787,6 +2270,7 @@ mod tests {
                         &cursor,
                         duration,
                         screen,
+                        None,
                         Some(recording_clip),
                         outgoing,
                     )
@@ -1807,9 +2291,10 @@ mod tests {
     #[test]
     fn zoom_inputs_invalidate_when_framing_or_timing_changes() {
         let project = project_for_zoom_reuse();
-        let changes: [fn(&mut ProjectConfiguration); 9] = [
+        let changes: [fn(&mut ProjectConfiguration); 10] = [
             |project| project.timeline.as_mut().unwrap().zoom_segments[0].amount = 3.0,
             |project| project.screen_movement_spring.stiffness += 1.0,
+            |project| project.screen_motion_version = cap_project::SCREEN_MOTION_VERSION,
             |project| {
                 project.background.crop = Some(Crop {
                     position: XY::new(100, 0),
@@ -1851,7 +2336,8 @@ mod tests {
                 !ZoomTransformTimeline::project_inputs_match(
                     &project,
                     &edited,
-                    XY::new(1000, 1000)
+                    XY::new(1000, 1000),
+                    None
                 ),
                 "change {index} reused stale zoom samples"
             );
@@ -1867,17 +2353,18 @@ mod tests {
         let screen = XY::new(1000, 1000);
 
         assert!(!ZoomTransformTimeline::project_inputs_match(
-            &before, &after, screen
+            &before, &after, screen, None
         ));
         assert!(!ZoomTransformTimeline::project_inputs_match(
-            &after, &before, screen
+            &after, &before, screen, None
         ));
         let no_transitions = after.clone();
         after.background.padding = 24.0;
         assert!(ZoomTransformTimeline::project_inputs_match(
             &no_transitions,
             &after,
-            screen
+            screen,
+            None
         ));
     }
 
@@ -2081,6 +2568,7 @@ mod tests {
             &cursor,
             6.0,
             XY::new(1000, 1000),
+            None,
             0,
         );
         let outgoing = ZoomTransformTimeline::from_project_for_outgoing_clip(
@@ -2088,6 +2576,7 @@ mod tests {
             &cursor,
             6.0,
             XY::new(1000, 1000),
+            None,
             0,
         );
         assert_eq!(
@@ -2498,7 +2987,15 @@ mod tests {
             clicks: Vec::new(),
         };
         for ordered in [false, true] {
-            let clusters = build_clusters(&cursor, ordered, 2.0, 10.0, 2.0, None);
+            let clusters = build_clusters(
+                &cursor,
+                ordered,
+                2.0,
+                10.0,
+                2.0,
+                None,
+                FollowRule::BoxMiddle,
+            );
             assert_eq!(
                 ClusterCenters::new(clusters).center_at(2000.0),
                 Some((0.1, 0.1))
@@ -2534,6 +3031,7 @@ mod tests {
                 &cursor,
                 12.0,
                 XY::new(1920, 1080),
+                None,
                 0,
             );
             timeline.precompute();
@@ -2919,6 +3417,345 @@ mod tests {
         }
     }
 
+    const CAMERA_SCREEN: XY<u32> = XY::new(1920, 1080);
+    const CAMERA_FRAME: Option<XY<u32>> = Some(XY::new(1280, 720));
+
+    fn camera_project(zoom_segments: Vec<ZoomSegment>) -> ProjectConfiguration {
+        let mut project = project_with_crop_styles(zoom_segments, Vec::new());
+        project.screen_motion_version = cap_project::SCREEN_MOTION_VERSION;
+        project
+    }
+
+    fn scene(start: f64, end: f64, mode: cap_project::SceneMode) -> cap_project::SceneSegment {
+        cap_project::SceneSegment {
+            start,
+            end,
+            mode,
+            split_layout: None,
+            transition_in: 0.3,
+            transition_out: 0.3,
+        }
+    }
+
+    fn resting_cursor(x: f64, y: f64) -> CursorEvents {
+        CursorEvents {
+            moves: vec![move_event(0.0, x, y), move_event(10_000.0, x, y)],
+            clicks: Vec::new(),
+        }
+    }
+
+    fn camera_target(
+        project: &ProjectConfiguration,
+        camera: Option<XY<u32>>,
+        focus: (f64, f64),
+        time: f64,
+    ) -> XY<f32> {
+        ZoomTransformTimeline::from_project_for_clip(
+            project,
+            &resting_cursor(focus.0, focus.1),
+            10.0,
+            CAMERA_SCREEN,
+            camera,
+            0,
+        )
+        .targets_at(time, XY::new(0.5, 0.5))
+        .center
+    }
+
+    /// Where on screen (fraction of the content rect) a focus lands for a
+    /// travel-space center at `amount`.
+    fn on_screen(focus: f64, center: f32, amount: f64) -> f64 {
+        focus * amount - f64::from(center) * (amount - 1.0)
+    }
+
+    #[test]
+    fn free_strip_takes_the_largest_side_the_camera_leaves() {
+        let area = [0.0, 0.0, 1920.0, 1080.0];
+        let bubble = 300.0;
+        let at = |x: f64, y: f64| [x, y, x + bubble, y + bubble];
+        let cases = [
+            (
+                "bottom right",
+                at(1570.0, 730.0),
+                [0.0, 0.0, 1520.0, 1080.0],
+            ),
+            ("bottom left", at(50.0, 730.0), [400.0, 0.0, 1920.0, 1080.0]),
+            ("top right", at(1570.0, 50.0), [0.0, 0.0, 1520.0, 1080.0]),
+            ("top left", at(50.0, 50.0), [400.0, 0.0, 1920.0, 1080.0]),
+            ("bottom centre", at(810.0, 730.0), [0.0, 0.0, 1920.0, 680.0]),
+            ("top centre", at(810.0, 50.0), [0.0, 400.0, 1920.0, 1080.0]),
+            ("left centre", at(50.0, 390.0), [400.0, 0.0, 1920.0, 1080.0]),
+            (
+                "right centre",
+                at(1570.0, 390.0),
+                [0.0, 0.0, 1520.0, 1080.0],
+            ),
+        ];
+        for (name, camera, expected) in cases {
+            assert_eq!(free_strip(area, camera, 50.0), Some(expected), "{name}");
+        }
+
+        assert_eq!(
+            free_strip(area, [2000.0, 0.0, 2300.0, 300.0], 50.0),
+            None,
+            "a camera outside the area frees nothing"
+        );
+        assert_eq!(
+            free_strip(area, [-100.0, -100.0, 2100.0, 1200.0], 0.0),
+            None,
+            "a camera covering the area frees nothing"
+        );
+    }
+
+    #[test]
+    fn default_camera_moves_a_centred_focus_into_the_free_strip() {
+        let project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        let center = camera_target(&project, CAMERA_FRAME, (0.5, 0.5), 5.0);
+        let plain = camera_target(&project, None, (0.5, 0.5), 5.0);
+        assert_eq!(plain, follow_center((0.5, 0.5)));
+
+        // The default bubble while zoomed: 30% x 0.7 of the 1080 px short axis
+        // plus 50 px, inset 50 px from the bottom-right corner; the free strip
+        // ends a further 50 px left of it.
+        let bubble = 1080.0 * 0.3 * 0.7 + 50.0;
+        let strip_end = 1920.0 - 50.0 - bubble - 50.0;
+        let expected = strip_end / 2.0 / 1920.0;
+        let landed = on_screen(0.5, center.x, 2.0);
+        assert!(
+            (landed - expected).abs() < 1e-4,
+            "focus landed at {landed}, expected {expected}"
+        );
+        assert!((0.39..0.41).contains(&landed), "{landed}");
+        assert_eq!(center.y, plain.y, "a side strip only moves x");
+    }
+
+    #[test]
+    fn camera_clearance_keeps_the_view_clamp_near_edges() {
+        let project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        let centred_shift = f64::from(
+            camera_target(&project, CAMERA_FRAME, (0.5, 0.5), 5.0).x
+                - camera_target(&project, None, (0.5, 0.5), 5.0).x,
+        );
+        assert!(centred_shift > 0.09, "{centred_shift}");
+
+        let right = camera_target(&project, CAMERA_FRAME, (0.97, 0.5), 5.0);
+        assert_eq!(right.x, 1.0, "the clamp keeps the right edge reachable");
+        assert_eq!(right, camera_target(&project, None, (0.97, 0.5), 5.0));
+
+        let left_shift = f64::from(
+            camera_target(&project, CAMERA_FRAME, (0.03, 0.5), 5.0).x
+                - camera_target(&project, None, (0.03, 0.5), 5.0).x,
+        );
+        assert!(
+            (0.0..centred_shift / 4.0).contains(&left_shift),
+            "focus already clear of the camera barely moves: {left_shift}"
+        );
+    }
+
+    #[test]
+    fn camera_clearance_is_off_without_an_overlaid_camera() {
+        use cap_project::SceneMode;
+
+        let zoom = vec![auto_segment(1.0, 9.0, 2.0)];
+        let plain = camera_target(&camera_project(zoom.clone()), None, (0.5, 0.5), 5.0);
+        let assert_plain = |name: &str, project: &ProjectConfiguration, camera| {
+            assert_eq!(
+                camera_target(project, camera, (0.5, 0.5), 5.0),
+                plain,
+                "{name}"
+            );
+        };
+
+        assert_plain("no camera", &camera_project(zoom.clone()), None);
+
+        let mut hidden = camera_project(zoom.clone());
+        hidden.camera.hide = true;
+        assert_plain("hidden", &hidden, CAMERA_FRAME);
+
+        let mut saved = camera_project(zoom.clone());
+        saved.screen_motion_version = 0;
+        assert_eq!(
+            camera_target(&saved, CAMERA_FRAME, (0.5, 0.5), 5.0),
+            camera_target(&saved, None, (0.5, 0.5), 5.0),
+            "saved projects"
+        );
+
+        for mode in [
+            SceneMode::CameraOnly,
+            SceneMode::HideCamera,
+            SceneMode::SplitScreen,
+            SceneMode::Floating,
+        ] {
+            let mut project = camera_project(zoom.clone());
+            project.timeline.as_mut().unwrap().scene_segments = vec![scene(0.0, 10.0, mode)];
+            assert_plain(&format!("{mode:?} scene"), &project, CAMERA_FRAME);
+        }
+
+        let mut takeover = camera_project(zoom.clone());
+        takeover.timeline.as_mut().unwrap().text_segments.push(
+            serde_json::from_value(serde_json::json!({
+                "start": 0.0, "end": 10.0, "layout": "splitLeft"
+            }))
+            .unwrap(),
+        );
+        assert_plain("text takeover", &takeover, CAMERA_FRAME);
+
+        let mut styled = camera_project(zoom.clone());
+        styled
+            .timeline
+            .as_mut()
+            .unwrap()
+            .style_segments
+            .push(StyleSegment {
+                start: 4.0,
+                end: 6.0,
+                overrides: StyleOverrides {
+                    camera: Some(cap_project::Camera {
+                        hide: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        assert_plain("style hides the camera", &styled, CAMERA_FRAME);
+        assert_ne!(
+            camera_target(&styled, CAMERA_FRAME, (0.5, 0.5), 2.0),
+            plain,
+            "outside the style the camera is back"
+        );
+
+        let manual = camera_project(vec![manual_segment(1.0, 9.0, 2.0, 0.5, 0.5)]);
+        assert_eq!(
+            camera_target(&manual, CAMERA_FRAME, (0.5, 0.5), 5.0),
+            XY::new(0.5, 0.5),
+            "manual zoom keeps its position"
+        );
+    }
+
+    #[test]
+    fn camera_clearance_follows_the_camera_layout() {
+        use cap_project::{CameraXPosition, CameraYPosition};
+
+        let plain = camera_target(
+            &camera_project(vec![auto_segment(1.0, 9.0, 2.0)]),
+            None,
+            (0.5, 0.5),
+            5.0,
+        );
+        let centre = on_screen(0.5, plain.x, 2.0);
+        let landed = |x: CameraXPosition, y: CameraYPosition| {
+            let mut project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+            project.camera.position = cap_project::CameraPosition { x, y };
+            camera_target(&project, CAMERA_FRAME, (0.5, 0.5), 5.0)
+        };
+        let center = landed(CameraXPosition::Left, CameraYPosition::Bottom);
+        assert!(on_screen(0.5, center.x, 2.0) > centre + 0.05 && center.y == plain.y);
+        let center = landed(CameraXPosition::Right, CameraYPosition::Top);
+        assert!(on_screen(0.5, center.x, 2.0) < centre - 0.05 && center.y == plain.y);
+        let center = landed(CameraXPosition::Center, CameraYPosition::Bottom);
+        assert!(on_screen(0.5, center.y, 2.0) < centre - 0.05 && center.x == plain.x);
+        let center = landed(CameraXPosition::Center, CameraYPosition::Top);
+        assert!(on_screen(0.5, center.y, 2.0) > centre + 0.05 && center.x == plain.x);
+
+        let mut manual = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        manual.camera.manual_position = Some(XY::new(0.1, 0.5));
+        let center = camera_target(&manual, CAMERA_FRAME, (0.5, 0.5), 5.0);
+        assert!(on_screen(0.5, center.x, 2.0) > centre + 0.05);
+    }
+
+    #[test]
+    fn camera_appearing_mid_zoom_retargets_smoothly() {
+        let mut project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        project.timeline.as_mut().unwrap().scene_segments =
+            vec![scene(4.0, 6.0, cap_project::SceneMode::HideCamera)];
+        let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+            &project,
+            &resting_cursor(0.5, 0.5),
+            10.0,
+            CAMERA_SCREEN,
+            CAMERA_FRAME,
+            0,
+        );
+        timeline.precompute();
+        let shown = timeline.sample(3.5).bounds;
+        let hidden = timeline.sample(5.5).bounds;
+        assert!(
+            shown.top_left.x < hidden.top_left.x - 0.05,
+            "the view moves back to centre while the camera is hidden"
+        );
+
+        let mut plain = ZoomTransformTimeline::from_project_for_clip(
+            &project,
+            &resting_cursor(0.5, 0.5),
+            10.0,
+            CAMERA_SCREEN,
+            None,
+            0,
+        );
+        plain.precompute();
+        let (jump, slope) = max_step_discontinuities(&timeline);
+        let (plain_jump, plain_slope) = max_step_discontinuities(&plain);
+        assert!(
+            jump <= plain_jump * 1.25 && slope <= plain_slope * 1.25,
+            "largest step {jump} / {slope} vs {plain_jump} / {plain_slope} without a camera"
+        );
+    }
+
+    #[test]
+    fn camera_layout_edits_invalidate_zoom_samples() {
+        let project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        let mut moved = project.clone();
+        moved.camera.position.x = cap_project::CameraXPosition::Left;
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &moved,
+            CAMERA_SCREEN,
+            CAMERA_FRAME
+        ));
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &moved,
+            CAMERA_SCREEN,
+            None
+        ));
+        let mut mirrored = project.clone();
+        mirrored.camera.mirror = true;
+        assert!(ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &mirrored,
+            CAMERA_SCREEN,
+            CAMERA_FRAME
+        ));
+    }
+
+    #[test]
+    fn saved_projects_sample_identically_with_a_camera() {
+        let mut project = camera_project(vec![auto_segment(1.0, 9.0, 2.0)]);
+        project.screen_motion_version = 0;
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.2, 0.8),
+                move_event(3000.0, 0.7, 0.4),
+                move_event(6000.0, 0.9, 0.9),
+            ],
+            clicks: vec![click_event(2000.0)],
+        };
+        let build = |camera| {
+            let mut timeline = ZoomTransformTimeline::from_project_for_clip(
+                &project,
+                &cursor,
+                10.0,
+                CAMERA_SCREEN,
+                camera,
+                0,
+            );
+            timeline.precompute();
+            samples_hash(&timeline)
+        };
+        assert_eq!(build(CAMERA_FRAME), build(None));
+    }
+
     fn samples_hash(timeline: &ZoomTransformTimeline) -> u64 {
         timeline
             .samples
@@ -2973,6 +3810,7 @@ mod tests {
                         &cursor,
                         duration_secs,
                         screen_size,
+                        None,
                         0,
                     );
                     let build_elapsed = build_start.elapsed();
@@ -3028,6 +3866,7 @@ mod tests {
                         },
                         8.0 / timescale,
                         XY::new(1920, 1080),
+                        None,
                         0,
                     );
                     timeline.precompute();
@@ -3069,6 +3908,7 @@ mod tests {
             },
             8.0,
             XY::new(1920, 1080),
+            None,
             0,
         );
         timeline.precompute();
@@ -3202,6 +4042,7 @@ mod tests {
                         &cursor,
                         12.0,
                         XY::new(1920, 1080),
+                        None,
                         0,
                     )
                 };
@@ -3224,6 +4065,7 @@ mod tests {
                     end,
                     segment,
                     &CursorCropMaps::from_project(&project, XY::new(1920, 1080)),
+                    FollowRule::BoxMiddle,
                 ));
                 actual.precompute();
                 original.precompute();
@@ -3554,10 +4396,15 @@ mod tests {
             (f64::NEG_INFINITY, f64::INFINITY),
         ];
         for (start, end) in bounds {
-            for amount in [1.0, 2.0, 4.0] {
-                for crop in [None, crop] {
-                    let ordered = build_clusters(&cursor, true, start, end, amount, crop);
-                    let scanned = build_clusters(&cursor, false, start, end, amount, crop);
+            for (amount, crop, rule) in [1.0, 2.0, 4.0].into_iter().flat_map(|amount| {
+                [None, crop].into_iter().flat_map(move |crop| {
+                    [FollowRule::BoxMiddle, FollowRule::TimeWeighted]
+                        .map(|rule| (amount, crop, rule))
+                })
+            }) {
+                {
+                    let ordered = build_clusters(&cursor, true, start, end, amount, crop, rule);
+                    let scanned = build_clusters(&cursor, false, start, end, amount, crop, rule);
                     assert_eq!(
                         format!("{ordered:?}"),
                         format!("{scanned:?}"),

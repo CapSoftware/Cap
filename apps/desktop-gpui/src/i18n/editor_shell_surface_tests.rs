@@ -20,6 +20,7 @@ pub(super) fn is_editor_shell_surface_key(key: &str) -> bool {
 }
 
 const FORMATTED: &[&str] = &[
+    "editor.tabs.keyboard.type_keys_summary",
     "editor.transcript.captions_save_failed",
     "editor.transcript.fillers.remove_all",
     "editor.transcript.pauses.summary",
@@ -110,7 +111,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::canvas::camera(), "Camera"),
         (
             tr::editor::canvas::camera_follows_zoom(),
-            "Camera size follows the zoom — drag to move",
+            "Camera size follows the zoom. Drag to move.",
         ),
         (tr::editor::canvas::captions(), "Captions"),
         (tr::editor::canvas::edit_zoom(), "Edit zoom"),
@@ -144,6 +145,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::clips::error::audio_only_mix(),
             "Audio only recordings and video clips cannot be combined in one project",
+        ),
+        (
+            tr::editor::clips::error::blank_source(),
+            "This project has no recording to add as a clip",
         ),
         (
             tr::editor::clips::error::no_duration(),
@@ -228,6 +233,107 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::export::done::link_copied(), "Link copied"),
         (tr::editor::export::done::open_file(), "Open File"),
+        (tr::editor::export::done::copy_file(), "Copy to Clipboard"),
+        (tr::editor::window::looks::launch_day(), "Launch Day"),
+        (
+            tr::editor::window::looks::launch_day_description(),
+            "A vivid gradient, snappy zooms and bold captions.",
+        ),
+        (tr::editor::window::looks::mac_native(), "Mac Native"),
+        (
+            tr::editor::window::looks::mac_native_description(),
+            "A macOS window on Tahoe with white Mac keys.",
+        ),
+        (tr::editor::window::looks::midnight(), "Midnight"),
+        (
+            tr::editor::window::looks::midnight_description(),
+            "A deep, dark backdrop with a crisp edge.",
+        ),
+        (tr::editor::window::looks::minimal(), "Minimal"),
+        (
+            tr::editor::window::looks::minimal_description(),
+            "A quiet off-white canvas and nothing extra.",
+        ),
+        (tr::editor::window::looks::retro_desk(), "Retro Desk"),
+        (
+            tr::editor::window::looks::retro_desk_description(),
+            "Warm beige and chunky mechanical keys.",
+        ),
+        (tr::editor::window::looks::saved(), "Your Presets"),
+        (tr::editor::window::looks::smooth_demo(), "Smooth Demo"),
+        (
+            tr::editor::window::looks::smooth_demo_description(),
+            "A drifting color field, gentle zooms and a big, calm cursor.",
+        ),
+        (
+            tr::editor::window::looks::preview_hint(),
+            "Hover a look to see it on your video.",
+        ),
+        (tr::editor::window::looks::title(), "Looks"),
+        (tr::editor::window::looks::tutorial(), "Tutorial"),
+        (
+            tr::editor::window::looks::tutorial_description(),
+            "Slow, steady zooms and keys anyone can follow.",
+        ),
+        (tr::editor::window::looks::web_product(), "Web Product"),
+        (
+            tr::editor::window::looks::web_product_description(),
+            "A browser window for site and app demos.",
+        ),
+        (tr::editor::tabs::keyboard::key_style(), "Key Style"),
+        (tr::editor::tabs::keyboard::key_theme(), "Key Theme"),
+        (tr::editor::tabs::keyboard::style_classic(), "Classic"),
+        (tr::editor::tabs::keyboard::style_macos(), "macOS"),
+        (tr::editor::tabs::keyboard::style_windows(), "Windows"),
+        (tr::editor::tabs::keyboard::style_linux(), "Linux"),
+        (tr::editor::tabs::keyboard::style_mechanical(), "Mechanical"),
+        (tr::editor::tabs::keyboard::type_keys(), "Add Keystrokes"),
+        (
+            tr::editor::tabs::keyboard::type_keys_placeholder(),
+            "A sentence, or a shortcut like cmd+k",
+        ),
+        (tr::editor::tabs::keyboard::show_as(), "Show As"),
+        (
+            tr::editor::tabs::keyboard::type_keys_button(),
+            "Add Keystrokes…",
+        ),
+        (
+            tr::editor::tabs::keyboard::add_to_timeline(),
+            "Add to Timeline",
+        ),
+        (
+            tr::editor::tabs::keyboard::type_keys_hint(),
+            "Paste a sentence, a script or a transcript, or a shortcut like cmd+shift+p. It types out as key presses from where you opened this.",
+        ),
+        (tr::editor::tabs::keyboard::split_words(), "Words"),
+        (tr::editor::tabs::keyboard::split_keys(), "Keys"),
+        (tr::editor::tabs::keyboard::split_sentence(), "Sentence"),
+        (tr::editor::tabs::keyboard::theme_light(), "Light"),
+        (tr::editor::tabs::keyboard::theme_dark(), "Dark"),
+        (tr::editor::tabs::keyboard::theme_retro(), "Retro"),
+        (
+            tr::editor::tabs::camera::empty_title(),
+            "No camera in this recording",
+        ),
+        (
+            tr::editor::tabs::camera::empty_description(),
+            "Choose a camera before you record and you can shape and place it here.",
+        ),
+        (
+            tr::editor::tabs::cursor::empty_title(),
+            "No cursor in this recording",
+        ),
+        (
+            tr::editor::tabs::cursor::empty_description(),
+            "This recording didn't capture the cursor, so there's nothing to style yet.",
+        ),
+        (tr::editor::export::done::file_copied(), "Copied"),
+        (tr::editor::export::more_formats(), "More"),
+        (tr::editor::export::tracks::separate(), "Separate tracks"),
+        (
+            tr::editor::export::tracks::separate_description(),
+            "Screen, camera and audio, each as its own file",
+        ),
         (tr::editor::export::done::open_link(), "Open link"),
         (tr::editor::export::done::retry_copy(), "Retry Copy"),
         (
@@ -620,6 +726,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::captions::preset::pop_description(),
             "Playful caps that pop in with a vibrant accent.",
         ),
+        (tr::editor::tabs::captions::preset::soft(), "Soft"),
+        (
+            tr::editor::tabs::captions::preset::soft_description(),
+            "Rounded charcoal card that matches the keys.",
+        ),
         (
             tr::editor::tabs::captions::refining_word_timings(),
             "Refining word timings…",
@@ -749,6 +860,24 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "No recorded keyboard presses were found.",
         ),
         (
+            tr::editor::tabs::keyboard::no_shortcuts(),
+            "No shortcuts were pressed in this recording.",
+        ),
+        (
+            tr::editor::tabs::keyboard::kept_edits(),
+            "Your edits to the recorded keys are kept. Regenerate to apply this change to them.",
+        ),
+        (tr::editor::tabs::keyboard::show_shortcuts(), "Shortcuts"),
+        (tr::editor::tabs::keyboard::show_all_keys(), "All keys"),
+        (
+            tr::editor::tabs::keyboard::show_shortcuts_hint(),
+            "Shows key combos such as ⌘C. Typing stays hidden.",
+        ),
+        (
+            tr::editor::tabs::keyboard::show_all_keys_hint(),
+            "Shows shortcuts and everything you type.",
+        ),
+        (
             tr::editor::tabs::keyboard::permission_action(),
             "Show me how",
         ),
@@ -791,6 +920,9 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::position::manual(), "Manual"),
         (tr::editor::tabs::position::top_center(), "Top Center"),
         (tr::editor::tabs::position::top_left(), "Top Left"),
+        (tr::editor::tabs::position::middle_left(), "Middle Left"),
+        (tr::editor::tabs::position::center(), "Center"),
+        (tr::editor::tabs::position::middle_right(), "Middle Right"),
         (tr::editor::tabs::position::top_right(), "Top Right"),
         (
             tr::editor::tabs::sync::auto_description(),
@@ -932,6 +1064,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::timeline::segment::caption(), "Caption"),
         (tr::editor::timeline::segment::clip(), "Clip"),
+        (tr::editor::timeline::segment::canvas(), "Canvas"),
         (
             tr::editor::timeline::segment::cursor_hidden(),
             "Cursor hidden",
@@ -984,6 +1117,40 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::window::audio_segment_changed(),
             "This audio segment changed. Select it and choose a replacement again.",
+        ),
+        (tr::editor::window::blank_start::title(), "Start your video"),
+        (
+            tr::editor::window::blank_start::body(),
+            "Pick something to add, or drop files here.",
+        ),
+        (tr::editor::window::blank_start::clips(), "Add clips"),
+        (tr::editor::window::blank_start::keys(), "Add keystrokes"),
+        (
+            tr::editor::window::blank_start::keys_detail(),
+            "Show typing or shortcuts on screen",
+        ),
+        (
+            tr::editor::window::blank_start::text_item_detail(),
+            "Titles and callouts",
+        ),
+        (
+            tr::editor::window::blank_start::music_detail(),
+            "From the library or a file",
+        ),
+        (
+            tr::editor::window::blank_start::image_detail(),
+            "Logos, screenshots, overlays",
+        ),
+        (tr::editor::window::blank_start::text_item(), "Add text"),
+        (tr::editor::window::blank_start::music(), "Add music"),
+        (tr::editor::window::blank_start::image(), "Add an image"),
+        (
+            tr::editor::window::blank_start::drop_failed(),
+            "That sound file could not be added",
+        ),
+        (
+            tr::editor::window::blank_start::drop_unsupported(),
+            "Drop a video, image or sound file to add it",
         ),
         (
             tr::editor::window::busy::clip_import(),
@@ -1231,6 +1398,15 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "No room for another caption here",
         ),
         (
+            tr::editor::window::no_room_for_key(),
+            "No room for another key press here",
+        ),
+        (tr::editor::timeline::empty::add_key(), "Add keystrokes"),
+        (
+            tr::editor::timeline::empty::keyboard_shortcuts(),
+            "No shortcuts",
+        ),
+        (
             tr::editor::window::open::damaged(),
             "This recording's video tracks could not be opened. The bundle looks damaged.",
         ),
@@ -1326,14 +1502,23 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Click a segment to split. Esc to finish.",
         ),
         (tr::editor::window::transport::enhance(), "Enhance"),
+        (tr::editor::window::transport::enhance_on(), "On"),
+        (tr::editor::window::transport::enhance_off(), "Off"),
         (
-            tr::editor::window::transport::enhance_tooltip(),
-            "Show the paused frame enhanced",
+            tr::editor::window::transport::enhance_card_body(),
+            "Uses an AI model to sharpen small text and fine detail in every frame, so your video stays crisp when it is zoomed in or scaled down.",
         ),
-        (tr::editor::window::transport::compare(), "Compare"),
         (
-            tr::editor::window::transport::compare_tooltip(),
-            "Hold to see the original",
+            tr::editor::window::transport::enhance_card_export(),
+            "Applies to your export, which can take a little longer.",
+        ),
+        (
+            tr::editor::window::transport::enhance_card_local(),
+            "Runs on this computer, so nothing is uploaded.",
+        ),
+        (
+            tr::editor::window::transport::enhance_card_preview(),
+            "Pause the video to see it in the preview.",
         ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
@@ -1354,11 +1539,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::turbo::title(), "Turbo export"),
         (
             tr::editor::export::turbo::description(),
-            "Exports much faster using every CPU core and the GPU",
+            "Finishes exports much faster by using more of your computer's power",
         ),
         (
             tr::editor::export::turbo::warning(),
-            "Uses all of your CPU, the GPU and several times more memory until the export finishes. Other apps may slow down, and your computer may get warm and loud.",
+            "Other apps may feel a little slower until the export finishes.",
         ),
         (tr::editor::window::clip_menu::transition(), "TRANSITION"),
         (tr::editor::window::clip_menu::transition_none(), "None"),

@@ -2141,7 +2141,7 @@ impl SettingsWindow {
                     .truncate()
                     .cursor_pointer()
                     .when(update_ready, |link| {
-                        link.text_color(rgb(Theme::SETTINGS_ACCENT))
+                        link.text_color(theme.editor.accent_ink)
                     })
                     .hover(|style| style.text_color(theme.settings_text()))
                     .on_click(cx.listener(move |_, _, _, cx| {

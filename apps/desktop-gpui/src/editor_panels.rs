@@ -2790,6 +2790,9 @@ pub enum FieldKey {
     /// Single-line names and labels.
     AudioName(usize),
     KeyboardText(usize),
+    /// The Keyboard tab's composer: a draft of keys to add, never written
+    /// from the project.
+    KeyComposer,
     /// `<Input type="number">` boxes.
     CaptionStart(usize),
     CaptionEnd(usize),
@@ -2822,7 +2825,10 @@ impl FieldKey {
     }
 
     fn multi_line(self) -> bool {
-        matches!(self, Self::TextContent(_) | Self::CaptionText(_))
+        matches!(
+            self,
+            Self::TextContent(_) | Self::CaptionText(_) | Self::KeyComposer
+        )
     }
 }
 
@@ -2842,11 +2848,15 @@ impl EditorWindow {
             return;
         }
         let input = cx.new(|cx| {
-            if key.multi_line() {
+            let mut input = if key.multi_line() {
                 ui::TextInputState::multi_line(window, cx)
             } else {
                 ui::TextInputState::single_line(window, cx)
+            };
+            if key == FieldKey::KeyComposer {
+                input.set_placeholder(tr::editor::tabs::keyboard::type_keys_placeholder());
             }
+            input
         });
         self.push_text_subscription(cx.subscribe_in(
             &input,
@@ -2919,6 +2929,10 @@ impl EditorWindow {
     /// `out`. `None` leaves the field alone.
     fn write_field_value(&self, key: FieldKey, out: &mut String) -> Option<()> {
         use std::fmt::Write as _;
+
+        if key == FieldKey::KeyComposer {
+            return None;
+        }
 
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
@@ -3029,6 +3043,20 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if key == FieldKey::KeyComposer {
+            match event {
+                // A script can run over lines, so Enter is a new line and
+                // the panel's Add button adds it; Escape closes the panel.
+                ui::TextInputEvent::Confirmed => {}
+                ui::TextInputEvent::Cancelled => {
+                    self.close_key_prompt(window, cx);
+                }
+                // The Add button follows whether there is anything to add.
+                ui::TextInputEvent::Changed => cx.notify(),
+                ui::TextInputEvent::Blurred => {}
+            }
+            return;
+        }
         match event {
             ui::TextInputEvent::Changed => {
                 self.begin_field_edit(key);
@@ -3085,6 +3113,8 @@ impl EditorWindow {
         };
         let text = input.read(cx).text().to_string();
         match key {
+            // The composer adds its keys on Enter only (`on_field_event`).
+            FieldKey::KeyComposer => {}
             FieldKey::StyleName(index) | FieldKey::ImageName(index) => {
                 let style = matches!(key, FieldKey::StyleName(_));
                 self.edit_project("segment-name", window, cx, move |project| {
@@ -3191,9 +3221,42 @@ impl EditorWindow {
                 });
             }
             FieldKey::KeyboardText(index) => {
+                // Typed text a key added by hand now carries may run past its
+                // end; it grows to fit, up to the next key or the end.
+                let room = self.project.timeline.as_ref().map(|timeline| {
+                    timeline
+                        .keyboard_segments
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .map(|(_, other)| other.start)
+                        .filter(|start| {
+                            timeline
+                                .keyboard_segments
+                                .get(index)
+                                .is_some_and(|segment| *start >= segment.start)
+                        })
+                        .fold(timeline.duration(), f64::min)
+                });
                 self.edit_keyboard_segment("keyboard-text", index, window, cx, move |segment| {
+                    // A key added by hand takes a shortcut in words
+                    // (`cmd+shift+p`) and strikes whatever its text says.
+                    let text = if cap_project::is_manual_keyboard_segment(segment) {
+                        cap_project::manual_key_text(&text)
+                    } else {
+                        text
+                    };
                     if segment.display_text == text {
                         return false;
+                    }
+                    if cap_project::is_manual_keyboard_segment(segment) {
+                        segment.keys = cap_project::manual_key_presses(&text);
+                        let needed = cap_project::manual_key_length(&segment.keys);
+                        if let Some(room) = room
+                            && segment.end - segment.start < needed
+                        {
+                            segment.end = (segment.start + needed).min(room).max(segment.end);
+                        }
                     }
                     segment.display_text = text;
                     true
@@ -4584,7 +4647,7 @@ impl EditorWindow {
                                             .children(positions_mixed.then(|| {
                                                 div()
                                                     .text_size(px(12.))
-                                                    .text_color(Hsla::from(theme.gray_10))
+                                                    .text_color(Hsla::from(theme.editor.text_3))
                                                     .child(
                                                         tr::editor::panel::zoom::positions_mixed(),
                                                     )
@@ -4680,15 +4743,23 @@ impl EditorWindow {
                 .flex_1()
                 .flex()
                 .justify_center()
-                .py(px(10.))
-                .rounded(px(9.6))
+                .py(px(7.))
+                .rounded(px(8.))
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(if selected {
-                    Hsla::from(theme.gray_12)
+                    Hsla::from(theme.editor.text_1)
                 } else {
-                    Hsla::from(theme.gray_11)
+                    Hsla::from(theme.editor.text_2)
                 })
                 .when(locked, |this| this.opacity(0.5))
-                .when(selected, |this| this.bg(Hsla::from(theme.gray_3)))
+                .when(selected, |this| {
+                    this.bg(theme.editor.pill_fill())
+                        .shadow(theme.editor.pill_shadow())
+                })
+                .when(!selected && !locked, |this| {
+                    this.cursor_pointer()
+                        .hover(|style| style.bg(Hsla::from(theme.editor.ctl_hover)))
+                })
                 .child(label)
                 .when(!locked, |this| {
                     this.on_click(cx.listener(move |this, _, window, cx| {
@@ -4706,10 +4777,10 @@ impl EditorWindow {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(Hsla::from(theme.gray_12))
-                    .p(px(1.))
+                    .rounded(px(10.))
+                    .bg(Hsla::from(theme.editor.ctl))
+                    .shadow(theme.editor.trough_ring())
+                    .p(px(2.))
                     .child(tab(
                         tr::editor::panel::zoom::auto(),
                         "zoom-mode-auto",
@@ -5181,7 +5252,8 @@ impl EditorWindow {
                 .text_size(px(11.))
                 .font_weight(FontWeight::MEDIUM)
                 .when(selected, |this| {
-                    this.bg(Hsla::from(theme.editor.ctl_active))
+                    this.bg(theme.editor.pill_fill())
+                        .shadow(theme.editor.pill_shadow())
                         .text_color(Hsla::from(theme.editor.text_1))
                 })
                 .when(!selected, |this| {
@@ -5404,7 +5476,7 @@ impl EditorWindow {
             .when(italic, |this| this.italic())
             .when(selected, |this| {
                 this.bg(with_alpha(theme.editor.accent, 0.12))
-                    .text_color(Hsla::from(theme.editor.accent))
+                    .text_color(Hsla::from(theme.editor.accent_ink))
             })
             .when(!selected, |this| {
                 this.bg(Hsla::from(theme.editor.ctl))
@@ -5442,7 +5514,7 @@ impl EditorWindow {
                     cx: &mut Context<Self>| {
             let selected = animation == current;
             let color = if selected {
-                accent
+                Hsla::from(theme.editor.accent_ink)
             } else {
                 Hsla::from(theme.editor.text_2)
             };
@@ -6013,6 +6085,27 @@ impl EditorWindow {
                     &theme,
                     SharedString::from(tr::editor::panel::keyboard::title(index + 1)),
                 )
+                // How every key looks lives in the Keyboard tab, one click
+                // away from any key.
+                .value(
+                    ui::Button::editor(
+                        &theme,
+                        SharedString::from(format!("keyboard-style-{index}")),
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .icon("icons/keyboard.svg")
+                    .label(tr::editor::tabs::keyboard::key_style())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(index) = crate::editor_sidebar::SidebarTab::ALL
+                            .iter()
+                            .position(|tab| *tab == crate::editor_sidebar::SidebarTab::Keyboard)
+                        {
+                            this.select_sidebar_tab(index, window, cx);
+                        }
+                    }))
+                    .into_any_element(),
+                )
                 .child(self.render_field_input(FieldKey::KeyboardText(index), None)),
             )
             .child(self.timing_field(
@@ -6022,12 +6115,12 @@ impl EditorWindow {
                 end,
                 cx,
             ))
-            .child(self.slider_field(
-                tr::editor::panel::fade_duration(),
-                SliderKey::Panel(PanelSlider::KeyboardFade, index),
-                "",
-                cx,
-            ))
+            .child({
+                // Stored as hundredths of a second; read as milliseconds.
+                let slider = SliderKey::Panel(PanelSlider::KeyboardFade, index);
+                let readout = format!("{}ms", (self.slider_value(slider) * 10.).round() as i32);
+                self.slider_field_readout(tr::editor::panel::fade_duration(), slider, readout, cx)
+            })
             .into_any_element()
     }
 
@@ -6061,7 +6154,7 @@ impl EditorWindow {
                         .justify_between()
                         .items_center()
                         .text_size(px(10.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(label)
                         .child(SharedString::from(format_time(time))),
                 )
@@ -6095,7 +6188,7 @@ impl EditorWindow {
                                     .pt(px(40.))
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .child(tr::editor::panel::timing::to()),
                             )
                             .child(box_for(tr::editor::panel::timing::end(), end, end_key)),
@@ -6203,7 +6296,7 @@ impl EditorWindow {
                                             div()
                                                 .text_size(px(12.))
                                                 .truncate()
-                                                .text_color(Hsla::from(theme.gray_10))
+                                                .text_color(Hsla::from(theme.editor.text_3))
                                                 .child(tr::editor::panel::audio::change_hint()),
                                         ),
                                 )
@@ -7486,7 +7579,7 @@ impl EditorWindow {
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .when(active, |this| {
-                        this.bg(Hsla::from(theme.editor.accent))
+                        this.bg(Hsla::from(theme.editor.accent_fill))
                             .text_color(gpui::white())
                     })
                     .when(!active, |this| {
@@ -8454,7 +8547,8 @@ impl EditorWindow {
                     }
                 }
                 crate::editor_sidebar::SidebarTab::Keyboard => {
-                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground])
+                    colors.extend([ColorTarget::KeyboardColor, ColorTarget::KeyboardBackground]);
+                    fields.push(FieldKey::KeyComposer);
                 }
                 crate::editor_sidebar::SidebarTab::Audio => {
                     if let Some(summary) = self.summary() {
@@ -9559,11 +9653,11 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(self.theme.gray_10))
+                            .text_color(Hsla::from(self.theme.editor.text_3))
                             .child(tr::editor::panel::image::arrange_help()),
                     )
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &self.theme,
                             SharedString::from(format!("center-image-{index}")),
                             ui::ButtonVariant::Gray,
@@ -9588,7 +9682,7 @@ impl EditorWindow {
                     ),
             )
             .child(
-                ui::Button::plain(
+                ui::Button::editor(
                     &self.theme,
                     SharedString::from(format!("replace-image-{index}")),
                     ui::ButtonVariant::Gray,

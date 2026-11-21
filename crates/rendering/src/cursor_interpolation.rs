@@ -12,6 +12,8 @@ use crate::{
     spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
+mod trailing;
+
 /// Click anticipation windows: the spring target snaps to the press position
 /// once the next button press is <=500ms away, and the spring profile
 /// stiffens 175ms before the press. The early snap relies on the spring
@@ -26,6 +28,44 @@ const DECIMATE_FPS: f64 = 60.0;
 const DECIMATE_MIN_DIST_UV: f64 = 1.0 / 1920.0;
 const SIMULATION_STEP_MS: f64 = 1000.0 / 60.0;
 const SPRING_SETTLE_TIMEOUT_MS: f64 = 5000.0;
+
+/// Cursor times further than this from the start of the recording are not
+/// real input. Smoothing steps the spring every millisecond up to the last
+/// event, so a single absurd time would make that work and its buffer
+/// unbounded; such events are left out of the smoothed timeline.
+const MAX_CURSOR_EVENT_MS: f64 = 24.0 * 60.0 * 60.0 * 1000.0;
+
+fn plausible_cursor_time(time_ms: f64) -> bool {
+    time_ms.is_finite() && time_ms.abs() <= MAX_CURSOR_EVENT_MS
+}
+
+fn bounded_cursor_events(cursor: &CursorEvents) -> std::borrow::Cow<'_, CursorEvents> {
+    if cursor
+        .moves
+        .iter()
+        .all(|event| plausible_cursor_time(event.time_ms))
+        && cursor
+            .clicks
+            .iter()
+            .all(|event| plausible_cursor_time(event.time_ms))
+    {
+        return std::borrow::Cow::Borrowed(cursor);
+    }
+    std::borrow::Cow::Owned(CursorEvents {
+        moves: cursor
+            .moves
+            .iter()
+            .filter(|event| plausible_cursor_time(event.time_ms))
+            .cloned()
+            .collect(),
+        clicks: cursor
+            .clicks
+            .iter()
+            .filter(|event| plausible_cursor_time(event.time_ms))
+            .cloned()
+            .collect(),
+    })
+}
 /// Per-step one-pole coefficient for adapting the phase lead when the active
 /// spring profile changes; ~130ms time constant at the 60Hz simulation step,
 /// so profile switches ease in without popping the target.
@@ -281,6 +321,11 @@ pub fn interpolate_cursor_with_click_spring(
     let time_ms = (time_secs * 1000.0) as f64;
 
     if let Some(smoothing_config) = smoothing {
+        let bounded = bounded_cursor_events(cursor);
+        let cursor = bounded.as_ref();
+        if cursor.moves.is_empty() {
+            return None;
+        }
         let filtered_moves = filter_cursor_shake(&cursor.moves);
         let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
         let timeline = build_smoothed_timeline(
@@ -355,7 +400,7 @@ fn interpolate_raw_cursor(
 const CURSOR_VARIANT_CACHE_CAPACITY: usize = 2;
 
 struct CursorTimelineVariant {
-    settings: [u32; 8],
+    settings: [u32; 9],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -438,11 +483,13 @@ impl HoverChanges {
     }
 }
 
-/// Which interactions a smoothed cursor is anchored to.
+/// Which interactions a smoothed cursor is anchored to, and how it follows
+/// the pointer between them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CursorAnchors {
     pub interaction: bool,
     pub hover: bool,
+    pub follow: cap_project::CursorFollow,
 }
 
 impl CursorAnchors {
@@ -450,6 +497,7 @@ impl CursorAnchors {
         Self {
             interaction: cursor.interaction_anchors,
             hover: cursor.interaction_anchors && cursor.hover_anchors,
+            follow: cursor.follow,
         }
     }
 }
@@ -477,7 +525,8 @@ impl PrecomputedCursorTimeline {
         hover_changes_ms: &[f64],
     ) -> Self {
         let event_order = CursorEventOrder::new(cursor);
-        if cursor.moves.is_empty() || smoothing.is_none() {
+        let bounded = bounded_cursor_events(cursor);
+        if bounded.moves.is_empty() || smoothing.is_none() {
             return Self {
                 timeline: vec![],
                 cursor_ids: Vec::new(),
@@ -490,9 +539,34 @@ impl PrecomputedCursorTimeline {
         }
 
         let smoothing_config = smoothing.unwrap();
+        let cursor = bounded.as_ref();
+        let hover_changes: Vec<f64>;
+        let hover_changes_ms = if hover_changes_ms
+            .iter()
+            .all(|&time| plausible_cursor_time(time))
+        {
+            hover_changes_ms
+        } else {
+            hover_changes = hover_changes_ms
+                .iter()
+                .copied()
+                .filter(|&time| plausible_cursor_time(time))
+                .collect();
+            &hover_changes
+        };
         let filtered_moves = filter_cursor_shake(&cursor.moves);
         let prepared_moves = decimate_cursor_moves(filtered_moves.as_ref());
-        let built = if anchors.interaction {
+        let built = if anchors.follow == cap_project::CursorFollow::Trailing {
+            // Every recorded sample: the trailing spring steps every 1 ms and
+            // holds across gaps itself, and a drag must meet each sample.
+            trailing::build_trailing_timeline(
+                cursor,
+                &cursor.moves,
+                smoothing_config,
+                anchors.interaction,
+                if anchors.hover { hover_changes_ms } else { &[] },
+            )
+        } else if anchors.interaction {
             let with_drag_samples = keep_drag_samples(&cursor.moves, &cursor.clicks);
             build_anchored_timeline(
                 cursor,
@@ -560,6 +634,7 @@ impl PrecomputedCursorTimeline {
             click_spring.friction.to_bits(),
             u32::from(anchors.interaction),
             u32::from(anchors.hover),
+            u32::from(anchors.follow == cap_project::CursorFollow::Trailing),
         ];
         let mut variants = self.variants.lock().unwrap();
         if let Some(index) = variants.iter().position(|entry| entry.settings == settings) {
@@ -3079,6 +3154,7 @@ mod tests {
                 CursorAnchors {
                     interaction: anchors,
                     hover: false,
+                    ..CursorAnchors::default()
                 },
                 &[],
             )
@@ -3556,5 +3632,64 @@ mod tests {
             assert!(presses_and_drag.contains(&1500.0));
             assert!(!presses_and_drag.contains(&700.0));
         }
+    }
+
+    #[test]
+    fn a_cursor_time_far_past_any_recording_stays_cheap_and_changes_nothing() {
+        let cursor = CursorEvents {
+            moves: (0..200)
+                .map(|index| cursor_move(index as f64 * 25.0, 0.2 + index as f64 * 0.003, 0.4))
+                .collect(),
+            clicks: vec![click_event(2000.0, true), click_event(2080.0, false)],
+        };
+        let mut absurd = cursor.clone();
+        absurd.moves.push(cursor_move(1e15, 0.9, 0.9));
+        absurd.moves.push(cursor_move(-1e15, 0.1, 0.1));
+        absurd.clicks.push(click_event(1e11, true));
+        let smoothing = Some(SpringMassDamperSimulationConfig {
+            tension: 125.0,
+            mass: 1.5,
+            friction: 12.0,
+        });
+        for follow in [
+            cap_project::CursorFollow::OnPointer,
+            cap_project::CursorFollow::Trailing,
+        ] {
+            for interaction in [false, true] {
+                let anchors = CursorAnchors {
+                    interaction,
+                    hover: interaction,
+                    follow,
+                };
+                let started = std::time::Instant::now();
+                let built = PrecomputedCursorTimeline::new_with_anchors(
+                    &absurd,
+                    smoothing,
+                    None,
+                    anchors,
+                    &[1e12, 1500.0],
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "{follow:?} {interaction}"
+                );
+                let plain = PrecomputedCursorTimeline::new_with_anchors(
+                    &cursor,
+                    smoothing,
+                    None,
+                    anchors,
+                    &[1500.0],
+                );
+                assert_eq!(built.timeline.len(), plain.timeline.len());
+                for (a, b) in built.timeline.iter().zip(&plain.timeline) {
+                    assert_eq!(a.time.to_bits(), b.time.to_bits());
+                    assert_eq!(a.position.x.to_bits(), b.position.x.to_bits());
+                    assert_eq!(a.position.y.to_bits(), b.position.y.to_bits());
+                }
+            }
+        }
+        let started = std::time::Instant::now();
+        assert!(interpolate_cursor(&absurd, 1.0, smoothing).is_some());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }

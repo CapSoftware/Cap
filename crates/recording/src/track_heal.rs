@@ -796,6 +796,7 @@ mod tests {
                     status: None,
                     cursor_shape_version: 0,
                     audio_only: false,
+                    blank: false,
                 },
             })),
         }

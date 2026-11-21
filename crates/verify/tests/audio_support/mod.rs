@@ -177,6 +177,7 @@ impl OfflinePlayer {
             .play(PlaySpec {
                 segments: self.segments.clone(),
                 music: self.music.clone(),
+                input_sounds: None,
                 project: self.config.clone(),
                 duration_secs: self.duration,
                 start_playhead_secs: start,

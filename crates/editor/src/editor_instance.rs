@@ -83,7 +83,7 @@ async fn still_interrupted(
     }
 }
 
-pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 9] {
+pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration) -> [u32; 10] {
     let click_spring = cursor.click_spring_config();
     [
         u32::from(cursor.raw),
@@ -95,6 +95,7 @@ pub(super) fn cursor_timeline_settings(cursor: &cap_project::CursorConfiguration
         click_spring.friction.to_bits(),
         u32::from(cursor.interaction_anchors),
         u32::from(cursor.hover_anchors),
+        u32::from(cursor.follow == cap_project::CursorFollow::Trailing),
     ]
 }
 
@@ -113,7 +114,7 @@ struct PreviewCursorCacheEntry {
     recording_clip: u32,
     cursor: Arc<CursorEvents>,
     hover_generation: u64,
-    settings: [u32; 9],
+    settings: [u32; 10],
     timeline: Arc<PrecomputedCursorTimeline>,
 }
 
@@ -1377,6 +1378,7 @@ impl EditorInstance {
                             &previous,
                             &project,
                             self.render_constants.options.screen_size,
+                            self.render_constants.options.camera_size,
                         )
                     {
                         zoom_timelines.clear();
@@ -1509,6 +1511,10 @@ impl EditorInstance {
                                         &segment_medias.cursor,
                                         total_duration,
                                         self.render_constants.options.screen_size,
+                                        self.render_constants
+                                            .options
+                                            .camera_size
+                                            .filter(|_| segment_medias.decoders.has_camera()),
                                         segment.recording_clip,
                                     )
                                 });
@@ -1590,6 +1596,10 @@ impl EditorInstance {
                                                 &outgoing_media.cursor,
                                                 total_duration,
                                                 self.render_constants.options.screen_size,
+                                                self.render_constants
+                                                    .options
+                                                    .camera_size
+                                                    .filter(|_| outgoing_media.decoders.has_camera()),
                                                 outgoing.segment.recording_clip,
                                             )
                                         });
@@ -1912,6 +1922,7 @@ pub struct SegmentMedia {
     pub cursor: Arc<CursorEvents>,
     pub hover_changes: Arc<HoverChanges>,
     pub keyboard: Arc<cap_project::KeyboardEvents>,
+    pub keyboard_offset_secs: f64,
     pub decoders: RecordingSegmentDecoders,
 }
 
@@ -2222,6 +2233,7 @@ async fn create_segments_with_audio(
                 cursor,
                 hover_changes,
                 keyboard: Arc::new(Default::default()),
+                keyboard_offset_secs: 0.0,
                 decoders,
             }])
         }
@@ -2287,6 +2299,7 @@ async fn create_segments_with_audio(
                     cursor,
                     hover_changes,
                     keyboard,
+                    keyboard_offset_secs: s.latest_start_time().unwrap_or(0.0),
                     decoders,
                 })
             });
@@ -2367,6 +2380,14 @@ fn get_calibration_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_how_the_cursor_follows_rebuilds_its_timeline() {
+        let mut cursor = cap_project::CursorConfiguration::default();
+        let on_pointer = cursor_timeline_settings(&cursor);
+        cursor.follow = cap_project::CursorFollow::Trailing;
+        assert_ne!(cursor_timeline_settings(&cursor), on_pointer);
+    }
     use cap_project::{AudioGapSummary, CursorClickEvent, CursorConfiguration, CursorMoveEvent};
 
     fn scrub_request(frame: u32) -> PreviewRequest {

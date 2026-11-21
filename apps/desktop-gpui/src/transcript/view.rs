@@ -2086,7 +2086,7 @@ impl EditorWindow {
         }));
 
         let action = if on_pauses {
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-shorten-pauses",
                 ui::ButtonVariant::Primary,
@@ -2098,7 +2098,7 @@ impl EditorWindow {
                 this.transcript_shorten_pauses(window, cx);
             }))
         } else {
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-remove-fillers",
                 ui::ButtonVariant::Primary,
@@ -2501,6 +2501,12 @@ impl EditorWindow {
             )
         } else if snapshot.no_speech {
             (tr::editor::transcript::no_speech(), "")
+        } else if !has_audio {
+            // Nothing to transcribe: say so once, with nothing to press.
+            (
+                tr::editor::transcript::empty_title(),
+                tr::editor::transcript::no_audio(),
+            )
         } else {
             (
                 tr::editor::transcript::empty_title(),
@@ -2509,13 +2515,9 @@ impl EditorWindow {
         };
 
         let action: AnyElement = if !has_audio {
-            div()
-                .text_size(px(12.))
-                .text_color(Hsla::from(theme.editor.text_3))
-                .child(tr::editor::transcript::no_audio())
-                .into_any_element()
+            div().into_any_element()
         } else if downloaded {
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-transcribe",
                 ui::ButtonVariant::Primary,
@@ -2536,7 +2538,7 @@ impl EditorWindow {
             let percent = download.map_or(0, |download| {
                 download.progress.clamp(0.0, 100.0).round() as u32
             });
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-download-model",
                 ui::ButtonVariant::Primary,

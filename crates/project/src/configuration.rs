@@ -1012,6 +1012,36 @@ pub enum CursorAnimationStyle {
     Custom,
 }
 
+/// How the smoothed cursor follows the recorded pointer.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorFollow {
+    /// The spring samples the pointer ahead by its own lag, so the cursor
+    /// sits on the pointer while it moves.
+    #[default]
+    OnPointer,
+    /// The spring chases the pointer without that lead, so on a free glide
+    /// the cursor trails it by the spring's own lag and settles softly. Ahead
+    /// of each press, release, drag sample and shape or hover change the
+    /// target runs ahead in time (and the spring speeds up if that is not
+    /// enough) so the cursor still meets the pointer there.
+    Trailing,
+}
+
+/// How the cursor reacts to a mouse button.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorPressAnimation {
+    /// Shrinks to 80% over the 130 ms before a press and grows back over the
+    /// 130 ms after the release.
+    #[default]
+    Quick,
+    /// Eases to 90% on the cursor's own spring once a press is up to 500 ms
+    /// away, holds there while a button is down, and springs back to full
+    /// size as the release comes up.
+    Held,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct CursorSmoothingPreset {
     pub tension: f32,
@@ -1100,11 +1130,11 @@ impl ScreenMovementSpring {
     /// How far ahead of its segment an early zoom starts moving.
     pub const EARLY_START_SECS: f64 = 0.35;
 
-    /// New projects' zoom motion: reaches 90% of a zoom in 317 ms with no
-    /// overshoot and settles within 1% by 500 ms.
+    /// New projects' zoom motion: critically damped, reaching 50% of a zoom
+    /// in 123 ms and 90% in 290 ms, with no overshoot.
     pub const NEW_PROJECT: Self = Self {
-        stiffness: 205.0,
-        damping: 33.3,
+        stiffness: 286.0,
+        damping: 42.2,
         mass: 1.5,
         start_zooms_early: false,
     };
@@ -1174,7 +1204,36 @@ pub struct CursorConfiguration {
     /// keep it off.
     #[serde(default)]
     pub hover_anchors: bool,
+    pub click_sounds: bool,
+    pub click_sound_type: ClickSoundType,
+    pub click_sound_volume: f32,
+    /// Configs saved without the field keep the cursor on the pointer.
+    #[serde(default)]
+    pub follow: CursorFollow,
+    /// Configs saved without the field keep the quick press animation.
+    #[serde(default)]
+    pub press_animation: CursorPressAnimation,
 }
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum ClickSoundType {
+    #[default]
+    Mouse,
+    Trackpad,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum KeySoundType {
+    #[default]
+    Mechanical,
+    Deep,
+    Laptop,
+    Typewriter,
+}
+
+pub const DEFAULT_INPUT_SOUND_VOLUME: f32 = 0.6;
 
 impl Default for CursorConfiguration {
     fn default() -> Self {
@@ -1201,6 +1260,11 @@ impl Default for CursorConfiguration {
             ripple: CursorRippleConfig::default(),
             interaction_anchors: true,
             hover_anchors: true,
+            click_sounds: false,
+            click_sound_type: ClickSoundType::default(),
+            click_sound_volume: DEFAULT_INPUT_SOUND_VOLUME,
+            follow: CursorFollow::OnPointer,
+            press_animation: CursorPressAnimation::Quick,
         };
 
         if let Some(preset) = animation_style.preset() {
@@ -1231,6 +1295,34 @@ impl CursorConfiguration {
 
     pub fn click_spring_config(&self) -> ClickSpringConfig {
         self.click_spring.unwrap_or_default()
+    }
+
+    /// New projects' cursor size: the arrow stands about 49 pt tall on a
+    /// 982 pt tall display.
+    pub const NEW_PROJECT_SIZE: u32 = 127;
+
+    /// New projects' cursor spring: quick to respond, lightly damped, and
+    /// kept from overshooting by the trailing follow's clamp.
+    pub const NEW_PROJECT_SPRING: CursorSmoothingPreset = CursorSmoothingPreset {
+        tension: 125.0,
+        mass: 1.5,
+        friction: 12.0,
+    };
+
+    /// The cursor new projects start with: larger, trailing the pointer on a
+    /// soft spring, and holding a gentle press while a button is down.
+    pub fn for_new_project() -> Self {
+        let spring = Self::NEW_PROJECT_SPRING;
+        Self {
+            size: Self::NEW_PROJECT_SIZE,
+            animation_style: CursorAnimationStyle::Custom,
+            tension: spring.tension,
+            mass: spring.mass,
+            friction: spring.friction,
+            follow: CursorFollow::Trailing,
+            press_animation: CursorPressAnimation::Held,
+            ..Self::default()
+        }
     }
 }
 
@@ -1317,6 +1409,20 @@ impl TimelineSegment {
         self.voice_eq
             .filter(VoiceEq::is_active)
             .map(|voice_eq| voice_eq.sanitized())
+    }
+
+    /// Whether this clip's own audio is silent: a clip at normal speed only
+    /// when muted outright, a sped-up or slowed one unless its audio was
+    /// kept, and any clip whose speed is outside what audio can follow.
+    pub fn speed_audio_muted(&self) -> bool {
+        if !self.timescale.is_finite() || !(0.25..=8.0).contains(&self.timescale) {
+            return true;
+        }
+        if (self.timescale - 1.0).abs() < f64::EPSILON {
+            self.speed_audio_mode == Some(ClipSpeedAudioMode::Mute)
+        } else {
+            self.speed_audio_mode.unwrap_or_default() == ClipSpeedAudioMode::Mute
+        }
     }
 
     pub fn volume(&self) -> f64 {
@@ -2725,7 +2831,7 @@ fn active_hold_window(windows: &[(f64, f64)], time: f64) -> Option<(f64, f64)> {
         .copied()
 }
 
-fn held_time_before(windows: &[(f64, f64)], time: f64) -> f64 {
+pub(crate) fn held_time_before(windows: &[(f64, f64)], time: f64) -> f64 {
     windows
         .iter()
         .map(|(start, end)| (time.min(*end) - start).max(0.0))
@@ -2796,16 +2902,26 @@ pub enum CaptionPosition {
 #[serde(rename_all = "camelCase", default)]
 pub struct CaptionSettings {
     pub enabled: bool,
+    /// New captions start in the Soft style; a project saved without one of
+    /// these fields keeps the Classic value it was drawn with.
+    #[serde(default = "CaptionSettings::legacy_font")]
     pub font: String,
+    #[serde(default = "CaptionSettings::legacy_size")]
     pub size: u32,
     pub color: String,
-    #[serde(alias = "backgroundColor")]
+    #[serde(
+        alias = "backgroundColor",
+        default = "CaptionSettings::legacy_background_color"
+    )]
     pub background_color: String,
-    #[serde(alias = "backgroundOpacity")]
+    #[serde(
+        alias = "backgroundOpacity",
+        default = "CaptionSettings::legacy_background_opacity"
+    )]
     pub background_opacity: u32,
     pub position: String,
     pub italic: bool,
-    #[serde(alias = "fontWeight")]
+    #[serde(alias = "fontWeight", default = "CaptionSettings::default_font_weight")]
     pub font_weight: u32,
     pub outline: bool,
     #[serde(alias = "outlineColor")]
@@ -2820,11 +2936,18 @@ pub struct CaptionSettings {
     pub linger_duration: f32,
     #[serde(alias = "wordTransitionDuration")]
     pub word_transition_duration: f32,
-    #[serde(alias = "activeWordHighlight")]
+    /// New captions highlight the spoken word; a project saved before this
+    /// setting existed keeps its captions unhighlighted.
+    #[serde(
+        alias = "activeWordHighlight",
+        default = "CaptionSettings::legacy_active_word_highlight"
+    )]
     pub active_word_highlight: bool,
     #[serde(alias = "manualPosition")]
     pub manual_position: Option<XY<f32>>,
+    #[serde(default = "CaptionSettings::default_preset")]
     pub preset: String,
+    #[serde(default = "CaptionSettings::default_animation")]
     pub animation: String,
     #[serde(alias = "highlightStyle")]
     pub highlight_style: String,
@@ -2865,8 +2988,25 @@ impl CaptionSettings {
         0.25
     }
 
-    fn default_active_word_highlight() -> bool {
+    fn legacy_active_word_highlight() -> bool {
         false
+    }
+
+    fn legacy_font() -> String {
+        "System Sans-Serif".to_string()
+    }
+
+    /// Captions saved without a size had the old default.
+    fn legacy_size() -> u32 {
+        24
+    }
+
+    fn legacy_background_color() -> String {
+        "#000000".to_string()
+    }
+
+    fn legacy_background_opacity() -> u32 {
+        90
     }
 
     fn default_preset() -> String {
@@ -2884,16 +3024,17 @@ impl CaptionSettings {
 
 impl Default for CaptionSettings {
     fn default() -> Self {
+        // The Soft preset: the keycaps' charcoal, Inter and a gentle pop.
         Self {
             enabled: false,
-            font: "System Sans-Serif".to_string(),
-            size: 24,
+            font: "Inter".to_string(),
+            size: 46,
             color: "#FFFFFF".to_string(),
-            background_color: "#000000".to_string(),
-            background_opacity: 90,
+            background_color: "#1C1C1F".to_string(),
+            background_opacity: 86,
             position: "bottom-center".to_string(),
             italic: false,
-            font_weight: Self::default_font_weight(),
+            font_weight: 600,
             outline: false,
             outline_color: "#000000".to_string(),
             export_with_subtitles: false,
@@ -2901,10 +3042,10 @@ impl Default for CaptionSettings {
             fade_duration: Self::default_fade_duration(),
             linger_duration: Self::default_linger_duration(),
             word_transition_duration: Self::default_word_transition_duration(),
-            active_word_highlight: Self::default_active_word_highlight(),
+            active_word_highlight: true,
             manual_position: None,
-            preset: Self::default_preset(),
-            animation: Self::default_animation(),
+            preset: "soft".to_string(),
+            animation: "pop".to_string(),
             highlight_style: Self::default_highlight_style(),
             uppercase: false,
             show_filler_words: false,
@@ -2937,6 +3078,9 @@ pub struct KeyboardSettings {
     pub color: String,
     pub background_color: String,
     pub background_opacity: u32,
+    /// New overlays sit at the top; one saved without a position keeps
+    /// the bottom it was drawn at.
+    #[serde(default = "KeyboardSettings::legacy_position")]
     pub position: String,
     pub font_weight: u32,
     pub fade_duration: f32,
@@ -2945,25 +3089,137 @@ pub struct KeyboardSettings {
     pub show_modifiers: bool,
     pub show_special_keys: bool,
     pub uppercase: bool,
+    /// How key presses are drawn: `classic` (one rounded label), keycaps
+    /// shaped like a `macos`, `windows` or `linux` keyboard, or `auto`, which
+    /// a project saved before keycaps existed reads as: see
+    /// [`KeyboardSettings::effective_style`].
+    #[serde(default = "KeyboardSettings::legacy_style")]
+    pub style: String,
+    /// The keycaps' colours: `light`, `dark` or `retro`.
+    #[serde(default = "KeyboardSettings::default_theme")]
+    pub theme: String,
+    /// Whether typed text shows, or only shortcuts. New projects show
+    /// shortcuts only; a project saved before the choice existed keeps its
+    /// typing.
+    #[serde(default = "KeyboardSettings::legacy_show_typing")]
+    pub show_typing: bool,
+    /// How the Keyboard tab's composer shows a sentence: `words`, each word
+    /// typed out on its own key, `keys`, every keystroke on its own, or
+    /// `sentence`, the whole of it on one key.
+    pub typing_split: String,
+    pub key_sounds: bool,
+    pub key_sound_type: KeySoundType,
+    pub key_sound_volume: f32,
 }
+
+impl KeyboardSettings {
+    fn legacy_position() -> String {
+        "bottom-center".to_string()
+    }
+
+    fn legacy_show_typing() -> bool {
+        true
+    }
+
+    fn legacy_style() -> String {
+        "auto".to_string()
+    }
+
+    /// The style to draw, on the platform this process runs on. See
+    /// [`KeyboardSettings::effective_style_for`], which every renderer uses.
+    pub fn effective_style(&self) -> &str {
+        self.effective_style_for(None, false)
+    }
+
+    /// The style to draw. `auto` gives an older project the keys of the
+    /// platform it was recorded on (this machine's when that is unknown) when
+    /// its label was never styled, and keeps the classic label for one whose
+    /// colours or font were chosen, globally or on any key (`styled_keys`).
+    /// Read every frame, so it allocates nothing.
+    pub fn effective_style_for(
+        &self,
+        platform: Option<&crate::Platform>,
+        styled_keys: bool,
+    ) -> &str {
+        if self.style != "auto" {
+            return &self.style;
+        }
+        let untouched = self.color.eq_ignore_ascii_case(DEFAULT_KEYBOARD_COLOR)
+            && self
+                .background_color
+                .eq_ignore_ascii_case(DEFAULT_KEYBOARD_BACKGROUND)
+            && self.background_opacity == DEFAULT_KEYBOARD_BACKGROUND_OPACITY
+            && self.font == DEFAULT_KEYBOARD_FONT
+            && self.font_weight == DEFAULT_KEYBOARD_FONT_WEIGHT
+            && !styled_keys;
+        if untouched {
+            Self::platform_style_name_for(platform)
+        } else {
+            "classic"
+        }
+    }
+
+    fn default_theme() -> String {
+        "dark".to_string()
+    }
+
+    /// The keycap style a new project starts with: the keyboard of the
+    /// platform it was made on.
+    pub fn platform_style() -> String {
+        Self::platform_style_name().to_string()
+    }
+
+    fn platform_style_name_for(platform: Option<&crate::Platform>) -> &'static str {
+        match platform {
+            Some(crate::Platform::MacOS) => "macos",
+            Some(crate::Platform::Windows) => "windows",
+            Some(crate::Platform::Linux) => "linux",
+            None => Self::platform_style_name(),
+        }
+    }
+
+    fn platform_style_name() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            "linux"
+        }
+    }
+}
+
+const DEFAULT_KEYBOARD_FONT: &str = "System Sans-Serif";
+const DEFAULT_KEYBOARD_COLOR: &str = "#FFFFFF";
+const DEFAULT_KEYBOARD_BACKGROUND: &str = "#000000";
+const DEFAULT_KEYBOARD_BACKGROUND_OPACITY: u32 = 95;
+const DEFAULT_KEYBOARD_FONT_WEIGHT: u32 = 400;
 
 impl Default for KeyboardSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            font: "System Sans-Serif".to_string(),
+            font: DEFAULT_KEYBOARD_FONT.to_string(),
+            // Keys a tenth of the frame tall.
             size: 50,
-            color: "#FFFFFF".to_string(),
-            background_color: "#000000".to_string(),
-            background_opacity: 95,
-            position: "bottom-center".to_string(),
-            font_weight: 400,
+            color: DEFAULT_KEYBOARD_COLOR.to_string(),
+            background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
+            background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,
+            position: "top-center".to_string(),
+            font_weight: DEFAULT_KEYBOARD_FONT_WEIGHT,
             fade_duration: 0.15,
-            linger_duration: 0.8,
+            linger_duration: 1.5,
             grouping_threshold_ms: 500.0,
             show_modifiers: true,
-            show_special_keys: true,
+            show_special_keys: false,
             uppercase: false,
+            style: Self::platform_style(),
+            theme: Self::default_theme(),
+            show_typing: false,
+            typing_split: "words".to_string(),
+            key_sounds: false,
+            key_sound_type: KeySoundType::default(),
+            key_sound_volume: DEFAULT_INPUT_SOUND_VOLUME,
         }
     }
 }
@@ -3218,6 +3474,15 @@ pub struct ProjectConfiguration {
     /// saved projects can never have zooms generated over them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_zoom_pending: bool,
+    /// How the screen follows the cursor while zoomed and how motion blur
+    /// spreads its taps. Absent (0) keeps the original follow, where an auto
+    /// zoom frames the middle of the cursor's bounding box, and a fixed
+    /// 21-tap blur kernel. [`SCREEN_MOTION_VERSION`] frames where the cursor
+    /// spent its time and blurs along the full path each pixel travelled
+    /// since the last frame. New projects start on it. Which way blur runs
+    /// and where a zoom blur converges do not depend on it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub screen_motion_version: u32,
     #[serde(
         default,
         deserialize_with = "markers::deserialize_markers",
@@ -3287,6 +3552,7 @@ impl Default for ProjectConfiguration {
             text_anim_version: TEXT_ANIM_VERSION,
             auto_zoom_version: 0,
             auto_zoom_pending: false,
+            screen_motion_version: 0,
             markers: Vec::new(),
             audio_visuals: None,
         }
@@ -3355,6 +3621,10 @@ impl ProjectStyleCache {
     }
 }
 
+/// The screen motion rules new projects start on, see
+/// [`ProjectConfiguration::screen_motion_version`].
+pub const SCREEN_MOTION_VERSION: u32 = 1;
+
 /// Rounding a new project gets when its background first gains padding: a
 /// tighter corner than older projects' 7.5, about 30 px on a 1080p screen.
 pub const NEW_PROJECT_ROUNDING: f64 = 5.5;
@@ -3363,7 +3633,8 @@ impl ProjectConfiguration {
     /// Where a new recording or import starts. Differs from `Default` (which
     /// is what an older project missing a field reads as) only in framing
     /// and motion: even padding, a lighter and softer card shadow, the
-    /// new-project zoom spring and the newer auto zoom rules. At zero padding both padding modes lay out
+    /// new-project zoom spring, the newer auto zoom rules and the new-project
+    /// cursor. At zero padding both padding modes lay out
     /// identically and the card fills the frame, so neither shows until the
     /// card has room around it.
     pub fn for_new_project() -> Self {
@@ -3376,8 +3647,10 @@ impl ProjectConfiguration {
             blur: 46.7,
         });
         config.screen_movement_spring = ScreenMovementSpring::NEW_PROJECT;
+        config.cursor = CursorConfiguration::for_new_project();
         config.auto_zoom_version = crate::auto_zoom::AUTO_ZOOM_VERSION;
         config.auto_zoom_pending = true;
+        config.screen_motion_version = SCREEN_MOTION_VERSION;
         config
     }
 
@@ -3407,6 +3680,7 @@ impl ProjectConfiguration {
         preset.text_anim_version = self.text_anim_version;
         preset.auto_zoom_version = self.auto_zoom_version;
         preset.auto_zoom_pending = self.auto_zoom_pending;
+        preset.screen_motion_version = self.screen_motion_version;
         preset.overlay_order = self.overlay_order.clone();
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
@@ -3932,6 +4206,24 @@ mod tests {
     use serde_json::Value;
 
     #[test]
+    fn new_projects_use_the_newer_screen_motion_and_saved_ones_keep_theirs() {
+        assert_eq!(
+            ProjectConfiguration::for_new_project().screen_motion_version,
+            SCREEN_MOTION_VERSION
+        );
+        let saved: ProjectConfiguration = serde_json::from_str("{}").unwrap();
+        assert_eq!(saved.screen_motion_version, 0);
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("screenMotionVersion").is_none());
+        let fresh = serde_json::to_value(ProjectConfiguration::for_new_project()).unwrap();
+        assert_eq!(fresh["screenMotionVersion"], 1);
+        let reloaded: ProjectConfiguration = serde_json::from_value(fresh).unwrap();
+        assert_eq!(reloaded.screen_motion_version, 1);
+        let styled = saved.with_preset(ProjectConfiguration::for_new_project());
+        assert_eq!(styled.screen_motion_version, 0);
+    }
+
+    #[test]
     fn an_unreadable_config_is_kept_before_callers_fall_back_to_defaults() {
         let project = tempfile::tempdir().unwrap();
         let config_path = project.path().join("project-config.json");
@@ -4078,6 +4370,41 @@ mod tests {
     }
 
     #[test]
+    fn new_projects_get_the_larger_trailing_cursor_and_saved_ones_keep_theirs() {
+        let fresh = ProjectConfiguration::for_new_project().cursor;
+        assert_eq!(fresh.size, CursorConfiguration::NEW_PROJECT_SIZE);
+        assert_eq!(fresh.follow, CursorFollow::Trailing);
+        assert_eq!(fresh.press_animation, CursorPressAnimation::Held);
+        assert_eq!(fresh.animation_style, CursorAnimationStyle::Custom);
+        assert_eq!(
+            (fresh.tension, fresh.mass, fresh.friction),
+            (125.0, 1.5, 12.0)
+        );
+        assert!(fresh.interaction_anchors);
+
+        let defaults = CursorConfiguration::default();
+        assert_eq!(defaults.size, 100);
+        assert_eq!(defaults.follow, CursorFollow::OnPointer);
+        assert_eq!(defaults.press_animation, CursorPressAnimation::Quick);
+
+        let saved: ProjectConfiguration = serde_json::from_str(
+            r#"{"cursor":{"size":100,"animationStyle":"mellow","tension":470.0,"mass":3.0,"friction":70.0}}"#,
+        )
+        .unwrap();
+        assert_eq!(saved.cursor.size, 100);
+        assert_eq!(saved.cursor.follow, CursorFollow::OnPointer);
+        assert_eq!(saved.cursor.press_animation, CursorPressAnimation::Quick);
+
+        let written = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(written["follow"], "trailing");
+        assert_eq!(written["pressAnimation"], "held");
+        let reloaded: CursorConfiguration = serde_json::from_value(written).unwrap();
+        assert_eq!(reloaded.follow, CursorFollow::Trailing);
+        assert_eq!(reloaded.press_animation, CursorPressAnimation::Held);
+        assert_eq!(reloaded.size, CursorConfiguration::NEW_PROJECT_SIZE);
+    }
+
+    #[test]
     fn interaction_anchors_are_on_for_new_projects_and_off_for_saved_ones() {
         assert!(ProjectConfiguration::default().cursor.interaction_anchors);
         assert!(ProjectConfiguration::default().cursor.hover_anchors);
@@ -4176,7 +4503,7 @@ mod tests {
     }
 
     #[test]
-    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing() {
+    fn new_projects_pad_evenly_and_differ_from_default_only_in_framing_and_motion() {
         let fresh = ProjectConfiguration::for_new_project();
         assert_eq!(fresh.background.padding_mode, PaddingMode::Even);
         assert_eq!(fresh.background.padding, 0.0);
@@ -4192,6 +4519,7 @@ mod tests {
             .unwrap()
             .remove("paddingMode");
         framing_reset["screenMovementSpring"] = default["screenMovementSpring"].clone();
+        framing_reset["cursor"] = default["cursor"].clone();
         framing_reset
             .as_object_mut()
             .unwrap()
@@ -4200,6 +4528,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("autoZoomPending");
+        framing_reset
+            .as_object_mut()
+            .unwrap()
+            .remove("screenMotionVersion");
         assert_eq!(framing_reset, default);
     }
 
@@ -5842,6 +6174,74 @@ mod tests {
 
         assert_eq!(loaded.camera.manual_position, Some(XY::new(0.25, 0.75)));
         assert_eq!(loaded.background.display_position, Some(XY::new(0.5, 0.4)));
+    }
+
+    #[test]
+    fn older_captions_keep_their_classic_look_and_new_ones_start_soft() {
+        let older: CaptionSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "color": "#FFFFFF",
+            "position": "bottom-center"
+        }))
+        .unwrap();
+        assert_eq!(older.font, "System Sans-Serif");
+        assert_eq!(older.size, 24);
+        assert_eq!(older.background_color, "#000000");
+        assert_eq!(older.background_opacity, 90);
+        assert_eq!(older.font_weight, 700);
+        assert_eq!(older.preset, "classic");
+        assert_eq!(older.animation, "bounce");
+        assert!(!older.active_word_highlight);
+
+        let new = CaptionSettings::default();
+        assert_eq!(new.preset, "soft");
+        assert_eq!(new.font, "Inter");
+        let saved: CaptionSettings =
+            serde_json::from_value(serde_json::to_value(&new).unwrap()).unwrap();
+        assert_eq!(saved.preset, "soft");
+        assert_eq!(saved.font, "Inter");
+        assert_eq!(saved.size, new.size);
+    }
+
+    #[test]
+    fn an_older_keyboard_overlay_gets_keys_unless_its_label_was_styled() {
+        let old: KeyboardSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true, "font": "System Sans-Serif", "size": 50,
+            "color": "#ffffff", "backgroundColor": "#000000", "backgroundOpacity": 95,
+            "position": "bottom-center", "fontWeight": 400, "fadeDuration": 0.15,
+            "lingerDuration": 0.8, "groupingThresholdMs": 500.0, "showModifiers": true,
+            "showSpecialKeys": true, "uppercase": false
+        }))
+        .unwrap();
+        assert_eq!(old.style, "auto");
+        assert!(old.show_typing);
+        assert_eq!(old.effective_style(), KeyboardSettings::platform_style());
+        let styled = KeyboardSettings {
+            background_color: "#2255FF".into(),
+            ..old.clone()
+        };
+        assert_eq!(styled.effective_style(), "classic");
+        let bold = KeyboardSettings {
+            font_weight: 700,
+            ..old.clone()
+        };
+        assert_eq!(bold.effective_style(), "classic");
+        let chosen = KeyboardSettings {
+            style: "windows".into(),
+            ..styled
+        };
+        assert_eq!(chosen.effective_style(), "windows");
+        // The renderer resolves `auto` for the platform the recording was
+        // made on, wherever it runs, and keeps the label when any key was
+        // coloured on its own.
+        for (platform, style) in [
+            (crate::Platform::MacOS, "macos"),
+            (crate::Platform::Windows, "windows"),
+            (crate::Platform::Linux, "linux"),
+        ] {
+            assert_eq!(old.effective_style_for(Some(&platform), false), style);
+            assert_eq!(old.effective_style_for(Some(&platform), true), "classic");
+        }
     }
 
     #[test]

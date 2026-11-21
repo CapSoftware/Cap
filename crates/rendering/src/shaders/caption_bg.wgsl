@@ -2,7 +2,12 @@ struct BackgroundUniforms {
     rect: vec4<f32>,
     color: vec4<f32>,
     radius: f32,
-    _padding: vec3<f32>,
+    // How dark the soft shadow under the card is (0 draws none), and how
+    // bright the lit line along its top edge is.
+    shadow: f32,
+    edge: f32,
+    _padding: f32,
+    _padding2: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
@@ -55,6 +60,36 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     
     let edge_softness = 1.5;
     let alpha = 1.0 - smoothstep(-edge_softness, edge_softness, distance);
+    var card = vec4<f32>(uniforms.color.rgb, uniforms.color.a * alpha);
 
-    return vec4<f32>(uniforms.color.rgb, uniforms.color.a * alpha);
+    if uniforms.edge > 0.0 {
+        // The lit top edge the keycaps have: a fine bright line just inside
+        // the upper rim, fading down the card.
+        let inside = -distance;
+        let line = (1.0 - smoothstep(0.0, 1.4, inside)) * alpha;
+        let upper = 1.0 - smoothstep(0.0, rect_size.y * 0.5, position.y - rect_min.y);
+        card = vec4<f32>(mix(card.rgb, vec3<f32>(1.0), line * upper * uniforms.edge), card.a);
+    }
+
+    if uniforms.shadow <= 0.0 {
+        return card;
+    }
+
+    // A wide ambient shadow and a tight contact shadow, dropped below the
+    // card the way light falls on the keys above it.
+    let height = rect_size.y;
+    let ambient_blur = max(height * 0.3, 2.0);
+    let ambient_d = squircle_sdf(local - vec2<f32>(0.0, height * 0.08), half_size, radius);
+    let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
+    let contact_blur = max(height * 0.04, 1.2);
+    let contact_d = squircle_sdf(local - vec2<f32>(0.0, height * 0.02), half_size, radius);
+    let contact = (1.0 - smoothstep(-contact_blur, contact_blur, contact_d)) * 0.6;
+    let shade = clamp((ambient + contact * (1.0 - ambient)) * uniforms.shadow, 0.0, 1.0);
+
+    // The card over its shadow, both straight alpha.
+    let out_a = card.a + shade * (1.0 - card.a);
+    if out_a <= 0.0001 {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(card.rgb * card.a / out_a, out_a);
 }

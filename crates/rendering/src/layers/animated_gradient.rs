@@ -15,6 +15,17 @@ struct AnimatedGradientUniforms {
     texture: [f32; 4],
     motion: [f32; 4],
     output: [f32; 4],
+    /// 1 to draw an ordered dither of the palette, then the dither's cell in
+    /// output pixels.
+    dither: [f32; 4],
+}
+
+/// The dither's cell in output pixels: `size` is set against a 1080p frame,
+/// so the pattern keeps its look at every export size and in the preview.
+fn dither_cell(size: f32, output: (u32, u32)) -> f32 {
+    (size * output.1.min(output.0) as f32 / 1080.0)
+        .round()
+        .max(1.0)
 }
 
 impl AnimatedGradientUniforms {
@@ -59,6 +70,14 @@ impl AnimatedGradientUniforms {
                 output.1 as f32,
                 config.color_stops.len() as f32,
                 config.detail,
+            ],
+            dither: [
+                f32::from(u8::from(
+                    config.style == cap_project::AnimatedGradientStyle::Dither,
+                )),
+                dither_cell(config.dither_size, output),
+                0.0,
+                0.0,
             ],
         }
     }
@@ -285,6 +304,8 @@ impl AnimatedGradientLayer {
         uniforms.motion[0] = (seconds * self.motion_speed) as f32;
         uniforms.output[0] = project.output_size.0 as f32;
         uniforms.output[1] = project.output_size.1 as f32;
+        uniforms.dither[1] =
+            dither_cell(self.config.dither_size.clamp(1.0, 8.0), project.output_size);
         if uniforms != self.uniforms {
             queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&uniforms));
             self.uniforms = uniforms;
@@ -368,7 +389,7 @@ mod tests {
         assert_ne!(at(&config, 2.0), at(&config, 3.0));
         config.motion_speed = 0.0;
         assert_eq!(at(&config, 0.0), at(&config, 7200.0));
-        assert_eq!(std::mem::size_of::<AnimatedGradientUniforms>(), 160);
+        assert_eq!(std::mem::size_of::<AnimatedGradientUniforms>(), 176);
     }
 
     async fn test_constants() -> RenderVideoConstants {
@@ -407,6 +428,7 @@ mod tests {
             segment_time: frame as f32 / 30.0,
             recording_time: frame as f32 / 30.0,
             segment_has_camera: false,
+            display_placeholder: false,
         };
         let mut zoom = ZoomTransformTimeline::from_project(
             &project,

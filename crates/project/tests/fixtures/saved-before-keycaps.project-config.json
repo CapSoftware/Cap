@@ -1,0 +1,262 @@
+{
+	"annotations": [],
+	"aspectRatio": null,
+	"audio": {
+		"improve": false,
+		"isolation": "balanced",
+		"micStereoMode": "stereo",
+		"micVolumeDb": 0.0,
+		"mute": false,
+		"systemVolumeDb": 0.0
+	},
+	"background": {
+		"advancedShadow": {
+			"blur": 3.799999952316284,
+			"opacity": 68.0999984741211,
+			"size": 14.399999618530273
+		},
+		"blur": 0.0,
+		"border": null,
+		"crop": null,
+		"displayPosition": null,
+		"frame": null,
+		"inset": 0,
+		"notch": null,
+		"padding": 12.0,
+		"rounding": 0.0,
+		"roundingType": "squircle",
+		"shadow": 73.5999984741211,
+		"source": {
+			"config": {
+				"colorStops": [
+					{
+						"color": [125, 220, 249],
+						"position": 0.0
+					},
+					{
+						"color": [111, 155, 245],
+						"position": 25.0
+					},
+					{
+						"color": [107, 111, 232],
+						"position": 50.0
+					},
+					{
+						"color": [154, 127, 245],
+						"position": 75.0
+					},
+					{
+						"color": [192, 166, 247],
+						"position": 100.0
+					}
+				],
+				"contrast": 104.0,
+				"curvature": 75.0,
+				"detail": 2.0,
+				"direction": 30.0,
+				"exposure": 0.0,
+				"flowScale": 1.2000000476837158,
+				"flowStrength": 65.0,
+				"grainAmount": 7.0,
+				"grainSize": 1.0,
+				"light": 5.0,
+				"motionSpeed": 40.0,
+				"relief": 15.0,
+				"ripples": 100.0,
+				"seed": 7,
+				"shade": 20.0,
+				"vibrance": 110.0
+			},
+			"type": "animatedGradient"
+		}
+	},
+	"camera": {
+		"advancedShadow": {
+			"blur": 10.5,
+			"opacity": 44.20000076293945,
+			"size": 33.900001525878906
+		},
+		"backgroundBlur": {
+			"mode": "off"
+		},
+		"hide": false,
+		"manualPosition": null,
+		"mirror": false,
+		"position": {
+			"x": "right",
+			"y": "bottom"
+		},
+		"rounding": 100.0,
+		"roundingType": "squircle",
+		"scaleDuringZoom": 0.699999988079071,
+		"shadow": 62.5,
+		"shape": "square",
+		"size": 30.0,
+		"zoomSize": 60.0
+	},
+	"captions": {
+		"segments": [
+			{
+				"end": 2.0,
+				"id": "c-1",
+				"start": 0.5,
+				"text": "Hello there",
+				"words": []
+			}
+		],
+		"settings": {
+			"activeWordHighlight": false,
+			"animation": "bounce",
+			"backgroundColor": "#000000",
+			"backgroundOpacity": 90,
+			"color": "#FFFFFF",
+			"enabled": true,
+			"exportWithSubtitles": false,
+			"fadeDuration": 0.15000000596046448,
+			"font": "System Sans-Serif",
+			"fontWeight": 700,
+			"highlightColor": "#FFFFFF",
+			"highlightStyle": "color",
+			"italic": false,
+			"lingerDuration": 0.4000000059604645,
+			"manualPosition": null,
+			"outline": false,
+			"outlineColor": "#000000",
+			"position": "bottom-center",
+			"preset": "classic",
+			"size": 24,
+			"uppercase": false,
+			"wordTransitionDuration": 0.25
+		},
+		"sourceTimed": false
+	},
+	"clipAlignmentVersion": 0,
+	"clips": [],
+	"colorCorrection": {
+		"camera": {
+			"contrast": 0.0,
+			"exposure": 0.0,
+			"fade": 0.0,
+			"grain": 0.0,
+			"intensity": 1.0,
+			"preset": "none",
+			"saturation": 0.0,
+			"splitTone": 0.0,
+			"temperature": 0.0,
+			"tint": 0.0,
+			"vignette": 0.0
+		},
+		"gradeCursor": true,
+		"screen": {
+			"contrast": 0.0,
+			"exposure": 0.0,
+			"fade": 0.0,
+			"grain": 0.0,
+			"intensity": 1.0,
+			"preset": "none",
+			"saturation": 0.0,
+			"splitTone": 0.0,
+			"temperature": 0.0,
+			"tint": 0.0,
+			"vignette": 0.0
+		}
+	},
+	"cursor": {
+		"animationStyle": "mellow",
+		"baseRotation": 0.0,
+		"clickSpring": null,
+		"friction": 70.0,
+		"hide": false,
+		"hideWhenIdle": false,
+		"hideWhenIdleDelay": 2.0,
+		"hoverAnchors": false,
+		"interactionAnchors": false,
+		"mass": 3.0,
+		"motionBlur": 1.0,
+		"raw": false,
+		"ripple": {
+			"color": [71, 133, 255],
+			"duration": 0.6000000238418579,
+			"enabled": false,
+			"size": 1.0,
+			"strength": 0.699999988079071
+		},
+		"rotationAmount": 0.15000000596046448,
+		"size": 120,
+		"stopMovementInLastSeconds": null,
+		"tension": 470.0,
+		"type": "auto",
+		"useSvg": true
+	},
+	"hotkeys": {
+		"show": false
+	},
+	"keyboard": {
+		"settings": {
+			"backgroundColor": "#000000",
+			"backgroundOpacity": 95,
+			"color": "#FFFFFF",
+			"enabled": true,
+			"fadeDuration": 0.15000000596046448,
+			"font": "System Sans-Serif",
+			"fontWeight": 400,
+			"groupingThresholdMs": 500.0,
+			"lingerDuration": 0.800000011920929,
+			"position": "bottom-center",
+			"showModifiers": true,
+			"showSpecialKeys": true,
+			"size": 50,
+			"uppercase": false
+		}
+	},
+	"screenMotionBlur": 1.0,
+	"screenMovementSpring": {
+		"damping": 40.0,
+		"mass": 2.25,
+		"stiffness": 200.0
+	},
+	"textAnimVersion": 1,
+	"textSizeVersion": 1,
+	"timeline": {
+		"audioSegments": [],
+		"camera3dSegments": [],
+		"captionSegments": [],
+		"keyboardSegments": [
+			{
+				"backgroundColorOverride": null,
+				"colorOverride": null,
+				"displayText": "⌘C",
+				"end": 1.8,
+				"fadeDurationOverride": null,
+				"fontSizeOverride": null,
+				"id": "kb-edit-0-kb-1",
+				"keys": [
+					{
+						"key": "LMeta",
+						"timeOffset": 0.0
+					},
+					{
+						"key": "c",
+						"timeOffset": 40.0
+					}
+				],
+				"positionOverride": null,
+				"start": 1.0,
+				"uppercaseOverride": null
+			}
+		],
+		"maskSegments": [],
+		"sceneSegments": [],
+		"segments": [
+			{
+				"end": 5.0,
+				"name": null,
+				"recordingSegment": 0,
+				"start": 0.0,
+				"timescale": 1.0
+			}
+		],
+		"textSegments": [],
+		"zoomSegments": []
+	}
+}

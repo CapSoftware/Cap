@@ -49,7 +49,9 @@ struct CaptionBackgroundUniforms {
     rect: [f32; 4],
     color: [f32; 4],
     radius: f32,
-    _padding: [f32; 3],
+    shadow: f32,
+    edge: f32,
+    _padding: f32,
     _padding2: [f32; 4],
 }
 
@@ -127,6 +129,18 @@ impl CaptionFrameBox {
     pub fn is_at(&self, position: &str) -> bool {
         self.position == CaptionPosition::from_str(position)
     }
+
+    /// Whether the box is held to the left or right margin, so it widens
+    /// from that edge rather than about its centre.
+    pub fn is_side_pinned(&self) -> bool {
+        matches!(
+            self.position,
+            CaptionPosition::TopLeft
+                | CaptionPosition::BottomLeft
+                | CaptionPosition::TopRight
+                | CaptionPosition::BottomRight
+        )
+    }
 }
 
 /// Top-left corner of a caption box of `box_size` at rest in a frame of
@@ -196,6 +210,13 @@ fn record_caption_center(position: CaptionPosition, rect: [f32; 4], frame: (u32,
 }
 
 const BASE_TEXT_OPACITY: f32 = 0.8;
+
+/// The caption preset drawn as a card in the keycaps' material.
+pub const SOFT_PRESET: &str = "soft";
+/// The Soft card's shadow, as dark as the dark keycaps'.
+const SOFT_SHADOW: f32 = 0.42;
+/// The Soft card's lit top edge.
+const SOFT_EDGE: f32 = 0.16;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // Safety net for caption segments whose trailing word end was stretched across a
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
@@ -458,6 +479,27 @@ fn caption_text_left(buffer: &Buffer, content_left: f32, render_scale: f32) -> f
 /// A size of 0 (from a hand-edited or tool-written config; the editor's
 /// slider stops at 12) would give cosmic-text a zero line height, which it
 /// asserts against.
+/// The family and weight a caption or key label setting draws with. Inter
+/// ships with the renderer at one weight, which every weight setting uses.
+pub(crate) fn overlay_face(font: &str, font_weight: u32) -> (Family<'static>, Weight) {
+    let family = match font {
+        "System Serif" => Family::Serif,
+        "System Monospace" => Family::Monospace,
+        super::keycaps::OVERLAY_TEXT_FONT => Family::Name(super::keycaps::OVERLAY_TEXT_FONT),
+        _ => Family::SansSerif,
+    };
+    let weight = if font == super::keycaps::OVERLAY_TEXT_FONT {
+        Weight::SEMIBOLD
+    } else if font_weight >= 700 {
+        Weight::BOLD
+    } else if font_weight >= 500 {
+        Weight::MEDIUM
+    } else {
+        Weight::NORMAL
+    };
+    (family, weight)
+}
+
 pub(crate) fn scaled_font_size(size: u32, output_height: u32) -> Option<f32> {
     let font_size = size as f32 * (output_height as f32 / 1080.0);
     (font_size > 0.0).then_some(font_size)
@@ -564,7 +606,9 @@ impl CaptionsLayer {
             rect: [0.0; 4],
             color: [0.0; 4],
             radius: 0.0,
-            _padding: [0.0; 3],
+            shadow: 0.0,
+            edge: 0.0,
+            _padding: 0.0,
             _padding2: [0.0; 4],
         };
 
@@ -699,6 +743,7 @@ impl CaptionsLayer {
         constants: &RenderVideoConstants,
     ) {
         self.has_caption = false;
+        self.text_atlas.trim();
         self.active_layout = None;
         self.frame_box = None;
         self.background_scissor = None;
@@ -862,19 +907,10 @@ impl CaptionsLayer {
             return;
         };
         let wrap_width = (width as f32 - margin * 2.0).max(font_size);
-        let font_family = match caption_data.settings.font.as_str() {
-            "System Serif" => Family::Serif,
-            "System Monospace" => Family::Monospace,
-            _ => Family::SansSerif,
-        };
-
-        let weight = if caption_data.settings.font_weight >= 700 {
-            Weight::BOLD
-        } else if caption_data.settings.font_weight >= 500 {
-            Weight::MEDIUM
-        } else {
-            Weight::NORMAL
-        };
+        let (font_family, weight) = overlay_face(
+            &caption_data.settings.font,
+            caption_data.settings.font_weight,
+        );
 
         let base_alpha = (fade_opacity * BASE_TEXT_OPACITY).clamp(0.0, 1.0);
         let highlight_alpha = fade_opacity.clamp(0.0, 1.0);
@@ -949,20 +985,29 @@ impl CaptionsLayer {
             layout_width = layout_width.max(font_size);
         }
 
+        // The Soft card is made like the keycaps above it: a wider, calmer
+        // inset, their corner, their shadow and their lit top edge.
+        let soft = caption_data.settings.preset == SOFT_PRESET;
+        let (pad_x_ratio, pad_y_ratio, radius_ratio) = if soft {
+            (0.62, 0.42, 0.36)
+        } else {
+            (0.5, 0.5, 0.55)
+        };
         let available_width = (width as f32 - margin * 2.0).max(1.0);
-        let initial_padding = font_size * 0.5;
+        let initial_padding = font_size * pad_x_ratio;
         let fit_scale = if layout_width + initial_padding * 2.0 > available_width {
             (available_width / (layout_width + initial_padding * 2.0)).clamp(0.35, 1.0)
         } else {
             1.0
         };
         let effective_font_size = font_size * fit_scale;
-        let padding = effective_font_size * 0.5;
-        let corner_radius = effective_font_size * 0.55;
+        let pad_x = effective_font_size * pad_x_ratio;
+        let pad_y = effective_font_size * pad_y_ratio;
+        let corner_radius = effective_font_size * radius_ratio;
         let text_width = (layout_width * fit_scale).min(available_width);
         let text_height = layout_height * fit_scale;
-        let box_width = (text_width + padding * 2.0).min(available_width).max(1.0);
-        let box_height = (text_height + padding * 2.0).min(height as f32).max(1.0);
+        let box_width = (text_width + pad_x * 2.0).min(available_width).max(1.0);
+        let box_height = (text_height + pad_y * 2.0).min(height as f32).max(1.0);
 
         let (background_left, base_background_top) = caption_box_origin(
             position,
@@ -984,9 +1029,9 @@ impl CaptionsLayer {
         let draw_text_width = text_width * anim_scale;
         let draw_text_height = text_height * anim_scale;
 
-        let content_left = draw_box_left + padding * anim_scale;
+        let content_left = draw_box_left + pad_x * anim_scale;
         let text_left = caption_text_left(&self.text.buffer, content_left, render_scale);
-        let text_top = draw_box_top + padding * anim_scale;
+        let text_top = draw_box_top + pad_y * anim_scale;
 
         let bounds = TextBounds {
             left: (content_left - 2.0).floor() as i32,
@@ -1097,7 +1142,19 @@ impl CaptionsLayer {
             radius: (corner_radius * anim_scale)
                 .min(draw_box_width / 2.0)
                 .min(draw_box_height / 2.0),
-            _padding: [0.0; 3],
+            shadow: if soft {
+                SOFT_SHADOW
+                    * fade_opacity
+                    * (caption_data.settings.background_opacity as f32 / 60.0).min(1.0)
+            } else {
+                0.0
+            },
+            edge: if soft {
+                SOFT_EDGE * background_alpha
+            } else {
+                0.0
+            },
+            _padding: 0.0,
             _padding2: [0.0; 4],
         };
 
@@ -1131,7 +1188,9 @@ impl CaptionsLayer {
                     fade_opacity,
                 ],
                 radius: pill_radius,
-                _padding: [0.0; 3],
+                shadow: 0.0,
+                edge: 0.0,
+                _padding: 0.0,
                 _padding2: [0.0; 4],
             };
             queue.write_buffer(
@@ -1166,7 +1225,12 @@ impl CaptionsLayer {
             }
         }
 
-        let scissor_padding = 4.0;
+        // Room for the Soft card's shadow, which falls below and around it.
+        let scissor_padding = if soft {
+            4.0 + draw_box_height * 0.42
+        } else {
+            4.0
+        };
         let scissor_x = (draw_box_left - scissor_padding).max(0.0).floor() as u32;
         let scissor_y = (draw_box_top - scissor_padding).max(0.0).floor() as u32;
         let max_width = width.saturating_sub(scissor_x);
@@ -1379,7 +1443,14 @@ mod tests {
             "سلام Cap 123 دنیا",
             "Hello world",
         ] {
-            for wrap_width in [80.0_f32, 1800.0] {
+            for (wrap_width, (family, weight)) in [80.0_f32, 1800.0].into_iter().flat_map(|width| {
+                [
+                    (Family::SansSerif, Weight::BOLD),
+                    // Inter ships without Arabic, which falls back.
+                    super::overlay_face("Inter", 700),
+                ]
+                .map(|face| (width, face))
+            }) {
                 for colors in [
                     CaptionTextColors::Uniform(Color::rgb(255, 255, 255)),
                     CaptionTextColors::Spans(vec![(0..text.len(), Color::rgb(255, 200, 0))]),
@@ -1390,8 +1461,8 @@ mod tests {
                             text: text.to_string(),
                             font_size: 48.0_f32.to_bits(),
                             wrap_width: wrap_width.to_bits(),
-                            family: Family::SansSerif,
-                            weight: Weight::BOLD,
+                            family,
+                            weight,
                             colors,
                         },
                     );
@@ -1555,6 +1626,18 @@ mod tests {
 
     #[test]
     fn the_frame_box_knows_its_placement() {
+        for (position, pinned) in [
+            ("bottom-left", true),
+            ("top-right", true),
+            ("bottom-center", false),
+            ("manual", false),
+        ] {
+            assert_eq!(
+                CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], position).is_side_pinned(),
+                pinned,
+                "{position}"
+            );
+        }
         let manual = CaptionFrameBox::new([0.0, 0.0, 10.0, 10.0], "manual");
         assert!(manual.is_manual());
         assert!(manual.is_at("manual"));
@@ -2132,6 +2215,7 @@ mod gpu_tests {
             segment_time: 0.0,
             recording_time: 0.0,
             segment_has_camera: false,
+            display_placeholder: false,
         }
     }
 
@@ -2401,9 +2485,11 @@ mod gpu_tests {
             assert!(layer.has_caption);
             render_pixels(&constants, layer, size)
         };
+        // A system font, which every weight setting changes.
         let plain = CaptionSettings {
             enabled: true,
             size: 60,
+            font: "System Sans-Serif".to_string(),
             ..Default::default()
         };
         let color_highlight = CaptionSettings {

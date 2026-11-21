@@ -126,7 +126,12 @@ pub const CURSOR_STYLES: [(CursorAnimationStyle, Label, Label); 4] = [
 ];
 
 /// `FONT_OPTIONS` (`text-style.tsx:12-16`).
-pub const FONT_OPTIONS: [&str; 3] = ["System Sans-Serif", "System Serif", "System Monospace"];
+pub const FONT_OPTIONS: [&str; 4] = [
+    "Inter",
+    "System Sans-Serif",
+    "System Serif",
+    "System Monospace",
+];
 
 /// The project keeps the English `FONT_OPTIONS` value; menus show it translated.
 fn font_option_label(font: &str) -> SharedString {
@@ -146,10 +151,14 @@ pub const TEXT_WEIGHTS: [(u32, Label); 3] = [
 ];
 
 /// `KEYBOARD_POSITION_OPTIONS` (`text-style.tsx:28-35`).
-pub const KEYBOARD_POSITIONS: [(&str, Label); 6] = [
+/// Where the keys can sit, row by row as the position picker lays them out.
+pub const KEYBOARD_POSITIONS: [(&str, Label); 9] = [
     ("top-left", tr::editor::tabs::position::top_left),
     ("top-center", tr::editor::tabs::position::top_center),
     ("top-right", tr::editor::tabs::position::top_right),
+    ("middle-left", tr::editor::tabs::position::middle_left),
+    ("center", tr::editor::tabs::position::center),
+    ("middle-right", tr::editor::tabs::position::middle_right),
     ("bottom-left", tr::editor::tabs::position::bottom_left),
     ("bottom-center", tr::editor::tabs::position::bottom_center),
     ("bottom-right", tr::editor::tabs::position::bottom_right),
@@ -269,6 +278,7 @@ pub struct CaptionPreset {
     pub id: &'static str,
     pub label: Label,
     pub description: Label,
+    pub font: &'static str,
     pub font_weight: u32,
     pub size: u32,
     pub color: &'static str,
@@ -284,11 +294,272 @@ pub struct CaptionPreset {
     pub fade_duration: f32,
 }
 
+/// Writes a caption preset's styling into `settings`.
+pub(crate) fn apply_caption_preset_settings(
+    settings: &mut CaptionSettings,
+    preset: &CaptionPreset,
+) {
+    settings.preset = preset.id.to_string();
+    // A font the user picked themselves stays; only a preset's own face is
+    // swapped for the new preset's.
+    if CAPTION_PRESETS
+        .iter()
+        .any(|other| other.font == settings.font)
+    {
+        settings.font = preset.font.to_string();
+    }
+    settings.font_weight = preset.font_weight;
+    settings.size = preset.size;
+    settings.color = preset.color.to_string();
+    settings.background_color = preset.background_color.to_string();
+    settings.background_opacity = preset.background_opacity;
+    settings.outline = preset.outline;
+    settings.outline_color = preset.outline_color.to_string();
+    settings.highlight_color = preset.highlight_color.to_string();
+    settings.active_word_highlight = preset.active_word_highlight;
+    settings.highlight_style = preset.highlight_style.to_string();
+    settings.animation = preset.animation.to_string();
+    settings.uppercase = preset.uppercase;
+    settings.fade_duration = preset.fade_duration;
+}
+
+/// The key styles, each with the keys its tile shows.
+static KEY_STYLES: [(&str, fn() -> &'static str, &[&str]); 5] = [
+    (
+        "classic",
+        tr::editor::tabs::keyboard::style_classic,
+        &["⌘", "K"],
+    ),
+    (
+        "macos",
+        tr::editor::tabs::keyboard::style_macos,
+        &["⌘", "K"],
+    ),
+    (
+        "windows",
+        tr::editor::tabs::keyboard::style_windows,
+        &["Ctrl", "K"],
+    ),
+    (
+        "linux",
+        tr::editor::tabs::keyboard::style_linux,
+        &["Super", "K"],
+    ),
+    (
+        "mechanical",
+        tr::editor::tabs::keyboard::style_mechanical,
+        &["⌘", "K"],
+    ),
+];
+
+/// How the style tiles are set out: the three platform keyboards side by
+/// side, then the desk keyboard and the plain label.
+const KEY_STYLE_ROWS: [&[&str]; 2] = [&["macos", "windows", "linux"], &["mechanical", "classic"]];
+
+static KEY_THEMES: [(&str, fn() -> &'static str); 3] = [
+    ("light", tr::editor::tabs::keyboard::theme_light),
+    ("dark", tr::editor::tabs::keyboard::theme_dark),
+    ("retro", tr::editor::tabs::keyboard::theme_retro),
+];
+
+fn rgba(color: [f32; 4]) -> Hsla {
+    gpui::Rgba {
+        r: color[0],
+        g: color[1],
+        b: color[2],
+        a: color[3],
+    }
+    .into()
+}
+
+/// A small key, painted like the renderer paints it: the gradient top, the
+/// side as a solid lip under it, a fine border and a soft shadow.
+pub(crate) fn key_chip(
+    style: cap_rendering::keycaps::KeycapStyle,
+    theme: cap_rendering::keycaps::KeycapTheme,
+    label: &str,
+    modifier: bool,
+) -> gpui::Div {
+    key_chip_sized(style, theme, label, modifier, 24.)
+}
+
+pub(crate) fn key_chip_sized(
+    style: cap_rendering::keycaps::KeycapStyle,
+    theme: cap_rendering::keycaps::KeycapTheme,
+    label: &str,
+    modifier: bool,
+    height: f32,
+) -> gpui::Div {
+    #[allow(non_snake_case)]
+    let HEIGHT = height;
+    let geometry = style.geometry();
+    let depth = (geometry.depth * HEIGHT).max(2.);
+    if style.is_mechanical() {
+        return mechanical_chip(theme.mechanical_palette(modifier), label, HEIGHT, depth);
+    }
+    let palette = theme.palette(modifier);
+    div()
+        .h(px(HEIGHT - depth))
+        .min_w(px(HEIGHT - depth))
+        .px(px(HEIGHT * 0.25))
+        .mb(px(depth))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(geometry.radius * HEIGHT))
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(rgba(palette.top[0]), 0.),
+            gpui::linear_color_stop(rgba(palette.top[1]), 1.),
+        ))
+        .border_1()
+        .border_color(rgba(palette.border))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: rgba(palette.side[1]),
+                offset: gpui::point(px(0.), px(depth)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., palette.shadow * 0.7),
+                offset: gpui::point(px(0.), px(depth + 1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+        ])
+        .text_size(px(
+            HEIGHT * if label.chars().count() > 1 { 0.4 } else { 0.46 }
+        ))
+        .text_color(rgba(palette.label))
+        .child(label.to_string())
+}
+
+/// A mechanical key in small: the walls as the body, lit lighter at the back
+/// than the deep front, and the top face set in from them.
+fn mechanical_chip(
+    palette: cap_rendering::keycaps::KeycapPalette,
+    label: &str,
+    height: f32,
+    depth: f32,
+) -> gpui::Div {
+    let inset = (height * 0.1).max(2.);
+    div()
+        .h(px(height))
+        .min_w(px(height))
+        .pt(px((inset * 0.4).max(1.)))
+        .px(px(inset))
+        .pb(px(depth + inset * 0.45))
+        .flex()
+        .rounded(px(height * 0.11))
+        .bg(gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(rgba(palette.side[0]), 0.),
+            gpui::linear_color_stop(rgba(palette.side[1]), 1.),
+        ))
+        .border_1()
+        .border_color(rgba(palette.border))
+        .shadow(vec![gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 0., palette.shadow * 0.7),
+            offset: gpui::point(px(0.), px(1.5)),
+            blur_radius: px(3.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+        .child(
+            div()
+                .flex_1()
+                .px(px(height * 0.16))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(height * 0.08))
+                .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(rgba(palette.top[0]), 0.),
+                    gpui::linear_color_stop(rgba(palette.top[1]), 1.),
+                ))
+                .shadow(vec![gpui::BoxShadow {
+                    color: rgba(palette.highlight),
+                    offset: gpui::point(px(0.), px(0.5)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                    inset: true,
+                }])
+                .text_size(px(
+                    height * if label.chars().count() > 1 { 0.34 } else { 0.4 }
+                ))
+                .text_color(rgba(palette.label))
+                .child(label.to_string()),
+        )
+}
+
+/// A tile's preview: its keys as keycaps, or the classic label.
+fn key_preview(
+    style: cap_rendering::keycaps::KeycapStyle,
+    theme: cap_rendering::keycaps::KeycapTheme,
+    keys: &[&str],
+) -> gpui::AnyElement {
+    if style == cap_rendering::keycaps::KeycapStyle::Classic {
+        return div()
+            .h(px(22.))
+            .px(px(9.))
+            .flex()
+            .items_center()
+            .rounded(px(11.))
+            .bg(gpui::hsla(0., 0., 0., 0.9))
+            .text_size(px(11.))
+            .text_color(gpui::white())
+            .child(keys.concat())
+            .into_any_element();
+    }
+    div()
+        .flex()
+        .flex_row()
+        .items_end()
+        .gap(px(4.))
+        .children(
+            keys.iter()
+                .enumerate()
+                .map(|(index, key)| key_chip(style, theme, key, index + 1 < keys.len())),
+        )
+        .into_any_element()
+}
+
+/// What was pasted into Add Keystrokes as one line: a script's line breaks and
+/// runs of spaces become single spaces.
+pub(crate) fn key_prompt_text(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub static CAPTION_PRESETS: &[CaptionPreset] = &[
+    // New captions start here: see `CaptionSettings::default`.
+    CaptionPreset {
+        id: "soft",
+        label: tr::editor::tabs::captions::preset::soft,
+        description: tr::editor::tabs::captions::preset::soft_description,
+        font: "Inter",
+        font_weight: 600,
+        size: 46,
+        color: "#FFFFFF",
+        background_color: "#1C1C1F",
+        background_opacity: 86,
+        outline: false,
+        outline_color: "#000000",
+        highlight_color: "#FFFFFF",
+        active_word_highlight: true,
+        highlight_style: "color",
+        animation: "pop",
+        uppercase: false,
+        fade_duration: 0.15,
+    },
     CaptionPreset {
         id: "classic",
         label: tr::editor::tabs::captions::preset::classic,
         description: tr::editor::tabs::captions::preset::classic_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 50,
         color: "#FFFFFF",
@@ -297,7 +568,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         outline: false,
         outline_color: "#000000",
         highlight_color: "#FFFFFF",
-        active_word_highlight: false,
+        active_word_highlight: true,
         highlight_style: "color",
         animation: "bounce",
         uppercase: false,
@@ -307,6 +578,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "karaoke",
         label: tr::editor::tabs::captions::preset::karaoke,
         description: tr::editor::tabs::captions::preset::karaoke_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 52,
         color: "#FFFFFF",
@@ -325,6 +597,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "highlight",
         label: tr::editor::tabs::captions::preset::highlight,
         description: tr::editor::tabs::captions::preset::highlight_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 54,
         color: "#FFFFFF",
@@ -343,6 +616,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "pop",
         label: tr::editor::tabs::captions::preset::pop,
         description: tr::editor::tabs::captions::preset::pop_description,
+        font: "System Sans-Serif",
         font_weight: 700,
         size: 56,
         color: "#FFFFFF",
@@ -361,6 +635,7 @@ pub static CAPTION_PRESETS: &[CaptionPreset] = &[
         id: "minimal",
         label: tr::editor::tabs::captions::preset::minimal,
         description: tr::editor::tabs::captions::preset::minimal_description,
+        font: "System Sans-Serif",
         font_weight: 600,
         size: 46,
         color: "#FFFFFF",
@@ -747,12 +1022,15 @@ pub fn keyboard_settings(project: &ProjectConfiguration) -> KeyboardSettings {
         .unwrap_or_default()
 }
 
-fn keyboard_generation_settings_fingerprint(settings: &KeyboardSettings) -> (u64, u32, bool, bool) {
+fn keyboard_generation_settings_fingerprint(
+    settings: &KeyboardSettings,
+) -> (u64, u32, bool, bool, bool) {
     (
         settings.grouping_threshold_ms.to_bits(),
         settings.linger_duration.to_bits(),
         settings.show_modifiers,
         settings.show_special_keys,
+        settings.show_typing,
     )
 }
 
@@ -801,7 +1079,6 @@ pub enum SidebarMenu {
     CaptionAnimation,
     CaptionWeight,
     KeyboardFont,
-    KeyboardPosition,
     KeyboardWeight,
     /// The segment panels' own selects carry their segment index.
     ///
@@ -817,6 +1094,41 @@ pub enum SidebarMenu {
 pub struct OpenMenu {
     pub kind: SidebarMenu,
     pub state: ui::MenuState,
+}
+
+/// The timeline as keyboard generation saw it, to tell whether it changed.
+fn project_timeline_fingerprint(project: &ProjectConfiguration) -> Option<Vec<u8>> {
+    project
+        .timeline
+        .as_ref()
+        .and_then(|timeline| serde_json::to_vec(timeline).ok())
+}
+
+/// Whether the recorded keys on the track (keys added by hand aside) are
+/// exactly `generated`, so nothing the user changed would be lost.
+fn recorded_keys_match(
+    track: &[cap_project::KeyboardTrackSegment],
+    generated: &[cap_project::KeyboardTrackSegment],
+) -> bool {
+    let recorded: Vec<_> = track
+        .iter()
+        .filter(|segment| !cap_project::is_manual_keyboard_segment(segment))
+        .collect();
+    recorded.len() == generated.len()
+        && recorded
+            .iter()
+            .zip(generated)
+            .all(|(a, b)| serde_json::to_value(a).ok() == serde_json::to_value(b).ok())
+}
+
+/// Why generating found nothing to show: no keys pressed in the edit, or
+/// keys but no shortcuts.
+fn empty_generation_message(others_pressed: bool) -> &'static str {
+    if others_pressed {
+        tr::editor::tabs::keyboard::no_shortcuts()
+    } else {
+        tr::editor::tabs::keyboard::no_presses()
+    }
 }
 
 impl EditorWindow {
@@ -915,10 +1227,6 @@ impl EditorWindow {
             SidebarMenu::KeyboardFont => FONT_OPTIONS
                 .iter()
                 .map(|font| ui::MenuItem::new(font_option_label(font), *font == keyboard.font))
-                .collect(),
-            SidebarMenu::KeyboardPosition => KEYBOARD_POSITIONS
-                .iter()
-                .map(|(value, label)| ui::MenuItem::new(label(), *value == keyboard.position))
                 .collect(),
             SidebarMenu::KeyboardWeight => TEXT_WEIGHTS
                 .iter()
@@ -1167,15 +1475,6 @@ impl EditorWindow {
                     settings.font = font
                 });
             }
-            SidebarMenu::KeyboardPosition => {
-                let Some((value, _)) = KEYBOARD_POSITIONS.get(index) else {
-                    return;
-                };
-                let value = value.to_string();
-                self.set_keyboard_setting("keyboard-position", window, cx, move |settings| {
-                    settings.position = value
-                });
-            }
             SidebarMenu::KeyboardWeight => {
                 let Some((weight, _)) = TEXT_WEIGHTS.get(index) else {
                     return;
@@ -1245,6 +1544,20 @@ impl EditorWindow {
         self.set_keyboard_setting_inner(true, reason, window, cx, change);
     }
 
+    /// The keycap style the renderer draws for `settings`: an older project's
+    /// `auto` resolves for the platform it was recorded on, and stays on its
+    /// label when any key was coloured on its own.
+    pub(crate) fn effective_key_style<'a>(&self, settings: &'a KeyboardSettings) -> &'a str {
+        let platform = self.summary().and_then(|summary| summary.platform.as_ref());
+        let styled_keys = settings.style == "auto"
+            && self.project.timeline.as_ref().is_some_and(|timeline| {
+                timeline.keyboard_segments.iter().any(|segment| {
+                    segment.color_override.is_some() || segment.background_color_override.is_some()
+                })
+            });
+        settings.effective_style_for(platform, styled_keys)
+    }
+
     fn set_keyboard_setting_inner(
         &mut self,
         rebuild_timeline: bool,
@@ -1253,7 +1566,20 @@ impl EditorWindow {
         cx: &mut Context<Self>,
         change: impl FnOnce(&mut KeyboardSettings),
     ) {
-        let apply = |project: &mut ProjectConfiguration| with_keyboard_settings(project, change);
+        // The first edit settles an older project's `auto` style on what it
+        // draws now, so editing its label (say, back to the default colours)
+        // can never flip it to keys mid-edit.
+        let settled = keyboard_settings(&self.project);
+        let settled =
+            (settled.style == "auto").then(|| self.effective_key_style(&settled).to_string());
+        let apply = |project: &mut ProjectConfiguration| {
+            with_keyboard_settings(project, |settings| {
+                if let Some(style) = settled {
+                    settings.style = style;
+                }
+                change(settings);
+            })
+        };
         if rebuild_timeline {
             self.edit_project(reason, window, cx, apply);
         } else {
@@ -1519,6 +1845,16 @@ impl EditorWindow {
     /// `CameraConfig` (`ConfigSidebar.tsx:2978-3330`).
     pub(crate) fn render_camera_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if !self.summary().is_some_and(|summary| summary.has_camera) {
+            return crate::editor_side_panel::panel_empty_state(
+                &theme,
+                "icons/camera.svg",
+                tr::editor::tabs::camera::empty_title(),
+                tr::editor::tabs::camera::empty_description(),
+            )
+            .pt(px(40.))
+            .into_any_element();
+        }
         let camera = &self.project.camera;
         let manual = camera.manual_position;
 
@@ -1965,7 +2301,6 @@ impl EditorWindow {
         ];
         let enabled = self.project.audio.improve;
         let enabled_by_default = self.sidebar.audio_enhancement_default;
-        let accent = Hsla::from(theme.editor.accent);
         let line = Hsla::from(theme.editor.line);
 
         div()
@@ -1995,7 +2330,7 @@ impl EditorWindow {
                             })
                             .child(svg().path("icons/microphone.svg").size(px(16.)).text_color(
                                 if enabled {
-                                    accent
+                                    Hsla::from(theme.editor.accent_ink)
                                 } else {
                                     Hsla::from(theme.editor.text_2)
                                 },
@@ -2148,6 +2483,19 @@ impl EditorWindow {
     /// The cursor tab (`:820-1000`).
     pub(crate) fn render_cursor_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if !self
+            .summary()
+            .is_some_and(|summary| summary.has_cursor_data)
+        {
+            return crate::editor_side_panel::panel_empty_state(
+                &theme,
+                "icons/cursor.svg",
+                tr::editor::tabs::cursor::empty_title(),
+                tr::editor::tabs::cursor::empty_description(),
+            )
+            .pt(px(40.))
+            .into_any_element();
+        }
         let cursor = &self.project.cursor;
         let hidden = cursor.hide;
 
@@ -2182,7 +2530,7 @@ impl EditorWindow {
             .child(self.slider_field(
                 tr::editor::tabs::cursor::size_label(),
                 SliderKey::Cursor(CursorSlider::Size),
-                "",
+                "int",
                 cx,
             ))
             .child(self.slider_field(
@@ -2192,6 +2540,7 @@ impl EditorWindow {
                 cx,
             ))
             .child(self.render_cursor_ripple(cx))
+            .child(self.render_click_sounds(cx))
             .child(
                 ui::Field::inline(&theme, tr::editor::tabs::cursor::hide_when_idle()).value(
                     ui::Toggle::plain(&theme, "cursor-idle", idle)
@@ -2209,49 +2558,33 @@ impl EditorWindow {
             // `<Subfield name=tr::editor::tabs::cursor::inactivity_delay() class="gap-4 items-center">`
             // with a `w-12 text-right` readout beside the slider (`:945-967`).
             let readout = format!("{:.1}s", cursor.hide_when_idle_delay);
-            body = body.child(
-                ui::Subfield::plain(&theme, tr::editor::tabs::cursor::inactivity_delay())
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(12.))
-                            .items_center()
-                            .child(self.slider_flex(
-                                SliderKey::Cursor(CursorSlider::IdleDelay),
-                                "s",
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .w(px(48.))
-                                    .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_11))
-                                    .child(readout),
-                            ),
-                    ),
-            );
+            body = body.child(self.slider_field_readout(
+                tr::editor::tabs::cursor::inactivity_delay(),
+                SliderKey::Cursor(CursorSlider::IdleDelay),
+                readout,
+                cx,
+            ));
         }
 
         let smooth = !cursor.raw;
         let mut body = body
             .child(
-                ui::Field::section(&theme, tr::editor::tabs::cursor::movement_style()).child(
-                    ui::RadioCards::plain(
-                        &theme,
-                        "cursor-style",
-                        CURSOR_STYLES
-                            .iter()
-                            .map(|(_, label, description)| {
-                                ui::RadioCard::new(label(), Some(description()))
-                            })
-                            .collect(),
-                        style_index,
-                    )
-                    .on_select(cx.listener(
-                        |this, index: &usize, window, cx| {
+                ui::Field::section(&theme, tr::editor::tabs::cursor::movement_style())
+                    .child(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            "cursor-style",
+                            CURSOR_STYLES
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (_, label, _))| {
+                                    ui::SegmentOption::new(label(), style_index == Some(index))
+                                })
+                                .collect(),
+                        )
+                        .stretch()
+                        .item_height(px(28.))
+                        .on_select(cx.listener(|this, index: &usize, window, cx| {
                             let Some((style, _, _)) = CURSOR_STYLES.get(*index) else {
                                 return;
                             };
@@ -2267,9 +2600,19 @@ impl EditorWindow {
                                 }
                                 true
                             });
+                        }))
+                        .into_any_element(),
+                    )
+                    .children(style_index.and_then(|index| CURSOR_STYLES.get(index)).map(
+                        |(_, _, description)| {
+                            div()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
+                                .text_color(Hsla::from(theme.editor.text_2))
+                                .child(description())
+                                .into_any_element()
                         },
                     )),
-                ),
             )
             .child(
                 div()
@@ -2301,7 +2644,7 @@ impl EditorWindow {
                             .child(self.slider_field(
                                 tr::editor::tabs::cursor::tension(),
                                 SliderKey::Cursor(CursorSlider::Tension),
-                                "",
+                                "int",
                                 cx,
                             ))
                             .child(self.slider_field(
@@ -2366,8 +2709,139 @@ impl EditorWindow {
 
     // -- Keyboard ------------------------------------------------------------
 
-    fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// A setting that changes which recorded keys show takes effect at once
+    /// while keys are on: the recording's keys are generated again, keys added
+    /// by hand stay, and one undo puts back both the setting and the keys
+    /// unless another edit came in between.
+    /// Recorded keys the user has edited are kept as they are (see
+    /// `generate_keyboard_segments`).
+    pub(crate) fn change_shown_keys(
+        &mut self,
+        reason: &'static str,
+        change: impl FnOnce(&mut KeyboardSettings),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = keyboard_settings(&self.project);
+        if !previous.enabled {
+            self.set_keyboard_setting(reason, window, cx, change);
+            return;
+        }
+        self.set_keyboard_setting(reason, window, cx, change);
+        // The setting's undo step, which its regenerated keys join when they
+        // land straight after it (see `finish_keyboard_refresh`).
+        self.keyboard_refresh_step = Some(self.history.entry_count());
+        self.generate_keyboard_segments(Some(previous), window, cx);
+        // Generation that could not start leaves nothing to wait for.
+        self.finish_keyboard_refresh(None);
+    }
+
+    fn wait_out_gesture_then_generate(
+        &mut self,
+        unedited_from: Option<KeyboardSettings>,
+        requested_on: Vec<u8>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.generating_keyboard = true;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(120))
+                    .await;
+                let Ok(paused) = this.update(cx, |this, _| this.history.is_paused()) else {
+                    return;
+                };
+                if !paused {
+                    break;
+                }
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.generating_keyboard = false;
+                // The gesture may have edited the timeline after the wait
+                // began (trimming a key, say); that edit stands over the run
+                // that was asked for before it.
+                if project_timeline_fingerprint(&this.project).as_deref() != Some(&requested_on[..])
+                {
+                    // A setting changed during the wait runs again only with
+                    // its check against edited keys, which keeps the trim.
+                    if std::mem::take(&mut this.keyboard_refresh_pending)
+                        && unedited_from.is_some()
+                        && keyboard_settings(&this.project).enabled
+                    {
+                        this.generate_keyboard_segments(unedited_from, window, cx);
+                        return;
+                    }
+                    this.keyboard_generation_message =
+                        Some(tr::editor::tabs::keyboard::changed_during_generation().into());
+                    this.finish_keyboard_refresh(None);
+                    cx.notify();
+                    window.refresh();
+                    return;
+                }
+                this.generate_keyboard_segments(unedited_from, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Joins regenerated keys to the setting change that asked for them, as
+    /// one undo step, when they were recorded right after it. Any other edit
+    /// in between keeps them as separate steps, so it is never undone with
+    /// them.
+    fn finish_keyboard_refresh(&mut self, recorded_at: Option<usize>) {
         if self.generating_keyboard {
+            return;
+        }
+        if let (Some(step), Some(recorded)) = (self.keyboard_refresh_step, recorded_at)
+            && recorded == step + 1
+            && self.history.entry_count() == recorded
+        {
+            self.history.fold_into_previous();
+        }
+        self.keyboard_refresh_step = None;
+    }
+
+    /// Turning keys on for a recording that has none on its timeline yet
+    /// generates them, rather than leaving an empty track behind a button.
+    pub(crate) fn generate_keyboard_segments_if_empty(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_recorded = self.project.timeline.as_ref().is_some_and(|timeline| {
+            timeline
+                .keyboard_segments
+                .iter()
+                .any(|segment| !cap_project::is_manual_keyboard_segment(segment))
+        });
+        if !has_recorded {
+            self.generate_keyboard_segments_clicked(window, cx);
+        }
+    }
+
+    fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.generate_keyboard_segments(None, window, cx);
+    }
+
+    /// Generates the recording's keys. With `unedited_from`, the settings in
+    /// force before a change, the recorded keys on the track are replaced
+    /// only if they are still what those settings generated: keys the user
+    /// trimmed, split or deleted are kept, and a note says how to apply the
+    /// change to them.
+    fn generate_keyboard_segments(
+        &mut self,
+        unedited_from: Option<KeyboardSettings>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.generating_keyboard {
+            // A setting changed again while keys generate: run once more when
+            // this finishes, against the track as it stands then.
+            if unedited_from.is_some() {
+                self.keyboard_refresh_pending = true;
+            }
             return;
         }
         let Some(timeline) = self.project.timeline.clone() else {
@@ -2384,91 +2858,160 @@ impl EditorWindow {
         };
         let settings = keyboard_settings(&self.project);
         let settings_fingerprint = keyboard_generation_settings_fingerprint(&settings);
+        // Generation can turn keys on; if they are switched on or off while it
+        // runs, that later choice stands and the result is dropped.
+        let enabled_before = settings.enabled;
         let path = self.project_path.clone();
         self.generating_keyboard = true;
         self.keyboard_generation_message = None;
         cx.notify();
         window.refresh();
 
+        let retry_from = unedited_from.clone();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     let meta = RecordingMeta::load_for_project(&path)
                         .map_err(tr::editor::tabs::keyboard::load_failed)?;
-                    cap_project::generate_project_keyboard_segments(&meta, &timeline, &settings)
+                    if let Some(previous) = unedited_from {
+                        let before = cap_project::generate_project_keyboard_segments_reporting(
+                            &meta, &timeline, &previous,
+                        )?
+                        .0;
+                        if !recorded_keys_match(&timeline.keyboard_segments, &before) {
+                            return Ok(None);
+                        }
+                    }
+                    cap_project::generate_project_keyboard_segments_reporting(
+                        &meta, &timeline, &settings,
+                    )
+                    .map(Some)
                 })
                 .await;
 
             this.update_in(cx, |this, window, cx| {
                 this.generating_keyboard = false;
-                let segments = match result {
-                    Ok(segments) => segments,
-                    Err(error) => {
-                        tracing::error!("keyboard generation failed: {error}");
-                        this.keyboard_generation_message = Some(error);
+                // A queued change runs again only while keys are still on; if
+                // they were switched off meanwhile, that choice stands and this
+                // run's own guard below drops its result.
+                if std::mem::take(&mut this.keyboard_refresh_pending)
+                    && keyboard_settings(&this.project).enabled
+                {
+                    this.generate_keyboard_segments(retry_from, window, cx);
+                    return;
+                }
+                // A drag in progress holds history; keys landing now would join
+                // its undo step. Generate again once the gesture has ended, but
+                // only if it left the timeline alone: a drag that edits it
+                // (trimming a key, say) makes this result stale, and the guard
+                // below drops it without touching that edit.
+                let timeline_untouched = project_timeline_fingerprint(&this.project).as_deref()
+                    == Some(&timeline_fingerprint[..]);
+                if this.history.is_paused() && timeline_untouched {
+                    this.wait_out_gesture_then_generate(
+                        retry_from,
+                        timeline_fingerprint,
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+                let mut apply = |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                    let (segments, others_pressed) = match result {
+                        Ok(Some(result)) => result,
+                        Ok(None) => {
+                            this.keyboard_generation_message =
+                                Some(tr::editor::tabs::keyboard::kept_edits().into());
+                            cx.notify();
+                            window.refresh();
+                            return;
+                        }
+                        Err(error) => {
+                            tracing::error!("keyboard generation failed: {error}");
+                            this.keyboard_generation_message = Some(error);
+                            cx.notify();
+                            window.refresh();
+                            return;
+                        }
+                    };
+                    let timeline_unchanged = this
+                        .project
+                        .timeline
+                        .as_ref()
+                        .and_then(|timeline| serde_json::to_vec(timeline).ok())
+                        .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
+                    let settings_unchanged =
+                        keyboard_generation_settings_fingerprint(&keyboard_settings(&this.project))
+                            == settings_fingerprint;
+                    if keyboard_settings(&this.project).enabled != enabled_before {
+                        cx.notify();
+                        return;
+                    }
+                    if !timeline_unchanged || !settings_unchanged {
+                        this.keyboard_generation_message =
+                            Some(tr::editor::tabs::keyboard::changed_during_generation().into());
                         cx.notify();
                         window.refresh();
                         return;
                     }
-                };
-                let timeline_unchanged = this
-                    .project
-                    .timeline
-                    .as_ref()
-                    .and_then(|timeline| serde_json::to_vec(timeline).ok())
-                    .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
-                let settings_unchanged =
-                    keyboard_generation_settings_fingerprint(&keyboard_settings(&this.project))
-                        == settings_fingerprint;
-                if !timeline_unchanged || !settings_unchanged {
-                    this.keyboard_generation_message =
-                        Some(tr::editor::tabs::keyboard::changed_during_generation().into());
-                    cx.notify();
-                    window.refresh();
-                    return;
-                }
-                let has_segments = !segments.is_empty();
-                let already_empty = this
-                    .project
-                    .timeline
-                    .as_ref()
-                    .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
-                if !has_segments && already_empty {
-                    this.keyboard_generation_message =
-                        Some(tr::editor::tabs::keyboard::no_presses().into());
-                    cx.notify();
-                    window.refresh();
-                    return;
-                }
+                    let has_segments = !segments.is_empty();
+                    let already_empty = this
+                        .project
+                        .timeline
+                        .as_ref()
+                        .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
+                    if !has_segments && already_empty {
+                        this.keyboard_generation_message =
+                            Some(empty_generation_message(others_pressed).into());
+                        cx.notify();
+                        window.refresh();
+                        return;
+                    }
 
-                if has_segments {
-                    this.tracks.keyboard = true;
-                }
-                this.edit_project("keyboard-generate", window, cx, move |project| {
                     if has_segments {
-                        let keyboard = project.keyboard.get_or_insert_with(KeyboardData::default);
-                        keyboard.settings.enabled = true;
+                        this.tracks.keyboard = true;
                     }
-                    let Some(timeline) = project.timeline.as_mut() else {
-                        return false;
-                    };
-                    timeline.keyboard_segments = segments;
-                    true
-                });
-                if has_segments {
-                    this.keyboard_generation_message = None;
-                } else {
-                    if this.selection.as_ref().is_some_and(|selection| {
-                        selection.track == crate::editor_timeline::TrackKind::Keyboard
-                    }) {
-                        this.set_selection(None, cx);
+                    this.edit_project("keyboard-generate", window, cx, move |project| {
+                        if has_segments {
+                            let keyboard =
+                                project.keyboard.get_or_insert_with(KeyboardData::default);
+                            keyboard.settings.enabled = true;
+                        }
+                        let Some(timeline) = project.timeline.as_mut() else {
+                            return false;
+                        };
+                        // Keys added by hand are not the recording's to replace.
+                        let mut segments = segments;
+                        segments.extend(
+                            timeline
+                                .keyboard_segments
+                                .iter()
+                                .filter(|segment| cap_project::is_manual_keyboard_segment(segment))
+                                .cloned(),
+                        );
+                        segments.sort_by(|a, b| a.start.total_cmp(&b.start));
+                        timeline.keyboard_segments = segments;
+                        true
+                    });
+                    if has_segments {
+                        this.keyboard_generation_message = None;
+                    } else {
+                        if this.selection.as_ref().is_some_and(|selection| {
+                            selection.track == crate::editor_timeline::TrackKind::Keyboard
+                        }) {
+                            this.set_selection(None, cx);
+                        }
+                        this.keyboard_generation_message =
+                            Some(empty_generation_message(others_pressed).into());
+                        cx.notify();
+                        window.refresh();
                     }
-                    this.keyboard_generation_message =
-                        Some(tr::editor::tabs::keyboard::no_presses().into());
-                    cx.notify();
-                    window.refresh();
-                }
+                };
+                let before = this.history.entry_count();
+                apply(this, window, cx);
+                let after = this.history.entry_count();
+                this.finish_keyboard_refresh((after > before).then_some(after));
             })
             .ok();
         })
@@ -2476,8 +3019,139 @@ impl EditorWindow {
     }
 
     /// `KeyboardTab` (`KeyboardTab.tsx:128-553`).
+    /// The key style tiles, then, for keycaps, the theme tiles. Each tile
+    /// shows a small key in the renderer's own colours.
+    fn render_key_style_picker(
+        &self,
+        settings: &KeyboardSettings,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
+        let theme = self.theme;
+        let effective = self.effective_key_style(settings).to_string();
+        let style = KeycapStyle::from_setting_for(
+            &effective,
+            self.summary().and_then(|summary| summary.platform.as_ref()),
+        );
+        let key_theme = KeycapTheme::from_setting(&settings.theme);
+        let tile_for = |&(value, label, keys): &(&'static str, fn() -> &'static str, &[&str])| {
+            let tile_style = KeycapStyle::from_setting(value);
+            self.key_choice_tile(
+                SharedString::from(format!("keyboard-style-{value}")),
+                label(),
+                effective == value,
+                key_preview(tile_style, key_theme, keys),
+                // The timeline's key labels follow the style, so it rebuilds.
+                cx.listener(move |this, _, window, cx| {
+                    this.set_keyboard_setting("keyboard-style", window, cx, move |settings| {
+                        settings.style = value.to_string()
+                    });
+                }),
+            )
+        };
+        let row = |values: &[&str]| {
+            div().flex().flex_row().gap(px(8.)).children(
+                values
+                    .iter()
+                    .filter_map(|value| KEY_STYLES.iter().find(|(v, ..)| v == value))
+                    .map(&tile_for),
+            )
+        };
+        let keys = KEY_STYLES
+            .iter()
+            .find(|(value, ..)| *value == effective)
+            .map_or(&["⌘", "K"][..], |(_, _, keys)| keys);
+        let themes = KEY_THEMES.iter().map(|(value, label)| {
+            let value = *value;
+            self.key_choice_tile(
+                SharedString::from(format!("keyboard-theme-{value}")),
+                label(),
+                settings.theme == value,
+                key_preview(style, KeycapTheme::from_setting(value), keys),
+                cx.listener(move |this, _, window, cx| {
+                    this.set_keyboard_setting_inner(
+                        false,
+                        "keyboard-theme",
+                        window,
+                        cx,
+                        move |settings| settings.theme = value.to_string(),
+                    );
+                }),
+            )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                ui::Field::section(&theme, tr::editor::tabs::keyboard::key_style()).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .children(KEY_STYLE_ROWS.iter().map(|values| row(values))),
+                ),
+            )
+            .when(style != KeycapStyle::Classic, |this| {
+                this.child(
+                    ui::Field::section(&theme, tr::editor::tabs::keyboard::key_theme())
+                        .child(div().flex().flex_row().gap(px(8.)).children(themes)),
+                )
+            })
+    }
+
+    fn key_choice_tile(
+        &self,
+        id: SharedString,
+        label: &'static str,
+        selected: bool,
+        preview: impl IntoElement,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> impl IntoElement {
+        let editor = self.theme.editor;
+        div()
+            .id(id)
+            .flex_1()
+            .min_w_0()
+            .h(px(78.))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(10.))
+            .rounded(px(12.))
+            .map(|this| {
+                if selected {
+                    this.bg(editor.choice_selected_fill())
+                        .shadow(editor.choice_selected_shadow())
+                } else {
+                    this.bg(editor.choice_fill())
+                        .shadow(editor.choice_ring())
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(editor.choice_hover_fill()))
+                }
+            })
+            .on_click(on_click)
+            .child(preview)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(if selected {
+                        editor.text_1
+                    } else {
+                        editor.text_2
+                    }))
+                    .child(label),
+            )
+    }
+
     pub(crate) fn render_keyboard_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        // A blank project has no recording to take key presses from until one
+        // is imported; its keys come from the composer and the track.
+        let blank = self
+            .summary()
+            .is_some_and(|summary| summary.blank && !summary.has_keyboard_capture);
         let settings = keyboard_settings(&self.project);
         let enabled = settings.enabled;
         let has_segments = self
@@ -2497,91 +3171,105 @@ impl EditorWindow {
             .find(|(weight, _)| *weight == settings.font_weight)
             .map_or(tr::editor::tabs::weight::normal(), |(_, label)| label());
 
+        let classic = self.effective_key_style(&settings) == "classic";
+
         // `class={cx("space-y-4", !enabled && "opacity-50 pointer-events-none")}`
         let body = div()
             .flex()
             .flex_col()
             .gap(px(16.))
             .when(!enabled, |this| this.opacity(0.5))
+            .child(self.render_key_style_picker(&settings, cx))
+            .child(self.render_key_sounds(cx))
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::font_settings()).child(
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        .child(self.labelled_inline(
-                            tr::editor::tabs::keyboard::font_family(),
-                            self.menu_select(
-                                SidebarMenu::KeyboardFont,
-                                "keyboard-font",
-                                font_label,
-                                cx,
-                            ),
-                        ))
+                        // Keycaps are set in each keyboard's own face, so the
+                        // family and weight only apply to the classic label.
+                        .when(classic, |this| {
+                            this.child(self.labelled_inline(
+                                tr::editor::tabs::keyboard::font_family(),
+                                self.menu_select(
+                                    SidebarMenu::KeyboardFont,
+                                    "keyboard-font",
+                                    font_label,
+                                    cx,
+                                ),
+                            ))
+                        })
                         .child(
                             self.slider_field(
                                 tr::editor::tabs::keyboard::size_label(),
                                 SliderKey::Keyboard(KeyboardSlider::Size),
-                                "",
+                                "int",
                                 cx,
                             )
                             .into_any_element(),
                         )
-                        .child(self.labelled(
-                            tr::editor::tabs::keyboard::text_color(),
-                            self.render_hex_field(
-                                crate::editor_panels::FieldKey::KeyboardColor,
-                                &settings.color,
-                                cx,
-                            ),
-                        )),
-                ),
-            )
-            .child(
-                ui::Field::section(&theme, tr::editor::tabs::keyboard::background_settings())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .child(self.labelled(
-                                tr::editor::tabs::keyboard::background_color(),
+                        .when(classic, |this| {
+                            this.child(self.labelled(
+                                tr::editor::tabs::keyboard::text_color(),
                                 self.render_hex_field(
-                                    crate::editor_panels::FieldKey::KeyboardBackground,
-                                    &settings.background_color,
+                                    crate::editor_panels::FieldKey::KeyboardColor,
+                                    &settings.color,
                                     cx,
                                 ),
                             ))
-                            .child(
-                                self.slider_field(
-                                    tr::editor::tabs::keyboard::background_opacity(),
-                                    SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
-                                    "",
-                                    cx,
-                                )
-                                .into_any_element(),
+                        }),
+                ),
+            )
+            // Keycaps take their colours from the theme; the label's own
+            // background only applies to the classic look.
+            .when(classic, |this| {
+                this.child(
+                    ui::Field::section(&theme, tr::editor::tabs::keyboard::background_settings())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.))
+                                .child(self.labelled(
+                                    tr::editor::tabs::keyboard::background_color(),
+                                    self.render_hex_field(
+                                        crate::editor_panels::FieldKey::KeyboardBackground,
+                                        &settings.background_color,
+                                        cx,
+                                    ),
+                                ))
+                                .child(
+                                    self.slider_field(
+                                        tr::editor::tabs::keyboard::background_opacity(),
+                                        SliderKey::Keyboard(KeyboardSlider::BackgroundOpacity),
+                                        "",
+                                        cx,
+                                    )
+                                    .into_any_element(),
+                                ),
+                        ),
+                )
+            })
+            .child(
+                ui::Field::section(&theme, tr::editor::tabs::keyboard::position())
+                    .value_text(position_label)
+                    .child(self.render_key_position_picker(&settings.position, cx)),
+            )
+            .when(
+                classic && settings.font != cap_rendering::keycaps::OVERLAY_TEXT_FONT,
+                |this| {
+                    this.child(
+                        ui::Field::inline(&theme, tr::editor::tabs::keyboard::font_weight()).child(
+                            self.menu_select(
+                                SidebarMenu::KeyboardWeight,
+                                "keyboard-weight",
+                                weight_label,
+                                cx,
                             ),
-                    ),
-            )
-            .child(
-                ui::Field::inline(&theme, tr::editor::tabs::keyboard::position()).child(
-                    self.menu_select(
-                        SidebarMenu::KeyboardPosition,
-                        "keyboard-position",
-                        position_label,
-                        cx,
-                    ),
-                ),
-            )
-            .child(
-                ui::Field::inline(&theme, tr::editor::tabs::keyboard::font_weight()).child(
-                    self.menu_select(
-                        SidebarMenu::KeyboardWeight,
-                        "keyboard-weight",
-                        weight_label,
-                        cx,
-                    ),
-                ),
+                        ),
+                    )
+                },
             )
             .child(
                 ui::Field::section(&theme, tr::editor::tabs::keyboard::animation()).child(
@@ -2601,12 +3289,15 @@ impl EditorWindow {
                             format!("{:.1}s", settings.linger_duration),
                             cx,
                         ))
-                        .child(self.labelled_readout(
-                            tr::editor::tabs::keyboard::grouping_threshold(),
-                            SliderKey::Keyboard(KeyboardSlider::GroupingThreshold),
-                            format!("{:.0}ms", settings.grouping_threshold_ms),
-                            cx,
-                        )),
+                        // Grouping only joins typed letters into words.
+                        .when(settings.show_typing, |this| {
+                            this.child(self.labelled_readout(
+                                tr::editor::tabs::keyboard::grouping_threshold(),
+                                SliderKey::Keyboard(KeyboardSlider::GroupingThreshold),
+                                format!("{:.0}ms", settings.grouping_threshold_ms),
+                                cx,
+                            ))
+                        }),
                 ),
             )
             .child(
@@ -2615,30 +3306,33 @@ impl EditorWindow {
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        .child(
-                            ui::Subfield::plain(
-                                &theme,
-                                tr::editor::tabs::keyboard::show_modifiers(),
-                            )
-                            .child(
-                                ui::Toggle::plain(
+                        .when(settings.show_typing, |this| {
+                            this.child(
+                                ui::Subfield::plain(
                                     &theme,
-                                    "keyboard-modifiers",
-                                    settings.show_modifiers,
+                                    tr::editor::tabs::keyboard::show_modifiers(),
                                 )
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        let next = !keyboard_settings(&this.project).show_modifiers;
-                                        this.set_keyboard_setting(
-                                            "keyboard-modifiers",
-                                            window,
-                                            cx,
-                                            move |settings| settings.show_modifiers = next,
-                                        );
-                                    },
-                                )),
-                            ),
-                        )
+                                .child(
+                                    ui::Toggle::plain(
+                                        &theme,
+                                        "keyboard-modifiers",
+                                        settings.show_modifiers,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            let next =
+                                                !keyboard_settings(&this.project).show_modifiers;
+                                            this.change_shown_keys(
+                                                "keyboard-modifiers",
+                                                move |settings| settings.show_modifiers = next,
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                            )
+                        })
                         .child(
                             ui::Subfield::plain(
                                 &theme,
@@ -2654,11 +3348,11 @@ impl EditorWindow {
                                     |this, _, window, cx| {
                                         let next =
                                             !keyboard_settings(&this.project).show_special_keys;
-                                        this.set_keyboard_setting(
+                                        this.change_shown_keys(
                                             "keyboard-special",
+                                            move |settings| settings.show_special_keys = next,
                                             window,
                                             cx,
-                                            move |settings| settings.show_special_keys = next,
                                         );
                                     },
                                 )),
@@ -2687,36 +3381,38 @@ impl EditorWindow {
                         ),
                 ),
             )
-            .child(
-                div().pt(px(8.)).child(
-                    ui::Button::plain(
-                        &theme,
-                        "keyboard-generate",
-                        ui::ButtonVariant::Primary,
-                        ui::ButtonSize::Md,
-                    )
-                    .label(if self.generating_keyboard {
-                        tr::editor::tabs::keyboard::generating()
-                    } else if has_segments {
-                        tr::editor::tabs::keyboard::regenerate()
-                    } else {
-                        tr::editor::tabs::keyboard::generate()
-                    })
-                    .full_width()
-                    .disabled(self.generating_keyboard || self.project.timeline.is_none())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.generate_keyboard_segments_clicked(window, cx);
-                    })),
-                ),
-            )
+            .when(!blank, |this| {
+                this.child(
+                    div().pt(px(8.)).child(
+                        ui::Button::editor(
+                            &theme,
+                            "keyboard-generate",
+                            ui::ButtonVariant::Primary,
+                            ui::ButtonSize::Md,
+                        )
+                        .label(if self.generating_keyboard {
+                            tr::editor::tabs::keyboard::generating()
+                        } else if has_segments {
+                            tr::editor::tabs::keyboard::regenerate()
+                        } else {
+                            tr::editor::tabs::keyboard::generate()
+                        })
+                        .full_width()
+                        .disabled(self.generating_keyboard || self.project.timeline.is_none())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.generate_keyboard_segments_clicked(window, cx);
+                        })),
+                    ),
+                )
+            })
             .children(self.keyboard_generation_message.as_ref().map(|message| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(message.clone())
                     .into_any_element()
             }))
-            .children((!has_segments).then(|| {
+            .children((!has_segments && !blank).then(|| {
                 div()
                     .py(px(16.))
                     .flex()
@@ -2732,7 +3428,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.editor.text_3))
                             .child(tr::editor::tabs::keyboard::empty_description()),
                     )
                     .into_any_element()
@@ -2753,6 +3449,9 @@ impl EditorWindow {
                             keyboard.settings.enabled = next;
                             true
                         });
+                        if next {
+                            this.generate_keyboard_segments_if_empty(window, cx);
+                        }
                         if !next
                             && this.selection.as_ref().is_some_and(|s| {
                                 s.track == crate::editor_timeline::TrackKind::Keyboard
@@ -2763,9 +3462,353 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
+            // What the keys show: shortcuts only, or everything typed too.
+            // Up front, so it is clear the typing can be shown.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            "keyboard-show",
+                            vec![
+                                ui::SegmentOption::new(
+                                    tr::editor::tabs::keyboard::show_shortcuts(),
+                                    !settings.show_typing,
+                                ),
+                                ui::SegmentOption::new(
+                                    tr::editor::tabs::keyboard::show_all_keys(),
+                                    settings.show_typing,
+                                ),
+                            ],
+                        )
+                        .stretch()
+                        .on_select(cx.listener(
+                            |this, index: &usize, window, cx| {
+                                let next = *index == 1;
+                                if keyboard_settings(&this.project).show_typing == next {
+                                    return;
+                                }
+                                this.change_shown_keys(
+                                    "keyboard-typing",
+                                    move |settings| settings.show_typing = next,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(Hsla::from(theme.editor.text_2))
+                            .child(if settings.show_typing {
+                                tr::editor::tabs::keyboard::show_all_keys_hint()
+                            } else {
+                                tr::editor::tabs::keyboard::show_shortcuts_hint()
+                            }),
+                    ),
+            )
+            // Typing keys onto the video opens its own panel.
+            .child({
+                let editor = theme.editor;
+                div()
+                    .id("keyboard-type-keys")
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.))
+                    .h(px(34.))
+                    .rounded(px(10.))
+                    .bg(editor.choice_fill())
+                    .shadow(editor.choice_ring())
+                    .text_size(px(13.))
+                    .text_color(Hsla::from(editor.text_1))
+                    .cursor_pointer()
+                    .hover(move |this| this.bg(editor.choice_hover_fill()))
+                    .child(tr::editor::tabs::keyboard::type_keys_button())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let at = this.playhead;
+                        this.open_key_prompt(at, window, cx);
+                    }))
+            })
             .children(Self::keystroke_permission_callout(&theme))
             .child(body)
             .into_any_element()
+    }
+
+    /// Where the keys sit, picked on a little frame: nine spots, the chosen
+    /// one holding a key, so the choice reads as the video will.
+    fn render_key_position_picker(&self, current: &str, cx: &mut Context<Self>) -> AnyElement {
+        // The frame, at the video's own shape, as wide as the panel.
+        const FRAME_HEIGHT: f32 = 132.;
+        let theme = self.theme;
+        let editor = theme.editor;
+        // An older project's "above captions" sits where bottom-center does,
+        // and lights that spot; clicking it still writes bottom-center.
+        let stored = current.to_string();
+        let current = match current {
+            "top" => "top-center",
+            "bottom" | "above-captions" => "bottom-center",
+            "middle-center" => "center",
+            other => other,
+        };
+        let rows = KEYBOARD_POSITIONS.chunks(3).map(|row| {
+            div()
+                .flex()
+                .flex_1()
+                .flex_row()
+                .children(row.iter().map(|&(value, label)| {
+                    let selected = value == current;
+                    let align = |this: gpui::Div| match value.rsplit('-').next() {
+                        Some("left") => this.justify_start(),
+                        Some("right") => this.justify_end(),
+                        _ => this.justify_center(),
+                    };
+                    let vertical = |this: gpui::Div| match value.split('-').next() {
+                        Some("top") => this.items_start(),
+                        Some("bottom") => this.items_end(),
+                        _ => this.items_center(),
+                    };
+                    vertical(align(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .p(px(7.))
+                            .cursor_pointer()
+                            .group(value),
+                    ))
+                    .id(SharedString::from(format!("keyboard-position-{value}")))
+                    .tooltip(move |_window, cx| ui::Tooltip::new(&theme, label()).view(cx))
+                    .child(if selected {
+                        // The chosen spot holds a key, as the frame will.
+                        div()
+                            .h(px(12.))
+                            .w(px(22.))
+                            .rounded(px(3.))
+                            .bg(Hsla::from(editor.accent))
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::hsla(0., 0., 0., 0.35),
+                                offset: gpui::point(px(0.), px(1.5)),
+                                blur_radius: px(0.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                            .into_any_element()
+                    } else {
+                        div()
+                            .size(px(5.))
+                            .rounded_full()
+                            .bg(Hsla::from(editor.text_3))
+                            .opacity(0.45)
+                            .group_hover(value, |style| style.opacity(1.))
+                            .into_any_element()
+                    })
+                    .when(stored != value, |this| {
+                        let value = value.to_string();
+                        this.on_click(cx.listener(move |this, _, window, cx| {
+                            let value = value.clone();
+                            this.set_keyboard_setting(
+                                "keyboard-position",
+                                window,
+                                cx,
+                                move |settings| settings.position = value,
+                            );
+                        }))
+                    })
+                }))
+        });
+        div()
+            .w_full()
+            .h(px(FRAME_HEIGHT))
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .rounded(px(10.))
+            .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
+            .children(rows)
+            .into_any_element()
+    }
+
+    /// How a typed sentence shows: a key per word (the default, and the most
+    /// like watching someone type), a key per keystroke, or whole.
+    fn render_typing_split(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let current = keyboard_settings(&self.project).typing_split;
+        let splits: [(&'static str, Label); 3] = [
+            ("words", tr::editor::tabs::keyboard::split_words),
+            ("keys", tr::editor::tabs::keyboard::split_keys),
+            ("sentence", tr::editor::tabs::keyboard::split_sentence),
+        ];
+        ui::Field::inline(&theme, tr::editor::tabs::keyboard::show_as())
+            .value(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "keyboard-typing-split",
+                    splits
+                        .iter()
+                        .map(|(value, label)| ui::SegmentOption::new(label(), *value == current))
+                        .collect(),
+                )
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    let Some((value, _)) = splits.get(*index) else {
+                        return;
+                    };
+                    let value = value.to_string();
+                    this.set_keyboard_setting_inner(
+                        false,
+                        "keyboard-typing-split",
+                        window,
+                        cx,
+                        move |settings| settings.typing_split = value,
+                    );
+                }))
+                .into_any_element(),
+            )
+            .into_any_element()
+    }
+
+    /// The Add Keystrokes panel, in place of the sidebar while it is open: paste a
+    /// sentence, a script or a transcript, or a shortcut like cmd+shift+p,
+    /// and Add turns it into key presses on the timeline, typed out from
+    /// where the panel was opened.
+    pub(crate) fn render_key_prompt(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let Some(input) = self
+            .field(crate::editor_panels::FieldKey::KeyComposer)
+            .cloned()
+        else {
+            return div().into_any_element();
+        };
+        let typed = cap_project::manual_key_text(&key_prompt_text(input.read(cx).text()));
+        let has_text = !typed.trim().is_empty();
+        let split = keyboard_settings(&self.project).typing_split;
+        let runs = cap_project::manual_key_runs(&typed, &split);
+        let seconds = runs.last().map_or(0.0, |run| run.offset + run.length);
+        let add_input = input.clone();
+        div()
+            .id("key-prompt")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p(px(16.))
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        ui::EditorButton::plain(&theme, "key-prompt-close")
+                            .left_icon("icons/x.svg")
+                            .icon_size(px(14.))
+                            .label(tr::common::cancel())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_key_prompt_from_button(window, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .text_color(Hsla::from(theme.editor.text_1))
+                            .child(tr::editor::tabs::keyboard::type_keys()),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .text_color(Hsla::from(theme.editor.text_3))
+                    .child(tr::editor::tabs::keyboard::type_keys_hint()),
+            )
+            .child(
+                ui::TextInput::plain(&theme, "key-prompt-text", &input)
+                    .flex(true)
+                    .padding_x(px(12.))
+                    .padding_y(px(10.))
+                    .text_size(px(14.))
+                    .height(px(150.))
+                    .bg(Hsla::from(theme.gray_2))
+                    .border(Hsla::from(theme.editor.line)),
+            )
+            .child(self.render_typing_split(cx))
+            .when(has_text, |this| {
+                this.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.editor.text_3))
+                        .child(tr::editor::tabs::keyboard::type_keys_summary(format!(
+                            "{seconds:.1}"
+                        ))),
+                )
+            })
+            .child(
+                ui::Button::editor(
+                    &theme,
+                    "key-prompt-add",
+                    ui::ButtonVariant::Blue,
+                    ui::ButtonSize::Md,
+                )
+                .label(tr::editor::tabs::keyboard::add_to_timeline())
+                .full_width()
+                .disabled(!has_text)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let text = key_prompt_text(add_input.read(cx).text());
+                    let at = this.key_prompt.unwrap_or(this.playhead);
+                    if this.add_typed_keys(&text, at, window, cx) {
+                        add_input.update(cx, |input, cx| input.set_text("", cx));
+                        this.close_key_prompt_from_button(window, cx);
+                    }
+                })),
+            )
+            .into_any_element()
+    }
+
+    /// Opens Add Keystrokes, to add key presses from `at` on.
+    pub(crate) fn open_key_prompt(&mut self, at: f64, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_selection(None, cx);
+        self.audio_picker = None;
+        // The panel draws in the sidebar, which only Style shows.
+        if self.panel_tab() != crate::editor_side_panel::PanelTab::Style {
+            self.set_panel_tab(crate::editor_side_panel::PanelTab::Style, window, cx);
+        }
+        self.key_prompt = Some(at);
+        self.ensure_field(crate::editor_panels::FieldKey::KeyComposer, window, cx);
+        if let Some(input) = self
+            .field(crate::editor_panels::FieldKey::KeyComposer)
+            .cloned()
+        {
+            input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Closes Add Keystrokes. Focus left on its text box or buttons, which are no
+    /// longer drawn, would keep Space and every other editor shortcut off, so
+    /// it goes back to the editor.
+    pub(crate) fn close_key_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.key_prompt = None;
+        if self
+            .field(crate::editor_panels::FieldKey::KeyComposer)
+            .is_some_and(|input| input.read(cx).is_focused(window))
+        {
+            self.focus_root(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Cancel and Add take focus when clicked, then go with the panel.
+    fn close_key_prompt_from_button(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_key_prompt(window, cx);
+        self.focus_root(window, cx);
     }
 
     /// From macOS 27.3 keystrokes need Input Monitoring (before, the
@@ -2833,9 +3876,7 @@ impl EditorWindow {
         readout: String,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        ui::Field::inline(&self.theme, label)
-            .value_text(readout)
-            .child(self.slider_flex(slider, "", cx))
+        self.slider_field_readout(label, slider, readout, cx)
             .into_any_element()
     }
 
@@ -2968,7 +4009,7 @@ impl EditorWindow {
                 div()
                     .flex_shrink_0()
                     .text_size(px(10.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(crate::i18n::decimal(model.size)),
             )
             .child(
@@ -2994,7 +4035,7 @@ impl EditorWindow {
             let mut column = div().flex().flex_col().gap(px(8.));
             if has_audio {
                 column = column.child(
-                    ui::Button::plain(
+                    ui::Button::editor(
                         &theme,
                         "caption-generate",
                         ui::ButtonVariant::Primary,
@@ -3033,12 +4074,12 @@ impl EditorWindow {
                                     .path("icons/check.svg")
                                     .size(px(14.))
                                     .flex_shrink_0()
-                                    .text_color(Hsla::from(theme.gray_9)),
+                                    .text_color(Hsla::from(theme.editor.text_3)),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .truncate()
                                     .child(SharedString::from(
                                         tr::editor::tabs::captions::model_downloaded(
@@ -3048,7 +4089,7 @@ impl EditorWindow {
                             ),
                     )
                     .child(
-                        ui::Button::plain(
+                        ui::Button::editor(
                             &theme,
                             "caption-delete",
                             ui::ButtonVariant::Gray,
@@ -3078,7 +4119,7 @@ impl EditorWindow {
                     div()
                         .id("caption-no-speech")
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(SharedString::from(tr::editor::transcript::no_speech())),
                 );
             } else if snapshot.refining {
@@ -3086,7 +4127,7 @@ impl EditorWindow {
                     div()
                         .id("caption-refining")
                         .text_size(px(12.))
-                        .text_color(Hsla::from(theme.gray_10))
+                        .text_color(Hsla::from(theme.editor.text_3))
                         .child(SharedString::from(
                             tr::editor::tabs::captions::refining_word_timings(),
                         )),
@@ -3094,7 +4135,7 @@ impl EditorWindow {
             }
             column
         } else {
-            let download_button = ui::Button::plain(
+            let download_button = ui::Button::editor(
                 &theme,
                 "caption-download",
                 ui::ButtonVariant::Primary,
@@ -3160,7 +4201,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .text_size(px(12.))
-                            .text_color(Hsla::from(theme.gray_10))
+                            .text_color(Hsla::from(theme.editor.text_3))
                             .child(download_message.unwrap_or_else(|| {
                                 tr::editor::tabs::captions::keep_open().to_string()
                             })),
@@ -3181,20 +4222,22 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(16.))
+            // The model's name, what it is for and its size, across the
+            // panel rather than cut short beside its label.
             .child(
-                ui::Subfield::plain(&theme, tr::editor::tabs::captions::model_label())
-                    .child(div().w(px(220.)).child(model_trigger)),
+                ui::Field::stacked(&theme, tr::editor::tabs::captions::model_label())
+                    .child(model_trigger),
             )
             .children((!transcription::supports_parakeet()).then(|| {
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(tr::editor::tabs::captions::intel_unavailable())
             }))
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(Hsla::from(theme.gray_10))
+                    .text_color(Hsla::from(theme.editor.text_3))
                     .child(tr::editor::tabs::captions::download_note()),
             )
             .child(
@@ -3335,7 +4378,7 @@ impl EditorWindow {
                                 .child(
                                     div()
                                         .text_size(px(12.))
-                                        .text_color(Hsla::from(theme.gray_10))
+                                        .text_color(Hsla::from(theme.editor.text_3))
                                         .child(tr::editor::tabs::captions::highlight_note()),
                                 ),
                         )
@@ -3415,7 +4458,7 @@ impl EditorWindow {
                     ))
                     .child(
                         div().flex().flex_row().justify_end().child(
-                            ui::Button::plain(
+                            ui::Button::editor(
                                 &theme,
                                 "caption-reset-position",
                                 ui::ButtonVariant::Gray,
@@ -3466,15 +4509,21 @@ impl EditorWindow {
                         )),
                 ),
             )
-            .child(
-                ui::Field::inline(&theme, tr::editor::tabs::captions::font_weight()).child(
-                    self.menu_select(
-                        SidebarMenu::CaptionWeight,
-                        "caption-weight",
-                        weight_label,
-                        cx,
-                    ),
-                ),
+            // Inter ships at one weight, so it has no weight to pick.
+            .when(
+                settings.font != cap_rendering::keycaps::OVERLAY_TEXT_FONT,
+                |this| {
+                    this.child(
+                        ui::Field::inline(&theme, tr::editor::tabs::captions::font_weight()).child(
+                            self.menu_select(
+                                SidebarMenu::CaptionWeight,
+                                "caption-weight",
+                                weight_label,
+                                cx,
+                            ),
+                        ),
+                    )
+                },
             );
 
         // An extra flex ancestor here repeats intrinsic layout while scrolling.
@@ -3508,55 +4557,66 @@ impl EditorWindow {
         let theme = self.theme;
         let active = settings.preset.clone();
 
+        let editor = theme.editor;
+        let tile = |index: usize, preset: &CaptionPreset, cx: &mut Context<Self>| {
+            let selected = active == preset.id;
+            // Painted like the cursor, key and sound tiles.
+            div()
+                .id(SharedString::from(format!("caption-preset-{}", preset.id)))
+                // Two across the column, however wide it is.
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(8.))
+                .p(px(6.))
+                .pb(px(9.))
+                .rounded(px(12.))
+                .map(|this| {
+                    if selected {
+                        this.bg(editor.choice_selected_fill())
+                            .shadow(editor.choice_selected_shadow())
+                    } else {
+                        this.bg(editor.choice_fill())
+                            .shadow(editor.choice_ring())
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(editor.choice_hover_fill()))
+                    }
+                })
+                .child(self.caption_preset_preview(preset))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(if selected {
+                            editor.text_1
+                        } else {
+                            editor.text_2
+                        }))
+                        .child((preset.label)()),
+                )
+                .tooltip({
+                    let description = SharedString::from((preset.description)());
+                    move |_window, cx| ui::Tooltip::new(&theme, description.clone()).view(cx)
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.apply_caption_preset(index, window, cx);
+                }))
+                .into_any_element()
+        };
+        let presets: Vec<(usize, &CaptionPreset)> = CAPTION_PRESETS.iter().enumerate().collect();
         div()
             .flex()
-            .flex_row()
-            .flex_wrap()
+            .flex_col()
             .gap(px(8.))
-            .children(CAPTION_PRESETS.iter().enumerate().map(|(index, preset)| {
-                let selected = active == preset.id;
+            .children(presets.chunks(2).map(|row| {
                 div()
-                    .id(SharedString::from(format!("caption-preset-{}", preset.id)))
-                    // Two across the 382px column with `gap-2`.
-                    .w(px(187.))
                     .flex()
-                    .flex_col()
-                    .gap(px(6.))
-                    .p(px(6.))
-                    .rounded(px(8.))
-                    .bg(self.panel_bg())
-                    .border_1()
-                    .border_color(if selected {
-                        Hsla::from(theme.blue_9)
-                    } else {
-                        Hsla::from(theme.gray_3)
-                    })
-                    // `ring-1 ring-blue-9`, painted behind an opaque card.
-                    .when(selected, |this| {
-                        this.shadow(vec![gpui::BoxShadow {
-                            color: Hsla::from(theme.blue_9),
-                            offset: gpui::point(px(0.), px(0.)),
-                            blur_radius: px(0.),
-                            spread_radius: px(1.),
-                            inset: false,
-                        }])
-                    })
-                    .child(self.caption_preset_preview(preset))
-                    .child(
-                        div()
-                            .px(px(2.))
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.gray_12))
-                            .child((preset.label)()),
-                    )
-                    .tooltip({
-                        let description = SharedString::from((preset.description)());
-                        move |_window, cx| ui::Tooltip::new(&theme, description.clone()).view(cx)
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.apply_caption_preset(index, window, cx);
-                    }))
+                    .flex_row()
+                    .gap(px(8.))
+                    .children(row.iter().map(|(index, preset)| tile(*index, preset, cx)))
+                    // A lone last tile keeps its half of the row.
+                    .when(row.len() == 1, |this| this.child(div().flex_1()))
             }))
             .into_any_element()
     }
@@ -3601,6 +4661,19 @@ impl EditorWindow {
                     .px(px(8.))
                     .py(px(4.))
                     .bg(background)
+                    // The Soft card's shadow and lit top edge.
+                    .when(preset.id == "soft", |this| {
+                        this.rounded(px(5.))
+                            .border_t_1()
+                            .border_color(gpui::hsla(0., 0., 1., 0.12))
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::hsla(0., 0., 0., 0.45),
+                                offset: gpui::point(px(0.), px(2.)),
+                                blur_radius: px(6.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                    })
                     .children(words.into_iter().enumerate().map(|(index, word)| {
                         let emphasised = preset.active_word_highlight && index == 2;
                         let pill = emphasised && preset.highlight_style == "pill";
@@ -3638,21 +4711,7 @@ impl EditorWindow {
             let Some(captions) = project.captions.as_mut() else {
                 return false;
             };
-            let settings = &mut captions.settings;
-            settings.preset = preset.id.to_string();
-            settings.font_weight = preset.font_weight;
-            settings.size = preset.size;
-            settings.color = preset.color.to_string();
-            settings.background_color = preset.background_color.to_string();
-            settings.background_opacity = preset.background_opacity;
-            settings.outline = preset.outline;
-            settings.outline_color = preset.outline_color.to_string();
-            settings.highlight_color = preset.highlight_color.to_string();
-            settings.active_word_highlight = preset.active_word_highlight;
-            settings.highlight_style = preset.highlight_style.to_string();
-            settings.animation = preset.animation.to_string();
-            settings.uppercase = preset.uppercase;
-            settings.fade_duration = preset.fade_duration;
+            apply_caption_preset_settings(&mut captions.settings, preset);
             true
         });
     }
@@ -4232,9 +5291,63 @@ impl EditorWindow {
 mod tests {
     use super::*;
 
+    /// Recorded keys still as generated may be replaced; a deleted or
+    /// trimmed one marks the track as edited. Keys added by hand never count.
+    #[test]
+    fn recorded_keys_count_as_edited_once_changed() {
+        let key = |id: &str, start: f64, end: f64| -> cap_project::KeyboardTrackSegment {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "start": start, "end": end, "displayText": "⌘C", "keys": []
+            }))
+            .unwrap()
+        };
+        let generated = vec![key("kb-1", 1.0, 2.0), key("kb-2", 3.0, 4.0)];
+        let mut track = generated.clone();
+        track.push(key("kb-manual-1", 5.0, 6.0));
+        assert!(recorded_keys_match(&track, &generated));
+        track.remove(1);
+        assert!(!recorded_keys_match(&track, &generated));
+        let mut trimmed = generated.clone();
+        trimmed[0].end = 1.5;
+        assert!(!recorded_keys_match(&trimmed, &generated));
+    }
+
+    #[test]
+    fn an_empty_generation_says_whether_any_keys_were_pressed() {
+        assert_eq!(
+            empty_generation_message(true),
+            tr::editor::tabs::keyboard::no_shortcuts()
+        );
+        assert_eq!(
+            empty_generation_message(false),
+            tr::editor::tabs::keyboard::no_presses()
+        );
+    }
+
     /// A left-aligned caption sits a margin in from the edge, its centre a
     /// half box width further in. Manual starts at that drawn centre, so
     /// switching does not move it.
+    #[test]
+    fn every_key_style_has_one_tile() {
+        let mut laid_out: Vec<&str> = KEY_STYLE_ROWS
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect();
+        laid_out.sort_unstable();
+        let mut styles: Vec<&str> = KEY_STYLES.iter().map(|(value, ..)| *value).collect();
+        styles.sort_unstable();
+        assert_eq!(laid_out, styles);
+        // Every tile names a style the renderer draws as keys or the label.
+        for value in styles {
+            let style = cap_rendering::keycaps::KeycapStyle::from_setting(value);
+            assert_eq!(
+                style == cap_rendering::keycaps::KeycapStyle::Classic,
+                value == "classic",
+                "{value}"
+            );
+        }
+    }
+
     #[test]
     fn manual_caption_position_starts_at_the_drawn_caption() {
         let mut settings = CaptionSettings {
@@ -4441,12 +5554,14 @@ mod tests {
 
     #[test]
     fn the_catalogues_match_the_source() {
-        assert_eq!(CAPTION_PRESETS.len(), 5);
-        assert_eq!(CAPTION_PRESETS[0].id, "classic");
-        assert_eq!(CAPTION_PRESETS[2].highlight_style, "pill");
+        assert_eq!(CAPTION_PRESETS.len(), 6);
+        assert_eq!(CAPTION_PRESETS[0].id, "soft");
+        assert_eq!(CAPTION_PRESETS[1].id, "classic");
+        assert_eq!(CAPTION_PRESETS[3].highlight_style, "pill");
         assert_eq!(CAPTION_POSITIONS[0].0, "manual");
-        assert_eq!(KEYBOARD_POSITIONS.len(), 6);
-        assert_eq!(FONT_OPTIONS.len(), 3);
+        assert_eq!(KEYBOARD_POSITIONS.len(), 9);
+        assert_eq!(KEYBOARD_POSITIONS[4].0, "center");
+        assert_eq!(FONT_OPTIONS.len(), 4);
         for font in FONT_OPTIONS {
             assert_eq!(font_option_label(font).as_ref(), font);
         }
@@ -4494,7 +5609,7 @@ mod tests {
         }));
         assert_eq!(keyboard_settings(&project).size, 72);
         // The rest of the defaults come along, not just the written key.
-        assert_eq!(keyboard_settings(&project).position, "bottom-center");
+        assert_eq!(keyboard_settings(&project).position, "top-center");
     }
 
     fn slider_model_project(timeline_segments: usize) -> ProjectConfiguration {
@@ -5133,5 +6248,98 @@ mod tests {
             "slider_edit timeline_segments=2000 samples=10 iterations_per_sample=10 \
              skipped_rebuild_us={skipped:.3}"
         );
+    }
+
+    // gpui's test windows have no platform window handle on macOS or Windows,
+    // which the editor needs.
+    #[cfg(target_os = "linux")]
+    mod keyboard_gesture_wait {
+        use super::*;
+
+        fn editor_with_a_clip(
+            cx: &mut gpui::TestAppContext,
+        ) -> (
+            gpui::Entity<EditorWindow>,
+            &mut gpui::VisualTestContext,
+            tempfile::TempDir,
+        ) {
+            let project = tempfile::tempdir().unwrap();
+            let project_path = project.path().to_path_buf();
+            let (editor, cx) = cx.add_window_view(move |window, cx| {
+                EditorWindow::new(project_path.clone(), window, cx)
+            });
+            cx.run_until_parked();
+            let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                    ],
+                    "zoomSegments": []
+                }
+            }))
+            .unwrap();
+            editor.update(cx, |editor, _| editor.project.timeline = config.timeline);
+            (editor, cx, project)
+        }
+
+        /// Keys that finish generating during a drag wait for it to end. A
+        /// trim made during that wait stands, and the run is dropped.
+        #[gpui::test]
+        fn a_trim_during_the_wait_keeps_its_edit(cx: &mut gpui::TestAppContext) {
+            let (editor, cx, _project) = editor_with_a_clip(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                let requested = project_timeline_fingerprint(&editor.project).unwrap();
+                editor.history.pause();
+                editor.wait_out_gesture_then_generate(None, requested, window, cx);
+                editor.keyboard_refresh_step = Some(editor.history.entry_count());
+                editor.keyboard_refresh_pending = true;
+                editor.project.timeline.as_mut().unwrap().segments[0].end = 8.0;
+                let config = editor.project.clone();
+                editor.history.resume(&config);
+            });
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(150));
+            cx.run_until_parked();
+            let changed: String = tr::editor::tabs::keyboard::changed_during_generation().into();
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.generating_keyboard);
+                assert_eq!(
+                    editor.keyboard_generation_message.as_deref(),
+                    Some(changed.as_str())
+                );
+                assert_eq!(
+                    editor.project.timeline.as_ref().unwrap().segments[0].end,
+                    8.0
+                );
+                assert!(!editor.keyboard_refresh_pending);
+                assert_eq!(editor.keyboard_refresh_step, None);
+            });
+        }
+
+        /// A drag that leaves the timeline alone still gets its keys once it
+        /// ends.
+        #[gpui::test]
+        fn an_untouched_timeline_generates_after_the_gesture(cx: &mut gpui::TestAppContext) {
+            let (editor, cx, _project) = editor_with_a_clip(cx);
+            editor.update_in(cx, |editor, window, cx| {
+                let requested = project_timeline_fingerprint(&editor.project).unwrap();
+                editor.history.pause();
+                editor.wait_out_gesture_then_generate(None, requested, window, cx);
+                let config = editor.project.clone();
+                editor.history.resume(&config);
+            });
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(150));
+            cx.run_until_parked();
+            let changed: String = tr::editor::tabs::keyboard::changed_during_generation().into();
+            editor.read_with(cx, |editor, _| {
+                assert!(!editor.generating_keyboard);
+                assert!(editor.keyboard_generation_message.is_some());
+                assert_ne!(
+                    editor.keyboard_generation_message.as_deref(),
+                    Some(changed.as_str())
+                );
+            });
+        }
     }
 }

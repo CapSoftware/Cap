@@ -64,6 +64,7 @@ pub struct TabRail {
     bg: Hsla,
     border: Hsla,
     indicator: Hsla,
+    indicator_shadow: Vec<gpui::BoxShadow>,
     hover: Hsla,
     selected_icon: Hsla,
     idle_icon: Hsla,
@@ -72,8 +73,6 @@ pub struct TabRail {
 }
 
 impl TabRail {
-    /// The editor's config sidebar rail: a 46px bar on the card surface under
-    /// an `ed-line` hairline, with 40x30 tab boxes and 16px icons.
     pub fn editor(
         theme: &Theme,
         id: impl Into<ElementId>,
@@ -89,7 +88,8 @@ impl TabRail {
             icon_size: px(16.),
             bg: panel_bg,
             border: Hsla::from(theme.editor.line),
-            indicator: Hsla::from(theme.editor.ctl_hover),
+            indicator: theme.editor.pill_fill(),
+            indicator_shadow: theme.editor.pill_shadow(),
             hover: Hsla::from(theme.editor.ctl),
             selected_icon: Hsla::from(theme.editor.text_1),
             idle_icon: Hsla::from(theme.editor.text_2),
@@ -112,7 +112,7 @@ impl TabRail {
 }
 
 impl RenderOnce for TabRail {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let TabRail {
             id,
             items,
@@ -123,6 +123,7 @@ impl RenderOnce for TabRail {
             bg,
             border,
             indicator,
+            indicator_shadow,
             hover,
             selected_icon,
             idle_icon,
@@ -135,6 +136,15 @@ impl RenderOnce for TabRail {
             other => SharedString::from(format!("{other:?}")),
         };
         let handler: Option<std::rc::Rc<TabHandler>> = on_select.map(std::rc::Rc::new);
+        let fades: Vec<_> = (0..items.len())
+            .map(|index| {
+                crate::ui::hover_fade(
+                    window,
+                    cx,
+                    SharedString::from(format!("{prefix}-hover-{index}")),
+                )
+            })
+            .collect();
 
         div()
             .id(id)
@@ -145,7 +155,7 @@ impl RenderOnce for TabRail {
             .h(height)
             .flex_none()
             .overflow_hidden()
-            .rounded_t(px(11.))
+            .rounded_t(px(crate::theme::EDITOR_CARD_RADIUS - 1.))
             .justify_around()
             .px(px(10.))
             .border_b_1()
@@ -167,9 +177,22 @@ impl RenderOnce for TabRail {
                     .w(box_width)
                     .rounded(px(9.))
                     .when(disabled, |this| this.opacity(0.6))
-                    .when(selected, |this| this.bg(indicator))
-                    .when(!selected && !disabled, |this| {
-                        this.cursor_pointer().hover(move |style| style.bg(hover))
+                    .when(selected, |this| {
+                        this.bg(indicator).shadow(indicator_shadow.clone())
+                    })
+                    .map(|this| {
+                        let (fade, level) = fades[index].clone();
+                        this.when(!selected && !disabled, |this| {
+                            this.cursor_pointer().when(level > 0., |this| {
+                                this.bg(crate::ui::hover_blend(hover.opacity(0.), hover, level))
+                            })
+                        })
+                        .on_hover(move |hovered, _, cx| {
+                            fade.update(cx, |fade, cx| {
+                                fade.set_hovered(*hovered);
+                                cx.notify();
+                            });
+                        })
                     })
                     .tooltip_show_delay(crate::ui::TOOLTIP_SHOW_DELAY)
                     .tooltip(move |_, cx| crate::ui::Tooltip::new(&theme, label.clone()).view(cx))

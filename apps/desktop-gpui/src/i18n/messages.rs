@@ -10,12 +10,30 @@ use crate::permissions::OSPermission;
 pub(super) const KEY_PREFIX: &str = "message.";
 
 const EXACT: &[(&str, fn() -> &'static str)] = &[
-    ("Recording task failed.", tr::message::recording::task_failed),
-    ("Recording startup failed", tr::message::recording::startup_failed),
-    ("Recording ended unexpectedly.", tr::message::recording::ended_unexpectedly),
-    ("Stop task failed.", tr::message::recording::stop_task_failed_plain),
-    ("Capture stop was not acknowledged", tr::message::recording::stop_not_acknowledged),
-    ("Timed out confirming capture state", tr::message::recording::capture_state_timed_out),
+    (
+        "Recording task failed.",
+        tr::message::recording::task_failed,
+    ),
+    (
+        "Recording startup failed",
+        tr::message::recording::startup_failed,
+    ),
+    (
+        "Recording ended unexpectedly.",
+        tr::message::recording::ended_unexpectedly,
+    ),
+    (
+        "Stop task failed.",
+        tr::message::recording::stop_task_failed_plain,
+    ),
+    (
+        "Capture stop was not acknowledged",
+        tr::message::recording::stop_not_acknowledged,
+    ),
+    (
+        "Timed out confirming capture state",
+        tr::message::recording::capture_state_timed_out,
+    ),
     (
         "Capture did not acknowledge the requested pause state",
         tr::message::recording::pause_not_acknowledged,
@@ -65,7 +83,10 @@ const EXACT: &[(&str, fn() -> &'static str)] = &[
         tr::message::recording::crashed_before_capture,
     ),
     ("offline", tr::message::upload::offline),
-    ("Authentication expired", tr::message::upload::authentication_expired),
+    (
+        "Authentication expired",
+        tr::message::upload::authentication_expired,
+    ),
     (
         "This older recording has no saved audio intent; review it before retrying",
         tr::message::upload::no_audio_intent_review,
@@ -90,15 +111,30 @@ const EXACT: &[(&str, fn() -> &'static str)] = &[
         "Sign in to the original recording account and server to retry",
         tr::message::upload::sign_in_original,
     ),
-    ("Sign in again to upload this recording", tr::message::upload::sign_in_again),
-    ("Instant recording requires an upgraded plan", tr::message::upload::needs_upgrade),
-    ("The local recording changed during upload", tr::message::upload::changed_during),
+    (
+        "Sign in again to upload this recording",
+        tr::message::upload::sign_in_again,
+    ),
+    (
+        "Instant recording requires an upgraded plan",
+        tr::message::upload::needs_upgrade,
+    ),
+    (
+        "The local recording changed during upload",
+        tr::message::upload::changed_during,
+    ),
     (
         "The local recording changed after upload; it has been preserved",
         tr::message::upload::changed_after,
     ),
-    ("This recording is already queued for upload", tr::message::upload::already_queued),
-    ("Upload paused; the local recording is preserved", tr::message::upload::paused),
+    (
+        "This recording is already queued for upload",
+        tr::message::upload::already_queued,
+    ),
+    (
+        "Upload paused; the local recording is preserved",
+        tr::message::upload::paused,
+    ),
     (
         "The upload worker failed; the local recording is preserved",
         tr::message::upload::worker_failed,

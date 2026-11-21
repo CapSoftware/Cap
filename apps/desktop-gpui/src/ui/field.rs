@@ -61,7 +61,6 @@ pub struct Field {
     gap: Pixels,
     style: FieldStyle,
     text: Hsla,
-    muted: Hsla,
     value_color: Hsla,
     disabled_text: Hsla,
     badge_bg: Hsla,
@@ -82,7 +81,6 @@ impl Field {
             gap,
             style,
             text: Hsla::from(theme.editor.text_1),
-            muted: Hsla::from(theme.editor.text_2),
             value_color: Hsla::from(theme.editor.text_3),
             disabled_text: Hsla::from(theme.editor.text_3),
             badge_bg: Hsla::from(theme.editor.ctl),
@@ -174,7 +172,6 @@ impl RenderOnce for Field {
             gap,
             style,
             text,
-            muted,
             value_color,
             disabled_text,
             badge_bg,
@@ -183,7 +180,7 @@ impl RenderOnce for Field {
         } = self;
         let label_color = match (disabled, style) {
             (true, _) => disabled_text,
-            (false, FieldStyle::Section) => muted,
+            (false, FieldStyle::Section) => text,
             (false, _) => text,
         };
 
@@ -232,7 +229,7 @@ impl RenderOnce for Field {
         }
 
         let (label_size, label_weight) = match style {
-            FieldStyle::Section => (px(12.), FontWeight::MEDIUM),
+            FieldStyle::Section => (px(13.), FontWeight::MEDIUM),
             FieldStyle::Stacked => (px(13.), FontWeight::NORMAL),
             _ => (px(13.), FontWeight::SEMIBOLD),
         };
@@ -296,7 +293,7 @@ impl Subfield {
             children: Vec::new(),
             gap: None,
             text: Hsla::from(theme.editor.text_1),
-            accent: Hsla::from(theme.editor.accent),
+            accent: Hsla::from(theme.editor.accent_ink),
         }
     }
 

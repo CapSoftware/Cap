@@ -40,7 +40,7 @@ pub(super) fn preview(theme: &Theme, animated: bool) -> AnyElement {
         .items_center()
         .justify_center()
         .p(px(24.))
-        .bg(Hsla::from(theme.editor.card))
+        .bg(Hsla::from(theme.editor.window))
         .child(pulse(
             "editor-preview-skeleton",
             div()
@@ -139,6 +139,17 @@ pub(super) fn reveal(
     content: impl IntoElement,
     placeholder: impl IntoElement,
 ) -> AnyElement {
+    reveal_from(id, content, placeholder, 0.)
+}
+
+/// [`reveal`], with the placeholder starting `above` pixels over the content,
+/// for content drawn under a sibling the placeholder also covers.
+pub(super) fn reveal_from(
+    id: &'static str,
+    content: impl IntoElement,
+    placeholder: impl IntoElement,
+    above: f32,
+) -> AnyElement {
     div()
         .relative()
         .size_full()
@@ -146,7 +157,10 @@ pub(super) fn reveal(
         .child(
             div()
                 .absolute()
-                .inset_0()
+                .top(px(-above))
+                .left_0()
+                .right_0()
+                .bottom_0()
                 .child(placeholder)
                 .with_animation(
                     id,

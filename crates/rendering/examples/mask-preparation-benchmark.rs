@@ -64,6 +64,7 @@ async fn main() {
         segment_time: 0.0,
         recording_time: 0.0,
         segment_has_camera: false,
+        display_placeholder: false,
     };
     let samples =
         std::env::var("CAP_MASK_PROBE_SAMPLES").map_or(16, |value| value.parse::<usize>().unwrap());

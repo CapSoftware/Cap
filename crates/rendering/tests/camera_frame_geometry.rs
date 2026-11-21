@@ -50,6 +50,7 @@ async fn camera_geometry_matches_a_project_with_the_current_clips_dimensions() {
             segment_time: 3.0 + width as f32 / 1000.0,
             recording_time: 3.0 + width as f32 / 1000.0,
             segment_has_camera: true,
+            display_placeholder: false,
         };
         for mode in ["default", "cameraOnly", "splitScreen", "floating"] {
             project.timeline = Some(

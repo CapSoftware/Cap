@@ -239,8 +239,12 @@ impl Menu {
         Self {
             radius: px(12.),
             shadow: theme.editor.pop_shadow(),
-            bg: Hsla::from(theme.editor.card),
-            border: Hsla::from(theme.editor.line),
+            bg: Hsla::from(if theme.is_dark() {
+                theme.editor.card_2
+            } else {
+                theme.editor.card
+            }),
+            border: Hsla::from(theme.editor.line_strong),
             hover: Hsla::from(theme.editor.ctl_hover),
             text: Hsla::from(theme.editor.text_1),
             ..Self::settings(theme, id, items, state)

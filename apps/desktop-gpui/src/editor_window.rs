@@ -36,7 +36,7 @@
 //! that locks `instance.state` runs on the tokio runtime ([`run_transport`]).
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     path::PathBuf,
     rc::Rc,
@@ -79,6 +79,8 @@ use crate::{
     ui,
 };
 
+mod blank_start;
+mod enhance;
 mod frame;
 mod loading;
 mod markers;
@@ -86,6 +88,8 @@ mod scenes;
 mod snap;
 mod style_preset_ui;
 mod transitions;
+
+pub(crate) use blank_start::blank_canvas_untouched;
 
 // ---------------------------------------------------------------------------
 // Window geometry
@@ -233,10 +237,253 @@ impl EditorVerticalLayout {
     }
 }
 
-const PRESETS_MENU_WIDTH: f32 = 288.;
+const PRESETS_MENU_WIDTH: f32 = 520.;
 const PRESET_SUBMENU_WIDTH: f32 = 208.;
 const PRESET_SUBMENU_HEIGHT: f32 = 5. * 32. + 4. * 2. + 8.;
 const POPOVER_WINDOW_INSET: f32 = 8.;
+
+/// A look in miniature: its background, the recording as a rounded card at
+/// the look's padding with its shadow and frame, and its keys in the
+/// corner.
+/// Every setting a look changes, as (icon, label) chips, worded with the
+/// sidebar's own names for them.
+fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
+    use crate::looks::{LookBackground, LookCursorStyle};
+    use cap_project::FrameStyle;
+    let mut changes = Vec::new();
+    use crate::i18n::tr::editor::sidebar::{layout, source};
+    changes.push(match look.background {
+        LookBackground::Wallpaper(_) => ("icons/image.svg", source::wallpaper().to_string()),
+        LookBackground::Gradient { .. } => ("icons/palette.svg", source::gradient().to_string()),
+        LookBackground::Color(_) => ("icons/palette.svg", source::color().to_string()),
+        LookBackground::Animated(name) => (
+            "icons/square-play.svg",
+            format!("{} · {name}", source::animated()),
+        ),
+    });
+    changes.push((
+        "icons/padding.svg",
+        format!("{} {}%", layout::padding(), look.padding),
+    ));
+    changes.push((
+        "icons/corners.svg",
+        format!("{} {}%", layout::rounded_corners(), look.rounding),
+    ));
+    if look.shadow.0 > 0.0 {
+        changes.push((
+            "icons/shadow.svg",
+            format!(
+                "{} {}%",
+                tr::editor::sidebar::shadow::title(),
+                look.shadow.0
+            ),
+        ));
+    }
+    if look.border.is_some() {
+        changes.push((
+            "icons/square.svg",
+            tr::editor::sidebar::border::title().to_string(),
+        ));
+    }
+    if let Some((style, _)) = look.frame {
+        let name = match style {
+            FrameStyle::Browser => tr::editor::window::frame::browser().to_string(),
+            FrameStyle::MacOS => "macOS".to_string(),
+            _ => tr::editor::window::frame::heading().to_string(),
+        };
+        changes.push(("icons/app-window.svg", name));
+    }
+    let cursor = match look.pointer.style {
+        LookCursorStyle::MacOS => "macOS".to_string(),
+        LookCursorStyle::Tahoe => "Tahoe".to_string(),
+        LookCursorStyle::Windows => "Windows".to_string(),
+        LookCursorStyle::Recorded => tr::editor::sidebar::cursor::default().to_string(),
+    };
+    changes.push((
+        "icons/mouse-pointer-2.svg",
+        format!("{cursor} {}%", look.pointer.size),
+    ));
+    if look.pointer.ripple {
+        changes.push((
+            "icons/circle.svg",
+            tr::editor::sidebar::cursor::click_ripple().to_string(),
+        ));
+    }
+    changes.push((
+        "icons/bg-blur.svg",
+        format!(
+            "{} {}%",
+            tr::editor::sidebar::layout::motion_blur(),
+            (look.pointer.motion_blur * 100.0).round() as i32
+        ),
+    ));
+    if let Some(style) = look.keys.style {
+        let name = match style {
+            "mechanical" => tr::editor::tabs::keyboard::style_mechanical().to_string(),
+            "macos" => "macOS".to_string(),
+            other => other.to_string(),
+        };
+        changes.push(("icons/keyboard.svg", name));
+    }
+    changes
+}
+
+fn look_preview(
+    theme: &crate::theme::Theme,
+    look: &crate::looks::Look,
+    image: Option<Arc<gpui::RenderImage>>,
+    selected: bool,
+) -> gpui::Div {
+    use crate::looks::LookBackground;
+    use cap_rendering::keycaps::{KeycapStyle, KeycapTheme};
+    use gpui::StyledImage as _;
+    const HEIGHT: f32 = 72.;
+    let rgb = |c: [u16; 3]| -> Hsla {
+        gpui::Rgba {
+            r: c[0] as f32 / 255.,
+            g: c[1] as f32 / 255.,
+            b: c[2] as f32 / 255.,
+            a: 1.,
+        }
+        .into()
+    };
+    let pad = (look.padding as f32 * 1.05).clamp(5., 16.);
+    let radius = (look.rounding as f32 * 0.55).clamp(2., 8.);
+    let (app, line) = if look.dark_app {
+        (gpui::rgb(0x1d1d21), gpui::hsla(0., 0., 1., 0.14))
+    } else {
+        (gpui::rgb(0xffffff), gpui::hsla(0., 0., 0., 0.08))
+    };
+    let frame = look.frame.map(|(style, _)| style);
+    let window =
+        div()
+            .absolute()
+            .left(px(pad))
+            .right(px(pad))
+            .top(px(pad * 0.8))
+            .bottom(px(pad * 0.8))
+            .rounded(px(radius))
+            .bg(app)
+            .overflow_hidden()
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., (look.shadow.0 / 100.) * 0.55),
+                offset: gpui::point(px(0.), px(3.)),
+                blur_radius: px(10.),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .when_some(look.border, |this, _| {
+                this.border_1().border_color(gpui::hsla(0., 0., 1., 0.35))
+            })
+            .flex()
+            .flex_col()
+            .when(
+                matches!(
+                    frame,
+                    Some(cap_project::FrameStyle::MacOS | cap_project::FrameStyle::Browser)
+                ),
+                |this| {
+                    this.child(
+                        div()
+                            .h(px(8.))
+                            .flex_none()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(2.))
+                            .px(px(4.))
+                            .bg(gpui::rgb(0xececee))
+                            .children([0xff5f57_u32, 0xfebc2e, 0x28c840].map(|color| {
+                                div().size(px(3.)).rounded_full().bg(gpui::rgb(color))
+                            }))
+                            .when(frame == Some(cap_project::FrameStyle::Browser), |bar| {
+                                bar.child(
+                                    div()
+                                        .ml(px(6.))
+                                        .h(px(4.))
+                                        .w(px(26.))
+                                        .rounded(px(2.))
+                                        .bg(gpui::rgb(0xffffff)),
+                                )
+                            }),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(3.))
+                    .p(px(5.))
+                    .child(div().h(px(3.)).w(px(28.)).rounded(px(2.)).bg(line))
+                    .child(div().h(px(3.)).w(px(40.)).rounded(px(2.)).bg(line))
+                    .child(div().h(px(3.)).w(px(22.)).rounded(px(2.)).bg(line)),
+            );
+    let style = KeycapStyle::from_setting(&look.keys.style.map_or_else(
+        cap_project::KeyboardSettings::platform_style,
+        str::to_string,
+    ));
+    let key_theme = KeycapTheme::from_setting(look.keys.theme);
+    let keys = div()
+        .absolute()
+        .right(px(5.))
+        .bottom(px(4.))
+        .flex()
+        .flex_row()
+        .items_end()
+        .gap(px(2.))
+        .child(crate::editor_tabs::key_chip_sized(
+            style, key_theme, "⌘", true, 14.,
+        ))
+        .child(crate::editor_tabs::key_chip_sized(
+            style, key_theme, "K", false, 14.,
+        ));
+    div()
+        .relative()
+        .h(px(HEIGHT))
+        .w_full()
+        .rounded(px(9.))
+        .overflow_hidden()
+        .map(|this| match (look.background, image) {
+            (LookBackground::Wallpaper(_), Some(image)) => this.child(
+                gpui::img(image)
+                    .absolute()
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover),
+            ),
+            (LookBackground::Gradient { from, to, angle }, _) => this.bg(gpui::linear_gradient(
+                angle as f32,
+                gpui::linear_color_stop(rgb(from), 0.),
+                gpui::linear_color_stop(rgb(to), 1.),
+            )),
+            (LookBackground::Color(color), _) => this.bg(rgb(color)),
+            (LookBackground::Animated(name), _) => {
+                match crate::looks::animated_background_ends(name) {
+                    Some((first, last)) => this.bg(gpui::linear_gradient(
+                        135.,
+                        gpui::linear_color_stop(rgb(first), 0.),
+                        gpui::linear_color_stop(rgb(last), 1.),
+                    )),
+                    _ => this.bg(Hsla::from(theme.editor.ctl_active)),
+                }
+            }
+            _ => this.bg(Hsla::from(theme.editor.ctl_active)),
+        })
+        .child(window)
+        .child(keys)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px(9.))
+                .border_1()
+                .border_color(gpui::hsla(0., 0., 0., 0.08))
+                .when(selected, |this| {
+                    this.border_2()
+                        .border_color(Hsla::from(theme.editor.accent))
+                }),
+        )
+}
 
 /// The per-preset submenu sits beside the menu, aligned with the row that
 /// summoned it: to the right when it fits, otherwise flipped to the left, and
@@ -330,18 +577,54 @@ fn seeked_playhead(time: f64, frame: u32, playing: bool) -> f64 {
     if playing { time } else { frame_seconds(frame) }
 }
 
-/// The part of a frame layout the canvas overlay draws from. A preset
-/// caption has no box on the canvas, and the overlay only draws while the
-/// player is hovered or dragged, so a new caption under the playhead only
-/// rebuilds the editor when its box could be on screen. Hovering the player
-/// rebuilds the editor anyway, which picks up the latest box.
+/// The part of a frame layout the canvas overlay draws from. Every caption,
+/// preset or manual, has a box on the canvas, and the overlay only draws
+/// while the player is hovered or dragged, so a new caption under the
+/// playhead only rebuilds the editor when its box could be on screen.
+/// Hovering the player rebuilds the editor anyway, which picks up the latest
+/// box.
 fn canvas_hit_layout(layout: FrameLayout, overlay_live: bool) -> FrameLayout {
     FrameLayout {
-        caption: layout
-            .caption
-            .filter(|caption| overlay_live && caption.is_manual()),
+        caption: layout.caption.filter(|_| overlay_live),
         ..layout
     }
+}
+
+/// Where each of a run of keys added by hand lands in `start..end`: back to
+/// back as laid out, squeezed in proportion when less room than they asked
+/// for was free, so every one lands inside it.
+fn manual_run_spans(runs: &[cap_project::ManualKeyRun], start: f64, end: f64) -> Vec<(f64, f64)> {
+    let requested = runs
+        .last()
+        .map_or(0.0, |run| run.offset + run.length)
+        .max(1e-9);
+    let scale = ((end - start) / requested).min(1.0);
+    runs.iter()
+        .map(|run| {
+            let run_start = start + run.offset * scale;
+            (run_start, (run_start + run.length * scale).min(end))
+        })
+        .collect()
+}
+
+/// A run's key presses, squeezed in step with the run when it was given less
+/// room than it asked for, so every press lands inside it.
+fn manual_run_keys(
+    run: &cap_project::ManualKeyRun,
+    span: f64,
+) -> Vec<cap_project::KeyPressDisplay> {
+    let scale = if run.length > 0.0 {
+        (span / run.length).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    cap_project::manual_key_presses(&run.text)
+        .into_iter()
+        .map(|mut key| {
+            key.time_offset *= scale;
+            key
+        })
+        .collect()
 }
 
 fn frame_layout_requires_editor_invalidation(
@@ -405,6 +688,14 @@ pub struct ProjectSummary {
     /// stored it in `recording-meta.json`: the rate it captured at, where the
     /// probed rate in `recordings` is the track's average.
     pub recorded_fps: Vec<(u32, Option<u32>)>,
+    /// The platform the recording was made on, whose keyboard an older
+    /// project's keys follow, as the renderer draws them.
+    pub platform: Option<cap_project::Platform>,
+    /// Started empty rather than recorded: no key presses to generate from.
+    pub blank: bool,
+    /// A recording in the project captured key presses (one imported into a
+    /// blank project counts), so its keys can be generated.
+    pub has_keyboard_capture: bool,
 }
 
 /// Validate a `.cap` before handing it to `EditorInstance::new`.
@@ -527,10 +818,18 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
         });
     }
 
-    let timeline = TimelineModel::build(&config, has_camera, multiple_recording_segments);
+    let timeline = TimelineModel::build_for(
+        &config,
+        has_camera,
+        multiple_recording_segments,
+        meta.platform.as_ref(),
+    );
     let duration = timeline.total_duration;
 
     Ok(ProjectSummary {
+        platform: meta.platform.clone(),
+        blank: studio.is_blank(),
+        has_keyboard_capture: cap_project::project_has_keyboard_capture(&meta),
         recordings: recordings.clone(),
         pretty_name: meta.pretty_name.clone(),
         timeline,
@@ -863,11 +1162,15 @@ enum EditorSection {
     Toolbar,
     Transport,
     Sidebar,
+    SidebarRail,
     Timeline,
+    TimelineOverlay,
     Transcript,
+    PanelSwitcher,
+    BlankStart,
 }
 
-struct EditorSectionView {
+pub(crate) struct EditorSectionView {
     editor: WeakEntity<EditorWindow>,
     section: EditorSection,
     _editor_subscription: Subscription,
@@ -912,19 +1215,43 @@ impl Render for EditorSectionView {
                             editor.render_sidebar(cx).into_any_element()
                         })
                     };
-                    loading::reveal(
+                    // The placeholder still covers the rail, which draws above
+                    // this section.
+                    let rail = if editor.sidebar_rail_shown() {
+                        SIDEBAR_TAB_BAR_HEIGHT
+                    } else {
+                        0.
+                    };
+                    loading::reveal_from(
                         "editor-sidebar-ready",
                         sidebar,
                         editor.render_preparing_sidebar(false),
+                        rail,
                     )
                 }
+                EditorSection::SidebarRail => {
+                    if editor.sidebar_rail_shown() {
+                        div()
+                            .size_full()
+                            .child(editor.render_sidebar_rail(cx))
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }
+                }
                 EditorSection::Transcript => editor.render_transcript(window, cx),
+                EditorSection::PanelSwitcher => editor.render_panel_switcher(cx).into_any_element(),
+                EditorSection::BlankStart => editor.render_blank_start(window, cx),
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
                     editor
                         .render_timeline(viewport_width, viewport_height, cx)
                         .into_any_element()
+                }
+                EditorSection::TimelineOverlay => {
+                    let viewport_width: f32 = window.viewport_size().width.into();
+                    editor.render_timeline_overlay(viewport_width, cx)
                 }
             }
         })
@@ -1561,8 +1888,29 @@ pub struct EditorWindow {
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
+    /// What the transport bar last drew from the playhead: it shows whole
+    /// seconds, so most playhead ticks leave it as it is.
+    transport_drawn: Cell<Option<TransportClock>>,
     sidebar_view: Entity<EditorSectionView>,
+    pub(crate) sidebar_rail_view: Entity<EditorSectionView>,
+    /// The blank slate a new blank project opens on, a section of its own so
+    /// its hover fades repaint nothing else.
+    blank_start_view: Entity<EditorSectionView>,
+    blank_start: blank_start::BlankStart,
+    blank_panel: blank_start::BlankPanel,
+    /// The ruler and the track rows. The playhead, the ghost line and the
+    /// minimap draw in `timeline_overlay_view` above it, so a playhead tick
+    /// or a ghost-line move leaves the rows cached.
     timeline_view: Entity<EditorSectionView>,
+    timeline_overlay_view: Entity<EditorSectionView>,
+    /// What the rows were last built for that no notify reaches: the viewport
+    /// the follow scroll moves during playback, and the pointer time a create
+    /// ghost follows.
+    timeline_rows_key: Cell<Option<TimelineRowsKey>>,
+    timeline_overlay_merged: Cell<Option<bool>>,
+    /// The timeline view the overlay draws: the playhead runs ahead of the
+    /// last engine sample while playing.
+    timeline_drawn: TimelineView,
     pub(crate) frame_layout: Option<FrameLayout>,
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
@@ -1659,6 +2007,11 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
+    /// A setting changed while keys were generating; generate again after.
+    pub(crate) keyboard_refresh_pending: bool,
+    /// The history length right after a key setting changed, so the keys it
+    /// regenerates can join that undo step.
+    pub(crate) keyboard_refresh_step: Option<usize>,
     clip_speed: Option<ClipSpeedMenu>,
     markers: markers::MarkersState,
     transition_popover: Option<TransitionPopover>,
@@ -1786,9 +2139,13 @@ pub struct EditorWindow {
     preview_speed: cap_editor::PreviewSpeed,
     /// The transport's Enhance toggle: the paused preview shows the enhanced
     /// frame. Never saved with the project.
-    preview_enhance: bool,
+    pub(crate) preview_enhance: bool,
     /// Compare is held down: the paused preview shows the original.
-    preview_comparing: bool,
+    /// The Enhance chip's bounds, for anchoring its card.
+    enhance_chip_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
+    enhance_hovered: bool,
+    enhance_card: Option<Entity<enhance::EnhanceCard>>,
+    enhance_card_task: Option<gpui::Task<()>>,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
@@ -1797,6 +2154,8 @@ pub struct EditorWindow {
     add_track: Option<AddTrackMenu>,
     add_track_opens: usize,
     pub(crate) audio_picker: Option<crate::editor_audio::AudioPicker>,
+    /// Add Keystrokes is open, to add key presses from this time on.
+    pub(crate) key_prompt: Option<f64>,
     pub(crate) audio_picker_generation: u64,
     pub(crate) audio_import_pending: Option<u64>,
     audio_picker_request: Option<AudioImportRequest>,
@@ -1820,6 +2179,9 @@ pub struct EditorWindow {
     /// of its three dialogs is up. The dialog closes the menu when it opens,
     /// exactly as the Solid dialogs replace the dropdown.
     presets_menu: Option<PresetsMenu>,
+    /// The look shown on the video while its card is hovered, and the
+    /// project to put back when the pointer leaves.
+    look_preview: Option<(usize, ProjectConfiguration)>,
     preset_dialog: Option<PresetDialog>,
     style_presets: style_preset_ui::StylePresetsState,
     caption_sync_signature: Option<u64>,
@@ -1832,6 +2194,8 @@ pub struct EditorWindow {
     transcript_view: Entity<EditorSectionView>,
     /// The right-hand panel's shared width and its grip drag.
     pub(crate) panel: crate::editor_side_panel::PanelState,
+    pub(crate) panel_fade: Entity<crate::editor_side_panel::PanelFade>,
+    pub(crate) panel_switcher_view: Entity<EditorSectionView>,
 }
 
 struct PresetsMenu {
@@ -1840,6 +2204,9 @@ struct PresetsMenu {
     /// An open per-preset submenu: which row, and where it was summoned.
     submenu: Option<(PresetRow, gpui::Point<Pixels>)>,
     scroll: gpui::ScrollHandle,
+    /// The look the project wears, found once when the menu opens: finding
+    /// it compares the project against every look, too much for each frame.
+    current_look: Option<&'static str>,
 }
 
 /// A row of the presets menu: the built-in Default, or a saved preset.
@@ -2047,7 +2414,7 @@ fn clip_menu_toggle_row(
                 .size(px(14.))
                 .flex_none()
                 .text_color(Hsla::from(if checked {
-                    theme.editor.accent
+                    theme.editor.accent_ink
                 } else {
                     theme.editor.text_2
                 })),
@@ -2167,6 +2534,7 @@ enum ToolbarMenu {
     AspectRatio,
     PreviewSpeed,
     CaptionDownload,
+    AddClips,
 }
 
 struct OpenToolbarMenu {
@@ -2334,12 +2702,28 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
         });
+        let blank_start_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::BlankStart, cx)
+        });
+        let sidebar_rail_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::SidebarRail, cx)
+        });
         let transcript_view = cx.new({
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Transcript, cx)
         });
-        let timeline_view =
-            cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
+        let panel_switcher_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::PanelSwitcher, cx)
+        });
+        let timeline_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx)
+        });
+        let timeline_overlay_view =
+            cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::TimelineOverlay, cx));
 
         Self {
             // No material and no transparency: `applyMacOSWindowMaterial` runs
@@ -2373,8 +2757,17 @@ impl EditorWindow {
             header,
             toolbar,
             transport_controls,
+            transport_drawn: Cell::new(None),
             sidebar_view,
+            sidebar_rail_view,
+            blank_start_view,
+            blank_start: blank_start::BlankStart::default(),
+            blank_panel: blank_start::BlankPanel::default(),
             timeline_view,
+            timeline_overlay_view,
+            timeline_rows_key: Cell::new(None),
+            timeline_overlay_merged: Cell::new(None),
+            timeline_drawn: TimelineView::default(),
             frame_layout: None,
             instance: None,
             audio_levels: None,
@@ -2414,6 +2807,8 @@ impl EditorWindow {
             hovering_generate_zoom: false,
             generating_keyboard: false,
             keyboard_generation_message: None,
+            keyboard_refresh_pending: false,
+            keyboard_refresh_step: None,
             clip_speed: None,
             markers: markers_state,
             transition_popover: None,
@@ -2465,8 +2860,14 @@ impl EditorWindow {
             shape_clipboard: Vec::new(),
             preview_quality: crate::store::GeneralSettings::load().editor_preview_quality,
             preview_speed: crate::store::GeneralSettings::load().editor_preview_speed,
-            preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance,
-            preview_comparing: false,
+            // Enhance was once two switches, one for the paused preview and
+            // one for exports; either being on turns the one switch on.
+            preview_enhance: crate::store::GeneralSettings::load().editor_preview_enhance
+                || crate::editor_export::ExportUi::load().enhance_quality,
+            enhance_chip_bounds: Rc::new(Cell::new(None)),
+            enhance_hovered: false,
+            enhance_card: None,
+            enhance_card_task: None,
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             text_menu: None,
@@ -2475,6 +2876,7 @@ impl EditorWindow {
             add_track: None,
             add_track_opens: 0,
             audio_picker: None,
+            key_prompt: None,
             audio_picker_generation: 0,
             audio_import_pending: None,
             audio_picker_request: None,
@@ -2487,6 +2889,7 @@ impl EditorWindow {
             initial_timeline_rows: None,
             timeline_resize: None,
             presets_menu: None,
+            look_preview: None,
             preset_dialog: None,
             style_presets: style_preset_ui::StylePresetsState::load(),
             caption_sync_signature: None,
@@ -2495,6 +2898,8 @@ impl EditorWindow {
             transcript: crate::transcript::TranscriptState::new(cx.focus_handle()),
             transcript_view,
             panel: crate::editor_side_panel::PanelState::load(window.window_handle()),
+            panel_fade: cx.new(|_| crate::editor_side_panel::PanelFade::default()),
+            panel_switcher_view,
         }
     }
 
@@ -2619,6 +3024,7 @@ impl EditorWindow {
         self.transcript.dirty = true;
         self.history = ProjectHistory::new(self.project.clone());
         self.tracks = TrackLanes::from_project(&self.project, self.has_camera);
+        self.refresh_blank_start(true);
         self.rebuild_timeline();
         // The sidebar's own signals are seeded from the config the instance
         // actually loaded, not the pre-flight's: `backgroundSourceTab`'s
@@ -2639,12 +3045,19 @@ impl EditorWindow {
         let system = std::mem::take(&mut self.timeline.system_waveforms);
         let imported = std::mem::take(&mut self.timeline.imported_waveforms);
         let waveform_paths = self.timeline.waveform_paths.clone();
-        self.timeline = TimelineModel::build_with_lanes(
+        let platform = self.summary().and_then(|summary| summary.platform.clone());
+        self.timeline = TimelineModel::build_with_lanes_for(
             &self.project,
             self.has_camera,
             self.multiple_clips,
             &self.tracks,
+            platform.as_ref(),
         );
+        self.refresh_blank_start(false);
+        if self.summary().is_some_and(|summary| summary.blank) {
+            self.timeline
+                .label_blank_canvas(self.project.timeline.as_ref());
+        }
         self.timeline.mic_waveforms = mic;
         self.timeline.system_waveforms = system;
         self.timeline.imported_waveforms = imported;
@@ -3030,6 +3443,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.keep_edit_under_look_preview();
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.transcript.dirty = true;
@@ -3049,6 +3463,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.keep_edit_under_look_preview();
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.transcript.dirty = true;
@@ -3067,6 +3482,9 @@ impl EditorWindow {
     ) {
         if !self.project_ready() {
             return;
+        }
+        if self.keep_edit_under_look_preview() {
+            self.publish_project();
         }
         let durations = self.clip_display_durations.clone();
         let removed_takes = self
@@ -3191,6 +3609,10 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        // A hovered look is never saved.
+        if self.keep_edit_under_look_preview() {
+            self.publish_project();
+        }
         self.pending_save.borrow_mut().queue(self.project.clone());
         let pending = self.pending_save.clone();
         self.save_task = Some(cx.spawn_in(window, async move |_, cx| {
@@ -3211,7 +3633,18 @@ impl EditorWindow {
     /// `projectHistory.undo()` -- reconcile the previous snapshot back over the
     /// store. The playhead is not moved and the selection is not restored;
     /// neither is in the snapshot (`editorState` is a separate store).
+    /// An undo or redo while the Presets menu is open changes which look the
+    /// project wears; the menu's outline follows it.
+    fn refresh_presets_menu_look(&mut self) {
+        if let Some(menu) = self.presets_menu.as_mut() {
+            menu.current_look = crate::looks::current_look(&self.project);
+        }
+    }
+
     pub(crate) fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A previewed look is not part of history: put the real project back
+        // first so the step applies to it and nothing restores over it later.
+        self.end_look_preview(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -3221,10 +3654,12 @@ impl EditorWindow {
             return;
         };
         self.apply_history(config, window, cx);
+        self.refresh_presets_menu_look();
         self.note_edit("undo", None);
     }
 
     pub(crate) fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_look_preview(cx);
         self.close_frame_controls(window, cx);
         self.end_field_edit(cx);
         self.close_color_picker(cx);
@@ -3234,6 +3669,7 @@ impl EditorWindow {
             return;
         };
         self.apply_history(config, window, cx);
+        self.refresh_presets_menu_look();
         self.note_edit("redo", None);
     }
 
@@ -3326,6 +3762,12 @@ impl EditorWindow {
             && self.preparing_consumer.is_none()
             && self.ordinary_handoff_frame.is_none()
             && self.preparing_candidate_frame.is_none()
+    }
+
+    /// Whether the Style tab's rail is up: the preparing placeholder draws a
+    /// rail of its own, and Clips and Transcript have none.
+    pub(crate) fn sidebar_rail_shown(&self) -> bool {
+        self.panel_tab() == crate::editor_side_panel::PanelTab::Style && self.visual_ready()
     }
 
     pub(crate) fn project_ready(&self) -> bool {
@@ -3609,7 +4051,7 @@ impl EditorWindow {
     }
 
     fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
-        if self.preview_enhance && !self.preview_comparing {
+        if self.preview_enhance {
             cap_project::ScreenEnhancement::on()
         } else {
             cap_project::ScreenEnhancement::default()
@@ -3806,8 +4248,6 @@ impl EditorWindow {
     }
 
     fn start_playback(&mut self, from: f64, cx: &mut Context<Self>) {
-        // Compare only applies to a paused frame, so playing ends it.
-        self.set_preview_comparing(false, cx);
         let Some(transport) = &self.transport else {
             return;
         };
@@ -3857,8 +4297,8 @@ impl EditorWindow {
                         if this.last_playhead_redraw.elapsed() < Duration::from_millis(15) {
                             return true;
                         }
-                        this.timeline_view.update(cx, |_, cx| cx.notify());
-                        this.transport_controls.update(cx, |_, cx| cx.notify());
+                        this.invalidate_playhead_layer(cx);
+                        this.invalidate_transport_clock(cx);
                         true
                     })
                     .unwrap_or(false);
@@ -3914,6 +4354,9 @@ impl EditorWindow {
     /// `handlePlayPauseClick` (`Player.tsx:212-233`), verbatim: at the end,
     /// restart from 0; playing, stop; otherwise seek to the playhead and go.
     pub fn toggle_play(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.blank_start_shown() {
+            return;
+        }
         if self.preparing_transport_active() {
             if self.preparing_controls_ready() {
                 let seek = self.is_at_end().then_some(0.0);
@@ -3967,7 +4410,7 @@ impl EditorWindow {
     /// One pointer move of a ruler scrub. While paused, the playhead is read
     /// by the timeline, the transport clock and what the window itself renders
     /// (the canvas overlay, the clip popover), so this invalidates those the
-    /// way [`Self::invalidate_hover_chrome`] does instead of rebuilding the
+    /// way [`Self::invalidate_playhead_chrome`] does instead of rebuilding the
     /// header, toolbar and sidebar on every move. The one sidebar reader is
     /// the 3D panel's "on the playhead" pose marker, which is only redrawn
     /// when it changes. Playing and handoff seeks keep the full invalidation.
@@ -3981,7 +4424,7 @@ impl EditorWindow {
             cx.notify();
             return;
         }
-        self.invalidate_hover_chrome(cx);
+        self.invalidate_playhead_chrome(cx);
         if self.camera3d_poses_at_playhead() != poses {
             self.sidebar_view.update(cx, |_, cx| cx.notify());
         }
@@ -4222,6 +4665,17 @@ impl EditorWindow {
         cx.notify();
     }
 
+    /// The pointer moving onto a timeline lane, as the row's hover handler
+    /// reports it.
+    pub(crate) fn bench_hover_lane(
+        &mut self,
+        lane: TrackKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_hovered_track(Some(lane), window, cx);
+    }
+
     fn capture_playback_key(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -4439,6 +4893,7 @@ impl EditorWindow {
                 || self.preset_dialog.is_some()
                 || self.style_presets.menu_open())
         {
+            self.end_look_preview(cx);
             self.presets_menu = None;
             self.preset_dialog = None;
             self.style_presets.close_menu();
@@ -4597,6 +5052,7 @@ impl EditorWindow {
                     || self.style_presets.menu_open()
                     || self.clips.has_open_menu()
                     || self.audio_picker.is_some()
+                    || self.key_prompt.is_some()
                     || self.camera3d_picker
                     || self.frame_controls.is_open()
                 {
@@ -4643,6 +5099,10 @@ impl EditorWindow {
                 if self.audio_picker.is_some() {
                     self.audio_picker = None;
                     cx.notify();
+                    return;
+                }
+                if self.key_prompt.is_some() {
+                    self.close_key_prompt(window, cx);
                     return;
                 }
                 if self.camera3d_picker {
@@ -4807,8 +5267,8 @@ impl EditorWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.timeline_view.update(cx, |_, cx| cx.notify());
-        self.transport_controls.update(cx, |_, cx| cx.notify());
+        self.invalidate_playhead_layer(cx);
+        self.invalidate_transport_clock(cx);
         // While playing, nothing else the parent renders reads the playhead:
         // the canvas overlay is hidden (`canvas_overlay_visible`) and the
         // scene-mode pane gates on it too. Notifying the parent here would
@@ -4990,7 +5450,7 @@ impl EditorWindow {
         if next != self.view.preview_time {
             self.view.preview_time = next;
             self.emit_preview_frame();
-            self.invalidate_hover_chrome(cx);
+            self.invalidate_playhead_chrome(cx);
         }
     }
 
@@ -5000,7 +5460,7 @@ impl EditorWindow {
         }
         self.view.preview_time = None;
         self.emit_preview_frame();
-        self.invalidate_hover_chrome(cx);
+        self.invalidate_playhead_chrome(cx);
     }
 
     /// Pointer-hover state that only the timeline, the transport and the
@@ -5011,7 +5471,38 @@ impl EditorWindow {
     /// sections are reused from their cache.
     fn invalidate_hover_chrome(&mut self, cx: &mut Context<Self>) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
-        self.transport_controls.update(cx, |_, cx| cx.notify());
+        self.invalidate_playhead_chrome(cx);
+    }
+
+    /// The playhead and the hover ghost line, which the timeline overlay draws.
+    /// A create ghost that follows the pointer inside a row is caught by
+    /// [`timeline_rows_key`].
+    fn invalidate_playhead_chrome(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_playhead_layer(cx);
+        self.invalidate_transport_clock(cx);
+    }
+
+    fn transport_clock(&self) -> TransportClock {
+        transport_clock(self.view, self.playhead, !self.playing || self.is_at_end())
+    }
+
+    /// Redraws the transport bar only when the clock, the play button or the
+    /// zoom slider it draws would change.
+    fn invalidate_transport_clock(&mut self, cx: &mut Context<Self>) {
+        if self.transport_drawn.get() != Some(self.transport_clock()) {
+            self.transport_controls.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    /// The timeline layer that draws the playhead: the overlay, or the rows
+    /// while [`Self::timeline_merged`].
+    fn invalidate_playhead_layer(&mut self, cx: &mut Context<Self>) {
+        let layer = if self.timeline_merged(cx) {
+            &self.timeline_view
+        } else {
+            &self.timeline_overlay_view
+        };
+        layer.update(cx, |_, cx| cx.notify());
     }
 
     /// State only the sidebar draws, such as a caption model download's
@@ -5025,6 +5516,8 @@ impl EditorWindow {
         self.transcript_view.update(cx, |_, cx| cx.notify());
     }
 
+    /// The lane under the pointer, which only the timeline draws from: its
+    /// row tint and the create ghosts.
     fn set_hovered_track(
         &mut self,
         track: Option<TrackKind>,
@@ -5036,7 +5529,7 @@ impl EditorWindow {
             if track != Some(TrackKind::Scene) {
                 self.scene_preview_time = None;
             }
-            cx.notify();
+            self.invalidate_hover_chrome(cx);
         }
     }
 
@@ -5201,6 +5694,7 @@ impl EditorWindow {
             });
             if selection.is_some() {
                 self.clear_marker_selection();
+                self.key_prompt = None;
                 if self.audio_import_pending != Some(self.audio_picker_generation) {
                     self.audio_picker = None;
                     self.audio_picker_request = None;
@@ -5298,7 +5792,7 @@ impl EditorWindow {
         let position = self.view.transform.position;
         let total = self.total_duration();
         let hit = edits::hit_test(
-            self.timeline.segments(kind),
+            &timeline::drawn_segments(kind, self.timeline.segments(kind), secs_per_pixel),
             lane,
             x,
             position,
@@ -5366,6 +5860,12 @@ impl EditorWindow {
                         self.seek_to_time(press_time, cx);
                         self.view.preview_time = None;
                     }
+                } else if kind == TrackKind::Keyboard {
+                    // Add Keystrokes opens where the track was pressed.
+                    cx.stop_propagation();
+                    self.seek_to_time(press_time, cx);
+                    self.view.preview_time = None;
+                    self.open_key_prompt(press_time, window, cx);
                 } else if matches!(
                     kind,
                     TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
@@ -5431,6 +5931,13 @@ impl EditorWindow {
             return;
         }
         let (start, end) = (segments[index].start, segments[index].end);
+        // A key press's end handle sits where its drawn end is, so the trim
+        // starts there.
+        let drawn_end = if kind == TrackKind::Keyboard {
+            timeline::keyboard_visible_ends(segments, secs_per_pixel)[index].unwrap_or(end)
+        } else {
+            end
+        };
 
         // The clip's own recording-domain edges, which its handles move.
         let source_edges = self
@@ -5474,7 +5981,7 @@ impl EditorWindow {
                 let min = edits::min_segment_duration(kind, secs_per_pixel);
                 let bounds = edits::trim_end_bounds(segments, lane, index, min, total);
                 Some(DragKind::TrimEnd {
-                    end,
+                    end: drawn_end,
                     bounds: audio_segment.map_or(bounds, |segment| {
                         edits::audio_trim_end_bounds(segment, bounds)
                     }),
@@ -6747,7 +7254,7 @@ impl EditorWindow {
         };
         match request.picker {
             crate::editor_audio::AudioPicker::Add { lane } => {
-                self.commit_audio_import(lane, imported, window, cx);
+                self.commit_audio_import(lane, self.playhead, imported, window, cx);
             }
             crate::editor_audio::AudioPicker::Replace { index } => {
                 self.replace_audio_segment(
@@ -6856,6 +7363,9 @@ impl EditorWindow {
     ) {
         if !self.project.auto_zoom_pending || !self.project_ready() {
             return;
+        }
+        if self.keep_edit_under_look_preview() {
+            self.publish_project();
         }
         let untouched = self.history.is_untouched();
         let settings = crate::store::GeneralSettings::load();
@@ -7148,6 +7658,136 @@ impl EditorWindow {
         true
     }
 
+    /// A shortcut written out (`cmd+shift+p`) always shows as its keys,
+    /// whatever "Show as" says.
+    pub(crate) fn add_typed_keys(
+        &mut self,
+        input: &str,
+        at: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let text = cap_project::manual_key_text(input);
+        if text.trim().is_empty() {
+            return false;
+        }
+        let split = crate::editor_tabs::keyboard_settings(&self.project).typing_split;
+        let runs = cap_project::manual_key_runs(&text, &split);
+        let Some(length) = runs.last().map(|run| run.offset + run.length) else {
+            return false;
+        };
+        let start = at;
+        let Some((_, end)) = self.add_manual_keys(start + length / 2.0, &runs, false, window, cx)
+        else {
+            return false;
+        };
+        self.seek_to_time((end + 0.15).min(self.total_duration()), cx);
+        true
+    }
+
+    /// Adds key presses by hand around `time`: `runs` back to back, each
+    /// striking its own text, and returns where they landed. `select` opens
+    /// the first one's panel.
+    fn add_manual_keys(
+        &mut self,
+        time: f64,
+        runs: &[cap_project::ManualKeyRun],
+        select: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(f64, f64)> {
+        let requested = runs.last().map(|run| run.offset + run.length)?;
+        let durations = self.clip_display_durations.clone();
+        if !edits::ensure_timeline(&mut self.project, &durations) {
+            return None;
+        }
+        let total = self.total_duration();
+        let length = requested.min(total);
+        let placement = self.project.timeline.as_ref().and_then(|timeline| {
+            edits::find_placement(&timeline.keyboard_segments, time, length, total)
+        });
+        let Some((start, end)) = placement else {
+            self.show_notice(tr::editor::window::no_room_for_key(), window, cx);
+            return None;
+        };
+        let next = self.project.timeline.as_ref().map_or(0, |timeline| {
+            timeline
+                .keyboard_segments
+                .iter()
+                .filter_map(|segment| {
+                    segment
+                        .id
+                        .strip_prefix(cap_project::MANUAL_KEYBOARD_PREFIX)?
+                        .parse::<u64>()
+                        .ok()
+                })
+                .max()
+                .map_or(0, |last| last + 1)
+        });
+        let id = format!("{}{next}", cap_project::MANUAL_KEYBOARD_PREFIX);
+        let spans = manual_run_spans(runs, start, end);
+        let showed_track = self.tracks.keyboard;
+        self.tracks.keyboard = true;
+        let added = self.edit_timeline_project(
+            |project| {
+                let keyboard = project
+                    .keyboard
+                    .get_or_insert_with(cap_project::KeyboardData::default);
+                keyboard.settings.enabled = true;
+                let Some(timeline) = project.timeline.as_mut() else {
+                    return false;
+                };
+                for (index, (run, &(run_start, run_end))) in runs.iter().zip(&spans).enumerate() {
+                    let segment = cap_project::KeyboardTrackSegment {
+                        id: if index == 0 {
+                            id.clone()
+                        } else {
+                            format!(
+                                "{}{}",
+                                cap_project::MANUAL_KEYBOARD_PREFIX,
+                                next + index as u64
+                            )
+                        },
+                        start: run_start,
+                        end: run_end,
+                        display_text: run.text.clone(),
+                        keys: manual_run_keys(run, run_end - run_start),
+                        fade_duration_override: None,
+                        position_override: None,
+                        color_override: None,
+                        background_color_override: None,
+                        font_size_override: None,
+                        uppercase_override: None,
+                    };
+                    let at = timeline
+                        .keyboard_segments
+                        .partition_point(|other| other.start <= run_start);
+                    timeline.keyboard_segments.insert(at, segment);
+                }
+                true
+            },
+            window,
+            cx,
+        );
+        if !added {
+            self.tracks.keyboard = showed_track;
+            return None;
+        }
+        if select {
+            let index = self.project.timeline.as_ref().and_then(|timeline| {
+                timeline
+                    .keyboard_segments
+                    .iter()
+                    .position(|segment| segment.id == id)
+            });
+            if let Some(index) = index {
+                self.set_selection(Some(Selection::single(TrackKind::Keyboard, index)), cx);
+            }
+        }
+        self.note_edit("add-keyboard", Some(TrackKind::Keyboard));
+        Some((start, end))
+    }
+
     /// `finish(e)`: resume the history, and -- if the drag never promoted --
     /// select instead, which also moves the playhead
     /// (`props.handleUpdatePlayhead(e)`).
@@ -7278,7 +7918,7 @@ impl EditorWindow {
         let x = self.content_x(window_x);
         let position = self.view.transform.position;
         let hit = edits::hit_test(
-            self.timeline.segments(kind),
+            &timeline::drawn_segments(kind, self.timeline.segments(kind), secs_per_pixel),
             lane,
             x,
             position,
@@ -8282,6 +8922,10 @@ impl EditorWindow {
                 .iter()
                 .map(|format| ui::MenuItem::new(format.label(), false))
                 .collect(),
+            ToolbarMenu::AddClips => vec![
+                ui::MenuItem::new(tr::editor::clips::import_existing(), false),
+                ui::MenuItem::new(tr::editor::clips::import_mp4(), false),
+            ],
         }
     }
 
@@ -8430,6 +9074,11 @@ impl EditorWindow {
                     self.download_captions(*format, window, cx);
                 }
             }
+            ToolbarMenu::AddClips => match index {
+                0 => self.pick_existing_recording(window, cx),
+                1 => self.pick_mp4(window, cx),
+                _ => {}
+            },
         }
         cx.notify();
         window.refresh();
@@ -8445,6 +9094,7 @@ impl EditorWindow {
                     ToolbarMenu::AspectRatio => px(200.),
                     ToolbarMenu::PreviewSpeed => px(96.),
                     ToolbarMenu::CaptionDownload => px(160.),
+                    ToolbarMenu::AddClips => px(180.),
                 })
                 .on_select(cx.listener(move |this, index: &usize, window, cx| {
                     this.choose_toolbar_menu(kind, *index, window, cx);
@@ -8486,29 +9136,28 @@ impl EditorWindow {
     }
 
     fn toggle_preview_enhance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.preview_enhance = !self.preview_enhance;
-        self.preview_comparing = false;
+        self.set_enhance(!self.preview_enhance, window, cx);
+    }
+
+    /// Enhance is one setting: the export and the paused preview follow it
+    /// together, from the toolbar or the export page.
+    pub(crate) fn set_enhance(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_enhance = on;
+        self.update_enhance_card(cx);
         if !crate::store::set_store_setting(
             crate::store::GENERAL_SETTINGS,
             crate::store::EDITOR_PREVIEW_ENHANCE_KEY,
-            serde_json::json!(self.preview_enhance),
+            serde_json::json!(on),
         ) {
-            tracing::warn!("failed to persist the preview enhance toggle");
+            tracing::warn!("failed to persist the enhance toggle");
+        }
+        match self.export.as_mut() {
+            Some(export) => export.set_enhance_quality(on),
+            None => crate::editor_export::ExportUi::save_enhance_quality(on),
         }
         self.publish_project();
         cx.notify();
         window.refresh();
-    }
-
-    /// Holding Compare shows the original paused frame; letting go shows the
-    /// enhanced one again.
-    fn set_preview_comparing(&mut self, comparing: bool, cx: &mut Context<Self>) {
-        if self.preview_comparing == comparing {
-            return;
-        }
-        self.preview_comparing = comparing;
-        self.publish_project();
-        cx.notify();
     }
 
     fn has_open_menu(&self) -> bool {
@@ -8667,21 +9316,249 @@ impl EditorWindow {
         let viewport = window.viewport_size();
         // `gutter={8}`, opening downward from the header trigger; `w-72`.
         let x = f32::from(anchor.x)
-            .min(f32::from(viewport.width) - 288. - 12.)
+            .min(f32::from(viewport.width) - PRESETS_MENU_WIDTH - 12.)
             .max(12.);
         let y = f32::from(anchor.y) + 8.;
+        self.ensure_look_wallpapers(window, cx);
         self.presets_menu = Some(PresetsMenu {
             origin: point(px(x), px(y)),
             store: crate::presets::PresetsStore::load(),
             submenu: None,
             scroll: gpui::ScrollHandle::new(),
+            current_look: crate::looks::current_look(&self.project),
         });
         cx.notify();
+    }
+
+    /// A built-in look: its styling over the project, one undo entry.
+    fn apply_look_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(look) = crate::looks::LOOKS.get(index) else {
+            return;
+        };
+        self.end_look_preview(cx);
+        let next = crate::looks::apply_look(look, &self.project);
+        tracing::info!(look = look.id, "look applied");
+        self.apply_project_preset(next, window, cx);
+    }
+
+    /// Shows look `index` on the video while its card is hovered, without
+    /// saving it or adding an undo step.
+    fn preview_look(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(look) = crate::looks::LOOKS.get(index) else {
+            return;
+        };
+        if self
+            .look_preview
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == index)
+        {
+            return;
+        }
+        let saved = match self.look_preview.take() {
+            Some((_, saved)) => saved,
+            None => self.project.clone(),
+        };
+        self.project = crate::looks::apply_look(look, &saved);
+        self.look_preview = Some((index, saved));
+        self.publish_project();
+        cx.notify();
+    }
+
+    /// An edit that reached the project while a look was previewed (a
+    /// shortcut, say) landed on the previewed project: keep the edit, take
+    /// the look off, and end the preview so nothing restores over it.
+    /// Returns whether a preview was ended.
+    fn keep_edit_under_look_preview(&mut self) -> bool {
+        crate::looks::keep_edit_under_preview(&mut self.project, &mut self.look_preview)
+    }
+
+    /// Puts the project back as it was before a look was previewed.
+    pub(crate) fn end_look_preview(&mut self, cx: &mut Context<Self>) {
+        let Some((_, saved)) = self.look_preview.take() else {
+            return;
+        };
+        self.project = saved;
+        self.publish_project();
+        cx.notify();
+    }
+
+    /// The looks gallery atop the presets menu: four across, each a small
+    /// picture of the look, its name, and its one line on hover.
+    fn render_looks_gallery(&self, menu: &PresetsMenu, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let current = menu.current_look;
+        let cards: Vec<gpui::AnyElement> = crate::looks::LOOKS
+            .iter()
+            .enumerate()
+            .map(|(index, look)| {
+                let selected = current == Some(look.id);
+                let image = match look.background {
+                    crate::looks::LookBackground::Wallpaper(id) => self.wallpaper_thumbnail(id),
+                    _ => None,
+                };
+                div()
+                    .id(SharedString::from(format!("look-{}", look.id)))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.))
+                    .p(px(4.))
+                    .rounded(px(12.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(Hsla::from(editor.ctl)))
+                    .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                        if *hovered {
+                            this.preview_look(index, cx);
+                        } else if this
+                            .look_preview
+                            .as_ref()
+                            .is_some_and(|(shown, _)| *shown == index)
+                        {
+                            this.end_look_preview(cx);
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.apply_look_at(index, window, cx);
+                    }))
+                    .child(look_preview(&theme, look, image, selected))
+                    .child(
+                        div()
+                            .px(px(2.))
+                            .text_size(px(12.5))
+                            .line_height(px(15.))
+                            .text_color(Hsla::from(if selected {
+                                editor.text_1
+                            } else {
+                                editor.text_2
+                            }))
+                            .truncate()
+                            .child((look.name)()),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let mut rows = Vec::new();
+        let mut cards = cards.into_iter();
+        loop {
+            let row: Vec<_> = cards.by_ref().take(4).collect();
+            if row.is_empty() {
+                break;
+            }
+            rows.push(div().flex().flex_row().gap(px(4.)).children(row));
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .px(px(8.))
+            .pt(px(10.))
+            .pb(px(8.))
+            .border_b_1()
+            .border_color(Hsla::from(editor.line))
+            .child(
+                div()
+                    .px(px(6.))
+                    .pb(px(4.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(editor.text_2))
+                    .child(tr::editor::window::looks::title()),
+            )
+            .children(rows)
+            .child(self.render_look_details(current))
+            .into_any_element()
+    }
+
+    /// Under the gallery: the hovered look (or the one the project wears),
+    /// what it is for, and every setting it changes, so a look's effect is
+    /// clear before it is applied. The video behind shows it live.
+    fn render_look_details(&self, current: Option<&'static str>) -> gpui::AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        let look = self
+            .look_preview
+            .as_ref()
+            .and_then(|(index, _)| crate::looks::LOOKS.get(*index))
+            .or_else(|| {
+                current.and_then(|id| crate::looks::LOOKS.iter().find(|look| look.id == id))
+            });
+        let body = div()
+            .mx(px(4.))
+            .mt(px(4.))
+            .p(px(10.))
+            .rounded(px(10.))
+            .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
+            .flex()
+            .flex_col()
+            .gap(px(6.));
+        let Some(look) = look else {
+            return body
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(editor.text_2))
+                        .child(tr::editor::window::looks::preview_hint()),
+                )
+                .into_any_element();
+        };
+        let chip = |icon: &'static str, label: String| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(5.))
+                .h(px(22.))
+                .px(px(8.))
+                .rounded(px(7.))
+                .bg(Hsla::from(editor.ctl_active))
+                .text_size(px(11.5))
+                .text_color(Hsla::from(editor.text_1))
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(12.))
+                        .text_color(Hsla::from(editor.text_2)),
+                )
+                .child(label)
+        };
+        body.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(Hsla::from(editor.text_1))
+                        .child((look.name)()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(editor.text_2))
+                        .child((look.description)()),
+                ),
+        )
+        .child(
+            div().flex().flex_row().flex_wrap().gap(px(5.)).children(
+                look_changes(look)
+                    .into_iter()
+                    .map(|(icon, label)| chip(icon, label)),
+            ),
+        )
+        .into_any_element()
     }
 
     /// Apply row `index`: the preset's config with the current timeline and
     /// clips kept -- one undo entry, like any other config edit.
     fn apply_preset_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_look_preview(cx);
         let Some(menu) = self.presets_menu.as_ref() else {
             return;
         };
@@ -8719,6 +9596,7 @@ impl EditorWindow {
     /// The built-in Default row: Cap's own look, with this project's timeline
     /// and clips kept.
     fn apply_default_preset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_look_preview(cx);
         let next = crate::presets::default_project_config(&self.project);
         self.apply_project_preset(next, window, cx);
     }
@@ -8775,6 +9653,7 @@ impl EditorWindow {
             _ => String::new(),
         };
         // The dropdown closes when its dialog opens, as Kobalte's does.
+        self.end_look_preview(cx);
         self.presets_menu = None;
         self.preset_dialog = Some(dialog);
         if !matches!(dialog, PresetDialog::Delete { .. }) {
@@ -8869,6 +9748,9 @@ impl EditorWindow {
                     true
                 });
                 self.tracks.keyboard = next;
+                if next {
+                    self.generate_keyboard_segments_if_empty(window, cx);
+                }
             }
             TrackKind::Scene => self.tracks.scene = next,
             // Showing the lane is all the tile does: an empty lane draws its
@@ -8929,6 +9811,12 @@ impl EditorWindow {
                 self.add_overlay_segment(kind, window, cx);
             }
             TrackKind::Shape => self.add_shape_at_playhead(window, cx),
+            TrackKind::Keyboard => {
+                self.tracks.keyboard = true;
+                self.rebuild_timeline();
+                let at = self.playhead;
+                self.open_key_prompt(at, window, cx);
+            }
             _ => {}
         }
         cx.notify();
@@ -9388,6 +10276,7 @@ impl EditorWindow {
     fn commit_audio_import(
         &mut self,
         lane: u32,
+        at: f64,
         imported: ImportedAudio,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -9401,7 +10290,7 @@ impl EditorWindow {
             source_duration
         }));
         let max_start = (total - length).max(0.0);
-        let start = self.playhead.max(0.0).min(max_start);
+        let start = at.max(0.0).min(max_start);
         let end = start + length;
         let path = imported.path.clone();
         let inserted = self.edit(
@@ -9492,6 +10381,19 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if spec == "type-keys" {
+            self.open_key_prompt(0.0, window, cx);
+            return;
+        }
+        // `looks[:<index>]`: the Presets menu, previewing that look.
+        if let Some(look) = spec.strip_prefix("looks") {
+            let viewport = window.viewport_size();
+            self.open_presets_menu(point(viewport.width - px(120.), px(40.)), window, cx);
+            if let Ok(index) = look.trim_start_matches(':').parse::<usize>() {
+                self.preview_look(index, cx);
+            }
+            return;
+        }
         self.open_add_track(window, cx);
         let kind = match spec {
             "style" => TrackKind::Style,
@@ -9715,8 +10617,8 @@ impl EditorWindow {
             .gap(px(8.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .p(px(6.))
             .shadow(theme.editor.pop_shadow())
             .on_mouse_down(
@@ -10168,10 +11070,11 @@ impl EditorWindow {
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .bg(if selected {
-                    Hsla::from(theme.editor.ctl_active)
+                    theme.editor.pill_fill()
                 } else {
                     gpui::transparent_black()
                 })
+                .when(selected, |this| this.shadow(theme.editor.pill_shadow()))
                 .text_color(Hsla::from(if selected {
                     theme.editor.text_1
                 } else {
@@ -10202,8 +11105,8 @@ impl EditorWindow {
             .gap(px(8.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .p(px(6.))
             .shadow(theme.editor.pop_shadow())
             .occlude()
@@ -10333,7 +11236,7 @@ impl EditorWindow {
                                         .size(px(14.))
                                         .flex_none()
                                         .text_color(Hsla::from(if voice_eq_active {
-                                            theme.editor.accent
+                                            theme.editor.accent_ink
                                         } else {
                                             theme.editor.text_2
                                         })),
@@ -10620,8 +11523,8 @@ impl EditorWindow {
                         .flex_col()
                         .rounded(px(12.))
                         .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
+                        .border_color(theme.editor.pop_line())
+                        .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
@@ -10744,7 +11647,7 @@ impl EditorWindow {
                         this.child(
                             badge(div())
                                 .w(px(14.))
-                                .bg(Hsla::from(theme.editor.accent))
+                                .bg(Hsla::from(theme.editor.accent_fill))
                                 .child(
                                     svg()
                                         .path("icons/check.svg")
@@ -10874,6 +11777,7 @@ impl EditorWindow {
                         .size_full()
                         .occlude()
                         .on_click(cx.listener(|this, _, _window, cx| {
+                            this.end_look_preview(cx);
                             this.presets_menu = None;
                             cx.notify();
                         })),
@@ -10889,10 +11793,19 @@ impl EditorWindow {
                         .flex_col()
                         .rounded(px(12.))
                         .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
+                        .border_color(theme.editor.pop_line())
+                        .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .overflow_hidden()
+                        .child(self.render_looks_gallery(menu, cx))
+                        .child(
+                            div()
+                                .px(px(14.))
+                                .pt(px(4.))
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.editor.text_2))
+                                .child(tr::editor::window::looks::saved()),
+                        )
                         .child(
                             div()
                                 .id("presets-list")
@@ -11087,8 +12000,8 @@ impl EditorWindow {
             .gap(px(2.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .shadow(theme.editor.pop_shadow())
             .child(
                 menu_row(
@@ -11301,8 +12214,8 @@ impl EditorWindow {
                         .flex_col()
                         .rounded(px(12.))
                         .border_1()
-                        .border_color(Hsla::from(theme.editor.line))
-                        .bg(Hsla::from(theme.editor.card))
+                        .border_color(theme.editor.pop_line())
+                        .bg(theme.editor.pop_bg())
                         .shadow(theme.editor.pop_shadow())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
@@ -11326,7 +12239,7 @@ impl EditorWindow {
                                 .px(px(16.))
                                 .pb(px(16.))
                                 .child(
-                                    ui::Button::plain(
+                                    ui::Button::editor(
                                         &theme,
                                         "preset-cancel",
                                         ui::ButtonVariant::Gray,
@@ -11341,7 +12254,7 @@ impl EditorWindow {
                                     )),
                                 )
                                 .child(
-                                    ui::Button::plain(
+                                    ui::Button::editor(
                                         &theme,
                                         "preset-confirm",
                                         if danger {
@@ -11619,6 +12532,8 @@ impl EditorWindow {
     /// `accent-2 -> accent` gradient with a 1px top highlight.
     fn render_export_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.theme.editor;
+        // A blank slate has nothing in it to export yet.
+        let exportable = self.project_ready() && !self.blank_start_shown();
         let gradient = |top: gpui::Rgba, bottom: gpui::Rgba| {
             gpui::linear_gradient(
                 180.,
@@ -11640,35 +12555,35 @@ impl EditorWindow {
             .flex_none()
             .overflow_hidden()
             .rounded(px(8.))
-            .when(self.project_ready(), |button| button.cursor_pointer())
-            .when(!self.project_ready(), |button| button.opacity(0.5))
-            .bg(gradient(editor.accent_2, editor.accent))
+            .when(exportable, |button| button.cursor_pointer())
+            .when(!exportable, |button| button.opacity(0.5))
+            .bg(gradient(editor.accent_fill_2, editor.accent_fill))
+            // Hover deepens rather than lightens, so the white label keeps
+            // its contrast in every state.
             .hover(move |style| {
                 style.bg(gradient(
-                    crate::theme::mix(editor.accent_2, gpui::rgb(0xffffff), 0.10),
-                    crate::theme::mix(editor.accent, gpui::rgb(0xffffff), 0.10),
+                    crate::theme::mix(editor.accent_fill_2, gpui::rgb(0x000000), 0.08),
+                    crate::theme::mix(editor.accent_fill, gpui::rgb(0x000000), 0.08),
                 ))
             })
             .active(move |style| {
                 style.bg(gradient(
-                    crate::theme::mix(editor.accent_2, gpui::rgb(0x000000), 0.06),
-                    crate::theme::mix(editor.accent, gpui::rgb(0x000000), 0.06),
+                    crate::theme::mix(editor.accent_fill_2, gpui::rgb(0x000000), 0.16),
+                    crate::theme::mix(editor.accent_fill, gpui::rgb(0x000000), 0.16),
                 ))
             })
             .text_size(px(13.))
             .font_weight(FontWeight::MEDIUM)
             .text_color(gpui::white())
-            // gpui has no box-shadow, so the `inset 0 1px 0 rgba(255,255,255,
-            // .22)` highlight is a painted hairline instead.
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .h(px(1.))
-                    .bg(gpui::hsla(0., 0., 1., 0.22)),
-            )
+            // The lit top edge is an inset shadow, so it follows the rounded
+            // corners instead of running past them.
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.22),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            }])
             .child(
                 svg()
                     .path("icons/upload-arrow.svg")
@@ -11677,9 +12592,9 @@ impl EditorWindow {
                     .text_color(gpui::white()),
             )
             .child(tr::editor::window::header::export())
-            .when(self.project_ready(), |button| {
+            .when(exportable, |button| {
                 button.on_click(cx.listener(|this, _, window, cx| {
-                    if this.project_ready() {
+                    if this.project_ready() && !this.blank_start_shown() {
                         this.open_export(window, cx);
                     }
                 }))
@@ -11692,20 +12607,22 @@ impl EditorWindow {
     /// transport, with no rule between them.
     fn render_player(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let panel_bounds = self.player_panel_bounds.clone();
-        div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| panel_bounds.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
+        let player = div().relative().flex().flex_col().flex_1().min_h_0().child(
+            gpui::canvas(
+                move |bounds, _, _| panel_bounds.set(Some(bounds)),
+                |_, _, _, _| {},
             )
+            .absolute()
+            .inset_0(),
+        );
+        // A new blank project is a blank slate until something is added:
+        // nothing plays and there is no frame to show yet.
+        if self.blank_start_shown() && self.project_ready() {
+            return player
+                .children(self.render_blank_start_layer(cx))
+                .children(self.render_notice());
+        }
+        player
             .child(
                 self.toolbar.clone().cached(
                     StyleRefinement::default()
@@ -11719,6 +12636,7 @@ impl EditorWindow {
                     .clone()
                     .cached(StyleRefinement::default().w_full().h(px(PLAYER_BAR_HEIGHT))),
             )
+            .children(self.render_blank_start_layer(cx))
             .children(self.render_notice())
     }
 
@@ -11828,6 +12746,7 @@ impl EditorWindow {
                     .items_center()
                     .flex_none()
                     .gap(px(8.))
+                    .child(self.render_preview_enhance(!narrow, cx))
                     .child(
                         div()
                             .text_size(px(12.))
@@ -11899,19 +12818,16 @@ impl EditorWindow {
                 .rev()
                 .copied()
                 .collect();
-        let selected_bg = if theme.is_dark() {
-            gpui::hsla(0., 0., 1., 0.12)
-        } else {
-            Hsla::from(editor.card)
-        };
+        let selected_bg = editor.pill_fill();
         div()
             .id("preview-quality")
             .flex()
             .flex_row()
             .flex_none()
             .p(px(2.))
-            .rounded(px(8.))
+            .rounded(px(9.))
             .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
             .children(qualities.iter().enumerate().map(|(index, quality)| {
                 let quality = *quality;
                 let selected = quality == self.preview_quality;
@@ -11926,12 +12842,14 @@ impl EditorWindow {
                     .h(px(24.))
                     .min_w(px(24.))
                     .px(px(10.))
-                    .rounded(px(6.))
+                    .rounded(px(7.))
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
                     .map(|this| {
                         if selected {
-                            this.bg(selected_bg).text_color(Hsla::from(editor.text_1))
+                            this.bg(selected_bg)
+                                .shadow(editor.pill_shadow())
+                                .text_color(Hsla::from(editor.text_1))
                         } else {
                             this.text_color(Hsla::from(editor.text_2))
                                 .cursor_pointer()
@@ -11989,7 +12907,7 @@ impl EditorWindow {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .bg(Hsla::from(theme.editor.card))
+            .bg(Hsla::from(theme.editor.window))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if event.button == MouseButton::Left {
                     this.focus_root(window, cx);
@@ -12123,6 +13041,7 @@ impl EditorWindow {
     /// The player's transport bar: the clock on the left, the transport cluster
     /// centred across the row, split and zoom on the right.
     fn render_transport(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.transport_drawn.set(Some(self.transport_clock()));
         let theme = self.theme;
         let editor = theme.editor;
         let player_width = self.player_width(f32::from(window.viewport_size().width));
@@ -12207,8 +13126,7 @@ impl EditorWindow {
                                     )),
                                 )
                             })),
-                    )
-                    .child(self.render_preview_enhance(player_width >= 920., cx)),
+                    ),
             )
             .child(
                 div()
@@ -12298,7 +13216,7 @@ impl EditorWindow {
                                 .view(cx)
                             })
                             .child(
-                                ui::Button::plain(
+                                ui::Button::editor(
                                     &theme,
                                     "transport-split",
                                     if self.split_mode {
@@ -12340,14 +13258,7 @@ impl EditorWindow {
                         )
                         .row_width(px(72.))
                         .row_height(px(20.))
-                        .track(px(3.), Hsla::from(editor.ctl_active))
-                        .fill(Hsla::from(editor.accent))
-                        .thumb(
-                            px(12.),
-                            Hsla::from(editor.thumb),
-                            Some(gpui::hsla(0., 0., 0., 0.12)),
-                        )
-                        .thumb_shadow()
+                        .editor(&theme, px(12.), false)
                         .on_drag_start(cx.listener(
                             |this, event: &MouseDownEvent, window, cx| {
                                 this.zoom_slider_drag = true;
@@ -12362,98 +13273,6 @@ impl EditorWindow {
                         cx,
                     )),
             )
-    }
-
-    /// The Enhance toggle and, while it is on, Compare: hold it to see the
-    /// paused frame without enhancement.
-    fn render_preview_enhance(&self, labels: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let ready = self.project_ready();
-        let enhance = ui::Button::plain(
-            &theme,
-            "transport-enhance",
-            if self.preview_enhance {
-                ui::ButtonVariant::Primary
-            } else {
-                ui::ButtonVariant::Gray
-            },
-            ui::ButtonSize::Sm,
-        )
-        .icon("icons/scan-text.svg")
-        .when(labels, |button| {
-            button.label(tr::editor::window::transport::enhance())
-        })
-        .radius(px(7.))
-        .disabled(!ready)
-        .on_click(cx.listener(|this, _, window, cx| {
-            this.toggle_preview_enhance(window, cx);
-        }));
-        let comparing = self.preview_comparing;
-        let can_compare = ready && !self.playing;
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(4.))
-            .child(
-                div()
-                    .id("transport-enhance-tooltip")
-                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-                    .tooltip(move |_, cx| {
-                        ui::Tooltip::new(&theme, tr::editor::window::transport::enhance_tooltip())
-                            .view(cx)
-                    })
-                    .child(enhance),
-            )
-            .children(self.preview_enhance.then(|| {
-                div()
-                    .id("transport-compare")
-                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-                    .tooltip(move |_, cx| {
-                        ui::Tooltip::new(&theme, tr::editor::window::transport::compare_tooltip())
-                            .view(cx)
-                    })
-                    .when(can_compare, |this| {
-                        this.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                this.set_preview_comparing(true, cx);
-                            }),
-                        )
-                    })
-                    // Release always ends Compare, even once playback has
-                    // disabled the button under the held mouse.
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                            this.set_preview_comparing(false, cx);
-                        }),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                            this.set_preview_comparing(false, cx);
-                        }),
-                    )
-                    .child(
-                        ui::Button::plain(
-                            &theme,
-                            "transport-compare-button",
-                            if comparing {
-                                ui::ButtonVariant::Primary
-                            } else {
-                                ui::ButtonVariant::Gray
-                            },
-                            ui::ButtonSize::Sm,
-                        )
-                        .icon("icons/columns-2.svg")
-                        .when(labels, |button| {
-                            button.label(tr::editor::window::transport::compare())
-                        })
-                        .radius(px(7.))
-                        .disabled(!can_compare),
-                    )
-            }))
     }
 
     fn render_preview_speed(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -12480,7 +13299,7 @@ impl EditorWindow {
             .map(|this| {
                 if changed {
                     this.bg(accent.opacity(if open { 0.22 } else { 0.14 }))
-                        .text_color(accent)
+                        .text_color(Hsla::from(editor.accent_ink))
                 } else if open {
                     this.bg(Hsla::from(editor.ctl_hover))
                         .text_color(Hsla::from(editor.text_1))
@@ -12531,6 +13350,8 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         self.timeline.waveform_paths.sweep();
+        self.timeline_rows_key
+            .set(Some(timeline_rows_key(self.view, self.timeline_merged(cx))));
         if !self.project_ready() {
             if self
                 .preparing_presentation
@@ -12563,108 +13384,113 @@ impl EditorWindow {
                 })
                 .into_any_element();
         }
-        let content_width = timeline::content_width(viewport_width);
-        let live = self.transport.is_some();
-
-        // While playing, the drawn line runs ahead by the wall-clock elapsed
-        // since the last applied sample so the 60Hz ticker's redraws land
-        // between events instead of on them -- but only once this play epoch
-        // has actually produced a sample (`playhead_extrapolation`).
-        let mut playhead_view = {
-            let mut view = self.view;
-            let ahead = playhead_extrapolation(
-                self.playing,
-                self.playhead_epoch_live,
-                self.last_playhead_redraw.elapsed().as_secs_f64(),
-                self.preview_speed.as_f64(),
-            );
-            if ahead > 0.0 {
-                view.playhead = (view.playhead + ahead).min(self.total_duration());
-            }
-            view
-        };
-        if self.playing {
-            let interacting = self.scrub.is_some()
-                || self.drag.is_some()
-                || self.lane_reorder.is_some()
-                || self.minimap_drag.is_some()
-                || self.zoom_slider_drag;
-            let total = self.total_duration();
-            self.playback_follow.update(
-                &mut self.view.transform,
-                playhead_view.playhead,
-                total,
-                Instant::now(),
-                interacting,
-            );
-            playhead_view.transform = self.view.transform;
+        if self.blank_start_shown() {
+            return self.render_blank_timeline(viewport_width, cx);
         }
-        let playhead_x = timeline::playhead_offset(playhead_view, content_width);
-        let ghost_x = timeline::ghost_offset(self.view, content_width);
-
-        let (_, minimap_width) = timeline::minimap_bounds(viewport_width);
+        let live = self.transport.is_some();
 
         // The card itself is the root shell's; this is its inside, at the
         // brief's `10px 12px 12px` less the hairline the card already draws.
-        div()
-            .size_full()
-            .min_h_0()
-            .relative()
-            .overflow_hidden()
-            .pt(px(TIMELINE_TOP_PADDING))
-            .pl(px(TIMELINE_PADDING))
-            .pr(px(TIMELINE_PADDING))
-            .pb(px(TIMELINE_BOTTOM_PADDING))
-            .child(
-                div()
-                    .id("timeline-container")
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .gap(px(timeline::TIMELINE_HEADER_GAP))
-                    .h_full()
-                    .overflow_hidden()
-                    // The container's own `onMouseDown` -- a press
-                    // anywhere in the timeline seeks to that point when it
-                    // is released (`TL/index.tsx:1155-1169`). The ruler's
-                    // dedicated surface below sits on top of it and takes
-                    // precedence, exactly as its `z-40` does.
-                    .when(live, |this| {
-                        this.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                this.timeline_mouse_down(event, false, window, cx);
-                            }),
-                        )
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                                this.timeline_mouse_up(cx)
-                            }),
-                        )
-                    })
-                    // `onMouseMove` -> `previewTime` (`:1170-1184`).
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                        this.timeline_hover(f32::from(event.position.x), window, cx);
-                    }))
-                    .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
-                        if !*hovered {
-                            this.timeline_hover_leave(window, cx);
-                        }
-                    }))
-                    // `onWheel` (`:1189-1207`) and the pinch the webview
-                    // would have delivered as `ctrl+wheel`.
-                    .on_scroll_wheel(cx.listener(
-                        |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                            this.timeline_wheel(event, window, cx);
-                        },
-                    ))
-                    .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
-                        this.timeline_pinch(event, window, cx);
-                    }))
-                    .child(self.render_timeline_header(viewport_width, live, cx))
-                    .child(self.render_timeline_body(viewport_width, cx)),
-            )
+        let timeline = timeline_layer().child(
+            div()
+                .id("timeline-container")
+                .relative()
+                .flex()
+                .flex_col()
+                .gap(px(timeline::TIMELINE_HEADER_GAP))
+                .h_full()
+                .overflow_hidden()
+                // The container's own `onMouseDown` -- a press
+                // anywhere in the timeline seeks to that point when it
+                // is released (`TL/index.tsx:1155-1169`). The ruler's
+                // dedicated surface below sits on top of it and takes
+                // precedence, exactly as its `z-40` does.
+                .when(live, |this| {
+                    this.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.timeline_mouse_down(event, false, window, cx);
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            this.timeline_mouse_up(cx)
+                        }),
+                    )
+                })
+                // `onMouseMove` -> `previewTime` (`:1170-1184`).
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.timeline_hover(f32::from(event.position.x), window, cx);
+                }))
+                .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                    if !*hovered {
+                        this.timeline_hover_leave(window, cx);
+                    }
+                }))
+                // `onWheel` (`:1189-1207`) and the pinch the webview
+                // would have delivered as `ctrl+wheel`.
+                .on_scroll_wheel(
+                    cx.listener(|this, event: &gpui::ScrollWheelEvent, window, cx| {
+                        this.timeline_wheel(event, window, cx);
+                    }),
+                )
+                .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
+                    this.timeline_pinch(event, window, cx);
+                }))
+                .child(self.render_timeline_header(viewport_width, live, cx))
+                .child(self.render_timeline_body(viewport_width, cx)),
+        );
+        if self.blank_start_leaving(cx).is_some() {
+            return div()
+                .size_full()
+                .child(self.with_timeline_overlay(timeline, viewport_width, cx))
+                .with_animation(
+                    "timeline-after-blank-start",
+                    Animation::new(Duration::from_millis(260)),
+                    |timeline, progress| timeline.opacity(1. - (1. - progress).powi(3)),
+                )
+                .into_any_element();
+        }
+        timeline.into_any_element()
+    }
+
+    /// Whether the playhead, the ghost line and the minimap are drawn inside
+    /// the rows layer rather than over it: while the timeline is not up yet,
+    /// and during the fade after the blank slate, which fades them together.
+    fn timeline_merged(&self, cx: &gpui::App) -> bool {
+        !self.project_ready() || self.blank_start_shown() || self.blank_start_leaving(cx).is_some()
+    }
+
+    /// The lines drawn over the rows. A playhead tick or a ghost-line move
+    /// repaints only this layer; the rows stay cached under it.
+    fn render_timeline_overlay(
+        &mut self,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let merged = self.timeline_merged(cx);
+        self.timeline_overlay_merged.set(Some(merged));
+        if merged {
+            return div().size_full().into_any_element();
+        }
+        self.with_timeline_overlay(timeline_layer(), viewport_width, cx)
+            .into_any_element()
+    }
+
+    fn with_timeline_overlay(
+        &self,
+        layer: gpui::Div,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme;
+        let content_width = timeline::content_width(viewport_width);
+        let live = self.transport.is_some();
+        let playhead_x = timeline::playhead_offset(self.timeline_drawn, content_width);
+        let ghost_x = timeline::ghost_offset(self.view, content_width);
+        let (_, minimap_width) = timeline::minimap_bounds(viewport_width);
+        layer
             // The minimap's 4px scroll indicator sits in the card's bottom
             // padding, under the last row rather than over it.
             .child(
@@ -12727,7 +13553,78 @@ impl EditorWindow {
                 x.is_finite()
                     .then(|| render_split_preview(&theme, x, true, false))
             }))
-            .into_any_element()
+    }
+
+    /// Settles what the overlay draws from the clock before either timeline
+    /// layer is built: the playhead runs ahead of the last engine sample while
+    /// playing, and the follow scroll moves the viewport the rows are drawn
+    /// at.
+    fn settle_timeline_playhead(&mut self) {
+        if !self.project_ready() || self.blank_start_shown() {
+            return;
+        }
+        // While playing, the drawn line runs ahead by the wall-clock elapsed
+        // since the last applied sample so the 60Hz ticker's redraws land
+        // between events instead of on them -- but only once this play epoch
+        // has actually produced a sample (`playhead_extrapolation`).
+        let mut playhead_view = {
+            let mut view = self.view;
+            let ahead = playhead_extrapolation(
+                self.playing,
+                self.playhead_epoch_live,
+                self.last_playhead_redraw.elapsed().as_secs_f64(),
+                self.preview_speed.as_f64(),
+            );
+            if ahead > 0.0 {
+                view.playhead = (view.playhead + ahead).min(self.total_duration());
+            }
+            view
+        };
+        if self.playing {
+            let interacting = self.scrub.is_some()
+                || self.drag.is_some()
+                || self.lane_reorder.is_some()
+                || self.minimap_drag.is_some()
+                || self.zoom_slider_drag;
+            let total = self.total_duration();
+            self.playback_follow.update(
+                &mut self.view.transform,
+                playhead_view.playhead,
+                total,
+                Instant::now(),
+                interacting,
+            );
+            playhead_view.transform = self.view.transform;
+        }
+        self.timeline_drawn = playhead_view;
+    }
+
+    /// The rows layer, reused from its cache unless the viewport or a create
+    /// ghost moved since it was built. The follow scroll moves the viewport
+    /// in the root's render, too late for a notify to reach this frame, so a
+    /// changed key renders the rows in place instead; that also drops the
+    /// stale cache, which the next frame rebuilds.
+    fn timeline_rows_element(&self, cx: &gpui::App) -> gpui::AnyElement {
+        let rows = self.timeline_view.clone();
+        if self.timeline_rows_key.get()
+            == Some(timeline_rows_key(self.view, self.timeline_merged(cx)))
+        {
+            rows.cached(StyleRefinement::default().w_full().h_full())
+                .into_any_element()
+        } else {
+            rows.into_any_element()
+        }
+    }
+
+    fn timeline_overlay_element(&self, cx: &gpui::App) -> gpui::AnyElement {
+        let overlay = self.timeline_overlay_view.clone();
+        if self.timeline_overlay_merged.get() == Some(self.timeline_merged(cx)) {
+            overlay
+                .cached(StyleRefinement::default().w_full().h_full())
+                .into_any_element()
+        } else {
+            overlay.into_any_element()
+        }
     }
 
     /// The 26px header strip (`TL/index.tsx:1220-1245`): the ruler, the "Add
@@ -12749,55 +13646,6 @@ impl EditorWindow {
                 self.view,
                 viewport_width,
             ))
-            // `TrackManager`'s trigger (`TL/TrackManager.tsx`): a solid pill
-            // in the gutter (`bg-ed-text-1 text-ed-card`, so black on the
-            // light theme and white on the dark one). Its plus turns into an
-            // x while the tray is open.
-            .child(
-                div()
-                    .id("add-track")
-                    .absolute()
-                    .bottom_0()
-                    .left(px(4.))
-                    .h(px(24.))
-                    .flex()
-                    .flex_row()
-                    .flex_none()
-                    .items_center()
-                    .justify_start()
-                    .gap(px(5.))
-                    .pl(px(6.))
-                    .pr(px(8.))
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .bg(Hsla::from(theme.editor.text_1))
-                    .hover(|style| style.opacity(0.85))
-                    .active(|style| style.opacity(0.7))
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(Hsla::from(theme.editor.card))
-                    .child(
-                        svg()
-                            .path(if self.add_track.is_some() {
-                                "icons/x.svg"
-                            } else {
-                                "icons/plus.svg"
-                            })
-                            .size(px(12.))
-                            .flex_none()
-                            .text_color(Hsla::from(theme.editor.card)),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .whitespace_nowrap()
-                            .child(tr::editor::window::add_track::button()),
-                    )
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                        this.open_add_track(window, cx);
-                    })),
-            )
             // `absolute inset-y-0 right-0 z-40` at
             // `left: TRACK_GUTTER - START_SNAP_PX` -- the ruler's scrub
             // surface, which reaches into the snap-to-zero zone so hitting
@@ -12820,6 +13668,52 @@ impl EditorWindow {
                         ),
                 )
             })
+            // `TrackManager`'s trigger. Drawn after the scrub surface so a
+            // press anywhere on it opens the tray, even where a long label
+            // reaches past `TRACK_GUTTER - START_SNAP_PX`.
+            .child(
+                div()
+                    .id("add-track")
+                    .absolute()
+                    .bottom_0()
+                    .left(px(4.))
+                    .h(px(TIMELINE_HEADER_HEIGHT))
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .items_center()
+                    .justify_start()
+                    .gap(px(6.))
+                    .pl(px(9.))
+                    .pr(px(12.))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .map(|this| add_track_paint(this, &theme))
+                    .active(|style| style.opacity(0.8))
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(
+                        svg()
+                            .path(if self.add_track.is_some() {
+                                "icons/x.svg"
+                            } else {
+                                "icons/plus.svg"
+                            })
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(gpui::white()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .child(tr::editor::window::add_track::button()),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                        this.open_add_track(window, cx);
+                    })),
+            )
             .children(self.render_marker_flags(viewport_width, cx))
     }
 
@@ -12848,6 +13742,8 @@ impl EditorWindow {
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
+            keyboard_shortcuts_only: !crate::editor_tabs::keyboard_settings(&self.project)
+                .show_typing,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.
@@ -12965,8 +13861,7 @@ impl EditorWindow {
                         {
                             this.hovered_segment = None;
                             this.split_preview = None;
-                            cx.notify();
-                            let _ = window;
+                            this.invalidate_hover_chrome(cx);
                         }
                     }))
                     // The per-segment hover the trim handles' reveal reads,
@@ -13139,7 +14034,7 @@ impl EditorWindow {
                                                     .child(self.auto_zoom_prompt()),
                                             )
                                             .child(
-                                                ui::Button::plain(
+                                                ui::Button::editor(
                                                     &theme,
                                                     "zoom-generate-button",
                                                     ui::ButtonVariant::Primary,
@@ -13220,7 +14115,7 @@ impl EditorWindow {
                                         .child(tr::editor::window::camera3d_lane::prompt()),
                                 )
                                 .child(
-                                    ui::Button::plain(
+                                    ui::Button::editor(
                                         &theme,
                                         "camera3d-auto-scene",
                                         ui::ButtonVariant::Primary,
@@ -13259,7 +14154,7 @@ impl EditorWindow {
                                 )
                             })
                             .child(
-                                ui::Button::plain(
+                                ui::Button::editor(
                                     &theme,
                                     "camera3d-add-shot",
                                     ui::ButtonVariant::Outline,
@@ -13479,6 +14374,61 @@ fn is_at_end(total: f64, playhead: f64) -> bool {
     total > 0.0 && total - playhead <= 0.1
 }
 
+/// The timeline card's inside, at the brief's `10px 12px 12px` less the
+/// hairline the card already draws. The rows and the overlay above them are
+/// both laid out in it.
+fn timeline_layer() -> gpui::Div {
+    div()
+        .size_full()
+        .min_h_0()
+        .relative()
+        .overflow_hidden()
+        .pt(px(TIMELINE_TOP_PADDING))
+        .pl(px(TIMELINE_PADDING))
+        .pr(px(TIMELINE_PADDING))
+        .pb(px(TIMELINE_BOTTOM_PADDING))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TransportClock {
+    seconds: u64,
+    shows_play: bool,
+    zoom: f64,
+}
+
+/// What the transport bar draws from the playhead: the clock, which reads the
+/// hover time when there is one and shows whole seconds, the play button and
+/// the zoom slider.
+fn transport_clock(view: TimelineView, playhead: f64, shows_play: bool) -> TransportClock {
+    TransportClock {
+        seconds: view.preview_time.unwrap_or(playhead).max(0.0).floor() as u64,
+        shows_play,
+        zoom: view.transform.zoom,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TimelineRowsKey {
+    transform: Transform,
+    ghost_time: Option<f64>,
+    merged: bool,
+}
+
+/// The zoom and 3D lanes draw a create ghost at the pointer time while they
+/// are hovered; every other lane ignores where the pointer is.
+fn timeline_rows_key(view: TimelineView, merged: bool) -> TimelineRowsKey {
+    TimelineRowsKey {
+        transform: view.transform,
+        ghost_time: matches!(
+            view.hovered_track,
+            Some(TrackKind::Zoom | TrackKind::ThreeD)
+        )
+        .then_some(view.preview_time)
+        .flatten(),
+        merged,
+    }
+}
+
 /// The most the drawn playhead may run ahead of the last applied engine
 /// sample. Big enough to bridge a render stall, small enough that a wrongly
 /// anchored extrapolation cannot wander far.
@@ -13554,7 +14504,6 @@ fn dismiss_indexed_sidebar_menu(menu: &mut Option<crate::editor_tabs::OpenMenu>)
         | SidebarMenu::CaptionAnimation
         | SidebarMenu::CaptionWeight
         | SidebarMenu::KeyboardFont
-        | SidebarMenu::KeyboardPosition
         | SidebarMenu::KeyboardWeight => false,
     });
     if indexed {
@@ -13637,6 +14586,8 @@ impl Render for EditorWindow {
                 .track_focus(&self.focus)
                 .child(self.render_export_page(window, cx));
         }
+
+        self.settle_timeline_playhead();
 
         let timeline_drag_cursor = self
             .drag
@@ -13853,11 +14804,6 @@ impl Render for EditorWindow {
                                             .flex_1()
                                             .min_w_0()
                                             .min_h_0()
-                                            .rounded(px(12.))
-                                            .border_1()
-                                            .border_color(self.card_line())
-                                            .bg(self.panel_bg())
-                                            .shadow(theme.editor.card_shadow())
                                             .overflow_hidden()
                                             .child(self.render_player(cx)),
                                     )
@@ -13865,8 +14811,11 @@ impl Render for EditorWindow {
                                     // the panel is one card whatever its tab,
                                     // at one width, so a switch never moves
                                     // the player.
-                                    .child(self.render_panel_grip(cx))
-                                    .child(self.render_side_panel(viewport_width, window, cx)),
+                                    .children(self.render_side_panel_slot(
+                                        viewport_width,
+                                        window,
+                                        cx,
+                                    )),
                             )
                             // The timeline card: the wrapper is owned here so
                             // `render_timeline` keeps laying out inside a plain
@@ -13881,15 +14830,21 @@ impl Render for EditorWindow {
                                     .child(
                                         div()
                                             .size_full()
-                                            .rounded(px(12.))
+                                            // Invisible, but kept: the timeline's
+                                            // hit-testing still offsets by
+                                            // `TIMELINE_CARD_BORDER`.
                                             .border_1()
-                                            .border_color(self.card_line())
-                                            .bg(self.panel_bg())
-                                            .shadow(theme.editor.card_shadow())
+                                            .border_color(gpui::transparent_black())
                                             .overflow_hidden()
-                                            .child(self.timeline_view.clone().cached(
-                                                StyleRefinement::default().w_full().h_full(),
-                                            )),
+                                            .child(self.timeline_rows_element(cx))
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top_0()
+                                                    .left_0()
+                                                    .size_full()
+                                                    .child(self.timeline_overlay_element(cx)),
+                                            ),
                                     )
                                     // The grip rides the gap between the two
                                     // cards rather than taking a strip of the
@@ -14123,6 +15078,7 @@ impl Render for EditorWindow {
             .children(self.render_style_presets_menu(cx))
             .children(self.render_preset_dialog(cx))
             .children(self.render_marker_overlays(window, cx))
+            .children(self.render_enhance_card())
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
@@ -14769,6 +15725,7 @@ mod tests {
                     max_width: 1000.,
                     padding_scale: 1.,
                     even: None,
+                    caption_size: 0,
                 }),
             });
             editor.canvas_drag_rect = Some(rect);
@@ -15527,6 +16484,7 @@ mod tests {
                     store: store.clone(),
                     submenu: None,
                     scroll: gpui::ScrollHandle::new(),
+                    current_look: None,
                 });
             });
             let mut samples = Vec::new();
@@ -16222,7 +17180,7 @@ mod tests {
     #[test]
     fn responsive_editor_hugs_its_rows_and_still_fits_a_short_viewport() {
         // The four-row scratch project: chrome plus four rows and their gaps.
-        assert_eq!(timeline::hug_height(4), 246.);
+        assert_eq!(timeline::hug_height(4), 268.);
         assert_eq!(timeline::hug_height(0), timeline::MIN_HUG_HEIGHT);
         for rows in 1..12usize {
             let hug = timeline::hug_height(rows);
@@ -16351,7 +17309,6 @@ mod tests {
             SidebarMenu::CaptionAnimation,
             SidebarMenu::CaptionWeight,
             SidebarMenu::KeyboardFont,
-            SidebarMenu::KeyboardPosition,
             SidebarMenu::KeyboardWeight,
         ] {
             let mut menu = open_sidebar_menu_for_test(kind);
@@ -16493,6 +17450,9 @@ mod tests {
                     .unwrap();
                     editor.set_summary(
                         ProjectSummary {
+                            platform: None,
+                            blank: false,
+                            has_keyboard_capture: false,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
@@ -16641,6 +17601,9 @@ mod tests {
                     .unwrap();
                     editor.set_summary(
                         ProjectSummary {
+                            platform: None,
+                            blank: false,
+                            has_keyboard_capture: false,
                             recordings: Arc::new(ProjectRecordingsMeta {
                                 segments: Vec::new(),
                             }),
@@ -16665,6 +17628,10 @@ mod tests {
                     editor.set_project(config, window, cx);
                     editor.transport = Some(handle);
                 });
+                // Hover and edits redraw the editor's timeline section, not
+                // the editor itself; this view draws the rows in its place.
+                let rows = editor.read(cx).timeline_view.clone();
+                cx.observe(&rows, |_, _, cx| cx.notify()).detach();
                 ClipRowView {
                     editor,
                     _driver: driver,
@@ -17109,31 +18076,6 @@ mod tests {
         cx.simulate_click(title, gpui::Modifiers::default());
 
         cx.update(|window, _| assert!(input_focus.is_focused(window)));
-    }
-
-    // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
-    #[cfg(target_os = "linux")]
-    #[gpui::test]
-    fn playback_ends_a_held_compare(cx: &mut gpui::TestAppContext) {
-        let project = tempfile::tempdir().unwrap();
-        let project_path = project.path().to_path_buf();
-        let (editor, cx) = cx
-            .add_window_view(move |window, cx| EditorWindow::new(project_path.clone(), window, cx));
-        editor.update(cx, |editor, cx| {
-            editor.preview_enhance = true;
-            editor.set_preview_comparing(true, cx);
-            assert!(editor.preview_comparing);
-            assert_eq!(
-                editor.preview_screen_enhancement(),
-                cap_project::ScreenEnhancement::default()
-            );
-            editor.start_playback(0.0, cx);
-            assert!(!editor.preview_comparing);
-            assert_eq!(
-                editor.preview_screen_enhancement(),
-                cap_project::ScreenEnhancement::on()
-            );
-        });
     }
 
     // gpui's test windows have no platform window handle on macOS or Windows, which the editor needs.
@@ -17630,12 +18572,61 @@ mod tests {
         ));
     }
 
-    /// Scrubbing across preset captions changes only the caption box, which
-    /// the canvas never draws, so it costs no editor rebuild. A manual
-    /// caption's box is a canvas hit target, so its change does while the
-    /// overlay is live, and not while the pointer is elsewhere.
+    /// Every caption's box is a canvas hit target, so a change to it rebuilds
+    /// the editor while the overlay is live, and not while the pointer is
+    /// elsewhere.
+    /// A sentence longer than the room for it is squeezed to fit, every key
+    /// landing inside the clip with its start before its end.
     #[test]
-    fn only_a_manual_caption_box_changes_the_canvas_layout() {
+    fn typed_keys_longer_than_the_room_are_squeezed_in() {
+        let runs = cap_project::manual_key_runs("hello world", "keys");
+        let requested = runs.last().map(|run| run.offset + run.length).unwrap();
+        assert!(requested > 2.0);
+        let spans = manual_run_spans(&runs, 0.0, 2.0);
+        assert_eq!(spans.len(), runs.len());
+        for (start, end) in &spans {
+            assert!(
+                *start >= 0.0 && start < end && *end <= 2.0 + 1e-9,
+                "{start} {end}"
+            );
+        }
+        assert!((spans.last().unwrap().1 - 2.0).abs() < 1e-9);
+        // With room to spare, nothing is stretched.
+        let roomy = manual_run_spans(&runs, 1.0, 100.0);
+        assert!((roomy[0].1 - roomy[0].0 - runs[0].length).abs() < 1e-9);
+    }
+
+    /// A long sentence squeezed into a short span keeps every letter: each
+    /// press lands inside its squeezed key, and none is moved when the run
+    /// had room.
+    #[test]
+    fn squeezed_typed_keys_keep_every_press_inside_their_span() {
+        let runs = cap_project::manual_key_runs("the quick brown fox jumps over", "sentence");
+        let spans = manual_run_spans(&runs, 0.0, 2.0);
+        for (run, &(start, end)) in runs.iter().zip(&spans) {
+            let keys = manual_run_keys(run, end - start);
+            assert_eq!(keys.len(), cap_project::manual_key_presses(&run.text).len());
+            for key in &keys {
+                assert!(
+                    start + key.time_offset / 1000.0 <= end + 1e-9,
+                    "{} past {end}",
+                    start + key.time_offset / 1000.0
+                );
+            }
+        }
+        let run = &runs[0];
+        let unscaled = cap_project::manual_key_presses(&run.text);
+        let roomy = manual_run_keys(run, run.length);
+        assert!(
+            roomy
+                .iter()
+                .zip(&unscaled)
+                .all(|(a, b)| a.time_offset == b.time_offset)
+        );
+    }
+
+    #[test]
+    fn a_caption_box_changes_the_canvas_layout_only_while_the_overlay_is_live() {
         let base = FrameLayout {
             display: [0., 0., 1920., 1080.],
             camera: None,
@@ -17650,10 +18641,14 @@ mod tests {
             caption: Some(cap_rendering::CaptionFrameBox::new(bounds, "manual")),
             ..base
         };
-        assert_eq!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
-        assert_eq!(
+        assert_ne!(canvas_hit_layout(preset([0., 0., 10., 10.]), true), base);
+        assert_ne!(
             canvas_hit_layout(preset([0., 0., 10., 10.]), true),
             canvas_hit_layout(preset([5., 5., 50., 20.]), true)
+        );
+        assert_eq!(
+            canvas_hit_layout(preset([0., 0., 10., 10.]), false),
+            canvas_hit_layout(preset([5., 5., 50., 20.]), false)
         );
         assert_ne!(
             canvas_hit_layout(manual([0., 0., 10., 10.]), true),
@@ -17728,6 +18723,71 @@ mod tests {
         );
         // A clock hiccup must not pull the playhead backwards.
         assert_eq!(playhead_extrapolation(true, true, -0.01, 1.0), 0.0);
+    }
+
+    #[test]
+    fn timeline_rows_are_reused_across_playhead_and_ghost_line_moves() {
+        let mut view = TimelineView {
+            hovered_track: Some(TrackKind::Clip),
+            preview_time: Some(2.0),
+            ..TimelineView::default()
+        };
+        let built = timeline_rows_key(view, false);
+
+        view.playhead = 7.5;
+        view.preview_time = Some(3.0);
+        assert_eq!(timeline_rows_key(view, false), built);
+        view.preview_time = None;
+        assert_eq!(timeline_rows_key(view, false), built);
+
+        view.transform.position += 1.0;
+        assert_ne!(timeline_rows_key(view, false), built);
+    }
+
+    #[test]
+    fn the_transport_redraws_only_for_what_it_shows() {
+        let view = TimelineView {
+            transform: Transform {
+                zoom: 20.0,
+                position: 0.0,
+            },
+            ..TimelineView::default()
+        };
+        let drawn = transport_clock(view, 12.1, false);
+        assert_eq!(transport_clock(view, 12.9, false), drawn);
+        assert_ne!(transport_clock(view, 13.0, false), drawn);
+        assert_ne!(transport_clock(view, 12.5, true), drawn);
+
+        let mut hovered = view;
+        hovered.preview_time = Some(4.2);
+        assert_ne!(transport_clock(hovered, 12.5, false), drawn);
+
+        let mut zoomed = view;
+        zoomed.transform.zoom /= 1.1;
+        assert_ne!(transport_clock(zoomed, 12.5, false), drawn);
+    }
+
+    #[test]
+    fn a_create_ghost_rebuilds_the_rows_as_the_pointer_moves() {
+        for track in [TrackKind::Zoom, TrackKind::ThreeD] {
+            let mut view = TimelineView {
+                hovered_track: Some(track),
+                preview_time: Some(2.0),
+                ..TimelineView::default()
+            };
+            let built = timeline_rows_key(view, false);
+            view.preview_time = Some(2.5);
+            assert_ne!(timeline_rows_key(view, false), built, "{track:?}");
+        }
+    }
+
+    #[test]
+    fn the_rows_rebuild_when_the_overlay_moves_in_or_out_of_them() {
+        let view = TimelineView::default();
+        assert_ne!(
+            timeline_rows_key(view, true),
+            timeline_rows_key(view, false)
+        );
     }
 
     #[test]
@@ -18091,4 +19151,26 @@ mod add_caption_ui_tests {
             assert!(editor.notice.is_some());
         });
     }
+}
+
+/// The Add Track button: the timeline's one filled action, white on the
+/// accent fill (5.5:1) in both themes, deepening on hover so the label keeps
+/// its contrast.
+fn add_track_paint(this: gpui::Stateful<gpui::Div>, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    let editor = theme.editor;
+    let hover = Hsla::from(crate::theme::mix(
+        editor.accent_fill,
+        gpui::rgb(0x000000),
+        0.08,
+    ));
+    this.bg(Hsla::from(editor.accent_fill))
+        .text_color(gpui::white())
+        .shadow(vec![gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.22),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        }])
+        .hover(move |style| style.bg(hover))
 }

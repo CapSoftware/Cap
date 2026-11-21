@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::estimates::SampleTiming;
-use cap_editor::SegmentMedia;
+use cap_editor::{InputSounds, SegmentMedia};
 use cap_enc_ffmpeg::{PacketSink, h264::SoftwareEncoderTuning};
 use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
@@ -851,7 +851,11 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
     }
 
     let output_path = base.output_path.clone();
-    let mut streaming_audio = base.streaming_audio.take();
+    let input_sounds = InputSounds::for_segments(&base.project_config, &base.segments);
+    let mut streaming_audio = base
+        .streaming_audio
+        .take()
+        .map(|audio| audio.with_input_sounds(input_sounds.clone()));
     let audio_control = base.audio_cancellation.take();
     let temporary_output = match base.streaming_output.take() {
         Some(staged) => Some(staged),
@@ -893,12 +897,14 @@ pub(crate) async fn export<F: FnMut(u32) -> bool + Send + 'static>(
         .first()
         .filter(|_| !base.project_config.audio.mute)
         .is_some();
-    let audio = (has_recording_audio || !music.is_empty()).then(|| {
+    let audio = (has_recording_audio || !music.is_empty() || input_sounds.is_some()).then(|| {
         let source = match streaming_audio.take() {
             Some(audio) => ExportAudioSource::Streaming(audio),
-            None => {
-                ExportAudioSource::Renderer(AudioRenderer::new(audio_segments).with_music(music))
-            }
+            None => ExportAudioSource::Renderer(
+                AudioRenderer::new(audio_segments)
+                    .with_music(music)
+                    .with_input_sounds(input_sounds),
+            ),
         };
         (source, base.project_config.clone())
     });

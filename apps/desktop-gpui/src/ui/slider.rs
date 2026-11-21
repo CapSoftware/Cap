@@ -162,6 +162,38 @@ impl Slider {
         self
     }
 
+    pub fn editor(self, theme: &crate::theme::Theme, knob: Pixels, disabled: bool) -> Self {
+        let editor = theme.editor;
+        let fill = if disabled {
+            editor.text_3
+        } else {
+            editor.accent
+        };
+        let mut slider = self
+            .track(px(4.), Hsla::from(editor.track))
+            .fill(Hsla::from(fill))
+            .thumb(knob, gpui::white(), None);
+        if let Some(thumb) = slider.thumb.as_mut() {
+            thumb.shadow = vec![
+                gpui::BoxShadow {
+                    color: gpui::hsla(0., 0., 0., 0.12),
+                    offset: gpui::point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.5),
+                    inset: false,
+                },
+                gpui::BoxShadow {
+                    color: gpui::hsla(0., 0., 0., 0.22),
+                    offset: gpui::point(px(0.), px(1.)),
+                    blur_radius: px(3.),
+                    spread_radius: px(0.),
+                    inset: false,
+                },
+            ];
+        }
+        slider
+    }
+
     /// A knob that has to read on a light track needs the lift the CSS one
     /// gets from `0 1px 3px rgba(0,0,0,.25)`.
     pub fn thumb_shadow(mut self) -> Self {

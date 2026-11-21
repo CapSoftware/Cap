@@ -87,7 +87,10 @@ pub struct CompositeVideoFrameUniforms {
     pub border_enabled: f32,
     pub border_width: f32,
     pub preserve_source_alpha: f32,
-    pub _padding1: [f32; 3],
+    /// 1 blurs along each pixel's full frame-to-frame path with equal taps
+    /// and trails the shadow with the card; 0 keeps the fixed 21-tap kernels.
+    pub motion_blur_kernel: f32,
+    pub _padding1: [f32; 2],
     pub border_color: [f32; 4],
     /// Per-corner multipliers on `rounding_px` (top-left, top-right,
     /// bottom-left, bottom-right). All 1s = uniform rounding; the display
@@ -130,7 +133,8 @@ impl Default for CompositeVideoFrameUniforms {
             border_enabled: 0.0,
             border_width: 5.0,
             preserve_source_alpha: 0.0,
-            _padding1: [0.0; 3],
+            motion_blur_kernel: 0.0,
+            _padding1: [0.0; 2],
             border_color: [0.0, 0.0, 0.0, 0.0],
             corner_radii: [1.0; 4],
             color_adjust_a: [0.0; 4],

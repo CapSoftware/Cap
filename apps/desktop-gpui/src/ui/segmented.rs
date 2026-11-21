@@ -14,15 +14,18 @@
 //! ([`crate::ui::TabRail`]) because its items are `flex-1` icon boxes with a
 //! separate indicator layer, not padded pills.
 //!
-//! The indicator does not slide. Kobalte positions it from the selected
-//! trigger's measured rect and animates a transform; this gpui rev has no
-//! transform, so the selected item paints its own fill -- which is what the
-//! settings window has always done here.
+//! The selected pill glides between items. Stretched controls without gaps
+//! place it by fraction so it tracks a resizing row exactly; the rest place
+//! it from item rects measured on the previous frame, so until those exist
+//! the selected item paints its own fill.
+
+use std::time::Duration;
 
 use gpui::{
-    App, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px, svg,
+    Animation, AnimationExt, App, Bounds, ElementId, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Point, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, canvas, div, prelude::FluentBuilder, px, relative,
+    svg,
 };
 
 use crate::theme::Theme;
@@ -97,6 +100,7 @@ pub struct SegmentedControl {
     idle_bg: Option<Hsla>,
     hover_bg: Option<Hsla>,
     selected_shadow: Vec<gpui::BoxShadow>,
+    container_shadow: Vec<gpui::BoxShadow>,
     stretch: bool,
     tab_stops: bool,
     on_select: Option<SegmentHandler>,
@@ -126,6 +130,7 @@ impl SegmentedControl {
             idle_bg: None,
             hover_bg: None,
             selected_shadow: Vec::new(),
+            container_shadow: Vec::new(),
             stretch: false,
             tab_stops: false,
             on_select: None,
@@ -176,30 +181,21 @@ impl SegmentedControl {
         }
     }
 
-    /// The editor's segmented control: an `ed-ctl` trough with a raised
-    /// `ed-card` pill on the selected item (a white 12% wash in dark, where a
-    /// lifted card would read as a hole).
     pub fn editor(theme: &Theme, id: impl Into<ElementId>, options: Vec<SegmentOption>) -> Self {
         let editor = theme.editor;
         Self {
             container_bg: Some(Hsla::from(editor.ctl)),
-            container_border: None,
+            container_radius: px(9.),
+            container_shadow: editor.trough_ring(),
+            item_radius: px(7.),
             item_padding_x: px(10.),
             item_padding_y: px(0.),
             item_height: Some(px(24.)),
-            selected_bg: Some(if theme.is_dark() {
-                gpui::hsla(0., 0., 1., 0.12)
-            } else {
-                Hsla::from(editor.card)
-            }),
+            selected_bg: Some(editor.pill_fill()),
             selected_text: Hsla::from(editor.text_1),
             idle_text: Hsla::from(editor.text_2),
             hover_bg: Some(Hsla::from(editor.ctl_hover)),
-            selected_shadow: if theme.is_dark() {
-                Vec::new()
-            } else {
-                crate::theme::raised_pill_shadow()
-            },
+            selected_shadow: editor.pill_shadow(),
             ..Self::base(theme, id, options)
         }
     }
@@ -260,7 +256,7 @@ impl SegmentedControl {
 }
 
 impl RenderOnce for SegmentedControl {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let SegmentedControl {
             id,
             options,
@@ -283,6 +279,7 @@ impl RenderOnce for SegmentedControl {
             idle_bg,
             hover_bg,
             selected_shadow,
+            container_shadow,
             stretch,
             tab_stops,
             on_select,
@@ -294,8 +291,60 @@ impl RenderOnce for SegmentedControl {
             other => SharedString::from(format!("{other:?}")),
         };
 
+        let count = options.len();
+        let selected_index = options.iter().position(|option| option.selected);
+        let glide_state = (selected_bg.is_some() && count > 1).then(|| {
+            let state = window.use_keyed_state(
+                SharedString::from(format!("{prefix}-glide")),
+                cx,
+                |_, _| Glide::new(selected_index, count),
+            );
+            state.update(cx, |glide, _| glide.select(selected_index, count));
+            state
+        });
+        let fractional = stretch && f32::from(container_gap) == 0.;
+        let indicator = glide_state.as_ref().and_then(|state| {
+            let glide = state.read(cx);
+            let to = glide.current?;
+            let from = glide.from.unwrap_or(to);
+            let place = if fractional {
+                let width = 1. / count as f32;
+                Placement::Fraction {
+                    from: from as f32 * width,
+                    to: to as f32 * width,
+                    width,
+                }
+            } else {
+                let origin = glide.origin?;
+                let start = glide.rects.get(from).copied().flatten()?;
+                let end = glide.rects.get(to).copied().flatten()?;
+                Placement::Measured {
+                    from: (
+                        f32::from(start.origin.x - origin.x),
+                        f32::from(start.size.width),
+                    ),
+                    to: (
+                        f32::from(end.origin.x - origin.x),
+                        f32::from(end.size.width),
+                    ),
+                }
+            };
+            Some((place, glide.generation))
+        });
+        let glides = indicator.is_some();
+        let fades: Vec<_> = (0..count)
+            .map(|index| {
+                crate::ui::hover_fade(
+                    window,
+                    cx,
+                    SharedString::from(format!("{prefix}-hover-{index}")),
+                )
+            })
+            .collect();
+
         div()
             .id(id)
+            .relative()
             .flex()
             .flex_row()
             .p(container_padding)
@@ -305,13 +354,73 @@ impl RenderOnce for SegmentedControl {
             .when_some(container_border, |this, border| {
                 this.border_1().border_color(border)
             })
+            .when(!container_shadow.is_empty(), |this| {
+                this.shadow(container_shadow)
+            })
+            .when_some(
+                glide_state.clone().filter(|_| !fractional),
+                |this, state| {
+                    this.child(
+                        canvas(
+                            move |bounds, _, cx| {
+                                state.update(cx, |glide, _| glide.origin = Some(bounds.origin));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                },
+            )
+            .when_some(indicator, |this, (place, generation)| {
+                let pill = div()
+                    .absolute()
+                    .top(container_padding)
+                    .bottom(container_padding)
+                    .rounded(item_radius)
+                    .when_some(selected_bg, |pill, bg| pill.bg(bg))
+                    .when(!selected_shadow.is_empty(), |pill| {
+                        pill.shadow(selected_shadow.clone())
+                    });
+                let glide_ms = if cx.reduce_motion() { 1 } else { GLIDE_MS };
+                let animation = Animation::new(Duration::from_millis(glide_ms))
+                    .with_easing(gpui::ease_out_quint());
+                let id = SharedString::from(format!("{prefix}-glide-{generation}"));
+                match place {
+                    Placement::Fraction { from, to, width } => this.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(container_padding)
+                            .right(container_padding)
+                            .child(pill.w(relative(width)).left(relative(to)).with_animation(
+                                id,
+                                animation,
+                                move |pill, delta| pill.left(relative(from + (to - from) * delta)),
+                            )),
+                    ),
+                    Placement::Measured { from, to } => {
+                        this.child(pill.left(px(to.0)).w(px(to.1)).with_animation(
+                            id,
+                            animation,
+                            move |pill, delta| {
+                                pill.left(px(from.0 + (to.0 - from.0) * delta))
+                                    .w(px(from.1 + (to.1 - from.1) * delta))
+                            },
+                        ))
+                    }
+                }
+            })
             .children(options.into_iter().enumerate().map(|(index, option)| {
                 let handler = handler.clone();
                 let selected = option.selected;
                 let disabled = option.disabled;
+                let measure = glide_state.clone().filter(|_| !fractional);
 
                 div()
                     .id(SharedString::from(format!("{prefix}-{index}")))
+                    .relative()
                     .flex()
                     .flex_row()
                     .items_center()
@@ -330,8 +439,22 @@ impl RenderOnce for SegmentedControl {
                     })
                     .when_some(font_weight, |this, weight| this.font_weight(weight))
                     .when(disabled, |this| this.opacity(0.5))
+                    .when_some(measure, |this, state| {
+                        this.child(
+                            canvas(
+                                move |bounds, _, cx| {
+                                    state.update(cx, |glide, _| glide.measure(index, bounds));
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                    })
                     .map(|this| {
-                        if selected {
+                        if selected && glides {
+                            this.text_color(selected_text)
+                        } else if selected {
                             let this = this
                                 .text_color(selected_text)
                                 .when(!selected_shadow.is_empty(), |this| {
@@ -348,7 +471,13 @@ impl RenderOnce for SegmentedControl {
                                 None => this,
                             };
                             match hover_bg {
-                                Some(bg) if !disabled => this.hover(move |style| style.bg(bg)),
+                                Some(bg) if !disabled => {
+                                    let level = fades[index].1;
+                                    let rest = idle_bg.unwrap_or(bg.opacity(0.));
+                                    this.when(level > 0., |this| {
+                                        this.bg(crate::ui::hover_blend(rest, bg, level))
+                                    })
+                                }
                                 _ => this,
                             }
                         }
@@ -367,6 +496,15 @@ impl RenderOnce for SegmentedControl {
                             label.into_any_element()
                         }
                     }))
+                    .on_hover({
+                        let fade = fades[index].0.clone();
+                        move |hovered, _, cx| {
+                            fade.update(cx, |fade, cx| {
+                                fade.set_hovered(*hovered);
+                                cx.notify();
+                            });
+                        }
+                    })
                     .when_some(handler.filter(|_| !disabled), |this, handler| {
                         this.on_click(move |_, window, cx| handler(&index, window, cx))
                     })
@@ -374,9 +512,81 @@ impl RenderOnce for SegmentedControl {
     }
 }
 
+const GLIDE_MS: u64 = 200;
+
+#[derive(Clone, Copy)]
+enum Placement {
+    Fraction { from: f32, to: f32, width: f32 },
+    Measured { from: (f32, f32), to: (f32, f32) },
+}
+
+struct Glide {
+    current: Option<usize>,
+    from: Option<usize>,
+    generation: u64,
+    origin: Option<Point<Pixels>>,
+    rects: Vec<Option<Bounds<Pixels>>>,
+}
+
+impl Glide {
+    fn new(selected: Option<usize>, count: usize) -> Self {
+        Self {
+            current: selected,
+            from: selected,
+            generation: 0,
+            origin: None,
+            rects: vec![None; count],
+        }
+    }
+
+    fn select(&mut self, selected: Option<usize>, count: usize) {
+        if self.rects.len() != count {
+            self.rects = vec![None; count];
+        }
+        if self.current != selected {
+            self.from = self.current.or(selected);
+            self.current = selected;
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    fn measure(&mut self, index: usize, bounds: Bounds<Pixels>) {
+        if let Some(slot) = self.rects.get_mut(index) {
+            *slot = Some(bounds);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_pick_glides_from_the_old_one() {
+        let mut glide = Glide::new(Some(0), 3);
+        glide.select(Some(2), 3);
+        assert_eq!(
+            (glide.from, glide.current, glide.generation),
+            (Some(0), Some(2), 1)
+        );
+        glide.select(Some(2), 3);
+        assert_eq!(glide.generation, 1);
+    }
+
+    #[test]
+    fn a_first_pick_appears_in_place() {
+        let mut glide = Glide::new(None, 3);
+        glide.select(Some(1), 3);
+        assert_eq!((glide.from, glide.current), (Some(1), Some(1)));
+    }
+
+    #[test]
+    fn a_changed_item_count_forgets_stale_rects() {
+        let mut glide = Glide::new(Some(0), 2);
+        glide.measure(1, Bounds::default());
+        glide.select(Some(0), 4);
+        assert_eq!(glide.rects, vec![None; 4]);
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Quality {
