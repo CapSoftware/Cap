@@ -630,22 +630,45 @@ struct ScalerKey {
 #[derive(Default)]
 struct Nv12Converter {
     scaler: Option<(ScalerKey, scaling::Context)>,
+    fitted: Option<frame::Video>,
 }
 
 const SWS_CS_ITU709: i32 = 1;
 const SWS_CS_ITU601: i32 = 5;
 
 impl Nv12Converter {
-    /// Writes `decoded` into `target`, NV12 at the track's size, in BT.709
-    /// because that is how the encoder tags every track. A BT.709 frame of
-    /// the same size is a plane copy; anything else (a BT.601 or untagged
-    /// source, which the renderer also reads as BT.601, or a camera swapped
-    /// mid-recording) goes through swscale with the source's matrix.
+    /// Writes `decoded` into `target`, NV12 at the track's size. A frame of
+    /// another shape (a clip recorded on another display, an imported video)
+    /// keeps its aspect, centred on black.
     fn fill(&mut self, decoded: &DecodedFrame, target: &mut frame::Video) -> Result<(), String> {
         let (width, height) = (decoded.width(), decoded.height());
         if width == 0 || height == 0 {
             return Err("A decoded frame has no size".into());
         }
+        let target_size = (target.width(), target.height());
+        let fitted = fitted_size((width, height), target_size);
+        if fitted == target_size {
+            return self.convert(decoded, target);
+        }
+        let mut scaled = self
+            .fitted
+            .take()
+            .filter(|frame| (frame.width(), frame.height()) == fitted)
+            .unwrap_or_else(|| frame::Video::new(Pixel::NV12, fitted.0, fitted.1));
+        let result = self
+            .convert(decoded, &mut scaled)
+            .and_then(|()| place_centered(&scaled, target));
+        self.fitted = Some(scaled);
+        result
+    }
+
+    /// Writes `decoded` into `target` at `target`'s size, in BT.709 because
+    /// that is how the encoder tags every track. A BT.709 frame of the same
+    /// size is a plane copy; anything else (a BT.601 or untagged source,
+    /// which the renderer also reads as BT.601, or a camera swapped
+    /// mid-recording) goes through swscale with the source's matrix.
+    fn convert(&mut self, decoded: &DecodedFrame, target: &mut frame::Video) -> Result<(), String> {
+        let (width, height) = (decoded.width(), decoded.height());
         let bt709_source = decoded.matrix() == YuvMatrix::Bt709;
         if decoded.format() == PixelFormat::Nv12
             && bt709_source
@@ -707,6 +730,44 @@ impl Nv12Converter {
             .run(&source, target)
             .map_err(|error| format!("Could not convert a track frame: {error}"))
     }
+}
+
+/// The largest size with `source`'s aspect that fits in `target`, rounded to
+/// even pixels so NV12 chroma lines up. A side that fills an odd-sized track
+/// keeps the track's odd length.
+fn fitted_size(source: (u32, u32), target: (u32, u32)) -> (u32, u32) {
+    let scale =
+        (f64::from(target.0) / f64::from(source.0)).min(f64::from(target.1) / f64::from(source.1));
+    let even = |length: u32, limit: u32| {
+        (((f64::from(length) * scale / 2.0).round() as u32) * 2).clamp(2, limit)
+    };
+    (even(source.0, target.0), even(source.1, target.1))
+}
+
+fn place_centered(frame: &frame::Video, target: &mut frame::Video) -> Result<(), String> {
+    let (width, height) = (frame.width() as usize, frame.height() as usize);
+    let x = (target.width() as usize - width) / 4 * 2;
+    let y = (target.height() as usize - height) / 4 * 2;
+    fill_black(target);
+    let planes = [
+        (0, width, height, y),
+        (1, width.div_ceil(2) * 2, height.div_ceil(2), y / 2),
+    ];
+    for (plane, row_bytes, rows, row) in planes {
+        let target_stride = target.stride(plane);
+        copy_plane(
+            frame.data(plane),
+            frame.stride(plane),
+            row_bytes,
+            rows,
+            target
+                .data_mut(plane)
+                .get_mut(row * target_stride + x..)
+                .ok_or_else(unreadable)?,
+            target_stride,
+        )?;
+    }
+    Ok(())
 }
 
 fn unreadable() -> String {
@@ -1486,12 +1547,22 @@ mod tests {
     }
 
     fn nv12_frame(y: u8, u: u8, v: u8, matrix: YuvMatrix) -> DecodedFrame {
-        let (width, height) = (16u32, 16u32);
+        sized_nv12_frame((16, 16), y, u, v, matrix)
+    }
+
+    fn sized_nv12_frame(
+        (width, height): (u32, u32),
+        y: u8,
+        u: u8,
+        v: u8,
+        matrix: YuvMatrix,
+    ) -> DecodedFrame {
         let mut data = vec![y; (width * height) as usize];
-        for _ in 0..(width * height / 4) {
+        for _ in 0..(width.div_ceil(2) * height.div_ceil(2)) {
             data.extend_from_slice(&[u, v]);
         }
-        DecodedFrame::new_nv12(data, width, height, width, width).with_matrix(matrix)
+        let uv_stride = width.div_ceil(2) * 2;
+        DecodedFrame::new_nv12(data, width, height, width, uv_stride).with_matrix(matrix)
     }
 
     #[test]
@@ -1515,5 +1586,75 @@ mod tests {
             close(y, 63) && close(u, 102) && close(v, 240),
             "{y} {u} {v}"
         );
+    }
+
+    #[test]
+    fn clips_of_another_shape_keep_their_aspect_on_black() {
+        ffmpeg::init().unwrap();
+        let mut converter = Nv12Converter::default();
+        let square = nv12_frame(200, 90, 240, YuvMatrix::Bt709);
+
+        let mut wide = black_nv12(32, 16);
+        converter.fill(&square, &mut wide).unwrap();
+        let luma =
+            |frame: &frame::Video, x: usize, y: usize| frame.data(0)[y * frame.stride(0) + x];
+        let row: Vec<u8> = (0..32).map(|x| luma(&wide, x, 8)).collect();
+        assert!(
+            row[..8].iter().chain(&row[24..]).all(|&y| y == 16),
+            "{row:?}"
+        );
+        let close = |actual: u8, expected: u8| actual.abs_diff(expected) <= 2;
+        assert!(row[8..24].iter().all(|&y| close(y, 200)), "{row:?}");
+        let chroma = wide.data(1);
+        assert_eq!(&chroma[..2], &[128, 128]);
+        assert!(close(chroma[8], 90) && close(chroma[9], 240), "{chroma:?}");
+
+        let mut tall = black_nv12(16, 32);
+        converter.fill(&square, &mut tall).unwrap();
+        let column: Vec<u8> = (0..32).map(|y| luma(&tall, 4, y)).collect();
+        assert!(
+            column[..8].iter().chain(&column[24..]).all(|&y| y == 16),
+            "{column:?}"
+        );
+        assert!(column[8..24].iter().all(|&y| close(y, 200)), "{column:?}");
+
+        let mut scaled = black_nv12(64, 32);
+        converter.fill(&square, &mut scaled).unwrap();
+        let row: Vec<u8> = (0..64).map(|x| luma(&scaled, x, 16)).collect();
+        assert!(
+            row[..16].iter().chain(&row[48..]).all(|&y| y == 16),
+            "{row:?}"
+        );
+        assert!(row[16..48].iter().all(|&y| close(y, 200)), "{row:?}");
+        let chroma = &scaled.data(1)[8 * scaled.stride(1)..];
+        assert!(
+            close(chroma[32], 90) && close(chroma[33], 240),
+            "{chroma:?}"
+        );
+    }
+
+    #[test]
+    fn odd_width_clips_keep_colour_in_the_last_column() {
+        ffmpeg::init().unwrap();
+        let mut converter = Nv12Converter::default();
+        let clip = sized_nv12_frame((1001, 500), 200, 90, 240, YuvMatrix::Bt709);
+        let mut track = black_nv12(1001, 777);
+
+        converter.fill(&clip, &mut track).unwrap();
+
+        let row = &track.data(1)[200 * track.stride(1)..][..1002];
+        assert!(
+            row.chunks_exact(2).all(|pair| pair == [90, 240]),
+            "{:?}",
+            &row[996..]
+        );
+    }
+
+    #[test]
+    fn a_shape_off_by_rounding_still_fills_the_track() {
+        assert_eq!(fitted_size((1366, 768), (1920, 1080)), (1920, 1080));
+        assert_eq!(fitted_size((3840, 2160), (1920, 1080)), (1920, 1080));
+        assert_eq!(fitted_size((1080, 1920), (1920, 1080)), (608, 1080));
+        assert_eq!(fitted_size((1001, 777), (1001, 777)), (1001, 777));
     }
 }
