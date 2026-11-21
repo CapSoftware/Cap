@@ -18,6 +18,7 @@ import {
 	shareLadderEnabledFor,
 } from "@/lib/share-ladder-flag";
 import {
+	isShareLadderRetryLater,
 	SHARE_LADDER_MASTER,
 	SHARE_LADDER_MAX_TIER,
 	shareLadderOutputPrefix,
@@ -66,6 +67,7 @@ type Check =
 	| { status: "running" }
 	| { status: "missing" }
 	| { status: "stopped" }
+	| { status: "preempted" }
 	| { status: "complete"; progress: Record<string, unknown> }
 	| { status: "failed"; message: string };
 
@@ -126,6 +128,18 @@ export async function buildShareLadderWorkflow(
 		if (check.status === "stopped") {
 			await stopShareLadder(build, undefined, dispatch.jobId);
 			return { success: false };
+		}
+		if (check.status === "preempted") {
+			if (Date.now() - busySince > BUSY_GIVE_UP_MS) {
+				await stopShareLadder(build, "Farm stayed busy");
+				return { success: false };
+			}
+			const moved = await retryShareLadderElsewhere(build);
+			if (!moved) return { success: false };
+			build = moved;
+			await sleep(`${busyWaitMinutes}m`);
+			busyWaitMinutes = Math.min(MAX_BUSY_WAIT_MINUTES, busyWaitMinutes * 2);
+			continue;
 		}
 		if (check.status === "missing") {
 			lostJobs++;
@@ -303,6 +317,10 @@ async function dispatchShareLadder(build: Build): Promise<Dispatch> {
 async function moveShareLadderOutput(build: Build): Promise<Build | null> {
 	"use step";
 
+	return moveShareLadderOutputNow(build);
+}
+
+async function moveShareLadderOutputNow(build: Build): Promise<Build | null> {
 	const prefix = shareLadderOutputPrefix(
 		build.ownerId,
 		build.videoId,
@@ -313,6 +331,25 @@ async function moveShareLadderOutput(build: Build): Promise<Build | null> {
 		.set({ outputPrefix: prefix, jobId: null, updatedAt: new Date() })
 		.where(ownRow(build));
 	return moved.affectedRows === 1 ? { ...build, prefix } : null;
+}
+
+// The stopped job may have left part of its output behind. It has ended, so
+// nothing writes there any more: the retry gets a fresh folder and the old one
+// goes.
+async function retryShareLadderElsewhere(build: Build): Promise<Build | null> {
+	"use step";
+
+	const moved = await moveShareLadderOutputNow(build);
+	if (!moved) return null;
+	try {
+		await deleteShareObjectsUnder(build.prefix);
+	} catch (error) {
+		console.error("[share-ladder] Failed to remove a stopped job's output", {
+			videoId: build.videoId,
+			error,
+		});
+	}
+	return moved;
 }
 
 async function checkShareLadder(build: Build, jobId: string): Promise<Check> {
@@ -326,6 +363,7 @@ async function checkShareLadder(build: Build, jobId: string): Promise<Check> {
 	if (status.status === "missing") return { status: "missing" };
 	const { progress } = status;
 	if (progress.phase === "complete") return { status: "complete", progress };
+	if (isShareLadderRetryLater(progress)) return { status: "preempted" };
 	return {
 		status: "failed",
 		message:

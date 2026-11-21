@@ -38,6 +38,23 @@ export function isShareLadderEligible(facts: ShareLadderSourceFacts): boolean {
 	return shortSide > 1080 && bitsPerSecond >= ABOVE_1080P_BITRATE;
 }
 
+// The farm stops an idle ladder the moment other work needs its slot, or when
+// the box gets busy. Those jobs come back later instead of failing.
+const SHARE_LADDER_RETRY_LATER_CODES: ReadonlySet<string> = new Set([
+	"idle-preempted",
+	"processing-unavailable",
+]);
+
+export function isShareLadderRetryLater(
+	progress: Record<string, unknown>,
+): boolean {
+	return (
+		progress.phase === "error" &&
+		typeof progress.errorCode === "string" &&
+		SHARE_LADDER_RETRY_LATER_CODES.has(progress.errorCode)
+	);
+}
+
 export function shareLadderOutputPrefix(
 	ownerId: string,
 	videoId: string,
