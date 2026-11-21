@@ -7,6 +7,8 @@ const AVCC_FOURCC_C = 0x63;
 const AVCC_FOURCC_UPPER_C = 0x43;
 
 const AVC_PROBE_RANGE_BYTES = 256 * 1024;
+const AVC_LEVEL_5_2_MAX_FRAME_MACROBLOCKS = 36_864;
+const AVC_SAMPLE_ENTRY_TO_AVCC_BYTES = 86;
 
 export type PatchMp4AvcLevelResult = {
 	patched: boolean;
@@ -80,7 +82,38 @@ export function patchMp4AvcLevel(
 	return { patched, originalLevel: firstObservedLevel };
 }
 
-export function readAvcLevelFromMp4Prefix(bytes: Uint8Array): number | null {
+export type Mp4AvcProbe = {
+	level: number;
+	width: number | null;
+	height: number | null;
+};
+
+function readUint16(bytes: Uint8Array, offset: number): number | null {
+	const hi = bytes[offset];
+	const lo = bytes[offset + 1];
+	if (hi === undefined || lo === undefined) return null;
+	return (hi << 8) | lo;
+}
+
+function readSampleEntrySize(
+	bytes: Uint8Array,
+	avcCOffset: number,
+): { width: number; height: number } | null {
+	const entry = avcCOffset - AVC_SAMPLE_ENTRY_TO_AVCC_BYTES;
+	if (entry < 0) return null;
+	const isAvcEntry =
+		bytes[entry] === AVCC_FOURCC_A &&
+		bytes[entry + 1] === AVCC_FOURCC_V &&
+		bytes[entry + 2] === AVCC_FOURCC_C &&
+		(bytes[entry + 3] === 0x31 || bytes[entry + 3] === 0x33);
+	if (!isAvcEntry) return null;
+	const width = readUint16(bytes, entry + 28);
+	const height = readUint16(bytes, entry + 30);
+	if (!width || !height) return null;
+	return { width, height };
+}
+
+export function readAvcFromMp4Prefix(bytes: Uint8Array): Mp4AvcProbe | null {
 	for (let i = 0; i + 8 < bytes.length; i++) {
 		if (
 			bytes[i] === AVCC_FOURCC_A &&
@@ -90,10 +123,32 @@ export function readAvcLevelFromMp4Prefix(bytes: Uint8Array): number | null {
 			bytes[i + 4] === 0x01
 		) {
 			const levelByte = bytes[i + 4 + 3];
-			return typeof levelByte === "number" ? levelByte : null;
+			if (typeof levelByte !== "number") return null;
+			const size = readSampleEntrySize(bytes, i);
+			return {
+				level: levelByte,
+				width: size?.width ?? null,
+				height: size?.height ?? null,
+			};
 		}
 	}
 	return null;
+}
+
+export function readAvcLevelFromMp4Prefix(bytes: Uint8Array): number | null {
+	return readAvcFromMp4Prefix(bytes)?.level ?? null;
+}
+
+// The rewrite exists for streams labelled above level 5.2 whose frames fit it
+// (WebCodecs wrote 6.2 for 1080p). A frame larger than level 5.2 allows is not
+// mislabelled, and since faststart desktop exports (#4439) every export above
+// 4K is one, so those keep today's moov-at-end behaviour: no full download.
+export function shouldPatchAvcLevelForIos(probe: Mp4AvcProbe | null): boolean {
+	if (!probe || probe.level <= AVC_LEVEL_IOS_HARDWARE_CEILING) return false;
+	if (probe.width === null || probe.height === null) return true;
+	const macroblocks =
+		Math.ceil(probe.width / 16) * Math.ceil(probe.height / 16);
+	return macroblocks <= AVC_LEVEL_5_2_MAX_FRAME_MACROBLOCKS;
 }
 
 export function isIosSafari(userAgent: string | undefined): boolean {
@@ -118,14 +173,23 @@ export function isIosSafari(userAgent: string | undefined): boolean {
 	);
 }
 
+type ProbeAvcOptions = {
+	fetchImpl?: typeof fetch;
+	signal?: AbortSignal;
+	rangeBytes?: number;
+};
+
 export async function probeAvcLevelFromUrl(
 	url: string,
-	options?: {
-		fetchImpl?: typeof fetch;
-		signal?: AbortSignal;
-		rangeBytes?: number;
-	},
+	options?: ProbeAvcOptions,
 ): Promise<number | null> {
+	return (await probeAvcFromUrl(url, options))?.level ?? null;
+}
+
+export async function probeAvcFromUrl(
+	url: string,
+	options?: ProbeAvcOptions,
+): Promise<Mp4AvcProbe | null> {
 	const fetchImpl = options?.fetchImpl ?? fetch;
 	const rangeEnd = (options?.rangeBytes ?? AVC_PROBE_RANGE_BYTES) - 1;
 
@@ -140,7 +204,7 @@ export async function probeAvcLevelFromUrl(
 		}
 
 		const buffer = new Uint8Array(await response.arrayBuffer());
-		return readAvcLevelFromMp4Prefix(buffer);
+		return readAvcFromMp4Prefix(buffer);
 	} catch {
 		return null;
 	}
