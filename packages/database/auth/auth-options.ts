@@ -31,7 +31,9 @@ import {
 	normalizeSignInEmail,
 } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
+import { signInTimestamp } from "./fresh-sign-in.ts";
 import { GoogleOneTapProvider } from "./google-one-tap.ts";
+import { verifyPasskeySignIn } from "./passkeys.ts";
 import {
 	provisionSsoMembership,
 	type SsoAuthContext,
@@ -304,6 +306,28 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 							}),
 						]
 					: []),
+				CredentialsProvider({
+					id: "passkey",
+					name: "Passkey",
+					credentials: {},
+					async authorize(credentials) {
+						const user = await verifyPasskeySignIn(
+							(credentials as Record<string, unknown> | undefined)?.response,
+						).catch((error: unknown) => {
+							console.error("[passkeys] Sign-in verification failed", {
+								error: error instanceof Error ? error.message : String(error),
+							});
+							return null;
+						});
+						if (!user) return null;
+						return {
+							id: user.id,
+							email: user.email,
+							name: user.name,
+							image: user.image,
+						};
+					},
+				}),
 				EmailProvider({
 					// next-auth defaults to 24h, but the code is 6 digits and the
 					// verify path has no attempt limiting, so a day-long window is a
@@ -476,6 +500,12 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					session.user.email = token.email ?? null;
 					session.user.image = token.picture ?? null;
 				}
+				if (typeof token?.authTime === "number") {
+					(session as { authTime?: number }).authTime = token.authTime;
+				}
+				if (typeof token?.authMethod === "string") {
+					(session as { authMethod?: string }).authMethod = token.authMethod;
+				}
 
 				return session;
 			},
@@ -510,6 +540,8 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 					if (!dbUser) {
 						if (user) {
 							token.id = user?.id;
+							token.authTime = signInTimestamp();
+							token.authMethod = account?.provider;
 						}
 						return token;
 					}
@@ -521,6 +553,20 @@ export const authOptions = (ssoContext?: SsoAuthContext): NextAuthOptions => {
 						email: dbUser.email,
 						picture: dbUser.image,
 						sessionVersion: dbUser.authSessionVersion,
+						...(user
+							? {
+									authTime: signInTimestamp(),
+									authMethod: account?.provider,
+								}
+							: typeof token.authTime === "number"
+								? {
+										authTime: token.authTime,
+										authMethod:
+											typeof token.authMethod === "string"
+												? token.authMethod
+												: undefined,
+									}
+								: {}),
 					};
 				}
 
