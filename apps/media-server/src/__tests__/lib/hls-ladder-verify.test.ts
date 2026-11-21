@@ -3,44 +3,40 @@ import {
 	audioToleranceSeconds,
 	durationMismatch,
 	frameSecondsForRate,
-	packetSpanSeconds,
-	parsePacketTimings,
+	PacketSpan,
 } from "../../lib/hls-ladder-verify";
 
-describe("parsePacketTimings", () => {
-	test("reads pts and duration and skips lines without a time", () => {
-		expect(
-			parsePacketTimings("0.000000,0.033367\nN/A,N/A\n0.033367,N/A\n\n"),
-		).toEqual([
-			{ pts: 0, duration: 0.033367 },
-			{ pts: 0.033367, duration: null },
-		]);
-	});
-});
+function spanOf(lines: string[]): number | null {
+	const span = new PacketSpan();
+	for (const line of lines) span.addLine(line);
+	return span.seconds();
+}
 
-describe("packetSpanSeconds", () => {
+describe("PacketSpan", () => {
 	test("runs from the first pts to the end of the last packet", () => {
-		expect(
-			packetSpanSeconds([
-				{ pts: 0.1, duration: 0.5 },
-				{ pts: -0.02, duration: 0.02 },
-				{ pts: 0.6, duration: 0.4 },
-			]),
-		).toBeCloseTo(1.02, 9);
+		expect(spanOf(["0.1,0.5", "-0.02,0.02", "0.6,0.4"])).toBeCloseTo(1.02, 9);
 	});
 
-	test("gives a packet without a duration the stream's usual gap", () => {
-		expect(
-			packetSpanSeconds([
-				{ pts: 0, duration: null },
-				{ pts: 0.04, duration: null },
-				{ pts: 0.08, duration: null },
-			]),
-		).toBeCloseTo(0.12, 9);
+	test("skips lines without a time", () => {
+		expect(spanOf(["N/A,N/A", "", "0,0.5", "0.5,0.5"])).toBeCloseTo(1, 9);
+	});
+
+	test("gives a packet without a duration the usual gap at the stream's end", () => {
+		expect(spanOf(["0,N/A", "0.04,N/A", "0.08,N/A"])).toBeCloseTo(0.12, 9);
+		expect(spanOf(["0.08,N/A", "0,0.04", "0.04,0.04"])).toBeCloseTo(0.12, 9);
+	});
+
+	test("measures a long stream from the packets as they arrive", () => {
+		const span = new PacketSpan();
+		const frame = 1 / 60;
+		for (let index = 0; index < 864_000; index++) {
+			span.add(index * frame, index % 2 === 0 ? frame : null);
+		}
+		expect(span.seconds()).toBeCloseTo(864_000 * frame, 6);
 	});
 
 	test("is null without packets", () => {
-		expect(packetSpanSeconds([])).toBeNull();
+		expect(new PacketSpan().seconds()).toBeNull();
 	});
 });
 

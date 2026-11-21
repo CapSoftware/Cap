@@ -11,11 +11,6 @@ const AAC_FRAME_SAMPLES = 1024;
 const MAX_ERROR_OUTPUT_CHARS = 500;
 const TIMESTAMP_ROUNDING_SECONDS = 1e-6;
 
-export interface PacketTiming {
-	pts: number;
-	duration: number | null;
-}
-
 export interface HlsLadderVerifyOptions {
 	sourcePath: string;
 	ladder: Pick<EncodedHlsLadder, "files" | "result" | "frameRate">;
@@ -24,46 +19,61 @@ export interface HlsLadderVerifyOptions {
 	signal?: AbortSignal;
 }
 
-export function parsePacketTimings(csv: string): PacketTiming[] {
-	const packets: PacketTiming[] = [];
-	for (const line of csv.split("\n")) {
+const TAIL_PACKETS = 64;
+
+// Packets are counted as they stream out of ffprobe, holding only the latest
+// few timestamps, so a long video is measured without keeping every packet.
+// Some sources (Matroska without block or default durations) give packets no
+// duration. Such a last frame would count as zero length and the source would
+// measure a frame short of a ladder that has every duration, so it is given
+// the usual gap between the stream's final frames.
+export class PacketSpan {
+	private count = 0;
+	private first = Number.POSITIVE_INFINITY;
+	private last = Number.NEGATIVE_INFINITY;
+	private lastWithoutDuration = Number.NEGATIVE_INFINITY;
+	private readonly tail: number[] = [];
+
+	addLine(line: string): void {
 		const [pts, duration] = line.trim().split(",");
 		const time = Number.parseFloat(pts ?? "");
-		if (!Number.isFinite(time)) continue;
+		if (!Number.isFinite(time)) return;
 		const length = Number.parseFloat(duration ?? "");
-		packets.push({
-			pts: time,
-			duration: Number.isFinite(length) && length > 0 ? length : null,
-		});
+		this.add(time, Number.isFinite(length) && length > 0 ? length : null);
 	}
-	return packets;
-}
 
-function medianGap(sortedPts: number[]): number {
-	const gaps: number[] = [];
-	for (let index = 1; index < sortedPts.length; index++) {
-		const gap = (sortedPts[index] ?? 0) - (sortedPts[index - 1] ?? 0);
-		if (gap > 0) gaps.push(gap);
+	add(pts: number, duration: number | null): void {
+		this.count++;
+		this.first = Math.min(this.first, pts);
+		if (duration === null) {
+			this.lastWithoutDuration = Math.max(this.lastWithoutDuration, pts);
+		} else {
+			this.last = Math.max(this.last, pts + duration);
+		}
+		if (this.tail.length === TAIL_PACKETS && pts <= (this.tail[0] ?? 0)) return;
+		const index = this.tail.findIndex((value) => value > pts);
+		this.tail.splice(index === -1 ? this.tail.length : index, 0, pts);
+		if (this.tail.length > TAIL_PACKETS) this.tail.shift();
 	}
-	if (gaps.length === 0) return 0;
-	gaps.sort((a, b) => a - b);
-	return gaps[Math.floor(gaps.length / 2)] ?? 0;
-}
 
-// Some sources (Matroska without block or default durations) give packets no
-// duration. The last frame would count as zero length and the source would
-// measure a frame short of a ladder that has every duration.
-export function packetSpanSeconds(packets: PacketTiming[]): number | null {
-	if (packets.length === 0) return null;
-	const sortedPts = packets.map((packet) => packet.pts).sort((a, b) => a - b);
-	const fallback = medianGap(sortedPts);
-	let first = Number.POSITIVE_INFINITY;
-	let last = Number.NEGATIVE_INFINITY;
-	for (const packet of packets) {
-		first = Math.min(first, packet.pts);
-		last = Math.max(last, packet.pts + (packet.duration ?? fallback));
+	private tailGap(): number {
+		const gaps: number[] = [];
+		for (let index = 1; index < this.tail.length; index++) {
+			const gap = (this.tail[index] ?? 0) - (this.tail[index - 1] ?? 0);
+			if (gap > 0) gaps.push(gap);
+		}
+		gaps.sort((a, b) => a - b);
+		return gaps[Math.floor(gaps.length / 2)] ?? 0;
 	}
-	return last - first;
+
+	seconds(): number | null {
+		if (this.count === 0) return null;
+		const last =
+			this.lastWithoutDuration === Number.NEGATIVE_INFINITY
+				? this.last
+				: Math.max(this.last, this.lastWithoutDuration + this.tailGap());
+		return last - this.first;
+	}
 }
 
 export function frameSecondsForRate(frameRate: string): number {
@@ -105,9 +115,27 @@ export function durationMismatch(input: {
 	return `${rendition} ${track} lasts ${measuredSeconds.toFixed(3)}s, expected ${expectedSeconds.toFixed(3)}s within ${input.toleranceSeconds.toFixed(3)}s`;
 }
 
+async function readLines(
+	stream: ReadableStream<Uint8Array>,
+	onLine: (line: string) => void,
+): Promise<string> {
+	const decoder = new TextDecoder();
+	let buffer = "";
+	for await (const chunk of stream) {
+		buffer += decoder.decode(chunk, { stream: true });
+		const lines = buffer.split("\n");
+		buffer = lines.pop() ?? "";
+		for (const line of lines) onLine(line);
+	}
+	buffer += decoder.decode();
+	if (buffer.length > 0) onLine(buffer);
+	return "";
+}
+
 async function runMediaTool(
 	cmd: string[],
 	options: Pick<HlsLadderVerifyOptions, "timeoutMs" | "niceness" | "signal">,
+	onStdoutLine?: (line: string) => void,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	options.signal?.throwIfAborted();
 	const proc = registerSubprocess(
@@ -121,7 +149,9 @@ async function runMediaTool(
 	try {
 		const [stdout, stderr, exitCode] = await withTimeout(
 			Promise.all([
-				new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+				onStdoutLine
+					? readLines(proc.stdout as ReadableStream<Uint8Array>, onStdoutLine)
+					: new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
 				new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
 				proc.exited,
 			]),
@@ -136,13 +166,14 @@ async function runMediaTool(
 	}
 }
 
-async function readPacketTimings(
+async function measureStreamSeconds(
 	path: string,
 	stream: string,
 	playlist: boolean,
 	options: Pick<HlsLadderVerifyOptions, "timeoutMs" | "niceness" | "signal">,
-): Promise<PacketTiming[]> {
-	const { exitCode, stdout, stderr } = await runMediaTool(
+): Promise<number | null> {
+	const span = new PacketSpan();
+	const { exitCode, stderr } = await runMediaTool(
 		[
 			"ffprobe",
 			"-v",
@@ -157,13 +188,14 @@ async function readPacketTimings(
 			path,
 		],
 		options,
+		(line) => span.addLine(line),
 	);
 	if (exitCode !== 0) {
 		throw new Error(
 			`HLS ladder verification could not read ${stream} packets: ${stderr.slice(0, MAX_ERROR_OUTPUT_CHARS)}`,
 		);
 	}
-	return parsePacketTimings(stdout);
+	return span.seconds();
 }
 
 async function readSampleRate(
@@ -244,8 +276,11 @@ export async function verifyHlsLadder(
 	options: HlsLadderVerifyOptions,
 ): Promise<void> {
 	const { ladder, sourcePath } = options;
-	const sourceVideo = packetSpanSeconds(
-		await readPacketTimings(sourcePath, "v:0", false, options),
+	const sourceVideo = await measureStreamSeconds(
+		sourcePath,
+		"v:0",
+		false,
+		options,
 	);
 	if (sourceVideo === null) {
 		throw new Error("HLS ladder verification found no video in the source");
@@ -259,9 +294,7 @@ export async function verifyHlsLadder(
 		const mismatch = durationMismatch({
 			rendition: rendition.name,
 			track: "video",
-			measuredSeconds: packetSpanSeconds(
-				await readPacketTimings(path, "v:0", true, options),
-			),
+			measuredSeconds: await measureStreamSeconds(path, "v:0", true, options),
 			expectedSeconds: sourceVideo,
 			toleranceSeconds: frameSeconds,
 		});
@@ -271,8 +304,11 @@ export async function verifyHlsLadder(
 	const audio = ladder.result.audio;
 	if (audio) {
 		const path = playlistPath(ladder, audio.playlist);
-		const sourceAudio = packetSpanSeconds(
-			await readPacketTimings(sourcePath, "a:0", false, options),
+		const sourceAudio = await measureStreamSeconds(
+			sourcePath,
+			"a:0",
+			false,
+			options,
 		);
 		if (sourceAudio === null) {
 			throw new Error("HLS ladder verification found no audio in the source");
@@ -280,9 +316,7 @@ export async function verifyHlsLadder(
 		const mismatch = durationMismatch({
 			rendition: audio.name,
 			track: "audio",
-			measuredSeconds: packetSpanSeconds(
-				await readPacketTimings(path, "a:0", true, options),
-			),
+			measuredSeconds: await measureStreamSeconds(path, "a:0", true, options),
 			expectedSeconds: sourceAudio,
 			toleranceSeconds: audioToleranceSeconds(
 				await readSampleRate(path, options),
