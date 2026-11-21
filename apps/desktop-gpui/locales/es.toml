@@ -3000,6 +3000,7 @@ type_keys_button = "Añadir pulsaciones…"
 type_keys_hint = "Pega una frase, un guion o una transcripción, o un atajo como cmd+shift+p. Se escribe como pulsaciones desde donde abriste esto."
 type_keys_placeholder = "Una frase o un atajo como cmd+k"
 type_keys_summary = "Unos {seconds} s de escritura"
+typing_only = "Esta grabación tiene texto escrito pero ningún atajo. Activa Mostrar lo que escribes para mostrar lo que escribiste."
 uppercase = "Mayúsculas"
 
 [editor.tabs.padding]
@@ -3088,7 +3089,9 @@ add_scene = "Añadir escena"
 audio = "Añade música de fondo o importa tu propio audio"
 captions = "Sin subtítulos"
 keyboard = "Sin eventos de teclado"
+keyboard_typing_only = "Esta grabación solo tiene texto escrito"
 scene = "Cambia de diseño entre tu pantalla y tu cámara"
+show_typing = "Mostrar lo que escribes"
 
 [editor.timeline.picker]
 audio = "Añade música de fondo o importa tu propio audio."

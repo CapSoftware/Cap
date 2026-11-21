@@ -2107,6 +2107,9 @@ pub struct SegmentUi<'a> {
     /// Which end of the selected 3D shot the panel is editing, for the pose
     /// dots on its box.
     pub camera3d_editing_end: bool,
+    /// The recording's presses are all typing and typing is hidden, so the
+    /// empty keyboard lane offers to show it.
+    pub keyboard_typing_hidden: bool,
 }
 
 impl SegmentUi<'_> {
@@ -2531,6 +2534,7 @@ fn render_track_content(
             row.kind,
             view.hovered_track == Some(row.kind),
             row.kind == TrackKind::Audio && ui.audio_picker_lane == Some(row.lane),
+            ui.keyboard_typing_hidden,
         )
     {
         content = content.child(empty);
@@ -3001,8 +3005,13 @@ fn render_empty_track(
     kind: TrackKind,
     hovered: bool,
     active: bool,
+    keyboard_typing_hidden: bool,
 ) -> Option<AnyElement> {
     let (copy, action) = match kind {
+        TrackKind::Keyboard if keyboard_typing_hidden => (
+            tr::editor::timeline::empty::keyboard_typing_only(),
+            Some(tr::editor::timeline::empty::show_typing()),
+        ),
         // `TL/CaptionsTrack.tsx:146-160`.
         TrackKind::Caption => (tr::editor::timeline::empty::captions(), None),
         // `TL/KeyboardTrack.tsx:146-153`.

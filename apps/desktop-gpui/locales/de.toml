@@ -3000,6 +3000,7 @@ type_keys_button = "Tastenanschläge hinzufügen…"
 type_keys_hint = "Füge einen Satz, ein Skript oder ein Transkript ein, oder ein Kürzel wie cmd+shift+p. Es wird ab hier als Tastenanschläge getippt."
 type_keys_placeholder = "Ein Satz oder ein Kürzel wie cmd+k"
 type_keys_summary = "Etwa {seconds} s Tippen"
+typing_only = "Diese Aufnahme enthält Getipptes, aber keine Tastenkürzel. Aktiviere „Getippten Text zeigen“, um das Getippte zu zeigen."
 uppercase = "Großbuchstaben"
 
 [editor.tabs.padding]
@@ -3088,7 +3089,9 @@ add_scene = "Szene hinzufügen"
 audio = "Fügen Sie Hintergrundmusik hinzu oder importieren Sie eigenes Audio"
 captions = "Keine Untertitel"
 keyboard = "Keine Tastaturereignisse"
+keyboard_typing_only = "In dieser Aufnahme wurde nur getippt"
 scene = "Wechseln Sie zwischen Layouts für Bildschirm und Kamera"
+show_typing = "Getippten Text zeigen"
 
 [editor.timeline.picker]
 audio = "Fügen Sie Hintergrundmusik hinzu oder importieren Sie eigenes Audio."

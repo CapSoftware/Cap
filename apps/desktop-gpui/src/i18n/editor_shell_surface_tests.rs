@@ -861,6 +861,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "No recorded keyboard presses were found.",
         ),
         (
+            tr::editor::tabs::keyboard::typing_only(),
+            "This recording has typing but no shortcuts. Turn on Show Typing to show what you typed.",
+        ),
+        (
             tr::editor::tabs::keyboard::permission_action(),
             "Show me how",
         ),
@@ -1385,6 +1389,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "No room for another key press here",
         ),
         (tr::editor::timeline::empty::add_key(), "Add keystrokes"),
+        (
+            tr::editor::timeline::empty::keyboard_typing_only(),
+            "Only typing in this recording",
+        ),
+        (tr::editor::timeline::empty::show_typing(), "Show typing"),
         (
             tr::editor::window::open::damaged(),
             "This recording's video tracks could not be opened. The bundle looks damaged.",

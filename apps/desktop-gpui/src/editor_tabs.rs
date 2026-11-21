@@ -1096,6 +1096,16 @@ pub struct OpenMenu {
     pub state: ui::MenuState,
 }
 
+/// Why generating found nothing to show: no presses at all, or only typing
+/// while just shortcuts are shown.
+fn empty_generation_message(pressed: bool, project: &ProjectConfiguration) -> &'static str {
+    if pressed && !keyboard_settings(project).show_typing {
+        tr::editor::tabs::keyboard::typing_only()
+    } else {
+        tr::editor::tabs::keyboard::no_presses()
+    }
+}
+
 impl EditorWindow {
     /// The rows a menu draws, with a check mark on the value in force.
     pub(crate) fn sidebar_menu_items(&self, kind: SidebarMenu) -> Vec<ui::MenuItem> {
@@ -2674,6 +2684,33 @@ impl EditorWindow {
 
     // -- Keyboard ------------------------------------------------------------
 
+    /// The empty lane's Show typing: typing on, then the keys generated.
+    pub(crate) fn show_recorded_typing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_keyboard_setting("keyboard-typing", window, cx, |settings| {
+            settings.show_typing = true;
+        });
+        self.keyboard_typing_hidden = false;
+        self.generate_keyboard_segments_if_empty(window, cx);
+    }
+
+    /// Turning keys on for a recording that has none on its timeline yet
+    /// generates them, rather than leaving an empty track behind a button.
+    pub(crate) fn generate_keyboard_segments_if_empty(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let has_recorded = self.project.timeline.as_ref().is_some_and(|timeline| {
+            timeline
+                .keyboard_segments
+                .iter()
+                .any(|segment| !cap_project::is_manual_keyboard_segment(segment))
+        });
+        if !has_recorded {
+            self.generate_keyboard_segments_clicked(window, cx);
+        }
+    }
+
     fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.generating_keyboard {
             return;
@@ -2704,14 +2741,16 @@ impl EditorWindow {
                 .spawn(async move {
                     let meta = RecordingMeta::load_for_project(&path)
                         .map_err(tr::editor::tabs::keyboard::load_failed)?;
-                    cap_project::generate_project_keyboard_segments(&meta, &timeline, &settings)
+                    cap_project::generate_project_keyboard_segments_reporting(
+                        &meta, &timeline, &settings,
+                    )
                 })
                 .await;
 
             this.update_in(cx, |this, window, cx| {
                 this.generating_keyboard = false;
-                let segments = match result {
-                    Ok(segments) => segments,
+                let (segments, pressed) = match result {
+                    Ok(result) => result,
                     Err(error) => {
                         tracing::error!("keyboard generation failed: {error}");
                         this.keyboard_generation_message = Some(error);
@@ -2737,6 +2776,8 @@ impl EditorWindow {
                     return;
                 }
                 let has_segments = !segments.is_empty();
+                this.keyboard_typing_hidden =
+                    !has_segments && pressed && !keyboard_settings(&this.project).show_typing;
                 let already_empty = this
                     .project
                     .timeline
@@ -2744,7 +2785,7 @@ impl EditorWindow {
                     .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
                 if !has_segments && already_empty {
                     this.keyboard_generation_message =
-                        Some(tr::editor::tabs::keyboard::no_presses().into());
+                        Some(empty_generation_message(pressed, &this.project).into());
                     cx.notify();
                     window.refresh();
                     return;
@@ -2783,7 +2824,7 @@ impl EditorWindow {
                         this.set_selection(None, cx);
                     }
                     this.keyboard_generation_message =
-                        Some(tr::editor::tabs::keyboard::no_presses().into());
+                        Some(empty_generation_message(pressed, &this.project).into());
                     cx.notify();
                     window.refresh();
                 }
@@ -3095,6 +3136,14 @@ impl EditorWindow {
                                                 cx,
                                                 move |settings| settings.show_typing = next,
                                             );
+                                            // An empty track fills in; keys
+                                            // already there are kept.
+                                            if next {
+                                                this.keyboard_typing_hidden = false;
+                                                this.generate_keyboard_segments_if_empty(
+                                                    window, cx,
+                                                );
+                                            }
                                         },
                                     )),
                                 ),
@@ -3244,6 +3293,9 @@ impl EditorWindow {
                             keyboard.settings.enabled = next;
                             true
                         });
+                        if next {
+                            this.generate_keyboard_segments_if_empty(window, cx);
+                        }
                         if !next
                             && this.selection.as_ref().is_some_and(|s| {
                                 s.track == crate::editor_timeline::TrackKind::Keyboard
@@ -5032,6 +5084,28 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Typing with only shortcuts shown says so, rather than that nothing
+    /// was pressed.
+    #[test]
+    fn an_empty_generation_says_whether_typing_is_hidden() {
+        let mut project = ProjectConfiguration::default();
+        let keyboard = project.keyboard.get_or_insert_with(KeyboardData::default);
+        keyboard.settings.show_typing = false;
+        assert_eq!(
+            empty_generation_message(true, &project),
+            tr::editor::tabs::keyboard::typing_only()
+        );
+        assert_eq!(
+            empty_generation_message(false, &project),
+            tr::editor::tabs::keyboard::no_presses()
+        );
+        project.keyboard.as_mut().unwrap().settings.show_typing = true;
+        assert_eq!(
+            empty_generation_message(true, &project),
+            tr::editor::tabs::keyboard::no_presses()
+        );
+    }
 
     /// A left-aligned caption sits a margin in from the edge, its centre a
     /// half box width further in. Manual starts at that drawn centre, so

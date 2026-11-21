@@ -1963,6 +1963,9 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
+    /// The last generation found key presses but only typing, with just
+    /// shortcuts shown, so the empty lane can offer to show the typing.
+    pub(crate) keyboard_typing_hidden: bool,
     clip_speed: Option<ClipSpeedMenu>,
     markers: markers::MarkersState,
     transition_popover: Option<TransitionPopover>,
@@ -2749,6 +2752,7 @@ impl EditorWindow {
             hovering_generate_zoom: false,
             generating_keyboard: false,
             keyboard_generation_message: None,
+            keyboard_typing_hidden: false,
             clip_speed: None,
             markers: markers_state,
             transition_popover: None,
@@ -5756,6 +5760,10 @@ impl EditorWindow {
                         self.seek_to_time(press_time, cx);
                         self.view.preview_time = None;
                     }
+                } else if kind == TrackKind::Keyboard && self.keyboard_typing_hidden {
+                    // The recording only has typing: show it.
+                    cx.stop_propagation();
+                    self.show_recorded_typing(window, cx);
                 } else if kind == TrackKind::Keyboard {
                     // Add Keystrokes opens where the track was pressed.
                     cx.stop_propagation();
@@ -9644,6 +9652,9 @@ impl EditorWindow {
                     true
                 });
                 self.tracks.keyboard = next;
+                if next {
+                    self.generate_keyboard_segments_if_empty(window, cx);
+                }
             }
             TrackKind::Scene => self.tracks.scene = next,
             // Showing the lane is all the tile does: an empty lane draws its
@@ -13582,6 +13593,7 @@ impl EditorWindow {
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
+            keyboard_typing_hidden: self.keyboard_typing_hidden,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.

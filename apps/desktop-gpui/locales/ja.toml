@@ -3000,6 +3000,7 @@ type_keys_button = "キー入力を追加…"
 type_keys_hint = "文章、台本、文字起こし、または cmd+shift+p のようなショートカットを貼り付けます。ここからキー入力として打ち込まれます。"
 type_keys_placeholder = "文章、または cmd+k のようなショートカット"
 type_keys_summary = "入力は約 {seconds} 秒"
+typing_only = "この録画には入力はありますが、ショートカットはありません。入力内容を表示するには「入力した文字を表示」をオンにしてください。"
 uppercase = "大文字"
 
 [editor.tabs.padding]
@@ -3088,7 +3089,9 @@ add_scene = "シーンを追加"
 audio = "BGMを追加するか、自分の音声を読み込みます"
 captions = "字幕なし"
 keyboard = "キーボードイベントなし"
+keyboard_typing_only = "この録画は入力のみです"
 scene = "画面とカメラのレイアウトを切り替えます"
+show_typing = "入力した文字を表示"
 
 [editor.timeline.picker]
 audio = "BGMを追加するか、自分の音声を読み込みます。"
