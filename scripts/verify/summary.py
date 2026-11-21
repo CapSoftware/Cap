@@ -108,7 +108,7 @@ def details(r):
 
 
 def retried(dirs):
-    """Tests retried after a proven machine stall -> (evidence, passed)."""
+    """Tests retried after a proven environment fault -> (evidence, passed)."""
     out = {}
     for d in dirs:
         path = os.path.join(d, "retried.txt")
@@ -222,8 +222,8 @@ def render(records, title, junit, flaky, text, retries=None):
         if len(bad) > MAX_CASES:
             out.append(f"... and {len(bad) - MAX_CASES} more (see the report artifact)")
     if retries:
-        out.append("### Retried after a proven machine stall")
-        out.append("The starvation sentinel recorded the runner not scheduling the test; only wall-clock failures are retried, once.")
+        out.append("### Retried after a proven environment fault")
+        out.append("Each retry has exact evidence: the starvation sentinel recorded the runner not scheduling the test (only wall-clock failures are excused), or a crash report shows a known OS bug. Retried once.")
         out.extend(
             f"- `{test}`: {evidence}: {'passed on retry' if ok else '**failed again (environment)**'}"
             for test, (evidence, ok) in retries.items()

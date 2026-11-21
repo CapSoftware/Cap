@@ -181,9 +181,10 @@ if [[ $have_nextest == 1 ]]; then
   junit="${CARGO_TARGET_DIR:-$root/target}/nextest/$nextest_profile/junit.xml"
   # Always kept: the gate checks that every planned test ran (floor.py).
   if [[ -f "$junit" ]]; then cp "$junit" "$CAP_VERIFY_REPORT_DIR/junit.xml"; fi
-  # Starvation retry: a test whose only failures are wall-clock classes
+  # Environment retry: a test whose only failures are wall-clock classes
   # under a proven machine stall (inconclusive cases, or a timeout with the
-  # sentinel's evidence) runs once more with CAP_VERIFY_RETRY=1. The run
+  # sentinel's evidence), or a crash a crash report proves is a known OS
+  # bug, runs once more with CAP_VERIFY_RETRY=1. The run
   # passes only if every failed test was retryable and every retry passed;
   # a case inconclusive again fails as `environment`. See retry.py.
   if [[ $status != 0 && -f "$CAP_VERIFY_REPORT_DIR/junit.xml" ]]; then
@@ -197,7 +198,7 @@ if [[ $have_nextest == 1 ]]; then
       [[ -z "$binary" || "$binary" == blocking ]] && continue
       retried=$((retried + 1))
       echo "retrying $binary $name once: $evidence"
-      echo "::warning title=Retried after a machine stall::$binary $name: $evidence"
+      echo "::warning title=Retried after a proven environment fault::$binary $name: $evidence"
       echo "$binary $name: $evidence" >>"$CAP_VERIFY_REPORT_DIR/retried.txt"
       if ! CAP_VERIFY_RETRY=1 CAP_VERIFY_REPORT_DIR="$CAP_VERIFY_REPORT_DIR/retry" \
         "${run[@]}" -E "binary_id($binary) and test(=$name)"; then
@@ -206,7 +207,7 @@ if [[ $have_nextest == 1 ]]; then
       fi
     done <<<"$retry_plan"
     if [[ $retried -gt 0 && "${blocking:-1}" == 0 && $retry_failed == 0 ]]; then
-      echo "every failure was a proven machine stall and passed on retry"
+      echo "every failure was a proven environment fault and passed on retry"
       status=0
     fi
   fi

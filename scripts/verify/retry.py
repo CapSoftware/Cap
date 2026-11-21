@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Decides which failed engine-verify tests may be retried once.
 
-A failed test is retried only when the machine-starvation sentinel
-(crates/verify/src/sentinel.rs) proves the runner starved it right where it
-failed, and the failure is one that wall-clock timing can cause:
+A failed test is retried only on exact evidence of an environment fault:
+the machine-starvation sentinel (crates/verify/src/sentinel.rs) proves the
+runner starved it right where it failed and the failure is one that
+wall-clock timing can cause, or a crash report proves a known OS bug:
 
 - every case it failed is `inconclusive` (a wall-clock class such as
   real-time playback `dropped`, under a sentinel wake gap of 100 ms or more
@@ -14,14 +15,18 @@ failed, and the failure is one that wall-clock timing can cause:
 - it panicked in wgpu-core's queue drop ("We timed out while waiting on the
   last successful submission", a 6.3 s limit) or on a lost GPU device
   ("Device with 'cap-rendering-device' label is invalid") and its sentinel
-  log shows such stalls in the PANIC_WINDOW_SECS before the panic.
+  log shows such stalls in the PANIC_WINDOW_SECS before the panic, or
+- on macOS it died of SIGTRAP and its crash report shows the CoreMedia
+  listener key collision (see listener_key_collision): an OS bug that
+  depends only on the process id, so the retry, under a later pid, does
+  not hit it again.
 
 A gap anywhere else in a test's life is not evidence (an intermittent hang
 after an unrelated stall is not excused). At most MAX_RETRIES tests are
 retried per job; beyond that the job fails as an unusable machine.
 
 A test with any FAIL or XPASS case, or that crashed or timed out without
-starvation evidence, is not retried: it fails the run as before. The retry
+that evidence, is not retried: it fails the run as before. The retry
 runs with CAP_VERIFY_RETRY=1, so a case that is inconclusive again fails as
 `environment`.
 
@@ -30,10 +35,12 @@ Prints one "binary<TAB>test<TAB>evidence" line per test to retry, then
 "blocking<TAB><n>" with the number of failed tests that cannot be retried.
 """
 
+import datetime
 import glob
 import json
 import os
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 STARVATION_GAP_MS = 100.0
@@ -47,6 +54,97 @@ QUEUE_DRAIN_PANIC = "We timed out while waiting on the last successful submissio
 # The GPU device was lost (WARP gives up on work that takes too long) and the
 # next wgpu call on it panics instead of reporting an error.
 DEVICE_LOST_PANIC = "Device with 'cap-rendering-device' label is invalid"
+SIGTRAP = "signal 5 (SIGTRAP)"
+# ReportCrash writes the report a few seconds after the process dies.
+CRASH_REPORT_WAIT_SECS = 30.0
+LISTENER_KEYS_PER_PID = 1_000_000
+
+
+def crash_report_dirs():
+    if "CAP_VERIFY_CRASH_REPORT_DIRS" in os.environ:
+        return [d for d in os.environ["CAP_VERIFY_CRASH_REPORT_DIRS"].split(os.pathsep) if d]
+    if sys.platform != "darwin":
+        return []
+    return [os.path.expanduser("~/Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"]
+
+
+def listener_key_collision(report, pid, exe, started):
+    """The CoreMedia listener key CoreFoundation trapped on, if `report` (a
+    macOS .ips crash report) is that crash of process `pid` running `exe`,
+    written after the test started at `started` (an aware datetime): an older
+    report of a reused pid is no evidence.
+
+    CoreMedia registers each weak notification listener with
+    CFNotificationCenterAddObserver, passing as the observer not a pointer
+    but an integer key from a process-wide counter that starts at
+    pid * 1,000,000 (plus 10,000 per earlier table) and grows by one per
+    registration. CoreFoundation traps (brk) when the observer equals the
+    address of its kCFNotificationAnyObserver string in the shared cache
+    (around 8.5e9 on the arm64 Macs seen). So a process whose pid times a million lands just below
+    that address traps once it has made enough registrations: about 30 per
+    AVAssetReader start, about 180,000 in the FULL tier AVFoundation seek
+    storm. The evidence is exact: the trapping frame, its caller, and an
+    observer register holding a key of this very process."""
+    try:
+        with open(report, encoding="utf-8") as f:
+            header, _, body = f.read().partition("\n")
+        crashed = datetime.datetime.strptime(json.loads(header)["timestamp"], "%Y-%m-%d %H:%M:%S.%f %z")
+        body = json.loads(body)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    # The header time has centisecond resolution.
+    if crashed < started - datetime.timedelta(seconds=1):
+        return None
+    if body.get("pid") != pid or body.get("procName") != exe:
+        return None
+    if (body.get("exception") or {}).get("type") != "EXC_BREAKPOINT":
+        return None
+    threads = body.get("threads") or []
+    index = body.get("faultingThread")
+    if not isinstance(index, int) or not 0 <= index < len(threads):
+        return None
+    thread = threads[index]
+    symbols = [frame.get("symbol") for frame in thread.get("frames") or []]
+    if symbols[:1] != ["_CFXNotificationRegisterObserver"]:
+        return None
+    if "FigNotificationCenterAddWeakListener" not in symbols[:4]:
+        return None
+    registers = (thread.get("threadState") or {}).get("x") or []
+    # The observer argument (x4) and its callee-saved copy (x23).
+    for i in (4, 23):
+        if i < len(registers):
+            value = registers[i].get("value")
+            if isinstance(value, int) and value // LISTENER_KEYS_PER_PID == pid:
+                return value
+    return None
+
+
+def find_listener_key_collision(procs, started):
+    """(pid, key) from a crash report showing the collision for one of
+    `procs` [(exe, pid)] since `started`, looking once a second for
+    CRASH_REPORT_WAIT_SECS."""
+    directories = crash_report_dirs()
+    if not directories:
+        return None
+    for attempt in range(int(CRASH_REPORT_WAIT_SECS) + 1):
+        if attempt:
+            time.sleep(1.0)
+        for directory in directories:
+            for report in glob.glob(os.path.join(directory, "*.ips")):
+                for exe, pid in procs:
+                    key = listener_key_collision(report, pid, exe, started)
+                    if key is not None:
+                        return pid, key
+    return None
+
+
+def test_started(case):
+    """When nextest started the junit `case`, or None."""
+    try:
+        started = datetime.datetime.fromisoformat(case.get("timestamp", "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return started if started.tzinfo else None
 
 
 def records(report_dir):
@@ -65,12 +163,12 @@ def records(report_dir):
 
 
 def sentinels(report_dir):
-    """(executable stem, argv, gaps [(start s, ms)], end s) per test process.
+    """(executable stem, argv, gaps [(start s, ms)], end s, pid) per test process.
     The end is the last heartbeat or gap: the sentinel writes one every 2 s,
     so it is within about 2 s of when the process stopped."""
     out = []
     for path in glob.glob(os.path.join(report_dir, "sentinel-*.log")):
-        exe, args, gaps, end = "", [], [], 0.0
+        exe, args, gaps, end, pid = "", [], [], 0.0, None
         with open(path, encoding="utf-8") as f:
             for line in f:
                 try:
@@ -80,13 +178,14 @@ def sentinels(report_dir):
                 if "args" in entry:
                     args = entry["args"]
                     exe = entry.get("exe", "")
+                    pid = entry.get("pid")
                 if "alive" in entry:
                     end = max(end, float(entry["alive"]))
                 if "gap_ms" in entry:
                     at, gap = float(entry.get("at", 0.0)), float(entry["gap_ms"])
                     gaps.append((at, gap))
                     end = max(end, at + gap / 1000.0)
-        out.append((exe, args, gaps, end))
+        out.append((exe, args, gaps, end, pid))
     return out
 
 
@@ -150,6 +249,64 @@ def self_test():
         if retried != expected_retried or blocking != 5:
             failed += 1
         print(f"{'ok ' if not failed else 'BAD'} retried {sorted(retried)} (expected {sorted(expected_retried)}), blocking {blocking} (expected 5)")
+
+    # SIGTRAP: retried only with a crash report of that very process showing
+    # the listener key collision (shape of a real macOS 15 report).
+    global CRASH_REPORT_WAIT_SECS
+    CRASH_REPORT_WAIT_SECS = 0.0
+    with tempfile.TemporaryDirectory() as d:
+        def write(path, text):
+            with open(os.path.join(d, path), "w", encoding="utf-8") as f:
+                f.write(text)
+
+        def report(pid, observer, crashed="2026-11-19 02:43:54.00 +0000"):
+            frames = ["_CFXNotificationRegisterObserver", "CFNotificationCenterAddObserver", "FigNotificationCenterAddWeakListener", None]
+            x = [{"value": 0} for _ in range(29)]
+            x[4] = x[23] = {"value": observer}
+            body = {
+                "pid": pid,
+                "procName": "seek-abc",
+                "exception": {"type": "EXC_BREAKPOINT", "signal": "SIGTRAP"},
+                "faultingThread": 1,
+                "threads": [{"frames": []}, {"frames": [{"symbol": s} for s in frames], "threadState": {"x": x}}],
+            }
+            header = {"bug_type": "309", "name": "seek-abc", "timestamp": crashed}
+            return json.dumps(header) + "\n" + json.dumps(body, indent=2)
+
+        cases = [
+            # (test, pid, crash report observer or None, expected retried)
+            ("collision", 8465, 8465 * LISTENER_KEYS_PER_PID + 169584, True),
+            ("other-trap", 8466, 0x1F8903CB0, False),
+            ("no-report", 8467, None, False),
+            # A collision report from before this test started (a reused pid).
+            ("stale-report", 8468, 8468 * LISTENER_KEYS_PER_PID + 42, False),
+        ]
+        tests = []
+        for name, pid, observer, _ in cases:
+            write(f"sentinel-{pid}.log", json.dumps({"pid": pid, "exe": "seek-abc", "args": ["--exact", name]}) + "\n")
+            if observer is not None:
+                crashed = "2026-11-18 21:00:00.00 +0000" if name == "stale-report" else "2026-11-19 02:43:54.00 +0000"
+                write(f"seek-abc-{pid}.ips", report(pid, observer, crashed))
+            tests.append(
+                f'<testcase classname="cap-verify::seek" name="{name}" timestamp="2026-11-19T02:42:45.189+00:00">'
+                f'<failure type="test abort">process aborted with {SIGTRAP}</failure></testcase>'
+            )
+        # A report of another process with a key of its own is no evidence.
+        write("seek-abc-1.ips", report(1, 8467 * LISTENER_KEYS_PER_PID + 5))
+        write("junit.xml", "<testsuites><testsuite>" + "".join(tests) + "</testsuite></testsuites>")
+        os.environ["CAP_VERIFY_CRASH_REPORT_DIRS"] = d
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            sys.argv = ["retry.py", os.path.join(d, "junit.xml"), d]
+            main()
+        del os.environ["CAP_VERIFY_CRASH_REPORT_DIRS"]
+        lines = out.getvalue().splitlines()
+        retried = {line.split("\t")[1] for line in lines if not line.startswith("blocking")}
+        blocking = next(int(line.split("\t")[1]) for line in lines if line.startswith("blocking"))
+        expected_retried = {name for name, _, _, retry in cases if retry}
+        ok = retried == expected_retried and blocking == len(cases) - len(expected_retried)
+        failed += 0 if ok else 1
+        print(f"{'ok ' if ok else 'BAD'} SIGTRAP retried {sorted(retried)} (expected {sorted(expected_retried)}), blocking {blocking}")
     sys.exit(1 if failed else 0)
 
 
@@ -179,11 +336,12 @@ def main():
         # Test binaries are named after their target (export-<hash>): match
         # the target as well as the test name, which can repeat across them.
         target = binary.split("::")[-1].replace("-", "_")
-        mine_logs = [
-            (gaps, end)
-            for exe, args, gaps, end in logs
+        mine_procs = [
+            (exe, gaps, end, pid)
+            for exe, args, gaps, end, pid in logs
             if name in args and exe.replace("-", "_").startswith(target)
         ]
+        mine_logs = [(gaps, end) for _, gaps, end, _ in mine_procs]
 
         def evidence(window):
             return max((stalled(gaps, end, window) for gaps, end in mine_logs), default=0.0)
@@ -206,6 +364,17 @@ def main():
         elif inconclusive:
             cases = ", ".join(r["case"] for r in inconclusive)
             reason = f"inconclusive under starvation: {cases}"
+        elif SIGTRAP in text:
+            procs = [(exe, pid) for exe, _, _, pid in mine_procs if isinstance(pid, int)]
+            started = test_started(case)
+            found = find_listener_key_collision(procs, started) if procs and started else None
+            if found:
+                pid, key = found
+                reason = (
+                    f"macOS CoreMedia listener key collision: CoreFoundation trapped on observer {key:#x}, "
+                    f"key {key - pid * LISTENER_KEYS_PER_PID} of pid {pid}'s counter "
+                    "(an OS bug tied to the pid; the retry runs under another pid)"
+                )
         if reason is None:
             blocking += 1
         elif retried >= MAX_RETRIES:
