@@ -688,11 +688,15 @@ impl LibraryWindow {
             return;
         }
         self.layout = layout;
-        crate::store::set_store_setting(
-            LAYOUT_SECTION,
-            LAYOUT_KEY,
-            serde_json::json!(layout.slug()),
-        );
+        // The store write syncs to disk: never on the frame that switches.
+        cx.background_spawn(async move {
+            crate::store::set_store_setting(
+                LAYOUT_SECTION,
+                LAYOUT_KEY,
+                serde_json::json!(layout.slug()),
+            );
+        })
+        .detach();
         cx.notify();
     }
 
@@ -899,25 +903,54 @@ impl LibraryWindow {
                 )
             );
         }
-        let id = folder.id.clone();
-        match store::update(&self.dir, |file| {
-            match file.smart_folders.iter_mut().find(|f| f.id == folder.id) {
-                Some(existing) => {
-                    existing.name = folder.name.clone();
-                    existing.matching = folder.matching;
-                    existing.rules = folder.rules.clone();
-                }
-                None => file.smart_folders.push(folder.clone()),
-            }
-        }) {
-            Ok(file) => {
-                self.file = file;
-                self.editor = None;
-                self.section = Section::Smart(id);
-                self.reevaluate(cx);
-            }
-            Err(error) => tracing::warn!("smart folder not saved: {error:?}"),
+        self.editor = None;
+        self.commit_smart_folder(folder, cx);
+    }
+
+    /// Shows a smart folder at once and writes it in the background (the
+    /// write syncs to disk). The written file, which merges anything another
+    /// window saved meanwhile, replaces ours when it lands; if the write
+    /// fails, the file on disk wins again.
+    fn commit_smart_folder(&mut self, folder: SmartFolder, cx: &mut Context<Self>) {
+        if self.outcome == store::LoadOutcome::ReadOnly {
+            tracing::warn!("smart folders are read only here");
+            return;
         }
+        let upsert = move |file: &mut store::LibraryFile, folder: &SmartFolder| match file
+            .smart_folders
+            .iter_mut()
+            .find(|f| f.id == folder.id)
+        {
+            Some(existing) => {
+                existing.name = folder.name.clone();
+                existing.matching = folder.matching;
+                existing.rules = folder.rules.clone();
+            }
+            None => file.smart_folders.push(folder.clone()),
+        };
+        upsert(&mut self.file, &folder);
+        self.section = Section::Smart(folder.id.clone());
+        self.reevaluate(cx);
+        let dir = self.dir.clone();
+        cx.spawn(async move |this, cx| {
+            let written = cx
+                .background_spawn(async move { store::update(&dir, |file| upsert(file, &folder)) })
+                .await;
+            this.update(cx, |this, cx| {
+                match written {
+                    Ok(file) => this.file = file,
+                    Err(error) => {
+                        tracing::warn!("smart folder not saved: {error:?}");
+                        let loaded = store::load(&this.dir);
+                        this.file = loaded.file;
+                        this.outcome = loaded.outcome;
+                    }
+                }
+                this.reevaluate(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The perf bench's "save a rule": the same path the sheet's Create
@@ -940,14 +973,8 @@ impl LibraryWindow {
             ],
             extra: Default::default(),
         };
-        if let Ok(file) = store::update(&self.dir, |file| {
-            file.smart_folders.retain(|f| f.id != folder.id);
-            file.smart_folders.push(folder);
-        }) {
-            self.file = file;
-            self.section = Section::Smart(id);
-            self.reevaluate(cx);
-        }
+        let _ = id;
+        self.commit_smart_folder(folder, cx);
     }
 
     fn auto_page(&mut self, page: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -2110,7 +2137,7 @@ impl LibraryWindow {
                     rows,
                     cx.processor(move |this, range: std::ops::Range<usize>, window, cx| {
                         let width = this.content_width(window);
-                        range
+                        let rows = range
                             .map(|r| {
                                 let start = r * cols;
                                 let end = (start + cols).min(visible.len());
@@ -2771,6 +2798,6 @@ impl Render for LibraryWindow {
                 el.child(div().w(px(1.)).h_full().bg(p.hairline))
             })
             .child(main)
-            .children(self.render_editor(cx))
+            .children(editor)
     }
 }

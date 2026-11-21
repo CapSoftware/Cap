@@ -181,6 +181,12 @@ pub enum UpdateError {
 /// Re-reads the file, applies `edit`, and replaces the file atomically.
 /// Returns the file as written.
 pub fn update(dir: &Path, edit: impl FnOnce(&mut LibraryFile)) -> Result<LibraryFile, UpdateError> {
+    // Writes from this process (background saves, two windows) take turns,
+    // so each read-modify-write sees the one before it.
+    static WRITER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = WRITER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let loaded = load(dir);
     if loaded.outcome == LoadOutcome::ReadOnly {
         return Err(UpdateError::ReadOnly);
