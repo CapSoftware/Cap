@@ -446,6 +446,126 @@ index 393e517..bb20879 100644
  #[cfg(test)]
  mod tests {
      use crate::{
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 701ae28..0a18864 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -84,6 +84,7 @@ pub(crate) struct WindowRef {
+     expose_event_received: bool,
+     last_visibility: Visibility,
+     is_mapped: bool,
++    frame_requests_paused: bool,
+ }
+ 
+ impl WindowRef {
+@@ -257,6 +258,27 @@ impl X11ClientStatePtr {
+         state.cursor_styles.remove(&x_window);
+     }
+ 
++    pub fn set_frame_requests_paused(&self, x_window: xproto::Window, paused: bool) {
++        let Some(client) = self.get_client() else {
++            return;
++        };
++        let mut state = client.0.borrow_mut();
++        let Some(window_ref) = state.windows.get_mut(&x_window) else {
++            return;
++        };
++        // A window still owed a forced render after GPU recovery, or a
++        // presentation of an area exposed after the frame that asked for the
++        // pause, keeps its refresh timer until that frame has run.
++        if paused
++            && (window_ref.expose_event_received
++                || window_ref.window.state.borrow().force_render_after_recovery)
++        {
++            return;
++        }
++        window_ref.frame_requests_paused = paused;
++        state.update_refresh_loop(x_window);
++    }
++
+     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+         let Some(client) = self.get_client() else {
+             return;
+@@ -659,8 +681,12 @@ impl X11Client {
+ 
+             for window in windows_to_refresh.into_iter() {
+                 let mut state = self.0.borrow_mut();
+-                if let Some(window) = state.windows.get_mut(&window) {
+-                    window.expose_event_received = true;
++                if let Some(window_ref) = state.windows.get_mut(&window) {
++                    window_ref.expose_event_received = true;
++                    // A paused window presents the exposed area on the next refresh.
++                    if std::mem::take(&mut window_ref.frame_requests_paused) {
++                        state.update_refresh_loop(window);
++                    }
+                 }
+             }
+ 
+@@ -1652,6 +1678,7 @@ impl LinuxClient for X11Client {
+             expose_event_received: false,
+             last_visibility: Visibility::UNOBSCURED,
+             is_mapped: false,
++            frame_requests_paused: false,
+         };
+ 
+         state.windows.insert(x_window, window_ref);
+@@ -1921,7 +1948,8 @@ impl X11ClientState {
+         };
+         let is_visible = window_ref.is_mapped
+             && !matches!(window_ref.last_visibility, Visibility::FULLY_OBSCURED);
+-        match (is_visible, window_ref.refresh_state.take()) {
++        let should_refresh = is_visible && !window_ref.frame_requests_paused;
++        match (should_refresh, window_ref.refresh_state.take()) {
+             (false, refresh_state @ Some(RefreshState::Hidden { .. }))
+             | (false, refresh_state @ None)
+             | (true, refresh_state @ Some(RefreshState::PeriodicRefresh { .. })) => {
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+index 169a2cd..3995127 100644
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -3,11 +3,12 @@ use x11rb::connection::RequestConnection;
+ 
+ use crate::linux::X11ClientStatePtr;
+ use gpui::{
+-    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
+-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
+-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+-    WindowDecorations, WindowKind, WindowParams, popup::PopupNotSupportedError, px,
++    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, FrameRequests,
++    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
++    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
++    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
++    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
++    popup::PopupNotSupportedError, px,
+ };
+ use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
+ 
+@@ -1665,6 +1666,24 @@ impl PlatformWindow for X11Window {
+         self.0.callbacks.borrow_mut().request_frame = Some(callback);
+     }
+ 
++    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(FrameRequests)>> {
++        let state = self.0.state.borrow();
++        let client = state.client.clone();
++        let executor = state.executor.clone();
++        let x_window = self.0.x_window;
++        Some(Box::new(move |request| {
++            // Deferred: requests come from inside frames and event handlers,
++            // which may hold the client's state. Once restarts the refresh
++            // timer like Start; the frame pacer stops it again after the frame.
++            let client = client.clone();
++            executor
++                .spawn(async move {
++                    client.set_frame_requests_paused(x_window, request == FrameRequests::Stop);
++                })
++                .detach();
++        }))
++    }
++
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
+         self.0.callbacks.borrow_mut().input = Some(callback);
+     }
 diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
 index f5b2c1a..96f7826 100644
 --- a/crates/gpui_macos/src/window.rs
@@ -542,4 +662,479 @@ index f5b2c1a..96f7826 100644
 +
      fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>) {
          self.0.as_ref().lock().event_callback = Some(callback);
+     }
+diff --git a/crates/gpui_windows/src/direct_manipulation.rs b/crates/gpui_windows/src/direct_manipulation.rs
+index 9adcbed..308f320 100644
+--- a/crates/gpui_windows/src/direct_manipulation.rs
++++ b/crates/gpui_windows/src/direct_manipulation.rs
+@@ -26,6 +26,10 @@ pub(crate) struct DirectManipulationHandler {
+     window: HWND,
+     scale_factor: Rc<Cell<f32>>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++    /// Set from the moment a touchpad contact is handed over until the
++    /// viewport is ready again after the gesture and its inertia. `update`
++    /// has to keep running until then.
++    manipulating: Rc<Cell<bool>>,
+ }
+ 
+ impl DirectManipulationHandler {
+@@ -65,12 +69,14 @@ impl DirectManipulationHandler {
+ 
+             let scale_factor = Rc::new(Cell::new(scale_factor));
+             let pending_events = Rc::new(RefCell::new(Vec::new()));
++            let manipulating = Rc::new(Cell::new(false));
+ 
+             let event_handler: IDirectManipulationViewportEventHandler =
+                 DirectManipulationEventHandler::new(
+                     window,
+                     Rc::clone(&scale_factor),
+                     Rc::clone(&pending_events),
++                    Rc::clone(&manipulating),
+                 )
+                 .into();
+ 
+@@ -86,6 +92,7 @@ impl DirectManipulationHandler {
+                 window,
+                 scale_factor,
+                 pending_events,
++                manipulating,
+             })
+         }
+     }
+@@ -100,11 +107,17 @@ impl DirectManipulationHandler {
+             let mut pointer_type = POINTER_INPUT_TYPE::default();
+             if GetPointerType(pointer_id, &mut pointer_type).is_ok() && pointer_type == PT_TOUCHPAD
+             {
+-                self.viewport.SetContact(pointer_id).log_err();
++                if self.viewport.SetContact(pointer_id).log_err().is_some() {
++                    self.manipulating.set(true);
++                }
+             }
+         }
+     }
+ 
++    pub fn is_manipulating(&self) -> bool {
++        self.manipulating.get()
++    }
++
+     pub fn update(&self) {
+         unsafe {
+             self.update_manager.Update(None).log_err();
+@@ -143,6 +156,7 @@ struct DirectManipulationEventHandler {
+     last_y_offset: Cell<f32>,
+     scroll_phase: Cell<TouchPhase>,
+     pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++    manipulating: Rc<Cell<bool>>,
+ }
+ 
+ impl DirectManipulationEventHandler {
+@@ -150,6 +164,7 @@ impl DirectManipulationEventHandler {
+         window: HWND,
+         scale_factor: Rc<Cell<f32>>,
+         pending_events: Rc<RefCell<Vec<PlatformInput>>>,
++        manipulating: Rc<Cell<bool>>,
+     ) -> Self {
+         Self {
+             window,
+@@ -160,6 +175,7 @@ impl DirectManipulationEventHandler {
+             last_y_offset: Cell::new(0.0),
+             scroll_phase: Cell::new(TouchPhase::Started),
+             pending_events,
++            manipulating,
+         }
+     }
+ 
+@@ -214,6 +230,12 @@ impl IDirectManipulationViewportEventHandler_Impl for DirectManipulationEventHan
+             return Ok(());
+         }
+ 
++        if current == DIRECTMANIPULATION_RUNNING || current == DIRECTMANIPULATION_INERTIA {
++            self.manipulating.set(true);
++        } else if current == DIRECTMANIPULATION_READY {
++            self.manipulating.set(false);
++        }
++
+         // A new gesture interrupted inertia, so end the old sequence.
+         if current == DIRECTMANIPULATION_RUNNING && previous == DIRECTMANIPULATION_INERTIA {
+             self.end_gesture();
+@@ -357,3 +379,38 @@ fn float_equals(f1: f32, f2: f32) -> bool {
+     const EPSILON_SCALE: f32 = 0.00001;
+     (f1 - f2).abs() < EPSILON_SCALE * f1.abs().max(f2.abs()).max(EPSILON_SCALE)
+ }
++
++#[cfg(test)]
++mod tests {
++    use std::{cell::Cell, rc::Rc};
++
++    use windows::Win32::{Foundation::HWND, Graphics::DirectManipulation::*};
++
++    use super::DirectManipulationEventHandler;
++
++    #[test]
++    fn a_manipulation_lasts_through_its_inertia_until_the_viewport_is_ready() {
++        let manipulating = Rc::new(Cell::new(true));
++        let handler: IDirectManipulationViewportEventHandler = DirectManipulationEventHandler::new(
++            HWND::default(),
++            Rc::new(Cell::new(1.0)),
++            Rc::default(),
++            Rc::clone(&manipulating),
++        )
++        .into();
++        let status_changed = |current, previous| unsafe {
++            handler
++                .OnViewportStatusChanged(None::<&IDirectManipulationViewport>, current, previous)
++                .unwrap()
++        };
++
++        status_changed(DIRECTMANIPULATION_RUNNING, DIRECTMANIPULATION_ENABLED);
++        assert!(manipulating.get());
++        status_changed(DIRECTMANIPULATION_INERTIA, DIRECTMANIPULATION_RUNNING);
++        assert!(manipulating.get());
++        status_changed(DIRECTMANIPULATION_READY, DIRECTMANIPULATION_INERTIA);
++        assert!(!manipulating.get());
++        status_changed(DIRECTMANIPULATION_RUNNING, DIRECTMANIPULATION_READY);
++        assert!(manipulating.get());
++    }
++}
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 44f5505..b957e4b 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -111,7 +111,7 @@ impl WindowsWindowInner {
+             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
+             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
+             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+-            DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(wparam),
++            DM_POINTERHITTEST => self.handle_dm_pointer_hit_test(handle, wparam),
+             WM_GETOBJECT => self.handle_wm_getobject(wparam, lparam),
+             _ => None,
+         };
+@@ -1240,8 +1240,11 @@ impl WindowsWindowInner {
+         Some(0)
+     }
+ 
+-    fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {
++    fn handle_dm_pointer_hit_test(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
+         self.state.direct_manipulation.on_pointer_hit_test(wparam);
++        // `draw_window` pumps Direct Manipulation, so a touchpad gesture on an
++        // idle window needs the vsync redraws back.
++        set_frame_requests_paused(&self.paused_windows, handle, false);
+         None
+     }
+ 
+diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
+index f8939e9..b933fdd 100644
+--- a/crates/gpui_windows/src/platform.rs
++++ b/crates/gpui_windows/src/platform.rs
+@@ -30,9 +30,14 @@ use windows::{
+ use crate::*;
+ use gpui::*;
+ 
++/// Windows whose frame requests gpui has stopped because they have nothing to
++/// draw. The `VSyncProvider` thread skips redrawing them.
++pub(crate) type PausedWindows = Arc<RwLock<SmallVec<[SafeHwnd; 4]>>>;
++
+ pub struct WindowsPlatform {
+     inner: Rc<WindowsPlatformInner>,
+     raw_window_handles: Arc<RwLock<SmallVec<[SafeHwnd; 4]>>>,
++    paused_windows: PausedWindows,
+     // The below members will never change throughout the entire lifecycle of the app.
+     headless: bool,
+     icon: HICON,
+@@ -192,6 +197,7 @@ impl WindowsPlatform {
+             inner,
+             handle,
+             raw_window_handles,
++            paused_windows: PausedWindows::default(),
+             headless,
+             icon,
+             background_executor,
+@@ -239,6 +245,7 @@ impl WindowsPlatform {
+             disable_direct_composition: self.disable_direct_composition,
+             directx_devices: self.inner.state.directx_devices.borrow().clone().unwrap(),
+             invalidate_devices: self.invalidate_devices.clone(),
++            paused_windows: self.paused_windows.clone(),
+         }
+     }
+ 
+@@ -316,6 +323,7 @@ impl WindowsPlatform {
+         let all_windows = Arc::downgrade(&self.raw_window_handles);
+         let text_system = Arc::downgrade(direct_write_text_system);
+         let invalidate_devices = self.invalidate_devices.clone();
++        let paused_windows = self.paused_windows.clone();
+ 
+         std::thread::Builder::new()
+             .name("VSyncProvider".to_owned())
+@@ -339,7 +347,8 @@ impl WindowsPlatform {
+                     let Some(all_windows) = all_windows.upgrade() else {
+                         break;
+                     };
+-                    for hwnd in all_windows.read().iter() {
++                    let paused_windows = paused_windows.read();
++                    for hwnd in unpaused_windows(&all_windows.read(), &paused_windows) {
+                         unsafe {
+                             let _ = RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE);
+                         }
+@@ -350,6 +359,20 @@ impl WindowsPlatform {
+     }
+ }
+ 
++/// The windows the `VSyncProvider` thread redraws every vblank: those whose
++/// frame requests are running. Device-lost recovery still reaches paused
++/// windows: it sends its messages to all of them.
++fn unpaused_windows<'a>(
++    all_windows: &'a [SafeHwnd],
++    paused_windows: &'a [SafeHwnd],
++) -> impl Iterator<Item = &'a SafeHwnd> {
++    all_windows.iter().filter(|hwnd| {
++        !paused_windows
++            .iter()
++            .any(|paused| paused.as_raw() == hwnd.as_raw())
++    })
++}
++
+ fn translate_accelerator(msg: &MSG) -> Option<()> {
+     if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
+         return None;
+@@ -526,6 +549,9 @@ impl Platform for WindowsPlatform {
+         let window = WindowsWindow::new(handle, options, self.generate_creation_info())?;
+         let handle = window.get_raw_handle();
+         self.raw_window_handles.write().push(handle.into());
++        // A new window starts with frame requests running, even if it reuses
++        // the handle of a closed window that had them stopped.
++        set_frame_requests_paused(&self.paused_windows, handle, false);
+ 
+         Ok(Box::new(window))
+     }
+@@ -1132,6 +1158,7 @@ pub(crate) struct WindowCreationInfo {
+     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
+     /// as resizing them has failed, causing us to have lost at least the render target.
+     pub(crate) invalidate_devices: Arc<AtomicBool>,
++    pub(crate) paused_windows: PausedWindows,
+ }
+ 
+ struct PlatformWindowCreateContext {
+@@ -1504,3 +1531,132 @@ mod tests {
+         assert_eq!(read_from_clipboard(), Some(item));
+     }
+ }
++
++#[cfg(test)]
++mod frame_request_tests {
++    use std::{cell::RefCell, sync::Arc};
++
++    use gpui_util::ResultExt;
++    use parking_lot::RwLock;
++    use smallvec::{SmallVec, smallvec};
++    use windows::{
++        Win32::{Foundation::*, UI::WindowsAndMessaging::*},
++        core::w,
++    };
++
++    use super::{handle_gpu_device_lost, unpaused_windows};
++    use crate::{
++        DirectXDevices, PausedWindows, SafeHwnd, WM_GPUI_FORCE_UPDATE_WINDOW,
++        WM_GPUI_GPU_DEVICE_LOST, set_frame_requests_paused,
++    };
++
++    thread_local! {
++        static MESSAGES: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
++    }
++
++    unsafe extern "system" fn record_messages(
++        hwnd: HWND,
++        msg: u32,
++        wparam: WPARAM,
++        lparam: LPARAM,
++    ) -> LRESULT {
++        if matches!(msg, WM_GPUI_GPU_DEVICE_LOST | WM_GPUI_FORCE_UPDATE_WINDOW) {
++            MESSAGES.with(|messages| messages.borrow_mut().push((hwnd.0 as usize, msg)));
++        }
++        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
++    }
++
++    fn test_window() -> HWND {
++        static REGISTER: std::sync::Once = std::sync::Once::new();
++        let class_name = w!("GpuiFrameRequestTestWindow");
++        REGISTER.call_once(|| {
++            let wc = WNDCLASSW {
++                lpfnWndProc: Some(record_messages),
++                lpszClassName: class_name,
++                ..Default::default()
++            };
++            unsafe { RegisterClassW(&wc) };
++        });
++        unsafe {
++            CreateWindowExW(
++                WINDOW_EX_STYLE(0),
++                class_name,
++                None,
++                WINDOW_STYLE(0),
++                0,
++                0,
++                0,
++                0,
++                Some(HWND_MESSAGE),
++                None,
++                None,
++                None,
++            )
++            .unwrap()
++        }
++    }
++
++    fn raw(windows: impl IntoIterator<Item = HWND>) -> Vec<usize> {
++        windows.into_iter().map(|hwnd| hwnd.0 as usize).collect()
++    }
++
++    #[test]
++    fn a_paused_window_skips_vsync_redraws_but_still_gets_the_device_lost_forced_render() {
++        let running = test_window();
++        let paused = test_window();
++        let all_windows: Arc<RwLock<SmallVec<[SafeHwnd; 4]>>> =
++            Arc::new(RwLock::new(smallvec![running.into(), paused.into()]));
++        let paused_windows = PausedWindows::default();
++        set_frame_requests_paused(&paused_windows, paused, true);
++        set_frame_requests_paused(&paused_windows, paused, true);
++
++        let redrawn = |paused_windows: &PausedWindows| {
++            raw(
++                unpaused_windows(&all_windows.read(), &paused_windows.read())
++                    .map(|hwnd| hwnd.as_raw()),
++            )
++        };
++        assert_eq!(redrawn(&paused_windows), raw([running]));
++
++        let devices = DirectXDevices::new();
++        assert!(
++            devices.is_ok() || std::env::var_os("GPUI_REQUIRE_TEST_DEVICE").is_none(),
++            "GPUI_REQUIRE_TEST_DEVICE is set but no DirectX device is available"
++        );
++        if let Ok(mut devices) = devices {
++            let platform_window = test_window();
++            handle_gpu_device_lost(
++                &mut devices,
++                platform_window,
++                0,
++                &Arc::downgrade(&all_windows),
++                &std::sync::Weak::new(),
++            )
++            .unwrap();
++            let messages = MESSAGES.with(|messages| std::mem::take(&mut *messages.borrow_mut()));
++            let device_lost = |hwnd: HWND| (hwnd.0 as usize, WM_GPUI_GPU_DEVICE_LOST);
++            let forced_render = |hwnd: HWND| (hwnd.0 as usize, WM_GPUI_FORCE_UPDATE_WINDOW);
++            assert_eq!(
++                messages,
++                [
++                    device_lost(platform_window),
++                    device_lost(running),
++                    device_lost(paused),
++                    forced_render(running),
++                    forced_render(paused),
++                ]
++            );
++            unsafe { DestroyWindow(platform_window).log_err() };
++        }
++
++        set_frame_requests_paused(&paused_windows, paused, false);
++        assert_eq!(redrawn(&paused_windows), raw([running, paused]));
++        set_frame_requests_paused(&paused_windows, running, true);
++        set_frame_requests_paused(&paused_windows, running, false);
++        assert!(paused_windows.read().is_empty());
++
++        for hwnd in [running, paused] {
++            unsafe { DestroyWindow(hwnd).log_err() };
++        }
++    }
++}
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+index 8fdd318..58a9292 100644
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -102,6 +102,7 @@ pub(crate) struct WindowsWindowInner {
+     pub(crate) main_receiver: PriorityQueueReceiver<RunnableVariant>,
+     pub(crate) platform_window_handle: HWND,
+     pub(crate) parent_hwnd: Option<HWND>,
++    pub(crate) paused_windows: PausedWindows,
+ }
+ 
+ impl WindowsWindowState {
+@@ -278,6 +279,7 @@ impl WindowsWindowInner {
+             platform_window_handle: context.platform_window_handle,
+             system_settings: WindowsSystemSettings::new(),
+             parent_hwnd: context.parent_hwnd,
++            paused_windows: context.paused_windows.clone(),
+         }))
+     }
+ 
+@@ -413,6 +415,21 @@ struct WindowCreateContext {
+     directx_devices: DirectXDevices,
+     invalidate_devices: Arc<AtomicBool>,
+     parent_hwnd: Option<HWND>,
++    paused_windows: PausedWindows,
++}
++
++pub(crate) fn set_frame_requests_paused(paused_windows: &PausedWindows, hwnd: HWND, paused: bool) {
++    let mut paused_windows = paused_windows.write();
++    let index = paused_windows
++        .iter()
++        .position(|paused| paused.as_raw() == hwnd);
++    match (index, paused) {
++        (None, true) => paused_windows.push(hwnd.into()),
++        (Some(index), false) => {
++            paused_windows.swap_remove(index);
++        }
++        _ => {}
++    }
+ }
+ 
+ fn custom_frame_enabled(normal_window: bool, transparent_titlebar: Option<bool>) -> bool {
+@@ -443,6 +460,7 @@ impl WindowsWindow {
+             disable_direct_composition,
+             directx_devices,
+             invalidate_devices,
++            paused_windows,
+         } = creation_info;
+         register_window_class(icon);
+         let parent_hwnd = if params.kind == WindowKind::Dialog {
+@@ -554,6 +572,7 @@ impl WindowsWindow {
+             directx_devices,
+             invalidate_devices,
+             parent_hwnd,
++            paused_windows,
+         };
+         let creation_result = unsafe {
+             CreateWindowExW(
+@@ -638,6 +657,7 @@ impl Drop for WindowsWindow {
+             .executor
+             .spawn(async move {
+                 let handle = this.hwnd;
++                set_frame_requests_paused(&this.paused_windows, handle, false);
+                 unsafe {
+                     RevokeDragDrop(handle).log_err();
+                     DestroyWindow(handle).log_err();
+@@ -1031,6 +1051,24 @@ impl PlatformWindow for WindowsWindow {
+         self.state.callbacks.request_frame.set(Some(callback));
+     }
+ 
++    fn frame_request_toggle(&self) -> Option<Box<dyn Fn(FrameRequests)>> {
++        let this = Rc::downgrade(&self.0);
++        Some(Box::new(move |request| {
++            let Some(this) = this.upgrade() else {
++                return;
++            };
++            // Once resumes the vsync redraws too: the frame pacer stops them
++            // again after the frame, and until a frame arrives the window keeps
++            // getting redrawn every vblank, as it did before it was paused.
++            // Device-lost forced renders are sent to every window regardless.
++            // A touchpad gesture keeps them running until it ends, because
++            // `draw_window` is what pumps Direct Manipulation.
++            let paused =
++                request == FrameRequests::Stop && !this.state.direct_manipulation.is_manipulating();
++            set_frame_requests_paused(&this.paused_windows, this.hwnd, paused);
++        }))
++    }
++
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
+         self.state.callbacks.input.set(Some(callback));
      }
