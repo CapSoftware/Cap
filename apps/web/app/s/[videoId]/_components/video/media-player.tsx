@@ -3506,6 +3506,7 @@ interface CaptionOption {
 }
 
 interface MediaPlayerSettingsProps extends MediaPlayerPlaybackSpeedProps {
+	qualitySubmenu?: React.ReactNode;
 	enhancedAudioStatus?: EnhancedAudioStatus | null;
 	enhancedAudioEnabled?: boolean;
 	setEnhancedAudioEnabled?: (enabled: boolean) => void;
@@ -3527,6 +3528,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 		modal = false,
 		className,
 		disabled,
+		qualitySubmenu,
 		enhancedAudioStatus,
 		enhancedAudioEnabled,
 		setEnhancedAudioEnabled,
@@ -3688,6 +3690,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
 						{enhancedAudioEnabled && <CheckIcon />}
 					</DropdownMenuItem>
 				)}
+				{qualitySubmenu}
 				{context.isVideo && mediaRenditionList.length > 0 && (
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger>

@@ -125,6 +125,7 @@ vi.mock("next/server", async (importOriginal) => ({
 	},
 }));
 vi.mock("@/lib/share-ladder", () => ({
+	getShareLadderPlayback: async () => null,
 	recordShareLadderView: mocks.recordLadderView,
 }));
 vi.mock("@/lib/shareable-link-quota", () => ({

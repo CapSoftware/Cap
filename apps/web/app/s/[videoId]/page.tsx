@@ -71,7 +71,11 @@ import {
 	withoutWorkspaceCallToAction,
 } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
-import { recordShareLadderView } from "@/lib/share-ladder";
+import {
+	getShareLadderPlayback,
+	recordShareLadderView,
+	type ShareLadderVideo,
+} from "@/lib/share-ladder";
 import {
 	canStartPlaybackInHtml,
 	getCustomThumbnailUrl,
@@ -654,6 +658,30 @@ async function AuthorizedContent({
 	// player hydrates. Custom buckets and storage integrations keep resolving it
 	// on the client, behind the probe that falls back to the playlist route, and
 	// so does this source if it is not ready in time.
+	const shareLadderVideo: ShareLadderVideo = {
+		id: video.id,
+		ownerId: video.owner.id,
+		orgId: video.orgId,
+		bucket: video.bucket,
+		storageIntegrationId: video.storageIntegrationId,
+		duration: video.duration,
+		width: video.width,
+		height: video.height,
+		sourceType: video.source.type,
+		isScreenshot: video.isScreenshot,
+		hasActiveUpload,
+	};
+	// Streamed to the client and never awaited here: the player only needs a
+	// ladder once playback is under way, so it never delays the page.
+	const shareLadderPlaybackPromise = initialPlaybackSourcePromise
+		? initialPlaybackSourcePromise
+				.then((source) =>
+					source?.defaultStorage
+						? getShareLadderPlayback(shareLadderVideo, source.fileKey)
+						: null,
+				)
+				.catch(() => null)
+		: Promise.resolve(null);
 	const serverPlaybackSourcePromise =
 		buildEnv.NEXT_PUBLIC_IS_CAP === "true" &&
 		!video.bucket &&
@@ -1016,27 +1044,14 @@ async function AuthorizedContent({
 		after(async () => {
 			const source = await playbackSource;
 			if (!source?.defaultStorage) return;
-			await recordShareLadderView(
-				{
-					id: video.id,
-					ownerId: video.owner.id,
-					orgId: video.orgId,
-					bucket: video.bucket,
-					storageIntegrationId: video.storageIntegrationId,
-					duration: video.duration,
-					width: video.width,
-					height: video.height,
-					sourceType: video.source.type,
-					isScreenshot: video.isScreenshot,
-					hasActiveUpload,
+			await recordShareLadderView(shareLadderVideo, source.fileKey).catch(
+				(error) => {
+					console.error(
+						`[ShareVideoPage] Share ladder view not recorded for ${videoId}:`,
+						error,
+					);
 				},
-				source.fileKey,
-			).catch((error) => {
-				console.error(
-					`[ShareVideoPage] Share ladder view not recorded for ${videoId}:`,
-					error,
-				);
-			});
+			);
 		});
 	}
 
@@ -1193,6 +1208,7 @@ async function AuthorizedContent({
 				serverPlaybackUrl={
 					serverPlaybackSource?.defaultStorage ? serverPlaybackSource.url : null
 				}
+				ladder={shareLadderPlaybackPromise}
 				screenshotImageUrl={screenshotImageUrl}
 				posterUrl={posterUrl}
 				videoSettings={videoWithOrganizationInfo.settings}
