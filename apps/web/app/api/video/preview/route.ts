@@ -19,11 +19,17 @@ function getFallbackResponse(request: NextRequest, videoId: string) {
 		return new NextResponse(null, { status: 404 });
 	}
 
-	const fallbackUrl = new URL("/api/video/og", request.url);
-	fallbackUrl.searchParams.set("videoId", videoId);
-	const response = NextResponse.redirect(fallbackUrl, 302);
-	response.headers.set("Cache-Control", "private, no-store, max-age=0");
-	return response;
+	// Relative on purpose: behind a proxy `request.url` carries the server's
+	// bind address (eg. https://0.0.0.0:8080), which unfurlers can't reach. The
+	// client resolves this against the URL it requested, custom domains included.
+	const params = new URLSearchParams({ videoId });
+	return new NextResponse(null, {
+		status: 302,
+		headers: {
+			Location: `/api/video/og?${params}`,
+			"Cache-Control": "private, no-store, max-age=0",
+		},
+	});
 }
 
 export async function GET(request: NextRequest) {
