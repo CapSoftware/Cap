@@ -1164,6 +1164,7 @@ enum EditorSection {
     Sidebar,
     SidebarRail,
     Timeline,
+    TimelineOverlay,
     Transcript,
     PanelSwitcher,
     BlankStart,
@@ -1247,6 +1248,10 @@ impl Render for EditorSectionView {
                     editor
                         .render_timeline(viewport_width, viewport_height, cx)
                         .into_any_element()
+                }
+                EditorSection::TimelineOverlay => {
+                    let viewport_width: f32 = window.viewport_size().width.into();
+                    editor.render_timeline_overlay(viewport_width, cx)
                 }
             }
         })
@@ -1890,7 +1895,19 @@ pub struct EditorWindow {
     blank_start_view: Entity<EditorSectionView>,
     blank_start: blank_start::BlankStart,
     blank_panel: blank_start::BlankPanel,
+    /// The ruler and the track rows. The playhead, the ghost line and the
+    /// minimap draw in `timeline_overlay_view` above it, so a playhead tick
+    /// or a ghost-line move leaves the rows cached.
     timeline_view: Entity<EditorSectionView>,
+    timeline_overlay_view: Entity<EditorSectionView>,
+    /// What the rows were last built for that no notify reaches: the viewport
+    /// the follow scroll moves during playback, and the pointer time a create
+    /// ghost follows.
+    timeline_rows_key: Cell<Option<TimelineRowsKey>>,
+    timeline_overlay_merged: Cell<Option<bool>>,
+    /// The timeline view the overlay draws: the playhead runs ahead of the
+    /// last engine sample while playing.
+    timeline_drawn: TimelineView,
     pub(crate) frame_layout: Option<FrameLayout>,
     /// Kept alive for the window's lifetime: dropping the last `Arc` is what
     /// tears the decoders down, and `dispose()` on close does it explicitly.
@@ -2698,8 +2715,12 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::PanelSwitcher, cx)
         });
-        let timeline_view =
-            cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx));
+        let timeline_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx)
+        });
+        let timeline_overlay_view =
+            cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::TimelineOverlay, cx));
 
         Self {
             // No material and no transparency: `applyMacOSWindowMaterial` runs
@@ -2739,6 +2760,10 @@ impl EditorWindow {
             blank_start: blank_start::BlankStart::default(),
             blank_panel: blank_start::BlankPanel::default(),
             timeline_view,
+            timeline_overlay_view,
+            timeline_rows_key: Cell::new(None),
+            timeline_overlay_merged: Cell::new(None),
+            timeline_drawn: TimelineView::default(),
             frame_layout: None,
             instance: None,
             audio_levels: None,
@@ -4268,7 +4293,7 @@ impl EditorWindow {
                         if this.last_playhead_redraw.elapsed() < Duration::from_millis(15) {
                             return true;
                         }
-                        this.timeline_view.update(cx, |_, cx| cx.notify());
+                        this.invalidate_playhead_layer(cx);
                         this.transport_controls.update(cx, |_, cx| cx.notify());
                         true
                     })
@@ -4381,7 +4406,7 @@ impl EditorWindow {
     /// One pointer move of a ruler scrub. While paused, the playhead is read
     /// by the timeline, the transport clock and what the window itself renders
     /// (the canvas overlay, the clip popover), so this invalidates those the
-    /// way [`Self::invalidate_hover_chrome`] does instead of rebuilding the
+    /// way [`Self::invalidate_playhead_chrome`] does instead of rebuilding the
     /// header, toolbar and sidebar on every move. The one sidebar reader is
     /// the 3D panel's "on the playhead" pose marker, which is only redrawn
     /// when it changes. Playing and handoff seeks keep the full invalidation.
@@ -4395,7 +4420,7 @@ impl EditorWindow {
             cx.notify();
             return;
         }
-        self.invalidate_hover_chrome(cx);
+        self.invalidate_playhead_chrome(cx);
         if self.camera3d_poses_at_playhead() != poses {
             self.sidebar_view.update(cx, |_, cx| cx.notify());
         }
@@ -5227,7 +5252,7 @@ impl EditorWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.invalidate_playhead_layer(cx);
         self.transport_controls.update(cx, |_, cx| cx.notify());
         // While playing, nothing else the parent renders reads the playhead:
         // the canvas overlay is hidden (`canvas_overlay_visible`) and the
@@ -5410,7 +5435,7 @@ impl EditorWindow {
         if next != self.view.preview_time {
             self.view.preview_time = next;
             self.emit_preview_frame();
-            self.invalidate_hover_chrome(cx);
+            self.invalidate_playhead_chrome(cx);
         }
     }
 
@@ -5420,7 +5445,7 @@ impl EditorWindow {
         }
         self.view.preview_time = None;
         self.emit_preview_frame();
-        self.invalidate_hover_chrome(cx);
+        self.invalidate_playhead_chrome(cx);
     }
 
     /// Pointer-hover state that only the timeline, the transport and the
@@ -5431,7 +5456,26 @@ impl EditorWindow {
     /// sections are reused from their cache.
     fn invalidate_hover_chrome(&mut self, cx: &mut Context<Self>) {
         self.timeline_view.update(cx, |_, cx| cx.notify());
+        self.invalidate_playhead_chrome(cx);
+    }
+
+    /// The playhead and the hover ghost line, which the timeline overlay draws.
+    /// A create ghost that follows the pointer inside a row is caught by
+    /// [`timeline_rows_key`].
+    fn invalidate_playhead_chrome(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_playhead_layer(cx);
         self.transport_controls.update(cx, |_, cx| cx.notify());
+    }
+
+    /// The timeline layer that draws the playhead: the overlay, or the rows
+    /// while [`Self::timeline_merged`].
+    fn invalidate_playhead_layer(&mut self, cx: &mut Context<Self>) {
+        let layer = if self.timeline_merged(cx) {
+            &self.timeline_view
+        } else {
+            &self.timeline_overlay_view
+        };
+        layer.update(cx, |_, cx| cx.notify());
     }
 
     /// State only the sidebar draws, such as a caption model download's
@@ -13276,6 +13320,8 @@ impl EditorWindow {
     ) -> impl IntoElement {
         let theme = self.theme;
         self.timeline.waveform_paths.sweep();
+        self.timeline_rows_key
+            .set(Some(timeline_rows_key(self.view, self.timeline_merged(cx))));
         if !self.project_ready() {
             if self
                 .preparing_presentation
@@ -13311,108 +13357,110 @@ impl EditorWindow {
         if self.blank_start_shown() {
             return self.render_blank_timeline(viewport_width, cx);
         }
-        let content_width = timeline::content_width(viewport_width);
         let live = self.transport.is_some();
-
-        // While playing, the drawn line runs ahead by the wall-clock elapsed
-        // since the last applied sample so the 60Hz ticker's redraws land
-        // between events instead of on them -- but only once this play epoch
-        // has actually produced a sample (`playhead_extrapolation`).
-        let mut playhead_view = {
-            let mut view = self.view;
-            let ahead = playhead_extrapolation(
-                self.playing,
-                self.playhead_epoch_live,
-                self.last_playhead_redraw.elapsed().as_secs_f64(),
-                self.preview_speed.as_f64(),
-            );
-            if ahead > 0.0 {
-                view.playhead = (view.playhead + ahead).min(self.total_duration());
-            }
-            view
-        };
-        if self.playing {
-            let interacting = self.scrub.is_some()
-                || self.drag.is_some()
-                || self.lane_reorder.is_some()
-                || self.minimap_drag.is_some()
-                || self.zoom_slider_drag;
-            let total = self.total_duration();
-            self.playback_follow.update(
-                &mut self.view.transform,
-                playhead_view.playhead,
-                total,
-                Instant::now(),
-                interacting,
-            );
-            playhead_view.transform = self.view.transform;
-        }
-        let playhead_x = timeline::playhead_offset(playhead_view, content_width);
-        let ghost_x = timeline::ghost_offset(self.view, content_width);
-
-        let (_, minimap_width) = timeline::minimap_bounds(viewport_width);
 
         // The card itself is the root shell's; this is its inside, at the
         // brief's `10px 12px 12px` less the hairline the card already draws.
-        let timeline = div()
-            .size_full()
-            .min_h_0()
-            .relative()
-            .overflow_hidden()
-            .pt(px(TIMELINE_TOP_PADDING))
-            .pl(px(TIMELINE_PADDING))
-            .pr(px(TIMELINE_PADDING))
-            .pb(px(TIMELINE_BOTTOM_PADDING))
-            .child(
-                div()
-                    .id("timeline-container")
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .gap(px(timeline::TIMELINE_HEADER_GAP))
-                    .h_full()
-                    .overflow_hidden()
-                    // The container's own `onMouseDown` -- a press
-                    // anywhere in the timeline seeks to that point when it
-                    // is released (`TL/index.tsx:1155-1169`). The ruler's
-                    // dedicated surface below sits on top of it and takes
-                    // precedence, exactly as its `z-40` does.
-                    .when(live, |this| {
-                        this.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                this.timeline_mouse_down(event, false, window, cx);
-                            }),
-                        )
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, _: &MouseUpEvent, _window, cx| {
-                                this.timeline_mouse_up(cx)
-                            }),
-                        )
-                    })
-                    // `onMouseMove` -> `previewTime` (`:1170-1184`).
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                        this.timeline_hover(f32::from(event.position.x), window, cx);
-                    }))
-                    .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
-                        if !*hovered {
-                            this.timeline_hover_leave(window, cx);
-                        }
-                    }))
-                    // `onWheel` (`:1189-1207`) and the pinch the webview
-                    // would have delivered as `ctrl+wheel`.
-                    .on_scroll_wheel(cx.listener(
-                        |this, event: &gpui::ScrollWheelEvent, window, cx| {
-                            this.timeline_wheel(event, window, cx);
-                        },
-                    ))
-                    .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
-                        this.timeline_pinch(event, window, cx);
-                    }))
-                    .child(self.render_timeline_header(viewport_width, live, cx))
-                    .child(self.render_timeline_body(viewport_width, cx)),
-            )
+        let timeline = timeline_layer().child(
+            div()
+                .id("timeline-container")
+                .relative()
+                .flex()
+                .flex_col()
+                .gap(px(timeline::TIMELINE_HEADER_GAP))
+                .h_full()
+                .overflow_hidden()
+                // The container's own `onMouseDown` -- a press
+                // anywhere in the timeline seeks to that point when it
+                // is released (`TL/index.tsx:1155-1169`). The ruler's
+                // dedicated surface below sits on top of it and takes
+                // precedence, exactly as its `z-40` does.
+                .when(live, |this| {
+                    this.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.timeline_mouse_down(event, false, window, cx);
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseUpEvent, _window, cx| {
+                            this.timeline_mouse_up(cx)
+                        }),
+                    )
+                })
+                // `onMouseMove` -> `previewTime` (`:1170-1184`).
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.timeline_hover(f32::from(event.position.x), window, cx);
+                }))
+                .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                    if !*hovered {
+                        this.timeline_hover_leave(window, cx);
+                    }
+                }))
+                // `onWheel` (`:1189-1207`) and the pinch the webview
+                // would have delivered as `ctrl+wheel`.
+                .on_scroll_wheel(
+                    cx.listener(|this, event: &gpui::ScrollWheelEvent, window, cx| {
+                        this.timeline_wheel(event, window, cx);
+                    }),
+                )
+                .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, window, cx| {
+                    this.timeline_pinch(event, window, cx);
+                }))
+                .child(self.render_timeline_header(viewport_width, live, cx))
+                .child(self.render_timeline_body(viewport_width, cx)),
+        );
+        if self.blank_start_leaving(cx).is_some() {
+            return div()
+                .size_full()
+                .child(self.with_timeline_overlay(timeline, viewport_width, cx))
+                .with_animation(
+                    "timeline-after-blank-start",
+                    Animation::new(Duration::from_millis(260)),
+                    |timeline, progress| timeline.opacity(1. - (1. - progress).powi(3)),
+                )
+                .into_any_element();
+        }
+        timeline.into_any_element()
+    }
+
+    /// Whether the playhead, the ghost line and the minimap are drawn inside
+    /// the rows layer rather than over it: while the timeline is not up yet,
+    /// and during the fade after the blank slate, which fades them together.
+    fn timeline_merged(&self, cx: &gpui::App) -> bool {
+        !self.project_ready() || self.blank_start_shown() || self.blank_start_leaving(cx).is_some()
+    }
+
+    /// The lines drawn over the rows. A playhead tick or a ghost-line move
+    /// repaints only this layer; the rows stay cached under it.
+    fn render_timeline_overlay(
+        &mut self,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let merged = self.timeline_merged(cx);
+        self.timeline_overlay_merged.set(Some(merged));
+        if merged {
+            return div().size_full().into_any_element();
+        }
+        self.with_timeline_overlay(timeline_layer(), viewport_width, cx)
+            .into_any_element()
+    }
+
+    fn with_timeline_overlay(
+        &self,
+        layer: gpui::Div,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme;
+        let content_width = timeline::content_width(viewport_width);
+        let live = self.transport.is_some();
+        let playhead_x = timeline::playhead_offset(self.timeline_drawn, content_width);
+        let ghost_x = timeline::ghost_offset(self.view, content_width);
+        let (_, minimap_width) = timeline::minimap_bounds(viewport_width);
+        layer
             // The minimap's 4px scroll indicator sits in the card's bottom
             // padding, under the last row rather than over it.
             .child(
@@ -13474,19 +13522,79 @@ impl EditorWindow {
                     as f32;
                 x.is_finite()
                     .then(|| render_split_preview(&theme, x, true, false))
-            }));
-        if self.blank_start_leaving(cx).is_some() {
-            return div()
-                .size_full()
-                .child(timeline)
-                .with_animation(
-                    "timeline-after-blank-start",
-                    Animation::new(Duration::from_millis(260)),
-                    |timeline, progress| timeline.opacity(1. - (1. - progress).powi(3)),
-                )
-                .into_any_element();
+            }))
+    }
+
+    /// Settles what the overlay draws from the clock before either timeline
+    /// layer is built: the playhead runs ahead of the last engine sample while
+    /// playing, and the follow scroll moves the viewport the rows are drawn
+    /// at.
+    fn settle_timeline_playhead(&mut self) {
+        if !self.project_ready() || self.blank_start_shown() {
+            return;
         }
-        timeline.into_any_element()
+        // While playing, the drawn line runs ahead by the wall-clock elapsed
+        // since the last applied sample so the 60Hz ticker's redraws land
+        // between events instead of on them -- but only once this play epoch
+        // has actually produced a sample (`playhead_extrapolation`).
+        let mut playhead_view = {
+            let mut view = self.view;
+            let ahead = playhead_extrapolation(
+                self.playing,
+                self.playhead_epoch_live,
+                self.last_playhead_redraw.elapsed().as_secs_f64(),
+                self.preview_speed.as_f64(),
+            );
+            if ahead > 0.0 {
+                view.playhead = (view.playhead + ahead).min(self.total_duration());
+            }
+            view
+        };
+        if self.playing {
+            let interacting = self.scrub.is_some()
+                || self.drag.is_some()
+                || self.lane_reorder.is_some()
+                || self.minimap_drag.is_some()
+                || self.zoom_slider_drag;
+            let total = self.total_duration();
+            self.playback_follow.update(
+                &mut self.view.transform,
+                playhead_view.playhead,
+                total,
+                Instant::now(),
+                interacting,
+            );
+            playhead_view.transform = self.view.transform;
+        }
+        self.timeline_drawn = playhead_view;
+    }
+
+    /// The rows layer, reused from its cache unless the viewport or a create
+    /// ghost moved since it was built. The follow scroll moves the viewport
+    /// in the root's render, too late for a notify to reach this frame, so a
+    /// changed key renders the rows in place instead; that also drops the
+    /// stale cache, which the next frame rebuilds.
+    fn timeline_rows_element(&self, cx: &gpui::App) -> gpui::AnyElement {
+        let rows = self.timeline_view.clone();
+        if self.timeline_rows_key.get()
+            == Some(timeline_rows_key(self.view, self.timeline_merged(cx)))
+        {
+            rows.cached(StyleRefinement::default().w_full().h_full())
+                .into_any_element()
+        } else {
+            rows.into_any_element()
+        }
+    }
+
+    fn timeline_overlay_element(&self, cx: &gpui::App) -> gpui::AnyElement {
+        let overlay = self.timeline_overlay_view.clone();
+        if self.timeline_overlay_merged.get() == Some(self.timeline_merged(cx)) {
+            overlay
+                .cached(StyleRefinement::default().w_full().h_full())
+                .into_any_element()
+        } else {
+            overlay.into_any_element()
+        }
     }
 
     /// The 26px header strip (`TL/index.tsx:1220-1245`): the ruler, the "Add
@@ -14237,6 +14345,43 @@ fn is_at_end(total: f64, playhead: f64) -> bool {
     total > 0.0 && total - playhead <= 0.1
 }
 
+/// The timeline card's inside, at the brief's `10px 12px 12px` less the
+/// hairline the card already draws. The rows and the overlay above them are
+/// both laid out in it.
+fn timeline_layer() -> gpui::Div {
+    div()
+        .size_full()
+        .min_h_0()
+        .relative()
+        .overflow_hidden()
+        .pt(px(TIMELINE_TOP_PADDING))
+        .pl(px(TIMELINE_PADDING))
+        .pr(px(TIMELINE_PADDING))
+        .pb(px(TIMELINE_BOTTOM_PADDING))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TimelineRowsKey {
+    transform: Transform,
+    ghost_time: Option<f64>,
+    merged: bool,
+}
+
+/// The zoom and 3D lanes draw a create ghost at the pointer time while they
+/// are hovered; every other lane ignores where the pointer is.
+fn timeline_rows_key(view: TimelineView, merged: bool) -> TimelineRowsKey {
+    TimelineRowsKey {
+        transform: view.transform,
+        ghost_time: matches!(
+            view.hovered_track,
+            Some(TrackKind::Zoom | TrackKind::ThreeD)
+        )
+        .then_some(view.preview_time)
+        .flatten(),
+        merged,
+    }
+}
+
 /// The most the drawn playhead may run ahead of the last applied engine
 /// sample. Big enough to bridge a render stall, small enough that a wrongly
 /// anchored extrapolation cannot wander far.
@@ -14394,6 +14539,8 @@ impl Render for EditorWindow {
                 .track_focus(&self.focus)
                 .child(self.render_export_page(window, cx));
         }
+
+        self.settle_timeline_playhead();
 
         let timeline_drag_cursor = self
             .drag
@@ -14642,9 +14789,15 @@ impl Render for EditorWindow {
                                             .border_1()
                                             .border_color(gpui::transparent_black())
                                             .overflow_hidden()
-                                            .child(self.timeline_view.clone().cached(
-                                                StyleRefinement::default().w_full().h_full(),
-                                            )),
+                                            .child(self.timeline_rows_element(cx))
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .top_0()
+                                                    .left_0()
+                                                    .size_full()
+                                                    .child(self.timeline_overlay_element(cx)),
+                                            ),
                                     )
                                     // The grip rides the gap between the two
                                     // cards rather than taking a strip of the
@@ -18519,6 +18672,48 @@ mod tests {
         );
         // A clock hiccup must not pull the playhead backwards.
         assert_eq!(playhead_extrapolation(true, true, -0.01, 1.0), 0.0);
+    }
+
+    #[test]
+    fn timeline_rows_are_reused_across_playhead_and_ghost_line_moves() {
+        let mut view = TimelineView {
+            hovered_track: Some(TrackKind::Clip),
+            preview_time: Some(2.0),
+            ..TimelineView::default()
+        };
+        let built = timeline_rows_key(view, false);
+
+        view.playhead = 7.5;
+        view.preview_time = Some(3.0);
+        assert_eq!(timeline_rows_key(view, false), built);
+        view.preview_time = None;
+        assert_eq!(timeline_rows_key(view, false), built);
+
+        view.transform.position += 1.0;
+        assert_ne!(timeline_rows_key(view, false), built);
+    }
+
+    #[test]
+    fn a_create_ghost_rebuilds_the_rows_as_the_pointer_moves() {
+        for track in [TrackKind::Zoom, TrackKind::ThreeD] {
+            let mut view = TimelineView {
+                hovered_track: Some(track),
+                preview_time: Some(2.0),
+                ..TimelineView::default()
+            };
+            let built = timeline_rows_key(view, false);
+            view.preview_time = Some(2.5);
+            assert_ne!(timeline_rows_key(view, false), built, "{track:?}");
+        }
+    }
+
+    #[test]
+    fn the_rows_rebuild_when_the_overlay_moves_in_or_out_of_them() {
+        let view = TimelineView::default();
+        assert_ne!(
+            timeline_rows_key(view, true),
+            timeline_rows_key(view, false)
+        );
     }
 
     #[test]
