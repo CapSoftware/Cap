@@ -544,8 +544,26 @@ pub fn generate_project_keyboard_segments(
     timeline: &crate::TimelineConfiguration,
     settings: &crate::KeyboardSettings,
 ) -> Result<Vec<KeyboardTrackSegment>, String> {
+    generate_project_keyboard_segments_reporting(meta, timeline, settings)
+        .map(|(segments, _)| segments)
+}
+
+/// The generated segments, and whether the recording held any key presses
+/// at all, so an empty result can say whether nothing was pressed or only
+/// keys the settings hide (typing, with shortcuts only) were.
+pub fn generate_project_keyboard_segments_reporting(
+    meta: &crate::RecordingMeta,
+    timeline: &crate::TimelineConfiguration,
+    settings: &crate::KeyboardSettings,
+) -> Result<(Vec<KeyboardTrackSegment>, bool), String> {
     let takes = load_project_keyboard_events(meta)?;
-    Ok(project_keyboard_events(&takes, timeline, settings))
+    let pressed = takes.iter().any(|(events, _)| {
+        events
+            .presses
+            .iter()
+            .any(|press| press.down && !is_modifier_key(&press.key))
+    });
+    Ok((project_keyboard_events(&takes, timeline, settings), pressed))
 }
 
 fn legacy_keyboard_capture_offset(meta: &crate::RecordingMeta, recording_clip: u32) -> f64 {
@@ -1334,8 +1352,9 @@ pub fn group_shortcuts(
                 .all(|key| matches!(key.as_str(), "LShift" | "RShift"));
         let character = is_single_character(&event.key);
         let display_key = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
-        // Shift on a character is typing a capital, not a shortcut.
-        let typing_capital = shift_only && character;
+        // Shift on a character is typing a capital, not a shortcut, and a
+        // space struck before Shift comes up is still typing.
+        let typing_capital = shift_only && (character || event.key == "Space");
         if !(active.is_empty() || typing_capital) {
             presses.push(Press {
                 time_ms: event.time_ms,
@@ -1460,6 +1479,8 @@ mod tests {
         presses.extend(shortcut(&["LShift"], "h", 2000.0));
         presses.extend([key_down("e", 2100.0), key_down("y", 2200.0)]);
         presses.extend(shortcut(&["LShift", "LMeta"], "p", 4000.0));
+        // A space struck before Shift comes up is still typing.
+        presses.extend(shortcut(&["LShift"], "Space", 5000.0));
         // Shift with a named key is a shortcut.
         presses.extend(shortcut(&["LShift"], "Tab", 6000.0));
         let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
