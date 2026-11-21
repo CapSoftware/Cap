@@ -1107,7 +1107,9 @@ video.post("/ladder", async (c) => {
 
 	const { videoId, userId, webhookUrl, webhookSecret } = result.data;
 	const jobId = generateJobId();
-	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret);
+	const job = createJob(jobId, videoId, userId, webhookUrl, webhookSecret, {
+		idle,
+	});
 	if (infraHeavyLadder) job.infraHeavyLadder = true;
 	if (result.data.maxTier && HEAVY_LADDER_TIERS.has(result.data.maxTier))
 		job.heavyLadder = true;
@@ -1117,11 +1119,12 @@ video.post("/ladder", async (c) => {
 		pruneInvertedRungs: result.data.pruneInvertedRungs === true,
 	};
 	if (
-		result.data.priority !== undefined ||
-		result.data.verify !== undefined ||
-		result.data.pruneInvertedRungs !== undefined
+		!idle &&
+		(result.data.priority !== undefined ||
+			result.data.verify !== undefined ||
+			result.data.pruneInvertedRungs !== undefined)
 	) {
-		job.idle = idle;
+		job.idle = false;
 	}
 	if (idle) {
 		console.log(
@@ -1566,7 +1569,8 @@ async function encodeLadderAsync(
 
 	const abortController = new AbortController();
 	const signal = abortController.signal;
-	updateJob(jobId, { abortController });
+	if (!updateJob(jobId, { abortController }) && options.priority === "idle")
+		return;
 	let inputTempFile: TempFileHandle | null = null;
 	let cleanupLadder: (() => Promise<void>) | null = null;
 

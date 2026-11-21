@@ -178,8 +178,9 @@ describe("POST /video/ladder", () => {
 	});
 
 	test("holds an idle ladder back while another idle job or a heavy ladder runs", async () => {
-		const idleJob = jobManager.createJob("held-idle", "other", "user-1");
-		idleJob.idle = true;
+		jobManager.createJob("held-idle", "other", "user-1", undefined, undefined, {
+			idle: true,
+		});
 		try {
 			const response = await startLadder({
 				uploads: uploadTargets("idle-held"),
@@ -246,6 +247,46 @@ describe("POST /video/ladder", () => {
 		expect(progress.idle).toBe(true);
 		expect(progress.verified).toBe(true);
 		expect(progress.pruned).toEqual([]);
+	});
+
+	test("stops a running idle ladder as soon as another ladder is admitted", async () => {
+		const { cpuPressure } = jobManager.getSystemResources();
+		const idleResponse = await startLadder({
+			videoUrl: `${baseUrl}/large.mp4`,
+			uploads: uploadTargets("preempted"),
+			priority: "idle",
+			verify: true,
+		});
+		if (cpuPressure >= 0.5) {
+			expect(idleResponse.status).toBe(503);
+			return;
+		}
+		expect(idleResponse.status).toBe(200);
+		const idle = (await idleResponse.json()) as { jobId: string };
+
+		const otherResponse = await startLadder({
+			uploads: uploadTargets("after-preempt"),
+		});
+		expect(otherResponse.status).toBe(200);
+		const other = (await otherResponse.json()) as { jobId: string };
+
+		const idleJob = await waitForTerminalJob(idle.jobId);
+		expect(idleJob.phase).toBe("error");
+		expect(idleJob.errorCode).toBe("idle-preempted");
+		const status = await app.request(`/video/process/${idle.jobId}/status`, {
+			headers: HEADERS,
+		});
+		const body = (await status.json()) as JobProgress;
+		expect(body.errorCode).toBe("idle-preempted");
+		expect(body.retryable).toBe(true);
+
+		const otherJob = await waitForTerminalJob(other.jobId);
+		expect(otherJob.phase).toBe("complete");
+		expect(
+			[...uploads.keys()].filter((key) => key.startsWith("preempted/")),
+		).toEqual([]);
+		const final = webhooks.findLast((payload) => payload.jobId === idle.jobId);
+		expect(final?.errorCode).toBe("idle-preempted");
 	});
 
 	test("verifies and prunes a ladder before it uploads it", async () => {
