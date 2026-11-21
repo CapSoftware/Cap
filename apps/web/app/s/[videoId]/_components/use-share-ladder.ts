@@ -659,6 +659,7 @@ export function useShareLadder({
 		if (!current || !ladderKey || !active || !deviceEngine || !video) return;
 		if (engine !== "mp4" || disabled) return;
 
+		let seekPending = false;
 		let countTimer: ReturnType<typeof setTimeout> | undefined;
 		let stallTimer: ReturnType<typeof setTimeout> | undefined;
 		const clearStall = () => {
@@ -717,10 +718,26 @@ export function useShareLadder({
 		};
 
 		const onWaiting = () => {
-			if (!framedRef.current || video.paused || video.seeking) return;
+			if (!framedRef.current || video.paused) return;
 			clearStall();
 			const startedAt = performance.now();
 			const stalledAt = video.currentTime;
+			// A seek into unbuffered media waits even on a fast line, so it only
+			// gets the same rescue as a first frame that never comes. Safari
+			// fires "seeked" before that media arrives and then "waiting", so
+			// every wait until playback resumes counts as part of the seek.
+			if (video.seeking || seekPending) {
+				stallTimer = setTimeout(() => {
+					if (
+						!video.paused &&
+						!video.ended &&
+						(video.seeking || video.currentTime - stalledAt < MOVED_SECONDS)
+					) {
+						callForLadder();
+					}
+				}, FIRST_FRAME_SWITCH_MS);
+				return;
+			}
 			const judge = (stalledMs: number) => {
 				if (
 					video.paused ||
@@ -762,6 +779,16 @@ export function useShareLadder({
 			viewerPause();
 		};
 
+		const onSeeking = () => {
+			seekPending = true;
+			viewerPause();
+		};
+
+		const onPlaying = () => {
+			seekPending = false;
+			clearStall();
+		};
+
 		const onVisibility = () => {
 			if (document.visibilityState === "hidden") viewerPause();
 		};
@@ -770,9 +797,9 @@ export function useShareLadder({
 		video.addEventListener("timeupdate", onTimeUpdate);
 		video.addEventListener("progress", onProgress);
 		video.addEventListener("waiting", onWaiting);
-		video.addEventListener("playing", clearStall);
+		video.addEventListener("playing", onPlaying);
 		video.addEventListener("pause", onPause);
-		video.addEventListener("seeking", viewerPause);
+		video.addEventListener("seeking", onSeeking);
 		document.addEventListener("visibilitychange", onVisibility);
 		if (!video.paused) onPlayRequested();
 
@@ -783,9 +810,9 @@ export function useShareLadder({
 			video.removeEventListener("timeupdate", onTimeUpdate);
 			video.removeEventListener("progress", onProgress);
 			video.removeEventListener("waiting", onWaiting);
-			video.removeEventListener("playing", clearStall);
+			video.removeEventListener("playing", onPlaying);
 			video.removeEventListener("pause", onPause);
-			video.removeEventListener("seeking", viewerPause);
+			video.removeEventListener("seeking", onSeeking);
 			document.removeEventListener("visibilitychange", onVisibility);
 		};
 	}, [
