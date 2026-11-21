@@ -1135,6 +1135,65 @@ const requireBootstrapGeneration = (generation: number) => {
 	}
 };
 
+const SIGN_IN_REJECTED_MESSAGE =
+	"Your Cap sign-in is no longer valid. Sign in again to keep recording.";
+
+const serverOrigin = (apiBaseUrl: string) => {
+	try {
+		return new URL(apiBaseUrl).origin;
+	} catch {
+		return apiBaseUrl;
+	}
+};
+
+const serverHost = (apiBaseUrl: string) => {
+	try {
+		return new URL(apiBaseUrl).host;
+	} catch {
+		return apiBaseUrl;
+	}
+};
+
+// Auth writes run one at a time, so a sign-out that checks the stored key
+// cannot interleave with a sign-in saving a new one.
+let authWrites: Promise<unknown> = Promise.resolve();
+const queueAuthWrite = <T>(write: () => Promise<T>) => {
+	const run = authWrites.then(write);
+	authWrites = run.catch(() => undefined);
+	return run;
+};
+
+// Signs out only while the stored key is still the rejected one; a sign-in
+// that landed meanwhile keeps its key.
+const signOutLocally = (rejected: ExtensionAuth, reason: string) =>
+	queueAuthWrite(async () => {
+		const current = await loadAuth();
+		if (current?.authApiKey !== rejected.authApiKey) return;
+		// The reason goes first: the open panel reads it when the key disappears.
+		await saveAuthError(reason);
+		await clearAuth();
+		await resetBootstrapCache();
+		await clearPendingAuth();
+	});
+
+// A key only works on the server that minted it. Changing the Cap URL used to
+// keep the old key, so every request to the new server failed with a bare 401
+// while the panel still looked signed in.
+const signOutOfOtherServer = async () => {
+	const [settings, auth] = await Promise.all([loadSettings(), loadAuth()]);
+	if (!auth?.apiBaseUrl) return;
+	if (serverOrigin(auth.apiBaseUrl) === serverOrigin(settings.apiBaseUrl)) {
+		return;
+	}
+	void revokeAuth({ ...settings, apiBaseUrl: auth.apiBaseUrl }, auth).catch(
+		() => undefined,
+	);
+	await signOutLocally(
+		auth,
+		`Signed out because the Cap URL changed. Sign in to ${serverHost(settings.apiBaseUrl)} to keep recording.`,
+	);
+};
+
 const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 	if (bootstrapRefreshInFlight) return bootstrapRefreshInFlight;
 	const generation = bootstrapGeneration;
@@ -1145,6 +1204,14 @@ const refreshBootstrap = (settings: ExtensionSettings, auth: ExtensionAuth) => {
 			await saveCachedBootstrap(bootstrap);
 			requireBootstrapGeneration(generation);
 			return bootstrap;
+		})
+		.catch(async (error: unknown) => {
+			// The server rejected the key itself (revoked, or minted by another
+			// server). Keeping it would only fail every request with a bare 401.
+			if (error instanceof ApiRequestError && error.status === 401) {
+				await signOutLocally(auth, SIGN_IN_REJECTED_MESSAGE);
+			}
+			throw error;
 		})
 		.finally(() => {
 			if (bootstrapRefreshInFlight === refresh) {
@@ -1192,6 +1259,7 @@ const refreshFreePlanForStart = async (
 };
 
 const loadSignedInState = async () => {
+	await signOutOfOtherServer();
 	const generation = bootstrapGeneration;
 	const [settings, auth, pendingAuth, authError] = await Promise.all([
 		loadSettings(),
@@ -1233,6 +1301,45 @@ const loadSignedInState = async () => {
 		authPending: false,
 		authError: null,
 	};
+};
+
+// A start can fail on a key the server no longer accepts. Re-checking the
+// sign-in signs out on that 401, so the panel can say "sign in again" instead
+// of showing the HTTP status. The check is capped so an unrelated failure
+// still reaches the panel promptly.
+const explainStartFailure = async (error: string) => {
+	const [settings, auth] = await Promise.all([loadSettings(), loadAuth()]);
+	if (auth) {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			refreshBootstrap(settings, auth).catch(() => undefined),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, START_PLAN_REFRESH_TIMEOUT_MS);
+			}),
+		]);
+		clearTimeout(timer);
+		if (await loadAuth()) return error;
+	}
+	return (await loadAuthError()) ?? error;
+};
+
+// Answers with the sign-in as it stands once the request finishes. A sign-in
+// change mid-request (a sign-out, or a background refresh that found the key
+// rejected) gets one fresh read instead of an error.
+const loadCurrentSignedInState = async () => {
+	const generation = bootstrapGeneration;
+	try {
+		const state = await loadSignedInState();
+		await syncRecordingStatus().catch(() => recordingStatus);
+		requireBootstrapGeneration(generation);
+		return state;
+	} catch (error) {
+		if (generation === bootstrapGeneration) throw error;
+		const retryGeneration = bootstrapGeneration;
+		const state = await loadSignedInState();
+		requireBootstrapGeneration(retryGeneration);
+		return state;
+	}
 };
 
 const requireSignedInState = async () => {
@@ -1707,7 +1814,10 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 	// co-installed extensions can observe.
 	void launchWebAuthFlow(authStart.url)
 		.then(async (responseUrl) => {
-			const auth = parseAuthResponse(responseUrl, authStart.state);
+			const auth = {
+				...parseAuthResponse(responseUrl, authStart.state),
+				apiBaseUrl: serverOrigin(settings.apiBaseUrl),
+			};
 			// Server-minted keys never expire, so a re-auth would otherwise leave
 			// the previous key live in auth_api_keys forever; revoke it
 			// best-effort before it is forgotten locally.
@@ -1715,8 +1825,10 @@ const beginAuthFlow = async (settings: ExtensionSettings) => {
 			if (previousAuth && previousAuth.authApiKey !== auth.authApiKey) {
 				await revokeAuth(settings, previousAuth).catch(() => undefined);
 			}
-			await saveAuth(auth);
-			await resetBootstrapCache();
+			await queueAuthWrite(async () => {
+				await saveAuth(auth);
+				await resetBootstrapCache();
+			});
 			void refreshBootstrap(settings, auth).catch(() => undefined);
 		})
 		.catch(async (error: unknown) => {
@@ -1812,7 +1924,12 @@ const handleRequest = async (
 		const auth = await loadAuth();
 		if (auth) {
 			try {
-				await revokeAuth(settings, auth);
+				await revokeAuth(
+					auth.apiBaseUrl
+						? { ...settings, apiBaseUrl: auth.apiBaseUrl }
+						: settings,
+					auth,
+				);
 			} catch (error) {
 				// A definitive 4xx means the server saw the request and the key
 				// is unusable or already gone, so clearing local state is right.
@@ -1827,17 +1944,16 @@ const handleRequest = async (
 				}
 			}
 		}
-		await clearAuth();
-		await resetBootstrapCache();
-		await clearPendingAuth();
+		await queueAuthWrite(async () => {
+			await clearAuth();
+			await resetBootstrapCache();
+			await clearPendingAuth();
+		});
 		return { ok: true, auth: null, settings };
 	}
 
 	if (message.type === "bootstrap") {
-		const generation = bootstrapGeneration;
-		const state = await loadSignedInState();
-		await syncRecordingStatus().catch(() => recordingStatus);
-		requireBootstrapGeneration(generation);
+		const state = await loadCurrentSignedInState();
 		return {
 			ok: true,
 			auth: state.auth,
@@ -1896,12 +2012,11 @@ const handleRequest = async (
 				}
 			}
 		} else if (!response.ok && !response.canceled) {
+			const error = await explainStartFailure(response.error);
 			// Surface real failures: the panel already closed on "creating", so
 			// this broadcast is what reopens it with the error message.
-			setRecordingStatusAndBroadcast({
-				phase: "error",
-				message: response.error,
-			});
+			setRecordingStatusAndBroadcast({ phase: "error", message: error });
+			return { ok: false, error, canceled: response.canceled };
 		} else {
 			setRecordingStatusAndBroadcast({ phase: "idle" });
 			await saveWebcamPreviewDismissed(true);
@@ -2022,6 +2137,7 @@ const handleRequest = async (
 
 	if (message.type === "settings-updated") {
 		await saveSettings(message.settings);
+		await signOutOfOtherServer();
 		if (isWebcamPreviewEnabled(message.settings)) {
 			await saveWebcamPreviewDismissed(false);
 			await showOverlayInActiveTab(

@@ -120,6 +120,9 @@ export type ExtensionSettings = {
 export type ExtensionAuth = {
 	authApiKey: string;
 	userId: string;
+	// Origin of the Cap server that minted the key. Missing on sign-ins saved
+	// before it was recorded; the first successful bootstrap fills it in.
+	apiBaseUrl?: string;
 };
 
 export type PendingAuth = {
