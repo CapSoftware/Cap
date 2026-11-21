@@ -6,13 +6,19 @@ import {
 } from "./container-cpu";
 import { getContainerMemoryMetrics } from "./container-memory";
 import type { HlsLadderResult } from "./hls-ladder-encode";
+import { idleProcessCpuMicros } from "./idle-processes";
 import {
 	INPUT_POLICY_VIOLATION,
 	isInputPolicyViolationMessage,
 } from "./media-input-policy";
 import type { MediaOperationHandle } from "./media-operations";
 import type { TempFileHandle } from "./temp-files";
-import { getActiveDirectVideoProcessCount } from "./video-capacity";
+import {
+	getActiveDirectVideoProcessCount,
+	onDirectVideoProcessAdmitted,
+} from "./video-capacity";
+
+export const IDLE_PREEMPTED = "idle-preempted";
 
 export type JobPhase =
 	| "queued"
@@ -32,7 +38,8 @@ export type RecordingErrorCode =
 	| "output-invalid"
 	| "processing-unavailable"
 	| "processing-budget-exhausted"
-	| typeof INPUT_POLICY_VIOLATION;
+	| typeof INPUT_POLICY_VIOLATION
+	| typeof IDLE_PREEMPTED;
 
 export interface RecordingVerificationRequest {
 	version: 1;
@@ -86,6 +93,10 @@ export interface JobProgress {
 	outputUrl?: string;
 	deferredSourceKey?: string;
 	ladder?: HlsLadderResult;
+	idle?: boolean;
+	verified?: boolean;
+	pruned?: string[];
+	retryable?: boolean;
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -164,6 +175,13 @@ export interface Job {
 	// GPU encoder busy on its own.
 	infraHeavyLadder?: boolean;
 	infraMp4?: boolean;
+	heavyLadder?: boolean;
+	idle?: boolean;
+	verified?: boolean;
+	pruned?: string[];
+	retryable?: boolean;
+	uploadsStopped?: Promise<void>;
+	preemptedReason?: string;
 }
 
 const jobs = new Map<string, Job>();
@@ -207,13 +225,95 @@ const CPU_SAMPLE_MIN_INTERVAL_MS = 250;
 
 let previousContainerCpuUsageMicros = 0;
 let previousContainerCpuSampleAt = 0;
-let containerCpuPressure = 0;
+let previousContainerIdleCpuMicros = 0;
+let containerCpuPressure: CpuPressure = { total: 0, withoutIdle: 0 };
+let previousIdleCpuMicros = 0;
+let previousIdleSampleAt = 0;
+let idleLoadEstimate = 0;
+
+export interface CpuPressure {
+	total: number;
+	withoutIdle: number;
+}
 
 function getCpuCapacity(): number {
 	return getContainerCpuLimit() || hostCpuCount;
 }
 
-function getCpuPressure(cpuCapacity: number, loadAvg1m: number): number {
+// Idle work must not count against any other job, so the CPU its processes
+// used over the same window as the cgroup reading comes off the pressure every
+// other admission sees.
+export function cpuPressureOverWindow(input: {
+	elapsedMs: number;
+	usedMicros: number;
+	idleMicros: number;
+	cpuCapacity: number;
+}): CpuPressure {
+	const seconds = input.elapsedMs / 1000;
+	const total =
+		input.usedMicros >= 0
+			? Math.max(0, input.usedMicros / 1_000_000 / seconds / input.cpuCapacity)
+			: 0;
+	const idle = Math.max(
+		0,
+		input.idleMicros / 1_000_000 / seconds / input.cpuCapacity,
+	);
+	return { total, withoutIdle: Math.max(0, total - idle) };
+}
+
+// Without a cgroup the load average stands in, and the idle processes' share
+// of it comes off. The kernel's 1-minute load average is an EWMA over 5 s
+// ticks (decay e^(-5/60) = 0.920 per tick): it holds 15% of a step after 10 s,
+// 63% after 60 s and 95% after 180 s. Taking the idle cores off at once would
+// under-report other load while an idle job starts (3 idle cores on 16 CPUs
+// at 10 s is 0.16 of pressure too low) and, after a preemption, count the idle
+// job's lingering share against real work for minutes. So what comes off is an
+// estimate that follows the kernel's own decay. The farm reads the cgroup;
+// this path only matters without one.
+export function followLoadAverage(
+	estimate: number,
+	idleCores: number,
+	elapsedSeconds: number,
+): number {
+	return (
+		estimate + (idleCores - estimate) * (1 - Math.exp(-elapsedSeconds / 60))
+	);
+}
+
+export function loadPressureWithoutIdle(
+	loadAvg1m: number,
+	idleLoad: number,
+	cpuCapacity: number,
+): CpuPressure {
+	return {
+		total: loadAvg1m / cpuCapacity,
+		withoutIdle: Math.max(0, loadAvg1m - idleLoad) / cpuCapacity,
+	};
+}
+
+function sampleIdleLoad(now: number): number {
+	if (previousIdleSampleAt === 0) {
+		previousIdleCpuMicros = idleProcessCpuMicros();
+		previousIdleSampleAt = now;
+	} else if (now - previousIdleSampleAt >= CPU_SAMPLE_MIN_INTERVAL_MS) {
+		const micros = idleProcessCpuMicros();
+		const elapsedSeconds = (now - previousIdleSampleAt) / 1000;
+		const idleCores = Math.max(
+			0,
+			(micros - previousIdleCpuMicros) / 1_000_000 / elapsedSeconds,
+		);
+		idleLoadEstimate = followLoadAverage(
+			idleLoadEstimate,
+			idleCores,
+			elapsedSeconds,
+		);
+		previousIdleCpuMicros = micros;
+		previousIdleSampleAt = now;
+	}
+	return idleLoadEstimate;
+}
+
+function getCpuPressure(cpuCapacity: number, loadAvg1m: number): CpuPressure {
 	const usageMicros = getContainerCpuUsageMicros();
 	const now = performance.now();
 
@@ -222,34 +322,38 @@ function getCpuPressure(cpuCapacity: number, loadAvg1m: number): number {
 			previousContainerCpuUsageMicros > 0 &&
 			now - previousContainerCpuSampleAt >= CPU_SAMPLE_MIN_INTERVAL_MS
 		) {
-			const elapsedSeconds = (now - previousContainerCpuSampleAt) / 1000;
-			const usedCpuSeconds =
-				(usageMicros - previousContainerCpuUsageMicros) / 1_000_000;
-			containerCpuPressure =
-				usedCpuSeconds >= 0
-					? Math.max(0, usedCpuSeconds / elapsedSeconds / cpuCapacity)
-					: 0;
+			const idleMicros = idleProcessCpuMicros();
+			containerCpuPressure = cpuPressureOverWindow({
+				elapsedMs: now - previousContainerCpuSampleAt,
+				usedMicros: usageMicros - previousContainerCpuUsageMicros,
+				idleMicros: idleMicros - previousContainerIdleCpuMicros,
+				cpuCapacity,
+			});
 			previousContainerCpuUsageMicros = usageMicros;
 			previousContainerCpuSampleAt = now;
+			previousContainerIdleCpuMicros = idleMicros;
 		} else if (previousContainerCpuUsageMicros === 0) {
 			previousContainerCpuUsageMicros = usageMicros;
 			previousContainerCpuSampleAt = now;
+			previousContainerIdleCpuMicros = idleProcessCpuMicros();
 		}
 
 		return containerCpuPressure;
 	}
 
-	return loadAvg1m / cpuCapacity;
+	return loadPressureWithoutIdle(loadAvg1m, sampleIdleLoad(now), cpuCapacity);
 }
 
 function isActivePhase(phase: JobPhase): boolean {
 	return phase !== "complete" && phase !== "error" && phase !== "cancelled";
 }
 
+// Idle jobs are left out: every admission rule sees a worker running only idle
+// work as empty, and an idle job is preempted when other work is admitted.
 export function getActiveVideoProcessCount(): number {
 	let count = 0;
 	for (const job of jobs.values()) {
-		if (isActivePhase(job.phase)) {
+		if (isActivePhase(job.phase) && !job.idle) {
 			count++;
 		}
 	}
@@ -300,9 +404,17 @@ export interface SystemResources {
 }
 
 export function getSystemResources(): SystemResources {
+	return readSystemResources().resources;
+}
+
+function readSystemResources(): {
+	resources: SystemResources;
+	totalCpuPressure: number;
+} {
 	const loadAvg1m = os.loadavg()[0];
 	const cpuCount = getCpuCapacity();
-	const cpuPressure = getCpuPressure(cpuCount, loadAvg1m);
+	const pressure = getCpuPressure(cpuCount, loadAvg1m);
+	const cpuPressure = pressure.withoutIdle;
 	const mem = process.memoryUsage();
 	const processRssMB = Math.round(mem.rss / (1024 * 1024));
 	const processHeapMB = Math.round(mem.heapUsed / (1024 * 1024));
@@ -338,21 +450,24 @@ export function getSystemResources(): SystemResources {
 	}
 
 	return {
-		cpuCount,
-		hostCpuCount,
-		loadAvg1m,
-		cpuPressure,
-		processRssMB,
-		processHeapMB,
-		processRssLimitMB: memoryLimitMB,
-		containerMemoryUsageMB: containerMemory.usageMB,
-		containerMemoryWorkingSetMB: containerMemory.workingSetMB,
-		containerMemoryReclaimableCacheMB: containerMemory.reclaimableCacheMB,
-		containerMemoryLimitMB: containerMemory.limitMB,
-		memoryPressure,
-		configuredMax: configuredMaxProcesses,
-		effectiveMax,
-		throttleReason,
+		resources: {
+			cpuCount,
+			hostCpuCount,
+			loadAvg1m,
+			cpuPressure,
+			processRssMB,
+			processHeapMB,
+			processRssLimitMB: memoryLimitMB,
+			containerMemoryUsageMB: containerMemory.usageMB,
+			containerMemoryWorkingSetMB: containerMemory.workingSetMB,
+			containerMemoryReclaimableCacheMB: containerMemory.reclaimableCacheMB,
+			containerMemoryLimitMB: containerMemory.limitMB,
+			memoryPressure,
+			configuredMax: configuredMaxProcesses,
+			effectiveMax,
+			throttleReason,
+		},
+		totalCpuPressure: pressure.total,
 	};
 }
 
@@ -445,6 +560,145 @@ export function canAcceptNewInfraVideoProcess(
 	});
 }
 
+// An idle job runs only on a worker with room to spare: two free slots, CPU
+// below half, no heavy ladder and no other idle job, so it never takes the
+// capacity a job that someone is waiting for would need.
+const IDLE_MAX_CPU_PRESSURE = 0.5;
+const IDLE_FREE_SLOTS = 2;
+
+export function getActiveHeavyLadderCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if ((job.heavyLadder || job.infraHeavyLadder) && isActivePhase(job.phase))
+			count++;
+	}
+	return count;
+}
+
+export function getActiveIdleJobCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.idle && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
+export function idleCapacityAllows(input: {
+	draining: boolean;
+	effectiveMax: number;
+	active: number;
+	cpuPressure: number;
+	activeHeavyLadders: number;
+	activeIdleJobs: number;
+}): boolean {
+	return (
+		!input.draining &&
+		input.active + IDLE_FREE_SLOTS <= input.effectiveMax &&
+		input.cpuPressure < IDLE_MAX_CPU_PRESSURE &&
+		input.activeHeavyLadders === 0 &&
+		input.activeIdleJobs === 0
+	);
+}
+
+// The idle job's own decisions use the whole worker's CPU, its own included.
+export function canAcceptNewIdleVideoProcess(draining: boolean): boolean {
+	const { resources, totalCpuPressure } = readSystemResources();
+	const activeIdleJobs = getActiveIdleJobCount();
+	return idleCapacityAllows({
+		draining,
+		effectiveMax: resources.effectiveMax,
+		active: getActiveVideoProcessCount() + activeIdleJobs,
+		cpuPressure: totalCpuPressure,
+		activeHeavyLadders: getActiveHeavyLadderCount(),
+		activeIdleJobs,
+	});
+}
+
+// A running idle job gives way when the rest of the worker gets busy, before
+// that work nears the 0.8 CPU throttle, and before memory, which the idle job
+// does share, nears the 0.85 memory throttle. The CPU check leaves the idle
+// job's own CPU out: a software ladder alone measured 9.0 of 10 cores, so a
+// check on the total would stop every idle encode within a second.
+const IDLE_YIELD_CPU_PRESSURE = 0.7;
+const IDLE_YIELD_MEMORY_PRESSURE = 0.75;
+const IDLE_WATCH_INTERVAL_MS = 1_000;
+
+export function idleYieldReason(input: {
+	otherCpuPressure: number;
+	memoryPressure: number;
+}): string | null {
+	if (input.otherCpuPressure >= IDLE_YIELD_CPU_PRESSURE)
+		return `Idle job yielded: other work at CPU ${input.otherCpuPressure.toFixed(2)}`;
+	if (input.memoryPressure >= IDLE_YIELD_MEMORY_PRESSURE)
+		return `Idle job yielded: memory ${input.memoryPressure.toFixed(2)}`;
+	return null;
+}
+
+let idleWatchdog: ReturnType<typeof setInterval> | null = null;
+
+export function checkIdleJobs(): string | null {
+	if (getActiveIdleJobCount() === 0) {
+		if (idleWatchdog) clearInterval(idleWatchdog);
+		idleWatchdog = null;
+		return null;
+	}
+	const { cpuPressure, memoryPressure } = getSystemResources();
+	const reason = idleYieldReason({
+		otherCpuPressure: cpuPressure,
+		memoryPressure,
+	});
+	if (reason) preemptIdleJobs(reason);
+	return reason;
+}
+
+function watchIdleJobs(): void {
+	if (idleWatchdog) return;
+	idleWatchdog = setInterval(checkIdleJobs, IDLE_WATCH_INTERVAL_MS);
+	idleWatchdog.unref?.();
+}
+
+// GPU encoder sessions are shared whatever the niceness, so an idle job stops
+// as soon as any other work is admitted rather than run beside it. That
+// includes uploading: an upload competes for the network and the event loop
+// while the new job downloads its source. The caller removes the part of a
+// ladder already uploaded, so an uploading job only turns terminal, in its
+// status and webhooks alike, once every upload has stopped. The idle job is
+// already invisible to admission, so the wait costs other work nothing.
+export function preemptIdleJobs(reason: string): number {
+	let preempted = 0;
+	for (const job of jobs.values()) {
+		if (!job.idle || !isActivePhase(job.phase) || job.preemptedReason) continue;
+		job.preemptedReason = reason;
+		job.abortController?.abort(new Error(reason));
+		preempted++;
+		console.warn(
+			JSON.stringify({
+				event: "idle_job_preempted",
+				jobId: job.jobId,
+				videoId: job.videoId,
+				reason,
+			}),
+		);
+		const finish = () => {
+			const ended = updateJob(job.jobId, {
+				phase: "error",
+				error: reason,
+				errorCode: IDLE_PREEMPTED,
+				retryable: true,
+				message: "Idle job preempted",
+			});
+			if (ended) void sendWebhook(ended);
+		};
+		if (job.uploadsStopped) void job.uploadsStopped.then(finish, finish);
+		else finish();
+	}
+	return preempted;
+}
+
+onDirectVideoProcessAdmitted(() => {
+	preemptIdleJobs("Idle job preempted by a conversion");
+});
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
 ): boolean {
@@ -481,7 +735,9 @@ export function createJob(
 	userId: string,
 	webhookUrl?: string,
 	webhookSecret?: string,
+	options: { idle?: boolean } = {},
 ): Job {
+	if (!options.idle) preemptIdleJobs("Idle job preempted by another job");
 	const now = Date.now();
 	const job: Job = {
 		jobId,
@@ -493,10 +749,12 @@ export function createJob(
 		updatedAt: now,
 		webhookUrl,
 		webhookSecret,
+		...(options.idle && { idle: true }),
 	};
 	jobs.set(jobId, job);
 	jobTotals.created++;
 	evictExcessTerminalJobs();
+	if (options.idle) watchIdleJobs();
 	return job;
 }
 
@@ -528,6 +786,9 @@ export function updateJob(
 			| "outputUrl"
 			| "deferredSourceKey"
 			| "ladder"
+			| "verified"
+			| "pruned"
+			| "retryable"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -829,6 +1090,10 @@ export function getJobProgress(job: Job): JobProgress {
 		outputUrl: job.outputUrl,
 		deferredSourceKey: job.deferredSourceKey,
 		ladder: job.ladder,
+		idle: job.idle,
+		verified: job.verified,
+		pruned: job.pruned,
+		retryable: job.retryable,
 	};
 }
 

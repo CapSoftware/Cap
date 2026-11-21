@@ -1,4 +1,6 @@
+import os from "node:os";
 import type { Subprocess } from "bun";
+import { trackIdleProcess } from "./idle-processes";
 
 const PROCESS_EXIT_WAIT_MS = 5_000;
 const FORCE_KILL_WAIT_MS = 1_000;
@@ -21,6 +23,19 @@ export function unregisterSubprocess(proc: ManagedSubprocess): void {
 
 export function getActiveSubprocessCount(): number {
 	return activeSubprocesses.size;
+}
+
+// A process started at a lower priority belongs to idle work, so its CPU is
+// also left out of the pressure that admits every other job.
+export function lowerProcessPriority(
+	proc: Pick<Subprocess, "pid" | "exited" | "resourceUsage">,
+	niceness: number | undefined,
+): void {
+	if (niceness === undefined) return;
+	try {
+		os.setPriority(proc.pid, niceness);
+	} catch {}
+	trackIdleProcess(proc);
 }
 
 async function waitForProcessExit(

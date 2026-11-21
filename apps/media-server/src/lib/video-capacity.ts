@@ -10,6 +10,11 @@ const configuredMaxDirectVideoProcesses =
 const DEFAULT_MAX_CONCURRENT_DIRECT_VIDEO_PROCESSES = 1;
 
 let activeDirectVideoProcessCount = 0;
+let onAdmitted: (() => void) | null = null;
+
+export function onDirectVideoProcessAdmitted(listener: () => void): void {
+	onAdmitted = listener;
+}
 
 export function getActiveDirectVideoProcessCount(): number {
 	return activeDirectVideoProcessCount;
@@ -33,6 +38,7 @@ export function tryAcquireDirectVideoProcessSlot(
 	}
 
 	activeDirectVideoProcessCount += 1;
+	onAdmitted?.();
 	let released = false;
 
 	return {
