@@ -1796,6 +1796,62 @@ export const videoProcessingJobs = mysqlTable(
 	],
 );
 
+export type ShareLadderState =
+	| "candidate"
+	| "queued"
+	| "encoding"
+	| "ready"
+	| "failed"
+	| "skipped"
+	| "invalid";
+
+export type ShareLadderRendition = {
+	name: string;
+	width: number;
+	height: number;
+	bandwidth: number;
+	averageBandwidth: number | null;
+	codecs: string | null;
+	bytes: number;
+};
+
+export const shareLadders = mysqlTable(
+	"share_ladders",
+	{
+		videoId: nanoId("video_id").primaryKey().notNull().$type<Video.VideoId>(),
+		ownerId: nanoId("owner_id").notNull().$type<User.UserId>(),
+		state: varchar("state", { length: 16 })
+			.$type<ShareLadderState>()
+			.notNull()
+			.default("candidate"),
+		sourceKey: varchar("source_key", { length: 512 }).notNull(),
+		sourceEtag: varchar("source_etag", { length: 128 }),
+		sourceBytes: bigint("source_bytes", { mode: "number", unsigned: true }),
+		viewHits: int("view_hits").notNull().default(0),
+		viewsCheckedAt: datetime("views_checked_at", { fsp: 3 }),
+		outputPrefix: varchar("output_prefix", { length: 512 }),
+		renditions: json("renditions").$type<ShareLadderRendition[]>(),
+		attempts: int("attempts").notNull().default(0),
+		jobId: varchar("job_id", { length: 255 }),
+		error: text("error"),
+		createdAt: datetime("created_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		updatedAt: datetime("updated_at", { fsp: 3 })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [index("share_ladders_state_idx").on(table.state)],
+);
+
+export const appFlags = mysqlTable("app_flags", {
+	key: varchar("key", { length: 64 }).primaryKey().notNull(),
+	value: json("value").$type<unknown>().notNull(),
+	updatedAt: datetime("updated_at", { fsp: 3 })
+		.notNull()
+		.$defaultFn(() => new Date()),
+});
+
 export const mediaProcessingBudgets = mysqlTable(
 	"media_processing_budgets",
 	{
