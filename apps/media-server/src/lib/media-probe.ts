@@ -242,20 +242,28 @@ async function hasUnsupportedVideoStream(path: string): Promise<boolean> {
 	}
 }
 
-async function probeMetadata(path: string): Promise<VideoMetadata> {
-	const probed = await runProbe("metadata", path, PROBE_TIMEOUT_MS).catch(
-		async (error: unknown) => {
-			if (
-				error instanceof UnreadableMediaInputError &&
-				error.message === NO_VIDEO_STREAM_MESSAGE &&
-				(await hasUnsupportedVideoStream(path))
-			) {
-				throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
-			}
-			throw error;
-		},
-	);
+async function probeMetadata(
+	path: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoMetadata> {
+	const probed = await runProbe(
+		"metadata",
+		path,
+		PROBE_TIMEOUT_MS,
+		abortSignal,
+	).catch(async (error: unknown) => {
+		if (
+			error instanceof UnreadableMediaInputError &&
+			error.message === NO_VIDEO_STREAM_MESSAGE &&
+			(await hasUnsupportedVideoStream(path))
+		) {
+			throw new UnreadableMediaInputError(UNSUPPORTED_FORMAT_MESSAGE);
+		}
+		throw error;
+	});
+	abortSignal?.throwIfAborted();
 	await assertSupportedCodecs(path, probed.metadata);
+	abortSignal?.throwIfAborted();
 	return await withTrueDuration(path, probed);
 }
 
@@ -269,13 +277,16 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 	return await withMediaOperation("probe", () => probeMetadata(videoUrl));
 }
 
-export async function probeVideoFile(filePath: string): Promise<VideoMetadata> {
+export async function probeVideoFile(
+	filePath: string,
+	abortSignal?: AbortSignal,
+): Promise<VideoMetadata> {
 	if (!canAcceptNewProbeOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
 	return await withMediaOperation("probe", () =>
-		probeMetadata(normalizeLocalPath(filePath)),
+		probeMetadata(normalizeLocalPath(filePath), abortSignal),
 	);
 }
 

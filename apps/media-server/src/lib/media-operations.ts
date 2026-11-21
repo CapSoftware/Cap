@@ -1,4 +1,4 @@
-import { hasCriticalMemoryPressure } from "./job-manager";
+import { hasCriticalMemoryPressure, preemptIdleJobs } from "./job-manager";
 import { terminateAllSubprocesses } from "./subprocess";
 
 export interface MediaOperationHandle {
@@ -60,10 +60,14 @@ export function canAcceptNewProbeOperation(): boolean {
 	);
 }
 
+// Probes are short and frequent, so only audio and video work stops an idle
+// job.
 export function registerMediaOperation(
 	kind: OperationKind,
 	cancel: () => Promise<void> | void,
 ): MediaOperationHandle {
+	if (kind !== "probe")
+		preemptIdleJobs(`Idle job preempted by ${kind} processing`);
 	const id = createOperationId(kind);
 	const operation: ActiveOperation = {
 		kind,

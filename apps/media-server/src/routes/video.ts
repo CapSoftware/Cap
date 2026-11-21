@@ -38,6 +38,7 @@ import {
 	getMaxConcurrentVideoProcesses,
 	getSystemResources,
 	hasCriticalMemoryPressure,
+	preemptIdleJobs,
 	sendWebhook,
 	touchJob,
 	updateJob,
@@ -693,6 +694,7 @@ video.post("/thumbnail", async (c) => {
 
 	try {
 		const metadata = await probeVideo(result.data.videoUrl);
+		preemptIdleJobs("Idle job preempted by a thumbnail");
 
 		// Only the options the caller set: an explicit undefined would replace
 		// the default and reach FFmpeg as NaN.
@@ -1595,7 +1597,10 @@ async function encodeLadderAsync(
 			message: "Analyzing source video...",
 		});
 		const metadata = await withJobHeartbeat(jobId, () =>
-			probeVideoFile(input.path),
+			probeVideoFile(
+				input.path,
+				options.priority === "idle" ? signal : undefined,
+			),
 		);
 		signal.throwIfAborted();
 		updateJob(jobId, { metadata });
@@ -3198,6 +3203,7 @@ video.post("/preverify-segments", async (c) => {
 		return c.json({ error: "Server busy", code: "SERVER_BUSY" }, 503);
 	}
 	activePreverifyRuns++;
+	preemptIdleJobs("Idle job preempted by a recording preverification");
 	void trackBackgroundTask(
 		preverifySegments(body.data, secret)
 			.catch((error: unknown) => {
