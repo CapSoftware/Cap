@@ -25,6 +25,8 @@ mod linux;
 #[cfg(target_os = "linux")]
 mod linux_dmabuf_import;
 #[cfg(target_os = "linux")]
+mod linux_pipewire_frames;
+#[cfg(target_os = "linux")]
 mod linux_shm;
 #[cfg(target_os = "linux")]
 pub use linux::*;

@@ -121,7 +121,13 @@ real login activates.
   producer that negotiates and shares frames the way niri 26.04 does: a
   mandatory DMA-BUF modifier, DMA-BUF buffers the consumer must map itself,
   and a chunk size of 1 (GitHub #2941). It needs a host with PipeWire and
-  WirePlumber, and runs in the GNOME job.
+  WirePlumber, and runs in the GNOME job. The test holds borrowed frames across
+  capture stop and checks their pixels after both the stream and producer exit.
+  For real GPU DMA-BUFs, install the GBM development package and set
+  `CAP_TEST_DRM_RENDER_NODE=/dev/dri/renderD128` to the hardware render node.
+  This allocates LINEAR GBM buffers and requires real DMA-BUF read sync ioctls
+  to succeed. Set `CAP_TEST_USE_EXISTING_PIPEWIRE=1` to use the current session's
+  PipeWire daemon. `CAP_PIPEWIRE_TEST_FRAMES=180` checks more frames before stop.
 - `appimage-pipewire/run.sh <Cap.AppImage> <out-dir>` connects a screen
   capture stream inside NixOS's `appimage-run`, through the AppImage's real
   launchers, with the AppDir as the given AppImage shipped it and as
