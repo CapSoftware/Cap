@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	COUNTED_STALL_MS,
 	FIRST_FRAME_SWITCH_MS,
+	judgeStall,
 	levelIndexForHeight,
 	MEASURE_WINDOW_MS,
 	measuredThroughput,
@@ -12,8 +14,10 @@ import {
 	pickStartRendition,
 	qualityOptions,
 	REMEMBERED_LINE_MAX_AGE_MS,
+	REPEAT_STALL_WINDOW_MS,
 	rememberedLineIsSlow,
 	type ShareLadderPlayback,
+	STALL_SWITCH_MS,
 	serializeRememberedLine,
 	serializeShareQuality,
 	switchesOnViewerPause,
@@ -126,6 +130,52 @@ describe("remembered slow line", () => {
 		expect(rememberedLineIsSlow(50_000_000, SOURCE_BPS)).toBe(false);
 		expect(rememberedLineIsSlow(null, SOURCE_BPS)).toBe(false);
 		expect(rememberedLineIsSlow(1, 0)).toBe(false);
+	});
+});
+
+describe("stall rule", () => {
+	it("ignores a single hiccup shorter than 1.5 s", () => {
+		expect(judgeStall({ startedAt: 1000, stalledMs: 100 }, null)).toBe("wait");
+		expect(judgeStall({ startedAt: 1000, stalledMs: 600 }, null)).toBe("count");
+		expect(judgeStall({ startedAt: 1000, stalledMs: 1499 }, null)).toBe(
+			"count",
+		);
+	});
+
+	it("switches on a stall of 1.5 s or more", () => {
+		expect(judgeStall({ startedAt: 1000, stalledMs: 1500 }, null)).toBe(
+			"switch",
+		);
+	});
+
+	it("switches on a second counted stall within 20 s", () => {
+		expect(
+			judgeStall(
+				{
+					startedAt: 1000 + REPEAT_STALL_WINDOW_MS,
+					stalledMs: COUNTED_STALL_MS,
+				},
+				1000,
+			),
+		).toBe("switch");
+		expect(
+			judgeStall(
+				{
+					startedAt: 1001 + REPEAT_STALL_WINDOW_MS,
+					stalledMs: COUNTED_STALL_MS,
+				},
+				1000,
+			),
+		).toBe("count");
+	});
+
+	it("never counts a wait too short to be a stall", () => {
+		expect(judgeStall({ startedAt: 2000, stalledMs: 100 }, 1000)).toBe("wait");
+	});
+
+	it("keeps the stall threshold above the hiccup measured on a fast line", () => {
+		expect(STALL_SWITCH_MS).toBe(1500);
+		expect(STALL_SWITCH_MS).toBeGreaterThan(600);
 	});
 });
 

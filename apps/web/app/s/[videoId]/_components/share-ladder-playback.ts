@@ -20,7 +20,12 @@ export type QualityOption = { id: string; label: string };
 
 export const SHARE_QUALITY_KEY = "cap-share-quality";
 export const SHARE_THROUGHPUT_KEY = "cap-share-throughput";
-export const STALL_SWITCH_MS = 500;
+// One stall this long, or a second counted stall within the window, after the
+// first frame. A single hiccup of about 550 ms on a fast line in Safari moved
+// a 4K viewer to the 1080p rung at 500 ms; slow lines stall for seconds.
+export const STALL_SWITCH_MS = 1500;
+export const COUNTED_STALL_MS = 250;
+export const REPEAT_STALL_WINDOW_MS = 20_000;
 // Longer than the slowest MP4 first frame measured (Safari at 1.6 Mbps,
 // 8.7 s). At 2.5 s a 1.6 Mbps line switched before the MP4's own first frame
 // and HLS then took longer to start, so the first frame got slower. Weak
@@ -76,6 +81,23 @@ export const lineIsSlow = (
 ) =>
 	sourceBitsPerSecond > 0 &&
 	bitsPerSecond < LINE_HEADROOM * sourceBitsPerSecond;
+
+export type StallVerdict = "switch" | "count" | "wait";
+
+export function judgeStall(
+	stall: { startedAt: number; stalledMs: number },
+	previousStallAt: number | null,
+): StallVerdict {
+	if (stall.stalledMs >= STALL_SWITCH_MS) return "switch";
+	if (stall.stalledMs < COUNTED_STALL_MS) return "wait";
+	if (
+		previousStallAt !== null &&
+		stall.startedAt - previousStallAt <= REPEAT_STALL_WINDOW_MS
+	) {
+		return "switch";
+	}
+	return "count";
+}
 
 export function parseRememberedLine(
 	raw: string | null | undefined,

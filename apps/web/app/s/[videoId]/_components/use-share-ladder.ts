@@ -16,8 +16,10 @@ import {
 	useState,
 } from "react";
 import {
+	COUNTED_STALL_MS,
 	FIRST_FRAME_SWITCH_MS,
 	isExpiredMediaStatus,
+	judgeStall,
 	type LadderEngine,
 	levelIndexForHeight,
 	measuredThroughput,
@@ -616,6 +618,8 @@ export function useShareLadder({
 		);
 	}, []);
 
+	const lastStallRef = useRef<number | null>(null);
+
 	const callForLadder = useCallback(() => {
 		lineCalledRef.current = true;
 		finishMeasurement(true);
@@ -654,9 +658,12 @@ export function useShareLadder({
 		if (!current || !ladderKey || !active || !deviceEngine || !video) return;
 		if (engine !== "mp4" || disabled) return;
 
+		let countTimer: ReturnType<typeof setTimeout> | undefined;
 		let stallTimer: ReturnType<typeof setTimeout> | undefined;
 		const clearStall = () => {
+			clearTimeout(countTimer);
 			clearTimeout(stallTimer);
+			countTimer = undefined;
 			stallTimer = undefined;
 		};
 
@@ -709,19 +716,27 @@ export function useShareLadder({
 		};
 
 		const onWaiting = () => {
-			if (!framedRef.current || video.paused) return;
+			if (!framedRef.current || video.paused || video.seeking) return;
 			clearStall();
+			const startedAt = performance.now();
 			const stalledAt = video.currentTime;
-			stallTimer = setTimeout(() => {
-				stallTimer = undefined;
+			const judge = (stalledMs: number) => {
 				if (
-					!video.paused &&
-					!video.ended &&
-					video.currentTime - stalledAt < MOVED_SECONDS
+					video.paused ||
+					video.ended ||
+					video.currentTime - stalledAt >= MOVED_SECONDS
 				) {
-					callForLadder();
+					return;
 				}
-			}, STALL_SWITCH_MS);
+				const verdict = judgeStall(
+					{ startedAt, stalledMs },
+					lastStallRef.current,
+				);
+				if (verdict === "count") lastStallRef.current = startedAt;
+				if (verdict === "switch") callForLadder();
+			};
+			countTimer = setTimeout(() => judge(COUNTED_STALL_MS), COUNTED_STALL_MS);
+			stallTimer = setTimeout(() => judge(STALL_SWITCH_MS), STALL_SWITCH_MS);
 		};
 
 		const viewerPause = () => {
