@@ -158,6 +158,183 @@ describe("POST /video/ladder", () => {
 		expect(response.status).toBe(401);
 	});
 
+	test("rejects idle with Infra or a slice, and verification or pruning of a slice", async () => {
+		for (const body of [
+			{ priority: "idle", infra: true },
+			{ priority: "idle", range: { startSeconds: 0, durationSeconds: 4 } },
+			{ verify: true, range: { startSeconds: 0, durationSeconds: 4 } },
+			{
+				pruneInvertedRungs: true,
+				range: { startSeconds: 0, durationSeconds: 4 },
+			},
+		]) {
+			const response = await startLadder({
+				uploads: uploadTargets("refused"),
+				...body,
+			});
+			expect(response.status).toBe(400);
+		}
+		expect(uploads.has("refused/master.m3u8")).toBe(false);
+	});
+
+	test("holds an idle ladder back while another idle job or a heavy ladder runs", async () => {
+		const idleJob = jobManager.createJob("held-idle", "other", "user-1");
+		idleJob.idle = true;
+		try {
+			const response = await startLadder({
+				uploads: uploadTargets("idle-held"),
+				priority: "idle",
+			});
+			expect(response.status).toBe(503);
+			expect(response.headers.get("retry-after")).toBe("600");
+			const body = (await response.json()) as {
+				code: string;
+				jobs: { jobId: string; idle?: boolean }[];
+			};
+			expect(body.code).toBe("SERVER_BUSY");
+			expect(body.jobs.find((job) => job.jobId === "held-idle")?.idle).toBe(
+				true,
+			);
+		} finally {
+			jobManager.deleteJob("held-idle");
+		}
+
+		const heavyJob = jobManager.createJob("held-heavy", "other", "user-1");
+		heavyJob.heavyLadder = true;
+		try {
+			const response = await startLadder({
+				uploads: uploadTargets("idle-held"),
+				priority: "idle",
+			});
+			expect(response.status).toBe(503);
+			expect(response.headers.get("retry-after")).toBe("600");
+		} finally {
+			jobManager.deleteJob("held-heavy");
+		}
+		expect(uploads.has("idle-held/master.m3u8")).toBe(false);
+	});
+
+	test("runs an idle ladder only below half CPU and echoes what it applied", async () => {
+		const { cpuPressure } = jobManager.getSystemResources();
+		const response = await startLadder({
+			uploads: uploadTargets("idle"),
+			priority: "idle",
+			verify: true,
+			pruneInvertedRungs: true,
+		});
+		if (cpuPressure >= 0.5) {
+			expect(response.status).toBe(503);
+			expect(response.headers.get("retry-after")).toBe("600");
+			return;
+		}
+		expect(response.status).toBe(200);
+		const started = (await response.json()) as {
+			jobId: string;
+			status: string;
+			accepted: unknown;
+		};
+		expect(started.status).toBe("queued");
+		expect(started.accepted).toEqual({
+			priority: "idle",
+			verify: true,
+			pruneInvertedRungs: true,
+		});
+		const job = await waitForTerminalJob(started.jobId);
+		expect(job.error).toBeUndefined();
+		expect(job.phase).toBe("complete");
+		const progress = jobManager.getJobProgress(job);
+		expect(progress.idle).toBe(true);
+		expect(progress.verified).toBe(true);
+		expect(progress.pruned).toEqual([]);
+	});
+
+	test("verifies and prunes a ladder before it uploads it", async () => {
+		const response = await startLadder({
+			videoUrl: `${baseUrl}/large.mp4`,
+			uploads: uploadTargets("checked"),
+			verify: true,
+			pruneInvertedRungs: true,
+		});
+		expect(response.status).toBe(200);
+		const started = (await response.json()) as {
+			jobId: string;
+			accepted: unknown;
+		};
+		expect(started.accepted).toEqual({
+			priority: "normal",
+			verify: true,
+			pruneInvertedRungs: true,
+		});
+		const job = await waitForTerminalJob(started.jobId);
+		expect(job.error).toBeUndefined();
+		expect(job.phase).toBe("complete");
+		expect(job.ladder?.renditions.map((rendition) => rendition.name)).toEqual([
+			"720p",
+			"360p",
+		]);
+		const final = webhooks.findLast(
+			(payload) => payload.jobId === started.jobId,
+		);
+		expect(final?.phase).toBe("complete");
+		expect(final?.idle).toBe(false);
+		expect(final?.verified).toBe(true);
+		expect(final?.pruned).toEqual([]);
+		const master = parseHlsLadderMaster(
+			new TextDecoder().decode(uploads.get("checked/master.m3u8")?.bytes),
+		);
+		expect(master.video.map((variant) => variant.name)).toEqual([
+			"720p",
+			"360p",
+		]);
+	});
+
+	test("keeps an Infra request without the new options as it was", async () => {
+		const response = await startLadder({
+			uploads: uploadTargets("infra-plain"),
+			infra: true,
+		});
+		expect(response.status).toBe(200);
+		const started = (await response.json()) as Record<string, unknown>;
+		expect(Object.keys(started).sort()).toEqual([
+			"accepted",
+			"jobId",
+			"message",
+			"status",
+		]);
+		expect(started.accepted).toEqual({
+			priority: "normal",
+			verify: false,
+			pruneInvertedRungs: false,
+		});
+		const job = await waitForTerminalJob(started.jobId as string);
+		expect(job.phase).toBe("complete");
+		expect(job.idle).toBeUndefined();
+		expect(job.heavyLadder).toBeUndefined();
+		const final = webhooks.findLast(
+			(payload) => payload.jobId === started.jobId,
+		);
+		expect(final).toBeDefined();
+		for (const key of ["idle", "verified", "pruned"]) {
+			expect(Object.hasOwn(final ?? {}, key)).toBe(false);
+		}
+		const produced = [
+			"master.m3u8",
+			...(job.ladder?.renditions ?? []).flatMap((rendition) => [
+				rendition.playlist,
+				rendition.media,
+			]),
+			"audio.m3u8",
+			"audio.m4s",
+		];
+		for (const name of produced) {
+			expect(uploads.has(`infra-plain/${name}`)).toBe(true);
+		}
+		expect(
+			[...uploads.keys()].filter((key) => key.startsWith("infra-plain/"))
+				.length,
+		).toBe(produced.length);
+	});
+
 	test("rejects upload targets that are not ladder files", async () => {
 		const response = await startLadder({
 			uploads: { "../escape.m4s": `${baseUrl}/uploads/x` },
