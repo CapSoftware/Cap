@@ -86,6 +86,9 @@ export interface JobProgress {
 	outputUrl?: string;
 	deferredSourceKey?: string;
 	ladder?: HlsLadderResult;
+	idle?: boolean;
+	verified?: boolean;
+	pruned?: string[];
 }
 
 export interface RecordingWorkerAcknowledgement {
@@ -164,6 +167,11 @@ export interface Job {
 	// GPU encoder busy on its own.
 	infraHeavyLadder?: boolean;
 	infraMp4?: boolean;
+	// Any ladder whose top rendition is 1440p or 2160p, Infra or not.
+	heavyLadder?: boolean;
+	idle?: boolean;
+	verified?: boolean;
+	pruned?: string[];
 }
 
 const jobs = new Map<string, Job>();
@@ -445,6 +453,58 @@ export function canAcceptNewInfraVideoProcess(
 	});
 }
 
+// An idle job runs only on a worker with room to spare: two free slots, CPU
+// below half, no heavy ladder and no other idle job, so it never takes the
+// capacity a job that someone is waiting for would need.
+const IDLE_MAX_CPU_PRESSURE = 0.5;
+const IDLE_FREE_SLOTS = 2;
+
+export function getActiveHeavyLadderCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if ((job.heavyLadder || job.infraHeavyLadder) && isActivePhase(job.phase))
+			count++;
+	}
+	return count;
+}
+
+export function getActiveIdleJobCount(): number {
+	let count = 0;
+	for (const job of jobs.values()) {
+		if (job.idle && isActivePhase(job.phase)) count++;
+	}
+	return count;
+}
+
+export function idleCapacityAllows(input: {
+	draining: boolean;
+	effectiveMax: number;
+	active: number;
+	cpuPressure: number;
+	activeHeavyLadders: number;
+	activeIdleJobs: number;
+}): boolean {
+	return (
+		!input.draining &&
+		input.active + IDLE_FREE_SLOTS <= input.effectiveMax &&
+		input.cpuPressure < IDLE_MAX_CPU_PRESSURE &&
+		input.activeHeavyLadders === 0 &&
+		input.activeIdleJobs === 0
+	);
+}
+
+export function canAcceptNewIdleVideoProcess(draining: boolean): boolean {
+	const { effectiveMax, cpuPressure } = getSystemResources();
+	return idleCapacityAllows({
+		draining,
+		effectiveMax,
+		active: getActiveVideoProcessCount(),
+		cpuPressure,
+		activeHeavyLadders: getActiveHeavyLadderCount(),
+		activeIdleJobs: getActiveIdleJobCount(),
+	});
+}
+
 export function canAcceptNewVideoProcess(
 	priority: "interactive" | "recovery" = "interactive",
 ): boolean {
@@ -528,6 +588,8 @@ export function updateJob(
 			| "outputUrl"
 			| "deferredSourceKey"
 			| "ladder"
+			| "verified"
+			| "pruned"
 			| "inputTempFile"
 			| "outputTempFile"
 			| "mediaOperation"
@@ -829,6 +891,9 @@ export function getJobProgress(job: Job): JobProgress {
 		outputUrl: job.outputUrl,
 		deferredSourceKey: job.deferredSourceKey,
 		ladder: job.ladder,
+		idle: job.idle,
+		verified: job.verified,
+		pruned: job.pruned,
 	};
 }
 
