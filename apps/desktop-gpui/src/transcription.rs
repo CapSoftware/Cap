@@ -1232,6 +1232,24 @@ fn schedule_parakeet_release() {
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn schedule_parakeet_release() {}
 
+/// Drops the cached Parakeet now and cancels any idle release still waiting.
+/// Call with the transcription slot held.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn release_parakeet_now() {
+    PARAKEET_LAST_USE.fetch_add(1, Ordering::AcqRel);
+    let released = PARAKEET_CONTEXT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if released.is_some() {
+        drop(released);
+        tracing::info!("Released Parakeet TDT model after the meeting");
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn release_parakeet_now() {}
+
 // ---------------------------------------------------------------------------
 // Audio extraction
 // ---------------------------------------------------------------------------
@@ -2454,7 +2472,7 @@ fn preload_parakeet(_model_dir: &str) -> Result<(), String> {
 pub(crate) fn release_live_models() {
     let _guard = lock_transcription_worker_slot();
     release_whisper_context_after_transcription();
-    schedule_parakeet_release();
+    release_parakeet_now();
 }
 
 // A live meeting transcribes a segment every few seconds; scheduling the idle
