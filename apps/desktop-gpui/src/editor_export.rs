@@ -395,6 +395,10 @@ pub struct ExportUi {
     pub turbo: bool,
     pub cursor_only: bool,
     pub custom_bpp: Option<f32>,
+    /// The quality of the destinations not showing: File and Clipboard
+    /// share one, Link has its own. `compression` and `custom_bpp` always
+    /// hold the showing destination's, so the pill is what gets exported.
+    other_quality: Quality,
     pub force_ffmpeg: bool,
     pub advanced_open: bool,
     pub preview: Option<Arc<RenderImage>>,
@@ -446,6 +450,33 @@ pub(crate) struct ExportSource {
     pub fps: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Quality {
+    compression: ExportCompression,
+    custom_bpp: Option<f32>,
+}
+
+impl Quality {
+    /// Links play straight from the CDN to every viewer, so they default to
+    /// half Maximum's bits.
+    const LINK_DEFAULT: Self = Self {
+        compression: ExportCompression::Social,
+        custom_bpp: None,
+    };
+
+    fn from_saved(compression: &str, custom_bpp: Option<f32>) -> Self {
+        Self {
+            compression: match compression {
+                "Social" => ExportCompression::Social,
+                "Web" => ExportCompression::Web,
+                "Potato" => ExportCompression::Potato,
+                _ => ExportCompression::Maximum,
+            },
+            custom_bpp,
+        }
+    }
+}
+
 impl Drop for ExportUi {
     fn drop(&mut self) {
         self.estimate_cancel.store(true, Ordering::Release);
@@ -492,28 +523,39 @@ impl ExportUi {
             fps_from_source: true,
             audio_format: None,
             enhance_quality: false,
+            link_compression: None,
+            link_custom_bpp: None,
         });
         Self::from_preferences(prefs)
     }
 
     fn from_preferences(prefs: ExportPrefs) -> Self {
+        let destination = ExportDestination::from_slug(&prefs.export_to);
+        let file_quality = Quality::from_saved(&prefs.compression, prefs.custom_bpp);
+        let link_quality = prefs
+            .link_compression
+            .as_deref()
+            .map_or(Quality::LINK_DEFAULT, |compression| {
+                Quality::from_saved(compression, prefs.link_custom_bpp)
+            });
+        let (quality, other_quality) = if destination == ExportDestination::Link {
+            (link_quality, file_quality)
+        } else {
+            (file_quality, link_quality)
+        };
         Self {
-            destination: ExportDestination::from_slug(&prefs.export_to),
+            destination,
             format: ExportFormatKind::from_slug(&prefs.format),
             resolution: ExportResolution::from_slug(&prefs.resolution),
             fps: prefs.fps,
-            compression: match prefs.compression.as_str() {
-                "Social" => ExportCompression::Social,
-                "Web" => ExportCompression::Web,
-                "Potato" => ExportCompression::Potato,
-                _ => ExportCompression::Maximum,
-            },
+            compression: quality.compression,
             gif_quality: GifQualityPreset::from_slug(prefs.gif_quality.as_deref()),
             optimize_filesize: prefs.optimize_filesize,
             enhance_quality: prefs.enhance_quality,
             turbo: prefs.turbo && turbo_available(),
             cursor_only: prefs.cursor_only,
-            custom_bpp: prefs.custom_bpp,
+            custom_bpp: quality.custom_bpp,
+            other_quality,
             force_ffmpeg: prefs.force_ffmpeg_decoder,
             advanced_open: prefs.advanced_open,
             preview: None,
@@ -585,7 +627,7 @@ impl ExportUi {
             return;
         }
         self.format = ExportFormatKind::Tracks;
-        self.destination = ExportDestination::File;
+        self.set_destination(ExportDestination::File);
         self.cursor_only = false;
         if let Some(slugs) = slugs {
             let mut tracks = slugs
@@ -634,7 +676,32 @@ impl ExportUi {
         }
     }
 
+    /// Every destination change goes through here, so moving between Link
+    /// and File or Clipboard brings up that side's own quality.
+    pub(crate) fn set_destination(&mut self, destination: ExportDestination) {
+        let is_link = |destination| destination == ExportDestination::Link;
+        if is_link(self.destination) != is_link(destination) {
+            let leaving = self.quality();
+            let showing = std::mem::replace(&mut self.other_quality, leaving);
+            self.compression = showing.compression;
+            self.custom_bpp = showing.custom_bpp;
+        }
+        self.destination = destination;
+    }
+
+    fn quality(&self) -> Quality {
+        Quality {
+            compression: self.compression,
+            custom_bpp: self.custom_bpp,
+        }
+    }
+
     fn preferences(&self) -> ExportPrefs {
+        let (file_quality, link_quality) = if self.destination == ExportDestination::Link {
+            (self.other_quality, self.quality())
+        } else {
+            (self.quality(), self.other_quality)
+        };
         ExportPrefs {
             format: if self.format == ExportFormatKind::Audio {
                 self.saved_format.slug().to_string()
@@ -644,11 +711,13 @@ impl ExportUi {
             fps: self.fps,
             export_to: self.destination.slug().to_string(),
             resolution: self.resolution.label().to_string(),
-            compression: format!("{:?}", self.compression),
+            compression: format!("{:?}", file_quality.compression),
             optimize_filesize: self.optimize_filesize,
             enhance_quality: self.enhance_quality,
             cursor_only: self.cursor_only,
-            custom_bpp: self.custom_bpp,
+            custom_bpp: file_quality.custom_bpp,
+            link_compression: Some(format!("{:?}", link_quality.compression)),
+            link_custom_bpp: link_quality.custom_bpp,
             force_ffmpeg_decoder: self.force_ffmpeg,
             advanced_open: self.advanced_open,
             organization_id: self.organization_id.clone(),
@@ -890,7 +959,7 @@ impl EditorWindow {
                         if !has_transparent_background(&this.project)
                             && let Some(ui) = this.export.as_mut()
                         {
-                            ui.destination = ExportDestination::Link;
+                            ui.set_destination(ExportDestination::Link);
                             ui.format = ExportFormatKind::Mp4;
                             ui.cursor_only = false;
                         }
@@ -925,13 +994,13 @@ impl EditorWindow {
                 ui.resolution = ExportResolution::P1080;
             }
             if ui.destination == ExportDestination::Link {
-                ui.destination = ExportDestination::File;
+                ui.set_destination(ExportDestination::File);
             }
         }
         if (ui.cursor_only || !ui.format.writes_video())
             && ui.destination == ExportDestination::Link
         {
-            ui.destination = ExportDestination::File;
+            ui.set_destination(ExportDestination::File);
         }
         self.normalize_export_options(&mut ui);
         self.export = Some(ui);
@@ -3055,7 +3124,7 @@ impl EditorWindow {
                     {
                         return;
                     }
-                    ui.destination = dest;
+                    ui.set_destination(dest);
                     if dest == ExportDestination::Link && ui.format == ExportFormatKind::Gif {
                         ui.format = ExportFormatKind::Mp4;
                     }
@@ -3244,12 +3313,12 @@ impl EditorWindow {
                     if let Some(ui) = this.export.as_mut() {
                         ui.format = format;
                         if !format.writes_video() {
-                            ui.destination = ExportDestination::File;
+                            ui.set_destination(ExportDestination::File);
                             ui.cursor_only = false;
                         }
                         if format == ExportFormatKind::Gif {
                             if ui.destination == ExportDestination::Link {
-                                ui.destination = ExportDestination::File;
+                                ui.set_destination(ExportDestination::File);
                             }
                             if ui.resolution == ExportResolution::P4k {
                                 ui.resolution = ExportResolution::P1080;
@@ -3720,7 +3789,7 @@ impl EditorWindow {
                         if let Some(ui) = this.export.as_mut() {
                             ui.cursor_only = !ui.cursor_only;
                             if ui.cursor_only && ui.destination == ExportDestination::Link {
-                                ui.destination = ExportDestination::File;
+                                ui.set_destination(ExportDestination::File);
                             }
                         }
                         this.normalize_loaded_export_options();
@@ -4443,10 +4512,10 @@ fn export_resolutions(
 
 fn normalize_export_options(ui: &mut ExportUi, transparent: bool) {
     if ui.format == ExportFormatKind::Tracks {
-        ui.destination = ExportDestination::File;
+        ui.set_destination(ExportDestination::File);
     }
     if ui.format == ExportFormatKind::Audio {
-        ui.destination = ExportDestination::File;
+        ui.set_destination(ExportDestination::File);
         ui.cursor_only = false;
     }
     let fps_options = export_fps_options(ui.format, ui.cursor_only);
@@ -4707,6 +4776,8 @@ mod tests {
         export_resolutions, highest_recorded_fps, normalize_export_options, selected_tracks,
     };
     use crate::store::ExportPrefs;
+    use cap_export::mp4::ExportCompression;
+    use cap_export::settings::ExportSettings;
     use cap_project::XY;
     use std::path::PathBuf;
     use std::sync::{
@@ -4738,7 +4809,114 @@ mod tests {
             fps_from_source: false,
             audio_format: None,
             enhance_quality: false,
+            link_compression: None,
+            link_custom_bpp: None,
         }
+    }
+
+    fn shown_quality(ui: &ExportUi) -> (String, Option<f32>) {
+        (format!("{:?}", ui.compression), ui.custom_bpp)
+    }
+
+    fn exported_bpp(ui: &ExportUi) -> f32 {
+        match ui.estimate_settings() {
+            ExportSettings::Mp4(settings) => settings
+                .custom_bpp
+                .unwrap_or_else(|| settings.compression.bits_per_pixel()),
+            _ => panic!("expected an mp4 export"),
+        }
+    }
+
+    #[test]
+    fn links_default_to_social_and_files_keep_the_saved_quality() {
+        let saved_before_this_change: ExportPrefs = serde_json::from_str(
+            r#"{"format":"Mp4","fps":60,"export_to":"file","resolution":"1080p","compression":"Maximum","custom_bpp":null}"#,
+        )
+        .unwrap();
+        assert!(saved_before_this_change.link_compression.is_none());
+        let mut ui = ExportUi::from_preferences(saved_before_this_change);
+        assert_eq!(shown_quality(&ui), ("Maximum".into(), None));
+        assert_eq!(exported_bpp(&ui), 0.3);
+
+        ui.set_destination(ExportDestination::Link);
+        assert_eq!(shown_quality(&ui), ("Social".into(), None));
+        assert_eq!(exported_bpp(&ui), 0.15);
+
+        ui.set_destination(ExportDestination::Clipboard);
+        assert_eq!(shown_quality(&ui), ("Maximum".into(), None));
+        ui.set_destination(ExportDestination::File);
+        assert_eq!(shown_quality(&ui), ("Maximum".into(), None));
+
+        for (saved, custom_bpp) in [("Web", None), ("Maximum", Some(0.22))] {
+            for export_to in ["file", "clipboard"] {
+                let ui = ExportUi::from_preferences(ExportPrefs {
+                    export_to: export_to.into(),
+                    compression: saved.into(),
+                    custom_bpp,
+                    ..prefs()
+                });
+                assert_eq!(
+                    shown_quality(&ui),
+                    (saved.into(), custom_bpp),
+                    "{export_to}"
+                );
+                assert_eq!(ui.preferences().compression, saved);
+                assert_eq!(ui.preferences().custom_bpp, custom_bpp);
+            }
+        }
+
+        let opened_on_link = ExportUi::from_preferences(ExportPrefs {
+            export_to: "link".into(),
+            compression: "Web".into(),
+            ..prefs()
+        });
+        assert_eq!(shown_quality(&opened_on_link), ("Social".into(), None));
+        let saved = opened_on_link.preferences();
+        assert_eq!(saved.compression, "Web");
+        assert_eq!(saved.link_compression.as_deref(), Some("Social"));
+    }
+
+    #[test]
+    fn a_quality_chosen_on_link_is_kept_for_link_only() {
+        let mut ui = ExportUi::from_preferences(ExportPrefs {
+            export_to: "file".into(),
+            compression: "Maximum".into(),
+            ..prefs()
+        });
+        ui.set_destination(ExportDestination::Link);
+        ui.compression = ExportCompression::Web;
+        ui.custom_bpp = None;
+        ui.set_destination(ExportDestination::File);
+        assert_eq!(shown_quality(&ui), ("Maximum".into(), None));
+        ui.set_destination(ExportDestination::Link);
+        assert_eq!(shown_quality(&ui), ("Web".into(), None));
+
+        ui.custom_bpp = Some(0.12);
+        for export_to in [ExportDestination::Link, ExportDestination::File] {
+            ui.set_destination(export_to);
+            let saved = ui.preferences();
+            assert_eq!(saved.compression, "Maximum");
+            assert_eq!(saved.custom_bpp, None);
+            assert_eq!(saved.link_compression.as_deref(), Some("Web"));
+            assert_eq!(saved.link_custom_bpp, Some(0.12));
+
+            let json = serde_json::to_string(&saved).unwrap();
+            let mut reopened = ExportUi::from_preferences(serde_json::from_str(&json).unwrap());
+            assert_eq!(reopened.destination, export_to);
+            reopened.set_destination(ExportDestination::Link);
+            assert_eq!(shown_quality(&reopened), ("Web".into(), Some(0.12)));
+            assert_eq!(exported_bpp(&reopened), 0.12);
+            reopened.set_destination(ExportDestination::Clipboard);
+            assert_eq!(shown_quality(&reopened), ("Maximum".into(), None));
+            assert_eq!(exported_bpp(&reopened), 0.3);
+        }
+
+        let mut file_choice = ExportUi::from_preferences(prefs());
+        file_choice.compression = ExportCompression::Potato;
+        file_choice.set_destination(ExportDestination::Link);
+        assert_eq!(shown_quality(&file_choice), ("Social".into(), None));
+        file_choice.set_destination(ExportDestination::File);
+        assert_eq!(shown_quality(&file_choice), ("Potato".into(), None));
     }
 
     #[test]
