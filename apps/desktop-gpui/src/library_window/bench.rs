@@ -62,7 +62,7 @@ pub fn run_from_env(cx: &mut App) {
 
 async fn wait_for_items(cx: &mut AsyncApp) -> Option<f64> {
     let started = Instant::now();
-    for _ in 0..600 {
+    for _ in 0..2000 {
         let ready = with_view(cx, |view, _| !view.scan.items.is_empty() && view.load_task.is_none())
             .unwrap_or(false);
         if ready {
