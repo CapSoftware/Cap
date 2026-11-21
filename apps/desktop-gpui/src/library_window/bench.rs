@@ -23,7 +23,10 @@ fn window(cx: &App) -> Option<AnyWindowHandle> {
     cx.try_global::<LibraryWindowSlot>().and_then(|s| s.0)
 }
 
-fn with_view<R>(cx: &mut AsyncApp, f: impl FnOnce(&mut LibraryWindow, &mut gpui::Context<LibraryWindow>) -> R) -> Option<R> {
+fn with_view<R>(
+    cx: &mut AsyncApp,
+    f: impl FnOnce(&mut LibraryWindow, &mut gpui::Context<LibraryWindow>) -> R,
+) -> Option<R> {
     cx.update(|cx| {
         let handle = window(cx)?;
         handle
@@ -51,6 +54,8 @@ pub fn run_from_env(cx: &mut App) {
     cx.spawn(async move |cx| {
         match kind.as_str() {
             "panel" => panel(cx).await,
+            "switch" => switching(cx).await,
+            "toggle-loop" => toggle_loop(cx).await,
             _ => library(cx).await,
         }
         sleep(cx, 200).await;
@@ -63,8 +68,10 @@ pub fn run_from_env(cx: &mut App) {
 async fn wait_for_items(cx: &mut AsyncApp) -> Option<f64> {
     let started = Instant::now();
     for _ in 0..2000 {
-        let ready = with_view(cx, |view, _| !view.scan.items.is_empty() && view.load_task.is_none())
-            .unwrap_or(false);
+        let ready = with_view(cx, |view, _| {
+            !view.scan.items.is_empty() && view.load_task.is_none()
+        })
+        .unwrap_or(false);
         if ready {
             return Some(started.elapsed().as_secs_f64() * 1e3);
         }
@@ -133,7 +140,14 @@ async fn library(cx: &mut AsyncApp) {
     for i in 0..40 {
         let started = Instant::now();
         with_view(cx, |view, cx| {
-            view.set_layout(if i % 2 == 0 { Layout::Grid } else { Layout::List }, cx)
+            view.set_layout(
+                if i % 2 == 0 {
+                    Layout::Grid
+                } else {
+                    Layout::List
+                },
+                cx,
+            )
         });
         draw(cx);
         samples.push(started.elapsed().as_secs_f64() * 1e6);
@@ -149,8 +163,18 @@ async fn library(cx: &mut AsyncApp) {
             Section::Kind(KindView::Notes),
             Section::Pinned,
         ];
-        out.extend(view.file.smart_folders.iter().map(|f| Section::Smart(f.id.clone())));
-        out.extend(view.scan.folders.iter().map(|f| Section::Folder(f.id.clone())));
+        out.extend(
+            view.file
+                .smart_folders
+                .iter()
+                .map(|f| Section::Smart(f.id.clone())),
+        );
+        out.extend(
+            view.scan
+                .folders
+                .iter()
+                .map(|f| Section::Folder(f.id.clone())),
+        );
         out
     })
     .unwrap_or_default();
@@ -174,7 +198,8 @@ async fn library(cx: &mut AsyncApp) {
             let typed = &word[..end];
             let started = Instant::now();
             with_view(cx, |view, cx| {
-                view.search.update(cx, |input, cx| input.set_text(typed.to_string(), cx));
+                view.search
+                    .update(cx, |input, cx| input.set_text(typed.to_string(), cx));
                 view.query = text::fold(typed);
                 view.refilter(cx);
             });
@@ -183,7 +208,8 @@ async fn library(cx: &mut AsyncApp) {
             sleep(cx, 30).await;
         }
         with_view(cx, |view, cx| {
-            view.search.update(cx, |input, cx| input.set_text(String::new(), cx));
+            view.search
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
             view.query.clear();
             view.refilter(cx);
         });
@@ -227,7 +253,11 @@ async fn panel(cx: &mut AsyncApp) {
     use crate::main_window::{LibraryKind, Panel};
     let main = cx.update(|cx| cx.global::<crate::app_windows::AppWindows>().main);
     sleep(cx, 1500).await;
-    let kinds = [LibraryKind::Recordings, LibraryKind::Screenshots, LibraryKind::Notes];
+    let kinds = [
+        LibraryKind::Recordings,
+        LibraryKind::Screenshots,
+        LibraryKind::Notes,
+    ];
     let mut samples = Vec::new();
     for i in 0..30 {
         let started = Instant::now();
@@ -257,14 +287,16 @@ async fn panel(cx: &mut AsyncApp) {
             let typed = word[..end].to_string();
             let started = Instant::now();
             cx.update(|cx| {
-                main.update(cx, |view, _, cx| view.bench_set_search(&typed, cx)).ok();
+                main.update(cx, |view, _, cx| view.bench_set_search(&typed, cx))
+                    .ok();
                 timed_draw(main.into(), cx);
             });
             samples.push(started.elapsed().as_secs_f64() * 1e6);
             sleep(cx, 30).await;
         }
         cx.update(|cx| {
-            main.update(cx, |view, _, cx| view.bench_set_search("", cx)).ok();
+            main.update(cx, |view, _, cx| view.bench_set_search("", cx))
+                .ok();
         });
     }
     report(PREFIX, "panel-search-key", &mut samples);
@@ -280,4 +312,111 @@ async fn panel(cx: &mut AsyncApp) {
         sleep(cx, 10).await;
     }
     report(PREFIX, "panel-full-redraw", &mut samples);
+}
+
+/// Section and layout switches only, many samples each, on fixed pages.
+async fn switching(cx: &mut AsyncApp) {
+    if wait_for_items(cx).await.is_none() {
+        println!("{PREFIX}: no items, giving up");
+        return;
+    }
+    sleep(cx, 500).await;
+    let sections: Vec<Section> = with_view(cx, |view, _| {
+        let mut out = vec![
+            Section::Home,
+            Section::Kind(KindView::Recordings),
+            Section::Kind(KindView::Screenshots),
+            Section::Kind(KindView::Notes),
+            Section::Pinned,
+        ];
+        out.extend(
+            view.file
+                .smart_folders
+                .iter()
+                .map(|f| Section::Smart(f.id.clone())),
+        );
+        out.extend(
+            view.scan
+                .folders
+                .iter()
+                .map(|f| Section::Folder(f.id.clone())),
+        );
+        out
+    })
+    .unwrap_or_default();
+    for layout in [Layout::List, Layout::Grid] {
+        with_view(cx, |view, cx| view.set_layout(layout, cx));
+        draw(cx);
+        let mut samples = Vec::new();
+        for i in 0..200 {
+            let section = sections[i % sections.len().max(1)].clone();
+            let started = Instant::now();
+            with_view(cx, |view, cx| view.show(section, cx));
+            draw(cx);
+            samples.push(started.elapsed().as_secs_f64() * 1e6);
+            sleep(cx, 15).await;
+        }
+        report(
+            PREFIX,
+            &format!("section-switch-{}", layout.slug()),
+            &mut samples,
+        );
+    }
+    for (label, section) in [
+        ("home", Section::Home),
+        ("screenshots", Section::Kind(KindView::Screenshots)),
+    ] {
+        with_view(cx, |view, cx| view.show(section.clone(), cx));
+        draw(cx);
+        let mut samples = Vec::new();
+        for i in 0..100 {
+            let started = Instant::now();
+            with_view(cx, |view, cx| {
+                view.set_layout(
+                    if i % 2 == 0 {
+                        Layout::Grid
+                    } else {
+                        Layout::List
+                    },
+                    cx,
+                )
+            });
+            draw(cx);
+            samples.push(started.elapsed().as_secs_f64() * 1e6);
+            sleep(cx, 15).await;
+        }
+        report(PREFIX, &format!("layout-switch-{label}"), &mut samples);
+    }
+}
+
+/// Layout toggling for 15 s on Screenshots, untimed, for a profiler.
+async fn toggle_loop(cx: &mut AsyncApp) {
+    if wait_for_items(cx).await.is_none() {
+        return;
+    }
+    with_view(cx, |view, cx| {
+        view.show(Section::Kind(KindView::Screenshots), cx)
+    });
+    println!("{PREFIX}: toggle loop start");
+    let started = Instant::now();
+    let mut switches = 0usize;
+    for i in 0..100_000usize {
+        if started.elapsed() >= Duration::from_secs(15) {
+            break;
+        }
+        with_view(cx, |view, cx| {
+            view.set_layout(
+                if i % 2 == 0 {
+                    Layout::Grid
+                } else {
+                    Layout::List
+                },
+                cx,
+            )
+        });
+        draw(cx);
+        switches += 1;
+        sleep(cx, 5).await;
+    }
+    println!("{PREFIX}: toggle loop end ({switches} switches)");
 }
