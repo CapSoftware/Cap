@@ -161,6 +161,13 @@ function capture(video: HTMLVideoElement): Snapshot {
 	};
 }
 
+// The switch restores the play state itself. An autoplay attribute left on
+// would start a viewer's paused video again once the new source loads.
+function takeOver(video: HTMLVideoElement): Snapshot {
+	video.autoplay = false;
+	return capture(video);
+}
+
 function restore(video: HTMLVideoElement, snapshot: Snapshot) {
 	if (snapshot.time > 0) {
 		try {
@@ -380,7 +387,7 @@ export function useShareLadder({
 	const switchToMp4 = useCallback(() => {
 		const video = videoRef.current;
 		if (engineRef.current !== "hls" || !video) return;
-		const snapshot = capture(video);
+		const snapshot = takeOver(video);
 		detachRef.current?.();
 		detachRef.current = null;
 		if (video.hasAttribute("src")) {
@@ -453,7 +460,7 @@ export function useShareLadder({
 		(video: HTMLVideoElement, mode: LadderEngine, target: Target) => {
 			const current = ladderRef.current;
 			if (!current) return;
-			const snapshot = capture(video);
+			const snapshot = takeOver(video);
 			if (mode === "native") {
 				const onError = () => fallBackToMp4();
 				video.addEventListener("error", onError);
@@ -528,7 +535,7 @@ export function useShareLadder({
 					// again with fresh URLs has not expired, so it falls through.
 					reloadedFor = key;
 					warmRef.current.clear();
-					const resume = capture(video);
+					const resume = takeOver(video);
 					hls.config.startPosition = resume.time;
 					hls.loadSource(current.masterUrl);
 					restore(video, resume);
