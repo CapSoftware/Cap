@@ -350,16 +350,13 @@ export function CapVideoPlayer({
 		const onTimeUpdate = () => {
 			if (moved()) setLadderStart("framed");
 		};
-		const onPause = () => clearTimeout(timer);
 		video.addEventListener("play", onPlay);
 		video.addEventListener("timeupdate", onTimeUpdate);
-		video.addEventListener("pause", onPause);
 		if (!video.paused) onPlay();
 		return () => {
 			clearTimeout(timer);
 			video.removeEventListener("play", onPlay);
 			video.removeEventListener("timeupdate", onTimeUpdate);
-			video.removeEventListener("pause", onPause);
 		};
 	}, [hasMp4Source, ladder, ladderStart, videoRef]);
 
