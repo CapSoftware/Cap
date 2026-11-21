@@ -362,6 +362,69 @@ export async function startMediaServerVideoJob(
 	return { status: "rejected", message: await readErrorMessage(response) };
 }
 
+export type IdleLadderJobStart =
+	| MediaServerJobStart
+	| { status: "unsupported"; jobId: string };
+
+// A media server without idle ladders drops the unknown fields and would run
+// the job at normal priority, so the start is only trusted when the server
+// echoes what it applied. Anything else is cancelled straight away.
+export async function startIdleLadderJob(
+	body: Record<string, unknown>,
+): Promise<IdleLadderJobStart> {
+	const { mediaServerUrl, mediaServerSecret } = getMediaServerConfig();
+
+	let response: Response;
+	try {
+		response = await fetch(`${mediaServerUrl}/video/ladder`, {
+			method: "POST",
+			headers: getMediaServerHeaders(mediaServerSecret),
+			body: JSON.stringify({
+				...body,
+				priority: "idle",
+				verify: true,
+				pruneInvertedRungs: true,
+				webhookSecret: mediaServerSecret,
+			}),
+			signal: AbortSignal.timeout(JOB_START_TIMEOUT_MS),
+		});
+	} catch (error) {
+		return { status: neverConnected(error) ? "unreachable" : "unconfirmed" };
+	}
+
+	if (response.ok) {
+		const data = (await response.json().catch(() => ({}))) as {
+			jobId?: unknown;
+			accepted?: {
+				priority?: unknown;
+				verify?: unknown;
+				pruneInvertedRungs?: unknown;
+			};
+		};
+		if (typeof data.jobId !== "string" || data.jobId.length === 0) {
+			return { status: "unconfirmed" };
+		}
+		if (
+			data.accepted?.priority !== "idle" ||
+			data.accepted.verify !== true ||
+			data.accepted.pruneInvertedRungs !== true
+		) {
+			return { status: "unsupported", jobId: data.jobId };
+		}
+		return { status: "started", jobId: data.jobId };
+	}
+
+	if (response.status === 404 || response.status === 405) {
+		await response.body?.cancel().catch(() => {});
+		return { status: "unavailable" };
+	}
+	if (isRetryableStatus(response.status, DEFAULT_RETRYABLE_STATUSES)) {
+		await response.body?.cancel().catch(() => {});
+		return { status: "busy" };
+	}
+	return { status: "rejected", message: await readErrorMessage(response) };
+}
+
 export const MEDIA_SERVER_SHUTDOWN_MESSAGE = "Server shutting down";
 
 export type MediaServerJobStatus =

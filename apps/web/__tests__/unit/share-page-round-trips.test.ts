@@ -78,9 +78,15 @@ vi.mock("@/lib/share-playback", () => ({
 	canStartPlaybackInHtml: () => true,
 	getSharePlaybackSource: async () => ({
 		url: "https://media.example.com/result.mp4",
+		fileKey: "owner/video/result.mp4",
 		defaultStorage: true,
 	}),
 }));
+vi.mock("next/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("next/server")>()),
+	after: vi.fn(),
+}));
+vi.mock("@/lib/share-ladder", () => ({ recordShareLadderView: vi.fn() }));
 vi.mock("@/lib/share-web-url", () => ({
 	resolveShareWebUrl: vi.fn(),
 	resolveForeignShareRedirect: async () => null,

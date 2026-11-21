@@ -180,7 +180,11 @@ describe("share page playback source storage", () => {
 					bucket,
 					storageIntegrationId,
 				}),
-			).toEqual({ url: signed, defaultStorage });
+			).toEqual({
+				url: signed,
+				fileKey: `${video.owner.id}/${video.id}/result.mp4`,
+				defaultStorage,
+			});
 		},
 	);
 });

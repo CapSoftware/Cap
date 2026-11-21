@@ -34,6 +34,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { isStorageObjectNotFound } from "@/lib/storage-not-found";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 import {
@@ -768,6 +769,11 @@ async function saveMetadataAndComplete(
 				: { duration: metadata.duration }),
 		})
 		.where(eq(videos.id, videoId as Video.VideoId));
+
+	await discardShareLadderSafely(
+		videoId as Video.VideoId,
+		"Recording was imported again",
+	);
 
 	await db()
 		.delete(videoUploads)

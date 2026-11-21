@@ -17,6 +17,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -452,6 +453,11 @@ async function invalidateResultCache(
 	"use step";
 
 	if (bucketId) return;
+
+	await discardShareLadderSafely(
+		videoId as Video.VideoId,
+		"Recording was reprocessed",
+	);
 
 	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
 	if (!distributionId) return;

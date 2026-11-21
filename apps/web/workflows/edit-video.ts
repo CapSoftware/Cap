@@ -32,6 +32,7 @@ import {
 } from "@/lib/edit-transcript";
 import { decryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { transcribeVideo } from "@/lib/transcribe";
 import {
 	clearFailedEdit,
@@ -723,6 +724,11 @@ async function invalidateEditedVideoCache(
 	editSpec: VideoEditSpec,
 ): Promise<void> {
 	"use step";
+
+	await discardShareLadderSafely(
+		videoId as Video.VideoId,
+		"Recording was edited",
+	);
 
 	const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
 	if (!distributionId) return;
