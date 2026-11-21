@@ -252,6 +252,7 @@ describe("POST /video/ladder", () => {
 		const response = await startLadder({
 			videoUrl: `${baseUrl}/large.mp4`,
 			uploads: uploadTargets("checked"),
+			maxTier: "2160p",
 			verify: true,
 			pruneInvertedRungs: true,
 		});
@@ -265,9 +266,11 @@ describe("POST /video/ladder", () => {
 			verify: true,
 			pruneInvertedRungs: true,
 		});
+		expect(jobManager.getJob(started.jobId)?.heavyLadder).toBe(true);
 		const job = await waitForTerminalJob(started.jobId);
 		expect(job.error).toBeUndefined();
 		expect(job.phase).toBe("complete");
+		expect(job.heavyLadder).toBe(false);
 		expect(job.ladder?.renditions.map((rendition) => rendition.name)).toEqual([
 			"720p",
 			"360p",
@@ -309,7 +312,7 @@ describe("POST /video/ladder", () => {
 		const job = await waitForTerminalJob(started.jobId as string);
 		expect(job.phase).toBe("complete");
 		expect(job.idle).toBeUndefined();
-		expect(job.heavyLadder).toBeUndefined();
+		expect(job.heavyLadder).toBe(false);
 		const final = webhooks.findLast(
 			(payload) => payload.jobId === started.jobId,
 		);

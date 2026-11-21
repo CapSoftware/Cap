@@ -1606,8 +1606,9 @@ async function encodeLadderAsync(
 				{ width: metadata.width, height: metadata.height },
 				{ maxTier: options.maxTier },
 			);
-			if (topRung && HEAVY_LADDER_TIERS.has(topRung.name))
-				probedJob.heavyLadder = true;
+			probedJob.heavyLadder = Boolean(
+				topRung && HEAVY_LADDER_TIERS.has(topRung.name),
+			);
 		}
 		const niceness = options.priority === "idle" ? IDLE_NICENESS : undefined;
 
