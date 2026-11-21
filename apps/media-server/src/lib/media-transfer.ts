@@ -178,6 +178,15 @@ export async function withMediaTransfers<T>(
 	});
 }
 
+export function consumeMediaTransferBytes(bytes: number): void {
+	const context = transfers.getStore();
+	if (!context) return;
+	context.controller.signal.throwIfAborted();
+	if (context.bytes + context.reserved + bytes > context.limit)
+		throw new MediaTransferBudgetError();
+	context.bytes += bytes;
+}
+
 export async function getMediaDownloadTarget(
 	input: string,
 	signal?: AbortSignal,

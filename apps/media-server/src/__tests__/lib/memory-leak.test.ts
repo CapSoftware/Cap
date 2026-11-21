@@ -55,7 +55,7 @@ describe("memory and resource leak tests", () => {
 		test("extractAudioStream cleans up after stream is fully consumed", async () => {
 			const beforeCount = getActiveProcessCount();
 
-			const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream } = await extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 
 			const reader = stream.getReader();
 			while (true) {
@@ -71,7 +71,9 @@ describe("memory and resource leak tests", () => {
 		test("extractAudioStream cleans up when stream is cancelled", async () => {
 			const beforeCount = getActiveProcessCount();
 
-			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream, cleanup } = await extractAudioStream(
+				TEST_VIDEO_WITH_AUDIO,
+			);
 
 			const reader = stream.getReader();
 			await reader.read();
@@ -86,7 +88,7 @@ describe("memory and resource leak tests", () => {
 		test("extractAudioStream cleans up via cancel() method", async () => {
 			const beforeCount = getActiveProcessCount();
 
-			const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream } = await extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 
 			await stream.cancel();
 
@@ -133,7 +135,7 @@ describe("memory and resource leak tests", () => {
 				checkHasAudioTrack(TEST_VIDEO_WITH_AUDIO),
 				extractAudio(TEST_VIDEO_WITH_AUDIO),
 				(async () => {
-					const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+					const { stream } = await extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 					const reader = stream.getReader();
 					while (true) {
 						const { done } = await reader.read();
@@ -166,7 +168,7 @@ describe("memory and resource leak tests", () => {
 				await checkHasAudioTrack(TEST_VIDEO_WITH_AUDIO);
 				await extractAudio(TEST_VIDEO_WITH_AUDIO);
 
-				const { stream } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+				const { stream } = await extractAudioStream(TEST_VIDEO_WITH_AUDIO);
 				const reader = stream.getReader();
 				while (true) {
 					const { done } = await reader.read();
@@ -200,7 +202,7 @@ describe("memory and resource leak tests", () => {
 					} else if (i % 3 === 1) {
 						await extractAudio(TEST_VIDEO_WITH_AUDIO);
 					} else {
-						const { stream, cleanup } = extractAudioStream(
+						const { stream, cleanup } = await extractAudioStream(
 							TEST_VIDEO_WITH_AUDIO,
 						);
 						const reader = stream.getReader();
@@ -226,7 +228,9 @@ describe("memory and resource leak tests", () => {
 			await checkHasAudioTrack(TEST_VIDEO_WITH_AUDIO);
 			await extractAudio(TEST_VIDEO_WITH_AUDIO);
 
-			const { stream, cleanup } = extractAudioStream(TEST_VIDEO_WITH_AUDIO);
+			const { stream, cleanup } = await extractAudioStream(
+				TEST_VIDEO_WITH_AUDIO,
+			);
 			await stream.cancel();
 			cleanup();
 
@@ -241,7 +245,7 @@ describe("abort signal handling", () => {
 	test("stream cleanup is called when response is aborted", async () => {
 		let cleanupCalled = false;
 
-		const { stream, cleanup: originalCleanup } = extractAudioStream(
+		const { stream, cleanup: originalCleanup } = await extractAudioStream(
 			TEST_VIDEO_WITH_AUDIO,
 		);
 

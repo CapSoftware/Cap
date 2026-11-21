@@ -1,6 +1,7 @@
 import { mock } from "bun:test";
 import * as dns from "node:dns/promises";
 
+process.env.MEDIA_SERVER_ALLOW_PRIVATE_URLS ??= "true";
 process.env.MEDIA_SERVER_INTERNAL_MEDIA_HOSTS ??= "localhost,127.0.0.1";
 
 const FAKE_ADDRESS = "203.0.113.10";
@@ -9,12 +10,15 @@ const FAKE_ADDRESS = "203.0.113.10";
 // resolve to a fixed public address instead of going to DNS.
 mock.module("node:dns/promises", () => ({
 	...dns,
-	lookup: async (hostname: string) => [
-		{
-			address: hostname === "localhost" ? "127.0.0.1" : FAKE_ADDRESS,
-			family: 4,
-		},
-	],
+	lookup: async (hostname: string) =>
+		hostname.endsWith(".invalid")
+			? []
+			: [
+					{
+						address: hostname === "localhost" ? "127.0.0.1" : FAKE_ADDRESS,
+						family: 4,
+					},
+				],
 }));
 
 // Media requests connect to the address a name resolved to and carry the name

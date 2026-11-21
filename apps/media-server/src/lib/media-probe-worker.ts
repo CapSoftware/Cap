@@ -13,9 +13,12 @@ import {
 	probeMedia,
 	UnreadableMediaInputError,
 } from "./media-probe-read";
+import { BlockedUrlError, withUrlPolicy } from "./url-policy";
 
 function describe(error: unknown): ProbeWorkerFailure {
 	const message = error instanceof Error ? error.message : String(error);
+	if (error instanceof BlockedUrlError)
+		return { kind: "url", message, url: error.url, reason: error.reason };
 	if (error instanceof MediaInputPolicyError)
 		return { kind: "policy", message };
 	if (error instanceof MediaAddressError) return { kind: "address", message };
@@ -56,7 +59,7 @@ function reply(response: WorkerResponse<ProbeWorkerFailure>): void {
 }
 
 process.on("message", (request: ProbeWorkerRequest) => {
-	run(request).then(
+	withUrlPolicy(request.urlPolicy, () => run(request)).then(
 		(value) => reply({ id: request.id, ok: true, value }),
 		(error) => reply({ id: request.id, ok: false, error: describe(error) }),
 	);

@@ -17,6 +17,7 @@ import {
 	extractAudioStream,
 	getActiveAudioOperationCount as getActiveProcessCount,
 } from "../lib/media-audio";
+import { blockedUrlPayload } from "../lib/url-policy";
 
 const audio = new Hono();
 const MEDIA_ENGINE_ERROR_CODE = ["FF", "MPEG_ERROR"].join("");
@@ -103,6 +104,9 @@ audio.post("/check", async (c) => {
 	} catch (err) {
 		console.error("[audio/check] Error:", err);
 
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
+
 		if (isBusyError(err)) {
 			return c.json(
 				{
@@ -184,9 +188,11 @@ audio.post("/extract", async (c) => {
 		}
 
 		if (useStreaming) {
-			const { stream, cleanup } = extractAudioStream(videoUrl, {
-				timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
-			});
+			const { stream, cleanup } = await extractAudioStream(
+				videoUrl,
+				{ timeoutMs: STREAMED_AUDIO_TIMEOUT_MS },
+				c.req.raw.signal,
+			);
 
 			c.req.raw.signal.addEventListener("abort", () => {
 				cleanup();
@@ -214,6 +220,9 @@ audio.post("/extract", async (c) => {
 		});
 	} catch (err) {
 		console.error("[audio/extract] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			return c.json(
@@ -289,10 +298,14 @@ audio.post("/convert", async (c) => {
 
 	try {
 		await assertRemoteMediaAllowed(audioUrl);
-		const { stream, cleanup } = extractAudioStream(audioUrl, {
-			bitrate,
-			timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
-		});
+		const { stream, cleanup } = await extractAudioStream(
+			audioUrl,
+			{
+				bitrate,
+				timeoutMs: STREAMED_AUDIO_TIMEOUT_MS,
+			},
+			c.req.raw.signal,
+		);
 
 		c.req.raw.signal.addEventListener("abort", () => {
 			cleanup();
@@ -310,6 +323,9 @@ audio.post("/convert", async (c) => {
 		);
 	} catch (err) {
 		console.error("[audio/convert] Error:", err);
+
+		const blocked = blockedUrlPayload(err);
+		if (blocked) return c.json(blocked, 400);
 
 		if (isBusyError(err)) {
 			return c.json(
