@@ -241,6 +241,15 @@ impl CapturedFrame {
     pub fn native(&self) -> &NativeCapturedFrame {
         &self.native
     }
+
+    #[cfg(windows)]
+    #[doc(hidden)]
+    pub fn from_windows_frame(frame: cap_camera_windows::Frame, timestamp: Duration) -> Self {
+        Self {
+            native: NativeCapturedFrame::from_frame(frame),
+            timestamp,
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -313,7 +322,28 @@ pub struct CaptureHandle {
 }
 
 impl CaptureHandle {
+    pub fn dropped_samples(&self) -> u64 {
+        #[cfg(windows)]
+        {
+            self.native
+                .as_ref()
+                .map(NativeCaptureHandle::dropped_samples)
+                .unwrap_or(0)
+        }
+        #[cfg(not(windows))]
+        {
+            0
+        }
+    }
+
     pub fn stop_capturing(mut self) -> Result<(), String> {
+        let dropped_samples = self.dropped_samples();
+        if dropped_samples > 0 {
+            tracing::debug!(
+                dropped_samples,
+                "Camera capture stopped with dropped callback samples"
+            );
+        }
         if let Some(feed) = self.native.take() {
             feed.stop_capturing()?;
         }
@@ -323,6 +353,13 @@ impl CaptureHandle {
 
 impl Drop for CaptureHandle {
     fn drop(&mut self) {
+        let dropped_samples = self.dropped_samples();
+        if dropped_samples > 0 {
+            tracing::debug!(
+                dropped_samples,
+                "Camera capture released with dropped callback samples"
+            );
+        }
         if let Some(feed) = self.native.take() {
             feed.stop_capturing().ok();
         }

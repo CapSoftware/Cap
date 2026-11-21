@@ -2,8 +2,8 @@ use cap_camera::{CapturedFrame, NativeFrameFormat};
 use ffmpeg::{Packet, format::Pixel, frame::Video as FFVideo};
 use std::cell::RefCell;
 
-use crate::CapturedFrameExt;
 use crate::mjpeg_idct::idct_lowres;
+use crate::{CONVERSION_STATS, CapturedFrameExt};
 
 #[derive(thiserror::Error, Debug)]
 pub enum AsFFmpegError {
@@ -102,7 +102,11 @@ fn mjpeg_frame_covering(
 impl CapturedFrameExt for CapturedFrame<'_> {
     fn as_ffmpeg(&self) -> Result<FFVideo, AsFFmpegError> {
         let native = self.native();
-        frame_from_bytes(native.bytes, native.format)
+        let started = std::time::Instant::now();
+        let frame = frame_from_bytes(native.bytes, native.format)?;
+
+        CONVERSION_STATS.record_copy(started.elapsed().as_nanos() as u64);
+        Ok(frame)
     }
 
     fn as_ffmpeg_covering(

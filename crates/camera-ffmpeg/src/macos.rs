@@ -7,7 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::CapturedFrameExt;
+use crate::{CONVERSION_STATS, CapturedFrameExt};
 
 type CachedScaler = (Pixel, u32, u32, scaling::Context, ffmpeg::frame::Video);
 
@@ -77,7 +77,8 @@ impl CapturedFrameExt for CapturedFrame {
 pub fn sample_buf_as_ffmpeg(
     sample_buf: &cm::SampleBuf,
 ) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
-    {
+    let started = std::time::Instant::now();
+    let frame = {
         let mut image_buf = sample_buf
             .image_buf()
             .map(|b| b.retained())
@@ -115,7 +116,7 @@ pub fn sample_buf_as_ffmpeg(
             cv::pixel_buffer::LockFlags::READ_ONLY,
         )?;
 
-        let res = match cidre::four_cc_to_str(&mut format_desc.media_sub_type().to_be_bytes()) {
+        match cidre::four_cc_to_str(&mut format_desc.media_sub_type().to_be_bytes()) {
             "2vuy" => {
                 let mut ff_frame = ffmpeg::frame::Video::new(
                     ffmpeg::format::Pixel::UYVY422,
@@ -453,8 +454,9 @@ pub fn sample_buf_as_ffmpeg(
                     return Err(AsFFmpegError::UnsupportedSubType(format.to_string()));
                 }
             }
-        };
+        }
+    };
 
-        Ok(res)
-    }
+    CONVERSION_STATS.record_copy(started.elapsed().as_nanos() as u64);
+    Ok(frame)
 }
