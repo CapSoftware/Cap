@@ -9,6 +9,8 @@ import nodeCrypto, {
 } from "node:crypto";
 import {
 	authChallenges,
+	mcpOAuthClients,
+	mcpOAuthCodes,
 	mcpOAuthTokens,
 	userPasskeys,
 	users,
@@ -1175,6 +1177,156 @@ describe.runIf(Boolean(databaseUrl))(
 				await database()
 					.delete(mcpOAuthTokens)
 					.where(eq(mcpOAuthTokens.id, tokenId));
+			});
+
+			describe("MCP authorization codes and sign-out", () => {
+				const redirectUri = "https://client.test/callback";
+				const resource = "https://cap.test/api/mcp";
+				const clients: string[] = [];
+
+				async function issueCode(
+					user: Pick<
+						Awaited<ReturnType<typeof makeUser>>,
+						"id" | "authSessionVersion"
+					>,
+				) {
+					const { createMcpAuthorizationCode } = await import("@/lib/mcp-auth");
+					const clientId = `cap_mcp_client_${id()}`;
+					clients.push(clientId);
+					await database()
+						.insert(mcpOAuthClients)
+						.values({
+							id: id(),
+							clientId,
+							clientName: "Test client",
+							redirectUris: [redirectUri],
+						});
+					const verifier = nodeCrypto.randomBytes(32).toString("base64url");
+					const code = await createMcpAuthorizationCode(user, {
+						clientId,
+						redirectUri,
+						codeChallenge: nodeCrypto
+							.createHash("sha256")
+							.update(verifier)
+							.digest("base64url"),
+						state: null,
+						resource,
+					});
+					return new URLSearchParams({
+						grant_type: "authorization_code",
+						code,
+						client_id: clientId,
+						redirect_uri: redirectUri,
+						code_verifier: verifier,
+						resource,
+					});
+				}
+
+				async function liveTokens(userId: User.UserId) {
+					const rows = await database()
+						.select({ revokedAt: mcpOAuthTokens.revokedAt })
+						.from(mcpOAuthTokens)
+						.where(eq(mcpOAuthTokens.userId, userId));
+					return rows.filter((row) => row.revokedAt === null).length;
+				}
+
+				afterAll(async () => {
+					if (createdUsers.length > 0) {
+						await database()
+							.delete(mcpOAuthTokens)
+							.where(inArray(mcpOAuthTokens.userId, createdUsers));
+						await database()
+							.delete(mcpOAuthCodes)
+							.where(inArray(mcpOAuthCodes.userId, createdUsers));
+					}
+					if (clients.length > 0)
+						await database()
+							.delete(mcpOAuthClients)
+							.where(inArray(mcpOAuthClients.clientId, clients));
+				});
+
+				it("a pending code can't be exchanged after signing out of all devices", async () => {
+					const { signOutAllDevices } = await import(
+						"@/app/(org)/dashboard/settings/account/server"
+					);
+					const { exchangeMcpCode } = await import("@/lib/mcp-auth");
+					const user = await makeUser();
+					const params = await issueCode(user);
+					fixture.currentUser = user;
+					await signOutAllDevices();
+					expect(await exchangeMcpCode(params)).toBeNull();
+					expect(await liveTokens(user.id)).toBe(0);
+				});
+
+				it("a code can't be issued from a session that was signed out", async () => {
+					const { signOutAllDevices } = await import(
+						"@/app/(org)/dashboard/settings/account/server"
+					);
+					const user = await makeUser();
+					fixture.currentUser = user;
+					await signOutAllDevices();
+					await expect(issueCode(user)).rejects.toThrow("Session expired");
+					const codes = await database()
+						.select({ id: mcpOAuthCodes.id })
+						.from(mcpOAuthCodes)
+						.where(eq(mcpOAuthCodes.userId, user.id));
+					expect(codes).toHaveLength(0);
+				});
+
+				it("a token from before sign-out can't be refreshed", async () => {
+					const { signOutAllDevices } = await import(
+						"@/app/(org)/dashboard/settings/account/server"
+					);
+					const { exchangeMcpCode, refreshMcpTokens } = await import(
+						"@/lib/mcp-auth"
+					);
+					const user = await makeUser();
+					const params = await issueCode(user);
+					const tokens = await exchangeMcpCode(params);
+					expect(tokens?.refresh_token).toBeTruthy();
+					fixture.currentUser = user;
+					await signOutAllDevices();
+					expect(
+						await refreshMcpTokens(
+							new URLSearchParams({
+								grant_type: "refresh_token",
+								refresh_token: tokens?.refresh_token ?? "",
+								client_id: params.get("client_id") ?? "",
+								resource,
+							}),
+						),
+					).toBeNull();
+					expect(await liveTokens(user.id)).toBe(0);
+				});
+
+				it("an exchange or refresh racing sign-out never leaves a live token", async () => {
+					const { signOutAllDevices } = await import(
+						"@/app/(org)/dashboard/settings/account/server"
+					);
+					const { exchangeMcpCode, refreshMcpTokens } = await import(
+						"@/lib/mcp-auth"
+					);
+					for (let round = 0; round < 6; round++) {
+						const user = await makeUser();
+						const params = await issueCode(user);
+						const pending = await issueCode(user);
+						const tokens = await exchangeMcpCode(params);
+						fixture.currentUser = user;
+						await Promise.all([
+							exchangeMcpCode(pending),
+							refreshMcpTokens(
+								new URLSearchParams({
+									grant_type: "refresh_token",
+									refresh_token: tokens?.refresh_token ?? "",
+									client_id: params.get("client_id") ?? "",
+									resource,
+								}),
+							),
+							signOutAllDevices(),
+						]);
+						expect(await liveTokens(user.id)).toBe(0);
+					}
+				});
 			});
 
 			it("signing out of all devices removes passkeys and pending checks", async () => {
