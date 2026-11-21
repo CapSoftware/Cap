@@ -158,6 +158,8 @@ public struct RecordingCreated: Codable, Sendable, Hashable {
 public enum RecordingLimits {
     /// Matches `mobileFreeRecordingDurationSeconds` on the server.
     public static let freeDuration: TimeInterval = 5 * 60
+    /// Matches `mobileRecordingDurationToleranceSeconds` on the server.
+    public static let freeTolerance: TimeInterval = 5
     public static let segmentDuration: TimeInterval = 2
 }
 

@@ -200,6 +200,7 @@ final class SessionModel {
     func tearDown() {
         tornDown = true
         uploads.cancelAll()
+        StudioSession.shared.signedOut()
         for library in libraries.values { library.cancel() }
         libraries.removeAll()
     }

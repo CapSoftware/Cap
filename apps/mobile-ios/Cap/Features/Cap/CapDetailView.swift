@@ -68,7 +68,8 @@ struct CapDetailView: View {
                 EditorView(model: editor) { outcome in
                     self.editor = nil
                     switch outcome {
-                    case .cancelled:
+                    case .cancelled, .rendered:
+                        // A rendered edit uploads as a new Cap; this one stays as it is.
                         break
                     case .saved:
                         session.toasts.show("Saving your edit. Your Cap updates in a moment.", systemImage: "scissors")

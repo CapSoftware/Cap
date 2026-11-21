@@ -27,7 +27,9 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var api: CapAPI?
     private var limit: TimeInterval?
     private var job: RecordingJob?
-    private var writer: SegmentWriter?
+    private var writer: (any RecordingSink)?
+    /// Set when Cap asked for a Studio recording: the screen is kept on the phone for editing, not uploaded.
+    private var studio: (store: StudioStore, projectId: String)?
     private var audioSource: RPSampleBufferType?
     private var lastFrame: CMSampleBuffer?
     private var lastFrameAt: CMTime = .invalid
@@ -40,6 +42,13 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     private var repeatedFrames = 0
 
     override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {
+        if let request = StudioScreenRequest.take(in: StudioStore.requests()) {
+            let store = StudioStore.shared(owner: request.ownerId)
+            queue.sync { studio = (store, request.projectId) }
+            startIdleTimer()
+            listenForStop()
+            return
+        }
         guard let environment = Self.environment() else {
             finish(message: "Cap couldn't start recording. Reinstall Cap and try again.")
             return
@@ -123,6 +132,12 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         writer?.appendVideo(buffer)
         lastFrame = buffer
         lastFrameAt = presentation
+        if studio != nil, (writer as? StudioTrackWriter)?.failed == true {
+            complete { [weak self] in
+                self?.finish(message: "Recording stopped because this iPhone is out of space. What was recorded is saved in Cap.")
+            }
+            return
+        }
         if let limit, let writer, writer.duration >= limit {
             limitReached()
         }
@@ -130,6 +145,27 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
 
     /// Created on the first frame, when the screen's size is known.
     private func start(with buffer: CMSampleBuffer) -> Bool {
+        if let studio {
+            guard studio.store.hasRoomToRecord() else {
+                finish(message: "Free up at least 1 GB on this iPhone to record in Studio Mode.")
+                return false
+            }
+            do {
+                let directory = studio.store.directory(for: studio.projectId)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                writer = try StudioTrackWriter(url: directory.appending(path: Self.studioScreenFile), settings: .init(kind: .screen, audio: true)) { started in
+                    // Noted as soon as picture or sound starts: if this process is ended mid-recording, Cap can still recover it.
+                    var pending = started
+                    pending.duration = 0
+                    pending.audio?.duration = 0
+                    try? pending.save(as: "screen", in: directory)
+                }
+                return true
+            } catch {
+                finish(message: "Cap couldn't start recording your screen.")
+                return false
+            }
+        }
         guard let uploads, let credentials, let pixels = CMSampleBufferGetImageBuffer(buffer) else { return false }
         // H.264 wants even dimensions.
         let width = CVPixelBufferGetWidth(pixels) & ~1
@@ -219,6 +255,10 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
         idleTimer = nil
         notify_cancel(stopToken)
         lastFrame = nil
+        if let studio {
+            completeStudio(studio, handOff: handOff, done)
+            return
+        }
         guard let writer, let job, let uploads else {
             done()
             return
@@ -286,6 +326,43 @@ final class SampleHandler: RPBroadcastSampleHandler, @unchecked Sendable {
     }
 
     private static let notificationId = "so.cap.mobile.screen-recording"
+    private static let studioScreenFile = "screen.mp4"
+
+    /// Studio recordings finish on the phone: close the file, note when it started, and tell Cap it's there.
+    private func completeStudio(_ studio: (store: StudioStore, projectId: String), handOff: Bool, _ done: @escaping @Sendable () -> Void) {
+        guard let writer = writer as? StudioTrackWriter else {
+            done()
+            return
+        }
+        self.writer = nil
+        let directory = studio.store.directory(for: studio.projectId)
+        let counts = (frames: frames, repeated: repeatedFrames, started: started)
+        writer.finish(at: CMClockGetTime(CMClockGetHostTimeClock())) { result in
+            let duration = (try? result.get()) ?? 0
+            ProcessStats.measure(since: counts.started, process: "broadcast-studio", recordedSeconds: duration, extra: [
+                "frames": Double(counts.frames),
+                "repeatedFrames": Double(counts.repeated),
+            ]).save()
+            if var info = writer.info {
+                if duration > 0 { info.duration = duration }
+                try? info.save(as: "screen", in: directory)
+            }
+            notify_post(StudioScreenRequest.finishedNotification)
+            if !handOff {
+                Task { await Self.notifyStudioSaved(projectId: studio.projectId) }
+            }
+            done()
+        }
+    }
+
+    private static func notifyStudioSaved(projectId: String) async {
+        let content = UNMutableNotificationContent()
+        content.title = "Your Studio recording is ready"
+        content.body = "Tap to edit it in Cap."
+        content.userInfo = ["studioProject": projectId]
+        content.interruptionLevel = .active
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: notificationId, content: content, trigger: nil))
+    }
 
     private static func notifySaved(_ entry: RecordingHandoff.Entry?) async {
         let content = UNMutableNotificationContent()
