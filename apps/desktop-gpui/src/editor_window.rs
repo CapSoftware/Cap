@@ -1963,6 +1963,11 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
+    /// A setting changed while keys were generating; generate again after.
+    pub(crate) keyboard_refresh_pending: bool,
+    /// History is held so a key setting and its regenerated keys are one
+    /// undo step.
+    pub(crate) keyboard_refresh_paused: bool,
     clip_speed: Option<ClipSpeedMenu>,
     markers: markers::MarkersState,
     transition_popover: Option<TransitionPopover>,
@@ -2749,6 +2754,8 @@ impl EditorWindow {
             hovering_generate_zoom: false,
             generating_keyboard: false,
             keyboard_generation_message: None,
+            keyboard_refresh_pending: false,
+            keyboard_refresh_paused: false,
             clip_speed: None,
             markers: markers_state,
             transition_popover: None,

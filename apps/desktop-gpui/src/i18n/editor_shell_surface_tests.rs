@@ -234,7 +234,6 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::export::done::link_copied(), "Link copied"),
         (tr::editor::export::done::open_file(), "Open File"),
         (tr::editor::export::done::copy_file(), "Copy to Clipboard"),
-        (tr::editor::tabs::keyboard::show_typing(), "Show Typing"),
         (tr::editor::window::looks::launch_day(), "Launch Day"),
         (
             tr::editor::window::looks::launch_day_description(),
@@ -863,6 +862,20 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::tabs::keyboard::no_shortcuts(),
             "No shortcuts were pressed in this recording.",
+        ),
+        (
+            tr::editor::tabs::keyboard::kept_edits(),
+            "Your edits to the recorded keys are kept. Regenerate to apply this change to them.",
+        ),
+        (tr::editor::tabs::keyboard::show_shortcuts(), "Shortcuts"),
+        (tr::editor::tabs::keyboard::show_all_keys(), "All keys"),
+        (
+            tr::editor::tabs::keyboard::show_shortcuts_hint(),
+            "Shows key combos such as ⌘C. Typing stays hidden.",
+        ),
+        (
+            tr::editor::tabs::keyboard::show_all_keys_hint(),
+            "Shows shortcuts and everything you type.",
         ),
         (
             tr::editor::tabs::keyboard::permission_action(),

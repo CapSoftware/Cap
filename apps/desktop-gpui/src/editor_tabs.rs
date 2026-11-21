@@ -1096,6 +1096,23 @@ pub struct OpenMenu {
     pub state: ui::MenuState,
 }
 
+/// Whether the recorded keys on the track (keys added by hand aside) are
+/// exactly `generated`, so nothing the user changed would be lost.
+fn recorded_keys_match(
+    track: &[cap_project::KeyboardTrackSegment],
+    generated: &[cap_project::KeyboardTrackSegment],
+) -> bool {
+    let recorded: Vec<_> = track
+        .iter()
+        .filter(|segment| !cap_project::is_manual_keyboard_segment(segment))
+        .collect();
+    recorded.len() == generated.len()
+        && recorded
+            .iter()
+            .zip(generated)
+            .all(|(a, b)| serde_json::to_value(a).ok() == serde_json::to_value(b).ok())
+}
+
 /// Why generating found nothing to show: no keys pressed in the edit, or
 /// keys but no shortcuts.
 fn empty_generation_message(others_pressed: bool) -> &'static str {
@@ -2684,12 +2701,41 @@ impl EditorWindow {
 
     // -- Keyboard ------------------------------------------------------------
 
-    /// A setting that changes which recorded keys show takes effect at once:
-    /// the recording's keys are generated again (keys added by hand stay),
-    /// and undoable, while keys are on.
-    pub(crate) fn refresh_recorded_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if keyboard_settings(&self.project).enabled {
-            self.generate_keyboard_segments_clicked(window, cx);
+    /// A setting that changes which recorded keys show takes effect at once
+    /// while keys are on: the recording's keys are generated again, keys added
+    /// by hand stay, and one undo puts back both the setting and the keys.
+    /// Recorded keys the user has edited are kept as they are (see
+    /// `generate_keyboard_segments`).
+    pub(crate) fn change_shown_keys(
+        &mut self,
+        reason: &'static str,
+        change: impl FnOnce(&mut KeyboardSettings),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = keyboard_settings(&self.project);
+        if !previous.enabled {
+            self.set_keyboard_setting(reason, window, cx, change);
+            return;
+        }
+        // The setting and the keys it regenerates are one undo step: history
+        // holds until the generation lands (see `finish_keyboard_refresh`).
+        if !self.keyboard_refresh_paused {
+            self.history.pause();
+            self.keyboard_refresh_paused = true;
+        }
+        self.set_keyboard_setting(reason, window, cx, change);
+        self.generate_keyboard_segments(Some(previous), window, cx);
+        // Generation that could not start leaves nothing to wait for.
+        self.finish_keyboard_refresh();
+    }
+
+    /// Closes the undo step a setting change opened, once its keys are in.
+    fn finish_keyboard_refresh(&mut self) {
+        if self.keyboard_refresh_paused && !self.generating_keyboard {
+            self.keyboard_refresh_paused = false;
+            let project = self.project.clone();
+            self.history.resume(&project);
         }
     }
 
@@ -2712,7 +2758,26 @@ impl EditorWindow {
     }
 
     fn generate_keyboard_segments_clicked(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.generate_keyboard_segments(None, window, cx);
+    }
+
+    /// Generates the recording's keys. With `unedited_from`, the settings in
+    /// force before a change, the recorded keys on the track are replaced
+    /// only if they are still what those settings generated: keys the user
+    /// trimmed, split or deleted are kept, and a note says how to apply the
+    /// change to them.
+    fn generate_keyboard_segments(
+        &mut self,
+        unedited_from: Option<KeyboardSettings>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.generating_keyboard {
+            // A setting changed again while keys generate: run once more when
+            // this finishes, against the track as it stands then.
+            if unedited_from.is_some() {
+                self.keyboard_refresh_pending = true;
+            }
             return;
         }
         let Some(timeline) = self.project.timeline.clone() else {
@@ -2738,101 +2803,128 @@ impl EditorWindow {
         cx.notify();
         window.refresh();
 
+        let retry_from = unedited_from.clone();
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     let meta = RecordingMeta::load_for_project(&path)
                         .map_err(tr::editor::tabs::keyboard::load_failed)?;
+                    if let Some(previous) = unedited_from {
+                        let before = cap_project::generate_project_keyboard_segments_reporting(
+                            &meta, &timeline, &previous,
+                        )?
+                        .0;
+                        if !recorded_keys_match(&timeline.keyboard_segments, &before) {
+                            return Ok(None);
+                        }
+                    }
                     cap_project::generate_project_keyboard_segments_reporting(
                         &meta, &timeline, &settings,
                     )
+                    .map(Some)
                 })
                 .await;
 
             this.update_in(cx, |this, window, cx| {
                 this.generating_keyboard = false;
-                let (segments, others_pressed) = match result {
-                    Ok(result) => result,
-                    Err(error) => {
-                        tracing::error!("keyboard generation failed: {error}");
-                        this.keyboard_generation_message = Some(error);
+                if std::mem::take(&mut this.keyboard_refresh_pending) {
+                    this.generate_keyboard_segments(retry_from, window, cx);
+                    return;
+                }
+                let mut apply = |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                    let (segments, others_pressed) = match result {
+                        Ok(Some(result)) => result,
+                        Ok(None) => {
+                            this.keyboard_generation_message =
+                                Some(tr::editor::tabs::keyboard::kept_edits().into());
+                            cx.notify();
+                            window.refresh();
+                            return;
+                        }
+                        Err(error) => {
+                            tracing::error!("keyboard generation failed: {error}");
+                            this.keyboard_generation_message = Some(error);
+                            cx.notify();
+                            window.refresh();
+                            return;
+                        }
+                    };
+                    let timeline_unchanged = this
+                        .project
+                        .timeline
+                        .as_ref()
+                        .and_then(|timeline| serde_json::to_vec(timeline).ok())
+                        .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
+                    let settings_unchanged =
+                        keyboard_generation_settings_fingerprint(&keyboard_settings(&this.project))
+                            == settings_fingerprint;
+                    if keyboard_settings(&this.project).enabled != enabled_before {
+                        cx.notify();
+                        return;
+                    }
+                    if !timeline_unchanged || !settings_unchanged {
+                        this.keyboard_generation_message =
+                            Some(tr::editor::tabs::keyboard::changed_during_generation().into());
                         cx.notify();
                         window.refresh();
                         return;
                     }
-                };
-                let timeline_unchanged = this
-                    .project
-                    .timeline
-                    .as_ref()
-                    .and_then(|timeline| serde_json::to_vec(timeline).ok())
-                    .is_some_and(|fingerprint| fingerprint == timeline_fingerprint);
-                let settings_unchanged =
-                    keyboard_generation_settings_fingerprint(&keyboard_settings(&this.project))
-                        == settings_fingerprint;
-                if keyboard_settings(&this.project).enabled != enabled_before {
-                    cx.notify();
-                    return;
-                }
-                if !timeline_unchanged || !settings_unchanged {
-                    this.keyboard_generation_message =
-                        Some(tr::editor::tabs::keyboard::changed_during_generation().into());
-                    cx.notify();
-                    window.refresh();
-                    return;
-                }
-                let has_segments = !segments.is_empty();
-                let already_empty = this
-                    .project
-                    .timeline
-                    .as_ref()
-                    .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
-                if !has_segments && already_empty {
-                    this.keyboard_generation_message =
-                        Some(empty_generation_message(others_pressed).into());
-                    cx.notify();
-                    window.refresh();
-                    return;
-                }
+                    let has_segments = !segments.is_empty();
+                    let already_empty = this
+                        .project
+                        .timeline
+                        .as_ref()
+                        .is_none_or(|timeline| timeline.keyboard_segments.is_empty());
+                    if !has_segments && already_empty {
+                        this.keyboard_generation_message =
+                            Some(empty_generation_message(others_pressed).into());
+                        cx.notify();
+                        window.refresh();
+                        return;
+                    }
 
-                if has_segments {
-                    this.tracks.keyboard = true;
-                }
-                this.edit_project("keyboard-generate", window, cx, move |project| {
                     if has_segments {
-                        let keyboard = project.keyboard.get_or_insert_with(KeyboardData::default);
-                        keyboard.settings.enabled = true;
+                        this.tracks.keyboard = true;
                     }
-                    let Some(timeline) = project.timeline.as_mut() else {
-                        return false;
-                    };
-                    // Keys added by hand are not the recording's to replace.
-                    let mut segments = segments;
-                    segments.extend(
-                        timeline
-                            .keyboard_segments
-                            .iter()
-                            .filter(|segment| cap_project::is_manual_keyboard_segment(segment))
-                            .cloned(),
-                    );
-                    segments.sort_by(|a, b| a.start.total_cmp(&b.start));
-                    timeline.keyboard_segments = segments;
-                    true
-                });
-                if has_segments {
-                    this.keyboard_generation_message = None;
-                } else {
-                    if this.selection.as_ref().is_some_and(|selection| {
-                        selection.track == crate::editor_timeline::TrackKind::Keyboard
-                    }) {
-                        this.set_selection(None, cx);
+                    this.edit_project("keyboard-generate", window, cx, move |project| {
+                        if has_segments {
+                            let keyboard =
+                                project.keyboard.get_or_insert_with(KeyboardData::default);
+                            keyboard.settings.enabled = true;
+                        }
+                        let Some(timeline) = project.timeline.as_mut() else {
+                            return false;
+                        };
+                        // Keys added by hand are not the recording's to replace.
+                        let mut segments = segments;
+                        segments.extend(
+                            timeline
+                                .keyboard_segments
+                                .iter()
+                                .filter(|segment| cap_project::is_manual_keyboard_segment(segment))
+                                .cloned(),
+                        );
+                        segments.sort_by(|a, b| a.start.total_cmp(&b.start));
+                        timeline.keyboard_segments = segments;
+                        true
+                    });
+                    if has_segments {
+                        this.keyboard_generation_message = None;
+                    } else {
+                        if this.selection.as_ref().is_some_and(|selection| {
+                            selection.track == crate::editor_timeline::TrackKind::Keyboard
+                        }) {
+                            this.set_selection(None, cx);
+                        }
+                        this.keyboard_generation_message =
+                            Some(empty_generation_message(others_pressed).into());
+                        cx.notify();
+                        window.refresh();
                     }
-                    this.keyboard_generation_message =
-                        Some(empty_generation_message(others_pressed).into());
-                    cx.notify();
-                    window.refresh();
-                }
+                };
+                apply(this, window, cx);
+                this.finish_keyboard_refresh();
             })
             .ok();
         })
@@ -3123,29 +3215,6 @@ impl EditorWindow {
                         .flex()
                         .flex_col()
                         .gap(px(12.))
-                        .child(
-                            ui::Subfield::plain(&theme, tr::editor::tabs::keyboard::show_typing())
-                                .child(
-                                    ui::Toggle::plain(
-                                        &theme,
-                                        "keyboard-typing",
-                                        settings.show_typing,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            let next =
-                                                !keyboard_settings(&this.project).show_typing;
-                                            this.set_keyboard_setting(
-                                                "keyboard-typing",
-                                                window,
-                                                cx,
-                                                move |settings| settings.show_typing = next,
-                                            );
-                                            this.refresh_recorded_keys(window, cx);
-                                        },
-                                    )),
-                                ),
-                        )
                         .when(settings.show_typing, |this| {
                             this.child(
                                 ui::Subfield::plain(
@@ -3162,13 +3231,12 @@ impl EditorWindow {
                                         |this, _, window, cx| {
                                             let next =
                                                 !keyboard_settings(&this.project).show_modifiers;
-                                            this.set_keyboard_setting(
+                                            this.change_shown_keys(
                                                 "keyboard-modifiers",
+                                                move |settings| settings.show_modifiers = next,
                                                 window,
                                                 cx,
-                                                move |settings| settings.show_modifiers = next,
                                             );
-                                            this.refresh_recorded_keys(window, cx);
                                         },
                                     )),
                                 ),
@@ -3189,13 +3257,12 @@ impl EditorWindow {
                                     |this, _, window, cx| {
                                         let next =
                                             !keyboard_settings(&this.project).show_special_keys;
-                                        this.set_keyboard_setting(
+                                        this.change_shown_keys(
                                             "keyboard-special",
+                                            move |settings| settings.show_special_keys = next,
                                             window,
                                             cx,
-                                            move |settings| settings.show_special_keys = next,
                                         );
-                                        this.refresh_recorded_keys(window, cx);
                                     },
                                 )),
                             ),
@@ -3305,6 +3372,56 @@ impl EditorWindow {
                         }
                     }))
                     .into_any_element(),
+            )
+            // What the keys show: shortcuts only, or everything typed too.
+            // Up front, so it is clear the typing can be shown.
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        ui::SegmentedControl::editor(
+                            &theme,
+                            "keyboard-show",
+                            vec![
+                                ui::SegmentOption::new(
+                                    tr::editor::tabs::keyboard::show_shortcuts(),
+                                    !settings.show_typing,
+                                ),
+                                ui::SegmentOption::new(
+                                    tr::editor::tabs::keyboard::show_all_keys(),
+                                    settings.show_typing,
+                                ),
+                            ],
+                        )
+                        .stretch()
+                        .on_select(cx.listener(
+                            |this, index: &usize, window, cx| {
+                                let next = *index == 1;
+                                if keyboard_settings(&this.project).show_typing == next {
+                                    return;
+                                }
+                                this.change_shown_keys(
+                                    "keyboard-typing",
+                                    move |settings| settings.show_typing = next,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .text_color(Hsla::from(theme.editor.text_2))
+                            .child(if settings.show_typing {
+                                tr::editor::tabs::keyboard::show_all_keys_hint()
+                            } else {
+                                tr::editor::tabs::keyboard::show_shortcuts_hint()
+                            }),
+                    ),
             )
             // Typing keys onto the video opens its own panel.
             .child({
@@ -5084,6 +5201,27 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Recorded keys still as generated may be replaced; a deleted or
+    /// trimmed one marks the track as edited. Keys added by hand never count.
+    #[test]
+    fn recorded_keys_count_as_edited_once_changed() {
+        let key = |id: &str, start: f64, end: f64| -> cap_project::KeyboardTrackSegment {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "start": start, "end": end, "displayText": "⌘C", "keys": []
+            }))
+            .unwrap()
+        };
+        let generated = vec![key("kb-1", 1.0, 2.0), key("kb-2", 3.0, 4.0)];
+        let mut track = generated.clone();
+        track.push(key("kb-manual-1", 5.0, 6.0));
+        assert!(recorded_keys_match(&track, &generated));
+        track.remove(1);
+        assert!(!recorded_keys_match(&track, &generated));
+        let mut trimmed = generated.clone();
+        trimmed[0].end = 1.5;
+        assert!(!recorded_keys_match(&trimmed, &generated));
+    }
 
     #[test]
     fn an_empty_generation_says_whether_any_keys_were_pressed() {
