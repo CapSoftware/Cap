@@ -280,7 +280,6 @@ async function uploadPreviews(
 			);
 		}
 	} catch (error) {
-		signal.throwIfAborted();
 		console.warn("[loom-importer] Thumbnail failed", error);
 	}
 	try {
@@ -298,9 +297,9 @@ async function uploadPreviews(
 			}
 		}
 	} catch (error) {
-		signal.throwIfAborted();
 		console.warn("[loom-importer] Preview GIF failed", error);
 	}
+	signal.throwIfAborted();
 }
 
 async function waitForDiskSpace(
