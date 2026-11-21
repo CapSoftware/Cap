@@ -3030,6 +3030,7 @@ impl EditorWindow {
         if !self.project_ready() {
             return;
         }
+        self.keyboard_follow_holds();
         self.synchronize_caption_track(false);
         self.history.record(&self.project);
         self.transcript.dirty = true;
@@ -3043,6 +3044,16 @@ impl EditorWindow {
         self.schedule_save(window, cx);
         cx.notify();
         window.refresh();
+    }
+
+    fn keyboard_follow_holds(&mut self) -> bool {
+        let (Some(before), Some(timeline)) = (
+            self.history.current().timeline.as_ref(),
+            self.project.timeline.as_mut(),
+        ) else {
+            return false;
+        };
+        edits::keyboard_follow_holds(before, timeline)
     }
 
     pub(crate) fn project_changed_live(&mut self, cx: &mut Context<Self>) {
@@ -6325,6 +6336,7 @@ impl EditorWindow {
         };
         let committed = self.edit(
             |timeline| {
+                let before = timeline.clone();
                 let Some(segment) = timeline.segments.get_mut(draft.index) else {
                     return false;
                 };
@@ -6333,6 +6345,7 @@ impl EditorWindow {
                 }
                 segment.start = draft.start;
                 segment.end = draft.end;
+                edits::carry_keyboard_with_clips(&before, timeline, |index| index);
                 true
             },
             window,
@@ -7213,6 +7226,10 @@ impl EditorWindow {
         }
 
         if drag.paused {
+            if drag.moved && self.keyboard_follow_holds() {
+                self.rebuild_timeline();
+                self.publish_project();
+            }
             let config = self.project.clone();
             self.history.resume(&config);
         }
