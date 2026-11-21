@@ -255,12 +255,45 @@ async fn assert_reference<T: FromSampleBytes + cpal::FromSample<f32> + PartialEq
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn output_matches_ordinary_resampling_preroll_formats_channels_and_tail() {
-    for (rate, channels) in [(48_000, 2), (44_100, 2), (44_100, 1)] {
+    for (rate, channels) in [
+        (48_000, 2),
+        (44_100, 2),
+        (44_100, 1),
+        (96_000, 2),
+        (192_000, 2),
+    ] {
         assert_reference::<f32>(2.013_345, 1.123_45, rate, channels).await;
         assert_reference::<i16>(2.013_345, 1.123_45, rate, channels).await;
     }
     assert_reference::<i16>(1_800.013_345, 1_799.923_45, 44_100, 2).await;
     assert_reference::<f64>(1_800.013_345, 1_799.923_45, 48_000, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn upsampled_output_plays_the_loaded_audio_before_waiting_for_more() {
+    let raw = audio(48_000);
+    let (loader, producer) = ProgressiveAudioTestProducer::new();
+    append(&producer, &raw, 0..32_768);
+    let (buffer, handle) = spawn::<f32>(
+        sources(1.0, Some(loader)),
+        info::<f32>(96_000, 2),
+        0.0,
+        tokio::runtime::Handle::current(),
+    )
+    .unwrap();
+    let ready = tokio::time::timeout(Duration::from_secs(2), async {
+        while buffer.control.produced.load(Ordering::Acquire) < 64_000 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    let produced = buffer.control.produced.load(Ordering::Acquire);
+    drop(buffer);
+    handle.stop_and_wait().await.unwrap();
+    assert!(
+        ready.is_ok(),
+        "only {produced} of the loaded output frames became playable"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
