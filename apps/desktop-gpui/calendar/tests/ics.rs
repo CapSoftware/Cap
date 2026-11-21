@@ -398,7 +398,7 @@ fn malformed_feed_never_panics_and_keeps_good_events() {
         cal.warning_messages
     );
     let ids: Vec<&str> = events.iter().map(|e| e.id.as_str()).collect();
-    for uid in [
+    for (index, uid) in [
         "bad-rule",
         "unknown-tz",
         "negative",
@@ -408,8 +408,11 @@ fn malformed_feed_never_panics_and_keeps_good_events() {
         "dupe#2",
         "quoted",
         "unclosed",
-    ] {
-        assert!(ids.contains(&uid), "missing {uid}");
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(ids.contains(&uid), "missing expected event {index}");
     }
     assert!(!ids.contains(&"no-start"));
     assert!(!ids.contains(&"bad-date"));

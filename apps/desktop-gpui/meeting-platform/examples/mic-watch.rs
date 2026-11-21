@@ -20,8 +20,11 @@ fn main() {
         );
         for client in &snapshot.clients {
             println!(
-                "          {} (raw {}, pid {}, device {:?})",
-                client.id, client.raw_id, client.pid, client.device_uid
+                "          {} (raw {}, pid {}, device known: {})",
+                client.id,
+                client.raw_id,
+                client.pid,
+                client.device_uid.is_some()
             );
         }
     }
