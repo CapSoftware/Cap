@@ -199,9 +199,13 @@ impl ProjectHistory {
         }
     }
 
-    /// How many states the history holds.
     pub fn entry_count(&self) -> usize {
         self.entries.len()
+    }
+
+    /// A gesture such as a slider drag holds history until it ends.
+    pub fn is_paused(&self) -> bool {
+        self.paused > 0
     }
 
     /// Folds the newest entry into the one before it, so a single undo goes
@@ -3430,6 +3434,16 @@ mod tests {
         undone.fold_into_previous();
         assert_eq!(undone.entry_count(), 3);
         assert!(undone.can_redo());
+    }
+
+    #[test]
+    fn history_reports_a_gesture_holding_it() {
+        let mut history = ProjectHistory::new(with_zoom_count(0));
+        assert!(!history.is_paused());
+        history.pause();
+        assert!(history.is_paused());
+        history.resume(&with_zoom_count(1));
+        assert!(!history.is_paused());
     }
 
     #[test]

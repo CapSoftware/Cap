@@ -2728,6 +2728,34 @@ impl EditorWindow {
         self.finish_keyboard_refresh(None);
     }
 
+    fn wait_out_gesture_then_generate(
+        &mut self,
+        unedited_from: Option<KeyboardSettings>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.generating_keyboard = true;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(120))
+                    .await;
+                let Ok(paused) = this.update(cx, |this, _| this.history.is_paused()) else {
+                    return;
+                };
+                if !paused {
+                    break;
+                }
+            }
+            this.update_in(cx, |this, window, cx| {
+                this.generating_keyboard = false;
+                this.generate_keyboard_segments(unedited_from, window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Joins regenerated keys to the setting change that asked for them, as
     /// one undo step, when they were recorded right after it. Any other edit
     /// in between keeps them as separate steps, so it is never undone with
@@ -2841,6 +2869,12 @@ impl EditorWindow {
                     && keyboard_settings(&this.project).enabled
                 {
                     this.generate_keyboard_segments(retry_from, window, cx);
+                    return;
+                }
+                // A drag in progress holds history; keys landing now would join
+                // its undo step. Generate again once the gesture has ended.
+                if this.history.is_paused() {
+                    this.wait_out_gesture_then_generate(retry_from, window, cx);
                     return;
                 }
                 let mut apply = |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
