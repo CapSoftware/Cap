@@ -544,26 +544,40 @@ pub fn generate_project_keyboard_segments(
     timeline: &crate::TimelineConfiguration,
     settings: &crate::KeyboardSettings,
 ) -> Result<Vec<KeyboardTrackSegment>, String> {
-    generate_project_keyboard_segments_reporting(meta, timeline, settings)
-        .map(|(segments, _)| segments)
+    let takes = load_project_keyboard_events(meta)?;
+    Ok(project_keyboard_events(&takes, timeline, settings))
 }
 
-/// The generated segments, and whether the recording held any key presses
-/// at all, so an empty result can say whether nothing was pressed or only
-/// keys the settings hide (typing, with shortcuts only) were.
+/// The generated segments, and whether the edit keeps key presses that
+/// these settings leave out, so an empty result can say no shortcuts were
+/// pressed rather than no keys at all.
 pub fn generate_project_keyboard_segments_reporting(
     meta: &crate::RecordingMeta,
     timeline: &crate::TimelineConfiguration,
     settings: &crate::KeyboardSettings,
 ) -> Result<(Vec<KeyboardTrackSegment>, bool), String> {
     let takes = load_project_keyboard_events(meta)?;
-    let pressed = takes.iter().any(|(events, _)| {
-        events
-            .presses
-            .iter()
-            .any(|press| press.down && !is_modifier_key(&press.key))
-    });
-    Ok((project_keyboard_events(&takes, timeline, settings), pressed))
+    Ok(keyboard_segments_reporting(&takes, timeline, settings))
+}
+
+fn keyboard_segments_reporting(
+    takes: &[(KeyboardEvents, f64)],
+    timeline: &crate::TimelineConfiguration,
+    settings: &crate::KeyboardSettings,
+) -> (Vec<KeyboardTrackSegment>, bool) {
+    let segments = project_keyboard_events(takes, timeline, settings);
+    let others_pressed = segments.is_empty()
+        && !settings.show_typing
+        && !project_keyboard_events(
+            takes,
+            timeline,
+            &crate::KeyboardSettings {
+                show_typing: true,
+                ..settings.clone()
+            },
+        )
+        .is_empty();
+    (segments, others_pressed)
 }
 
 fn legacy_keyboard_capture_offset(meta: &crate::RecordingMeta, recording_clip: u32) -> f64 {
@@ -1305,12 +1319,57 @@ fn is_single_character(key: &str) -> bool {
     key.chars().count() == 1
 }
 
+/// Keys that show on their own, with no modifier held, even when single
+/// keys are off: moving around, deleting and the function keys.
+const SOLO_SHORTCUT_KEYS: &[&str] = &[
+    "Backspace",
+    "Delete",
+    "CapsLock",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+];
+
+/// A Shift press followed this soon by an unmodified key is typing.
+const SHIFT_TYPING_MS: f64 = 1000.0;
+
+fn is_typed_character(key: &str) -> bool {
+    key.chars().count() == 1 && key.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 /// Key presses as shortcuts only, the way a demo shows them: every press
-/// with a modifier (other than Shift on a character, which is typing in
-/// capitals), and, with `show_single_keys`, named keys such as Return or
-/// Escape and lone characters that are not part of typing. Pressing the same
-/// shortcut again within two seconds extends its label rather than starting
-/// a new one; each press is kept so the overlay can strike the key again.
+/// with a modifier, unless Shift is held and typing carries on within a
+/// second (a capital, a word in capitals); and, on their own, the
+/// moving, deleting and function keys. With `show_single_keys`, every other
+/// lone key shows too, except letters and digits struck within a second of
+/// each other, which are typing. Pressing the same shortcut again within two
+/// seconds extends its label rather than starting a new one; each press is
+/// kept so the overlay can strike the key again.
 pub fn group_shortcuts(
     events: &KeyboardEvents,
     linger_duration_ms: f64,
@@ -1329,9 +1388,9 @@ pub fn group_shortcuts(
         .collect();
     ordered.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
 
+    // Each struck key with the modifiers held as it went down.
     let mut active: Vec<String> = Vec::new();
-    let mut presses: Vec<Press> = Vec::new();
-    let mut plain: Vec<(usize, f64)> = Vec::new();
+    let mut strokes: Vec<(&KeyPressEvent, Vec<String>)> = Vec::new();
     for event in ordered {
         if is_modifier_key(&event.key) {
             if event.down {
@@ -1343,26 +1402,41 @@ pub fn group_shortcuts(
             }
             continue;
         }
-        if !event.down {
-            continue;
+        if event.down {
+            strokes.push((event, active.clone()));
         }
-        let shift_only = !active.is_empty()
-            && active
+    }
+
+    let mut presses: Vec<Press> = Vec::new();
+    let mut plain: Vec<(usize, f64)> = Vec::new();
+    for (index, (event, held)) in strokes.iter().enumerate() {
+        let shift = held
+            .iter()
+            .any(|key| matches!(key.as_str(), "LShift" | "RShift"));
+        // Typing carries on when the next key comes within a second with
+        // nothing held, or with Shift still held on a character or space
+        // (a word in capitals, a question mark and a space).
+        let typing_on = strokes.get(index + 1).is_some_and(|(next, next_held)| {
+            let shift_only = next_held
                 .iter()
                 .all(|key| matches!(key.as_str(), "LShift" | "RShift"));
+            let typed = is_single_character(&next.key) || next.key == "Space";
+            next.time_ms - event.time_ms < SHIFT_TYPING_MS
+                && (next_held.is_empty() || (shift_only && typed))
+        });
+        if shift && typing_on {
+            continue;
+        }
         let character = is_single_character(&event.key);
         let display_key = display_char_for_key(&event.key).unwrap_or_else(|| event.key.clone());
-        // Shift on a character is typing a capital, not a shortcut, and a
-        // space struck before Shift comes up is still typing.
-        let typing_capital = shift_only && (character || event.key == "Space");
-        if !(active.is_empty() || typing_capital) {
+        if !held.is_empty() {
             presses.push(Press {
                 time_ms: event.time_ms,
                 key: event.key.clone(),
-                display: format!("{}{}", modifier_prefix(&active), display_key.to_uppercase()),
+                display: format!("{}{}", modifier_prefix(held), display_key.to_uppercase()),
             });
-        } else if active.is_empty() && show_single_keys {
-            if character {
+        } else if show_single_keys || SOLO_SHORTCUT_KEYS.contains(&event.key.as_str()) {
+            if show_single_keys && is_typed_character(&event.key) {
                 plain.push((presses.len(), event.time_ms));
             }
             presses.push(Press {
@@ -1479,9 +1553,10 @@ mod tests {
         presses.extend(shortcut(&["LShift"], "h", 2000.0));
         presses.extend([key_down("e", 2100.0), key_down("y", 2200.0)]);
         presses.extend(shortcut(&["LShift", "LMeta"], "p", 4000.0));
-        // A space struck before Shift comes up is still typing.
+        // Shift held into a space and on into typing is still typing.
         presses.extend(shortcut(&["LShift"], "Space", 5000.0));
-        // Shift with a named key is a shortcut.
+        presses.push(key_down("w", 5100.0));
+        // Shift with a named key, nothing typed after, is a shortcut.
         presses.extend(shortcut(&["LShift"], "Tab", 6000.0));
         let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
         let texts: Vec<&str> = segments.iter().map(|s| s.display_text.as_str()).collect();
@@ -1489,6 +1564,55 @@ mod tests {
         // Shown from just before the press until the linger ends.
         assert!((segments[0].start - 0.9).abs() < 1e-9);
         assert!((segments[0].end - 2.5).abs() < 1e-9);
+    }
+
+    /// A word typed in capitals and a question mark followed by a space keep
+    /// Shift held throughout: still typing, so no labels. A repeated Shift
+    /// shortcut is not typing.
+    #[test]
+    fn shift_held_through_typing_is_not_a_shortcut() {
+        let presses = vec![
+            key_down("LShift", 1000.0),
+            key_down("o", 1050.0),
+            key_down("s", 1100.0),
+            key_down("s", 1150.0),
+            key_down("Space", 1200.0),
+            key_up("LShift", 1250.0),
+            key_down("w", 1300.0),
+            key_down("LShift", 4000.0),
+            key_down("/", 4050.0),
+            key_down("Space", 4100.0),
+            key_up("LShift", 4150.0),
+            key_down("a", 4200.0),
+            key_down("LShift", 8000.0),
+            key_down("Tab", 8050.0),
+            key_down("Tab", 8400.0),
+            key_up("LShift", 8500.0),
+        ];
+        let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
+        let texts: Vec<&str> = segments.iter().map(|s| s.display_text.as_str()).collect();
+        assert_eq!(texts, ["⇧⇥"]);
+        assert_eq!(segments[0].keys.len(), 2);
+    }
+
+    /// Moving, deleting and function keys show on their own; Return,
+    /// Escape, Space and letters need single keys on; Shift on a letter
+    /// with nothing typed after it is a shortcut.
+    #[test]
+    fn solo_keys_and_a_lone_shift_letter_show_as_shortcuts() {
+        let mut presses = vec![
+            key_down("Backspace", 1000.0),
+            key_down("Up", 3000.0),
+            key_down("F5", 5000.0),
+            key_down("Enter", 7000.0),
+            key_down("Escape", 9000.0),
+            key_down("Space", 11000.0),
+            key_down("q", 13000.0),
+        ];
+        presses.extend(shortcut(&["LShift"], "a", 15000.0));
+        let segments = group_shortcuts(&KeyboardEvents { presses }, 1500.0, false);
+        let texts: Vec<&str> = segments.iter().map(|s| s.display_text.as_str()).collect();
+        assert_eq!(texts, ["⌫", "↑", "F5", "⇧A"]);
     }
 
     #[test]
@@ -2196,6 +2320,32 @@ mod timing_tests {
                 })
                 .collect(),
         }
+    }
+
+    /// Typing with no shortcuts leaves the track empty and says other keys
+    /// were pressed; typing trimmed out of every clip says nothing was.
+    #[test]
+    fn no_shortcuts_reports_whether_the_edit_keeps_other_keys() {
+        let typed = events(&[("t", 2.0), ("h", 2.1), ("e", 2.2), ("y", 2.3)]);
+        let shortcuts_only = crate::KeyboardSettings {
+            show_typing: false,
+            ..Default::default()
+        };
+        let kept = timeline(serde_json::json!([
+            {"start": 0.0, "end": 5.0, "timescale": 1.0, "recordingSegment": 0}
+        ]));
+        let (segments, others_pressed) =
+            keyboard_segments_reporting(&[(typed.clone(), 0.0)], &kept, &shortcuts_only);
+        assert!(segments.is_empty());
+        assert!(others_pressed);
+
+        let trimmed = timeline(serde_json::json!([
+            {"start": 3.0, "end": 5.0, "timescale": 1.0, "recordingSegment": 0}
+        ]));
+        let (segments, others_pressed) =
+            keyboard_segments_reporting(&[(typed, 0.0)], &trimmed, &shortcuts_only);
+        assert!(segments.is_empty());
+        assert!(!others_pressed, "trimmed typing is not reported");
     }
 
     #[test]
