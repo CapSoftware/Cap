@@ -41,5 +41,31 @@
 	<string>Cap captures your screen as part of recording your Caps</string>
 	<key>NSCameraUseContinuityCameraDeviceType</key>
 	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>so.cap.desktop.project</string>
+			<key>UTTypeDescription</key>
+			<string>Cap Project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>cap</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CFBundleIconFile</key>
+	<string>icon.icns</string>
+	<key>CFBundleIconName</key>
+	<string>cap-solarium</string>
+	<key>NSAccentColorName</key>
+	<string>AccentColor</string>
 </dict>
 </plist>

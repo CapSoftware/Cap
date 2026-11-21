@@ -10,6 +10,7 @@ import {
 	gpuiPlatformConfig,
 	mainBinaryName,
 	parseOptions,
+	profileArguments,
 	targetPlatform,
 } from "./bundle-gpui.mjs";
 
@@ -116,7 +117,7 @@ test("the Windows installer compresses with a window large enough to span both b
 	assert.equal(directives[0], "SetCompressorDictSize 128");
 	assert.ok(
 		directives.indexOf("SetCompressorDictSize 128") <
-			directives.findIndex((line) => line.startsWith("!macro")),
+		directives.findIndex((line) => line.startsWith("!macro")),
 	);
 });
 
@@ -166,6 +167,30 @@ test("platform resources point at the shared native dependencies", () => {
 	assert.equal(gpuiPlatformConfig("linux"), null);
 });
 
+test("signed Quick Look extensions are copied into PlugIns", () => {
+	const appex = [
+		"/tmp/build/CapQuickLookThumbnail.appex",
+		"/tmp/build/CapQuickLookPreview.appex",
+	];
+	assert.deepEqual(
+		gpuiPlatformConfig("darwin", { appexBundles: appex }).bundle.macOS.files,
+		{
+			"PlugIns/CapQuickLookThumbnail.appex": appex[0],
+			"PlugIns/CapQuickLookPreview.appex": appex[1],
+		},
+	);
+	assert.equal(gpuiPlatformConfig("darwin").bundle.macOS, undefined);
+});
+
+test("the GPUI app declares the Cap project type for Quick Look", () => {
+	const info = readFileSync(
+		new URL("../apps/desktop-gpui/Info.plist", import.meta.url),
+		"utf8",
+	);
+	assert.match(info, /<string>so\.cap\.desktop\.project<\/string>/);
+	assert.match(info, /<string>com\.apple\.package<\/string>/);
+});
+
 test("the Windows installer copies nothing while a CLI from this install runs", () => {
 	const hooks = readFileSync(
 		path.join(gpuiDirectory, gpuiConfig.bundle.windows.nsis.installerHooks),
@@ -180,7 +205,7 @@ test("the Windows installer copies nothing while a CLI from this install runs", 
 		assert.match(body, /!insertmacro WaitForCapCommandLineTools "/, hook);
 		assert.ok(
 			body.indexOf("EndCapMcpServers") <
-				body.indexOf("WaitForCapCommandLineTools"),
+			body.indexOf("WaitForCapCommandLineTools"),
 			hook,
 		);
 	}
@@ -230,11 +255,47 @@ test("signing builds can stop before bundling and rebundle without rebuilding", 
 	assert.deepEqual(parseOptions(["--no-bundle"]), {
 		skipBuild: false,
 		noBundle: true,
+		profile: "release",
 		bundleArgs: [],
 	});
 	assert.deepEqual(parseOptions(["--skip-build", "--bundles", "nsis"]), {
 		skipBuild: true,
 		noBundle: false,
+		profile: "release",
 		bundleArgs: ["--bundles", "nsis"],
 	});
+});
+
+test("the debug profile reaches Tauri on every platform, not only macOS", () => {
+	assert.deepEqual(profileArguments("debug"), ["--debug"]);
+	assert.deepEqual(profileArguments("release"), []);
+	assert.deepEqual(
+		bundleArguments("x86_64-pc-windows-msvc", [
+			"--bundles",
+			"nsis",
+			...profileArguments("debug"),
+		]),
+		[
+			"tauri",
+			"bundle",
+			"--target",
+			"x86_64-pc-windows-msvc",
+			"--bundles",
+			"nsis",
+			"--debug",
+		],
+	);
+});
+
+test("a local debug bundle is opt-in and never reaches the release path", () => {
+	assert.deepEqual(parseOptions(["--profile=debug", "--bundles", "app"]), {
+		skipBuild: false,
+		noBundle: false,
+		profile: "debug",
+		bundleArgs: ["--bundles", "app"],
+	});
+	assert.equal(
+		gpuiBinaryPath("aarch64-apple-darwin", "debug"),
+		path.join(gpuiDirectory, "target/aarch64-apple-darwin/debug/cap-gpui"),
+	);
 });

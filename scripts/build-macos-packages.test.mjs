@@ -166,6 +166,28 @@ test("an unsupported macOS override fails before starting a compiler or packager
 	assert.deepEqual(fixture.calls, []);
 });
 
+test("a platform config reaches tauri bundle as its own --config layer", async () => {
+	const fixture = harness([{ code: 0 }]);
+	const platformConfig = {
+		bundle: {
+			macOS: {
+				files: { "PlugIns/CapQuickLookThumbnail.appex": "/tmp/Thumb.appex" },
+			},
+		},
+	};
+	await buildMacosPackages(target, ["--bundles", "app"], {
+		...fixture.options,
+		platformConfig,
+	});
+	const configs = fixture.calls[0].args.flatMap((arg, index, all) =>
+		all[index - 1] === "--config" ? [arg] : [],
+	);
+	assert.deepEqual(configs, [
+		JSON.stringify({ bundle: { macOS: { minimumSystemVersion: "12.3" } } }),
+		JSON.stringify(platformConfig),
+	]);
+});
+
 test("caller configs cannot lower the validated build target in final bundle metadata", async () => {
 	for (const deploymentTarget of [undefined, "14.0"]) {
 		const fixture = harness([
