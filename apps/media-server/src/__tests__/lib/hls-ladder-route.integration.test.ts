@@ -31,6 +31,11 @@ let baseUrl = "";
 const workDir = mkdtempSync(join(tmpdir(), "cap-ladder-route-"));
 const uploads = new Map<string, { bytes: Uint8Array; contentType: string }>();
 const webhooks: JobProgress[] = [];
+const webhookListeners = new Map<string, () => void>();
+let hangingUploads: {
+	started: PromiseWithResolvers<void>;
+	aborted: PromiseWithResolvers<void>;
+} | null = null;
 
 async function waitForTerminalJob(jobId: string): Promise<Job> {
 	const startedAt = Date.now();
@@ -95,8 +100,24 @@ beforeAll(async () => {
 		async fetch(request) {
 			const url = new URL(request.url);
 			if (request.method === "POST" && url.pathname === "/webhook") {
-				webhooks.push((await request.json()) as JobProgress);
+				const payload = (await request.json()) as JobProgress;
+				webhooks.push(payload);
+				webhookListeners.get(`${payload.jobId}:${payload.phase}`)?.();
 				return new Response(null, { status: 200 });
+			}
+			if (request.method === "PUT" && url.pathname.startsWith("/hang/")) {
+				const hang = hangingUploads;
+				if (!hang) return new Response(null, { status: 404 });
+				hang.started.resolve();
+				if (!request.signal.aborted) {
+					await new Promise<void>((resolve) =>
+						request.signal.addEventListener("abort", () => resolve(), {
+							once: true,
+						}),
+					);
+				}
+				hang.aborted.resolve();
+				return new Response(null, { status: 499 });
 			}
 			if (request.method === "PUT" && url.pathname.startsWith("/uploads/")) {
 				uploads.set(url.pathname.slice("/uploads/".length), {
@@ -287,6 +308,53 @@ describe("POST /video/ladder", () => {
 		).toEqual([]);
 		const final = webhooks.findLast((payload) => payload.jobId === idle.jobId);
 		expect(final?.errorCode).toBe("idle-preempted");
+	});
+
+	test("stops an idle ladder's uploads when another ladder is admitted and reports only once they stop", async () => {
+		const { cpuPressure } = jobManager.getSystemResources();
+		const hang = {
+			started: Promise.withResolvers<void>(),
+			aborted: Promise.withResolvers<void>(),
+		};
+		hangingUploads = hang;
+		try {
+			const idleResponse = await startLadder({
+				uploads: Object.fromEntries(
+					LADDER_FILES.map((name) => [name, `${baseUrl}/hang/${name}`]),
+				),
+				priority: "idle",
+			});
+			if (cpuPressure >= 0.5) {
+				expect(idleResponse.status).toBe(503);
+				return;
+			}
+			const { jobId } = (await idleResponse.json()) as { jobId: string };
+			const terminal = Promise.withResolvers<boolean>();
+			let uploadsStopped = false;
+			webhookListeners.set(`${jobId}:error`, () =>
+				terminal.resolve(uploadsStopped),
+			);
+
+			await hang.started.promise;
+			const idleJob = getJob(jobId);
+			expect(idleJob?.phase).toBe("uploading");
+			void idleJob?.uploadsStopped?.then(() => {
+				uploadsStopped = true;
+			});
+
+			const other = await startLadder({
+				uploads: uploadTargets("after-upload-preempt"),
+			});
+			expect(other.status).toBe(200);
+			await hang.aborted.promise;
+			expect(await terminal.promise).toBe(true);
+			expect(getJob(jobId)?.errorCode).toBe("idle-preempted");
+			const { jobId: otherId } = (await other.json()) as { jobId: string };
+			expect((await waitForTerminalJob(otherId)).phase).toBe("complete");
+		} finally {
+			hangingUploads = null;
+			webhookListeners.clear();
+		}
 	});
 
 	test("verifies and prunes a ladder before it uploads it", async () => {

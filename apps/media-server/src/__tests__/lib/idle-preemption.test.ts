@@ -227,12 +227,11 @@ describe("preemption", () => {
 		expect(job.phase).toBe("processing");
 	});
 
-	test("an idle job that is uploading finishes", () => {
+	test("an idle job that is uploading is stopped too", () => {
 		const { job, abort } = addIdleJob();
 		job.phase = "uploading";
 		addJob();
-		expect(abort.signal.aborted).toBe(false);
-		expect(job.phase).toBe("uploading");
+		expectPreempted(job, abort);
 	});
 
 	test("an audio operation stops the idle job and a probe does not", async () => {
