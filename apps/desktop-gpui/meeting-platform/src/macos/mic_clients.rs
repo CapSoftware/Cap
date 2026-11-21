@@ -151,8 +151,12 @@ impl Worker {
                 self.process_listeners.insert(*id);
             }
         }
-        self.process_listeners
-            .retain(|id| reading.process_objects.contains(id));
+        forget_gone(
+            &mut self.process_listeners,
+            &reading.process_objects,
+            &address,
+            self.signal,
+        );
 
         let address = PropSelector::DEVICE_IS_RUNNING_SOMEWHERE.global_addr();
         for id in &reading.input_device_objects {
@@ -164,8 +168,12 @@ impl Worker {
                 self.device_listeners.insert(*id);
             }
         }
-        self.device_listeners
-            .retain(|id| reading.input_device_objects.contains(id));
+        forget_gone(
+            &mut self.device_listeners,
+            &reading.input_device_objects,
+            &address,
+            self.signal,
+        );
     }
 
     fn remove_listeners(&mut self) {
@@ -184,6 +192,26 @@ impl Worker {
         drop(unsafe { Box::from_raw(self.signal) });
         self.signal = std::ptr::null_mut();
     }
+}
+
+/// Drops the listeners on objects that left the latest reading. Each one is
+/// removed from CoreAudio before it is forgotten: an object CoreAudio keeps
+/// alive could otherwise call `on_change` with the signal after
+/// `remove_listeners` frees it, and an id that comes back would be listened
+/// to twice.
+fn forget_gone(
+    listening: &mut HashSet<u32>,
+    present: &[u32],
+    address: &PropAddr,
+    signal: *mut Signal,
+) {
+    listening.retain(|id| {
+        if present.contains(id) {
+            return true;
+        }
+        let _ = Obj(*id).remove_prop_listener(address, on_change, signal);
+        false
+    });
 }
 
 struct Reading {
