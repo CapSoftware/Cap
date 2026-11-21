@@ -1019,6 +1019,36 @@ describe("free meetings for signed-in users", () => {
 		expect(mocks.trial.get(user.id) ?? []).toEqual([]);
 	});
 
+	it("keeps the meeting claimed when the app hangs up before any notes", async () => {
+		const user = signIn(null);
+		// Like the SDK, the stream ends when its abort signal fires.
+		mocks.streamText.mockImplementation(
+			(options: { abortSignal?: AbortSignal }) => ({
+				fullStream: new ReadableStream({
+					start(stream) {
+						options.abortSignal?.addEventListener("abort", () =>
+							stream.error(new Error("aborted")),
+						);
+					},
+				}),
+			}),
+		);
+		const controller = new AbortController();
+		const pending = app.request("https://cap.so/api/desktop/meetings/notes", {
+			method: "POST",
+			body: JSON.stringify({ ...validNotes, meetingId: "m1" }),
+			headers: {
+				authorization: `Bearer ${API_KEY}`,
+				"content-type": "application/json",
+			},
+			signal: controller.signal,
+		});
+		setTimeout(() => controller.abort(), 20);
+		await (await pending).text().catch(() => undefined);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
+	});
+
 	it("answers questions only about meetings written up free", async () => {
 		const user = signIn(null);
 		mocks.trial.set(user.id, ["m1"]);

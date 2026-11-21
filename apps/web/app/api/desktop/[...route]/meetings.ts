@@ -819,13 +819,18 @@ app.post("/notes", async (c) => {
 				return await generateNotes(input, config, tracked, signal, markWritten);
 			} catch (error) {
 				// Notes that reached the app count as the free meeting, even if the
-				// stream then failed or was dropped; only a run that showed nothing
-				// gives it back.
-				if (trialMeeting)
-					await (delivered
+				// stream then failed or was dropped. Only a run that showed nothing
+				// and failed on our side gives it back: an app that hangs up keeps
+				// the meeting claimed, so cancelling early can't buy unlimited free
+				// runs. The same meeting can still be written later.
+				if (trialMeeting) {
+					const settle = delivered
 						? markWritten()
-						: releaseTrialMeeting(user.id, trialMeeting)
-					).catch(() => undefined);
+						: c.req.raw.signal.aborted
+							? Promise.resolve()
+							: releaseTrialMeeting(user.id, trialMeeting);
+					await settle.catch(() => undefined);
+				}
 				throw error;
 			}
 		},
