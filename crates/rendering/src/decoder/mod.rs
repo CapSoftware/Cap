@@ -165,6 +165,7 @@ pub struct DecodedFrame {
 struct SendableImageBuf {
     image_buf: Mutex<Option<R<cv::ImageBuf>>>,
     raw_data: OnceLock<Vec<u8>>,
+    imports: Option<Arc<crate::yuv_converter::IOSurfaceImports>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -177,10 +178,14 @@ unsafe impl Sync for SendableImageBuf {}
 
 #[cfg(target_os = "macos")]
 impl SendableImageBuf {
-    fn new(image_buf: R<cv::ImageBuf>) -> Self {
+    fn new(
+        image_buf: R<cv::ImageBuf>,
+        imports: Option<Arc<crate::yuv_converter::IOSurfaceImports>>,
+    ) -> Self {
         Self {
             image_buf: Mutex::new(Some(image_buf)),
             raw_data: OnceLock::new(),
+            imports,
         }
     }
 
@@ -456,6 +461,7 @@ impl DecodedFrame {
         y_stride: u32,
         uv_stride: u32,
         image_buf: R<cv::ImageBuf>,
+        imports: Option<Arc<crate::yuv_converter::IOSurfaceImports>>,
     ) -> Self {
         Self {
             data: Arc::new(Vec::new()),
@@ -466,7 +472,7 @@ impl DecodedFrame {
             y_stride,
             uv_stride,
             ffmpeg_backing: None,
-            image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
+            image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf, imports))),
             presentation_secs: None,
         }
     }
@@ -615,6 +621,13 @@ impl DecodedFrame {
         self.image_buf_backing
             .as_ref()
             .and_then(|backing| backing.with_image_buf(f))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn iosurface_imports(&self) -> Option<&crate::yuv_converter::IOSurfaceImports> {
+        self.image_buf_backing
+            .as_ref()
+            .and_then(|backing| backing.imports.as_deref())
     }
 
     pub fn width(&self) -> u32 {
@@ -2413,6 +2426,7 @@ mod tests {
             y_stride as u32,
             uv_stride as u32,
             image_buf,
+            None,
         );
 
         assert_eq!(frame.byte_len(), y_size + uv_size);

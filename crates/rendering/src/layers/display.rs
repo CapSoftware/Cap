@@ -908,6 +908,7 @@ impl DisplayLayer {
                                             encoder,
                                             image_buf,
                                             &self.frame_texture_views[next_texture],
+                                            screen_frame.iosurface_imports(),
                                         )
                                         .ok()
                                 })

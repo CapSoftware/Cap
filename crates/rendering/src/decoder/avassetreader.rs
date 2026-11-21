@@ -21,7 +21,7 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, oneshot},
 };
 
-use crate::{DecodedFrame, PixelFormat, cpu_yuv::YuvMatrix};
+use crate::{DecodedFrame, PixelFormat, cpu_yuv::YuvMatrix, yuv_converter::IOSurfaceImports};
 
 use super::frame_converter::{copy_bgra_to_rgba, copy_rgba_plane};
 use super::multi_position::{DecoderPoolManager, MultiPositionDecoderConfig, ScrubDetector};
@@ -245,6 +245,7 @@ impl CachedFrame {
         image_buf: R<cv::ImageBuf>,
         number: u32,
         presentation_secs: f64,
+        imports: &Arc<IOSurfaceImports>,
     ) -> Self {
         let width = image_buf.width() as u32;
         let height = image_buf.height() as u32;
@@ -262,7 +263,12 @@ impl CachedFrame {
                     let y_stride = image_buf.plane_bytes_per_row(0) as u32;
                     let uv_stride = image_buf.plane_bytes_per_row(1) as u32;
                     DecodedFrame::new_nv12_with_image_buf(
-                        width, height, y_stride, uv_stride, image_buf,
+                        width,
+                        height,
+                        y_stride,
+                        uv_stride,
+                        image_buf,
+                        Some(imports.clone()),
                     )
                 } else {
                     let mut image_buf = image_buf;
@@ -401,6 +407,8 @@ struct DecoderInstance {
     prev_vended: Option<u32>,
     /// First frame of the uninterrupted vend run that ends at `prev_vended`.
     run_start: Option<u32>,
+    /// Imports of this reader's IOSurfaces, replaced with the reader.
+    surface_imports: Arc<IOSurfaceImports>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -427,6 +435,7 @@ impl DecoderInstance {
             keyframe_index,
             prev_vended: None,
             run_start: None,
+            surface_imports: Arc::default(),
             _permit: permit,
         })
     }
@@ -439,6 +448,7 @@ impl DecoderInstance {
                 self.health.reset_counters();
                 self.prev_vended = None;
                 self.run_start = None;
+                self.surface_imports = Arc::default();
             }
             Err(e) => {
                 tracing::error!(
@@ -472,6 +482,7 @@ impl DecoderInstance {
         self.health = DecoderHealth::new();
         self.prev_vended = None;
         self.run_start = None;
+        self.surface_imports = Arc::default();
         Ok(())
     }
 
@@ -1049,6 +1060,7 @@ impl AVAssetReaderDecoder {
             // reader re-vends from the keyframe at-or-before the request, and
             // that frame is the true VFR hold for requests inside a pts hole.
             let mut hold_candidate: Option<(u32, f64, R<cv::ImageBuf>)> = None;
+            let surface_imports = this.decoders[decoder_idx].surface_imports.clone();
             let mut retry_requests = Vec::new();
 
             {
@@ -1119,6 +1131,7 @@ impl AVAssetReaderDecoder {
                                         buf.retained(),
                                         current_frame,
                                         current_secs,
+                                        &surface_imports,
                                     ),
                                     frame_limit,
                                     requested_frame,
@@ -1149,8 +1162,13 @@ impl AVAssetReaderDecoder {
                         continue;
                     };
 
-                    let cache_frame =
-                        CachedFrame::new(&processor, frame.retained(), current_frame, current_secs);
+                    let cache_frame = CachedFrame::new(
+                        &processor,
+                        frame.retained(),
+                        current_frame,
+                        current_secs,
+                        &surface_imports,
+                    );
 
                     if first_ever_frame.borrow().is_none() {
                         *first_ever_frame.borrow_mut() = Some(cache_frame.data().clone());
@@ -1203,9 +1221,15 @@ impl AVAssetReaderDecoder {
                                         .as_ref()
                                         .filter(|(n, _, _)| *n <= req.frame)
                                         .map(|(n, secs, buf)| {
-                                            CachedFrame::new(&processor, buf.retained(), *n, *secs)
-                                                .data()
-                                                .clone()
+                                            CachedFrame::new(
+                                                &processor,
+                                                buf.retained(),
+                                                *n,
+                                                *secs,
+                                                &surface_imports,
+                                            )
+                                            .data()
+                                            .clone()
                                         });
                                     let best_before =
                                         [cached_before, hold_before, candidate_before]
@@ -1436,9 +1460,15 @@ impl AVAssetReaderDecoder {
                         .as_ref()
                         .filter(|(n, _, _)| *n <= req.frame)
                         .map(|(n, secs, buf)| {
-                            CachedFrame::new(&processor, buf.retained(), *n, *secs)
-                                .data()
-                                .clone()
+                            CachedFrame::new(
+                                &processor,
+                                buf.retained(),
+                                *n,
+                                *secs,
+                                &surface_imports,
+                            )
+                            .data()
+                            .clone()
                         });
                     let best_before = [cached_before, hold_before, candidate_before]
                         .into_iter()
