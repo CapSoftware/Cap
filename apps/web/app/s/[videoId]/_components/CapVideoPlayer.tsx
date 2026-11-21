@@ -31,6 +31,7 @@ import {
 	shouldFallbackToRawPlaybackSource,
 } from "./playback-source";
 import { replayMissedMediaEvents } from "./replay-missed-media-events";
+import type { ShareLadderPlayback } from "./share-ladder-playback";
 import {
 	canRetryFailedProcessing,
 	getUploadFailureMessage,
@@ -38,6 +39,7 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	type UploadProgress,
 } from "./upload-progress";
+import { useShareLadder } from "./use-share-ladder";
 import { VideoPoster, VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
@@ -149,6 +151,7 @@ interface Props {
 	onUploadComplete?: () => void;
 	callToAction?: ShareCallToAction | null;
 	posterUrl?: string | null;
+	ladder?: ShareLadderPlayback;
 }
 
 export function CapVideoPlayer({
@@ -191,6 +194,7 @@ export function CapVideoPlayer({
 	onUploadComplete,
 	callToAction = null,
 	posterUrl = null,
+	ladder,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -303,6 +307,21 @@ export function CapVideoPlayer({
 		refetchOnWindowFocus: false,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
+	});
+
+	const {
+		engine: ladderEngine,
+		playingLadder,
+		qualityMenu,
+	} = useShareLadder({
+		ladder,
+		videoRef,
+		active:
+			Boolean(ladder) &&
+			resolvedSrc.data?.type === "mp4" &&
+			!isRefreshingInitialPlaybackSource &&
+			!hasActiveProgress,
+		mediaKey: resolvedSrc.data?.url,
 	});
 
 	useEffect(() => {
@@ -501,6 +520,7 @@ export function CapVideoPlayer({
 
 		const handleError = () => {
 			if (initialPlaybackSourceRetryPending.current) return;
+			if (playingLadder()) return;
 			// A server-rendered source never ran the client probe, so its failure
 			// takes the path a failed probe would: playlist route, then raw.
 			if (
@@ -657,6 +677,7 @@ export function CapVideoPlayer({
 		hasPlayedOnce,
 		hasTriedRawFallback,
 		isRefreshingInitialPlaybackSource,
+		playingLadder,
 		rawFallbackSrc,
 		resolvedSrc.data?.fromInitialUrl,
 		resolvedSrc.data?.fromServer,
@@ -916,7 +937,11 @@ export function CapVideoPlayer({
 			)}
 			{resolvedSrc.data && (
 				<MediaPlayerVideo
-					src={iosLevelPatchedUrl ?? resolvedSrc.data.url}
+					src={
+						ladderEngine === "mp4"
+							? (iosLevelPatchedUrl ?? resolvedSrc.data.url)
+							: undefined
+					}
 					ref={videoRef}
 					onLoadedData={() => {
 						if (!isRefreshingInitialPlaybackSource) setVideoLoaded(true);
@@ -1195,6 +1220,7 @@ export function CapVideoPlayer({
 									availableCaptions={availableCaptions}
 									isCaptionLoading={isCaptionLoading}
 									hasCaptions={hasCaptions}
+									quality={qualityMenu}
 								/>
 								<MediaPlayerPiP
 									className={docked ? "max-sm:hidden" : undefined}
