@@ -80,6 +80,7 @@ export type ShareLadderQualityMenu = {
 };
 
 const MOVED_SECONDS = 0.05;
+const HAVE_FUTURE_DATA = 3;
 
 let hlsModule: Promise<HlsModule> | undefined;
 
@@ -844,8 +845,12 @@ export function useShareLadder({
 		if (!startedRef.current) {
 			startedRef.current = true;
 			if (!video.paused) startPlayback();
-			if (start === "framed") onFirstFrame();
-			else if (!video.paused) callForLadder();
+			if (start === "framed") {
+				onFirstFrame();
+				// A stall that began while this chunk loaded fired its "waiting"
+				// before these listeners existed.
+				if (!video.paused && video.readyState < HAVE_FUTURE_DATA) onWaiting();
+			} else if (!video.paused) callForLadder();
 		} else if (!video.paused) {
 			onPlayRequested();
 		}
