@@ -1006,11 +1006,11 @@ pub fn get_video_capture_fps(path: &Path) -> Option<u32> {
     result
 }
 
-fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
-    const MAX_PACKETS: usize = 20_000;
+const CAPTURE_FPS_MAX_PACKETS: usize = 20_000;
 
+fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
     let mut ictx = avformat::input(path).ok()?;
-    let (stream_index, time_base) = {
+    let (stream_index, time_base, indexed) = {
         let stream = ictx.streams().best(ffmpeg::media::Type::Video)?;
         let tb = stream.time_base();
         if tb.numerator() <= 0 || tb.denominator() <= 0 {
@@ -1019,21 +1019,60 @@ fn get_video_capture_fps_inner(path: &Path) -> Option<u32> {
         (
             stream.index(),
             f64::from(tb.numerator()) / f64::from(tb.denominator()),
+            indexed_video_timestamps(path, &stream),
         )
     };
+    let timestamps = indexed.unwrap_or_else(|| packet_video_timestamps(&mut ictx, stream_index));
+    capture_fps_from_timestamps(
+        timestamps
+            .into_iter()
+            .map(|timestamp| timestamp as f64 * time_base)
+            .collect(),
+    )
+}
+
+fn packet_video_timestamps(ictx: &mut avformat::context::Input, stream_index: usize) -> Vec<i64> {
     let mut timestamps = Vec::new();
     for (stream, packet) in ictx.packets() {
         if stream.index() != stream_index {
             continue;
         }
-        if let Some(pts) = packet.pts().or(packet.dts()) {
-            timestamps.push(pts as f64 * time_base);
+        if let Some(timestamp) = packet.pts().or(packet.dts()) {
+            timestamps.push(timestamp);
         }
-        if timestamps.len() >= MAX_PACKETS {
+        if timestamps.len() >= CAPTURE_FPS_MAX_PACKETS {
             break;
         }
     }
-    capture_fps_from_timestamps(timestamps)
+    timestamps
+}
+
+fn indexed_video_timestamps(path: &Path, stream: &avformat::stream::Stream) -> Option<Vec<i64>> {
+    if !crate::mp4_boxes::track_has_no_composition_offsets(path, stream.id()) {
+        return None;
+    }
+    unsafe {
+        let stream = stream.as_ptr().cast_mut();
+        if (*(*stream).codecpar).video_delay > 0 {
+            return None;
+        }
+        let count = ffmpeg::ffi::avformat_index_get_entries_count(stream);
+        if count <= 0 || i64::from(count) != (*stream).nb_frames {
+            return None;
+        }
+        let mut timestamps = Vec::with_capacity((count as usize).min(CAPTURE_FPS_MAX_PACKETS));
+        for index in 0..count {
+            let entry = ffmpeg::ffi::avformat_index_get_entry(stream, index);
+            if entry.is_null() || (*entry).flags() & ffmpeg::ffi::AVINDEX_DISCARD_FRAME != 0 {
+                return None;
+            }
+            timestamps.push((*entry).timestamp);
+            if timestamps.len() >= CAPTURE_FPS_MAX_PACKETS {
+                break;
+            }
+        }
+        Some(timestamps)
+    }
 }
 
 /// The shortest gap between frames that recurs in runs, in 5% bins, refined
@@ -1500,7 +1539,8 @@ mod tests {
         concatenate_m4s_segments_with_init_validated,
         concatenate_m4s_segments_with_init_validated_with_reader, concatenate_video_fragments,
         concatenate_video_fragments_on_timeline, get_video_capture_fps, get_video_fps,
-        probe_video_pts_ladder, write_concat_list,
+        indexed_video_timestamps, packet_video_timestamps, probe_video_pts_ladder,
+        write_concat_list,
     };
     use std::{
         path::{Path, PathBuf},
@@ -2302,6 +2342,91 @@ mod tests {
             capture_fps_from_timestamps((0..5).map(|i| f64::from(i) / 60.0).collect()),
             None
         );
+    }
+
+    fn indexed_and_scanned_timestamps(path: &Path) -> (Option<Vec<i64>>, Vec<i64>) {
+        let mut input = ffmpeg::format::input(path).unwrap();
+        let (stream_index, indexed) = {
+            let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+            (stream.index(), indexed_video_timestamps(path, &stream))
+        };
+        let mut scanned = packet_video_timestamps(&mut input, stream_index);
+        scanned.sort_unstable();
+        (
+            indexed.map(|mut indexed| {
+                indexed.sort_unstable();
+                indexed
+            }),
+            scanned,
+        )
+    }
+
+    #[test]
+    fn indexed_timestamps_match_a_full_packet_scan() {
+        let constant: Vec<Duration> = (0..300u64)
+            .map(|i| Duration::from_nanos(i * 1_000_000_000 / 30))
+            .collect();
+        let jittered: Vec<Duration> = (0..300u64)
+            .map(|i| Duration::from_secs_f64(i as f64 / 60.0 + 0.002 + jitter(i, 0.002)))
+            .collect();
+        let paused: Vec<Duration> = (0..120u64)
+            .map(|i| {
+                let gap = if i >= 60 { 5_000_000_000u64 } else { 0 };
+                Duration::from_nanos(i * 1_000_000_000 / 30 + gap)
+            })
+            .collect();
+        for timestamps in [bursty_timestamps(20, 6, 30), constant, jittered, paused] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = encode_test_mp4(dir.path(), &timestamps);
+            let (indexed, scanned) = indexed_and_scanned_timestamps(&path);
+            assert_eq!(scanned.len(), timestamps.len());
+            assert_eq!(indexed, Some(scanned));
+        }
+    }
+
+    #[test]
+    fn varying_composition_offsets_fall_back_to_reading_packets() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../video-decode/tests/fixtures");
+
+        let varying = fixtures.join("h264-varying-composition-offset.mp4");
+        let (indexed, scanned) = indexed_and_scanned_timestamps(&varying);
+        assert_eq!(indexed, None);
+        let mut input = ffmpeg::format::input(&varying).unwrap();
+        let (stream_index, time_base) = {
+            let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+            (stream.index(), f64::from(stream.time_base()))
+        };
+        assert_eq!(packet_video_timestamps(&mut input, stream_index), scanned);
+        assert_eq!(
+            get_video_capture_fps(&varying),
+            capture_fps_from_timestamps(
+                scanned
+                    .iter()
+                    .map(|timestamp| *timestamp as f64 * time_base)
+                    .collect()
+            )
+        );
+
+        let plain = fixtures.join("h264-no-reordering.mp4");
+        let (indexed, scanned) = indexed_and_scanned_timestamps(&plain);
+        assert_eq!(indexed, Some(scanned));
+    }
+
+    #[test]
+    fn a_fragmented_track_falls_back_to_reading_packets() {
+        let dir = tempfile::tempdir().unwrap();
+        let (init, segments) = encode_test_frames(dir.path(), 120);
+        let path = dir.path().join("fragmented.mp4");
+        let mut bytes = std::fs::read(&init).unwrap();
+        for segment in &segments {
+            bytes.extend(std::fs::read(segment).unwrap());
+        }
+        std::fs::write(&path, bytes).unwrap();
+
+        let (indexed, scanned) = indexed_and_scanned_timestamps(&path);
+        assert_eq!(indexed, None);
+        assert_eq!(scanned.len(), 120);
+        assert_eq!(get_video_capture_fps(&path), Some(30));
     }
 
     #[test]
