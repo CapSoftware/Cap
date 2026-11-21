@@ -58,3 +58,7 @@ harness = false
 [[bench]]
 name = "screenshot_blur"
 harness = false
+
+[[bench]]
+name = "swap_red_blue"
+harness = false
