@@ -60,13 +60,20 @@ export function canAcceptNewProbeOperation(): boolean {
 	);
 }
 
-// Probes are short and frequent, so only audio and video work stops an idle
-// job.
+// Every operation stops an idle job, probes included: a probe beside a running
+// idle ladder measured 5 to 10 ms slower. Probes are frequent, so an idle
+// ladder only finishes on a quiet worker, which is fine because the share keeps
+// playing its MP4 meanwhile. Only the idle job's own operations leave it be.
+export interface MediaOperationOptions {
+	idle?: boolean;
+}
+
 export function registerMediaOperation(
 	kind: OperationKind,
 	cancel: () => Promise<void> | void,
+	options: MediaOperationOptions = {},
 ): MediaOperationHandle {
-	if (kind !== "probe")
+	if (!options.idle)
 		preemptIdleJobs(`Idle job preempted by ${kind} processing`);
 	const id = createOperationId(kind);
 	const operation: ActiveOperation = {
@@ -94,9 +101,10 @@ export function unregisterMediaOperation(handle: MediaOperationHandle): void {
 export async function withMediaOperation<T>(
 	kind: OperationKind,
 	work: (setCancel: (cancel: () => Promise<void> | void) => void) => Promise<T>,
+	options: MediaOperationOptions = {},
 ): Promise<T> {
 	let cancel: () => Promise<void> | void = () => {};
-	const handle = registerMediaOperation(kind, () => cancel());
+	const handle = registerMediaOperation(kind, () => cancel(), options);
 
 	try {
 		return await work((nextCancel) => {

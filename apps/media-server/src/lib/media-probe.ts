@@ -8,6 +8,7 @@ import {
 import {
 	canAcceptNewProbeOperation,
 	getActiveProbeOperationCount,
+	type MediaOperationOptions,
 	withMediaOperation,
 } from "./media-operations";
 import { runProbe } from "./media-probe-pool";
@@ -280,13 +281,16 @@ export async function probeVideo(videoUrl: string): Promise<VideoMetadata> {
 export async function probeVideoFile(
 	filePath: string,
 	abortSignal?: AbortSignal,
+	options: MediaOperationOptions = {},
 ): Promise<VideoMetadata> {
 	if (!canAcceptNewProbeOperation()) {
 		throw new Error("Server is busy, please try again later");
 	}
 
-	return await withMediaOperation("probe", () =>
-		probeMetadata(normalizeLocalPath(filePath), abortSignal),
+	return await withMediaOperation(
+		"probe",
+		() => probeMetadata(normalizeLocalPath(filePath), abortSignal),
+		options,
 	);
 }
 
@@ -314,15 +318,19 @@ export class ProbeBusyError extends Error {
 export async function probeFastestFrameRate(
 	filePath: string,
 	abortSignal?: AbortSignal,
+	options: MediaOperationOptions = {},
 ): Promise<number | null> {
 	if (!canAcceptNewProbeOperation()) throw new ProbeBusyError();
-	return await withMediaOperation("probe", () =>
-		runProbe(
-			"fastestFrameRate",
-			normalizeLocalPath(filePath),
-			PROBE_TIMEOUT_MS,
-			abortSignal,
-		),
+	return await withMediaOperation(
+		"probe",
+		() =>
+			runProbe(
+				"fastestFrameRate",
+				normalizeLocalPath(filePath),
+				PROBE_TIMEOUT_MS,
+				abortSignal,
+			),
+		options,
 	);
 }
 

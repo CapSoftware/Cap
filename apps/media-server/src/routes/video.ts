@@ -694,7 +694,6 @@ video.post("/thumbnail", async (c) => {
 
 	try {
 		const metadata = await probeVideo(result.data.videoUrl);
-		preemptIdleJobs("Idle job preempted by a thumbnail");
 
 		// Only the options the caller set: an explicit undefined would replace
 		// the default and reach FFmpeg as NaN.
@@ -1597,10 +1596,9 @@ async function encodeLadderAsync(
 			message: "Analyzing source video...",
 		});
 		const metadata = await withJobHeartbeat(jobId, () =>
-			probeVideoFile(
-				input.path,
-				options.priority === "idle" ? signal : undefined,
-			),
+			options.priority === "idle"
+				? probeVideoFile(input.path, signal, { idle: true })
+				: probeVideoFile(input.path),
 		);
 		signal.throwIfAborted();
 		updateJob(jobId, { metadata });
@@ -1638,6 +1636,7 @@ async function encodeLadderAsync(
 					range: options.range,
 					includeAudio: options.includeAudio,
 					niceness,
+					...(options.priority === "idle" && { idle: true }),
 				},
 				(progress, message) => {
 					updateJob(jobId, {
