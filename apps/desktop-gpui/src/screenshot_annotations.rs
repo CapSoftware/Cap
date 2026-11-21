@@ -1220,6 +1220,40 @@ pub struct AnnotationState {
     masks: Vec<MaskEntry<MaskOverlay>>,
     mask_pending: Option<Vec<MaskRequest>>,
     mask_task: Option<gpui::Task<()>>,
+    geometry_pending: bool,
+    retained_preview: Option<AnnotationPreview>,
+}
+
+impl AnnotationState {
+    #[cfg(test)]
+    pub(crate) fn set_layer_bounds_for_test(&mut self, bounds: Bounds<Pixels>) {
+        self.layer.set(Some(bounds));
+    }
+
+    pub(crate) fn has_active_gesture(&self) -> bool {
+        self.gesture.is_some()
+    }
+
+    pub(crate) fn invalidate_geometry(&mut self) {
+        self.geometry_pending = true;
+        self.mask_task = None;
+        self.mask_pending = None;
+        self.invalidate_interaction();
+    }
+
+    pub(crate) fn invalidate_interaction(&mut self) {
+        self.layer.set(None);
+        self.gesture = None;
+        self.hover = None;
+        self.hover_cursor = None;
+    }
+}
+
+struct AnnotationPreview {
+    frame: Arc<RenderImage>,
+    size: (f32, f32),
+    annotations: Vec<Annotation>,
+    masks: Vec<MaskOverlay>,
 }
 
 /// One paint of the layer, copied out of the window so the closure owns it.
@@ -1376,6 +1410,10 @@ impl ScreenshotEditorWindow {
     /// `getSvgPoint` (`:144-156`). The viewBox's origin is always `0 0` here,
     /// so the mapping is the layer's rect and the scale.
     fn frame_point(&self, position: Point<Pixels>) -> Option<(f64, f64)> {
+        self.frame.as_ref()?;
+        if !self.annotation_preview_ready() {
+            return None;
+        }
         let bounds = self.annotation_state.layer.get()?;
         let scale = self.annotation_scale()?;
         Some((
@@ -1933,6 +1971,7 @@ impl ScreenshotEditorWindow {
                 self.finish_drag(dragging, window, cx)
             }
         }
+        self.present_pending_preview(window, cx);
         true
     }
 
@@ -2279,29 +2318,97 @@ impl ScreenshotEditorWindow {
 
     // -- Mask overlays ---------------------------------------------------------
 
+    pub(crate) fn annotation_preview_ready(&self) -> bool {
+        !self.annotation_state.geometry_pending && self.frame_layout_matches_project()
+    }
+
+    pub(crate) fn annotation_frame_pending(&self) -> bool {
+        self.annotation_state.geometry_pending && self.annotation_state.mask_pending.is_some()
+    }
+
+    pub(crate) fn retain_annotation_preview(&mut self) {
+        if self.annotation_state.geometry_pending {
+            return;
+        }
+        if let Some(frame) = self.frame.clone() {
+            self.annotation_state.retained_preview = Some(AnnotationPreview {
+                frame,
+                size: self.rendered_frame_size(),
+                annotations: self.frame_annotations().to_vec(),
+                masks: self
+                    .annotation_state
+                    .masks
+                    .iter()
+                    .filter_map(|entry| entry.value.clone())
+                    .collect(),
+            });
+        }
+    }
+
+    fn retained_annotation_preview(&self) -> Option<&AnnotationPreview> {
+        self.annotation_state
+            .geometry_pending
+            .then_some(self.annotation_state.retained_preview.as_ref())
+            .flatten()
+    }
+
+    pub(crate) fn annotation_preview_frame(&self) -> Option<Arc<RenderImage>> {
+        self.retained_annotation_preview()
+            .map(|preview| preview.frame.clone())
+            .or_else(|| {
+                (!self.annotation_state.geometry_pending)
+                    .then(|| self.frame.clone())
+                    .flatten()
+            })
+    }
+
+    pub(crate) fn annotation_preview_size(&self) -> (f32, f32) {
+        self.retained_annotation_preview()
+            .map_or_else(|| self.rendered_frame_size(), |preview| preview.size)
+    }
+
+    fn finish_geometry_preview(&mut self, requests: &[MaskRequest]) {
+        if !self.annotation_state.geometry_pending {
+            return;
+        }
+        if self.frame.is_some()
+            && requests.iter().all(|request| {
+                self.annotation_state
+                    .masks
+                    .iter()
+                    .any(|entry| entry.request == *request && entry.value.is_some())
+            })
+        {
+            self.annotation_state.geometry_pending = false;
+        }
+    }
+
     fn mask_requests(&self) -> Vec<MaskRequest> {
         if self.frame.is_none() {
             return Vec::new();
         }
-        let size = (
-            self.frame_size.0.max(0.) as u32,
-            self.frame_size.1.max(0.) as u32,
+        let project = self.frame_project();
+        let size = self.rendered_frame_size();
+        let size = (size.0 as u32, size.1 as u32);
+        let rect = image_rect(
+            (size.0 as f64, size.1 as f64),
+            self.image_size.map(|size| (size.0 as f64, size.1 as f64)),
+            project.background.padding,
+            project.background.crop.as_ref(),
+            project.aspect_ratio.as_ref(),
         );
-        let rect = self.annotation_image_rect();
         let frame = MaskFrame {
             revision: self.mask_frame_revision,
             size,
             content: [rect.x, rect.y, rect.width, rect.height].map(f64::to_bits),
-            padding: self.project.background.padding.to_bits(),
-            crop: self
-                .project
+            padding: project.background.padding.to_bits(),
+            crop: project
                 .background
                 .crop
                 .as_ref()
                 .map(|crop| [crop.position.x, crop.position.y, crop.size.x, crop.size.y]),
         };
-        self.project
-            .annotations
+        self.frame_annotations()
             .iter()
             .filter_map(|mask| mask_request(mask, frame))
             .collect()
@@ -2312,6 +2419,7 @@ impl ScreenshotEditorWindow {
     /// blocks on a resample.
     pub(crate) fn refresh_mask_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let requests = self.mask_requests();
+        self.finish_geometry_preview(&requests);
         if self.annotation_state.mask_pending.as_ref() == Some(&requests) {
             return;
         }
@@ -2366,6 +2474,7 @@ impl ScreenshotEditorWindow {
                 this.install_mask_overlays(overlays, window);
                 this.annotation_state.mask_pending = None;
                 cx.notify();
+                this.present_pending_preview(window, cx);
                 // The masks may have moved on while this was in flight.
                 this.refresh_mask_overlays(window, cx);
             })
@@ -2384,6 +2493,7 @@ impl ScreenshotEditorWindow {
             let _ = window.drop_image(previous.image.clone());
         }
         self.annotation_state.masks = overlays;
+        self.finish_geometry_preview(&self.mask_requests());
     }
 }
 
@@ -2401,37 +2511,58 @@ impl ScreenshotEditorWindow {
         _rect: Rect,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self.frame_size.0 <= 0. || content.0 <= 0. {
+        let size = self.annotation_preview_size();
+        if size.0 <= 0. || content.0 <= 0. {
             return None;
         }
-        let scale = content.0 / self.frame_size.0;
+        let scale = content.0 / size.0;
+        let retained = self.retained_annotation_preview();
+        let interactive = self.annotation_preview_ready();
         let temp = match &self.annotation_state.gesture {
-            Some(Gesture::Create(creating)) if !creating.in_list => Some(creating.temp.clone()),
+            Some(Gesture::Create(creating)) if !creating.in_list && interactive => {
+                Some(creating.temp.clone())
+            }
             _ => None,
         };
         let paint = LayerPaint {
-            annotations: self.project.annotations.clone(),
+            annotations: retained.map_or_else(
+                || self.frame_annotations().to_vec(),
+                |preview| preview.annotations.clone(),
+            ),
             temp,
-            masks: self
-                .annotation_state
-                .masks
-                .iter()
-                .filter_map(|entry| entry.value.clone())
-                .collect(),
-            selected: self.selected_annotation.clone(),
-            editing: self
-                .annotation_state
-                .editing
-                .as_ref()
-                .map(|edit| edit.id.clone()),
-            hover: self.annotation_state.hover.clone(),
-            select_tool: self.tool == Tool::Select,
+            masks: retained.map_or_else(
+                || {
+                    self.annotation_state
+                        .masks
+                        .iter()
+                        .filter_map(|entry| entry.value.clone())
+                        .collect()
+                },
+                |preview| preview.masks.clone(),
+            ),
+            selected: interactive
+                .then(|| self.selected_annotation.clone())
+                .flatten(),
+            editing: interactive
+                .then(|| {
+                    self.annotation_state
+                        .editing
+                        .as_ref()
+                        .map(|edit| edit.id.clone())
+                })
+                .flatten(),
+            hover: interactive
+                .then(|| self.annotation_state.hover.clone())
+                .flatten(),
+            select_tool: interactive && self.tool == Tool::Select,
             scale,
             handle_size: HANDLE_SCREEN_SIZE / scale.max(0.001) as f64,
         };
         let cell = self.annotation_state.layer.clone();
-        let drawing = self.tool != Tool::Select;
-        let cursor = self.annotation_state.hover_cursor;
+        let drawing = interactive && self.tool != Tool::Select;
+        let cursor = interactive
+            .then_some(self.annotation_state.hover_cursor)
+            .flatten();
 
         Some(
             div()
@@ -2452,7 +2583,11 @@ impl ScreenshotEditorWindow {
                     .absolute()
                     .size_full(),
                 )
-                .children(self.render_text_editor(scale, cx))
+                .children(
+                    interactive
+                        .then(|| self.render_text_editor(scale, cx))
+                        .flatten(),
+                )
                 .into_any_element(),
         )
     }
@@ -4095,6 +4230,77 @@ fn mask_region(mask: &Annotation, rect: Rect, frame: (u32, u32)) -> Option<(u32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn history_invalidation_cancels_a_pending_mask_completion(cx: &mut gpui::TestAppContext) {
+        struct MaskTaskView {
+            state: AnnotationState,
+        }
+
+        impl gpui::Render for MaskTaskView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+            }
+        }
+
+        let frame = MaskFrame {
+            revision: 1,
+            size: (64, 48),
+            content: [0., 0., 64., 48.].map(f64::to_bits),
+            padding: 0_f64.to_bits(),
+            crop: None,
+        };
+        let a = mask_request(&shape(AnnotationType::Mask, 0., 0., 16., 16.), frame).unwrap();
+        let b = mask_request(&shape(AnnotationType::Mask, 32., 24., 16., 16.), frame).unwrap();
+        let pixels = vec![128; 64 * 48 * 4];
+        let cached = build_mask_overlays(&pixels, &[], std::slice::from_ref(&a));
+        let completed = build_mask_overlays(&pixels, &[], std::slice::from_ref(&b));
+        let original = cached[0].value.as_ref().unwrap().image.clone();
+        let (release, blocked) = tokio::sync::oneshot::channel::<()>();
+        let started = std::rc::Rc::new(std::cell::Cell::new(false));
+        let work_started = started.clone();
+        let installed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let completion = installed.clone();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let task = cx.spawn_in(window, async move |this, cx| {
+                work_started.set(true);
+                if blocked.await.is_ok() {
+                    this.update_in(cx, |view: &mut MaskTaskView, _, _| {
+                        completion.set(true);
+                        view.state.masks = finish_mask_build(&view.state.masks, completed);
+                    })
+                    .ok();
+                }
+            });
+            MaskTaskView {
+                state: AnnotationState {
+                    masks: cached,
+                    mask_pending: Some(vec![b]),
+                    mask_task: Some(task),
+                    ..Default::default()
+                },
+            }
+        });
+        cx.run_until_parked();
+        assert!(started.get());
+        view.update(cx, |view, _| {
+            assert!(view.state.mask_task.is_some());
+            view.state.invalidate_geometry();
+            assert!(view.state.mask_task.is_none());
+            assert!(view.state.mask_pending.is_none());
+        });
+        let _ = release.send(());
+        cx.run_until_parked();
+        assert!(!installed.get());
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.state.masks[0].request, a);
+            assert!(Arc::ptr_eq(
+                &view.state.masks[0].value.as_ref().unwrap().image,
+                &original,
+            ));
+        });
+    }
 
     fn transform(
         frame: (f64, f64),
