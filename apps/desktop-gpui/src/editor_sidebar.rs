@@ -2664,7 +2664,12 @@ impl EditorWindow {
             .into_iter()
             .map(|tab| {
                 let disabled = match tab {
-                    SidebarTab::Camera => !summary.is_some_and(|summary| summary.has_camera),
+                    // A recording without a camera can take a picture in its
+                    // place, unless it has no picture to show it over.
+                    SidebarTab::Camera => match summary {
+                        Some(summary) => !summary.has_camera && self.is_audio_only(),
+                        None => true,
+                    },
                     SidebarTab::Cursor => !summary.is_some_and(|summary| summary.has_cursor_data),
                     _ => false,
                 };
