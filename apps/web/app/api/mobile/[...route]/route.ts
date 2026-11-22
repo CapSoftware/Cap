@@ -4,8 +4,9 @@ import { isDisposableEmailSignup } from "@cap/database/auth/disposable-signup";
 import {
 	isEmailAllowedForSignup,
 	isEmailBlockedFromSignup,
-	normalizeEmailAddress,
+	normalizeSignInEmail,
 } from "@cap/database/auth/domain-utils";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
 	encrypt,
@@ -83,6 +84,7 @@ import {
 	resolveLinkAccessWrite,
 } from "@/lib/link-access";
 import { importLoomVideoForOwner } from "@/lib/loom-csv-import";
+import { toStoredUploadContentType } from "@/lib/media-processing-policy";
 import { mobileUserAgent, prepareMobileEvents } from "@/lib/mobile-events";
 import { pushSessionHash } from "@/lib/mobile-push";
 import {
@@ -573,7 +575,8 @@ const requestEmailSession = Effect.fn("Mobile.requestEmailSession")(function* (
 	rawEmail: string,
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
+	if (!email) return yield* Effect.fail(new HttpApiError.BadRequest());
 	yield* ensureEmailSignInAllowed(email);
 	yield* ensureAccountDeletionNotPending({ email });
 
@@ -625,10 +628,10 @@ const verifyEmailSession = Effect.fn("Mobile.verifyEmailSession")(function* (
 	}: (typeof Mobile.MobileEmailSessionVerifyInput)["Type"],
 	headers: Headers,
 ) {
-	const email = normalizeEmailAddress(rawEmail);
+	const email = normalizeSignInEmail(rawEmail);
 	const code = rawCode.trim();
 
-	if (!emailPattern.test(email) || !emailCodePattern.test(code)) {
+	if (!email || !emailPattern.test(email) || !emailCodePattern.test(code)) {
 		return yield* Effect.fail(new HttpApiError.BadRequest());
 	}
 
@@ -697,27 +700,7 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 
 		const database = yield* Database;
 		yield* database.use((db) =>
-			db.transaction(async (tx) => {
-				await tx
-					.update(Db.users)
-					.set({
-						authSessionVersion: sql`${Db.users.authSessionVersion} + 1`,
-					})
-					.where(eq(Db.users.id, user.id));
-				await tx.delete(Db.sessions).where(eq(Db.sessions.userId, user.id));
-				await tx
-					.delete(Db.authApiKeys)
-					.where(eq(Db.authApiKeys.userId, user.id));
-				await tx
-					.update(Db.agentApiKeys)
-					.set({ revokedAt: new Date() })
-					.where(
-						and(
-							eq(Db.agentApiKeys.userId, user.id),
-							isNull(Db.agentApiKeys.revokedAt),
-						),
-					);
-			}),
+			db.transaction((tx) => revokeAllCredentials(tx, user.id)),
 		);
 
 		return { success: true as const };
@@ -3426,11 +3409,12 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		},
 	);
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
+	const storedContentType = toStoredUploadContentType(input.contentType);
 	const upload = yield* writable.access.createUploadTarget(rawFileKey, {
-		contentType: input.contentType,
+		contentType: storedContentType,
 		method: "put",
 		fields: {
-			"Content-Type": input.contentType,
+			"Content-Type": storedContentType,
 			"x-amz-meta-userid": user.id,
 			"x-amz-meta-source": "cap-mobile-ios",
 		},

@@ -473,6 +473,45 @@ enum Arrangement {
     PutBack(ArrangedWindow),
 }
 
+/// Whether macOS raised its "allow Cap to control this app" prompt for a
+/// refused move; if so, waits (up to two minutes) for the user to answer.
+async fn wait_for_app_control_prompt(cx: &mut gpui::AsyncApp) -> bool {
+    let poll = |cx: &mut gpui::AsyncApp| {
+        cx.background_executor()
+            .spawn(async { crate::platform::app_control_prompt_visible() })
+    };
+    let mut seen = false;
+    for _ in 0..8 {
+        if poll(cx).await {
+            seen = true;
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(150))
+            .await;
+    }
+    if !seen {
+        return false;
+    }
+    cx.update(|cx| app_windows::lower_target_overlays(true, cx));
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline && poll(cx).await {
+        cx.background_executor()
+            .timer(Duration::from_millis(250))
+            .await;
+    }
+    true
+}
+
+/// A user-asked resize that macOS 27.3 refused although Cap holds the
+/// Override grant: the app just isn't one Cap may control yet.
+fn resize_needs_app_choice(arrangement: &Arrangement) -> bool {
+    cfg!(target_os = "macos")
+        && matches!(arrangement, Arrangement::Frame(_))
+        && crate::permissions::grants_are_settings_only()
+        && crate::foreign_window::can_arrange()
+}
+
 /// Focus records a window by itself, which only macOS and Windows capture.
 const FOCUS_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
@@ -1133,7 +1172,7 @@ pub(crate) fn backdrop_suits(mode: Option<TargetType>) -> bool {
     match mode {
         None => false,
         Some(TargetType::Display | TargetType::Window) => !cfg!(windows),
-        Some(TargetType::Area | TargetType::CameraOnly) => true,
+        Some(TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly) => true,
     }
 }
 
@@ -1797,6 +1836,7 @@ impl OverlayWindow {
                 }
             }),
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
+            TargetType::AudioOnly => Some(ScreenCaptureTarget::AudioOnly),
         }
     }
 
@@ -1807,7 +1847,7 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
-        if self.needs_sign_in(self.select.read(cx).recording_mode, cx) {
+        if self.needs_sign_in(self.recording_mode(cx), cx) {
             self.signed_in = crate::store::auth_snapshot().signed_in();
             if !self.signed_in {
                 self.start_sign_in(cx);
@@ -1835,7 +1875,7 @@ impl OverlayWindow {
             }
         }
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
-        if self.select.read(cx).recording_mode == Mode::Screenshot {
+        if self.recording_mode(cx) == Mode::Screenshot {
             // Screenshots never reach the recording actors: the target goes
             // straight to the capture path, which closes these overlays
             // itself (`startRecording`'s screenshot branch,
@@ -1850,6 +1890,17 @@ impl OverlayWindow {
 
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         cx.defer(app_windows::dismiss_target_overlays);
+    }
+
+    /// The mode Start records in. Audio Only is always a Studio recording,
+    /// whatever the pill says.
+    fn recording_mode(&self, cx: &App) -> Mode {
+        let select = self.select.read(cx);
+        if select.mode == Some(TargetType::AudioOnly) {
+            Mode::Studio
+        } else {
+            select.recording_mode
+        }
     }
 
     /// Instant mode uploads as it records, so it cannot start signed out
@@ -2223,6 +2274,7 @@ impl Render for OverlayWindow {
                 Some(TargetType::Window) => root.child(self.render_window_variant(window, cx)),
                 Some(TargetType::Area) => root.child(self.render_area_variant(window, cx)),
                 Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
+                Some(TargetType::AudioOnly) => root.child(self.render_audio_variant(cx)),
                 None => root,
             }
         };
@@ -2800,11 +2852,19 @@ impl OverlayWindow {
             label.push_str(&format!("  ·  {w}:{h}"));
         }
         let arrangeable = crate::foreign_window::can_arrange();
+        // macOS only needs the user's OK, so the chip walks them through it.
+        let needs_permission = !arrangeable && cfg!(target_os = "macos");
+        let app = self
+            .select
+            .read(cx)
+            .active_window()
+            .map(|window| window.app_name.clone())
+            .filter(|name| !name.is_empty());
         let hint = if arrangeable {
             Hint::new(tr::overlay::window::size_title()).body(tr::overlay::window::size_body())
-        } else if cfg!(target_os = "macos") {
-            Hint::new(tr::overlay::window::size_needs_accessibility_title())
-                .body(tr::overlay::window::size_needs_accessibility_body())
+        } else if needs_permission {
+            Hint::new(tr::overlay::window::size_needs_permission_title())
+                .body(tr::overlay::window::size_needs_permission_body())
         } else {
             Hint::new(tr::overlay::window::size_unavailable_title())
                 .body(tr::overlay::window::size_unavailable_body())
@@ -2833,6 +2893,23 @@ impl OverlayWindow {
                         cx.stop_propagation();
                         this.open_window_menu(event.position(), cx);
                     }))
+            })
+            .when(needs_permission, move |chip| {
+                chip.cursor_pointer()
+                    .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let app = app.clone();
+                        // The picker dims every screen above System Settings,
+                        // so it closes for the help; the main window comes
+                        // back once the help does.
+                        cx.defer(move |cx| {
+                            crate::permission_help::show_from_picker(
+                                crate::permission_help::Need::WindowControl { app },
+                                cx,
+                            )
+                        });
+                    })
             })
     }
 
@@ -3212,6 +3289,18 @@ impl OverlayWindow {
         raise: bool,
         cx: &mut Context<Self>,
     ) {
+        self.arrange_active_window_after(arrangement, raise, false, cx);
+    }
+
+    /// [`Self::arrange_active_window`]; `after_prompt` marks the one retry
+    /// that follows macOS asking the user to let Cap control the app.
+    fn arrange_active_window_after(
+        &mut self,
+        arrangement: Arrangement,
+        raise: bool,
+        after_prompt: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(window) = self.select.read(cx).active_window().cloned() else {
             return;
         };
@@ -3228,6 +3317,11 @@ impl OverlayWindow {
         let before = window.bounds;
         let requested = id.clone();
         let select = self.select.clone();
+        let needs_app_choice = resize_needs_app_choice(&arrangement);
+        let retry_frame = match &arrangement {
+            Arrangement::Frame(frame) => Some(*frame),
+            Arrangement::PutBack(_) => None,
+        };
         cx.spawn(async move |this, cx| {
             let moved = crate::foreign_window::in_order(move || {
                 let arranged = match arrangement {
@@ -3262,6 +3356,60 @@ impl OverlayWindow {
             let (arranged, fresh) = moved;
             if !arranged {
                 tracing::warn!("the picked window could not be arranged");
+                // From macOS 27.3 Cap can hold the grant yet still not be
+                // allowed to control this app (it is not one of the apps
+                // chosen for Cap under System & App Protection Override).
+                if needs_app_choice {
+                    // An app set to "Ask First" makes macOS ask the user
+                    // right now; let that prompt do its job and try again
+                    // once it closes. Help only when nobody is asking, or
+                    // the user said no.
+                    if !after_prompt && let Some(frame) = retry_frame {
+                        let asked = wait_for_app_control_prompt(cx).await;
+                        cx.update(|cx| app_windows::lower_target_overlays(false, cx));
+                        if asked {
+                            let same = requested.clone();
+                            this.update(cx, |this, cx| {
+                                let still_picked = this
+                                    .select
+                                    .read(cx)
+                                    .active_window()
+                                    .is_some_and(|window| window.id == same);
+                                if still_picked {
+                                    this.arrange_active_window_after(
+                                        Arrangement::Frame(frame),
+                                        raise,
+                                        true,
+                                        cx,
+                                    );
+                                }
+                            })
+                            .ok();
+                            return;
+                        }
+                    }
+                    // Only for the window still picked in a live picker: the
+                    // user may have moved on while the move was refused.
+                    let still_picked = this
+                        .update(cx, |_, cx| {
+                            select
+                                .read(cx)
+                                .active_window()
+                                .is_some_and(|window| window.id == requested)
+                        })
+                        .unwrap_or(false);
+                    if !still_picked {
+                        return;
+                    }
+                    let app = Some(window.app_name.clone()).filter(|name| !name.is_empty());
+                    cx.update(|cx| {
+                        crate::permission_help::show_from_picker(
+                            crate::permission_help::Need::WindowControl { app },
+                            cx,
+                        )
+                    });
+                    return;
+                }
             }
             // Only while this picker is still up with the same window picked:
             // a slow move must not replace a newer choice.
@@ -3375,6 +3523,190 @@ impl OverlayWindow {
                     .child(preview),
             )
             .child(self.render_controls_cluster(self.target(cx), false, cx))
+    }
+
+    fn render_audio_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let (has_microphone, system_audio) = main
+            .read(cx)
+            .map(|view| (view.microphone_selection().is_some(), view.system_audio()))
+            .unwrap_or((false, false));
+        let fill = if has_microphone {
+            let fill = self.select.read(cx).microphone_fill;
+            self.drawn_microphone_fill.set(Some(fill));
+            fill
+        } else {
+            0.
+        };
+        let caption = if has_microphone {
+            tr::overlay::audio_only::meter_hint()
+        } else if system_audio {
+            tr::overlay::audio_only::system_audio_only()
+        } else {
+            tr::overlay::audio_only::choose_source()
+        };
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .bg(gpui::hsla(0., 0., 0., 0.7))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .mb(px(16.))
+                    .child(
+                        div()
+                            .mb(px(8.))
+                            .text_size(px(30.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr::main::target::audio_only()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(self.theme.gray_11)
+                            .child(tr::overlay::audio_only::description()),
+                    ),
+            )
+            .child(
+                self.glass_surface()
+                    .id("overlay-audio-meter")
+                    .w(px(CLUSTER_WIDTH))
+                    .mb(px(6.))
+                    .px(px(20.))
+                    .py(px(18.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(self.render_level_bars(fill, has_microphone))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(self.theme.gray_11)
+                            .child(caption),
+                    ),
+            )
+            .child(self.render_controls_cluster(self.target(cx), false, cx))
+    }
+
+    fn render_level_bars(&self, fill: f32, live: bool) -> impl IntoElement {
+        const BARS: usize = 31;
+        const MAX_HEIGHT: f32 = 56.;
+        const MIN_HEIGHT: f32 = 4.;
+        let fill = if fill.is_finite() {
+            fill.clamp(0., 1.)
+        } else {
+            0.
+        };
+        let lit = if live {
+            Hsla::from(self.theme.blue_9)
+        } else {
+            Hsla::from(self.theme.gray_7)
+        };
+        div()
+            .h(px(MAX_HEIGHT))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .children((0..BARS).map(move |index| {
+                let offset = index as f32 - (BARS - 1) as f32 / 2.;
+                let envelope = (std::f32::consts::PI * offset / BARS as f32).cos();
+                let texture = 0.75 + 0.25 * ((index * 7 % 5) as f32 / 4.);
+                let height = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) * fill * envelope * texture;
+                div()
+                    .w(px(4.))
+                    .h(px(height.max(MIN_HEIGHT)))
+                    .rounded_full()
+                    .bg(lit)
+            }))
+    }
+
+    fn render_system_audio_control(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let Ok(view) = main.read(cx) else {
+            return div().into_any_element();
+        };
+        let enabled = view.system_audio();
+        let theme = self.theme;
+        div()
+            .id("overlay-system-audio")
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(8.))
+            .h(px(42.))
+            .flex_1()
+            .min_w_0()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_5)
+            .bg(theme.gray_3)
+            .text_color(theme.gray_12)
+            .overflow_hidden()
+            .child(
+                svg()
+                    .path("icons/volume-2.svg")
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(theme.gray_11),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(14.))
+                    .child(tr::overlay::audio_only::system_audio()),
+            )
+            .child(
+                div()
+                    .id("overlay-system-audio-toggle")
+                    .px(px(10.))
+                    .h(px(24.))
+                    .min_w(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .text_size(px(11.))
+                    .bg(if enabled {
+                        Hsla::from(theme.blue_9)
+                    } else {
+                        Hsla::from(theme.gray_5)
+                    })
+                    .text_color(if enabled {
+                        gpui::white()
+                    } else {
+                        Hsla::from(theme.gray_11)
+                    })
+                    .child(if enabled {
+                        tr::main::device::pill::on()
+                    } else {
+                        tr::main::device::pill::off()
+                    }),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |_, _, _, cx| {
+                cx.stop_propagation();
+                cx.defer(move |cx| {
+                    if let Err(error) = main.update(cx, |view, _, cx| {
+                        let enabled = view.system_audio();
+                        view.set_system_audio(!enabled, cx);
+                    }) {
+                        tracing::warn!(%error, "could not change the system audio setting");
+                    }
+                    app_windows::refresh_target_overlays(cx);
+                });
+            }))
+            .into_any_element()
     }
 
     /// The crop overlay: `bg-black/45` outside the selection, a `border-white/50`
@@ -4492,7 +4824,10 @@ impl OverlayWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let mode = self.select.read(cx).recording_mode;
+        let mode = self.recording_mode(cx);
+        let audio_only = target
+            .as_ref()
+            .is_some_and(ScreenCaptureTarget::is_audio_only);
         let disabled = disabled || target.is_none();
 
         // `flex flex-col gap-2.5 items-stretch my-2.5 w-104`.
@@ -4558,16 +4893,17 @@ impl OverlayWindow {
                 ),
             )
             .when(mode != Mode::Screenshot, |cluster| {
-                cluster.child(
-                    self.glass_surface().p(px(12.)).child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .w_full()
-                            .child(self.render_device_control(true, cx))
-                            .child(self.render_device_control(false, cx)),
-                    ),
-                )
+                cluster.child(self.glass_surface().p(px(12.)).child(
+                    div().flex().gap(px(8.)).w_full().map(|row| {
+                        if audio_only {
+                            row.child(self.render_device_control(false, cx))
+                                .child(self.render_system_audio_control(cx))
+                        } else {
+                            row.child(self.render_device_control(true, cx))
+                                .child(self.render_device_control(false, cx))
+                        }
+                    }),
+                ))
             })
     }
 
@@ -4635,6 +4971,9 @@ impl OverlayWindow {
             (theme.blue_10, theme.blue_11)
         };
         let needs_sign_in = self.needs_sign_in(mode, cx);
+        let fixed_mode = target
+            .as_ref()
+            .is_some_and(ScreenCaptureTarget::is_audio_only);
         let label = match mode {
             Mode::Screenshot => tr::overlay::start::take_screenshot(),
             _ if needs_sign_in => tr::overlay::start::sign_in(),
@@ -4652,8 +4991,6 @@ impl OverlayWindow {
             Mode::Studio => tr::overlay::start::studio(),
             Mode::Screenshot => tr::main::mode::header::screenshot(),
         };
-        let _ = target;
-
         div()
             .id("overlay-start")
             .relative()
@@ -4690,6 +5027,7 @@ impl OverlayWindow {
                     // they paint square corners past the pill onto the glass
                     // card behind it.
                     .rounded_l(px(22.))
+                    .when(fixed_mode, |this| this.rounded_r(px(22.)).pr(px(16.)))
                     // `opacity-60 cursor-not-allowed hover:bg-transparent`.
                     .when(disabled, |this| this.opacity(0.6))
                     .when(!disabled, |this| {
@@ -4737,63 +5075,65 @@ impl OverlayWindow {
                             ),
                     ),
             )
-            .child(
-                // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`,
-                // `onMouseDown/onClick={showMenu(menuModes(), e)}`: the caret
-                // pops the mode menu at the press location and must never arm
-                // the pill's start click -- gpui arms clicks on mouse-down per
-                // hitbox, so the stop has to happen here, not on a click
-                // handler. Active even while start is disabled, same as the
-                // source (the disabled styling only wraps the leading half).
-                self.hinted(
-                    div().id("overlay-mode-picker"),
-                    "overlay-mode-picker",
-                    Hint::new(tr::overlay::mode_title()).body(tr::overlay::mode_body()),
-                    cx,
+            .when(!fixed_mode, |this| {
+                this.child(
+                    // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`,
+                    // `onMouseDown/onClick={showMenu(menuModes(), e)}`: the caret
+                    // pops the mode menu at the press location and must never arm
+                    // the pill's start click -- gpui arms clicks on mouse-down per
+                    // hitbox, so the stop has to happen here, not on a click
+                    // handler. Active even while start is disabled, same as the
+                    // source (the disabled styling only wraps the leading half).
+                    self.hinted(
+                        div().id("overlay-mode-picker"),
+                        "overlay-mode-picker",
+                        Hint::new(tr::overlay::mode_title()).body(tr::overlay::mode_body()),
+                        cx,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            if crate::session::RecordingSession::global(cx)
+                                .read(cx)
+                                .editor_recording_target()
+                                .is_some()
+                            {
+                                return;
+                            }
+                            let current = this.select.read(cx).recording_mode;
+                            this.device_menu = None;
+                            this.countdown_menu = None;
+                            this.aspect_menu = None;
+                            this.window_menu = None;
+                            this.mode_menu = Some(crate::ui::MenuState::new(
+                                event.position,
+                                &mode_menu_items(current),
+                            ));
+                            cx.notify();
+                        }),
+                    )
+                    .flex()
+                    .items_center()
+                    .pl(px(10.))
+                    .pr(px(12.))
+                    .py(px(6.))
+                    // The right cap of the pill, for the same reason the
+                    // leading half takes `rounded_l`: its `bg-white/5` panel
+                    // otherwise pokes square corners past `rounded-full`.
+                    .rounded_r(px(22.))
+                    .border_l_1()
+                    .border_color(gpui::hsla(0., 0., 1., 0.2))
+                    .bg(gpui::hsla(0., 0., 1., 0.05))
+                    .child(
+                        svg()
+                            .path("icons/caret-down.svg")
+                            .w(px(10.))
+                            .h(px(6.))
+                            .text_color(gpui::white()),
+                    ),
                 )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                        if crate::session::RecordingSession::global(cx)
-                            .read(cx)
-                            .editor_recording_target()
-                            .is_some()
-                        {
-                            return;
-                        }
-                        let current = this.select.read(cx).recording_mode;
-                        this.device_menu = None;
-                        this.countdown_menu = None;
-                        this.aspect_menu = None;
-                        this.window_menu = None;
-                        this.mode_menu = Some(crate::ui::MenuState::new(
-                            event.position,
-                            &mode_menu_items(current),
-                        ));
-                        cx.notify();
-                    }),
-                )
-                .flex()
-                .items_center()
-                .pl(px(10.))
-                .pr(px(12.))
-                .py(px(6.))
-                // The right cap of the pill, for the same reason the
-                // leading half takes `rounded_l`: its `bg-white/5` panel
-                // otherwise pokes square corners past `rounded-full`.
-                .rounded_r(px(22.))
-                .border_l_1()
-                .border_color(gpui::hsla(0., 0., 1., 0.2))
-                .bg(gpui::hsla(0., 0., 1., 0.05))
-                .child(
-                    svg()
-                        .path("icons/caret-down.svg")
-                        .w(px(10.))
-                        .h(px(6.))
-                        .text_color(gpui::white()),
-                ),
-            )
+            })
             .when(!disabled, |this| {
                 this.on_click(cx.listener(|this, _, window, cx| {
                     cx.stop_propagation();

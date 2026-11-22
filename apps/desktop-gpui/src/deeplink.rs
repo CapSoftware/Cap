@@ -80,6 +80,8 @@ pub enum CaptureMode {
     Area(Box<CaptureArea>),
     #[cfg(debug_assertions)]
     CameraOnly,
+    #[cfg(debug_assertions)]
+    AudioOnly,
 }
 
 /// `CameraPreviewShape` (`src-tauri/src/camera.rs:161-168`), mirrored here so
@@ -368,6 +370,8 @@ impl DeepLinkAction {
                     }
                     #[cfg(debug_assertions)]
                     CaptureMode::CameraOnly => ScreenCaptureTarget::CameraOnly,
+                    #[cfg(debug_assertions)]
+                    CaptureMode::AudioOnly => ScreenCaptureTarget::AudioOnly,
                 };
 
                 let mode = match mode {

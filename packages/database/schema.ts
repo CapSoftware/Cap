@@ -120,6 +120,10 @@ export const users = mysqlTable(
 				trackedEvents?: {
 					user_signed_up?: boolean;
 				};
+				dashboard?: {
+					pageSize?: number;
+				};
+				passkeyPromptDismissedAt?: string;
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId(
@@ -545,6 +549,7 @@ export const videos = mysqlTable(
 		xStreamInfo: text("xStreamInfo"),
 		firstViewEmailSentAt: timestamp("firstViewEmailSentAt"),
 		isScreenshot: boolean("isScreenshot").notNull().default(false),
+		archivedAt: timestamp("archivedAt"),
 		// DEPRECATED
 		awsRegion: varchar("awsRegion", { length: 255 }),
 		awsBucket: varchar("awsBucket", { length: 255 }),
@@ -573,6 +578,13 @@ export const videos = mysqlTable(
 		),
 		index("org_effective_created_idx").on(
 			table.orgId,
+			table.effectiveCreatedAt,
+		),
+		index("org_owner_folder_archived_effective_idx").on(
+			table.orgId,
+			table.ownerId,
+			table.folderId,
+			table.archivedAt,
 			table.effectiveCreatedAt,
 		),
 		index("screenshot_transcription_created_idx").on(
@@ -1027,6 +1039,69 @@ export const authApiKeys = mysqlTable(
 	}),
 );
 
+export const userPasskeys = mysqlTable(
+	"user_passkeys",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		credentialId: varchar("credentialId", { length: 1400 }).notNull(),
+		credentialIdHash: varchar("credentialIdHash", { length: 64 }).notNull(),
+		publicKey: text("publicKey").notNull(),
+		counter: bigint("counter", { mode: "number", unsigned: true })
+			.notNull()
+			.default(0),
+		transports: json("transports").$type<string[]>(),
+		deviceType: varchar("deviceType", { length: 32 }).notNull(),
+		backedUp: boolean("backedUp").notNull().default(false),
+		confirmsIdentity: boolean("confirmsIdentity").notNull().default(true),
+		aaguid: varchar("aaguid", { length: 36 }),
+		name: varchar("name", { length: 64 }).notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+		lastUsedAt: timestamp("lastUsedAt"),
+	},
+	(table) => ({
+		credentialIdHashIndex: uniqueIndex("credential_id_hash_idx").on(
+			table.credentialIdHash,
+		),
+		userIdIndex: index("user_id_idx").on(table.userId),
+	}),
+);
+
+export const authChallenges = mysqlTable(
+	"auth_challenges",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoIdNullable("userId").$type<User.UserId>(),
+		purpose: varchar("purpose", { length: 32 }).notNull(),
+		secretHash: varchar("secretHash", { length: 64 }).notNull(),
+		attempts: int("attempts").notNull().default(0),
+		expiresAt: datetime("expiresAt").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		secretHashIndex: uniqueIndex("secret_hash_idx").on(table.secretHash),
+		userPurposeIndex: index("user_purpose_idx").on(table.userId, table.purpose),
+		expiresAtIndex: index("expires_at_idx").on(table.expiresAt),
+	}),
+);
+
+export const emailChangeRequests = mysqlTable(
+	"email_change_requests",
+	{
+		id: nanoId("id").notNull().primaryKey(),
+		userId: nanoId("userId").notNull().$type<User.UserId>(),
+		newEmail: varchar("newEmail", { length: 255 }).notNull(),
+		codeHash: varchar("codeHash", { length: 64 }).notNull(),
+		attempts: int("attempts").notNull().default(0),
+		expiresAt: datetime("expiresAt").notNull(),
+		createdAt: timestamp("createdAt").notNull().defaultNow(),
+	},
+	(table) => ({
+		userIdIndex: index("user_id_idx").on(table.userId),
+		expiresAtIndex: index("expires_at_idx").on(table.expiresAt),
+	}),
+);
+
 export const mobilePushTokens = mysqlTable(
 	"mobile_push_tokens",
 	{
@@ -1174,6 +1249,7 @@ export const mcpOAuthCodes = mysqlTable(
 	(table) => [
 		uniqueIndex("code_hash_idx").on(table.codeHash),
 		index("expires_at_idx").on(table.expiresAt),
+		index("user_consumed_idx").on(table.userId, table.consumedAt),
 	],
 );
 
@@ -1196,6 +1272,7 @@ export const mcpOAuthTokens = mysqlTable(
 		uniqueIndex("access_hash_idx").on(table.accessHash),
 		uniqueIndex("refresh_hash_idx").on(table.refreshHash),
 		index("family_id_idx").on(table.familyId),
+		index("user_revoked_idx").on(table.userId, table.revokedAt),
 		index("client_active_idx").on(
 			table.clientId,
 			table.revokedAt,
@@ -1503,6 +1580,7 @@ export const spaces = mysqlTable(
 			disableTranscript?: boolean;
 			disableComments?: boolean;
 			publicPage?: PublicCollection.PublicPageSettings;
+			videoOrder?: "newest" | "oldest" | "custom";
 		}>(),
 		password: encryptedTextNullable("password"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
@@ -1556,6 +1634,7 @@ export const spaceVideos = mysqlTable(
 		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		addedById: nanoId("addedById").notNull().$type<User.UserId>(),
 		addedAt: timestamp("addedAt").notNull().defaultNow(),
+		position: int("position"),
 	},
 	(table) => ({
 		folderIdIndex: index("folder_id_idx").on(table.folderId),

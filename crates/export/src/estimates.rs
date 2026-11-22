@@ -303,6 +303,7 @@ async fn estimate(
                 system_audio: segment.system_audio.clone(),
                 audio_timing_repair: segment.audio_timing_repair,
                 cursor: segment.cursor.clone(),
+                hover_changes: segment.hover_changes.clone(),
                 keyboard: segment.keyboard.clone(),
                 decoders: sample.decoders.clone(),
             })
@@ -814,6 +815,7 @@ fn summarize_pass(measurement: &PassMeasurement) -> Result<ExportEstimates, Stri
 }
 
 /// Markers never change an export, so a marker edit keeps the cached estimate.
+/// Screen enhancement is never serialized, so it is hashed on its own.
 fn estimate_key(
     project_path: &std::path::Path,
     project: &mut ProjectConfiguration,
@@ -830,6 +832,13 @@ fn estimate_key(
         .hash(&mut hasher);
     if turbo {
         turbo.hash(&mut hasher);
+    }
+    if project.screen_enhancement.enabled {
+        project
+            .screen_enhancement
+            .effective_strength()
+            .to_bits()
+            .hash(&mut hasher);
     }
     Ok(hasher.finish())
 }
@@ -856,6 +865,24 @@ mod tests {
         assert_ne!(
             estimate_key(path, &mut project, &settings, false).unwrap(),
             base
+        );
+    }
+
+    #[test]
+    fn screen_enhancement_changes_the_cached_estimate() {
+        let path = std::path::Path::new("/tmp/project.cap");
+        let settings = ExportSettings::Gif(crate::gif::GifExportSettings::default());
+        let mut project = ProjectConfiguration::default();
+        let off = estimate_key(path, &mut project, &settings, false).unwrap();
+        project.screen_enhancement = cap_project::ScreenEnhancement::on();
+        assert_ne!(
+            estimate_key(path, &mut project, &settings, false).unwrap(),
+            off
+        );
+        project.screen_enhancement = cap_project::ScreenEnhancement::default();
+        assert_eq!(
+            estimate_key(path, &mut project, &settings, false).unwrap(),
+            off
         );
     }
 

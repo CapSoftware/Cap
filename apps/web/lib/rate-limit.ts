@@ -181,6 +181,8 @@ export const RATE_LIMIT_IDS = {
 	TRANSLATE_TRANSCRIPT: "rl_translate_transcript",
 	/** Anonymous support-chat messages (Groq + Supermemory cost). Suggested: 20 / 1m per IP. */
 	MESSENGER_MESSAGE: "rl_messenger_message",
+	/** Support-chat update polls. An open chat polls at most every 3 s, slower when idle. Suggested: 120 / 1m per IP. */
+	MESSENGER_POLL: "rl_messenger_poll",
 	/** Unauthed analytics view tracking (Tinybird ingest + notifications). Suggested: 120 / 1m per IP. */
 	ANALYTICS_TRACK: "rl_analytics_track",
 	/** Unauthed guest checkout (Stripe object/cost abuse). Suggested: 20 / 10m per IP. */
@@ -192,6 +194,10 @@ export const RATE_LIMIT_IDS = {
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
 	AUTH_SSO_START: "rl_auth_sso_start",
+	/** Passkey sign-in ceremonies, counted when one starts and when one completes. Suggested: 30 / 1m per IP. */
+	AUTH_PASSKEY: "rl_auth_passkey",
+	/** Google One Tap sign-in attempts. Suggested: 30 / 1m per IP. */
+	AUTH_GOOGLE_ONE_TAP: "rl_auth_google_one_tap",
 	MCP_CLIENT_REGISTRATION: "rl_mcp_client_registration",
 	/** Share-page video password attempts. Suggested: 20 / 10m per IP. */
 	VIDEO_PASSWORD: "rl_video_password",
@@ -249,9 +255,12 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.AGENT_LOOM_IMPORT]: { limit: 20, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_PASSKEY]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_GOOGLE_ONE_TAP]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.MESSENGER_POLL]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.ANALYTICS_TRACK]: { limit: 120, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.GUEST_CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.DESKTOP_LOGS]: { limit: 10, windowMs: MINUTE_MS },

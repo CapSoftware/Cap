@@ -144,6 +144,10 @@ pub fn target_overlay_level() -> isize {
     1
 }
 
+pub fn recording_area_level() -> isize {
+    1
+}
+
 pub fn teleprompter_level() -> isize {
     1
 }
@@ -506,6 +510,8 @@ pub fn order_front_native(native: &NativeWindow) {
     }
 }
 
+pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
+
 /// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
 /// after an overlay's own activation and loses to it.
 pub fn raise_panel_native(native: &NativeWindow, _level: isize) {
@@ -826,6 +832,11 @@ pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
 
 pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
     None
+}
+
+/// macOS raises an app-control prompt; Windows has no such prompt.
+pub fn app_control_prompt_visible() -> bool {
+    false
 }
 
 pub fn system_settings_frontmost() -> bool {

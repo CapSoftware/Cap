@@ -1265,6 +1265,11 @@ async fn build_instant_recording_actor(
     }
     diagnostic.stage("initializing_capture");
 
+    anyhow::ensure!(
+        !inputs.capture_target.is_audio_only(),
+        "Audio only recordings are made in Studio Mode"
+    );
+
     #[cfg(target_os = "linux")]
     anyhow::ensure!(
         !matches!(inputs.capture_target, ScreenCaptureTarget::CameraOnly)
@@ -1324,7 +1329,9 @@ async fn build_instant_recording_actor(
                 let output_path = content_dir.join("output.mp4");
 
                 let mut builder = OutputPipeline::builder(output_path.clone())
-                    .with_video::<crate::sources::Camera>(camera_feed.clone())
+                    .with_video::<crate::sources::Camera>(crate::sources::CameraTrackInput::new(
+                        camera_feed.clone(),
+                    ))
                     .with_timestamps(timestamps);
 
                 if let Some(mic_feed) = inputs.mic_feed.clone() {
@@ -1363,7 +1370,9 @@ async fn build_instant_recording_actor(
                 let output_path = content_dir.join("output.mp4");
 
                 let mut builder = OutputPipeline::builder(output_path.clone())
-                    .with_video::<crate::sources::NativeCamera>(camera_feed.clone())
+                    .with_video::<crate::sources::NativeCamera>(
+                        crate::sources::CameraTrackInput::new(camera_feed.clone()),
+                    )
                     .with_timestamps(timestamps)
                     .with_start_gate(inputs.start_gate.clone());
 

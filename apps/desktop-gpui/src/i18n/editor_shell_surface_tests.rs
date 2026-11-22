@@ -46,6 +46,7 @@ const FORMATTED: &[&str] = &[
     "editor.clips.error.unsupported_video",
     "editor.clips.import_error",
     "editor.clips.prepare_controls_failed",
+    "editor.clips.removed_media",
     "editor.clips.save_before_recording_failed",
     "editor.clips.split",
     "editor.export.estimate.gigabytes",
@@ -139,6 +140,10 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::clips::error::into_itself(),
             "Cannot import a recording into itself",
+        ),
+        (
+            tr::editor::clips::error::audio_only_mix(),
+            "Audio only recordings and video clips cannot be combined in one project",
         ),
         (
             tr::editor::clips::error::no_duration(),
@@ -261,6 +266,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Re-encodes with software for much smaller files (slower)",
         ),
         (tr::editor::export::optimize::title(), "Optimize file size"),
+        (
+            tr::editor::export::enhance::description(),
+            "Sharpens text and fine detail when your recording is zoomed in or scaled down. Exports can take longer.",
+        ),
+        (tr::editor::export::enhance::title(), "Enhance quality"),
         (tr::editor::export::organization(), "Organization"),
         (
             tr::editor::export::phase::clipboard_failed(),
@@ -637,6 +647,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::editor::tabs::corner::rounded(), "Rounded"),
         (tr::editor::tabs::corner::squircle(), "Squircle"),
+        (tr::editor::tabs::padding::even(), "Even"),
+        (tr::editor::tabs::padding::proportional(), "Proportional"),
+        (
+            tr::editor::tabs::cursor::follow_hover(),
+            "Follow Hover Highlights",
+        ),
         (tr::editor::tabs::cursor::friction(), "Friction"),
         (tr::editor::tabs::cursor::hide_when_idle(), "Hide When Idle"),
         (
@@ -731,6 +747,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::tabs::keyboard::no_presses(),
             "No recorded keyboard presses were found.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_action(),
+            "Show me how",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_body(),
+            "Give Cap your OK so your next recordings include the keys you press.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_title(),
+            "Keystrokes aren't being recorded",
         ),
         (tr::editor::tabs::keyboard::position(), "Position"),
         (
@@ -1297,6 +1325,16 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::window::transport::split_tooltip(),
             "Click a segment to split. Esc to finish.",
         ),
+        (tr::editor::window::transport::enhance(), "Enhance"),
+        (
+            tr::editor::window::transport::enhance_tooltip(),
+            "Show the paused frame enhanced",
+        ),
+        (tr::editor::window::transport::compare(), "Compare"),
+        (
+            tr::editor::window::transport::compare_tooltip(),
+            "Hold to see the original",
+        ),
         (tr::editor::window::transport::zoom_in(), "Zoom in"),
         (tr::editor::window::transport::zoom_out(), "Zoom out"),
         (tr::editor::window::undo(), "Undo"),
@@ -1466,6 +1504,19 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Choose at least one track to export.",
         ),
         (tr::editor::export::tracks::cta(), "Export Tracks"),
+        (tr::editor::export::audio::cta(), "Export Audio"),
+        (tr::editor::export::audio::exported(), "Audio exported"),
+        (tr::editor::export::audio::exporting(), "Exporting audio"),
+        (tr::editor::export::audio::file_type(), "File type"),
+        (tr::editor::export::audio::format(), "Audio"),
+        (
+            tr::editor::export::audio::mp3_description(),
+            "Small and plays everywhere. 192 kb/s stereo.",
+        ),
+        (
+            tr::editor::export::audio::wav_description(),
+            "Lossless 16-bit, 48 kHz. Best for further editing.",
+        ),
         (tr::editor::export::tracks::exported(), "Tracks exported"),
         (tr::editor::export::tracks::exporting(), "Exporting tracks"),
         (
@@ -1624,6 +1675,10 @@ fn editor_shell_messages_format_like_the_code_they_replaced() {
     assert_eq!(
         tr::editor::clips::prepare_controls_failed(&error),
         format!("Could not prepare the recording controls: {error}")
+    );
+    assert_eq!(
+        tr::editor::clips::removed_media("Demo"),
+        "Demo (removed clips)"
     );
     assert_eq!(
         tr::editor::clips::save_before_recording_failed(&error),

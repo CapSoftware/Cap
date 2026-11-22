@@ -43,7 +43,7 @@ use std::{
 
 use cap_project::{
     AnimatedGradientParameter, BackgroundSource, BorderConfiguration, Color, CornerStyle,
-    DisplayNotch, NotchConfiguration, ProjectConfiguration, ShadowConfiguration,
+    DisplayNotch, NotchConfiguration, PaddingMode, ProjectConfiguration, ShadowConfiguration,
 };
 use gpui::{
     AnyElement, Bounds, Context, FontWeight, Hsla, InteractiveElement, IntoElement, MouseDownEvent,
@@ -200,6 +200,16 @@ pub const DEFAULT_GRADIENT_TO: Color = [255, 71, 102];
 /// `projectConfig.ts:18-19`.
 pub const DEFAULT_BACKGROUND_PADDING: f64 = 10.;
 pub const DEFAULT_BACKGROUND_ROUNDING: f64 = 7.5;
+
+/// Rounding seeded when a background first appears. Even padding is what new
+/// projects start with, so it gets the new-project corner; older projects
+/// keep the rounding they always got.
+pub fn default_background_rounding(mode: PaddingMode) -> f64 {
+    match mode {
+        PaddingMode::Even => cap_project::NEW_PROJECT_ROUNDING,
+        PaddingMode::Proportional => DEFAULT_BACKGROUND_ROUNDING,
+    }
+}
 /// `GradientEditor.tsx:39-40`.
 pub const DEFAULT_NOISE_SCALE: f32 = 3.;
 /// `BACKGROUND_IMAGE_EXTENSIONS` (`:250-257`).
@@ -1583,6 +1593,21 @@ impl EditorWindow {
         self.apply_slider(slider, value, window, cx);
     }
 
+    pub(crate) fn bench_slider_press(&mut self, slider: SliderKey) {
+        let history = &mut self.history;
+        self.sidebar.slider_drag.begin(slider, || history.pause());
+    }
+
+    pub(crate) fn bench_slider_move(
+        &mut self,
+        slider: SliderKey,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_slider(slider, value, window, cx);
+    }
+
     /// The release closes the undo bracket: everything the drag wrote becomes
     /// one entry.
     pub(crate) fn sidebar_mouse_up(&mut self, cx: &mut Context<Self>) {
@@ -2358,7 +2383,7 @@ impl EditorWindow {
                 changed = true;
             }
             if from_none && background.rounding == 0. {
-                background.rounding = DEFAULT_BACKGROUND_ROUNDING;
+                background.rounding = default_background_rounding(background.padding_mode);
                 changed = true;
             }
             changed
@@ -2702,7 +2727,16 @@ impl EditorWindow {
     /// own `flex flex-col gap-6 p-4` inside it.
     fn render_tab_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let content: AnyElement = match self.sidebar.tab {
-            SidebarTab::Background => self.render_background_tab(cx).into_any_element(),
+            SidebarTab::Background => match self.render_audio_visuals_card(cx) {
+                Some(visuals) => div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(visuals)
+                    .child(self.render_background_tab(cx))
+                    .into_any_element(),
+                None => self.render_background_tab(cx).into_any_element(),
+            },
             SidebarTab::Camera => self.render_camera_tab(cx),
             SidebarTab::Audio => self.render_audio_tab(cx),
             SidebarTab::Cursor => self.render_cursor_tab(cx),
@@ -2782,6 +2816,7 @@ impl EditorWindow {
                             "%",
                             cx,
                         ))
+                        .child(self.render_padding_mode(cx))
                         // The custom screen position row, shown only once the
                         // display has been dragged on the canvas (`:2656-2667`).
                         .children(background.display_position.map(|_| {
@@ -3607,6 +3642,43 @@ impl EditorWindow {
                 cx,
             )),
         )
+    }
+
+    fn render_padding_mode(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let label = match self.style_control_project().background.padding_mode {
+            PaddingMode::Even => tr::editor::tabs::padding::even(),
+            PaddingMode::Proportional => tr::editor::tabs::padding::proportional(),
+        };
+
+        ui::Field::inline(&theme, tr::editor::sidebar::layout::padding_style()).child(
+            div().w(px(150.)).child(self.menu_select(
+                crate::editor_tabs::SidebarMenu::BackgroundPaddingMode,
+                "padding-mode",
+                label,
+                cx,
+            )),
+        )
+    }
+
+    pub(crate) fn set_padding_mode(
+        &mut self,
+        mode: PaddingMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_background_without_timeline(
+            "padding-mode",
+            move |project| {
+                if project.background.padding_mode == mode {
+                    return false;
+                }
+                project.background.padding_mode = mode;
+                true
+            },
+            window,
+            cx,
+        );
     }
 
     fn render_border_field(&self, cx: &mut Context<Self>) -> impl IntoElement {

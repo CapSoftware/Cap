@@ -1572,14 +1572,28 @@ mod mac {
         super::MAIN_WINDOW_LEVEL + 1
     }
 
-    /// The level `windows.rs` gives every `TargetSelectOverlay`:
-    /// `CGWindowLevelForKey(10) - 1`, i.e. one below the recording controls
-    /// bar. Same mislabeled constant as [`recording_controls_level`] (key 10 is
-    /// `kCGModalPanelWindowLevelKey`, level 8), so the shipping overlay really
-    /// runs at level 7 -- above ordinary app windows, below the bar. Reproduced
-    /// verbatim rather than "fixed" from over here.
+    /// The target picker runs one level above the menu bar's status items
+    /// (`kCGStatusWindowLevelKey`, level 25; the menu bar itself is 24). At the
+    /// Tauri app's level 7 the menu bar sat over the overlay, so an area could
+    /// not be started or dragged into it (#1852).
     pub fn target_overlay_level() -> isize {
+        unsafe { CGWindowLevelForKey(9) as isize + 1 }
+    }
+
+    /// Where an Area overlay kept on screen as the recording outline goes once
+    /// the recording starts: the level every overlay had before #1852, one
+    /// below the recording controls bar (and the camera bubble), so the
+    /// stacking while recording is unchanged.
+    pub fn recording_area_level() -> isize {
         recording_controls_level() - 1
+    }
+
+    /// Set a panel's level outright, lowering it if needed. Same task-only rule
+    /// as every other ordering call here.
+    pub fn set_panel_level(native: &NativeWindow, level: isize) {
+        if native.0.level() != level {
+            native.0.setLevel(level);
+        }
     }
 
     /// A retained `NSWindow` that can outlive a `&Window` borrow -- what
@@ -2348,6 +2362,41 @@ mod mac {
             }
         }
         best
+    }
+
+    /// Whether macOS is asking the user to let Cap control another app right
+    /// now: from 27.3, an app set to "Ask First" for Cap under System & App
+    /// Protection Override raises this prompt (owned by
+    /// `universalAccessAuthWarn`) on Cap's first Accessibility call into it.
+    /// Owner names are readable without Screen Recording.
+    pub fn app_control_prompt_visible() -> bool {
+        use core_foundation::array::{CFArray, CFArrayRef};
+        use core_foundation::base::{CFType, TCFType};
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::{CFString, CFStringRef};
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+            static kCGWindowOwnerName: CFStringRef;
+        }
+        const ON_SCREEN_ONLY: u32 = 1 << 0;
+        const EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
+
+        let list = unsafe {
+            let raw = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP_ELEMENTS, 0);
+            if raw.is_null() {
+                return false;
+            }
+            CFArray::<CFDictionary<CFString, CFType>>::wrap_under_create_rule(raw)
+        };
+        let owner_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerName) };
+        list.iter().any(|window| {
+            window
+                .find(&owner_key)
+                .and_then(|value| value.downcast::<CFString>())
+                .is_some_and(|owner| owner.to_string() == "universalAccessAuthWarn")
+        })
     }
 
     /// Whether the user is in System Settings or one of the authentication
@@ -3352,6 +3401,10 @@ mod stub {
     pub fn target_overlay_level() -> isize {
         0
     }
+    pub fn recording_area_level() -> isize {
+        0
+    }
+    pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
     pub fn teleprompter_level() -> isize {
         0
     }
@@ -3468,6 +3521,9 @@ mod stub {
         None
     }
     pub fn system_settings_frontmost() -> bool {
+        false
+    }
+    pub fn app_control_prompt_visible() -> bool {
         false
     }
     pub fn show_native(_native: &NativeWindow) {}
@@ -3674,6 +3730,19 @@ pub use stub::*;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn target_picker_sits_above_the_menu_bar_and_recording_stacking_is_unchanged() {
+        const MAIN_MENU_LEVEL: isize = 24;
+        const STATUS_LEVEL: isize = 25;
+        const POP_UP_MENU_LEVEL: isize = 101;
+        let picker = super::target_overlay_level();
+        assert!(picker > STATUS_LEVEL && picker > MAIN_MENU_LEVEL);
+        assert!(picker < POP_UP_MENU_LEVEL);
+        assert_eq!(super::recording_controls_level(), 8);
+        assert_eq!(super::recording_area_level(), 7);
+    }
+
     #[test]
     fn dock_hide_waits_for_the_latest_show_without_extending_on_read() {
         use std::time::{Duration, Instant};

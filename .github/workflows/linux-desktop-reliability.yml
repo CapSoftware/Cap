@@ -7,6 +7,7 @@ name: Linux desktop reliability
 # the tray, approve the screen share), stops it, and checks it finished.
 
 on:
+  merge_group:
   pull_request:
     paths:
       - "apps/desktop-gpui/**"
@@ -47,10 +48,27 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.scope.outputs.run }}
+      run: ${{ steps.queue.outputs.run || steps.scope.outputs.run }}
     steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'merge_group'
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        if: github.event_name == 'merge_group'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/linux-desktop-reliability.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
       - name: Scope
         id: scope
+        if: github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
@@ -463,6 +481,9 @@ jobs:
           fi
           ls -la /dev/dri
 
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
+
       - name: Hyprland (portal refuses host apps, tray Stop control)
         run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
@@ -527,9 +548,13 @@ jobs:
       - name: Install Linux desktop dependencies
         uses: ./.github/actions/install-desktop-deps
 
-      - name: X11 recording with a camera
+      - name: Install camera test dependencies
+        timeout-minutes: 10
         run: |
           sudo apt-get install -y -qq "linux-headers-$(uname -r)" v4l2loopback-dkms xvfb xdotool ffmpeg dbus >/dev/null
+
+      - name: X11 recording with a camera
+        run: |
           chmod +x "$RUNNER_TEMP/build/cap-gpui"
           # Each format Cap's Linux camera path converts: packed YUYV, NV12 and
           # MJPEG (decoded before use).
@@ -661,6 +686,9 @@ jobs:
             sudo modprobe vkms
           fi
           ls -la /dev/dri
+
+      - name: Arch Linux base image
+        run: sudo bash scripts/linux-desktop-harness/pull-arch-base.sh
 
       - name: Build niri
         run: |

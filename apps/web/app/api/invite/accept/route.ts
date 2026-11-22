@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
 				.where(eq(organizationInvites.id, inviteId))
 				.for("update");
 
-			if (!invite) {
+			if (!invite || invite.status !== "pending") {
 				throw new Error("INVITE_NOT_FOUND");
 			}
 

@@ -24,8 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode, transcription_ranges_cover, transcription_source_ranges,
+    KeyboardData, KeyboardSettings, PaddingMode, ProjectConfiguration, RecordingMeta,
+    ShadowConfiguration, StereoMode, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -77,6 +77,14 @@ pub const CAMERA_BLUR_MODES: &[(BackgroundBlurMode, Label)] = &[
 pub const CORNER_STYLES: [(CornerStyle, Label); 2] = [
     (CornerStyle::Squircle, tr::editor::tabs::corner::squircle),
     (CornerStyle::Rounded, tr::editor::tabs::corner::rounded),
+];
+
+pub const PADDING_MODES: [(PaddingMode, Label); 2] = [
+    (PaddingMode::Even, tr::editor::tabs::padding::even),
+    (
+        PaddingMode::Proportional,
+        tr::editor::tabs::padding::proportional,
+    ),
 ];
 
 /// `STEREO_MODES` (`:375-379`).
@@ -780,6 +788,7 @@ fn with_keyboard_settings(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMenu {
     BackgroundCornerStyle,
+    BackgroundPaddingMode,
     CameraBlur,
     CameraShape,
     CameraCornerStyle,
@@ -822,6 +831,12 @@ impl EditorWindow {
                 .iter()
                 .map(|(style, label)| {
                     ui::MenuItem::new(label(), *style == project.background.rounding_type)
+                })
+                .collect(),
+            SidebarMenu::BackgroundPaddingMode => PADDING_MODES
+                .iter()
+                .map(|(mode, label)| {
+                    ui::MenuItem::new(label(), *mode == project.background.padding_mode)
                 })
                 .collect(),
             SidebarMenu::CameraBlur => CAMERA_BLUR_MODES
@@ -1005,6 +1020,12 @@ impl EditorWindow {
                     project.background.rounding_type = style;
                     true
                 });
+            }
+            SidebarMenu::BackgroundPaddingMode => {
+                let Some((mode, _)) = PADDING_MODES.get(index) else {
+                    return;
+                };
+                self.set_padding_mode(*mode, window, cx);
             }
             SidebarMenu::CameraBlur => {
                 let Some((mode, _)) = CAMERA_BLUR_MODES.get(index) else {
@@ -2299,6 +2320,29 @@ impl EditorWindow {
                     )),
             );
 
+        if smooth {
+            let hover = cursor.interaction_anchors && cursor.hover_anchors;
+            body = body.child(
+                ui::Field::inline(&theme, tr::editor::tabs::cursor::follow_hover()).value(
+                    ui::Toggle::plain(&theme, "cursor-hover-anchors", hover)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = {
+                                let cursor = &this.style_control_project().cursor;
+                                !(cursor.interaction_anchors && cursor.hover_anchors)
+                            };
+                            this.edit_project("cursor-hover-anchors", window, cx, move |p| {
+                                p.cursor.hover_anchors = next;
+                                if next {
+                                    p.cursor.interaction_anchors = true;
+                                }
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
+            );
+        }
+
         // An explicit family forces the SVG assets, so the toggle would be
         // showing a setting the renderer is already overriding.
         if cursor.cursor_type().family().is_none() {
@@ -2719,8 +2763,65 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
+            .children(Self::keystroke_permission_callout(&theme))
             .child(body)
             .into_any_element()
+    }
+
+    /// From macOS 27.3 keystrokes need Input Monitoring (before, the
+    /// Accessibility grant onboarding asks for). Without it a recording has no
+    /// key presses to show, so the tab says why and walks through the fix.
+    fn keystroke_permission_callout(theme: &crate::theme::Theme) -> Option<AnyElement> {
+        if !crate::permission_help::keystrokes_missing() {
+            return None;
+        }
+        Some(
+            div()
+                .id("keyboard-permission")
+                .mb(px(4.))
+                .p(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(Hsla::from(theme.gray_5))
+                .bg(Hsla::from(theme.gray_3))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_12))
+                        .child(tr::editor::tabs::keyboard::permission_title()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::keyboard::permission_body()),
+                )
+                .child(
+                    div().pt(px(6.)).child(
+                        ui::Button::plain(
+                            theme,
+                            "keyboard-permission-help",
+                            ui::ButtonVariant::Dark,
+                            ui::ButtonSize::Sm,
+                        )
+                        .label(tr::editor::tabs::keyboard::permission_action())
+                        .on_click(|_, _, cx| {
+                            cx.defer(|cx| {
+                                crate::permission_help::show(
+                                    crate::permission_help::Need::Keystrokes,
+                                    cx,
+                                )
+                            })
+                        }),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// A slider with a `text-xs text-right` readout underneath -- the shape the
