@@ -560,6 +560,50 @@ impl SetupWindow {
             .into_any_element()
     }
 
+    /// A computer too slow for live local captions: say so under the
+    /// choice, with Get Cap Pro or sign in when Cap Cloud isn't theirs yet.
+    fn slow_device_note(&self, cx: &mut Context<Self>) -> AnyElement {
+        let paper = self.paper();
+        let action: Option<(&'static str, bool)> = match self.cloud {
+            CloudState::Free => Some((tr::cap_ai::settings::get_pro(), false)),
+            CloudState::SignedOut => Some((tr::settings::meetings::transcription::sign_in(), true)),
+            _ => None,
+        };
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(6.))
+            .max_w(px(460.))
+            .child(
+                text(
+                    tr::settings::meetings::transcription::slow_device(),
+                    12.,
+                    17.,
+                    paper.soft,
+                )
+                .text_center(),
+            )
+            .children(action.map(|(label, sign_in)| {
+                quiet_link(&paper, "meeting-setup-slow-device", label)
+                    .text_color(paper.accent)
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        if sign_in {
+                            cx.defer(crate::meetings_ui::cap_ai::sign_in);
+                        } else {
+                            cx.defer(|cx| {
+                                crate::meetings_ui::cap_ai::open_upgrade(
+                                    None,
+                                    crate::meetings_ui::cap_ai::Host::Window,
+                                    cx,
+                                )
+                            });
+                        }
+                    }))
+            }))
+            .into_any_element()
+    }
+
     fn render_transcription(&self, cx: &mut Context<Self>) -> AnyElement {
         let engine = self.settings.transcription.engine;
         let cloud_footer = self.engine_footer_cloud(cx);
@@ -599,6 +643,9 @@ impl SetupWindow {
                     .child(cloud)
                     .child(local),
             )
+            .when(crate::meetings::device::slow(), |page| {
+                page.child(self.slow_device_note(cx))
+            })
             .into_any_element()
     }
 

@@ -980,6 +980,81 @@ impl SettingsWindow {
         )
     }
 
+    /// A computer too slow for live local captions: say so, and point at
+    /// Cap Cloud (with Get Cap Pro or sign in when it isn't theirs, unless
+    /// the Cap Cloud note below already offers it).
+    fn meetings_slow_note(&self, local: bool, cx: &mut Context<Self>) -> AnyElement {
+        let palette = Palette::new(&self.theme);
+        let action: Option<(&'static str, bool)> = match self.pages.meetings.cloud {
+            CloudState::Free if local => Some((tr::cap_ai::settings::get_pro(), false)),
+            CloudState::SignedOut if local => {
+                Some((tr::settings::meetings::transcription::sign_in(), true))
+            }
+            _ => None,
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(px(7.))
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .line_height(px(17.))
+                    .text_color(palette.muted)
+                    .child(
+                        div()
+                            .pt(px(2.))
+                            .child(glyph("icons/cloud.svg", 13., palette.muted)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .child(tr::settings::meetings::transcription::slow_device()),
+                    ),
+            )
+            .children(action.map(|(label, sign_in)| {
+                self.button(
+                    "meetings-slow-device-action",
+                    (ui::ButtonVariant::Primary, None),
+                    label,
+                    false,
+                    cx,
+                    move |_, _, cx| {
+                        if sign_in {
+                            shared::sign_in(cx)
+                        } else {
+                            crate::meetings_ui::cap_ai::open_upgrade(
+                                None,
+                                crate::meetings_ui::cap_ai::Host::Window,
+                                cx,
+                            )
+                        }
+                    },
+                )
+            }))
+            .into_any_element()
+    }
+
+    /// The live transcript switch: off by default with Cap Cloud on a
+    /// computer too slow for live local captions, as chosen everywhere else.
+    fn meetings_live_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.toggle(
+            "meetings-live",
+            tr::settings::meetings::transcription::live(),
+            self.meetings_live(),
+            cx,
+            |this, cx| this.meetings_toggle_live(cx),
+        )
+        .into_any_element()
+    }
+
     fn meetings_transcription(&self, cx: &mut Context<Self>) -> AnyElement {
         let palette = Palette::new(&self.theme);
         let s = self.pages.meetings.settings.transcription.clone();
@@ -1010,6 +1085,15 @@ impl SettingsWindow {
             .into_any_element(),
         );
         let mut engine_rows = vec![engine_row];
+        if crate::meetings::device::slow() {
+            engine_rows.push(
+                div()
+                    .px(px(12.))
+                    .pt(px(10.))
+                    .child(self.meetings_slow_note(local, cx))
+                    .into_any_element(),
+            );
+        }
         if local {
             engine_rows.push(
                 div()
@@ -1077,12 +1161,7 @@ impl SettingsWindow {
                     self.setting_row(
                         tr::settings::meetings::transcription::live(),
                         Some(tr::settings::meetings::transcription::live_description()),
-                        self.meetings_flag(
-                            "meetings-live",
-                            tr::settings::meetings::transcription::live(),
-                            Flag::Live,
-                            cx,
-                        ),
+                        self.meetings_live_toggle(cx),
                     ),
                 ])
                 .into_any_element(),

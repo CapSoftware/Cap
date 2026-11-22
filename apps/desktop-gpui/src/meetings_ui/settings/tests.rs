@@ -9,7 +9,7 @@ use gpui::{
 
 use super::{
     AUTO_RECORD, CORNERS, Flag, MeetingsMenu, muted_candidates, notes_languages,
-    shared::{COUNTDOWN_OPTIONS, LEAD_OPTIONS, RETENTION_OPTIONS, SILENCE_OPTIONS},
+    shared::{COUNTDOWN_OPTIONS, CloudState, LEAD_OPTIONS, RETENTION_OPTIONS, SILENCE_OPTIONS},
 };
 use crate::{
     editor_tabs::CAPTION_LANGUAGES,
@@ -133,6 +133,68 @@ fn every_toggle_round_trips_through_the_page(cx: &mut TestAppContext) {
         window.refresh();
         window.draw(cx).clear();
     });
+}
+
+fn live_on_page(settings: &Entity<SettingsWindow>, cx: &mut VisualTestContext) -> bool {
+    settings.read_with(cx, |s, _| s.meetings_live())
+}
+
+#[gpui::test]
+fn the_live_switch_is_unchanged_on_a_capable_computer(cx: &mut TestAppContext) {
+    let mut initial = MeetingSettings::default();
+    initial.transcription.engine = Engine::Cloud;
+    let (settings, meetings, mut cx, _dir) = open(cx, initial);
+    settings.update(&mut cx, |s, _| {
+        s.pages.meetings.cloud = CloudState::Available
+    });
+    assert!(
+        live_on_page(&settings, &mut cx),
+        "on with Cap Cloud, as before"
+    );
+    settings.update(&mut cx, |s, cx| s.meetings_toggle_live(cx));
+    let saved = read(&meetings, &mut cx);
+    assert!(!saved.transcription.live);
+    assert_eq!(saved.transcription.live_on_slow_cloud, None);
+    assert!(!live_on_page(&settings, &mut cx));
+}
+
+#[gpui::test]
+fn the_live_switch_starts_off_with_cap_cloud_on_a_slow_computer(cx: &mut TestAppContext) {
+    crate::meetings::device::TEST_SLOW.with(|slow| slow.set(true));
+    let mut initial = MeetingSettings::default();
+    initial.transcription.engine = Engine::Cloud;
+    let (settings, meetings, mut cx, _dir) = open(cx, initial);
+    settings.update(&mut cx, |s, _| {
+        s.pages.meetings.cloud = CloudState::Available
+    });
+    assert!(
+        !live_on_page(&settings, &mut cx),
+        "off by default with Cap Cloud"
+    );
+    settings.update(&mut cx, |s, cx| s.meetings_toggle_live(cx));
+    let saved = read(&meetings, &mut cx);
+    assert_eq!(
+        saved.transcription.live_on_slow_cloud,
+        Some(true),
+        "turned back on"
+    );
+    assert!(saved.transcription.live, "the local choice is untouched");
+    assert!(live_on_page(&settings, &mut cx));
+
+    settings.update(&mut cx, |s, _| s.pages.meetings.cloud = CloudState::Free);
+    assert!(
+        live_on_page(&settings, &mut cx),
+        "without Cap Cloud the local switch shows"
+    );
+    settings.update(&mut cx, |s, cx| s.meetings_toggle_live(cx));
+    let saved = read(&meetings, &mut cx);
+    assert!(!saved.transcription.live);
+    assert_eq!(saved.transcription.live_on_slow_cloud, Some(true));
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    });
+    crate::meetings::device::TEST_SLOW.with(|slow| slow.set(false));
 }
 
 #[gpui::test]

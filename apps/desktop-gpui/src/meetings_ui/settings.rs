@@ -70,7 +70,6 @@ pub(crate) enum Flag {
     KeepAudio,
     Indicator,
     Sounds,
-    Live,
     LearnVoice,
     AppNames,
     AutoNotes,
@@ -82,7 +81,7 @@ pub(crate) enum Flag {
 
 impl Flag {
     #[cfg(test)]
-    pub(crate) const ALL: [Flag; 18] = [
+    pub(crate) const ALL: [Flag; 17] = [
         Flag::Scheduled,
         Flag::ShowJoin,
         Flag::Detected,
@@ -93,7 +92,6 @@ impl Flag {
         Flag::KeepAudio,
         Flag::Indicator,
         Flag::Sounds,
-        Flag::Live,
         Flag::LearnVoice,
         Flag::AppNames,
         Flag::AutoNotes,
@@ -115,7 +113,6 @@ impl Flag {
             Flag::KeepAudio => &mut s.recording.keep_audio,
             Flag::Indicator => &mut s.recording.show_indicator,
             Flag::Sounds => &mut s.recording.sounds,
-            Flag::Live => &mut s.transcription.live,
             Flag::LearnVoice => &mut s.transcription.learn_voice,
             Flag::AppNames => &mut s.transcription.name_speakers_from_apps,
             Flag::AutoNotes => &mut s.notes.auto_generate,
@@ -138,7 +135,6 @@ impl Flag {
             Flag::KeepAudio => s.recording.keep_audio,
             Flag::Indicator => s.recording.show_indicator,
             Flag::Sounds => s.recording.sounds,
-            Flag::Live => s.transcription.live,
             Flag::LearnVoice => s.transcription.learn_voice,
             Flag::AppNames => s.transcription.name_speakers_from_apps,
             Flag::AutoNotes => s.notes.auto_generate,
@@ -507,6 +503,24 @@ impl SettingsWindow {
 
     pub(crate) fn meetings_toggle_flag(&mut self, flag: Flag, cx: &mut Context<Self>) {
         self.meetings_update(cx, move |s| flag.toggle(s));
+    }
+
+    /// Whether the transcript shows live with the engine meetings use now on
+    /// this computer (off by default with Cap Cloud on a slow one).
+    pub(crate) fn meetings_live(&self) -> bool {
+        let settings = &self.pages.meetings.settings;
+        let engine = shared::effective_engine(settings, self.pages.meetings.cloud);
+        settings
+            .transcription
+            .live_for(engine, crate::meetings::device::slow())
+    }
+
+    pub(crate) fn meetings_toggle_live(&mut self, cx: &mut Context<Self>) {
+        let engine =
+            shared::effective_engine(&self.pages.meetings.settings, self.pages.meetings.cloud);
+        let slow = crate::meetings::device::slow();
+        let on = !self.meetings_live();
+        self.meetings_update(cx, move |s| s.transcription.set_live_for(engine, slow, on));
     }
 
     pub(crate) fn meetings_set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
