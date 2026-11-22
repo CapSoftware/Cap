@@ -2764,6 +2764,10 @@ impl TranscriptView {
 
 #[cfg(debug_assertions)]
 impl TranscriptView {
+    pub fn debug_loaded(&self) -> bool {
+        self.loaded
+    }
+
     pub fn debug_set_live(&mut self, cx: &mut Context<Self>) {
         self.debug_live = true;
         self.shown_at = std::time::Instant::now();

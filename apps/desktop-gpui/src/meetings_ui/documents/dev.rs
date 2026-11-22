@@ -1013,6 +1013,123 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
             crate::draw_bench::report("documents-bench", "switch-load-only", &mut load);
             crate::draw_bench::report("documents-bench", "switch-draw", &mut draws);
         }
+        // The frames the app itself draws for a switch, from GPUI's frame
+        // trace: nothing here draws, so every frame between the open and the
+        // note settling (its text, then its transcript) is a real one. Reports
+        // each switch's worst frame, every frame, and the time to settle,
+        // then each switch's worst frame in order. Its notes (from the 400th
+        // on) are ones no other bench opens, so every visit is a first one.
+        // CAP_GPUI_DOCS_SWITCHES=<n> (default 60); `switch_long` alternates
+        // with the meeting with the longest transcript.
+        "switch_frames" | "switch_long" => {
+            let rounds = env("CAP_GPUI_DOCS_SWITCHES")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(60);
+            let long_id = cx.update(|cx| {
+                handle.read(cx).ok().and_then(|root| {
+                    root.store
+                        .read(cx)
+                        .snapshot
+                        .docs
+                        .iter()
+                        .filter(|d| !d.is_trashed())
+                        .max_by_key(|d| d.meeting.as_ref().map_or(0, |m| m.transcript_chars))
+                        .map(|d| d.id.clone())
+                })
+            });
+            let window_id = handle.window_id();
+            gpui::profiler::set_frame_trace_enabled(true);
+            let mut worst = Vec::new();
+            let mut frames = Vec::new();
+            let mut settle = Vec::new();
+            let mut counts = Vec::new();
+            let mut order = Vec::new();
+            for i in 0..rounds {
+                let id = if kind == "switch_long" && i % 2 == 0 {
+                    long_id.clone()
+                } else {
+                    cx.update(|cx| {
+                        handle
+                            .read(cx)
+                            .ok()
+                            .and_then(|root| doc_id_at(root, 400 + (i * 53 + 11) % 1500, cx))
+                    })
+                };
+                let Some(id) = id else {
+                    continue;
+                };
+                let mut collector = gpui::profiler::FrameTimingCollector::new();
+                let started = Instant::now();
+                cx.update(|cx| {
+                    handle
+                        .update(cx, |root, _, cx| {
+                            root.store.update(cx, |s, cx| s.open(Some(id.clone()), cx))
+                        })
+                        .ok();
+                });
+                let mut seen = Vec::new();
+                let mut settled_at = None;
+                let mut last_frame = started;
+                for _ in 0..1500 {
+                    sleep(cx, 2).await;
+                    for f in collector.collect_unseen() {
+                        if f.window_id == window_id {
+                            last_frame = f.draw_end;
+                            seen.push(f.draw_duration().as_secs_f64() * 1e6);
+                        }
+                    }
+                    let loaded = cx.update(|cx| {
+                        handle
+                            .read(cx)
+                            .ok()
+                            .map(|root| {
+                                let pane = root.pane.read(cx);
+                                pane.debug_loaded(&id) && pane.transcript.read(cx).debug_loaded()
+                            })
+                            .unwrap_or(false)
+                    });
+                    if loaded && settled_at.is_none() {
+                        settled_at = Some(Instant::now());
+                    }
+                    // Settled: loaded, and no frame for 50 ms since.
+                    if let Some(at) = settled_at
+                        && at.max(last_frame).elapsed() > Duration::from_millis(50)
+                    {
+                        break;
+                    }
+                }
+                if let Some(max) = seen.iter().copied().reduce(f64::max) {
+                    worst.push(max);
+                    order.push(format!("{:.1}", max / 1000.));
+                }
+                counts.push(seen.len() as f64);
+                frames.extend(seen);
+                settle.push(last_frame.duration_since(started).as_secs_f64() * 1e6);
+            }
+            gpui::profiler::set_frame_trace_enabled(false);
+            let label = |s: &str| {
+                if kind == "switch_long" {
+                    format!("long-{s}")
+                } else {
+                    s.to_string()
+                }
+            };
+            for (name, samples) in [
+                ("switch-worst-frame", &mut worst),
+                ("switch-frames", &mut frames),
+                ("switch-settled", &mut settle),
+                ("switch-frame-count", &mut counts),
+            ] {
+                if !samples.is_empty() {
+                    crate::draw_bench::report("documents-bench", &label(name), samples);
+                }
+            }
+            println!(
+                "documents-bench: {} in order (ms): {}",
+                label("switch-worst-frame"),
+                order.join(" ")
+            );
+        }
         // The sidebar search as typed: the frame each key draws, then the
         // frame its hits land in (the search itself runs off the main thread).
         "search" => {
