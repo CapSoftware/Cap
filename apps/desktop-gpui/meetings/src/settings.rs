@@ -147,6 +147,11 @@ pub struct TranscriptionSettings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub builtins_added: Vec<String>,
     pub live: bool,
+    /// The live transcript with Cap Cloud on a computer too slow to show it
+    /// (see `live_for`): off until the user turns it on. `None` until they
+    /// choose, so the default can stay off there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_on_slow_cloud: Option<bool>,
     /// Learn the user's voice from meetings where only they spoke into the
     /// microphone, so their lines carry their name in rooms with others.
     pub learn_voice: bool,
@@ -188,6 +193,28 @@ impl TranscriptionSettings {
         self.dictionary = Some(entries);
     }
 
+    /// Whether the transcript shows live with `engine` on this computer
+    /// (`slow`: too slow for live local captions). As chosen everywhere,
+    /// except Cap Cloud on a slow computer: off there unless turned on, the
+    /// cloud's lines arriving a few seconds after speech instead.
+    pub fn live_for(&self, engine: Engine, slow: bool) -> bool {
+        if slow && engine == Engine::Cloud {
+            self.live_on_slow_cloud.unwrap_or(false)
+        } else {
+            self.live
+        }
+    }
+
+    /// The switch for `live_for`, keeping the slow computer's Cap Cloud
+    /// choice apart from everyone else's.
+    pub fn set_live_for(&mut self, engine: Engine, slow: bool, on: bool) {
+        if slow && engine == Engine::Cloud {
+            self.live_on_slow_cloud = Some(on);
+        } else {
+            self.live = on;
+        }
+    }
+
     pub fn entries(&self) -> &[Entry] {
         self.dictionary.as_deref().unwrap_or(&[])
     }
@@ -220,6 +247,7 @@ impl Default for TranscriptionSettings {
                 .map(|e| e.spelling)
                 .collect(),
             live: true,
+            live_on_slow_cloud: None,
             learn_voice: true,
             name_speakers_from_apps: true,
         }

@@ -236,3 +236,56 @@ fn the_start_choice_is_remembered_and_older_files_start_by_recording() {
     assert!(!newer.notes.auto_generate);
     assert_eq!(newer.notes.start, StartChoice::Record);
 }
+
+#[test]
+fn the_live_transcript_defaults_off_only_for_cap_cloud_on_a_slow_computer() {
+    let s = TranscriptionSettings::default();
+    for (engine, slow, live) in [
+        (Engine::Local, false, true),
+        (Engine::Cloud, false, true),
+        (Engine::Local, true, true),
+        (Engine::Cloud, true, false),
+    ] {
+        assert_eq!(s.live_for(engine, slow), live, "{engine:?} slow={slow}");
+    }
+    let off = TranscriptionSettings {
+        live: false,
+        ..TranscriptionSettings::default()
+    };
+    assert!(
+        !off.live_for(Engine::Cloud, false),
+        "a capable computer keeps the choice"
+    );
+    assert!(!off.live_for(Engine::Local, true));
+}
+
+#[test]
+fn turning_the_live_transcript_on_with_cap_cloud_on_a_slow_computer_sticks() {
+    let mut s = MeetingSettings::default();
+    s.transcription.set_live_for(Engine::Cloud, true, true);
+    assert!(
+        s.transcription.live,
+        "the everywhere-else choice is untouched"
+    );
+    assert_eq!(s.transcription.live_on_slow_cloud, Some(true));
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(json.contains(r#""liveOnSlowCloud":true"#), "{json}");
+    let back = MeetingSettings::from_json(&json);
+    assert!(back.transcription.live_for(Engine::Cloud, true));
+
+    let mut t = TranscriptionSettings::default();
+    t.set_live_for(Engine::Local, true, false);
+    assert!(!t.live);
+    assert_eq!(t.live_on_slow_cloud, None);
+    t.set_live_for(Engine::Cloud, false, false);
+    assert_eq!(
+        t.live_on_slow_cloud, None,
+        "only a slow computer's Cap Cloud choice"
+    );
+}
+
+#[test]
+fn settings_without_the_slow_cloud_choice_write_nothing_new() {
+    let json = serde_json::to_string(&MeetingSettings::default()).unwrap();
+    assert!(!json.contains("liveOnSlowCloud"), "{json}");
+}
