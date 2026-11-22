@@ -9,10 +9,21 @@ import http.server
 import os
 import ssl
 import sys
+import threading
 import urllib.parse
 
 MEET, PORT, LOG = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The page posts /mic and /started at nearly the same moment, each on its own
+# server thread. Windows appends by seeking to the end and then writing, so
+# two unlocked writers can land on the same offset and one line overwrites
+# the other's start ("started " lost, the audio offset with it).
+LOG_LOCK = threading.Lock()
+
+
+def log_line(line):
+    with LOG_LOCK, open(LOG, "a") as log:
+        log.write(line + "\n")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -44,11 +55,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(url.query)
-        with open(LOG, "a") as log:
-            if url.path.endswith("/mic"):
-                log.write(f"mic {query.get('state', ['?'])[0]}\n")
-            else:
-                log.write(f"started {query.get('epoch', ['?'])[0]}\n")
+        if url.path.endswith("/mic"):
+            log_line(f"mic {query.get('state', ['?'])[0]}")
+        else:
+            log_line(f"started {query.get('epoch', ['?'])[0]}")
         self.send_response(204)
         self.end_headers()
 
