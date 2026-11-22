@@ -1713,6 +1713,10 @@ impl Meetings {
 
         let (mode, fallback, awaiting_mode) = self.engine_plan(cx);
         let live = self.settings.transcription.live;
+        // Cap Cloud on a computer too slow for live local captions: off
+        // unless the user turned them on (the cloud's lines come instead).
+        let slow_cloud_live =
+            device::slow().then(|| self.settings.transcription.live_for(Engine::Cloud, true));
         let voices_config = self.voices_config(&transcript, cx);
         let live_voices = LiveVoices {
             speakers: Vec::new(),
@@ -1730,6 +1734,7 @@ impl Meetings {
                 self.settings.transcription.entries(),
             )),
             live,
+            slow_cloud_live,
             voices: voices_config,
             audio: persist::audio_parts(&library, &meta),
             gaps: transcript.gaps().to_vec(),
@@ -2556,6 +2561,7 @@ impl Meetings {
                 self.settings.transcription.entries(),
             )),
             live: false,
+            slow_cloud_live: None,
             voices,
             audio: parts.clone(),
             gaps: repairable,

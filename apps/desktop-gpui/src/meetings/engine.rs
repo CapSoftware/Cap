@@ -196,6 +196,12 @@ pub struct EngineConfig {
     /// so a name never changes between a caption and its final line.
     pub dictionary: Arc<cap_meetings::dictionary::Corrector>,
     pub live: bool,
+    /// Cloud mode on a computer too slow for live local captions
+    /// (`super::device::slow`): whether the user turned them on there.
+    /// Off, the local model runs nothing while the cloud answers (no
+    /// captions, no local lines before the cloud's) and only stands in when
+    /// the cloud cannot. `None` everywhere else: Cloud is as it was.
+    pub slow_cloud_live: Option<bool>,
     pub voices: Option<VoicesConfig>,
     /// The meeting's saved tracks, read again to repair gaps.
     pub audio: Vec<AudioPart>,
@@ -780,7 +786,7 @@ impl Worker {
                 self.repair_live();
             }
             if !self.finishing
-                && self.config.live
+                && self.captions()
                 && self.live_model().is_some()
                 && let Ok(job) = self.partials.try_recv()
             {
@@ -793,7 +799,7 @@ impl Worker {
                 Wake::Segment(job) => self.final_segment(job),
                 Wake::Partial(job) => {
                     if !self.finishing
-                        && self.config.live
+                        && self.captions()
                         && self.live_model().is_some()
                         && self.segments.is_empty()
                     {
@@ -1200,7 +1206,7 @@ impl Worker {
     /// Live captions load their model as the meeting starts, while capture
     /// gathers the first speech, rather than on the first caption.
     fn preload_live_model(&self) {
-        if !self.config.live {
+        if !self.captions() {
             return;
         }
         #[cfg(test)]
@@ -1215,9 +1221,23 @@ impl Worker {
     fn live_model(&self) -> Option<LocalModel> {
         match &self.mode {
             EngineMode::Local(local) => Some(local.clone()),
-            EngineMode::Cloud { .. } => self.config.fallback.clone(),
-            EngineMode::Pending | EngineMode::Unavailable(_) => None,
+            EngineMode::Cloud { .. } if self.local_with_cloud() => self.config.fallback.clone(),
+            EngineMode::Cloud { .. } | EngineMode::Pending | EngineMode::Unavailable(_) => None,
         }
+    }
+
+    /// Live captions in this mode. A slow computer's Cloud meeting keeps
+    /// its choice when the cloud refuses it and this computer takes over.
+    fn captions(&self) -> bool {
+        match self.config.slow_cloud_live {
+            Some(on) if self.cloud_refused || matches!(self.mode, EngineMode::Cloud { .. }) => on,
+            _ => self.config.live,
+        }
+    }
+
+    /// Cloud: the local model also runs on the meeting as it happens.
+    fn local_with_cloud(&self) -> bool {
+        self.config.slow_cloud_live != Some(false)
     }
 
     /// Whatever can transcribe on this computer now.
@@ -1321,6 +1341,9 @@ impl Worker {
     /// final line so nothing is lost if the cloud never answers; the clip's
     /// words replace them when it returns.
     fn provisional_final(&mut self, job: &SegmentJob) {
+        if !self.local_with_cloud() {
+            return;
+        }
         let Some(local) = self.config.fallback.clone() else {
             return;
         };

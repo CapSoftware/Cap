@@ -165,6 +165,8 @@ struct Opts {
     /// the live caption tests expect, instead of at its end (repairs hear
     /// context before their gap).
     words_at_start: bool,
+    /// `EngineConfig::slow_cloud_live`.
+    slow_cloud_live: Option<bool>,
 }
 
 impl Default for Opts {
@@ -184,6 +186,7 @@ impl Default for Opts {
             disk_full_until: None,
             heard: None,
             words_at_start: false,
+            slow_cloud_live: None,
         }
     }
 }
@@ -204,6 +207,7 @@ fn run_opts(opts: Opts) -> Ran {
         disk_full_until,
         heard,
         words_at_start,
+        slow_cloud_live,
     } = opts;
     let dictionary = dictionary.as_slice();
     let dir = tempfile::tempdir().unwrap();
@@ -234,6 +238,7 @@ fn run_opts(opts: Opts) -> Ran {
         vocabulary: Vec::new(),
         dictionary: Arc::new(cap_meetings::dictionary::Corrector::new(dictionary)),
         live: true,
+        slow_cloud_live,
         voices: None,
         audio: Vec::new(),
         gaps,
@@ -614,6 +619,111 @@ fn live_captions_run_in_cloud_from_the_local_model() {
     );
 }
 
+/// A slow computer in Cloud mode with live captions off: the local model
+/// sits idle while the cloud answers.
+fn slow_cloud(cloud: Answer, heard: &Arc<std::sync::Mutex<Vec<usize>>>) -> Ran {
+    run_opts(Opts {
+        fallback: true,
+        cloud: Some(cloud),
+        partials: vec![job()],
+        segments: vec![job()],
+        heard: Some(heard.clone()),
+        slow_cloud_live: Some(false),
+        ..Opts::default()
+    })
+}
+
+#[test]
+fn a_slow_computer_in_cloud_runs_no_local_pass_while_the_cloud_answers() {
+    let heard = Arc::default();
+    let ran = slow_cloud(Answer::Words(CLOUD), &heard);
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(
+        ran.lines(),
+        vec![(id.clone(), "hello from the cloud".into(), true)],
+        "no caption and no local line: the cloud's line only, as without a local model"
+    );
+    assert_eq!(ran.saved(), vec![(id, "hello from the cloud".into())]);
+    assert!(
+        heard.lock().unwrap().is_empty(),
+        "the local model never ran"
+    );
+    assert!(ran.transcript.gaps().is_empty());
+}
+
+#[test]
+fn a_slow_computer_in_cloud_still_writes_locally_when_the_cloud_fails() {
+    let heard = Arc::default();
+    let ran = run_opts(Opts {
+        fallback: true,
+        cloud: Some(Answer::Fail),
+        budget: Duration::ZERO,
+        segments: vec![job()],
+        heard: Some(Arc::clone(&heard)),
+        slow_cloud_live: Some(false),
+        ..Opts::default()
+    });
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(
+        ran.saved(),
+        vec![(id, "hello from here".into())],
+        "nothing lost"
+    );
+    assert_eq!(
+        heard.lock().unwrap().len(),
+        1,
+        "one local pass, for the failed clip"
+    );
+    assert!(ran.transcript.gaps().is_empty());
+    assert_eq!(
+        ran.last_status().unwrap().cloud,
+        CloudState::Down { local: true }
+    );
+}
+
+#[test]
+fn a_slow_computer_without_pro_falls_back_to_local_finals_without_captions() {
+    let heard = Arc::default();
+    let ran = slow_cloud(Answer::Upgrade, &heard);
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(ran.saved(), vec![(id.clone(), "hello from here".into())]);
+    assert!(
+        ran.lines().iter().all(|(_, _, is_final)| *is_final),
+        "captions stay off: {:?}",
+        ran.lines()
+    );
+    let status = ran.last_status().unwrap();
+    assert!(
+        matches!(status.kind, EngineKind::Local { .. }),
+        "{status:?}"
+    );
+    assert!(ran.transcript.gaps().is_empty());
+}
+
+#[test]
+fn a_slow_computer_that_turned_captions_on_gets_cloud_as_before() {
+    let heard: Arc<std::sync::Mutex<Vec<usize>>> = Arc::default();
+    let ran = run_opts(Opts {
+        fallback: true,
+        cloud: Some(Answer::Words(CLOUD)),
+        partials: vec![job()],
+        segments: vec![job()],
+        heard: Some(heard.clone()),
+        slow_cloud_live: Some(true),
+        ..Opts::default()
+    });
+    let before = run_opts(Opts {
+        fallback: true,
+        cloud: Some(Answer::Words(CLOUD)),
+        partials: vec![job()],
+        segments: vec![job()],
+        ..Opts::default()
+    });
+    assert_eq!(ran.lines(), before.lines());
+    assert_eq!(ran.saved(), before.saved());
+    assert!(!heard.lock().unwrap().is_empty());
+}
+
 #[test]
 fn cloud_without_a_local_model_waits_for_the_clip_as_before() {
     let ran = run(
@@ -802,6 +912,7 @@ fn a_repair_never_writes_words_a_line_already_has() {
             vocabulary: Vec::new(),
             dictionary: Arc::new(cap_meetings::dictionary::Corrector::new(&[])),
             live: false,
+            slow_cloud_live: None,
             voices: None,
             audio: Vec::new(),
             gaps: vec![gap],
@@ -1042,6 +1153,7 @@ fn bench(gap: Gap, audio: Vec<AudioPart>) -> Bench {
             vocabulary: Vec::new(),
             dictionary: Arc::new(cap_meetings::dictionary::Corrector::new(&[])),
             live: false,
+            slow_cloud_live: None,
             voices: None,
             audio,
             gaps: vec![gap],
