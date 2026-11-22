@@ -1013,6 +1013,13 @@ no_microphones = "No se encontraron micrófonos"
 system_audio_off = "Sin audio del sistema"
 system_audio_on = "Con audio del sistema"
 
+[main.device.picture]
+label = "Imagen"
+choose = "Usar una imagen"
+detail = "Se muestra en lugar de una cámara"
+change = "Elegir otra imagen"
+filter = "Imágenes"
+
 [main.device.access]
 allow_access = "Permitir acceso"
 camera_denied = "Cap no puede usar tu cámara. Actívala en Ajustes del Sistema."
@@ -2786,6 +2793,14 @@ size_during_zoom = "Tamaño durante el zoom"
 size_label = "Tamaño"
 title = "Cámara"
 
+[editor.tabs.camera.picture]
+title = "Imagen"
+empty = "Añade una imagen para mostrarla donde estaría tu cámara."
+shown = "Se muestra donde estaría tu cámara."
+add = "Añadir imagen"
+replace = "Reemplazar"
+remove = "Quitar"
+
 [editor.tabs.camera.blur]
 heavy = "Desenfoque intenso"
 light = "Desenfoque suave"
@@ -3464,6 +3479,7 @@ stopped_metadata_unsaved = "La captura se detuvo, pero no se pudieron guardar su
 discard_stop_unconfirmed = "Al descartar en Studio no se ha confirmado la detención de la captura; los archivos locales se conservan"
 discard_unconfirmed = "No se ha confirmado el descarte de Studio; los archivos locales se conservan"
 crashed_before_capture = "Cap se cerró antes de que esta grabación capturara nada."
+picture_needs_studio = "En Linux, las imágenes se graban en el modo Studio. Cambia a Studio o elige una cámara."
 capture_state_failed = "No se pudo confirmar el estado de la captura: {error}"
 completion_task_failed = "La tarea de finalización de la grabación ha fallado: {error}"
 stop_task_failed = "La tarea de detención ha fallado: {error}"

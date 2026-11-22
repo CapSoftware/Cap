@@ -430,6 +430,7 @@ impl DeepLinkAction {
                                     input_readiness,
                                     microphone: mic_label,
                                     camera,
+                                    camera_picture: None,
                                     system_audio: capture_system_audio,
                                     excluded_windows: Vec::new(),
                                     camera_feed,

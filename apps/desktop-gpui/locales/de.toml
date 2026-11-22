@@ -1013,6 +1013,13 @@ no_microphones = "Keine Mikrofone gefunden"
 system_audio_off = "Kein Systemaudio"
 system_audio_on = "Systemaudio aufnehmen"
 
+[main.device.picture]
+label = "Bild"
+choose = "Bild verwenden"
+detail = "Wird statt einer Kamera gezeigt"
+change = "Anderes Bild wählen"
+filter = "Bilder"
+
 [main.device.access]
 allow_access = "Zugriff erlauben"
 camera_denied = "Cap kann Ihre Kamera nicht verwenden. Aktivieren Sie sie in den Systemeinstellungen."
@@ -2786,6 +2793,14 @@ size_during_zoom = "Größe beim Zoomen"
 size_label = "Größe"
 title = "Kamera"
 
+[editor.tabs.camera.picture]
+title = "Bild"
+empty = "Fügen Sie ein Bild hinzu, das an der Stelle Ihrer Kamera erscheint."
+shown = "Wird an der Stelle Ihrer Kamera gezeigt."
+add = "Bild hinzufügen"
+replace = "Ersetzen"
+remove = "Entfernen"
+
 [editor.tabs.camera.blur]
 heavy = "Starke Unschärfe"
 light = "Leichte Unschärfe"
@@ -3464,6 +3479,7 @@ stopped_metadata_unsaved = "Die Aufnahme wurde gestoppt, aber ihre Metadaten kon
 discard_stop_unconfirmed = "Beim Verwerfen in Studio ist das Beenden der Aufnahme nicht bestätigt; lokale Dateien bleiben erhalten"
 discard_unconfirmed = "Das Verwerfen in Studio ist nicht bestätigt; lokale Dateien bleiben erhalten"
 crashed_before_capture = "Cap wurde beendet, bevor diese Aufnahme etwas aufgenommen hat."
+picture_needs_studio = "Unter Linux werden Bilder im Studio-Modus aufgenommen. Wechseln Sie zu Studio oder wählen Sie eine Kamera."
 capture_state_failed = "Der Aufnahmestatus konnte nicht bestätigt werden: {error}"
 completion_task_failed = "Die Abschlussaufgabe der Aufnahme ist fehlgeschlagen: {error}"
 stop_task_failed = "Die Stopp-Aufgabe ist fehlgeschlagen: {error}"

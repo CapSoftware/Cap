@@ -1015,6 +1015,13 @@ no_microphones = "No microphones found"
 system_audio_off = { text = "No System Audio", max_px = 180, size = 14 }
 system_audio_on = { text = "Record System Audio", max_px = 180, size = 14 }
 
+[main.device.picture]
+label = { text = "Picture", max_px = 180, size = 14, context = "The camera row label when a still picture is used instead of a camera." }
+choose = "Use a picture"
+detail = "Shows in place of a camera"
+change = "Choose another picture"
+filter = "Images"
+
 [main.device.access]
 allow_access = { text = "Allow access", max_px = 130, size = 11 }
 camera_denied = "Cap can't use your camera. Turn it on in System Settings."
@@ -2788,6 +2795,14 @@ size_during_zoom = "Size During Zoom"
 size_label = "Size"
 title = "Camera"
 
+[editor.tabs.camera.picture]
+title = "Picture"
+empty = "Add a picture to show where your camera would be."
+shown = "Shown where your camera would be."
+add = "Add picture"
+replace = "Replace"
+remove = "Remove"
+
 [editor.tabs.camera.blur]
 heavy = "Heavy Blur"
 light = "Light Blur"
@@ -3466,6 +3481,7 @@ stopped_metadata_unsaved = "Capture stopped, but stopped metadata could not be s
 discard_stop_unconfirmed = "Studio discard stop is unconfirmed; local files preserved"
 discard_unconfirmed = "Studio discard is unconfirmed; local files preserved"
 crashed_before_capture = "Cap closed before this recording captured anything."
+picture_needs_studio = "Pictures are recorded in Studio mode on Linux. Switch to Studio or choose a camera."
 capture_state_failed = { text = "Could not confirm capture state: {error}", context = "{error} is a technical error message, usually in English." }
 completion_task_failed = { text = "Recording completion task failed: {error}", context = "{error} is a technical error message, usually in English." }
 stop_task_failed = { text = "Stop task failed: {error}", context = "{error} is a technical error message, usually in English." }

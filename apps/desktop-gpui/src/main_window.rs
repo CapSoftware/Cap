@@ -12,7 +12,7 @@ use gpui::{
     Render, SharedString, StatefulInteractiveElement, Styled, Window, div, img,
     prelude::FluentBuilder, px, rgb, svg,
 };
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use crate::i18n::tr;
 use crate::theme::LocaleFont as _;
@@ -983,6 +983,10 @@ pub struct MainWindow {
     devices: DeviceSnapshot,
     camera: Option<CameraOption>,
     camera_id: Option<recording::DeviceOrModelID>,
+    /// The picture last used as the camera, offered again in the camera menu.
+    remembered_camera_picture: Option<std::path::PathBuf>,
+    picking_camera_picture: bool,
+    camera_picture_restored: bool,
     microphone: Option<MicrophoneOption>,
     microphone_level: Entity<ui::MicrophoneLevel>,
     device_microphone_level: Entity<ui::MicrophoneLevel>,
@@ -1301,6 +1305,12 @@ impl MainWindow {
             devices: DeviceSnapshot::default(),
             camera: None,
             camera_id: None,
+            remembered_camera_picture: crate::store::load()
+                .camera_picture
+                .map(|choice| choice.path)
+                .filter(|path| path.is_file()),
+            picking_camera_picture: false,
+            camera_picture_restored: false,
             microphone: None,
             microphone_level,
             device_microphone_level,
@@ -2587,7 +2597,7 @@ impl MainWindow {
             return;
         }
 
-        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings) = {
+        let (camera_feed, mic_feed, mic_meter, input_readiness, device_settings, camera_picture) = {
             let feeds = Feeds::global(cx);
             feeds.update(cx, |feeds, cx| feeds.resume_camera_preview(cx));
             let feeds = feeds.read(cx);
@@ -2597,6 +2607,10 @@ impl MainWindow {
                 feeds.mic_meter(),
                 feeds.input_readiness(),
                 feeds.requested_device_settings(),
+                feeds
+                    .camera_picture
+                    .as_ref()
+                    .map(|picture| picture.path.clone()),
             )
         };
         let config = recording::StartConfig {
@@ -2606,6 +2620,7 @@ impl MainWindow {
             input_readiness,
             microphone: self.microphone.as_ref().map(|mic| mic.name.clone()),
             camera: self.camera_id.clone(),
+            camera_picture,
             system_audio: self.system_audio,
             excluded_windows,
             camera_feed,
@@ -2984,6 +2999,7 @@ impl MainWindow {
     }
 
     fn restore_recording_inputs(&mut self, cx: &mut Context<Self>) {
+        self.restore_camera_picture(cx);
         let Some(settings) = take_pending_recording_inputs(
             &mut self.pending_device_restore,
             self.enumerating,
@@ -3038,7 +3054,135 @@ impl MainWindow {
         if !crate::store::set_recording_camera_id(id.as_ref()) {
             tracing::warn!("Could not save the selected camera");
         }
+        if camera.is_none() {
+            Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera_picture(None, cx));
+        }
         self.apply_camera_selection(camera, id, cx);
+    }
+
+    /// Picks the saved picture again at launch, once devices are known and
+    /// only when no camera was saved in its place.
+    fn restore_camera_picture(&mut self, cx: &mut Context<Self>) {
+        if self.camera_picture_restored || self.enumerating || self.device_restore_suspended {
+            return;
+        }
+        self.camera_picture_restored = true;
+        if self.pending_device_restore.camera_id.is_some() || self.camera.is_some() {
+            return;
+        }
+        if let Some(choice) = crate::store::load().camera_picture
+            && choice.selected
+            && !self.camera_picture_selected(cx)
+        {
+            self.select_camera_picture(choice.path, cx);
+        }
+    }
+
+    pub(crate) fn camera_picture_selected(&self, cx: &gpui::App) -> bool {
+        Feeds::global(cx).read(cx).camera_picture.is_some()
+    }
+
+    pub(crate) fn remembered_camera_picture(&self) -> Option<&std::path::Path> {
+        self.remembered_camera_picture.as_deref()
+    }
+
+    /// Uses `picture` as the camera from now on.
+    fn use_camera_picture(
+        &mut self,
+        picture: Arc<crate::camera_picture::CameraPicture>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_device_restore.camera_id = None;
+        self.remembered_camera_picture = Some(picture.path.clone());
+        Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera_picture(Some(picture), cx));
+        cx.notify();
+    }
+
+    /// Loads `path` off the main thread and uses it as the camera.
+    fn select_camera_picture(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move { crate::camera_picture::load(&path) })
+                .await;
+            this.update(cx, |this, cx| match loaded {
+                Ok(picture) if this.device_changes_allowed(cx) => {
+                    this.use_camera_picture(Arc::new(picture), cx)
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "The camera picture could not be loaded");
+                    this.remembered_camera_picture = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The camera menu's picture row: the remembered picture when there is
+    /// one, else a file picker.
+    pub(crate) fn pick_or_select_camera_picture(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.remembered_camera_picture.clone() {
+            Some(path) => self.select_camera_picture(path, cx),
+            None => self.choose_camera_picture(window, cx),
+        }
+    }
+
+    /// Asks for a picture file, normalizes it and uses it as the camera.
+    pub(crate) fn choose_camera_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picking_camera_picture || !self.device_changes_allowed(cx) {
+            return;
+        }
+        self.picking_camera_picture = true;
+        cx.spawn_in(window, async move |this, cx| {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[(
+                    tr::main::device::picture::filter(),
+                    crate::camera_picture::EXTENSIONS,
+                )],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let picked = cx
+                .update(|_, _| crate::platform::open_image_panel(crate::camera_picture::EXTENSIONS))
+                .ok()
+                .flatten();
+            let loaded = match picked {
+                Some(source) => Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            let path = crate::camera_picture::save_for_recording(&source)?;
+                            crate::camera_picture::load(&path)
+                        })
+                        .await,
+                ),
+                None => None,
+            };
+            this.update(cx, |this, cx| {
+                this.picking_camera_picture = false;
+                match loaded {
+                    Some(Ok(picture)) if this.device_changes_allowed(cx) => {
+                        this.use_camera_picture(Arc::new(picture), cx);
+                    }
+                    Some(Ok(_)) | None => {}
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "The camera picture could not be used");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn apply_camera_selection(
@@ -5545,7 +5689,9 @@ impl MainWindow {
                 menu.none_label().to_string(),
                 None,
                 match menu {
-                    DeviceMenu::Camera => self.camera.is_none(),
+                    DeviceMenu::Camera => {
+                        self.camera.is_none() && !self.camera_picture_selected(cx)
+                    }
                     DeviceMenu::Microphone => self.microphone.is_none(),
                 },
                 None,
@@ -5636,6 +5782,9 @@ impl MainWindow {
                             ))
                             .into_any_element(),
                     );
+                }
+                if self.matches_search(tr::main::device::picture::label()) {
+                    rows.push(self.render_camera_picture_row(cx).into_any_element());
                 }
             }
             DeviceMenu::Microphone => {
@@ -6117,6 +6266,82 @@ impl MainWindow {
                 )
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.choose_device_format(format, cx)))
+    }
+
+    /// The camera menu's picture row: a still picture in place of a camera.
+    /// With a picture remembered, the row picks it and a trailing button
+    /// swaps it; without one the row asks for a file.
+    fn render_camera_picture_row(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let selected = self.camera_picture_selected(cx);
+        let remembered = self.remembered_camera_picture.is_some();
+        let enabled = self.device_changes_allowed(cx);
+        let row = self
+            .render_device_list_row(
+                SharedString::from("camera-picture"),
+                "icons/image.svg",
+                if remembered {
+                    tr::main::device::picture::label()
+                } else {
+                    tr::main::device::picture::choose()
+                }
+                .to_string(),
+                Some(tr::main::device::picture::detail().to_string()),
+                selected,
+                None,
+                cx.listener(move |this, _, window, cx| {
+                    if !this.device_changes_allowed(cx) {
+                        return;
+                    }
+                    if !this.camera_picture_selected(cx) {
+                        this.pick_or_select_camera_picture(window, cx);
+                    }
+                    this.close_panel(cx);
+                }),
+            )
+            .flex_1()
+            .min_w_0();
+        div()
+            .flex()
+            .flex_row()
+            .gap(px(4.))
+            .w_full()
+            .child(row)
+            .when(remembered, |this| {
+                this.child(
+                    div()
+                        .id("camera-picture-change")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(32.))
+                        .flex_shrink_0()
+                        .rounded(px(9.))
+                        .role(gpui::Role::Button)
+                        .aria_label(tr::main::device::picture::change())
+                        .tooltip(move |_, cx| {
+                            ui::Tooltip::new(&theme, tr::main::device::picture::change()).view(cx)
+                        })
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                        .when(enabled, |button| {
+                            button
+                                .cursor_pointer()
+                                .hover(move |style| style.bg(glass_hover(theme)))
+                                .active(move |style| style.bg(glass_press(theme)))
+                        })
+                        .when(!enabled, |button| button.opacity(0.45))
+                        .child(
+                            svg()
+                                .path("icons/pencil.svg")
+                                .size(px(14.))
+                                .text_color(theme.gray_10),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.choose_camera_picture(window, cx);
+                            this.close_panel(cx);
+                        })),
+                )
+            })
     }
 
     fn render_device_format_button(
@@ -7211,11 +7436,17 @@ impl MainWindow {
                     self.render_device_row(
                         "camera-row",
                         "icons/camera.svg",
-                        self.camera
-                            .as_ref()
-                            .map(|camera| camera_label(&camera.label))
-                            .unwrap_or_else(|| tr::main::device::no_camera().into()),
-                        if self.camera.is_some()
+                        if self.camera_picture_selected(cx) {
+                            tr::main::device::picture::label().into()
+                        } else {
+                            self.camera
+                                .as_ref()
+                                .map(|camera| camera_label(&camera.label))
+                                .unwrap_or_else(|| tr::main::device::no_camera().into())
+                        },
+                        if self.camera_picture_selected(cx) {
+                            PillState::On
+                        } else if self.camera.is_some()
                             && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
                         {
                             pill
@@ -7406,7 +7637,9 @@ impl MainWindow {
                             return;
                         }
                         match menu {
-                            DeviceMenu::Camera if this.camera.is_some() => {
+                            DeviceMenu::Camera
+                                if this.camera.is_some() || this.camera_picture_selected(cx) =>
+                            {
                                 cx.stop_propagation();
                                 this.set_camera_selection(None, cx);
                             }

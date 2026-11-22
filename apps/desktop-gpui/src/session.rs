@@ -1342,9 +1342,10 @@ impl RecordingSession {
         }
         let studio_project_path = active.project_dir.clone();
         let camera_snapshot = self.last_config.as_ref().and_then(|config| {
-            (config.mode == recording::RecordingMode::Studio && config.camera.is_some())
-                .then(|| crate::app_windows::studio_camera_snapshot(&config.target, cx))
-                .flatten()
+            (config.mode == recording::RecordingMode::Studio
+                && (config.camera.is_some() || config.camera_picture.is_some()))
+            .then(|| crate::app_windows::studio_camera_snapshot(&config.target, cx))
+            .flatten()
         });
         let (studio_progress, studio_finalization) = if prepares_studio_editor(
             self.mode(),

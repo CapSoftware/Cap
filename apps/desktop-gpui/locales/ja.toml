@@ -1013,6 +1013,13 @@ no_microphones = "マイクが見つかりません"
 system_audio_off = "システム音声なし"
 system_audio_on = "システム音声を録音"
 
+[main.device.picture]
+label = "画像"
+choose = "画像を使う"
+detail = "カメラの代わりに表示します"
+change = "別の画像を選ぶ"
+filter = "画像"
+
 [main.device.access]
 allow_access = "アクセスを許可"
 camera_denied = "Capはカメラを使用できません。システム設定でオンにしてください。"
@@ -2786,6 +2793,14 @@ size_during_zoom = "ズーム中のサイズ"
 size_label = "サイズ"
 title = "カメラ"
 
+[editor.tabs.camera.picture]
+title = "画像"
+empty = "カメラの位置に表示する画像を追加します。"
+shown = "カメラの位置に表示されます。"
+add = "画像を追加"
+replace = "置き換え"
+remove = "削除"
+
 [editor.tabs.camera.blur]
 heavy = "強いぼかし"
 light = "弱いぼかし"
@@ -3464,6 +3479,7 @@ stopped_metadata_unsaved = "キャプチャは停止しましたが、停止時�
 discard_stop_unconfirmed = "Studioの録画を破棄する際、キャプチャの停止を確認できません。ローカルファイルは保持されています"
 discard_unconfirmed = "Studioの破棄を確認できません。ローカルファイルは保持されています"
 crashed_before_capture = "この録画で何もキャプチャされないうちにCapが終了しました。"
+picture_needs_studio = "Linuxでは画像はStudioモードで録画されます。Studioに切り替えるか、カメラを選んでください。"
 capture_state_failed = "キャプチャの状態を確認できませんでした：{error}"
 completion_task_failed = "録画の完了処理が失敗しました：{error}"
 stop_task_failed = "停止タスクが失敗しました：{error}"

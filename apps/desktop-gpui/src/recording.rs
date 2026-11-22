@@ -40,6 +40,10 @@ pub struct StartConfig {
     /// Microphone by name -- the identity `MicrophoneFeed` keys on.
     pub microphone: Option<String>,
     pub camera: Option<DeviceOrModelID>,
+    /// A still picture standing in for the camera (never set with `camera`).
+    /// Studio copies it into the project for the editor to draw; Instant
+    /// records the bubble showing it, as it does a camera.
+    pub camera_picture: Option<PathBuf>,
     pub device_settings: crate::store::RecordingDeviceSettings,
     pub input_readiness: crate::feeds::InputReadiness,
     pub system_audio: bool,
@@ -481,7 +485,14 @@ async fn finalize_studio(
             None => RecoveryManager::remux_if_needed(&project_path),
         };
         result.map_err(anyhow::Error::from)?;
-        let camera_recorded = completed.meta.camera_path().is_some();
+        let camera_picture =
+            studio_camera_picture(&project_path, completed.meta.camera_path().is_some());
+        if let Some(picture) = &camera_picture
+            && !set_project_camera_picture(&project_path, picture)
+        {
+            tracing::warn!("Could not record the camera picture in the project");
+        }
+        let camera_recorded = completed.meta.camera_path().is_some() || camera_picture.is_some();
         let placement = camera_snapshot
             .and_then(|snapshot| snapshot.placement)
             .filter(|_| camera_recorded);
@@ -492,7 +503,11 @@ async fn finalize_studio(
         );
         apply_camera_preview_to_project_config(
             &project_path,
-            camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+            if camera_picture.is_some() {
+                crate::store::BlurMode::Off
+            } else {
+                camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur)
+            },
             placement,
             shape,
         );
@@ -1803,14 +1818,20 @@ pub(crate) fn preparing_presentation(
     project: &cap_project::ProjectConfiguration,
     camera_snapshot: Option<StudioCameraSnapshot>,
     camera_recorded: bool,
+    camera_picture: Option<String>,
 ) -> Result<cap_project::ProjectConfiguration, String> {
+    let camera_recorded = camera_recorded || camera_picture.is_some();
     let library = serde_json::from_value(serde_json::Value::Object(crate::store::store_section(
         "animated_gradients",
     )))
     .map_err(|error| format!("Preparing appearance preferences did not parse: {error}"))?;
     let mut config = preparing_presentation_for(
         project,
-        camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+        if camera_picture.is_some() {
+            crate::store::BlurMode::Off
+        } else {
+            camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur)
+        },
         &library,
         &crate::presets::PresetsStore::load(),
     )?;
@@ -1824,7 +1845,50 @@ pub(crate) fn preparing_presentation(
     if let Some(placement) = camera_snapshot.and_then(|snapshot| snapshot.placement) {
         placement.apply(&mut config.camera);
     }
+    if camera_picture.is_some() {
+        config.camera_picture = camera_picture;
+    }
     Ok(config)
+}
+
+/// Where a Studio recording keeps the picture it was made with, relative to
+/// the project. Copied in as the recording starts, so the preparing editor
+/// and finalize both find it.
+pub(crate) const STUDIO_CAMERA_PICTURE: &str = "content/images/camera-picture.jpg";
+
+/// The picture a Studio recording was made with, when it recorded no camera.
+pub(crate) fn studio_camera_picture(
+    project: &std::path::Path,
+    camera_recorded: bool,
+) -> Option<String> {
+    (!camera_recorded && project.join(STUDIO_CAMERA_PICTURE).is_file())
+        .then(|| STUDIO_CAMERA_PICTURE.to_string())
+}
+
+fn set_project_camera_picture(project_dir: &std::path::Path, picture: &str) -> bool {
+    let path = project_dir.join("project-config.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return false;
+    };
+    let Ok(serde_json::Value::Object(mut config)) = serde_json::from_slice(&bytes) else {
+        return false;
+    };
+    config.insert(
+        "cameraPicture".into(),
+        serde_json::Value::String(picture.to_string()),
+    );
+    let Ok(serialized) = serde_json::to_vec_pretty(&serde_json::Value::Object(config)) else {
+        return false;
+    };
+    let temp = path.with_extension("gpui-tmp");
+    if std::fs::write(&temp, serialized).is_err() {
+        return false;
+    }
+    if std::fs::rename(&temp, &path).is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return false;
+    }
+    true
 }
 
 fn preparing_presentation_for(
@@ -2506,6 +2570,19 @@ async fn start_internal(
     if matches!(config.target, ScreenCaptureTarget::CameraOnly) && config.camera.is_none() {
         return Err(anyhow!("Camera-only recording requires a selected camera."));
     }
+    // Linux Instant draws the camera from its live feed; it has no way to
+    // draw a still picture yet, and recording without it would drop it
+    // silently.
+    #[cfg(target_os = "linux")]
+    if config.mode == RecordingMode::Instant
+        && config.camera.is_none()
+        && config.camera_picture.is_some()
+        && !config.target.is_audio_only()
+    {
+        return Err(anyhow!(
+            "Pictures are recorded in Studio mode on Linux. Switch to Studio or choose a camera."
+        ));
+    }
     if config.target.is_audio_only() && config.microphone.is_none() && !config.system_audio {
         return Err(anyhow!(
             cap_recording::studio_recording::AUDIO_ONLY_NEEDS_A_SOURCE
@@ -2603,6 +2680,10 @@ async fn start_attempt_with_upload(
     // audio-only start never waits on it, locks it or fails because of it.
     if config.target.is_audio_only() {
         config.camera = None;
+        config.camera_picture = None;
+    }
+    if config.camera.is_some() {
+        config.camera_picture = None;
     }
     #[cfg(target_os = "linux")]
     validate_linux_camera_request(
@@ -2779,7 +2860,10 @@ async fn start_attempt_with_upload(
     let mut instant_upload = None;
     // Focus in the picker and the window capture style setting are the same
     // stored choice; recording reads it here, as it starts.
+    // Instant draws a picture the way it draws a camera, by recording the
+    // bubble on screen, so like a camera it keeps the screen region.
     let window_only = matches!(config.target, ScreenCaptureTarget::Window { .. })
+        && !(config.mode == RecordingMode::Instant && config.camera_picture.is_some())
         && crate::store::GeneralSettings::load().window_capture_style
             == crate::store::WindowCaptureStyle::FocusedWindow;
     let handle = match config.mode {
@@ -2889,6 +2973,21 @@ async fn start_attempt_with_upload(
             Handle::Instant(handle)
         }
     };
+
+    // Only once the recording is running, so a start that fails never leaves
+    // a folder behind holding just the picture.
+    if config.mode == RecordingMode::Studio
+        && let Some(picture) = &config.camera_picture
+    {
+        let destination = project_dir.join(STUDIO_CAMERA_PICTURE);
+        if let Err(error) = destination
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::copy(picture, &destination).map(|_| ()))
+        {
+            tracing::warn!(%error, "Could not keep the camera picture with the recording");
+        }
+    }
 
     let microphone_switch = match &handle {
         Handle::Instant(handle) => handle.microphone_switch(),
@@ -4446,6 +4545,44 @@ mod tests {
             assert_eq!(finalized.camera.size, 44.0);
             assert!(finalized.camera.mirror);
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_studio_picture_counts_only_without_a_recorded_camera() {
+        let dir = temp_project("camera-picture");
+        assert_eq!(studio_camera_picture(&dir, false), None);
+        std::fs::create_dir_all(dir.join("content/images")).unwrap();
+        std::fs::write(dir.join(STUDIO_CAMERA_PICTURE), b"jpeg").unwrap();
+        assert_eq!(
+            studio_camera_picture(&dir, false).as_deref(),
+            Some(STUDIO_CAMERA_PICTURE)
+        );
+        assert_eq!(studio_camera_picture(&dir, true), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_studio_picture_is_written_without_touching_other_keys() {
+        let dir = temp_project("camera-picture-config");
+        let path = dir.join("project-config.json");
+        let original = serde_json::json!({
+            "camera": { "hide": false, "futureCameraSetting": "retained" },
+            "futureProjectSetting": [1, 2, 3]
+        });
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+        assert!(set_project_camera_picture(&dir, STUDIO_CAMERA_PICTURE));
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut expected = original.clone();
+        expected["cameraPicture"] = STUDIO_CAMERA_PICTURE.into();
+        assert_eq!(written, expected);
+        assert_eq!(
+            cap_project::ProjectConfiguration::load(&dir)
+                .unwrap()
+                .camera_picture
+                .as_deref(),
+            Some(STUDIO_CAMERA_PICTURE)
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

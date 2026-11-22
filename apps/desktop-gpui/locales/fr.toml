@@ -1013,6 +1013,13 @@ no_microphones = "Aucun micro trouvé"
 system_audio_off = "Sans audio système"
 system_audio_on = "Avec l'audio système"
 
+[main.device.picture]
+label = "Image"
+choose = "Utiliser une image"
+detail = "Affichée à la place d'une caméra"
+change = "Choisir une autre image"
+filter = "Images"
+
 [main.device.access]
 allow_access = "Autoriser l'accès"
 camera_denied = "Cap ne peut pas utiliser votre caméra. Activez-la dans Réglages Système."
@@ -2786,6 +2793,14 @@ size_during_zoom = "Taille pendant le zoom"
 size_label = "Taille"
 title = "Caméra"
 
+[editor.tabs.camera.picture]
+title = "Image"
+empty = "Ajoutez une image à afficher à la place de votre caméra."
+shown = "Affichée à la place de votre caméra."
+add = "Ajouter une image"
+replace = "Remplacer"
+remove = "Retirer"
+
 [editor.tabs.camera.blur]
 heavy = "Flou intense"
 light = "Flou léger"
@@ -3464,6 +3479,7 @@ stopped_metadata_unsaved = "La capture est arrêtée, mais ses métadonnées n'o
 discard_stop_unconfirmed = "Lors de la suppression Studio, l'arrêt de la capture n'est pas confirmé ; les fichiers locaux sont conservés"
 discard_unconfirmed = "La suppression Studio n'est pas confirmée ; les fichiers locaux sont conservés"
 crashed_before_capture = "Cap s'est fermé avant que cet enregistrement ne capture quoi que ce soit."
+picture_needs_studio = "Sous Linux, les images sont enregistrées en mode Studio. Passez à Studio ou choisissez une caméra."
 capture_state_failed = "Impossible de confirmer l'état de la capture : {error}"
 completion_task_failed = "La tâche de fin d'enregistrement a échoué : {error}"
 stop_task_failed = "La tâche d'arrêt a échoué : {error}"

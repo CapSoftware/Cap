@@ -1013,6 +1013,13 @@ no_microphones = "कोई माइक्रोफ़ोन नहीं म�
 system_audio_off = "सिस्टम ऑडियो नहीं"
 system_audio_on = "सिस्टम ऑडियो रिकॉर्ड करें"
 
+[main.device.picture]
+label = "तस्वीर"
+choose = "तस्वीर इस्तेमाल करें"
+detail = "कैमरे की जगह दिखाई जाती है"
+change = "दूसरी तस्वीर चुनें"
+filter = "इमेज"
+
 [main.device.access]
 allow_access = "एक्सेस दें"
 camera_denied = "Cap आपका कैमरा इस्तेमाल नहीं कर सकता। इसे सिस्टम सेटिंग्स में चालू करें।"
@@ -2786,6 +2793,14 @@ size_during_zoom = "ज़ूम के दौरान आकार"
 size_label = "आकार"
 title = "कैमरा"
 
+[editor.tabs.camera.picture]
+title = "तस्वीर"
+empty = "कैमरे की जगह दिखाने के लिए एक तस्वीर जोड़ें।"
+shown = "आपके कैमरे की जगह दिखाई जाती है।"
+add = "तस्वीर जोड़ें"
+replace = "बदलें"
+remove = "हटाएँ"
+
 [editor.tabs.camera.blur]
 heavy = "ज़्यादा ब्लर"
 light = "हल्का ब्लर"
@@ -3464,6 +3479,7 @@ stopped_metadata_unsaved = "कैप्चर रुक गया, लेकि
 discard_stop_unconfirmed = "Studio रिकॉर्डिंग हटाते समय कैप्चर रुकने की पुष्टि नहीं हुई; लोकल फ़ाइलें सुरक्षित हैं"
 discard_unconfirmed = "Studio हटाने की पुष्टि नहीं हुई; लोकल फ़ाइलें सुरक्षित हैं"
 crashed_before_capture = "इस रिकॉर्डिंग में कुछ भी कैप्चर होने से पहले Cap बंद हो गया।"
+picture_needs_studio = "Linux पर तस्वीरें Studio मोड में रिकॉर्ड होती हैं। Studio पर जाएँ या कोई कैमरा चुनें।"
 capture_state_failed = "कैप्चर की स्थिति की पुष्टि नहीं हो सकी: {error}"
 completion_task_failed = "रिकॉर्डिंग पूरी करने का काम विफल हुआ: {error}"
 stop_task_failed = "रोकने का काम विफल हुआ: {error}"

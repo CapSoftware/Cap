@@ -120,6 +120,17 @@ fn main_surfaces_match_the_literals_they_replaced() {
             tr::camera::toolbar::blur_cutout(),
             "Background removed. Click to turn it off.",
         ),
+        (tr::main::device::picture::label(), "Picture"),
+        (tr::main::device::picture::choose(), "Use a picture"),
+        (
+            tr::main::device::picture::detail(),
+            "Shows in place of a camera",
+        ),
+        (
+            tr::main::device::picture::change(),
+            "Choose another picture",
+        ),
+        (tr::main::device::picture::filter(), "Images"),
         (tr::main::target::display(), "Display"),
         (tr::main::target::window(), "Window"),
         (tr::main::target::area(), "Area"),

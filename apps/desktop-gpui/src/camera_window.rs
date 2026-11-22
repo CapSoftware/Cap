@@ -84,21 +84,39 @@ pub fn clamp_size(scale: f32) -> f32 {
     scale.clamp(CAMERA_MIN_SIZE, CAMERA_MAX_SIZE)
 }
 
+/// What the `full` shape follows. A camera is shown at least 16:9 wide; a
+/// picture keeps its own aspect, the one the editor's `source` shape draws
+/// it at, so the bubble shows exactly what the recording will.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum BubbleAspect {
+    Camera(Option<f32>),
+    Picture(f32),
+}
+
 /// `cameraPreviewDimensions`: height is the size; width follows the aspect
 /// ratio (1 unless the shape is `full`).
-pub fn preview_dimensions(state: &CameraWindowState, frame_aspect: Option<f32>) -> (f32, f32) {
+fn bubble_dimensions(state: &CameraWindowState, aspect: BubbleAspect) -> (f32, f32) {
     let base = clamp_size(state.size);
-    let aspect = match state.shape {
-        CameraShape::Full => frame_aspect
-            .filter(|aspect| aspect.is_finite() && *aspect > 0.)
+    let valid = |aspect: &f32| aspect.is_finite() && *aspect > 0.;
+    let aspect = match (state.shape, aspect) {
+        (CameraShape::Full, BubbleAspect::Camera(frame_aspect)) => frame_aspect
+            .filter(valid)
             .map_or(WIDE_ASPECT, |aspect| aspect.max(WIDE_ASPECT)),
+        (CameraShape::Full, BubbleAspect::Picture(aspect)) => Some(aspect)
+            .filter(valid)
+            .map_or(1., |aspect| aspect.clamp(0.25, 4.)),
         _ => 1.,
     };
     (base * aspect, base)
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub fn window_size(state: &CameraWindowState, frame_aspect: Option<f32>) -> (f32, f32) {
-    let (width, height) = preview_dimensions(state, frame_aspect);
+    bubble_window_size(state, BubbleAspect::Camera(frame_aspect))
+}
+
+pub(crate) fn bubble_window_size(state: &CameraWindowState, aspect: BubbleAspect) -> (f32, f32) {
+    let (width, height) = bubble_dimensions(state, aspect);
     (width, height + CAMERA_TOOLBAR_HEIGHT)
 }
 
@@ -107,7 +125,15 @@ pub(crate) fn inline_preview_size(
     frame_aspect: Option<f32>,
     viewport: (f32, f32),
 ) -> (f32, f32) {
-    let (width, height) = preview_dimensions(state, frame_aspect);
+    inline_bubble_size(state, BubbleAspect::Camera(frame_aspect), viewport)
+}
+
+fn inline_bubble_size(
+    state: &CameraWindowState,
+    aspect: BubbleAspect,
+    viewport: (f32, f32),
+) -> (f32, f32) {
+    let (width, height) = bubble_dimensions(state, aspect);
     let scale = ((viewport.0 - 48.).max(160.) / width)
         .min((viewport.1 - 320.).max(160.) / height)
         .min(1.);
@@ -148,6 +174,31 @@ mod inline_preview_tests {
         }
         // A portrait sliver keeps close, size and shape.
         assert_eq!(toolbar_fit(1., Some(81.)).1, 3);
+    }
+
+    #[test]
+    fn a_picture_keeps_its_own_aspect_where_a_camera_is_widened() {
+        let full = CameraWindowState {
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        assert_eq!(
+            bubble_window_size(&full, BubbleAspect::Picture(1.)),
+            (230., 286.)
+        );
+        assert_eq!(
+            bubble_window_size(&full, BubbleAspect::Picture(0.75)),
+            (172.5, 286.)
+        );
+        assert_eq!(
+            bubble_window_size(&full, BubbleAspect::Camera(Some(1.))),
+            window_size(&full, Some(16. / 9.))
+        );
+        let round = CameraWindowState::default();
+        assert_eq!(
+            bubble_window_size(&round, BubbleAspect::Picture(2.)),
+            window_size(&round, None)
+        );
     }
 
     #[test]
@@ -1057,6 +1108,27 @@ fn snapshot_bgra(
 /// frame and is the only entity notified at camera rate. Chrome invalidation
 /// goes through the parent [`CameraWindow`] instead, so a frame draw reuses
 /// the cached toolbar subtree.
+fn same_picture(
+    a: &Option<Arc<crate::camera_picture::CameraPicture>>,
+    b: &Option<Arc<crate::camera_picture::CameraPicture>>,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// The size a fresh bubble opens at: the picture's aspect, else the last
+/// camera frame kept from a parked preview.
+pub(crate) fn opening_window_size(state: &CameraWindowState, cx: &gpui::App) -> (f32, f32) {
+    let aspect = match &Feeds::global(cx).read(cx).camera_picture {
+        Some(picture) => BubbleAspect::Picture(picture.aspect()),
+        None => BubbleAspect::Camera(retained_preview_aspect(cx)),
+    };
+    bubble_window_size(state, aspect)
+}
+
 struct CameraPreviewView {
     #[cfg(target_os = "macos")]
     cutout_frame: Option<Arc<gpui::RenderImage>>,
@@ -1082,6 +1154,11 @@ struct CameraPreviewView {
     selection_revision: u64,
     frame_revision: Option<u64>,
     camera: Option<crate::feeds::SelectedCamera>,
+    /// The picture standing in for the camera. While set it is all the
+    /// bubble shows: no frames, no loading disc, no camera issues.
+    picture: Option<Arc<crate::camera_picture::CameraPicture>>,
+    /// A replaced picture, released from the sprite atlas on the next frame.
+    stale_picture: Option<Arc<gpui::RenderImage>>,
     /// Bumped by the canvas paint callback; the parent's cadence log reads it
     /// to prove notify-driven repaints actually present.
     paints: Arc<AtomicU32>,
@@ -1111,6 +1188,7 @@ impl CameraPreviewView {
         let feeds = Feeds::global(cx);
         let camera_error = feeds.read(cx).camera_error.clone();
         let camera = feeds.read(cx).camera.clone();
+        let picture = feeds.read(cx).camera_picture.clone();
         let state = store::load().camera_window.unwrap_or_default();
         let retained = cx
             .default_global::<ParkedCameraPreview>()
@@ -1170,8 +1248,16 @@ impl CameraPreviewView {
                 cx.notify();
             }
             let feeds = feeds.read(cx);
+            let picture = feeds.camera_picture.clone();
             let error = feeds.camera_error.clone();
             let camera = feeds.camera.clone();
+            if !same_picture(&this.picture, &picture) {
+                if let Some(previous) = this.picture.take() {
+                    this.stale_picture = Some(previous.image.clone());
+                }
+                this.picture = picture;
+                cx.notify();
+            }
             if this.camera_error != error || this.camera != camera {
                 if error.is_some() || this.camera != camera {
                     this.retained_invalidated = true;
@@ -1206,6 +1292,8 @@ impl CameraPreviewView {
             selection_revision: 0,
             frame_revision: None,
             camera,
+            picture,
+            stale_picture: None,
             paints,
             camera_error,
             effect_issue: None,
@@ -1300,6 +1388,25 @@ impl Render for CameraPreviewView {
         self.retained_invalidated = false;
         let theme = self.theme;
         let radius = self.radius;
+        if let Some(image) = self.stale_picture.take() {
+            let _ = window.drop_image(image);
+        }
+
+        if let Some(picture) = &self.picture {
+            self.paints.fetch_add(1, Ordering::Relaxed);
+            return div()
+                .relative()
+                .size_full()
+                .overflow_hidden()
+                .rounded(px(radius))
+                .bg(theme.gray_1)
+                .child(
+                    gpui::img(picture.image.clone())
+                        .size_full()
+                        .rounded(px(radius))
+                        .object_fit(gpui::ObjectFit::Cover),
+                );
+        }
 
         let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
         let awaiting_access = self.awaiting_access && !showing_frame && self.camera_error.is_none();
@@ -1668,6 +1775,10 @@ pub struct CameraWindow {
     effect_failures: PreviewEffectFailures,
     preview: Entity<CameraPreviewView>,
     toolbar: Entity<CameraToolbarView>,
+    /// `Feeds::camera_picture`'s aspect while a picture stands in for the
+    /// camera; it sizes the bubble like a frame would.
+    picture_aspect: Option<f32>,
+    _feeds_subscription: Subscription,
     frame_dims: Option<(usize, usize)>,
     retained_aspect: Option<f32>,
     // Cadence instrumentation: proves the preview stays live (delivered) and
@@ -1860,6 +1971,24 @@ impl CameraWindow {
         });
         let camera = cx.entity();
         let toolbar = cx.new(|cx| CameraToolbarView::new(&camera, cx));
+        let feeds = Feeds::global(cx);
+        let picture_aspect = feeds
+            .read(cx)
+            .camera_picture
+            .as_ref()
+            .map(|picture| picture.aspect());
+        let feeds_subscription = cx.observe_in(&feeds, window, |this, feeds, window, cx| {
+            let aspect = feeds
+                .read(cx)
+                .camera_picture
+                .as_ref()
+                .map(|picture| picture.aspect());
+            if this.picture_aspect != aspect {
+                this.picture_aspect = aspect;
+                this.apply_window_size(window, cx);
+                cx.notify();
+            }
+        });
 
         // `currentWindow.onMoved` + the 400ms position sync
         // (`camera.tsx:167-216`): every move lands in the shared store,
@@ -1893,6 +2022,8 @@ impl CameraWindow {
             effect_failures: PreviewEffectFailures::default(),
             preview,
             toolbar,
+            picture_aspect,
+            _feeds_subscription: feeds_subscription,
             frame_dims: None,
             retained_aspect,
             frames_in_window: 0,
@@ -1921,7 +2052,7 @@ impl CameraWindow {
     }
 
     pub fn inline_size(&self, viewport: (f32, f32)) -> (f32, f32) {
-        inline_preview_size(&self.state, self.frame_aspect(), viewport)
+        inline_bubble_size(&self.state, self.bubble_aspect(), viewport)
     }
 
     pub fn is_inline(&self) -> bool {
@@ -2288,6 +2419,13 @@ impl CameraWindow {
             .or(self.retained_aspect)
     }
 
+    fn bubble_aspect(&self) -> BubbleAspect {
+        match self.picture_aspect {
+            Some(aspect) => BubbleAspect::Picture(aspect),
+            None => BubbleAspect::Camera(self.frame_aspect()),
+        }
+    }
+
     fn toolbar_fit(&self) -> (f32, usize) {
         toolbar_fit(
             0.7 + normalized_size(&self.state) * 0.3,
@@ -2351,7 +2489,7 @@ impl CameraWindow {
         }
         let (width, height) = self
             .picker_size
-            .unwrap_or_else(|| window_size(&self.state, self.frame_aspect()));
+            .unwrap_or_else(|| bubble_window_size(&self.state, self.bubble_aspect()));
         let generation = self.size_generation.fetch_add(1, Ordering::AcqRel) + 1;
         let generations = self.size_generation.clone();
 
@@ -2468,7 +2606,10 @@ impl CameraWindow {
         // Deselecting the camera is what closes the window (`Feeds` observes
         // the selection); mirrors the Tauri close button closing the webview
         // and the main window's selection following it.
-        Feeds::global(cx).update(cx, |feeds, cx| feeds.set_camera(None, cx));
+        Feeds::global(cx).update(cx, |feeds, cx| {
+            feeds.set_camera_picture(None, cx);
+            feeds.set_camera(None, cx);
+        });
     }
 
     // Mirrors `ControlButton`'s prop list; a config struct would just rename
@@ -2550,6 +2691,12 @@ impl CameraWindow {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let (scale, buttons) = self.toolbar_fit();
+        // A picture has nothing to mirror or blur.
+        let buttons = if self.picture_aspect.is_some() {
+            buttons.min(3)
+        } else {
+            buttons
+        };
         #[cfg(target_os = "macos")]
         let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
         #[cfg(not(target_os = "macos"))]
