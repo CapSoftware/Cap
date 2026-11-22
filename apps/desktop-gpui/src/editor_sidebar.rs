@@ -510,6 +510,15 @@ pub fn wallpapers_for_theme(theme: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// The wallpaper the Wallpaper tab starts on when none is stored, so switching
+/// to it never leaves the frame on an empty background.
+pub fn default_wallpaper(theme: &str) -> Option<String> {
+    wallpapers_for_theme(theme)
+        .into_iter()
+        .find_map(wallpaper_path)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 /// Where the bundled wallpapers live.
 ///
 /// **They are not embedded, and cannot be**: selecting one writes an *absolute
@@ -2494,6 +2503,9 @@ impl EditorWindow {
         // Batched with the source write below, exactly as the source's
         // `batch()` around `ensureBackgroundPresentation` + `setProject` is.
         self.ensure_background_presentation(from_none);
+        let fallback_wallpaper = (tab == SourceTab::Wallpaper)
+            .then(|| default_wallpaper(BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0))
+            .flatten();
         self.edit_background(
             "source",
             |project| {
@@ -2538,12 +2550,12 @@ impl EditorWindow {
                     // desktop picture's, which belongs to the other tab.
                     _ => BackgroundSource::Wallpaper {
                         path: match source {
-                            BackgroundSource::Wallpaper { path }
-                                if !is_current_desktop_background_path(path.as_deref()) =>
+                            BackgroundSource::Wallpaper { path: Some(path) }
+                                if !is_current_desktop_background_path(Some(path)) =>
                             {
-                                path.clone()
+                                Some(path.clone())
                             }
-                            _ => None,
+                            _ => fallback_wallpaper.clone(),
                         },
                     },
                 };
@@ -3078,6 +3090,7 @@ impl EditorWindow {
                         div()
                             .id("desktop-preview")
                             .relative()
+                            .flex()
                             .overflow_hidden()
                             .w_full()
                             // `h-48`
@@ -3217,8 +3230,12 @@ impl EditorWindow {
                                 })
                             })
                             .child(
+                                // Flex, not block: block layout grows an image
+                                // to its aspect ratio, so a square picture ran
+                                // past the tile and lost its bottom corners.
                                 div()
                                     .relative()
+                                    .flex()
                                     .size_full()
                                     .rounded(px(8.))
                                     .overflow_hidden()
@@ -3300,6 +3317,7 @@ impl EditorWindow {
                 .into_any_element(),
             Some(path) => div()
                 .relative()
+                .flex()
                 .w_full()
                 .h(px(192.))
                 .rounded(px(6.))
@@ -4491,6 +4509,17 @@ mod tests {
     #[test]
     fn built_in_wallpapers_remain_available_from_the_development_checkout() {
         assert!(wallpaper_path("macOS/sequoia-dark").is_some());
+    }
+
+    #[test]
+    fn the_wallpaper_tab_starts_on_the_first_wallpaper_of_its_theme() {
+        for (theme, _) in BACKGROUND_THEMES {
+            let path = default_wallpaper(theme).unwrap();
+            assert_eq!(
+                wallpaper_id_for_path(&path),
+                wallpapers_for_theme(theme).first().copied()
+            );
+        }
     }
 
     #[test]

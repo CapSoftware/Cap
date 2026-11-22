@@ -3346,11 +3346,16 @@ impl ScreenshotEditorWindow {
         if tab == BgTab::Wallpaper {
             self.ensure_wallpapers(cx);
         }
+        let fallback_wallpaper = (tab == BgTab::Wallpaper)
+            .then(|| editor_sidebar::default_wallpaper(BACKGROUND_THEMES[self.wallpaper_theme].0))
+            .flatten();
         self.edit_project(
             move |project| {
                 if BgTab::for_source(&project.background.source) != tab {
                     project.background.source = match tab {
-                        BgTab::Wallpaper => BackgroundSource::Wallpaper { path: None },
+                        BgTab::Wallpaper => BackgroundSource::Wallpaper {
+                            path: fallback_wallpaper.clone(),
+                        },
                         BgTab::Image => BackgroundSource::Image { path: None },
                         BgTab::Color => BackgroundSource::Color {
                             value: DEFAULT_COLOR,
