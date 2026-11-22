@@ -3,6 +3,7 @@
 //! are either filled by hand or by rules.
 
 #[doc(hidden)]
+pub mod app_icons;
 pub mod bench;
 pub mod index;
 pub mod items;
@@ -15,7 +16,12 @@ pub mod style;
 pub mod text;
 pub mod thumbs;
 
-use std::{collections::HashMap, path::PathBuf, rc::Rc, time::Instant};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    rc::Rc,
+    time::Instant,
+};
 
 use chrono::{Local, NaiveDate, Utc};
 use gpui::{
@@ -39,6 +45,7 @@ use crate::{
     theme::{LocaleFont as _, Theme},
     ui::{TextInput, TextInputEvent, TextInputState},
 };
+use cap_meetings::apps::AppInfo;
 
 pub const TITLE: &str = "Cap Library";
 
@@ -153,6 +160,8 @@ struct UpNext {
     title: String,
     start: chrono::DateTime<Utc>,
     people: Vec<String>,
+    /// The meeting service its join link points at.
+    app: Option<&'static AppInfo>,
 }
 
 struct RuleRow {
@@ -235,6 +244,7 @@ pub struct LibraryWindow {
     last_scan: Option<Instant>,
     people_task: Option<Task<()>>,
     thumbs: thumbs::Thumbs,
+    app_icons: app_icons::AppIcons,
     list_scroll: gpui::UniformListScrollHandle,
     grid_scroll: gpui::UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -452,6 +462,7 @@ impl LibraryWindow {
             last_scan: None,
             people_task: None,
             thumbs: thumbs::Thumbs::default(),
+            app_icons: app_icons::AppIcons::default(),
             list_scroll: gpui::UniformListScrollHandle::new(),
             grid_scroll: gpui::UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
@@ -616,6 +627,7 @@ impl LibraryWindow {
                 title: "Design review: library".into(),
                 start: Utc::now() + chrono::Duration::minutes(18),
                 people: vec!["Ana Pérez".into(), "Bo Chen".into(), "Mia Novak".into()],
+                app: cap_meetings::apps::app_by_id("zoom"),
             });
             return;
         }
@@ -633,6 +645,7 @@ impl LibraryWindow {
             .map(|e| UpNext {
                 title: e.title.clone(),
                 start: e.start,
+                app: e.link.as_ref().and_then(|l| load::app_for_link(&l.url)),
                 people: e
                     .attendees
                     .iter()
@@ -666,6 +679,7 @@ impl LibraryWindow {
     /// Decodes the thumbnails the last render asked for, off the main thread,
     /// and draws again as they land (in batches, not one frame per picture).
     fn load_thumbs(&mut self, cx: &mut Context<Self>) {
+        self.load_app_icons(cx);
         let jobs = self.thumbs.take_wanted();
         if jobs.is_empty() {
             return;
@@ -697,6 +711,43 @@ impl LibraryWindow {
                     return;
                 }
             }
+        })
+        .detach();
+    }
+
+    /// Reads the meeting apps' icons the last render asked for, off the main
+    /// thread, once per app.
+    fn load_app_icons(&mut self, cx: &mut Context<Self>) {
+        let apps = self.app_icons.take_wanted();
+        if apps.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            let found = cx
+                .background_spawn(async move {
+                    apps.into_iter()
+                        .map(|app| {
+                            let image = app_icons::lookup(app, app_icons::ICON_PX)
+                                .map(crate::library::rgba_to_render_image);
+                            (app, image)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            tracing::info!(
+                apps = found.len(),
+                found = found.iter().filter(|(_, i)| i.is_some()).count(),
+                ms = started.elapsed().as_secs_f64() * 1000.,
+                "library app icons read"
+            );
+            this.update(cx, |this, cx| {
+                for (app, image) in found {
+                    this.app_icons.insert(app, image);
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -1516,26 +1567,156 @@ impl LibraryWindow {
             .into_any_element()
     }
 
-    fn thumb(&self, item: &Item, height: f32, radius: f32) -> AnyElement {
+    /// An installed app's icon at `size` points, nothing for the moment it
+    /// is looked up, or the meeting glyph when the app is not on this computer.
+    fn app_icon(&self, app: &'static AppInfo, size: f32) -> AnyElement {
+        match self.app_icons.get(app) {
+            app_icons::Icon::Image(image) => {
+                img(image).size(px(size)).flex_shrink_0().into_any_element()
+            }
+            app_icons::Icon::Pending => div().size(px(size)).flex_shrink_0().into_any_element(),
+            app_icons::Icon::Missing => self.glyph_tile(ItemKind::Meeting, size, size),
+        }
+    }
+
+    /// The kind's glyph on a soft tile of its colour.
+    fn glyph_tile(&self, kind: ItemKind, w: f32, h: f32) -> AnyElement {
+        self.glyph_tile_with(kind_glyph(kind), kind, w, h)
+    }
+
+    fn glyph_tile_with(&self, glyph: &'static str, kind: ItemKind, w: f32, h: f32) -> AnyElement {
+        let dark = self.palette.dark;
+        let tint = style::kind_tint(kind, dark);
+        let side = w.min(h);
+        div()
+            .w(px(w))
+            .h(px(h))
+            .flex_shrink_0()
+            .rounded(px((side * 0.24).clamp(5., 9.)))
+            .bg(style::soft(tint, dark))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                svg()
+                    .path(glyph)
+                    .size(px((side * 0.42).clamp(12., 22.)))
+                    .text_color(tint),
+            )
+            .into_any_element()
+    }
+
+    /// A calendar leaf: the month on a red band over the day, with the
+    /// meeting app's icon tucked in its corner when this computer has it.
+    fn date_leaf(
+        &self,
+        start: chrono::DateTime<Utc>,
+        w: f32,
+        app: Option<&'static AppInfo>,
+    ) -> AnyElement {
+        use chrono::Datelike as _;
         let p = self.palette;
         let dark = p.dark;
-        let tint = style::kind_tint(item.kind, dark);
-        let base = div()
+        let local = format::local(start);
+        let h = (w * 1.12).round();
+        let band = (w * 0.3).round();
+        let radius = (w * 0.22).round();
+        // Big enough to read the app at list size (20 pt on a 32 pt leaf).
+        let badge = (w * 0.62).round();
+        let icon = app.and_then(|app| match self.app_icons.get(app) {
+            app_icons::Icon::Image(image) => Some(image),
+            _ => None,
+        });
+        div()
             .relative()
-            .w_full()
-            .h(px(height))
+            .flex_shrink_0()
+            .w(px(w))
+            .h(px(h))
+            .flex()
+            .flex_col()
             .rounded(px(radius))
-            .overflow_hidden()
-            .bg(style::thumb_well(dark));
-        match &item.thumbnail {
-            Some(path) => base
-                .children(self.thumbs.get(path).map(|image| {
+            .bg(style::leaf_face(dark))
+            .border_1()
+            .border_color(style::capsule_border(dark))
+            .shadow(style::capsule_shadow(dark))
+            .child(
+                div()
+                    .h(px(band))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_t(px(radius - 1.))
+                    .bg(style::calendar_red(dark))
+                    .text_size(px((band * 0.66).max(8.)))
+                    .line_height(px(band))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gpui::white())
+                    .child(format::month_short(local.month())),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px((w * 0.44).round()))
+                    .line_height(px((w * 0.5).round()))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(p.text)
+                    .child(local.day().to_string()),
+            )
+            .children(icon.map(|image| {
+                img(image)
+                    .absolute()
+                    .right(px(-badge * 0.55))
+                    .bottom(px(-badge * 0.4))
+                    .size(px(badge))
+            }))
+            .into_any_element()
+    }
+
+    /// A recording's or screenshot's picture in a well: the well takes the
+    /// kind's soft colour while it decodes, then the picture. No extra
+    /// elements and no animation frames (a fade repainted the window for
+    /// every batch of pictures that landed), so new rows cost what they did. `None` when the file is missing or unreadable, so the caller draws
+    /// something else.
+    fn picture(&self, item: &Item, path: &Path, height: f32, radius: f32) -> Option<gpui::Div> {
+        let dark = self.palette.dark;
+        let image = match self.thumbs.picture(path) {
+            thumbs::Picture::Failed => return None,
+            thumbs::Picture::Loading => None,
+            thumbs::Picture::Ready(image) => Some(image),
+        };
+        Some(
+            div()
+                .relative()
+                .w_full()
+                .h(px(height))
+                .rounded(px(radius))
+                .overflow_hidden()
+                .bg(if image.is_none() {
+                    style::soft(style::kind_tint(item.kind, dark), dark)
+                } else {
+                    style::thumb_well(dark)
+                })
+                .children(image.map(|image| {
                     img(image)
                         .absolute()
                         .inset_0()
                         .size_full()
                         .object_fit(ObjectFit::Cover)
-                }))
+                })),
+        )
+    }
+
+    fn thumb(&self, item: &Item, height: f32, radius: f32) -> AnyElement {
+        if let Some(well) = item
+            .thumbnail
+            .as_deref()
+            .and_then(|path| self.picture(item, path, height, radius))
+        {
+            return well
                 .when_some(
                     item.duration_ms
                         .filter(|_| item.kind == ItemKind::Recording),
@@ -1555,101 +1736,258 @@ impl LibraryWindow {
                         )
                     },
                 )
-                .into_any_element(),
-            None => {
-                // No picture: a quiet paper card that still says what the
-                // meeting was. Who was there, how long, and its first line.
-                let people: Vec<String> = item.people.iter().take(4).cloned().collect();
-                let extra = item.people.len().saturating_sub(people.len());
-                let avatars = div()
+                .into_any_element();
+        }
+        self.paper(item, height, radius)
+    }
+
+    /// No picture: a quiet paper card that still says what it was. Where the
+    /// meeting happened (its calendar day or its app), its first lines, and
+    /// who was there.
+    fn paper(&self, item: &Item, height: f32, radius: f32) -> AnyElement {
+        let p = self.palette;
+        let dark = p.dark;
+        let tint = style::kind_tint(item.kind, dark);
+        let big = height > 220.;
+        let people: Vec<String> = item.people.iter().take(4).cloned().collect();
+        let extra = item.people.len().saturating_sub(people.len());
+        let avatars = div()
+            .flex()
+            .items_center()
+            .children(people.iter().enumerate().map(|(i, name)| {
+                let initial: String = name
+                    .chars()
+                    .next()
+                    .map(|c| c.to_uppercase().collect())
+                    .unwrap_or_default();
+                div()
+                    .size(px(24.))
+                    .when(i > 0, |el| el.ml(px(-6.)))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(style::paper(dark))
+                    .bg(p.speaker(i))
                     .flex()
                     .items_center()
-                    .children(people.iter().enumerate().map(|(i, name)| {
-                        let initial: String = name
-                            .chars()
-                            .next()
-                            .map(|c| c.to_uppercase().collect())
-                            .unwrap_or_default();
-                        div()
-                            .size(px(24.))
-                            .when(i > 0, |el| el.ml(px(-6.)))
-                            .rounded_full()
-                            .border_2()
-                            .border_color(style::paper(dark))
-                            .bg(p.speaker(i))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(10.5))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(gpui::white())
-                            .child(initial)
-                    }));
-                let footer = (!people.is_empty()).then(|| {
+                    .justify_center()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(gpui::white())
+                    .child(initial)
+            }));
+        let footer = (!people.is_empty()).then(|| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(avatars)
+                .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(p.muted)
+                        .child(if extra > 0 {
+                            format!("{} +{extra}", people.join(", "))
+                        } else {
+                            people.join(", ")
+                        }),
+                )
+        });
+        let event = item
+            .event
+            .as_ref()
+            .filter(|_| item.kind == ItemKind::Meeting);
+        let header = if let Some(event) = event {
+            let start = format::local(event.start);
+            let span = match event.end.map(format::local) {
+                Some(end) if end > start => {
+                    format!("{}\u{2013}{}", format::clock(start), format::clock(end))
+                }
+                _ => format::clock(start),
+            };
+            let place = [
+                event.calendar.clone(),
+                item.meeting_app.map(|a| a.name.to_string()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("  \u{00b7}  ");
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(self.date_leaf(event.start, if big { 40. } else { 32. }, item.meeting_app))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .pl(px(if item.meeting_app.is_some() { 4. } else { 0. }))
                         .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(avatars)
+                        .flex_col()
+                        .gap(px(1.))
                         .child(
                             div()
-                                .flex_1()
-                                .min_w_0()
                                 .truncate()
-                                .text_size(px(12.))
-                                .text_color(p.muted)
-                                .child(if extra > 0 {
-                                    format!("{} +{extra}", people.join(", "))
-                                } else {
-                                    people.join(", ")
-                                }),
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(p.text)
+                                .child(span),
                         )
-                });
-                base.bg(style::paper(dark))
-                    .border_1()
-                    .border_color(style::capsule_border(dark))
-                    .shadow(style::capsule_shadow(dark))
-                    .p(px(16.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_size(px(11.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(tint)
-                            .child(
-                                svg()
-                                    .path(kind_glyph(item.kind))
-                                    .size(px(13.))
-                                    .text_color(tint),
-                            )
-                            .child(kind_word(item.kind))
-                            .child(div().flex_1())
-                            .children(item.app.clone().map(|app| {
+                        .when(!place.is_empty(), |el| {
+                            el.child(
                                 div()
-                                    .text_color(p.faint)
-                                    .font_weight(FontWeight::NORMAL)
-                                    .child(app)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .text_size(px(if height > 220. { 17. } else { 13.5 }))
-                            .line_height(px(if height > 220. { 25. } else { 19.5 }))
-                            .line_clamp(if height > 220. { 4 } else { 2 })
-                            .text_color(p.text)
-                            .child(item.excerpt.clone().unwrap_or_else(|| item.title.clone())),
-                    )
-                    .children(footer)
-                    .into_any_element()
+                                    .truncate()
+                                    .text_size(px(11.5))
+                                    .text_color(p.muted)
+                                    .child(place),
+                            )
+                        }),
+                )
+        } else if let Some(app) = item.meeting_app {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(self.app_icon(app, if big { 26. } else { 22. }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(p.muted)
+                        .child(app.name),
+                )
+        } else {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(tint)
+                .child(
+                    svg()
+                        .path(kind_glyph(item.kind))
+                        .size(px(13.))
+                        .text_color(tint),
+                )
+                .child(kind_word(item.kind))
+                .child(div().flex_1())
+                .children(item.app.clone().map(|app| {
+                    div()
+                        .text_color(p.faint)
+                        .font_weight(FontWeight::NORMAL)
+                        .child(app)
+                }))
+        };
+        // Whole lines only: the excerpt gets the lines that fit, and the
+        // avatars give way when they would leave it less than two (the names
+        // are under the card too).
+        let line_h = if big { 25. } else { 19.5 };
+        let header_h = match (event, item.meeting_app) {
+            (Some(_), _) => ((if big { 40. } else { 32. }) * 1.12f32).round(),
+            (None, Some(_)) => {
+                if big {
+                    26.
+                } else {
+                    22.
+                }
             }
+            (None, None) => 16.,
+        };
+        const PAD: f32 = 16. * 2. + 2.;
+        const GAP: f32 = 10.;
+        let room =
+            |footer: bool| height - PAD - header_h - GAP - if footer { 24. + GAP } else { 0. };
+        let footer = footer.filter(|_| item.excerpt.is_none() || room(true) >= line_h * 2.);
+        // Never fewer than one line: a note with words always shows some.
+        let lines =
+            ((room(footer.is_some()) / line_h).floor() as usize).clamp(1, if big { 4 } else { 3 });
+        let body: AnyElement = match &item.excerpt {
+            Some(text) => div()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .text_size(px(if big { 17. } else { 13.5 }))
+                .line_height(px(line_h))
+                .max_h(px(lines as f32 * line_h))
+                .line_clamp(lines)
+                .text_color(p.text)
+                .child(text.clone())
+                .into_any_element(),
+            // Nothing written yet: the page stays a page, with its glyph
+            // where the words will go.
+            None => div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    svg()
+                        .path(kind_glyph(item.kind))
+                        .size(px(if big { 34. } else { 24. }))
+                        .text_color(style::soft_glyph(tint, dark)),
+                )
+                .into_any_element(),
+        };
+        div()
+            .relative()
+            .w_full()
+            .h(px(height))
+            .rounded(px(radius))
+            .overflow_hidden()
+            .bg(style::paper(dark))
+            .border_1()
+            .border_color(style::capsule_border(dark))
+            .shadow(style::capsule_shadow(dark))
+            .p(px(16.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(header)
+            .child(body)
+            .children(footer)
+            .into_any_element()
+    }
+
+    /// The list row's leading picture, always 64 x 40 so titles line up.
+    fn lead(&self, item: &Item) -> AnyElement {
+        const W: f32 = 64.;
+        const H: f32 = 40.;
+        if let Some(well) = item
+            .thumbnail
+            .as_deref()
+            .and_then(|path| self.picture(item, path, H, 7.))
+        {
+            return well.w(px(W)).flex_shrink_0().into_any_element();
+        }
+        // Holds the row's place while an app icon is looked up.
+        let slot = div().w(px(W)).h(px(H)).flex_shrink_0();
+        match (item.kind, &item.event, item.meeting_app) {
+            // The row's day heading and time already say when: the app says
+            // where. (A calendar leaf here cost two text runs per row while
+            // scrolling; cards and Up next keep it.)
+            // One element per row, no wrapper: as cheap as the glyph tile.
+            (ItemKind::Meeting, _, Some(app)) => match self.app_icons.get(app) {
+                app_icons::Icon::Image(image) => img(image)
+                    .size(px(34.))
+                    .mx(px((W - 34.) / 2.))
+                    .my(px((H - 34.) / 2.))
+                    .flex_shrink_0()
+                    .into_any_element(),
+                app_icons::Icon::Pending => slot.into_any_element(),
+                app_icons::Icon::Missing => self.glyph_tile(ItemKind::Meeting, W, H),
+            },
+            (ItemKind::Meeting, Some(_), None) => {
+                self.glyph_tile_with("icons/calendar.svg", ItemKind::Meeting, W, H)
+            }
+            (kind, _, _) => self.glyph_tile(kind, W, H),
         }
     }
 
@@ -1717,41 +2055,9 @@ impl LibraryWindow {
 
     fn list_row(&self, index: u32, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
-        let dark = p.dark;
         let item = &self.scan.items[index as usize];
-        let tint = style::kind_tint(item.kind, dark);
         let today = today();
-        let leading = match &item.thumbnail {
-            Some(path) => div()
-                .w(px(64.))
-                .h(px(40.))
-                .flex_shrink_0()
-                .rounded(px(7.))
-                .overflow_hidden()
-                .bg(style::thumb_well(dark))
-                .children(
-                    self.thumbs
-                        .get(path)
-                        .map(|image| img(image).size_full().object_fit(ObjectFit::Cover)),
-                )
-                .into_any_element(),
-            None => div()
-                .w(px(64.))
-                .h(px(40.))
-                .flex_shrink_0()
-                .rounded(px(7.))
-                .bg(style::soft(tint, dark))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    svg()
-                        .path(kind_glyph(item.kind))
-                        .size(px(16.))
-                        .text_color(tint),
-                )
-                .into_any_element(),
-        };
+        let leading = self.lead(item);
         div()
             .id(SharedString::from(format!("row-{index}")))
             .h(px(style::LIST_ROW_HEIGHT))
@@ -1841,22 +2147,7 @@ impl LibraryWindow {
                 .border_1()
                 .border_color(style::capsule_border(dark))
                 .shadow(style::capsule_shadow(dark))
-                .child(
-                    div()
-                        .size(px(34.))
-                        .flex_shrink_0()
-                        .rounded(px(9.))
-                        .bg(tint)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            svg()
-                                .path("icons/calendar.svg")
-                                .size(px(16.))
-                                .text_color(gpui::white()),
-                        ),
-                )
+                .child(self.date_leaf(next.start, 34., next.app))
                 .child(
                     div()
                         .flex_1()
@@ -2041,12 +2332,14 @@ impl LibraryWindow {
                             .shadow(style::capsule_shadow(p.dark))
                             .cursor_pointer()
                             .text_size(px(13.))
-                            .child(
-                                svg()
+                            .child(match item.meeting_app {
+                                Some(app) => self.app_icon(app, 16.),
+                                None => svg()
                                     .path(kind_glyph(item.kind))
                                     .size(px(13.))
-                                    .text_color(tint),
-                            )
+                                    .text_color(tint)
+                                    .into_any_element(),
+                            })
                             .child(item.title.clone())
                             .on_click(cx.listener(move |this, _, _, cx| this.open_item(i, cx)))
                     })),

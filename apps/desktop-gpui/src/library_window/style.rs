@@ -140,3 +140,30 @@ pub fn paper(dark: bool) -> Hsla {
         hsla(45. / 360., 0.30, 0.975, 1.)
     }
 }
+
+/// A kind glyph standing in for a picture that is not there yet: the kind's
+/// colour, faded into the well.
+pub fn soft_glyph(color: Hsla, dark: bool) -> Hsla {
+    Hsla {
+        a: if dark { 0.45 } else { 0.38 },
+        ..color
+    }
+}
+
+/// The month band of a calendar leaf, the red calendars have always used.
+pub fn calendar_red(dark: bool) -> Hsla {
+    if dark {
+        hsla(3. / 360., 0.78, 0.58, 1.)
+    } else {
+        hsla(3. / 360., 0.82, 0.55, 1.)
+    }
+}
+
+/// The face of a calendar leaf.
+pub fn leaf_face(dark: bool) -> Hsla {
+    if dark {
+        hsla(240. / 360., 0.04, 0.22, 1.)
+    } else {
+        hsla(0., 0., 1., 1.)
+    }
+}

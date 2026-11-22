@@ -18,6 +18,13 @@ use gpui::RenderImage;
 /// Enough for several screens of the densest grid.
 pub const CAP: usize = 240;
 
+pub enum Picture {
+    Ready(Arc<RenderImage>),
+    Loading,
+    /// The file is missing or unreadable.
+    Failed,
+}
+
 #[derive(Default)]
 pub struct Thumbs {
     ready: HashMap<PathBuf, Arc<RenderImage>>,
@@ -30,14 +37,27 @@ pub struct Thumbs {
 
 impl Thumbs {
     /// The decoded picture, or `None` while it loads (queued on first ask).
+    #[cfg(test)]
     pub fn get(&self, path: &Path) -> Option<Arc<RenderImage>> {
-        if let Some(image) = self.ready.get(path) {
-            return Some(image.clone());
+        match self.picture(path) {
+            Picture::Ready(image) => Some(image),
+            _ => None,
         }
-        if !self.loading.contains(path) && !self.failed.contains(path) {
+    }
+
+    /// The picture, or whether it is still loading or will never come (a
+    /// missing or unreadable file). Queued on first ask.
+    pub fn picture(&self, path: &Path) -> Picture {
+        if let Some(image) = self.ready.get(path) {
+            return Picture::Ready(image.clone());
+        }
+        if self.failed.contains(path) {
+            return Picture::Failed;
+        }
+        if !self.loading.contains(path) {
             self.wanted.borrow_mut().push(path.to_path_buf());
         }
-        None
+        Picture::Loading
     }
 
     /// Paths asked for since the last call, each once, now marked loading.
@@ -108,6 +128,16 @@ mod tests {
         assert!(thumbs.take_wanted().is_empty());
         thumbs.insert(a.clone(), image());
         assert!(thumbs.get(&a).is_some());
+    }
+
+    #[test]
+    fn a_missing_picture_says_so_instead_of_loading_forever() {
+        let mut thumbs = Thumbs::default();
+        let b = PathBuf::from("/gone.png");
+        assert!(matches!(thumbs.picture(&b), Picture::Loading));
+        thumbs.take_wanted();
+        thumbs.fail(b.clone());
+        assert!(matches!(thumbs.picture(&b), Picture::Failed));
     }
 
     #[test]
