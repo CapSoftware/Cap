@@ -2892,9 +2892,6 @@ impl CameraWindow {
     }
 }
 
-/// What each toolbar button does, said beside it. The buttons are icons
-/// only, and shape and blur cycle through states the icon alone does not
-/// name.
 struct ToolbarHints {
     close: Hint,
     size: Hint,
