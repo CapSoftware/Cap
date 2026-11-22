@@ -3168,6 +3168,9 @@ zoom = "Zoom"
 
 [editor.transcript]
 add_caption = "Add caption at playhead"
+captions_offer = "Add captions to your video?"
+captions_offer_add = "Add captions"
+captions_offer_dismiss = "Not now"
 captions_save_failed = { text = "Could not save the captions: {error}", context = "{error} is a technical message that stays in English." }
 captions_saved = "Captions saved"
 cleanup = "Clean up"

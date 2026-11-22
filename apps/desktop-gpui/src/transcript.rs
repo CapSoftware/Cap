@@ -198,6 +198,9 @@ pub(crate) struct TranscriptState {
     pub energy_loading: bool,
     pub energy_offsets: Vec<(f64, f64)>,
     pub voiced_for: usize,
+    /// A transcript just landed with captions off: ask once whether to
+    /// show them on the video.
+    pub offer_captions: bool,
 }
 
 impl TranscriptState {
@@ -227,6 +230,7 @@ impl TranscriptState {
             energy_loading: false,
             energy_offsets: Vec::new(),
             voiced_for: 0,
+            offer_captions: false,
         }
     }
 

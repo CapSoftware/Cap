@@ -3166,6 +3166,9 @@ zoom = "ज़ूम"
 
 [editor.transcript]
 add_caption = "प्लेहेड पर कैप्शन जोड़ें"
+captions_offer = "वीडियो में कैप्शन जोड़ें?"
+captions_offer_add = "कैप्शन जोड़ें"
+captions_offer_dismiss = "अभी नहीं"
 captions_save_failed = "कैप्शन सेव नहीं हो सके: {error}"
 captions_saved = "कैप्शन सेव हो गए"
 cleanup = "साफ़ करें"

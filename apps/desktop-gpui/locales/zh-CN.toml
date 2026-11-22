@@ -3166,6 +3166,9 @@ zoom = "缩放"
 
 [editor.transcript]
 add_caption = "在播放头处添加字幕"
+captions_offer = "要为视频添加字幕吗？"
+captions_offer_add = "添加字幕"
+captions_offer_dismiss = "以后再说"
 captions_save_failed = "无法保存字幕：{error}"
 captions_saved = "字幕已保存"
 cleanup = "清理"

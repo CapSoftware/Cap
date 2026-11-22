@@ -3166,6 +3166,9 @@ zoom = "Zoom"
 
 [editor.transcript]
 add_caption = "Añadir subtítulo en el cabezal"
+captions_offer = "¿Añadir subtítulos al vídeo?"
+captions_offer_add = "Añadir subtítulos"
+captions_offer_dismiss = "Ahora no"
 captions_save_failed = "No se pudieron guardar los subtítulos: {error}"
 captions_saved = "Subtítulos guardados"
 cleanup = "Limpiar"

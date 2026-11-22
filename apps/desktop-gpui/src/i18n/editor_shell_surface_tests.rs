@@ -1271,6 +1271,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::transcript::add_caption(),
             "Add caption at playhead",
         ),
+        (
+            tr::editor::transcript::captions_offer(),
+            "Add captions to your video?",
+        ),
+        (tr::editor::transcript::captions_offer_add(), "Add captions"),
+        (tr::editor::transcript::captions_offer_dismiss(), "Not now"),
         (tr::editor::transcript::captions_saved(), "Captions saved"),
         (tr::editor::transcript::cleanup(), "Clean up"),
         (

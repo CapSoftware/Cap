@@ -5159,6 +5159,11 @@ impl EditorWindow {
             tracing::warn!("{error}");
         }
         let language = refinement.language;
+        let was_shown = self
+            .project
+            .captions
+            .as_ref()
+            .is_some_and(|captions| captions.settings.enabled);
         self.edit_project("caption-generate", window, cx, move |project| {
             let shown = project
                 .captions
@@ -5180,6 +5185,9 @@ impl EditorWindow {
         if show_captions {
             // `setEditorState("timeline", "tracks", "caption", true)`.
             self.tracks.caption = true;
+        } else if !was_shown {
+            self.transcript.offer_captions = true;
+            self.invalidate_transcript(cx);
         }
         cx.notify();
     }

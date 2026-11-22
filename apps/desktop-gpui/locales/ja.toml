@@ -3166,6 +3166,9 @@ zoom = "ズーム"
 
 [editor.transcript]
 add_caption = "再生ヘッドに字幕を追加"
+captions_offer = "動画に字幕を追加しますか？"
+captions_offer_add = "字幕を追加"
+captions_offer_dismiss = "今はしない"
 captions_save_failed = "字幕を保存できませんでした：{error}"
 captions_saved = "字幕を保存しました"
 cleanup = "クリーンアップ"

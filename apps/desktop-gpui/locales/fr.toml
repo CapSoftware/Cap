@@ -3166,6 +3166,9 @@ zoom = "Zoom"
 
 [editor.transcript]
 add_caption = "Ajouter un sous-titre à la tête de lecture"
+captions_offer = "Ajouter des sous-titres à la vidéo ?"
+captions_offer_add = "Ajouter des sous-titres"
+captions_offer_dismiss = "Pas maintenant"
 captions_save_failed = "Impossible d'enregistrer les sous-titres : {error}"
 captions_saved = "Sous-titres enregistrés"
 cleanup = "Nettoyer"

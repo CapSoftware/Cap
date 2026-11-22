@@ -3166,6 +3166,9 @@ zoom = "Zoom"
 
 [editor.transcript]
 add_caption = "Untertitel am Abspielkopf hinzufügen"
+captions_offer = "Untertitel zum Video hinzufügen?"
+captions_offer_add = "Untertitel hinzufügen"
+captions_offer_dismiss = "Nicht jetzt"
 captions_save_failed = "Die Untertitel konnten nicht gespeichert werden: {error}"
 captions_saved = "Untertitel gespeichert"
 cleanup = "Aufräumen"
