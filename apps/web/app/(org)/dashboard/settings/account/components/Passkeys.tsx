@@ -51,8 +51,19 @@ export const Passkeys = ({
 }) => {
 	const router = useRouter();
 	const [passkeys, setPasskeys] = useState(initialPasskeys);
+	// A passkey added elsewhere (the dashboard prompt) arrives through
+	// router.refresh() as a new prop, so take the server's list when it changes.
+	const [syncedPasskeys, setSyncedPasskeys] = useState(initialPasskeys);
+	if (syncedPasskeys !== initialPasskeys) {
+		setSyncedPasskeys(initialPasskeys);
+		setPasskeys(initialPasskeys);
+	}
 	const [supported, setSupported] = useState<boolean | null>(null);
 	const [verifyOpen, setVerifyOpen] = useState(false);
+	const [verifyPurpose, setVerifyPurpose] = useState<"add" | "remove">("add");
+	const [pendingRemove, setPendingRemove] = useState<PasskeyListItem | null>(
+		null,
+	);
 	const [grant, setGrant] = useState<string | null>(null);
 	const [registering, setRegistering] = useState(false);
 	const [readyOpen, setReadyOpen] = useState(false);
@@ -71,6 +82,7 @@ export const Passkeys = ({
 			if (options.status !== "ok") {
 				if (options.status === "verify") {
 					setGrant(null);
+					setVerifyPurpose("add");
 					setVerifyOpen(true);
 				} else if (options.status === "rate_limited") {
 					toast.error("Too many attempts. Try again in a minute.");
@@ -122,16 +134,25 @@ export const Passkeys = ({
 	};
 
 	const removeMutation = useMutation({
-		mutationFn: async (passkeyId: string) => {
-			const { removed } = await removePasskey(passkeyId);
-			if (!removed) throw new Error("Passkey was not removed");
+		mutationFn: async (input: { passkey: PasskeyListItem; grant: string }) => {
+			const result = await removePasskey(input.passkey.id, input.grant);
+			return result.status;
 		},
-		onSuccess: (_, passkeyId) => {
+		onSuccess: (status, input) => {
+			if (status === "verify") {
+				setGrant(null);
+				setPendingRemove(input.passkey);
+				setRemoveTarget(null);
+				setVerifyPurpose("remove");
+				setVerifyOpen(true);
+				return;
+			}
 			setPasskeys((current) =>
-				current.filter((passkey) => passkey.id !== passkeyId),
+				current.filter((passkey) => passkey.id !== input.passkey.id),
 			);
 			setRemoveTarget(null);
-			toast.success("Passkey removed");
+			setPendingRemove(null);
+			if (status === "removed") toast.success("Passkey removed");
 			router.refresh();
 		},
 		onError: () => {
@@ -144,6 +165,18 @@ export const Passkeys = ({
 			register(grant);
 			return;
 		}
+		setVerifyPurpose("add");
+		setVerifyOpen(true);
+	};
+
+	const confirmRemove = (passkey: PasskeyListItem) => {
+		if (grant) {
+			removeMutation.mutate({ passkey, grant });
+			return;
+		}
+		setPendingRemove(passkey);
+		setRemoveTarget(null);
+		setVerifyPurpose("remove");
 		setVerifyOpen(true);
 	};
 
@@ -199,6 +232,7 @@ export const Passkeys = ({
 									{passkey.lastUsedAt
 										? `last used ${formatDate(passkey.lastUsedAt)}`
 										: "never used"}
+									{passkey.confirmsIdentity ? "" : " · sign-in only"}
 								</p>
 							</div>
 						</div>
@@ -221,11 +255,27 @@ export const Passkeys = ({
 				open={verifyOpen}
 				onOpenChange={setVerifyOpen}
 				email={email}
-				canUsePasskey={passkeys.length > 0 && supported === true}
-				description="Adding a passkey lets it sign in to your account, so we need to check it's you first."
+				canUsePasskey={
+					passkeys.some((passkey) => passkey.confirmsIdentity) &&
+					supported === true
+				}
+				description={
+					verifyPurpose === "remove"
+						? "Removing a passkey changes how you can sign in, so we need to check it's you first."
+						: "Adding a passkey lets it sign in to your account, so we need to check it's you first."
+				}
 				onVerified={(stepUpGrant) => {
 					setGrant(stepUpGrant);
 					setVerifyOpen(false);
+					if (verifyPurpose === "remove") {
+						if (pendingRemove) {
+							removeMutation.mutate({
+								passkey: pendingRemove,
+								grant: stepUpGrant,
+							});
+						}
+						return;
+					}
 					setReadyOpen(true);
 				}}
 			/>
@@ -291,9 +341,7 @@ export const Passkeys = ({
 							variant="destructive"
 							disabled={removeMutation.isPending}
 							spinner={removeMutation.isPending}
-							onClick={() =>
-								removeTarget && removeMutation.mutate(removeTarget.id)
-							}
+							onClick={() => removeTarget && confirmRemove(removeTarget)}
 						>
 							{removeMutation.isPending ? "Removing..." : "Remove passkey"}
 						</Button>

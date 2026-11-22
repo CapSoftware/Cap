@@ -164,6 +164,13 @@ pub struct ExportPrefs {
     pub audio_format: Option<String>,
     #[serde(default)]
     pub enhance_quality: bool,
+    /// Shareable links keep their own quality: `compression` and
+    /// `custom_bpp` above belong to File and Clipboard. `None` means the
+    /// link default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_compression: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_custom_bpp: Option<f32>,
 }
 
 /// `so.cap.desktop`'s app-data dir -- where both stores live.

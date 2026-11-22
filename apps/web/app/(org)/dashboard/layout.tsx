@@ -7,6 +7,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
+import { shouldOfferPasskey } from "@/lib/passkey-prompt";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
 import DashboardInner from "./_components/DashboardInner";
@@ -14,6 +15,7 @@ import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
+import { PasskeyPrompt } from "./_components/PasskeyPrompt";
 import { DashboardContexts } from "./Contexts";
 import { UploadingProvider } from "./caps/UploadingContext";
 import {
@@ -51,6 +53,7 @@ export default async function DashboardLayout({
 
 	const hasName = Boolean(user.name && user.name.length > 0);
 	const pendingInviteIdPromise = getPendingInviteIdForUser(user.email);
+	const offerPasskeyPromise = shouldOfferPasskey(user);
 	const dashboardDataPromise = hasName ? getDashboardData(user) : null;
 	// Fail-open: the meter is informational and must never take the shell down.
 	const shareableLinkUsagePromise =
@@ -93,6 +96,7 @@ export default async function DashboardLayout({
 	}
 
 	const shareableLinkUsage = await shareableLinkUsagePromise;
+	const offerPasskey = await offerPasskeyPromise;
 
 	let activeOrganization = organizationSelect.find(
 		(organization) =>
@@ -124,6 +128,7 @@ export default async function DashboardLayout({
 					shareableLinkUsage={shareableLinkUsage}
 				>
 					<DashboardPasteImport />
+					{offerPasskey && <PasskeyPrompt />}
 					<div className="dashboard-chrome dashboard-grid">
 						<DesktopNav />
 						<div className="flex h-full [grid-area:main] focus:outline-none">
