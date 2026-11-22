@@ -3222,7 +3222,8 @@ impl EditorWindow {
             }
             FieldKey::KeyboardText(index) => {
                 // Typed text a key added by hand now carries may run past its
-                // end; it grows to fit, up to the next key or the end.
+                // end; it grows to fit, up to the next key or the end, and
+                // types faster when even that is not enough.
                 let room = self.project.timeline.as_ref().map(|timeline| {
                     timeline
                         .keyboard_segments
@@ -3250,13 +3251,19 @@ impl EditorWindow {
                         return false;
                     }
                     if cap_project::is_manual_keyboard_segment(segment) {
-                        segment.keys = cap_project::manual_key_presses(&text);
-                        let needed = cap_project::manual_key_length(&segment.keys);
+                        let keys = cap_project::manual_key_presses(&text);
+                        let needed = cap_project::manual_key_length(&keys);
                         if let Some(room) = room
                             && segment.end - segment.start < needed
                         {
                             segment.end = (segment.start + needed).min(room).max(segment.end);
                         }
+                        // Text longer than the room it can grow into types
+                        // faster, so no letter falls past the key's end.
+                        segment.keys = crate::editor_window::fit_manual_keys(
+                            keys,
+                            segment.end - segment.start,
+                        );
                     }
                     segment.display_text = text;
                     true

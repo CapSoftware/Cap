@@ -617,6 +617,36 @@ fn manual_run_keys(
         .collect()
 }
 
+/// A hand-made key's presses, squeezed in step when the key has less room
+/// than its text asks for, so every press (and the beat to read the last
+/// one) lands inside it.
+pub(crate) fn fit_manual_keys(
+    mut keys: Vec<cap_project::KeyPressDisplay>,
+    span: f64,
+) -> Vec<cap_project::KeyPressDisplay> {
+    let needed = cap_project::manual_key_length(&keys);
+    let last = keys
+        .iter()
+        .map(|key| key.time_offset / 1000.0)
+        .fold(0.0_f64, f64::max);
+    if needed <= span || last <= 0.0 {
+        return keys;
+    }
+    // The beat to read the last key stays whole while there is room for it;
+    // the presses share whatever is left.
+    let read = needed - last;
+    let scale = if span > read {
+        (span - read) / last
+    } else {
+        span / needed
+    }
+    .clamp(0.0, 1.0);
+    for key in &mut keys {
+        key.time_offset *= scale;
+    }
+    keys
+}
+
 fn frame_layout_requires_editor_invalidation(
     first_frame: bool,
     playing: bool,
@@ -18749,6 +18779,27 @@ mod tests {
     /// A long sentence squeezed into a short span keeps every letter: each
     /// press lands inside its squeezed key, and none is moved when the run
     /// had room.
+    /// Retyping a hand-made key with more text than its room can hold
+    /// types faster instead of dropping the letters past its end, and text
+    /// that fits keeps its natural pace.
+    #[test]
+    fn retyped_keys_fit_every_press_inside_the_key() {
+        let text = "the quick brown fox jumps over";
+        let span = 2.0;
+        let keys = fit_manual_keys(cap_project::manual_key_presses(text), span);
+        assert_eq!(keys.len(), text.chars().count());
+        assert!(cap_project::manual_key_length(&keys) <= span + 1e-9);
+        assert!(keys.iter().all(|key| key.time_offset / 1000.0 < span));
+        let offsets = |keys: &[cap_project::KeyPressDisplay]| -> Vec<f64> {
+            keys.iter().map(|key| key.time_offset).collect()
+        };
+        let roomy = fit_manual_keys(cap_project::manual_key_presses("hi"), span);
+        assert_eq!(
+            offsets(&roomy),
+            offsets(&cap_project::manual_key_presses("hi"))
+        );
+    }
+
     #[test]
     fn squeezed_typed_keys_keep_every_press_inside_their_span() {
         let runs = cap_project::manual_key_runs("the quick brown fox jumps over", "sentence");
