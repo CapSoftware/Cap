@@ -748,6 +748,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::tabs::keyboard::no_presses(),
             "No recorded keyboard presses were found.",
         ),
+        (
+            tr::editor::tabs::keyboard::permission_action(),
+            "Show me how",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_body(),
+            "Give Cap your OK so your next recordings include the keys you press.",
+        ),
+        (
+            tr::editor::tabs::keyboard::permission_title(),
+            "Keystrokes aren't being recorded",
+        ),
         (tr::editor::tabs::keyboard::position(), "Position"),
         (
             tr::editor::tabs::keyboard::regenerate(),

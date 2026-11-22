@@ -39,7 +39,7 @@ export async function authorizeMcpClient(formData: FormData) {
 	if (decision === "approve") {
 		callback.searchParams.set(
 			"code",
-			await createMcpAuthorizationCode(user.id, request),
+			await createMcpAuthorizationCode(user, request),
 		);
 	} else {
 		callback.searchParams.set("error", "access_denied");

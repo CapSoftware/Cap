@@ -2381,6 +2381,32 @@ fn reveal_main_after_picker_cancel(
     hidden_for_picker && idle && (was_visible || !keep_hidden)
 }
 
+/// Drop the picker overlays under macOS's own prompts while one is asking
+/// the user something (they sit one level above the menu bar, over every
+/// alert), then put them back.
+pub fn lower_target_overlays(lowered: bool, cx: &mut App) {
+    let overlays: Vec<_> = cx
+        .global::<AppWindows>()
+        .overlays
+        .iter()
+        .map(|(_, handle)| *handle)
+        .collect();
+    let level = if lowered {
+        0
+    } else {
+        platform::target_overlay_level()
+    };
+    for handle in overlays {
+        let native = handle
+            .update(cx, |_, window, _| platform::native_window(window))
+            .ok()
+            .flatten();
+        if let Some(native) = native {
+            platform::set_panel_level(&native, level);
+        }
+    }
+}
+
 /// Close the overlays and disarm the cursor probe, leaving the main window's
 /// selection alone.
 pub fn close_target_overlays(cx: &mut App) {
@@ -6185,7 +6211,7 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 let flags: Vec<&str> = page.split(',').collect();
                 export.advanced_open = flags.contains(&"advanced");
                 if flags.contains(&"link") {
-                    export.destination = crate::editor_export::ExportDestination::Link;
+                    export.set_destination(crate::editor_export::ExportDestination::Link);
                 }
                 if flags.contains(&"tracks") {
                     export.use_tracks(None);
@@ -6223,11 +6249,11 @@ async fn drive_auto_export(handle: WindowHandle<EditorWindow>, cx: &mut gpui::As
                 .and_then(|extension| extension.to_str())
                 .and_then(cap_export::audio::AudioExportFormat::from_extension)
         {
-            export.destination = crate::editor_export::ExportDestination::File;
+            export.set_destination(crate::editor_export::ExportDestination::File);
             export.format = crate::editor_export::ExportFormatKind::Audio;
             export.audio_format = format;
         } else if let Some(export) = view.export.as_mut() {
-            export.destination = crate::editor_export::ExportDestination::File;
+            export.set_destination(crate::editor_export::ExportDestination::File);
             export.format = if path.extension().is_some_and(|extension| extension == "gif") {
                 crate::editor_export::ExportFormatKind::Gif
             } else {

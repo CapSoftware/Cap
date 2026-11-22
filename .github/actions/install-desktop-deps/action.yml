@@ -17,16 +17,9 @@ runs:
       # setup.js stages -> soname mismatch and the loader fails at launch. Keeping
       # them absent forces the binary to link the same FFmpeg 7 that gets bundled.
       run: |
-        # GitHub's AWS-hosted Ubuntu runners list us-east-2.ec2.archive.ubuntu.com
-        # as their first apt mirror, and that mirror serves packages at tens of
-        # kB/s, so this install can outlast the job's time limit. apt only falls
-        # back to the next mirror on an error, never on a slow one. Use the
-        # Ubuntu mirror the Azure-hosted and Blacksmith runners already use.
-        if [ -f /etc/apt/apt-mirrors.txt ]; then
-          sudo sed -i -E 's#^https?://[a-z0-9-]+\.ec2\.archive\.ubuntu\.com/ubuntu/?#http://azure.archive.ubuntu.com/ubuntu/#' /etc/apt/apt-mirrors.txt
-        fi
-        sudo apt update
-        sudo apt install -y --no-install-recommends \
+        # apt-install.sh puts the fastest Ubuntu mirror first and moves off one
+        # that stalls, so a slow mirror cannot eat the job's time limit.
+        bash "$GITHUB_ACTION_PATH/apt-install.sh" \
           libwebkit2gtk-4.1-dev \
           build-essential \
           pkg-config \

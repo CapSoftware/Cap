@@ -17,7 +17,7 @@ use super::OnboardingWindow;
 use crate::doodle::{self, Doodle, Palette};
 use crate::i18n::tr;
 use crate::onboarding_doodles as art;
-use crate::permissions::{self, OSPermission, OSPermissionStatus};
+use crate::permissions::{self, OSPermission, OSPermissionStatus, PERMISSION_COUNT};
 use crate::permissions_ui::RowAction;
 use crate::theme::Theme;
 
@@ -101,17 +101,20 @@ pub(super) struct StageState {
     pub(super) waiting_on: Option<OSPermission>,
     shown: Option<(Stage, bool)>,
     shown_at: Instant,
-    marks: [(Mark, Instant); 4],
-    granted: [bool; 4],
+    marks: [(Mark, Instant); PERMISSION_COUNT],
+    granted: [bool; PERMISSION_COUNT],
     page_at: Instant,
     /// Screen Recording was already granted when Cap launched. A grant that
     /// lands mid-session only reaches capture after a restart.
     screen_at_launch: bool,
+    /// Same for Input Monitoring: macOS says an app "will not be able to
+    /// monitor input from your keyboard until it is quit" (27.3 beta 2).
+    keys_at_launch: bool,
     advance: Option<gpui::Task<()>>,
 }
 
 impl StageState {
-    pub(super) fn new(granted: [bool; 4]) -> Self {
+    pub(super) fn new(granted: [bool; PERMISSION_COUNT]) -> Self {
         let now = Instant::now();
         Self {
             focused: None,
@@ -119,10 +122,12 @@ impl StageState {
             waiting_on: None,
             shown: None,
             shown_at: now,
-            marks: [(Mark::Pending, now); 4],
+            marks: [(Mark::Pending, now); PERMISSION_COUNT],
             granted,
             page_at: now,
             screen_at_launch: granted[0],
+            keys_at_launch: granted[index(OSPermission::InputMonitoring)]
+                && permissions::note_launch_grants(),
             advance: None,
         }
     }
@@ -162,6 +167,14 @@ fn copy_for(permission: OSPermission) -> Copy {
             allow: tr::permission::onboarding::accessibility::allow(),
             doodle: &art::CURSOR,
         },
+        OSPermission::InputMonitoring => Copy {
+            title: tr::permission::onboarding::keystrokes::title(),
+            body: tr::permission::onboarding::keystrokes::body(),
+            done_title: tr::permission::onboarding::keystrokes::done_title(),
+            done_body: tr::permission::onboarding::keystrokes::done_body(),
+            allow: tr::permission::onboarding::keystrokes::allow(),
+            doodle: &art::KEYBOARD,
+        },
         OSPermission::Microphone => Copy {
             title: tr::permission::onboarding::microphone::title(),
             body: tr::permission::onboarding::microphone::body(),
@@ -183,9 +196,30 @@ fn copy_for(permission: OSPermission) -> Copy {
 
 impl OnboardingWindow {
     pub(super) fn needs_relaunch(&self) -> bool {
-        !self.stage.screen_at_launch
-            && self.state.status(OSPermission::ScreenRecording).permitted()
-            && self.state.status(OSPermission::ScreenRecording) != OSPermissionStatus::NotNeeded
+        self.needs_relaunch_for(OSPermission::ScreenRecording)
+            || self.needs_relaunch_for(OSPermission::InputMonitoring)
+    }
+
+    /// A grant that landed this session and only reaches a new process.
+    fn needs_relaunch_for(&self, permission: OSPermission) -> bool {
+        let at_launch = match permission {
+            OSPermission::ScreenRecording => self.stage.screen_at_launch,
+            OSPermission::InputMonitoring => self.stage.keys_at_launch,
+            _ => return false,
+        };
+        let status = self.state.status(permission);
+        !at_launch && status.permitted() && status != OSPermissionStatus::NotNeeded
+    }
+
+    /// The card is waiting on System Settings for `permission`. On macOS
+    /// 27.3 a Screen Recording grant made with + only lands after a restart,
+    /// so once the user has been sent there the card keeps saying so (with
+    /// the Relaunch hint) even after they visit another step and come back.
+    fn waiting_for(&self, permission: OSPermission) -> bool {
+        self.stage.waiting_on == Some(permission)
+            || (permission == OSPermission::ScreenRecording
+                && self.state.settings_only()
+                && self.state.relaunch_hint())
     }
 
     fn is_skipped(&self, permission: OSPermission) -> bool {
@@ -210,7 +244,7 @@ impl OnboardingWindow {
     /// Called from `render`, so every path that folds in a sweep is covered.
     pub(super) fn sync_stage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
-        let granted: [bool; 4] =
+        let granted: [bool; PERMISSION_COUNT] =
             std::array::from_fn(|i| self.state.status(OSPermission::ALL[i]).permitted());
         for (i, &permission) in OSPermission::ALL.iter().enumerate() {
             if !granted[i] || self.stage.granted[i] {
@@ -508,7 +542,11 @@ impl OnboardingWindow {
                 ))
                 .child(stage_body(
                     paper,
-                    tr::permission::onboarding::relaunch::body(),
+                    if self.needs_relaunch_for(OSPermission::ScreenRecording) {
+                        tr::permission::onboarding::relaunch::body()
+                    } else {
+                        tr::permission::onboarding::relaunch::keystrokes_body()
+                    },
                 ))
                 .child(div().mt(px(24.)).child(paper_button(
                     paper,
@@ -556,20 +594,18 @@ impl OnboardingWindow {
                         paper,
                         if granted {
                             copy.done_title
-                        } else if self.stage.waiting_on == Some(permission) && permission.required()
-                        {
+                        } else if self.waiting_for(permission) && permission.required() {
                             tr::permission::onboarding::switch_on_title()
                         } else {
                             copy.title
                         },
                     ));
                 if granted {
-                    let done_body =
-                        if permission == OSPermission::ScreenRecording && self.needs_relaunch() {
-                            tr::permission::onboarding::relaunch::later()
-                        } else {
-                            copy.done_body
-                        };
+                    let done_body = if self.needs_relaunch_for(permission) {
+                        tr::permission::onboarding::relaunch::later()
+                    } else {
+                        copy.done_body
+                    };
                     card.child(stage_body(paper, done_body)).child(allowed_pill(
                         paper,
                         self.stage.marks[index(permission)].1,
@@ -595,16 +631,22 @@ impl OnboardingWindow {
     ) -> gpui::Stateful<Div> {
         let action = self.state.action(permission);
         let busy = self.pending.is_some();
-        let waiting = self.stage.waiting_on == Some(permission);
+        let waiting = self.waiting_for(permission);
         let guided = crate::permission_guide::eligible(permission);
         let waiting_required = waiting && permission.required();
-        let body = if waiting_required && guided {
+        let settings_only = self.state.settings_only();
+        let body = if waiting && permission == OSPermission::InputMonitoring {
+            tr::permission::onboarding::hint::input_monitoring_plus()
+        } else if waiting_required && settings_only {
+            tr::permission::onboarding::hint::add_with_plus()
+        } else if waiting_required && guided {
             tr::permission::onboarding::hint::drag_into_list()
         } else if waiting_required {
             tr::permission::onboarding::hint::find_in_list()
         } else if status == OSPermissionStatus::Denied && !permission.required() {
             tr::permission::onboarding::hint::turned_off()
-        } else if action == Some(RowAction::OpenSettings) && permission.required() {
+        } else if action == Some(RowAction::OpenSettings) && permission.required() && !settings_only
+        {
             tr::permission::onboarding::hint::open_settings()
         } else {
             copy.body
@@ -651,6 +693,7 @@ impl OnboardingWindow {
         // the pane, instead of waiting on a dialog that is not there.
         let no_prompt = waiting
             && !permission.required()
+            && action != Some(RowAction::OpenSettings)
             && !busy
             && !self.media_request_pending
             && status == OSPermissionStatus::NotDetermined;
@@ -804,7 +847,7 @@ fn allowed_pill(paper: &Paper, shown_at: Instant, still: bool) -> Div {
 
 /// The extension's `.cta`: an ink pill. Primary is filled; secondary is the
 /// outlined `ghost`.
-pub(super) fn paper_button(
+pub(crate) fn paper_button(
     paper: &Paper,
     id: impl Into<gpui::ElementId>,
     label: &'static str,

@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
 	encrypt,
@@ -6216,27 +6217,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									.limit(1)
 									.for("update");
 								if (!account) return { state: "not_found" };
-								await tx
-									.update(Db.users)
-									.set({
-										authSessionVersion: sql`${Db.users.authSessionVersion} + 1`,
-									})
-									.where(eq(Db.users.id, principal.id));
-								await tx
-									.delete(Db.sessions)
-									.where(eq(Db.sessions.userId, principal.id));
-								await tx
-									.delete(Db.authApiKeys)
-									.where(eq(Db.authApiKeys.userId, principal.id));
-								await tx
-									.update(Db.agentApiKeys)
-									.set({ revokedAt: new Date() })
-									.where(
-										and(
-											eq(Db.agentApiKeys.userId, principal.id),
-											isNull(Db.agentApiKeys.revokedAt),
-										),
-									);
+								await revokeAllCredentials(tx, principal.id);
 								return {
 									state: "success",
 									response: mutationResponse(
