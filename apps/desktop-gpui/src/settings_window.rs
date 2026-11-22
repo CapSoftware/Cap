@@ -3646,6 +3646,23 @@ impl SettingsWindow {
             );
 
         let mut rows = vec![resolution.into_any_element()];
+        if let Some(health) = crate::network_health::indicator() {
+            let color = if health.failed {
+                Hsla::from(theme.red_11)
+            } else if health.limited {
+                Hsla::from(theme.amber_11)
+            } else {
+                theme.gray_11
+            };
+            rows.push(
+                div()
+                    .p(px(12.))
+                    .text_size(px(12.))
+                    .text_color(color)
+                    .child(health.detail)
+                    .into_any_element(),
+            );
+        }
         if let Some(InstantQualityNotice::SaveFailed) = self.instant_quality_notice {
             rows.push(
                 div()

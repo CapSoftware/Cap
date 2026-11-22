@@ -366,12 +366,11 @@ pub async fn authed_request(
     authed_request_with(&shared_api_client()?, method, path, body).await
 }
 
-pub async fn authed_request_with(
+pub(crate) fn authed_request_builder(
     client: &reqwest::Client,
     method: reqwest::Method,
     path: &str,
-    body: Option<Value>,
-) -> Result<reqwest::Response, AuthApiError> {
+) -> Result<reqwest::RequestBuilder, AuthApiError> {
     let (server, token) = if let Ok(context) = UPLOAD_REQUEST.try_with(Clone::clone) {
         let token = context.credentials()?;
         (context.server_url, token)
@@ -383,8 +382,17 @@ pub async fn authed_request_with(
         )
     };
     let url = format!("{server}{path}");
-    let mut request = client.request(method, url);
-    request = apply_desktop_headers(request).bearer_auth(token);
+    let request = client.request(method, url);
+    Ok(apply_desktop_headers(request).bearer_auth(token))
+}
+
+pub async fn authed_request_with(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<reqwest::Response, AuthApiError> {
+    let mut request = authed_request_builder(client, method, path)?;
     if let Some(body) = body {
         request = request
             .header("Content-Type", "application/json")

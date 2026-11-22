@@ -817,6 +817,7 @@ impl RecordingSession {
             self.clean_control.uncertain = false;
         }
         self.phase = Phase::Starting;
+        crate::network_health::recording_admitted();
         self.error = None;
         self.storage_warning = false;
         self.storage_notice = None;
@@ -996,49 +997,20 @@ impl RecordingSession {
                     }
                     Ok(Err(error)) => {
                         tracing::error!("recording failed to start: {error:#}");
-                        this.error = Some(format!("{error:#}"));
-                        this.abort_start_cue();
-                        this.countdown_remaining = None;
                         #[cfg(target_os = "linux")]
-                        {
-                            this.phase = if startup_joined {
-                                Phase::Idle
-                            } else {
-                                Phase::Starting
-                            };
-                        }
+                        let cleanup_joined = startup_joined;
                         #[cfg(not(target_os = "linux"))]
-                        {
-                            this.phase = Phase::Idle;
-                        }
+                        let cleanup_joined = true;
+                        this.fail_start(format!("{error:#}"), cleanup_joined);
                     }
                     Err(join_error) => {
                         tracing::error!("recording start task died: {join_error}");
-                        this.error = Some("Recording task failed.".into());
-                        this.abort_start_cue();
-                        this.countdown_remaining = None;
                         #[cfg(target_os = "linux")]
-                        {
-                            this.phase = if startup_joined {
-                                Phase::Idle
-                            } else {
-                                Phase::Starting
-                            };
-                        }
+                        let cleanup_joined = startup_joined;
                         #[cfg(not(target_os = "linux"))]
-                        {
-                            this.phase = Phase::Idle;
-                        }
+                        let cleanup_joined = true;
+                        this.fail_start("Recording task failed.".into(), cleanup_joined);
                     }
-                }
-                #[cfg(target_os = "linux")]
-                if startup_failed && !startup_joined {
-                    this.stop_requested = false;
-                    this.clean_control.uncertain = true;
-                    this.error = Some(format!(
-                        "{}. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop.",
-                        this.error.as_deref().unwrap_or("Recording startup failed")
-                    ));
                 }
                 #[cfg(target_os = "linux")]
                 if this.phase == Phase::Idle {
@@ -1051,6 +1023,27 @@ impl RecordingSession {
             .ok();
         })
         .detach();
+    }
+
+    fn fail_start(&mut self, error: String, cleanup_joined: bool) {
+        self.error = Some(error);
+        self.abort_start_cue();
+        self.countdown_remaining = None;
+        if cleanup_joined {
+            self.phase = Phase::Idle;
+            crate::network_health::recording_released();
+            return;
+        }
+        self.phase = Phase::Starting;
+        #[cfg(target_os = "linux")]
+        {
+            self.stop_requested = false;
+            self.clean_control.uncertain = true;
+            self.error = Some(format!(
+                "{}. Capture cleanup is unconfirmed. Use Ctrl+Shift+F9 to retry Stop.",
+                self.error.as_deref().unwrap_or("Recording startup failed")
+            ));
+        }
     }
 
     fn activate_primed(&mut self, cx: &mut Context<Self>) {
@@ -1961,6 +1954,7 @@ impl RecordingSession {
             self.failure_monitor = None;
         }
         self.phase = Phase::Starting;
+        crate::network_health::recording_admitted();
         self.started_at = None;
         cx.notify();
 
@@ -2213,6 +2207,7 @@ impl RecordingSession {
         self.storage_monitor = None;
         self.countdown_remaining = None;
         self.phase = Phase::Idle;
+        crate::network_health::recording_released();
         self.mic_muted = false;
         self.storage_warning = false;
         self.stopped_elapsed = None;
@@ -3099,5 +3094,29 @@ mod studio_editor_presentation_tests {
         assert_eq!(state, StudioEditorPresentation::Opened(2));
         state.closed(2);
         assert_eq!(state, StudioEditorPresentation::Dismissed);
+    }
+
+    #[tokio::test]
+    async fn failed_starts_release_upload_checks_only_after_capture_cleanup() {
+        let runtime = tokio::runtime::Handle::current();
+        gpui_platform::headless().run(move |cx| {
+            gpui_tokio::init_from_handle(cx, runtime);
+            crate::network_health::invalidate();
+            let session = RecordingSession::init(cx);
+            session.update(cx, |session, _cx| {
+                session.phase = Phase::Starting;
+                crate::network_health::recording_admitted();
+                session.fail_start("startup failed".into(), false);
+                assert_eq!(session.phase, Phase::Starting);
+            });
+            crate::network_health::request(cx, true);
+            assert!(crate::network_health::indicator().is_none());
+
+            session.update(cx, |session, _cx| {
+                session.fail_start("startup failed".into(), true);
+                assert_eq!(session.phase, Phase::Idle);
+            });
+            cx.quit();
+        });
     }
 }

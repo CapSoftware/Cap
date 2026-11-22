@@ -4168,6 +4168,7 @@ impl MainWindow {
                 )
         };
 
+        let upload_health = crate::network_health::indicator();
         let actions = div()
             .flex()
             .flex_1()
@@ -4196,6 +4197,40 @@ impl MainWindow {
                     })
                 },
             ))
+            .when_some(upload_health, |this, health| {
+                let color = if health.failed {
+                    Hsla::from(theme.red_11)
+                } else if health.limited {
+                    Hsla::from(theme.amber_11)
+                } else {
+                    theme.gray_11
+                };
+                let detail = health.detail.clone();
+                this.child(
+                    div()
+                        .id("upload-health")
+                        .when(cfg!(target_os = "windows"), |this| this.occlude())
+                        .tab_index(0)
+                        .when(keyboard_nav, ui::keyboard_nav::ring)
+                        .role(gpui::Role::Button)
+                        .aria_label(health.detail)
+                        .flex()
+                        .items_center()
+                        .flex_shrink_0()
+                        .h(px(20.))
+                        .px(px(6.))
+                        .rounded_full()
+                        .text_size(px(11.))
+                        .text_color(color)
+                        .hover(|style| style.text_color(theme.gray_12))
+                        .tooltip(move |_, cx| ui::Tooltip::new(&theme, detail.clone()).view(cx))
+                        .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            crate::network_health::request(cx, true);
+                        }))
+                        .child(health.label),
+                )
+            })
             .child(
                 div()
                     .flex()

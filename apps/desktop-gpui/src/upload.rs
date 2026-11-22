@@ -286,7 +286,7 @@ pub async fn prepare_instant_upload(
     camera_only: bool,
     project_name: String,
     organization_id: Option<String>,
-) -> Result<VideoUploadInfo, String> {
+) -> Result<(VideoUploadInfo, Option<String>), String> {
     if store_auth_missing() {
         return Err("Please sign in to use instant recording".to_string());
     }
@@ -315,11 +315,14 @@ pub async fn prepare_instant_upload(
 
     let link = created.link();
     let config = created.config;
-    Ok(VideoUploadInfo {
-        id: config.id.clone(),
-        link,
-        config,
-    })
+    Ok((
+        VideoUploadInfo {
+            id: config.id.clone(),
+            link,
+            config,
+        },
+        created.organization_id,
+    ))
 }
 
 pub(crate) fn start_instant_upload(
@@ -821,6 +824,7 @@ async fn upload_segments(
     cancel: Arc<AtomicBool>,
     mut authorization: Option<CompletionRequirement>,
 ) -> Result<(), String> {
+    let _transfer = crate::network_health::acquire_transfer();
     let mut authorized = authorization.is_none();
     let mut manifest = SegmentUploadManifest::default();
     let mut uploads = FuturesUnordered::new();
@@ -1369,6 +1373,7 @@ pub async fn upload_exported_video(
     progress: impl Fn(f64),
     cancel: std::sync::Arc<AtomicBool>,
 ) -> Result<UploadResult, String> {
+    let _transfer = crate::network_health::acquire_transfer();
     check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
     let auth_state = crate::store::store_section("auth");
     let Ok(context) = auth::UploadRequestContext::for_upload(
@@ -1662,6 +1667,7 @@ async fn create_or_get_video_with_mode(
 struct CreatedVideo {
     config: S3UploadMeta,
     share_url: Option<String>,
+    organization_id: Option<String>,
 }
 
 impl CreatedVideo {
@@ -1678,6 +1684,8 @@ fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
         id: String,
         #[serde(default)]
         share_url: Option<String>,
+        #[serde(default, rename = "organizationId")]
+        organization_id: Option<String>,
     }
 
     let response = serde_json::from_str::<CreateVideoResponse>(body)?;
@@ -1687,6 +1695,7 @@ fn parse_created_video(body: &str) -> Result<CreatedVideo, serde_json::Error> {
     Ok(CreatedVideo {
         config: S3UploadMeta { id: response.id },
         share_url,
+        organization_id: response.organization_id.filter(|id| !id.is_empty()),
     })
 }
 
@@ -2881,6 +2890,18 @@ mod tests {
 
         let created = parse_created_video(r#"{"id":"abc123","share_url":null}"#).unwrap();
         assert_eq!(created.share_url, None);
+    }
+
+    #[test]
+    fn created_video_accepts_legacy_and_organization_bound_responses() {
+        let legacy = parse_created_video(r#"{"id":"abc123"}"#).unwrap();
+        assert_eq!(legacy.organization_id, None);
+
+        let empty = parse_created_video(r#"{"id":"abc123","organizationId":""}"#).unwrap();
+        assert_eq!(empty.organization_id, None);
+
+        let bound = parse_created_video(r#"{"id":"abc123","organizationId":"org-1"}"#).unwrap();
+        assert_eq!(bound.organization_id.as_deref(), Some("org-1"));
     }
 
     #[test]

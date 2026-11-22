@@ -2585,6 +2585,7 @@ async fn start_internal(
     config: StartConfig,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
+    crate::network_health::wait_for_probe().await;
     #[cfg(target_os = "linux")]
     validate_linux_camera_request(
         config.mode,
@@ -2627,8 +2628,8 @@ async fn start_internal(
         .filter(|organization| !organization.is_empty())
         .map(str::to_string);
 
-    let pre_created_video = if config.mode == RecordingMode::Instant {
-        let video = crate::upload::prepare_instant_upload(
+    let (pre_created_video, upload_organization_id) = if config.mode == RecordingMode::Instant {
+        let (video, organization) = crate::upload::prepare_instant_upload(
             matches!(config.target, ScreenCaptureTarget::CameraOnly),
             project_name,
             organization_id,
@@ -2640,15 +2641,16 @@ async fn start_internal(
         if let Some(attempt) = &attempt {
             *attempt.0.video.lock().unwrap() = Some((video.id.clone(), project_dir.clone()));
         }
-        Some(video)
+        (Some(video), organization)
     } else {
-        None
+        (None, None)
     };
 
     let result = start_attempt_with_upload(
         config,
         project_dir,
         pre_created_video.clone(),
+        upload_organization_id,
         #[cfg(target_os = "linux")]
         attempt.clone(),
     )
@@ -2697,6 +2699,7 @@ async fn start_attempt_with_upload(
     mut config: StartConfig,
     project_dir: PathBuf,
     pre_created_video: Option<cap_project::VideoUploadInfo>,
+    upload_organization_id: Option<String>,
     #[cfg(target_os = "linux")] attempt: Option<InstantAttempt>,
 ) -> anyhow::Result<ActiveRecording> {
     // The selected camera stays selected for the next video recording, but an
@@ -2862,6 +2865,11 @@ async fn start_attempt_with_upload(
         settings.instant_mode_max_resolution
     } else {
         cap_recording::FREE_INSTANT_MODE_MAX_RESOLUTION
+    };
+    let instant_max_resolution = if config.mode == RecordingMode::Instant {
+        crate::network_health::max_width(instant_max_resolution, upload_organization_id.as_deref())
+    } else {
+        instant_max_resolution
     };
 
     #[cfg(target_os = "macos")]

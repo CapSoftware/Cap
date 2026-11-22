@@ -2451,4 +2451,64 @@ describe("Google Drive uploads with a stored checksum", () => {
 			Effect.runPromise(access.putObjectWithChecksum(resultKey, '{"a":1}')),
 		).resolves.toEqual({ sha256Checksum: null });
 	});
+
+	it.each(["video", "userVideo"] as const)(
+		"probes Drive uploads without creating recording folders or warning files in %s layout",
+		async (folderLayout) => {
+			const harness = makeRepoHarness();
+			harness.repo.getGoogleDriveConfig = () =>
+				Effect.succeed(makeConfig(folderLayout));
+			const probeKey = `${integrationOwnerId}/.cap-upload-health/probe-1`;
+			const calls: Array<{ url: string; method?: string; body: unknown }> = [];
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+					const url = String(input);
+					calls.push({ url, method: init?.method, body: requestBody(init) });
+					if (url.includes("/files/generateIds"))
+						return jsonResponse({ ids: ["probe-file-id"] });
+					if (url.includes("uploadType=resumable") && init?.method === "POST")
+						return new Response(null, {
+							status: 200,
+							headers: { Location: "https://upload.test/probe-session" },
+						});
+					if (
+						url === "https://upload.test/probe-session" &&
+						init?.method === "PUT"
+					)
+						return jsonResponse({ id: "probe-file-id", size: "4" });
+					if (
+						url.includes("/drive/v3/files/probe-file-id") &&
+						init?.method === "DELETE"
+					)
+						return response(204);
+					throw new Error(`Unexpected Drive request: ${init?.method} ${url}`);
+				}),
+			);
+
+			const access = await getStorageAccess(harness);
+			await Effect.runPromise(
+				access.putProbeObject(probeKey, new Uint8Array([1, 2, 3, 4])),
+			);
+			expect(harness.reservations).toEqual([
+				expect.objectContaining({
+					objectKey: probeKey,
+					videoId: null,
+				}),
+			]);
+
+			await Effect.runPromise(access.deleteObject(probeKey));
+
+			expect(
+				calls.filter((call) => call.url.includes("uploadType=multipart")),
+			).toHaveLength(0);
+			expect(
+				calls.find((call) => call.url.includes("uploadType=resumable"))?.body,
+			).toMatchObject({
+				id: "probe-file-id",
+				parents: ["root-folder"],
+			});
+			expect(harness.objects.size).toBe(0);
+		},
+	);
 });
