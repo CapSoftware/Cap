@@ -76,6 +76,9 @@ pub const NOTES_MODEL: &str = "best";
 /// Where that model cannot run (a Mac without Apple silicon) or cannot write
 /// the meeting's language, the model that can.
 pub const NOTES_FALLBACK_MODEL: &str = "small";
+/// On a computer too slow for those (`device::slow`), the most compatible
+/// model that keeps up: Whisper base.
+pub const SLOW_NOTES_MODEL: &str = "base";
 const NOTES_PATH: &str = "/api/desktop/meetings/notes";
 const ASK_PATH: &str = "/api/desktop/meetings/ask";
 
@@ -492,12 +495,24 @@ fn platform() -> Platform {
 
 /// The one speech model Cap Notes needs on this computer for `language`.
 pub fn notes_model(language: &Language) -> &'static str {
-    if crate::transcription::supports_parakeet()
-        && crate::transcription::parakeet_writes(&language_code(language))
-    {
-        NOTES_MODEL
-    } else {
-        NOTES_FALLBACK_MODEL
+    notes_model_for(
+        device::class(),
+        crate::transcription::supports_parakeet(),
+        &language_code(language),
+    )
+}
+
+/// The rule behind `notes_model`: Parakeet where it runs and writes the
+/// language, otherwise Whisper small, and on a slow computer Whisper base
+/// in place of small (an Intel Mac always: small falls minutes behind
+/// there).
+pub fn notes_model_for(class: device::Class, parakeet: bool, language: &str) -> &'static str {
+    let parakeet = parakeet && crate::transcription::parakeet_writes(language);
+    match class {
+        device::Class::IntelMac => SLOW_NOTES_MODEL,
+        _ if parakeet => NOTES_MODEL,
+        device::Class::FewCores => SLOW_NOTES_MODEL,
+        device::Class::Capable => NOTES_FALLBACK_MODEL,
     }
 }
 

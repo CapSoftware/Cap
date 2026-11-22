@@ -119,6 +119,13 @@ pub const CAPTION_MODEL_FOLDER: &str = "transcription_models";
 /// Every model the catalogue can name, for the disk scan.
 const MODEL_NAMES: [&str; 4] = ["best", "best-max", "small", "medium"];
 
+/// The models on disk worth knowing about here: the catalogue's, and on a
+/// computer too slow for those, Cap Notes' Whisper base too.
+fn scanned_models() -> impl Iterator<Item = &'static str> {
+    let slow = crate::meetings::device::slow().then_some(crate::meetings::SLOW_NOTES_MODEL);
+    MODEL_NAMES.into_iter().chain(slow)
+}
+
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const PARAKEET_UNSUPPORTED_MESSAGE: &str = "Parakeet transcription is not available on Intel macOS";
 
@@ -326,10 +333,9 @@ pub fn work_in_flight() -> bool {
 /// Rescan the catalogue against the disk -- `refreshDownloadedModels`
 /// (`CaptionsTab.tsx:481-492`), minus the async round-trips.
 pub fn refresh_downloaded_models() {
-    let downloaded: HashSet<String> = MODEL_NAMES
-        .iter()
+    let downloaded: HashSet<String> = scanned_models()
         .filter(|model| model_files_present(model))
-        .map(|model| (*model).to_string())
+        .map(str::to_string)
         .collect();
     let recommended_outdated = supports_parakeet() && parakeet_model_outdated(&model_path("best"));
     let mut hub = hub();
@@ -528,9 +534,13 @@ const MODEL_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 /// `download_whisper_model_to_path` (`captions.rs:2105-2196`), restricted to
-/// the two Whisper entries the catalogue offers.
+/// the two Whisper entries the catalogue offers, and Cap Notes' Whisper base
+/// for a computer too slow for them.
 async fn download_whisper_model(model: &str) -> Result<(), String> {
     let model_parts: &[&str] = match model {
+        "base" => &[
+            "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-base.bin",
+        ],
         "small" => &[
             "https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-small.bin",
         ],
@@ -1061,7 +1071,7 @@ fn transcript_is_english<'a>(
 }
 
 fn remove_word_aligner_if_unused() {
-    if MODEL_NAMES.iter().any(|model| model_files_present(model)) {
+    if scanned_models().any(model_files_present) {
         return;
     }
     let path = aligner_path();
