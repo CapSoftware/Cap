@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use cap_meetings::apps::AppInfo;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +67,20 @@ pub struct Item {
     pub thumbnail: Option<PathBuf>,
     /// A short line of body text for note cards.
     pub excerpt: Option<String>,
+    /// The meeting app, when Cap knows it: its icon is read from the system.
+    pub meeting_app: Option<&'static AppInfo>,
+    /// The calendar event the note was taken for. Boxed: every smart folder
+    /// and search walks all items, so the item stays small.
+    pub event: Option<Box<EventFacts>>,
     pub(crate) folded: Folded,
+}
+
+/// What a calendar note shows of its event.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventFacts {
+    pub start: DateTime<Utc>,
+    pub end: Option<DateTime<Utc>>,
+    pub calendar: Option<String>,
 }
 
 /// The item's text, folded once when the item is built.
@@ -90,6 +104,8 @@ pub struct ItemFacts {
     pub notes_folder: Option<String>,
     pub thumbnail: Option<PathBuf>,
     pub excerpt: Option<String>,
+    pub meeting_app: Option<&'static AppInfo>,
+    pub event: Option<EventFacts>,
 }
 
 impl Item {
@@ -137,6 +153,8 @@ impl Item {
             notes_folder: facts.notes_folder,
             thumbnail: facts.thumbnail,
             excerpt: facts.excerpt,
+            meeting_app: facts.meeting_app,
+            event: facts.event.map(Box::new),
             folded,
         }
     }
@@ -228,7 +246,10 @@ mod tests {
             },
         );
         item.add_people(&["jose alvarez".into(), "Bo".into(), " ".into(), "BO".into()]);
-        assert_eq!(item.people, vec!["José Álvarez".to_string(), "Bo".to_string()]);
+        assert_eq!(
+            item.people,
+            vec!["José Álvarez".to_string(), "Bo".to_string()]
+        );
         assert!(item.matches_query("bo"));
     }
 }

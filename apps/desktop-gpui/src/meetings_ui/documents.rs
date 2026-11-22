@@ -14,6 +14,7 @@ mod glass;
 mod home;
 mod menu;
 mod pane;
+pub(crate) use pane::PREVIEW_KEY;
 mod player;
 mod sidebar;
 mod start;

@@ -2,10 +2,11 @@
 
 use std::path::PathBuf;
 
-use cap_meetings::library::{DocKind, DocMeta, Folder, Library};
+use cap_meetings::apps::{self, AppInfo, AppKind};
+use cap_meetings::library::{DocKind, DocMeta, Folder, Library, MeetingDetails};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use super::items::{Item, ItemFacts, ItemKey, ItemKind, sort_newest_first};
+use super::items::{EventFacts, Item, ItemFacts, ItemKey, ItemKind, sort_newest_first};
 
 #[derive(Clone, Debug, Default)]
 pub struct Scan {
@@ -29,10 +30,30 @@ pub fn doc_item(library: Option<&Library>, meta: &DocMeta) -> Item {
         ItemKind::Note
     };
     let meeting = meta.meeting.as_ref();
-    let has_notes = library
+    let notes_file = library
         .and_then(|l| l.doc_dir(&meta.id).ok())
-        .and_then(|dir| std::fs::metadata(dir.join("notes.json")).ok())
-        .is_some_and(|m| m.len() > 64);
+        .map(|dir| dir.join(cap_meetings::library::NOTES_FILE));
+    let notes_len = notes_file
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map_or(0, |m| m.len());
+    let has_notes = notes_len > 64;
+    let preview = meta
+        .extra
+        .get(crate::meetings_ui::documents::PREVIEW_KEY)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string);
+    // A note's card shows its first lines. Meetings show their summary's
+    // first line; a plain note has none, so its own text is read (once per
+    // scan, small files only).
+    let excerpt = preview.or_else(|| {
+        (kind == ItemKind::Note && has_notes && notes_len <= NOTE_EXCERPT_MAX_FILE)
+            .then(|| std::fs::read_to_string(notes_file.as_ref()?).ok())
+            .flatten()
+            .and_then(|json| note_excerpt(&json))
+    });
     let title = meta.title.trim();
     Item::new(
         ItemKey::Doc(meta.id.clone()),
@@ -54,9 +75,104 @@ pub fn doc_item(library: Option<&Library>, meta: &DocMeta) -> Item {
             trashed: meta.is_trashed(),
             notes_folder: meta.folder_id.clone(),
             thumbnail: None,
-            excerpt: None,
+            excerpt,
+            meeting_app: meeting.and_then(meeting_app),
+            event: meeting.and_then(|m| m.event.as_ref()).and_then(|e| {
+                Some(EventFacts {
+                    start: e.start?,
+                    end: e.end,
+                    calendar: e.calendar_name.clone().filter(|c| !c.trim().is_empty()),
+                })
+            }),
         },
     )
+}
+
+/// Bigger notes files are not read just for a card's first lines.
+const NOTE_EXCERPT_MAX_FILE: u64 = 256 * 1024;
+const NOTE_EXCERPT_CHARS: usize = 220;
+
+/// The first lines of a note, as one line of text: headings and blocks
+/// joined, cut on a word.
+pub fn note_excerpt(json: &str) -> Option<String> {
+    let doc = cap_notes::Document::from_json(json).ok()?;
+    let mut text = String::new();
+    for block in &doc.blocks {
+        let line = block.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push_str(" \u{00b7} ");
+        }
+        text.push_str(&line);
+        if text.chars().count() > NOTE_EXCERPT_CHARS {
+            break;
+        }
+    }
+    if text.is_empty() {
+        return None;
+    }
+    if text.chars().count() <= NOTE_EXCERPT_CHARS {
+        return Some(text);
+    }
+    let cut: String = text.chars().take(NOTE_EXCERPT_CHARS).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    Some(format!("{}\u{2026}", cut.trim_end()))
+}
+
+/// The app the meeting ran in, for its icon. A call in a browser counts as
+/// the browser only when nothing better is known: the event's link says
+/// which service it was (a Meet link in Chrome is Google Meet).
+pub fn meeting_app(meeting: &MeetingDetails) -> Option<&'static AppInfo> {
+    let recorded = meeting
+        .app_id
+        .as_deref()
+        .and_then(apps::app_by_id)
+        .or_else(|| {
+            let name = meeting.app_name.as_deref()?.trim();
+            apps::all_apps()
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(name))
+        });
+    if recorded.is_some_and(|a| a.kind != AppKind::Browser) {
+        return recorded;
+    }
+    meeting
+        .event
+        .as_ref()
+        .and_then(|e| e.link.as_deref())
+        .and_then(app_for_link)
+}
+
+/// The meeting service a join link points at.
+pub fn app_for_link(link: &str) -> Option<&'static AppInfo> {
+    let rest = link.trim().split_once("://").map_or(link, |(_, r)| r);
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let on = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    let id = if on("meet.google.com") {
+        apps::GOOGLE_MEET_APP_ID
+    } else if on("zoom.us") || on("zoom.com") || on("zoomgov.com") {
+        "zoom"
+    } else if on("teams.microsoft.com") || on("teams.live.com") {
+        "teams"
+    } else if on("webex.com") {
+        "webex"
+    } else if on("whereby.com") {
+        "whereby"
+    } else if on("facetime.apple.com") {
+        "facetime"
+    } else {
+        return None;
+    };
+    apps::app_by_id(id)
 }
 
 /// The folder list from exactly one read: the folders sorted by name and
@@ -211,9 +327,27 @@ const PEOPLE: [&str; 7] = [
     "Mia Novak",
     "Kenji Sato",
 ];
-const APPS: [&str; 4] = ["Zoom", "Google Meet", "Microsoft Teams", "Slack"];
+/// The meeting apps the seed has always used (by detector id), so searches
+/// and benchmarks match exactly what they did.
+const APPS: [&str; 4] = ["zoom", "google-meet", "teams", "slack"];
+/// With gaps on: every app the library draws differently. `None` is a
+/// meeting with no app (in person, or the app was not known).
+const SHOWCASE_APPS: [Option<&str>; 10] = [
+    Some("zoom"),
+    Some("google-meet"),
+    Some("teams"),
+    Some("slack"),
+    Some("whatsapp"),
+    Some("facetime"),
+    Some("discord"),
+    Some("webex"),
+    Some("chrome"),
+    None,
+];
+const CALENDARS: [&str; 3] = ["Work", "Team", "Personal"];
 
 pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
+    let gaps = std::env::var_os("CAP_GPUI_LIBRARY_SEED_GAPS").is_some();
     let folders = vec![
         seed_folder("f-seed-clients", "Clients"),
         seed_folder("f-seed-product", "Product"),
@@ -234,6 +368,12 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
         let item = match i % 7 {
             0 | 3 | 5 => {
                 let title = MEETINGS[(i / 7 * 3 + i % 7) % MEETINGS.len()];
+                let app = if gaps {
+                    SHOWCASE_APPS[(i / 7 * 3 + i % 7) % SHOWCASE_APPS.len()]
+                } else {
+                    Some(APPS[i % APPS.len()])
+                }
+                .and_then(apps::app_by_id);
                 let n = 2 + i % 3;
                 let people = (0..n)
                     .map(|k| PEOPLE[(i + k * 3) % PEOPLE.len()].to_string())
@@ -246,7 +386,17 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
                     ItemFacts {
                         duration_ms: Some(((12 + (i * 13) % 50) as u64) * 60_000),
                         people,
-                        app: Some(APPS[i % APPS.len()].to_string()),
+                        app: app.map(|a| a.name.to_string()),
+                        meeting_app: app.filter(|a| a.kind != AppKind::Browser),
+                        // Every other meeting came from the calendar.
+                        event: (i % 2 == 0).then(|| {
+                            let start = at - Duration::minutes(2);
+                            EventFacts {
+                                start,
+                                end: Some(start + Duration::minutes(30 + 15 * (i as i64 % 3))),
+                                calendar: Some(CALENDARS[i % CALENDARS.len()].to_string()),
+                            }
+                        }),
                         has_transcript: true,
                         has_summary: i % 4 != 1,
                         has_notes: i % 3 == 0,
@@ -271,7 +421,17 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
                 at,
                 ItemFacts {
                     duration_ms: Some(((1 + (i * 7) % 9) as u64) * 60_000 + 23_000),
-                    thumbnail: next_image(images),
+                    // With gaps on, some pictures are missing on disk, as
+                    // after a crash. Off (benchmarks, before/after shots),
+                    // the seed is exactly what it always was, and the
+                    // pictures stay in the same order either way.
+                    thumbnail: next_image(images).map(|image| {
+                        if gaps && i % 5 == 4 {
+                            PathBuf::from(format!("/seed/missing/{i}.png"))
+                        } else {
+                            image
+                        }
+                    }),
                     pinned: i == 1,
                     ..Default::default()
                 },
@@ -294,8 +454,9 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
                     title,
                     at,
                     ItemFacts {
-                        has_notes: true,
-                        excerpt: Some(excerpt.to_string()),
+                        // With gaps on, some notes have nothing written yet.
+                        has_notes: !(gaps && i % 4 == 2),
+                        excerpt: (!(gaps && i % 4 == 2)).then(|| excerpt.to_string()),
                         notes_folder: (i % 3 == 0).then(|| folders[2].id.clone()),
                         ..Default::default()
                     },
