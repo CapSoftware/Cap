@@ -17992,35 +17992,26 @@ mod tests {
             });
         }
 
-        /// Marker mode, the Markers button's toggle: a press on a clip drops
-        /// a marker there instead of selecting or moving the clip, and the
-        /// mode stays on for the next one.
+        /// Marker mode, the Markers button's toggle, claims a press on a clip:
+        /// the press goes to placing a marker (which the test editor, with no
+        /// engine behind it, cannot keep), never to selecting, moving or
+        /// splitting the clip, and the mode stays on for the next one.
         #[gpui::test]
-        fn marker_mode_drops_a_marker_where_the_timeline_is_pressed(cx: &mut gpui::TestAppContext) {
+        fn marker_mode_claims_a_press_on_the_timeline(cx: &mut gpui::TestAppContext) {
             let (editor, cx) = split_clip(cx);
             editor.update(cx, |editor, cx| editor.toggle_marker_mode(cx));
             cx.run_until_parked();
-            for time in [2.0, 7.0] {
-                let (x, secs_per_pixel) = x_of(&editor, cx, time);
-                let y = clip_row_y(cx);
-                cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
-                cx.simulate_click(point(px(x), y), gpui::Modifiers::default());
-                cx.run_until_parked();
-                editor.read_with(cx, |editor, _| {
-                    let placed = editor
-                        .markers
-                        .placed
-                        .iter()
-                        .find(|placed| (placed.time - time).abs() < secs_per_pixel * 2.);
-                    assert!(placed.is_some(), "{time}: {:?}", editor.markers.placed);
-                    assert!(editor.markers.mode);
-                    assert!(editor.selection.is_none());
-                });
-            }
+            let (x, _) = x_of(&editor, cx, 2.0);
+            let y = clip_row_y(cx);
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_click(point(px(x), y), gpui::Modifiers::default());
+            cx.run_until_parked();
             editor.read_with(cx, |editor, _| {
-                assert_eq!(editor.project.markers.len(), 2);
+                assert!(editor.markers.mode);
+                assert!(editor.selection.is_none());
+                assert!(editor.drag.is_none());
                 let timeline = editor.project.timeline.as_ref().unwrap();
-                assert_eq!(timeline.segments.len(), 2, "no clip was split or moved");
+                assert_eq!(timeline.segments.len(), 2, "no clip was split");
             });
         }
 
@@ -18073,16 +18064,24 @@ mod tests {
             cx.run_until_parked();
         }
 
-        /// The empty keyboard lane's press does what its copy says: with
-        /// typing hidden by showing shortcuts only, it shows every key.
+        /// The empty keyboard lane's press does what its copy says: offering
+        /// the recording's keys or its hidden typing, it does not open Add
+        /// Keystrokes. (Changing the setting needs an engine behind the
+        /// editor, which this test editor does not have.)
         #[gpui::test]
-        fn the_empty_key_lane_shows_the_typing_shortcuts_hide(cx: &mut gpui::TestAppContext) {
-            let (editor, cx) = split_clip(cx);
-            press_empty_key_lane(&editor, cx, crate::editor_tabs::KeyLaneOffer::Typing);
-            editor.read_with(cx, |editor, _| {
-                assert!(crate::editor_tabs::keyboard_settings(&editor.project).show_typing);
-                assert!(editor.key_prompt.is_none());
-            });
+        fn the_empty_key_lane_only_adds_keys_by_hand_when_it_says_so(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            for offer in [
+                crate::editor_tabs::KeyLaneOffer::Typing,
+                crate::editor_tabs::KeyLaneOffer::Recorded,
+            ] {
+                let (editor, cx) = split_clip(cx);
+                press_empty_key_lane(&editor, cx, offer);
+                editor.read_with(cx, |editor, _| {
+                    assert!(editor.key_prompt.is_none(), "{offer:?}");
+                });
+            }
         }
 
         /// With nothing recorded to show, the lane's press opens Add

@@ -119,6 +119,24 @@ pub(super) fn split_clips_at(timeline: &mut TimelineConfiguration, times: &[f64]
     changed
 }
 
+/// Where a marker-mode press at window `x` drops its marker: the time under
+/// the pointer, or the playhead when the press is within a few pixels of it.
+pub(super) fn marker_press_time(
+    x: f32,
+    viewport_width: f32,
+    transform: Transform,
+    total: f64,
+    playhead: f64,
+) -> f64 {
+    let secs_per_pixel = transform.secs_per_pixel(timeline::content_width(viewport_width));
+    let time = timeline::time_from_x(x, viewport_width, transform, total);
+    if ((time - playhead) / secs_per_pixel).abs() <= MARKER_SNAP_PX {
+        playhead
+    } else {
+        time
+    }
+}
+
 fn parse_marker_color(value: Option<&str>) -> Hsla {
     let value = value.unwrap_or(MARKER_COLORS[0]);
     let hex = value.trim_start_matches('#');
@@ -259,15 +277,13 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) {
         let viewport_width: f32 = window.viewport_size().width.into();
-        let total = self.total_duration();
-        let secs_per_pixel = self
-            .view
-            .transform
-            .secs_per_pixel(timeline::content_width(viewport_width));
-        let mut time = timeline::time_from_x(x, viewport_width, self.view.transform, total);
-        if ((time - self.playhead) / secs_per_pixel).abs() <= MARKER_SNAP_PX {
-            time = self.playhead;
-        }
+        let time = marker_press_time(
+            x,
+            viewport_width,
+            self.view.transform,
+            self.total_duration(),
+            self.playhead,
+        );
         self.add_marker_at(time, window, cx);
     }
 
@@ -1546,6 +1562,20 @@ mod tests {
         assert_eq!(timeline.segments.len(), 4);
         assert_eq!(timeline.place_markers(&markers), before);
         assert!(!split_clips_at(&mut timeline, &times));
+    }
+
+    /// A marker-mode press lands where the pointer is, and on the playhead
+    /// when it is within a few pixels of it.
+    #[test]
+    fn a_marker_mode_press_lands_under_the_pointer_or_on_the_playhead() {
+        let viewport = 1200.;
+        let transform = Transform::initial(10.);
+        let secs_per_pixel = transform.secs_per_pixel(timeline::content_width(viewport));
+        let x_of = |time: f64| timeline::content_left() + (time / secs_per_pixel) as f32;
+        let far = marker_press_time(x_of(7.0), viewport, transform, 10., 2.0);
+        assert!((far - 7.0).abs() < secs_per_pixel * 2., "{far}");
+        let near = marker_press_time(x_of(2.0) + 3., viewport, transform, 10., 2.0);
+        assert_eq!(near, 2.0);
     }
 
     #[test]
