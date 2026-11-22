@@ -160,7 +160,7 @@ fn the_live_switch_is_unchanged_on_a_capable_computer(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn the_live_switch_starts_off_with_cap_cloud_on_a_slow_computer(cx: &mut TestAppContext) {
-    crate::meetings::device::TEST_SLOW.with(|slow| slow.set(true));
+    crate::meetings::device::TEST_CLASS.with(|c| c.set(crate::meetings::device::Class::IntelMac));
     let mut initial = MeetingSettings::default();
     initial.transcription.engine = Engine::Cloud;
     let (settings, meetings, mut cx, _dir) = open(cx, initial);
@@ -194,7 +194,7 @@ fn the_live_switch_starts_off_with_cap_cloud_on_a_slow_computer(cx: &mut TestApp
         window.refresh();
         window.draw(cx).clear();
     });
-    crate::meetings::device::TEST_SLOW.with(|slow| slow.set(false));
+    crate::meetings::device::TEST_CLASS.with(|c| c.set(crate::meetings::device::Class::Capable));
 }
 
 #[gpui::test]
@@ -511,4 +511,39 @@ fn cap_notes_asks_for_one_model_and_the_one_that_writes_the_language() {
         assert_eq!(tuned.model.name, crate::meetings::NOTES_FALLBACK_MODEL);
         assert_eq!(tuned.why, NotesModelWhy::NeedsAppleSilicon);
     }
+}
+
+#[gpui::test]
+fn use_cap_cloud_on_a_slow_computer_switches_the_engine(cx: &mut TestAppContext) {
+    use super::shared::{CloudAction, cloud_action};
+    crate::meetings::device::TEST_CLASS.with(|c| c.set(crate::meetings::device::Class::IntelMac));
+    assert_eq!(
+        cloud_action(CloudState::Available),
+        Some(CloudAction::UseCloud)
+    );
+    assert_eq!(cloud_action(CloudState::Free), Some(CloudAction::Upgrade));
+    assert_eq!(
+        cloud_action(CloudState::SignedOut),
+        Some(CloudAction::SignIn)
+    );
+    assert_eq!(cloud_action(CloudState::Checking), None);
+    let (settings, meetings, mut cx, _dir) = open(cx, MeetingSettings::default());
+    settings.update(&mut cx, |s, _| {
+        s.pages.meetings.cloud = CloudState::Available
+    });
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    });
+    assert_eq!(read(&meetings, &mut cx).transcription.engine, Engine::Local);
+    settings.update(&mut cx, |s, cx| {
+        s.meetings_run_cloud_action(CloudAction::UseCloud, cx)
+    });
+    let saved = read(&meetings, &mut cx);
+    assert_eq!(saved.transcription.engine, Engine::Cloud);
+    assert!(
+        !saved.transcription.live_for(Engine::Cloud, true),
+        "and the live transcript is off there by default"
+    );
+    crate::meetings::device::TEST_CLASS.with(|c| c.set(crate::meetings::device::Class::Capable));
 }

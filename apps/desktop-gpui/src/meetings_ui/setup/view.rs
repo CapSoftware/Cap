@@ -288,7 +288,8 @@ impl SetupWindow {
         let state = notes.state.clone();
         let size = notes.model.size;
         let note = match notes.why {
-            shared::NotesModelWhy::Tuned => None,
+            // Said once, under the two cards (`slow_device_note`).
+            shared::NotesModelWhy::Tuned | shared::NotesModelWhy::Slow => None,
             shared::NotesModelWhy::NeedsAppleSilicon => {
                 Some(tr::meeting_setup::transcription::intel_note())
             }
@@ -560,14 +561,23 @@ impl SetupWindow {
             .into_any_element()
     }
 
-    /// A computer too slow for live local captions: say so under the
-    /// choice, with Get Cap Pro or sign in when Cap Cloud isn't theirs yet.
+    /// A computer too slow for live local captions, said once under the
+    /// choice: with this computer's model, that it is the only compatible
+    /// one and Cap Cloud is recommended (switch to it when the account has
+    /// it; the card offers sign in and upgrade);
+    /// with Cap Cloud, that its lines come a moment after speech.
     fn slow_device_note(&self, cx: &mut Context<Self>) -> AnyElement {
         let paper = self.paper();
-        let action: Option<(&'static str, bool)> = match self.cloud {
-            CloudState::Free => Some((tr::cap_ai::settings::get_pro(), false)),
-            CloudState::SignedOut => Some((tr::settings::meetings::transcription::sign_in(), true)),
-            _ => None,
+        let local = self.settings.transcription.engine == Engine::Local;
+        let (note, action) = if local {
+            (
+                tr::settings::meetings::transcription::slow_model(),
+                // Sign in and upgrade sit on the Cap Cloud card already.
+                shared::cloud_action(self.cloud)
+                    .filter(|action| *action == shared::CloudAction::UseCloud),
+            )
+        } else {
+            (tr::settings::meetings::transcription::slow_device(), None)
         };
         div()
             .flex()
@@ -575,33 +585,31 @@ impl SetupWindow {
             .items_center()
             .gap(px(6.))
             .max_w(px(460.))
-            .child(
-                text(
-                    tr::settings::meetings::transcription::slow_device(),
-                    12.,
-                    17.,
-                    paper.soft,
-                )
-                .text_center(),
-            )
-            .children(action.map(|(label, sign_in)| {
-                quiet_link(&paper, "meeting-setup-slow-device", label)
+            .child(text(note, 12., 17., paper.soft).text_center())
+            .children(action.map(|action| {
+                quiet_link(&paper, "meeting-setup-slow-device", action.label())
                     .text_color(paper.accent)
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        if sign_in {
-                            cx.defer(crate::meetings_ui::cap_ai::sign_in);
-                        } else {
-                            cx.defer(|cx| {
-                                crate::meetings_ui::cap_ai::open_upgrade(
-                                    None,
-                                    crate::meetings_ui::cap_ai::Host::Window,
-                                    cx,
-                                )
-                            });
-                        }
-                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.run_cloud_action(action, cx)))
             }))
             .into_any_element()
+    }
+
+    /// The slow computer note's action: switch to Cap Cloud (sign in and
+    /// upgrade are on the Cap Cloud card).
+    pub(crate) fn run_cloud_action(&mut self, action: shared::CloudAction, cx: &mut Context<Self>) {
+        match action {
+            shared::CloudAction::SignIn => cx.defer(crate::meetings_ui::cap_ai::sign_in),
+            shared::CloudAction::Upgrade => cx.defer(|cx| {
+                crate::meetings_ui::cap_ai::open_upgrade(
+                    None,
+                    crate::meetings_ui::cap_ai::Host::Window,
+                    cx,
+                )
+            }),
+            shared::CloudAction::UseCloud => {
+                self.update_settings(cx, |s| s.transcription.engine = Engine::Cloud)
+            }
+        }
     }
 
     fn render_transcription(&self, cx: &mut Context<Self>) -> AnyElement {

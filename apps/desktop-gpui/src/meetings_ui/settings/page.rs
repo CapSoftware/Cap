@@ -858,7 +858,14 @@ impl SettingsWindow {
                 )
                 .into_any_element(),
         };
+        let slow = notes.why == shared::NotesModelWhy::Slow;
+        let cap_ai = if slow {
+            self.meetings_cloud_action(cx)
+        } else {
+            None
+        };
         let body = match notes.why {
+            shared::NotesModelWhy::Slow => tr::settings::meetings::transcription::slow_model(),
             shared::NotesModelWhy::Tuned => tr::settings::meetings::transcription::model_body(),
             shared::NotesModelWhy::NeedsAppleSilicon => {
                 tr::settings::meetings::transcription::model_body_intel()
@@ -906,6 +913,9 @@ impl SettingsWindow {
                             .line_height(px(16.))
                             .text_color(palette.muted)
                             .child(body),
+                    )
+                    .children(
+                        cap_ai.map(|button| div().flex().flex_row().pt(px(6.)).child(button)),
                     ),
             )
             .child(action)
@@ -980,66 +990,84 @@ impl SettingsWindow {
         )
     }
 
-    /// A computer too slow for live local captions: say so, and point at
-    /// Cap Cloud (with Get Cap Pro or sign in when it isn't theirs, unless
-    /// the Cap Cloud note below already offers it).
-    fn meetings_slow_note(&self, local: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// Cap Cloud on a computer too slow for live local captions: say why the
+    /// transcript shows the cloud's lines a moment late.
+    fn meetings_slow_note(&self) -> AnyElement {
         let palette = Palette::new(&self.theme);
-        let action: Option<(&'static str, bool)> = match self.pages.meetings.cloud {
-            CloudState::Free if local => Some((tr::cap_ai::settings::get_pro(), false)),
-            CloudState::SignedOut if local => {
-                Some((tr::settings::meetings::transcription::sign_in(), true))
-            }
-            _ => None,
-        };
         div()
             .flex()
             .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(12.))
+            .items_start()
+            .gap(px(7.))
+            .min_w_0()
+            .text_size(px(12.))
+            .line_height(px(17.))
+            .text_color(palette.muted)
             .child(
                 div()
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    .gap(px(7.))
-                    .min_w_0()
-                    .text_size(px(12.))
-                    .line_height(px(17.))
-                    .text_color(palette.muted)
-                    .child(
-                        div()
-                            .pt(px(2.))
-                            .child(glyph("icons/cloud.svg", 13., palette.muted)),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .child(tr::settings::meetings::transcription::slow_device()),
-                    ),
+                    .pt(px(2.))
+                    .child(glyph("icons/cloud.svg", 13., palette.muted)),
             )
-            .children(action.map(|(label, sign_in)| {
-                self.button(
-                    "meetings-slow-device-action",
-                    (ui::ButtonVariant::Primary, None),
-                    label,
-                    false,
-                    cx,
-                    move |_, _, cx| {
-                        if sign_in {
-                            shared::sign_in(cx)
-                        } else {
-                            crate::meetings_ui::cap_ai::open_upgrade(
-                                None,
-                                crate::meetings_ui::cap_ai::Host::Window,
-                                cx,
-                            )
-                        }
-                    },
-                )
-            }))
+            .child(
+                div()
+                    .min_w_0()
+                    .child(tr::settings::meetings::transcription::slow_device()),
+            )
             .into_any_element()
+    }
+
+    /// A slow computer's model row: the Cap Cloud recommendation's action.
+    fn meetings_cloud_action(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let action = shared::cloud_action(self.pages.meetings.cloud)?;
+        Some(
+            self.button(
+                "meetings-slow-cloud",
+                // Download stays the row's one primary action.
+                (ui::ButtonVariant::Gray, None),
+                action.label(),
+                false,
+                cx,
+                move |this, _, cx| this.meetings_run_cloud_action(action, cx),
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// Whisper small from before, on a slow computer whose notes now use
+    /// Whisper base: offer to delete it (never deleted unasked).
+    fn meetings_old_model(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let notes = shared::notes_model(&self.pages.meetings.settings);
+        let old = crate::meetings::NOTES_FALLBACK_MODEL;
+        if notes.why != shared::NotesModelWhy::Slow || notes.model.name == old {
+            return None;
+        }
+        let snapshot = crate::transcription::ui_snapshot(std::path::Path::new(""));
+        if !snapshot.downloaded.contains(old) {
+            return None;
+        }
+        let size = crate::editor_tabs::CAPTION_MODELS
+            .iter()
+            .find(|m| m.name == old)
+            .map_or("", |m| m.size);
+        Some(
+            self.meetings_row(
+                tr::settings::meetings::transcription::old_model(),
+                Some(
+                    tr::settings::meetings::transcription::old_model_description(
+                        shared::mega_size(size),
+                    ),
+                ),
+                self.button(
+                    "meetings-delete-old-model",
+                    (ui::ButtonVariant::Gray, None),
+                    tr::settings::meetings::transcription::delete(),
+                    self.pages.meetings.delete.is_some(),
+                    cx,
+                    move |this, window, cx| this.meetings_delete_model(old, window, cx),
+                )
+                .into_any_element(),
+            ),
+        )
     }
 
     /// The live transcript switch: off by default with Cap Cloud on a
@@ -1085,12 +1113,12 @@ impl SettingsWindow {
             .into_any_element(),
         );
         let mut engine_rows = vec![engine_row];
-        if crate::meetings::device::slow() {
+        if !local && crate::meetings::device::slow() {
             engine_rows.push(
                 div()
                     .px(px(12.))
                     .pt(px(10.))
-                    .child(self.meetings_slow_note(local, cx))
+                    .child(self.meetings_slow_note())
                     .into_any_element(),
             );
         }
@@ -1103,6 +1131,9 @@ impl SettingsWindow {
                     .child(self.meetings_model_list(cx))
                     .into_any_element(),
             );
+            if let Some(old) = self.meetings_old_model(cx) {
+                engine_rows.push(old);
+            }
         } else if let Some(note) = self.meetings_cloud_note(cx) {
             engine_rows.push(div().p(px(12.)).child(note).into_any_element());
         }

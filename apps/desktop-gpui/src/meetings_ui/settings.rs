@@ -523,6 +523,24 @@ impl SettingsWindow {
         self.meetings_update(cx, move |s| s.transcription.set_live_for(engine, slow, on));
     }
 
+    /// The slow computer's Cap Cloud recommendation: sign in, upgrade, or
+    /// switch this computer's meetings to Cap Cloud.
+    pub(crate) fn meetings_run_cloud_action(
+        &mut self,
+        action: shared::CloudAction,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            shared::CloudAction::SignIn => shared::sign_in(cx),
+            shared::CloudAction::Upgrade => crate::meetings_ui::cap_ai::open_upgrade(
+                None,
+                crate::meetings_ui::cap_ai::Host::Window,
+                cx,
+            ),
+            shared::CloudAction::UseCloud => self.meetings_set_engine(Engine::Cloud, cx),
+        }
+    }
+
     pub(crate) fn meetings_set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if enabled && !self.pages.meetings.settings.setup_completed {
             cx.defer(crate::meetings_ui::setup::open);

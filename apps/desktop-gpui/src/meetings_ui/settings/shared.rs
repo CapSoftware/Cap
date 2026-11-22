@@ -283,6 +283,47 @@ pub enum NotesModelWhy {
     NeedsAppleSilicon,
     /// It does not write the chosen language.
     Language,
+    /// This computer is too slow for the others (`device::slow`): the most
+    /// compatible model that keeps up.
+    Slow,
+}
+
+/// Cap Notes' Whisper base, for a computer too slow for the others. Not in
+/// the editor's caption list; only its name and size are shown.
+static SLOW_NOTES_CAPTION_MODEL: CaptionModel = CaptionModel {
+    name: crate::meetings::SLOW_NOTES_MODEL,
+    label: tr::editor::tabs::captions::model::small,
+    model_name: "whisper.cpp base",
+    size: "148MB",
+    description: tr::editor::tabs::captions::model::small_description,
+};
+
+/// What the slow computer note offers: sign in, upgrade, or switch to Cap
+/// Cloud when the account has it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudAction {
+    SignIn,
+    Upgrade,
+    UseCloud,
+}
+
+pub fn cloud_action(cloud: CloudState) -> Option<CloudAction> {
+    match cloud {
+        CloudState::SignedOut => Some(CloudAction::SignIn),
+        CloudState::Free => Some(CloudAction::Upgrade),
+        CloudState::Available => Some(CloudAction::UseCloud),
+        CloudState::Checking | CloudState::Unavailable | CloudState::Offline => None,
+    }
+}
+
+impl CloudAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            CloudAction::SignIn => tr::settings::meetings::transcription::sign_in(),
+            CloudAction::Upgrade => tr::settings::meetings::transcription::upgrade(),
+            CloudAction::UseCloud => tr::settings::meetings::transcription::use_cloud(),
+        }
+    }
 }
 
 fn fake_model() -> Option<ModelState> {
@@ -298,8 +339,14 @@ fn fake_model() -> Option<ModelState> {
 pub fn notes_model(settings: &MeetingSettings) -> NotesModel {
     let name = crate::meetings::notes_model(&settings.transcription.language);
     let models = available_caption_models();
-    let model = models.iter().find(|m| m.name == name).unwrap_or(&models[0]);
-    let why = if name == crate::meetings::NOTES_MODEL {
+    let model = models
+        .iter()
+        .find(|m| m.name == name)
+        .or_else(|| (name == SLOW_NOTES_CAPTION_MODEL.name).then_some(&SLOW_NOTES_CAPTION_MODEL))
+        .unwrap_or(&models[0]);
+    let why = if crate::meetings::device::slow() {
+        NotesModelWhy::Slow
+    } else if name == crate::meetings::NOTES_MODEL {
         NotesModelWhy::Tuned
     } else if transcription::supports_parakeet() {
         NotesModelWhy::Language

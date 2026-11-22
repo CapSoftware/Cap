@@ -261,3 +261,33 @@ fn the_accessibility_step_shows_only_where_it_can_be_granted() {
     );
     assert!(!accessibility_step_shown(false, false), "Windows and Linux");
 }
+
+#[gpui::test]
+fn use_cap_cloud_in_setup_on_a_slow_computer_switches_the_engine(cx: &mut TestAppContext) {
+    crate::meetings::device::TEST_CLASS.with(|c| c.set(crate::meetings::device::Class::IntelMac));
+    let initial = MeetingSettings {
+        setup_completed: true,
+        ..MeetingSettings::default()
+    };
+    let (view, meetings, mut cx, _fixture) = open(cx, initial, Step::Transcription);
+    view.update(&mut cx, |v, _| {
+        v.cloud = crate::meetings_ui::settings::shared::CloudState::Available
+    });
+    draw(&mut cx);
+    assert_eq!(
+        meetings.read_with(&mut cx, |m, _| m.settings().transcription.engine),
+        Engine::Local
+    );
+    view.update(&mut cx, |v, cx| {
+        v.run_cloud_action(
+            crate::meetings_ui::settings::shared::CloudAction::UseCloud,
+            cx,
+        )
+    });
+    assert_eq!(
+        meetings.read_with(&mut cx, |m, _| m.settings().transcription.engine),
+        Engine::Cloud
+    );
+    draw(&mut cx);
+    crate::meetings::device::TEST_CLASS.with(|c| c.set(crate::meetings::device::Class::Capable));
+}
