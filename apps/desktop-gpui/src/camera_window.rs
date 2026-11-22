@@ -1545,12 +1545,20 @@ impl Render for CameraToolbarView {
             let reduce_motion = cx.reduce_motion();
             let toolbar = camera.render_toolbar(cx).into_any_element();
             // Deferred so the hint paints over the preview, which comes after
-            // the toolbar. The toolbar sits at the window's origin, so the
-            // hint's window coordinates hold inside it.
+            // the toolbar. Hints are placed in window coordinates, and the
+            // picker's Camera Only view draws this camera mid-overlay, so the
+            // hint is pinned to the window's origin, not to the toolbar.
             let hint = camera
                 .hints
                 .render(window, &camera.theme, reduce_motion)
-                .map(|hint| gpui::deferred(hint).with_priority(1));
+                .map(|hint| {
+                    gpui::deferred(
+                        gpui::anchored()
+                            .position(gpui::point(px(0.), px(0.)))
+                            .child(hint),
+                    )
+                    .with_priority(1)
+                });
             div()
                 .size_full()
                 .child(toolbar)
