@@ -102,6 +102,7 @@ pub struct SegmentedControl {
     selected_shadow: Vec<gpui::BoxShadow>,
     container_shadow: Vec<gpui::BoxShadow>,
     stretch: bool,
+    fill: bool,
     tab_stops: bool,
     on_select: Option<SegmentHandler>,
 }
@@ -132,6 +133,7 @@ impl SegmentedControl {
             selected_shadow: Vec::new(),
             container_shadow: Vec::new(),
             stretch: false,
+            fill: false,
             tab_stops: false,
             on_select: None,
         }
@@ -221,6 +223,14 @@ impl SegmentedControl {
         self
     }
 
+    /// Spans the row with each segment as wide as its label plus an even
+    /// share of what is left, so long and short labels both sit comfortably.
+    /// A label that still does not fit truncates.
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
+    }
+
     /// Makes every enabled segment a Tab stop that Enter and Space activate,
     /// for a control that is the only way to reach what it switches to.
     pub fn tab_stops(mut self) -> Self {
@@ -281,6 +291,7 @@ impl RenderOnce for SegmentedControl {
             selected_shadow,
             container_shadow,
             stretch,
+            fill,
             tab_stops,
             on_select,
         } = self;
@@ -347,6 +358,7 @@ impl RenderOnce for SegmentedControl {
             .relative()
             .flex()
             .flex_row()
+            .when(fill, |this| this.w_full())
             .p(container_padding)
             .gap(container_gap)
             .rounded(container_radius)
@@ -434,6 +446,7 @@ impl RenderOnce for SegmentedControl {
                     .rounded(item_radius)
                     .text_size(text_size)
                     .when(stretch, |this| this.flex_1().min_w_0())
+                    .when(fill, |this| this.flex_grow(1.).flex_shrink(1.).min_w_0())
                     .when(tab_stops && !disabled, |this| {
                         crate::ui::keyboard_nav::ring(this.tab_index(0))
                     })
@@ -490,7 +503,7 @@ impl RenderOnce for SegmentedControl {
                             .text_color(if selected { selected_text } else { idle_text })
                     }))
                     .children(option.label.map(|label| {
-                        if stretch {
+                        if stretch || fill {
                             div().min_w_0().truncate().child(label).into_any_element()
                         } else {
                             label.into_any_element()

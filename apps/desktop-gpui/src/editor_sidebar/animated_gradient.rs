@@ -339,7 +339,7 @@ enum Band {
     Blend(Color, Color),
 }
 
-pub(super) fn palette(config: &AnimatedGradientConfig, radius: Pixels) -> gpui::Div {
+fn palette(config: &AnimatedGradientConfig, radius: Pixels) -> gpui::Div {
     let stops = &config.color_stops;
     let mut bands = Vec::new();
     if let Some(first) = stops.first()

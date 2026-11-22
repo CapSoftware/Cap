@@ -908,10 +908,6 @@ pub struct SidebarState {
     /// stale decode cannot land on a newer selection.
     preview: Option<(PathBuf, Arc<RenderImage>)>,
     preview_task: Option<gpui::Task<()>>,
-    /// Small decodes for the image and desktop source swatches.
-    source_thumbs: HashMap<PathBuf, Arc<RenderImage>>,
-    source_thumb_task: Option<gpui::Task<()>>,
-
     /// `currentDesktopBackgroundPath` (`:1783-1784`) and
     /// `importingDesktopBackground` (`:2030-2031`).
     pub desktop_background: Option<PathBuf>,
@@ -972,8 +968,6 @@ impl SidebarState {
             look_wallpaper_task: None,
             preview: None,
             preview_task: None,
-            source_thumbs: HashMap::new(),
-            source_thumb_task: None,
             desktop_background: None,
             importing_desktop: false,
             picking_image: false,
@@ -2382,7 +2376,6 @@ impl EditorWindow {
     /// The `h-48` preview the image and desktop panes show, decoded off the
     /// selected path.
     fn ensure_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.ensure_source_thumbs(window, cx);
         let Some(path) = self.preview_path() else {
             if let Some((_, previous)) = self.sidebar.preview.take() {
                 let _ = window.drop_image(previous);
@@ -2719,15 +2712,6 @@ impl EditorWindow {
 /// panel's `p-4`. Fixed, because the column is `w-104 min-w-104 flex-none`.
 const SIDEBAR_INSET: f32 = 20.;
 const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
-/// The background source picker's trough, its cells and their previews.
-/// Each radius is the one around it less the padding between them.
-const SOURCE_TROUGH_PADDING: f32 = 3.;
-const SOURCE_TROUGH_RADIUS: f32 = 12.;
-const SOURCE_CELL_RADIUS: f32 = SOURCE_TROUGH_RADIUS - SOURCE_TROUGH_PADDING;
-const SOURCE_CELL_INSET: f32 = 3.;
-const SOURCE_PREVIEW_RADIUS: f32 = SOURCE_CELL_RADIUS - SOURCE_CELL_INSET;
-const SOURCE_PREVIEW_HEIGHT: f32 = 30.;
-
 const WALLPAPER_COLUMNS: f32 = 4.;
 const WALLPAPER_GAP: f32 = 8.;
 const WALLPAPER_TILE_HEIGHT: f32 = 50.;
@@ -2991,7 +2975,25 @@ impl EditorWindow {
                     this.select_source_tab(SourceTab::None, window, cx);
                 }),
             ))
-            .child(self.render_source_swatches(tab, cx))
+            .child(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "background-source",
+                    SourceTab::PICKER
+                        .into_iter()
+                        .map(|item| ui::SegmentOption::new(item.label(), tab == item))
+                        .collect(),
+                )
+                .fill()
+                .item_height(px(28.))
+                .item_padding(px(8.), px(0.))
+                .tab_stops()
+                .on_select(cx.listener(|this, index: &usize, window, cx| {
+                    if let Some(item) = ui::option_at(&SourceTab::PICKER, *index) {
+                        this.select_source_tab(item, window, cx);
+                    }
+                })),
+            )
             .child(match tab {
                 SourceTab::Desktop => self.render_desktop_pane(cx).into_any_element(),
                 SourceTab::Wallpaper => self.render_wallpaper_pane(cx).into_any_element(),
@@ -3003,226 +3005,6 @@ impl EditorWindow {
                 }
                 SourceTab::None => div().into_any_element(),
             })
-    }
-
-    /// The background sources as one segmented control: a cell per source
-    /// with a small preview of what it gives over its name. The chosen cell
-    /// is raised like a segmented control's selected segment, and every
-    /// corner nests inside the one around it, so nothing reads as a square
-    /// in a rounded box.
-    fn render_source_swatches(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let editor = theme.editor;
-        let cell = |item: SourceTab, cx: &mut Context<Self>| {
-            let selected = tab == item;
-            let group = SharedString::from(format!("background-source-{item:?}"));
-            div()
-                .id(group.clone())
-                .group(group.clone())
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(5.))
-                .px(px(SOURCE_CELL_INSET))
-                .pt(px(SOURCE_CELL_INSET))
-                .pb(px(5.))
-                .rounded(px(SOURCE_CELL_RADIUS))
-                .cursor_pointer()
-                .map(|this| {
-                    if selected {
-                        this.bg(editor.pill_fill()).shadow(editor.pill_shadow())
-                    } else {
-                        this.hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
-                    }
-                })
-                .child(
-                    div()
-                        .relative()
-                        .w_full()
-                        .h(px(SOURCE_PREVIEW_HEIGHT))
-                        .rounded(px(SOURCE_PREVIEW_RADIUS))
-                        .child(self.source_swatch(item, px(SOURCE_PREVIEW_RADIUS)))
-                        .child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .rounded(px(SOURCE_PREVIEW_RADIUS))
-                                .shadow(editor.trough_ring()),
-                        ),
-                )
-                .child(
-                    div()
-                        .max_w_full()
-                        .truncate()
-                        .text_size(px(11.))
-                        .text_color(Hsla::from(if selected {
-                            editor.text_1
-                        } else {
-                            editor.text_2
-                        }))
-                        .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
-                        .when(!selected, |this| {
-                            this.group_hover(group, |this| {
-                                this.text_color(Hsla::from(editor.text_1))
-                            })
-                        })
-                        .child(item.label()),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_source_tab(item, window, cx);
-                }))
-        };
-        div()
-            .id("background-sources")
-            .flex()
-            .flex_row()
-            .w_full()
-            .p(px(SOURCE_TROUGH_PADDING))
-            .rounded(px(SOURCE_TROUGH_RADIUS))
-            .bg(Hsla::from(editor.ctl))
-            .shadow(editor.trough_ring())
-            .children(SourceTab::PICKER.map(|item| cell(item, cx)))
-    }
-
-    /// What one source swatch shows: the project's own value for that source
-    /// when it has one, otherwise what picking it would start from.
-    fn source_swatch(&self, item: SourceTab, radius: Pixels) -> AnyElement {
-        let editor = self.theme.editor;
-        let source = &self.style_background().source;
-        let picture = |image: Option<Arc<RenderImage>>, icon: &'static str| match image {
-            Some(image) => img(image)
-                .size_full()
-                .object_fit(gpui::ObjectFit::Cover)
-                .rounded(radius)
-                .into_any_element(),
-            None => div()
-                .size_full()
-                .rounded(radius)
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(Hsla::from(editor.ctl))
-                .child(
-                    svg()
-                        .path(icon)
-                        .size(px(16.))
-                        .text_color(Hsla::from(editor.text_3)),
-                )
-                .into_any_element(),
-        };
-        match item {
-            SourceTab::Wallpaper => {
-                let chosen = match source {
-                    BackgroundSource::Wallpaper { path: Some(path) }
-                        if !is_current_desktop_background_path(Some(path)) =>
-                    {
-                        wallpaper_id_for_path(path)
-                    }
-                    _ => None,
-                };
-                let image = chosen
-                    .and_then(|id| self.sidebar.wallpapers.get(id))
-                    .or_else(|| {
-                        wallpapers_for_theme(BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0)
-                            .into_iter()
-                            .find_map(|id| self.sidebar.wallpapers.get(id))
-                    })
-                    .cloned();
-                picture(image, "icons/image.svg")
-            }
-            SourceTab::AnimatedGradient => {
-                let config = self
-                    .animated_gradient_config()
-                    .or(self.sidebar.animated_gradient.library.last_used.as_ref())
-                    .cloned()
-                    .unwrap_or_default();
-                animated_gradient::palette(&config, radius).into_any_element()
-            }
-            SourceTab::Gradient => {
-                let (from, to, angle) = match source {
-                    BackgroundSource::Gradient {
-                        from, to, angle, ..
-                    } => (*from, *to, f32::from(*angle)),
-                    _ => (DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, 90.),
-                };
-                div()
-                    .size_full()
-                    .rounded(radius)
-                    .bg(linear_gradient(
-                        angle,
-                        linear_color_stop(color_to_hsla(from), 0.),
-                        linear_color_stop(color_to_hsla(to), 1.),
-                    ))
-                    .into_any_element()
-            }
-            SourceTab::Color => {
-                let value = match source {
-                    BackgroundSource::Color { value, .. } => *value,
-                    _ => DEFAULT_GRADIENT_FROM,
-                };
-                div()
-                    .size_full()
-                    .rounded(radius)
-                    .bg(color_to_hsla(value))
-                    .into_any_element()
-            }
-            SourceTab::Image => {
-                let image = match source {
-                    BackgroundSource::Image { path: Some(path) } => {
-                        self.sidebar.source_thumbs.get(Path::new(path)).cloned()
-                    }
-                    _ => None,
-                };
-                picture(image, "icons/folder-open.svg")
-            }
-            SourceTab::Desktop => {
-                let image = self
-                    .sidebar
-                    .desktop_background
-                    .as_ref()
-                    .and_then(|path| self.sidebar.source_thumbs.get(path))
-                    .cloned();
-                picture(image, "icons/monitor-outline.svg")
-            }
-            SourceTab::None => div().into_any_element(),
-        }
-    }
-
-    /// Small decodes of the chosen image and the imported desktop picture for
-    /// their source swatches, off the render path and once per file.
-    fn ensure_source_thumbs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let image = match &self.style_background().source {
-            BackgroundSource::Image { path: Some(path) } => Some(PathBuf::from(path)),
-            _ => None,
-        };
-        let wanted: Vec<PathBuf> = image
-            .into_iter()
-            .chain(self.sidebar.desktop_background.clone())
-            .filter(|path| !self.sidebar.source_thumbs.contains_key(path))
-            .collect();
-        if wanted.is_empty() {
-            return;
-        }
-        self.sidebar.source_thumb_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let decoded = cx
-                .background_executor()
-                .spawn(async move {
-                    wanted
-                        .into_iter()
-                        .filter_map(|path| {
-                            decode_scaled(&path, WALLPAPER_TILE_MAX).map(|image| (path, image))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.sidebar.source_thumbs.extend(decoded);
-                cx.notify();
-            })
-            .ok();
-        }));
     }
 
     /// The decoded preview for a path, if it is the one already decoded.
@@ -4657,55 +4439,6 @@ mod tests {
     /// group opens, so the Image swatch and preview show it rather than the
     /// empty folder.
     #[cfg(target_os = "linux")]
-    #[gpui::test]
-    fn opening_a_style_background_decodes_its_own_image(cx: &mut gpui::TestAppContext) {
-        let project = tempfile::tempdir().unwrap();
-        let image_path = project.path().join("style-background.png");
-        image::RgbaImage::from_pixel(8, 8, image::Rgba([40, 90, 200, 255]))
-            .save(&image_path)
-            .unwrap();
-        let project_path = project.path().to_path_buf();
-        let (editor, cx) = cx.add_window_view(move |window, cx| {
-            crate::editor_window::EditorWindow::new(project_path.clone(), window, cx)
-        });
-        let style_image = image_path.to_string_lossy().into_owned();
-        editor.update_in(cx, |editor, window, cx| {
-            let mut config = editor.project.clone();
-            config.timeline = Some(cap_project::TimelineConfiguration {
-                segments: Vec::new(),
-                transitions: Vec::new(),
-                zoom_segments: Vec::new(),
-                scene_segments: Vec::new(),
-                mask_segments: Vec::new(),
-                text_segments: Vec::new(),
-                caption_segments: Vec::new(),
-                keyboard_segments: Vec::new(),
-                audio_segments: Vec::new(),
-                image_segments: Vec::new(),
-                shape_segments: Vec::new(),
-                camera3d_segments: Vec::new(),
-                style_segments: vec![cap_project::StyleSegment {
-                    overrides: cap_project::StyleOverrides {
-                        background: Some(cap_project::BackgroundConfiguration {
-                            source: BackgroundSource::Image {
-                                path: Some(style_image.clone()),
-                            },
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }],
-            });
-            editor.project = config;
-            editor.open_style_group(0, StyleGroup::Background, window, cx);
-        });
-        cx.run_until_parked();
-        editor.update(cx, |editor, _| {
-            assert!(editor.sidebar.source_thumbs.contains_key(&image_path));
-        });
-    }
-
     #[test]
     fn a_new_grain_step_retires_the_old_texture_for_atlas_eviction() {
         let mut noise = NoiseCache::default();
