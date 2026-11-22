@@ -1273,6 +1273,25 @@ start_failed = "システムがこのカメラを起動できませんでした�
 timeout = "このカメラから映像が届きませんでした。閉じている、接続が切れている、覆われている、またはほかのアプリで使用中の可能性があります。"
 unavailable_title = "カメラを使用できません"
 
+[camera.toolbar]
+close = "カメラを閉じる"
+larger = "大きくする"
+smaller = "小さくする"
+size_body = "角をドラッグしてもサイズを変えられます。"
+shape = "形を変更"
+shape_to_square = "正方形に切り替えます。"
+shape_to_full = "カメラ全体を映す長方形に切り替えます。"
+shape_to_round = "円に戻します。"
+mirror = "プレビューを反転"
+mirror_off = "プレビューを鏡のように反転します。"
+mirror_on = "反転中です。クリックすると元に戻ります。"
+blur = "背景ぼかし"
+blur_off = "オフ。クリックすると弱くぼかします。"
+blur_light = "弱。クリックすると強くぼかします。"
+blur_heavy_then_cutout = "強。クリックすると背景を消します。"
+blur_heavy_then_off = "強。クリックするとオフにします。"
+blur_cutout = "背景を消しています。クリックするとオフにします。"
+
 [camera.blur]
 light = "弱"
 heavy = "強"

@@ -1273,6 +1273,25 @@ start_failed = "El sistema no pudo iniciar esta cámara. Puede que no esté disp
 timeout = "No se recibieron imágenes de esta cámara. Puede que esté cerrada, desconectada, tapada o en uso por otra app."
 unavailable_title = "Cámara no disponible"
 
+[camera.toolbar]
+close = "Cerrar cámara"
+larger = "Agrandar"
+smaller = "Reducir"
+size_body = "O arrastra cualquier esquina."
+shape = "Cambiar forma"
+shape_to_square = "Cambiar a un cuadrado."
+shape_to_full = "Cambiar a un rectángulo que muestra toda la cámara."
+shape_to_round = "Volver a un círculo."
+mirror = "Vista previa en espejo"
+mirror_off = "Invierte la vista previa como un espejo."
+mirror_on = "En espejo. Haz clic para quitarlo."
+blur = "Desenfoque de fondo"
+blur_off = "Desactivado. Haz clic para un desenfoque suave."
+blur_light = "Suave. Haz clic para más desenfoque."
+blur_heavy_then_cutout = "Fuerte. Haz clic para quitar el fondo."
+blur_heavy_then_off = "Fuerte. Haz clic para desactivarlo."
+blur_cutout = "Fondo quitado. Haz clic para desactivarlo."
+
 [camera.blur]
 light = "Suave"
 heavy = "Fuerte"

@@ -1273,6 +1273,25 @@ start_failed = "Le système n'a pas pu démarrer cette caméra. Elle est peut-ê
 timeout = "Aucune image n'a été reçue de cette caméra. Elle est peut-être fermée, déconnectée, masquée ou utilisée par une autre app."
 unavailable_title = "Caméra indisponible"
 
+[camera.toolbar]
+close = "Fermer la caméra"
+larger = "Agrandir"
+smaller = "Réduire"
+size_body = "Ou faites glisser un coin."
+shape = "Changer de forme"
+shape_to_square = "Passer à un carré."
+shape_to_full = "Passer à un rectangle qui montre toute la caméra."
+shape_to_round = "Revenir au cercle."
+mirror = "Aperçu en miroir"
+mirror_off = "Retourner l'aperçu comme un miroir."
+mirror_on = "En miroir. Cliquez pour l'annuler."
+blur = "Flou d'arrière-plan"
+blur_off = "Désactivé. Cliquez pour un flou léger."
+blur_light = "Léger. Cliquez pour un flou plus fort."
+blur_heavy_then_cutout = "Fort. Cliquez pour retirer l'arrière-plan."
+blur_heavy_then_off = "Fort. Cliquez pour le désactiver."
+blur_cutout = "Arrière-plan retiré. Cliquez pour le désactiver."
+
 [camera.blur]
 light = "Léger"
 heavy = "Fort"
