@@ -136,7 +136,10 @@ async fn library(cx: &mut AsyncApp) {
         }
     }
 
+    // Each direction on its own too: the two pages cost differently, so the
+    // mixed p50 sits between two clusters.
     let mut samples = Vec::new();
+    let mut to = [Vec::new(), Vec::new()];
     for i in 0..40 {
         let started = Instant::now();
         with_view(cx, |view, cx| {
@@ -150,10 +153,14 @@ async fn library(cx: &mut AsyncApp) {
             )
         });
         draw(cx);
-        samples.push(started.elapsed().as_secs_f64() * 1e6);
+        let us = started.elapsed().as_secs_f64() * 1e6;
+        samples.push(us);
+        to[i % 2].push(us);
         sleep(cx, 20).await;
     }
     report(PREFIX, "layout-switch", &mut samples);
+    report(PREFIX, "layout-to-magazine", &mut to[0]);
+    report(PREFIX, "layout-to-list", &mut to[1]);
 
     let sections: Vec<Section> = with_view(cx, |view, _| {
         let mut out = vec![
@@ -365,11 +372,15 @@ async fn switching(cx: &mut AsyncApp) {
     for (label, section) in [
         ("home", Section::Home),
         ("screenshots", Section::Kind(KindView::Screenshots)),
+        ("notes", Section::Kind(KindView::Notes)),
     ] {
-        with_view(cx, |view, cx| view.show(section.clone(), cx));
+        with_view(cx, |view, cx| {
+            view.set_layout(Layout::List, cx);
+            view.show(section.clone(), cx);
+        });
         draw(cx);
-        let mut samples = Vec::new();
-        for i in 0..100 {
+        let mut to = [Vec::new(), Vec::new()];
+        for i in 0..200 {
             let started = Instant::now();
             with_view(cx, |view, cx| {
                 view.set_layout(
@@ -382,10 +393,11 @@ async fn switching(cx: &mut AsyncApp) {
                 )
             });
             draw(cx);
-            samples.push(started.elapsed().as_secs_f64() * 1e6);
+            to[i % 2].push(started.elapsed().as_secs_f64() * 1e6);
             sleep(cx, 15).await;
         }
-        report(PREFIX, &format!("layout-switch-{label}"), &mut samples);
+        report(PREFIX, &format!("to-magazine-{label}"), &mut to[0]);
+        report(PREFIX, &format!("to-list-{label}"), &mut to[1]);
     }
 }
 
