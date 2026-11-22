@@ -197,10 +197,7 @@ pub const GRADIENT_PRESETS: [([u16; 3], [u16; 3]); 18] = [
     ([255, 0, 255], [0, 255, 0]),
 ];
 
-/// The colour the Color tab starts from.
 pub const DEFAULT_COLOR: Color = [71, 133, 255];
-/// The gradient the Gradient tab starts from: sky blue into indigo, across
-/// the frame's diagonal.
 pub const DEFAULT_GRADIENT_FROM: Color = [14, 165, 233];
 pub const DEFAULT_GRADIENT_TO: Color = [79, 70, 229];
 pub const DEFAULT_GRADIENT_ANGLE: u16 = 135;
