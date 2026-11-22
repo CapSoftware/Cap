@@ -193,3 +193,43 @@ fn spools_a_quit_left_behind_are_cleared_but_not_fresh_or_own_ones() {
     assert!(other.exists(), "other files stay");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn the_speech_spool_is_private_and_named_unguessably() {
+    let spool = Spool::create().unwrap();
+    let name = spool.path.file_name().unwrap().to_string_lossy().into_owned();
+    let own = format!("cap-nemotron-{}-", std::process::id());
+    assert!(name.starts_with(&own) && name.ends_with(".f32"), "{name}");
+    assert!(name.len() > own.len() + 20, "a random part follows the pid: {name}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&spool.path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let path = spool.path.clone();
+    drop(spool);
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_spool_never_writes_over_a_file_already_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let taken = dir.path().join("cap-nemotron-1-0-taken.f32");
+    std::fs::write(&taken, "keep").unwrap();
+    let error = open_private(&taken).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read_to_string(&taken).unwrap(), "keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_spool_never_follows_a_link_left_at_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("someone-elses-file");
+    std::fs::write(&target, "keep").unwrap();
+    let link = dir.path().join("cap-nemotron-1-0-link.f32");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(open_private(&link).is_err());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+}

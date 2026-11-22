@@ -439,6 +439,30 @@ fn remove_stale_spools(dir: &std::path::Path, own_pid: u32) -> usize {
     removed
 }
 
+/// The meeting's speech sits in the shared temp folder until Stop, so the
+/// name can't be guessed from the process id alone.
+fn spool_name(pid: u32, n: u64) -> String {
+    use std::hash::BuildHasher;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let token = std::collections::hash_map::RandomState::new().hash_one((pid, n, nanos));
+    format!("cap-nemotron-{pid}-{n}-{token:016x}.f32")
+}
+
+/// Opens a new spool only its owner can read, and only when nothing is at
+/// the path yet: a file or link someone else left there is never written.
+fn open_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
 impl Spool {
     fn create() -> Result<Self, String> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -447,8 +471,15 @@ impl Spool {
         if n == 0 {
             remove_stale_spools(&dir, std::process::id());
         }
-        let path = dir.join(format!("cap-nemotron-{}-{n}.f32", std::process::id()));
-        let file = std::fs::File::create(&path).map_err(|e| format!("could not keep the meeting's speech for Nemotron: {e}"))?;
+        let mut attempt = 0;
+        let (path, file) = loop {
+            let path = dir.join(spool_name(std::process::id(), n));
+            match open_private(&path) {
+                Ok(file) => break (path, file),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 8 => attempt += 1,
+                Err(e) => return Err(format!("could not keep the meeting's speech for Nemotron: {e}")),
+            }
+        };
         Ok(Self { path, file: Some(BufWriter::with_capacity(1 << 20, file)), index: Vec::new() })
     }
 
