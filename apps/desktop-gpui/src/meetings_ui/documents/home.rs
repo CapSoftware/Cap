@@ -76,6 +76,9 @@ pub struct Home {
     hits: Rc<Vec<SearchHit>>,
     search_task: Option<Task<()>>,
     search_cursor: usize,
+    /// Searches whose hits have landed, for the dev bench.
+    #[cfg(debug_assertions)]
+    searches_landed: u64,
     menu: Option<OpenMenu<Action>>,
     menu_target: Vec<String>,
     list_focus: FocusHandle,
@@ -164,6 +167,8 @@ impl Home {
             hits: Rc::new(Vec::new()),
             search_task: None,
             search_cursor: 0,
+            #[cfg(debug_assertions)]
+            searches_landed: 0,
             menu: None,
             menu_target: Vec::new(),
             list_focus: cx.focus_handle(),
@@ -435,6 +440,10 @@ impl Home {
                     return;
                 }
                 this.hits = Rc::new(hits);
+                #[cfg(debug_assertions)]
+                {
+                    this.searches_landed += 1;
+                }
                 this.search_cursor = 0;
                 this.rebuild(cx);
             })
@@ -1643,6 +1652,10 @@ impl Home {
         let query = query.to_string();
         self.search.update(cx, |s, cx| s.set_text(query, cx));
         self.query_changed(cx);
+    }
+
+    pub fn debug_searches_landed(&self) -> u64 {
+        self.searches_landed
     }
 
     pub fn debug_menu(&mut self, cx: &mut Context<Self>) {

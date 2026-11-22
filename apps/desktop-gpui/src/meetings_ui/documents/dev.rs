@@ -223,7 +223,13 @@ pub fn seed(root: &Path, count: usize, audio: Option<&Path>) -> std::io::Result<
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1)
             .max(1);
-        seed_corpus(&library, Path::new(transcript), Path::new(notes), repeat, now)?;
+        seed_corpus(
+            &library,
+            Path::new(transcript),
+            Path::new(notes),
+            repeat,
+            now,
+        )?;
         made += 1;
     }
     // CAP_GPUI_DOCS_LONG=<n>: every summary and set of typed notes repeated n
@@ -958,6 +964,7 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
         "switch" => {
             let mut total = Vec::new();
             let mut load = Vec::new();
+            let mut draws = Vec::new();
             for i in 0..30 {
                 let id = cx.update(|cx| {
                     handle
@@ -991,7 +998,11 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
                     }
                     sleep(cx, 1).await;
                 }
-                cx.update(|cx| crate::draw_bench::timed_draw(handle.into(), cx));
+                if let Some(frame) =
+                    cx.update(|cx| crate::draw_bench::timed_draw(handle.into(), cx))
+                {
+                    draws.push(frame.as_secs_f64() * 1e6);
+                }
                 total.push(started.elapsed().as_secs_f64() * 1e6);
                 if let Some(ms) = loaded_ms {
                     load.push(ms * 1000.);
@@ -1000,6 +1011,73 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
             }
             crate::draw_bench::report("documents-bench", "switch-to-first-paint", &mut total);
             crate::draw_bench::report("documents-bench", "switch-load-only", &mut load);
+            crate::draw_bench::report("documents-bench", "switch-draw", &mut draws);
+        }
+        // The sidebar search as typed: the frame each key draws, then the
+        // frame its hits land in (the search itself runs off the main thread).
+        "search" => {
+            cx.update(|cx| {
+                handle
+                    .update(cx, |root, window, cx| {
+                        root.show_home(Some(Scope::All), window, cx)
+                    })
+                    .ok();
+            });
+            sleep(cx, 200).await;
+            let mut keys = Vec::new();
+            let mut landed = Vec::new();
+            for word in ["design review", "pricing", "ana", "roadmap planning"] {
+                for end in 1..=word.len() {
+                    let typed = &word[..end];
+                    let before = cx.update(|cx| {
+                        handle
+                            .read(cx)
+                            .ok()
+                            .map(|root| root.home.read(cx).debug_searches_landed())
+                            .unwrap_or(0)
+                    });
+                    let started = Instant::now();
+                    cx.update(|cx| {
+                        handle
+                            .update(cx, |root, window, cx| {
+                                root.home
+                                    .update(cx, |h, cx| h.debug_search(typed, window, cx))
+                            })
+                            .ok();
+                        crate::draw_bench::timed_draw(handle.into(), cx);
+                    });
+                    keys.push(started.elapsed().as_secs_f64() * 1e6);
+                    for _ in 0..400 {
+                        let now = cx.update(|cx| {
+                            handle
+                                .read(cx)
+                                .ok()
+                                .map(|root| root.home.read(cx).debug_searches_landed())
+                                .unwrap_or(0)
+                        });
+                        if now != before {
+                            break;
+                        }
+                        sleep(cx, 2).await;
+                    }
+                    if let Some(frame) =
+                        cx.update(|cx| crate::draw_bench::timed_draw(handle.into(), cx))
+                    {
+                        landed.push(frame.as_secs_f64() * 1e6);
+                    }
+                }
+                cx.update(|cx| {
+                    handle
+                        .update(cx, |root, window, cx| {
+                            root.home.update(cx, |h, cx| h.debug_search("", window, cx))
+                        })
+                        .ok();
+                    crate::draw_bench::timed_draw(handle.into(), cx);
+                });
+                sleep(cx, 50).await;
+            }
+            crate::draw_bench::report("documents-bench", "search-key", &mut keys);
+            crate::draw_bench::report("documents-bench", "search-hits", &mut landed);
         }
         "draw" => {
             let mut samples = Vec::new();
@@ -1028,7 +1106,11 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
                             list.scroll_by(gpui::px(delta));
                             // As a wheel does: the list's own view and the
                             // transcript's scroll handler both hear of it.
-                            root.pane.read(cx).transcript.clone().update(cx, |t, cx| t.changed(cx));
+                            root.pane
+                                .read(cx)
+                                .transcript
+                                .clone()
+                                .update(cx, |t, cx| t.changed(cx));
                         })
                         .ok();
                 });
@@ -1055,7 +1137,9 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
                 })
             };
             let (lines, resizes) = counts(cx);
-            println!("documents-bench: page-counts after scroll: lines renders {lines}, lead resizes {resizes}");
+            println!(
+                "documents-bench: page-counts after scroll: lines renders {lines}, lead resizes {resizes}"
+            );
             let mut lit = Vec::new();
             for i in 0..60 {
                 cx.update(|cx| {
@@ -1110,7 +1194,9 @@ async fn run_bench(kind: &str, handle: WindowHandle<DocumentsWindow>, cx: &mut A
             sleep(cx, 1500).await;
             cx.update(|cx| {
                 handle
-                    .update(cx, |root, _, cx| root.pane.update(cx, |p, cx| p.debug_sheet(cx)))
+                    .update(cx, |root, _, cx| {
+                        root.pane.update(cx, |p, cx| p.debug_sheet(cx))
+                    })
                     .ok()
             });
             sleep(cx, 3500).await;
