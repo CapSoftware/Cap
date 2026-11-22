@@ -10,6 +10,7 @@ pub mod capture;
 pub mod cloud;
 #[cfg(debug_assertions)]
 pub mod dev;
+pub mod device;
 pub mod engine;
 pub mod generate;
 pub mod health;
