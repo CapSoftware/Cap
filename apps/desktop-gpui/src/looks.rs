@@ -2,12 +2,14 @@
 //!
 //! A look sets only what makes a recording look a certain way -- the
 //! background, framing, shadow, border and frame, how zooms move, how the
-//! cursor glides, the key-press keys and the caption style -- and leaves the
-//! timeline, camera, audio and everything else in the project as it is.
+//! cursor glides, the key-press colours and the caption style -- and leaves
+//! the timeline, camera, audio and everything else in the project as it is.
+//! Which cursor shapes and key style the video shows (macOS, Windows and so
+//! on) stay the user's choice: a look never switches them.
 
 use cap_project::{
     AnimatedGradientConfig, BackgroundSource, BorderConfiguration, CornerStyle,
-    CursorAnimationStyle, CursorType, FrameConfiguration, FrameStyle, FrameTheme, KeyboardData,
+    CursorAnimationStyle, FrameConfiguration, FrameStyle, FrameTheme, KeyboardData,
     KeyboardSettings, PaddingMode, ProjectConfiguration, ScreenMovementSpring, ShadowConfiguration,
 };
 
@@ -27,30 +29,9 @@ pub enum LookBackground {
     Animated(&'static str),
 }
 
-/// The cursor shapes a look draws.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LookCursorStyle {
-    Recorded,
-    MacOS,
-    Tahoe,
-    Windows,
-}
-
-impl LookCursorStyle {
-    pub fn cursor_type(self) -> CursorType {
-        match self {
-            Self::Recorded => CursorType::Auto,
-            Self::MacOS => CursorType::MacOS,
-            Self::Tahoe => CursorType::MacOSTahoe,
-            Self::Windows => CursorType::Windows,
-        }
-    }
-}
-
 /// How a look draws the cursor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LookCursor {
-    pub style: LookCursorStyle,
     /// Percent of the recorded size.
     pub size: u32,
     pub ripple: bool,
@@ -58,10 +39,9 @@ pub struct LookCursor {
     pub motion_blur: f32,
 }
 
-/// The key-press keys a look uses; `None` style keeps the platform's own.
+/// The key-press colours a look uses. The key style is left as it is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LookKeys {
-    pub style: Option<&'static str>,
     pub theme: &'static str,
 }
 
@@ -110,15 +90,11 @@ pub static LOOKS: [Look; 8] = [
         },
         cursor: CursorAnimationStyle::Smooth,
         pointer: LookCursor {
-            style: LookCursorStyle::MacOS,
             size: 150,
             ripple: true,
             motion_blur: 1.0,
         },
-        keys: LookKeys {
-            style: Some("macos"),
-            theme: "dark",
-        },
+        keys: LookKeys { theme: "dark" },
         captions: "soft",
         dark_app: false,
     },
@@ -135,15 +111,11 @@ pub static LOOKS: [Look; 8] = [
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
         pointer: LookCursor {
-            style: LookCursorStyle::Tahoe,
             size: 120,
             ripple: false,
             motion_blur: 0.6,
         },
-        keys: LookKeys {
-            style: Some("macos"),
-            theme: "light",
-        },
+        keys: LookKeys { theme: "light" },
         captions: "soft",
         dark_app: false,
     },
@@ -160,15 +132,11 @@ pub static LOOKS: [Look; 8] = [
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
         pointer: LookCursor {
-            style: LookCursorStyle::MacOS,
             size: 130,
             ripple: true,
             motion_blur: 1.0,
         },
-        keys: LookKeys {
-            style: Some("macos"),
-            theme: "dark",
-        },
+        keys: LookKeys { theme: "dark" },
         captions: "soft",
         dark_app: true,
     },
@@ -185,15 +153,11 @@ pub static LOOKS: [Look; 8] = [
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
         pointer: LookCursor {
-            style: LookCursorStyle::Recorded,
             size: 100,
             ripple: false,
             motion_blur: 0.3,
         },
-        keys: LookKeys {
-            style: None,
-            theme: "light",
-        },
+        keys: LookKeys { theme: "light" },
         captions: "classic",
         dark_app: false,
     },
@@ -215,15 +179,11 @@ pub static LOOKS: [Look; 8] = [
         },
         cursor: CursorAnimationStyle::Fast,
         pointer: LookCursor {
-            style: LookCursorStyle::MacOS,
             size: 170,
             ripple: true,
             motion_blur: 1.0,
         },
-        keys: LookKeys {
-            style: Some("macos"),
-            theme: "dark",
-        },
+        keys: LookKeys { theme: "dark" },
         captions: "highlight",
         dark_app: false,
     },
@@ -245,15 +205,11 @@ pub static LOOKS: [Look; 8] = [
         },
         cursor: CursorAnimationStyle::Slow,
         pointer: LookCursor {
-            style: LookCursorStyle::MacOS,
             size: 200,
             ripple: true,
             motion_blur: 0.5,
         },
-        keys: LookKeys {
-            style: None,
-            theme: "light",
-        },
+        keys: LookKeys { theme: "light" },
         captions: "karaoke",
         dark_app: false,
     },
@@ -274,15 +230,11 @@ pub static LOOKS: [Look; 8] = [
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
         pointer: LookCursor {
-            style: LookCursorStyle::Tahoe,
             size: 120,
             ripple: true,
             motion_blur: 0.8,
         },
-        keys: LookKeys {
-            style: None,
-            theme: "light",
-        },
+        keys: LookKeys { theme: "light" },
         captions: "soft",
         dark_app: false,
     },
@@ -303,15 +255,11 @@ pub static LOOKS: [Look; 8] = [
         zoom: DEFAULT_ZOOM,
         cursor: CursorAnimationStyle::Mellow,
         pointer: LookCursor {
-            style: LookCursorStyle::Windows,
             size: 130,
             ripple: false,
             motion_blur: 0.6,
         },
-        keys: LookKeys {
-            style: Some("mechanical"),
-            theme: "retro",
-        },
+        keys: LookKeys { theme: "retro" },
         captions: "classic",
         dark_app: false,
     },
@@ -382,8 +330,6 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
 
     next.screen_movement_spring = look.zoom;
 
-    next.cursor
-        .set_cursor_type(look.pointer.style.cursor_type());
     next.cursor.size = look.pointer.size;
     next.cursor.ripple.enabled = look.pointer.ripple;
     // One slider drives both blurs in the editor.
@@ -399,10 +345,6 @@ pub fn apply_look(look: &Look, current: &ProjectConfiguration) -> ProjectConfigu
     let keyboard = next.keyboard.get_or_insert_with(|| KeyboardData {
         settings: KeyboardSettings::default(),
     });
-    keyboard.settings.style = look
-        .keys
-        .style
-        .map_or_else(KeyboardSettings::platform_style, str::to_string);
     keyboard.settings.theme = look.keys.theme.to_string();
 
     if let Some(captions) = next.captions.as_mut()
@@ -422,7 +364,6 @@ pub fn take_off_look(project: &mut ProjectConfiguration, before: &ProjectConfigu
     project.screen_movement_spring = before.screen_movement_spring;
     project.screen_motion_blur = before.screen_motion_blur;
     let cursor = &mut project.cursor;
-    cursor.set_cursor_type(before.cursor.cursor_type().clone());
     cursor.size = before.cursor.size;
     cursor.ripple.enabled = before.cursor.ripple.enabled;
     cursor.motion_blur = before.cursor.motion_blur;
@@ -432,7 +373,6 @@ pub fn take_off_look(project: &mut ProjectConfiguration, before: &ProjectConfigu
     cursor.friction = before.cursor.friction;
     match (project.keyboard.as_mut(), before.keyboard.as_ref()) {
         (Some(keyboard), Some(earlier)) => {
-            keyboard.settings.style = earlier.settings.style.clone();
             keyboard.settings.theme = earlier.settings.theme.clone();
         }
         (Some(_), None) => project.keyboard = None,
@@ -498,7 +438,6 @@ fn look_settings(project: &ProjectConfiguration) -> serde_json::Value {
         "zoom": project.screen_movement_spring,
         "cursor": [
             serde_json::to_value(project.cursor.animation_style).ok(),
-            serde_json::to_value(project.cursor.cursor_type()).ok(),
             serde_json::json!(project.cursor.tension),
             serde_json::json!(project.cursor.mass),
             serde_json::json!(project.cursor.friction),
@@ -507,9 +446,10 @@ fn look_settings(project: &ProjectConfiguration) -> serde_json::Value {
             serde_json::json!(project.cursor.motion_blur),
             serde_json::json!(project.screen_motion_blur),
         ],
-        "keys": project.keyboard.as_ref().map(|keyboard| {
-            (keyboard.settings.style.clone(), keyboard.settings.theme.clone())
-        }),
+        "keys": project
+            .keyboard
+            .as_ref()
+            .map(|keyboard| keyboard.settings.theme.clone()),
         "captions": project.captions.as_ref().map(|captions| &captions.settings),
     })
 }
@@ -572,13 +512,17 @@ mod tests {
             next.cursor.animation_style,
             CursorAnimationStyle::Fast
         ));
-        assert_eq!(next.keyboard.as_ref().unwrap().settings.style, "macos");
-        // The cursor is part of the look: its style, size and ripple.
-        assert_eq!(next.cursor.cursor_type(), &CursorType::MacOS);
+        // The cursor's size and ripple are part of the look.
         assert_eq!(next.cursor.size, 170);
         assert!(next.cursor.ripple.enabled);
-        // Untouched: the camera and whether keys show.
+        // Untouched: the camera, whether keys show, and which cursor shapes
+        // and key style the video draws.
         assert_eq!(next.camera.size, 33.0);
+        assert_eq!(next.cursor.cursor_type(), project.cursor.cursor_type());
+        assert_eq!(
+            next.keyboard.as_ref().unwrap().settings.style,
+            KeyboardSettings::default().style
+        );
         assert!(!next.keyboard.as_ref().unwrap().settings.enabled);
         assert_eq!(current_look(&next), Some("launch-day"));
         assert_eq!(current_look(&project), None);

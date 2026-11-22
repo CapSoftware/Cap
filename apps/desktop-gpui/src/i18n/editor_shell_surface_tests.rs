@@ -1404,8 +1404,17 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::timeline::empty::add_key(), "Add keystrokes"),
         (
             tr::editor::timeline::empty::keyboard_shortcuts(),
-            "No shortcuts",
+            "Showing shortcuts only",
         ),
+        (
+            tr::editor::timeline::empty::show_all_keys(),
+            "Show all keys",
+        ),
+        (
+            tr::editor::timeline::empty::keyboard_recorded(),
+            "Recorded keys aren't shown",
+        ),
+        (tr::editor::timeline::empty::show_keys(), "Show keys"),
         (
             tr::editor::window::open::damaged(),
             "This recording's video tracks could not be opened. The bundle looks damaged.",
@@ -1450,7 +1459,11 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::window::presets::set_default(), "Set as default"),
         (tr::editor::window::preview::full(), "Full"),
         (tr::editor::window::preview::half(), "Half"),
-        (tr::editor::window::preview::label(), "Preview"),
+        (tr::editor::window::preview::label(), "Preview quality"),
+        (
+            tr::editor::window::preview::tooltip(),
+            "How sharp the preview draws while you edit. It never changes your export.",
+        ),
         (tr::editor::window::preview::quarter(), "Quarter"),
         (tr::editor::window::redo(), "Redo"),
         (tr::editor::window::text_menu::copy_style(), "Copy style"),
@@ -1493,6 +1506,12 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::markers::delete(), "Delete marker"),
         (tr::editor::markers::done(), "Done"),
         (tr::editor::markers::split(), "Split clips at markers"),
+        (tr::editor::markers::finish(), "Done marking"),
+        (tr::editor::markers::list(), "Show all markers"),
+        (
+            tr::editor::markers::mode_tooltip(),
+            "Click the timeline to add a marker. Esc to finish.",
+        ),
         (
             tr::editor::markers::empty(),
             "No markers yet. Press M to mark the playhead, or add markers while you record.",

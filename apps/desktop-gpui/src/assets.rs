@@ -74,6 +74,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "eye-off.svg",
     "film-cut.svg",
     "flip-horizontal-2.svg",
+    "focus.svg",
     "folder.svg",
     "gauge.svg",
     "gear.svg",
@@ -163,6 +164,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     "user-round.svg",
     "window.svg",
     "x.svg",
+    "x-mark.svg",
     // E5b's field glyphs: the rest of the sidebar's Lucide set, drawn from the
     // same 24x24 originals `~icons/lucide/*` resolves to. `ease-curve` stands
     // in for `~icons/hugeicons/ease-curve-control-points`, which is the one
@@ -331,6 +333,7 @@ mod tests {
         include_str!("editor_window/frame.rs"),
         include_str!("editor_window/scenes.rs"),
         include_str!("editor_window/markers.rs"),
+        include_str!("editor_window/enhance.rs"),
         // The timeline's nine track glyphs and its scene-mode icons are named
         // in the strip's own module, not in the window that hosts it.
         include_str!("editor_timeline.rs"),

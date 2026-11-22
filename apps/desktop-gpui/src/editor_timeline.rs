@@ -2088,6 +2088,9 @@ pub struct SegmentUi<'a> {
     /// `editorState.timeline.interactMode === "split"`, which swaps the cursor
     /// and turns a segment press into a cut.
     pub split_mode: bool,
+    /// Marker mode, where a press anywhere on the timeline drops a marker:
+    /// segments take the same crosshair and hide their trim handles.
+    pub marker_mode: bool,
     /// The segment under the pointer, as `(track, lane, index)`. This is the
     /// `group-hover` the handles' `opacity-100` hangs off
     /// (`TL/Track.tsx:250`).
@@ -2107,9 +2110,9 @@ pub struct SegmentUi<'a> {
     /// Which end of the selected 3D shot the panel is editing, for the pose
     /// dots on its box.
     pub camera3d_editing_end: bool,
-    /// Only shortcuts are shown, so an empty keyboard lane says no
-    /// shortcuts rather than no keys.
-    pub keyboard_shortcuts_only: bool,
+    /// What the empty keyboard lane offers: the recording's keys, the typing
+    /// showing shortcuts only hides, or keys typed in by hand.
+    pub key_lane_offer: crate::editor_tabs::KeyLaneOffer,
 }
 
 impl SegmentUi<'_> {
@@ -2534,7 +2537,7 @@ fn render_track_content(
             row.kind,
             view.hovered_track == Some(row.kind),
             row.kind == TrackKind::Audio && ui.audio_picker_lane == Some(row.lane),
-            ui.keyboard_shortcuts_only,
+            ui.key_lane_offer,
         )
     {
         content = content.child(empty);
@@ -2582,6 +2585,7 @@ fn render_track_content(
             ui.is_selected(row.kind, index),
             ui.is_hovered(row.kind, row.lane, index),
             ui.split_mode,
+            ui.marker_mode,
             ui.camera3d_editing_end,
         ));
     }
@@ -2592,6 +2596,7 @@ fn render_track_content(
     // land. Pressing it is what creates the segment.
     if row.kind == TrackKind::Zoom
         && !ui.dragging
+        && !ui.marker_mode
         && !ui.hovering_generate_zoom
         && view.hovered_track == Some(TrackKind::Zoom)
         && let Some(preview) = view.preview_time
@@ -3005,20 +3010,29 @@ fn render_empty_track(
     kind: TrackKind,
     hovered: bool,
     active: bool,
-    keyboard_shortcuts_only: bool,
+    key_lane_offer: crate::editor_tabs::KeyLaneOffer,
 ) -> Option<AnyElement> {
     let (copy, action) = match kind {
         // `TL/CaptionsTrack.tsx:146-160`.
         TrackKind::Caption => (tr::editor::timeline::empty::captions(), None),
         // `TL/KeyboardTrack.tsx:146-153`.
-        TrackKind::Keyboard => (
-            if keyboard_shortcuts_only {
-                tr::editor::timeline::empty::keyboard_shortcuts()
-            } else {
-                tr::editor::timeline::empty::keyboard()
-            },
-            Some(tr::editor::timeline::empty::add_key()),
-        ),
+        // A press puts the recording's keys back, shows the typing the
+        // Shortcuts setting hides, or adds keys by hand, and the copy says
+        // which.
+        TrackKind::Keyboard => match key_lane_offer {
+            crate::editor_tabs::KeyLaneOffer::Recorded => (
+                tr::editor::timeline::empty::keyboard_recorded(),
+                Some(tr::editor::timeline::empty::show_keys()),
+            ),
+            crate::editor_tabs::KeyLaneOffer::Typing => (
+                tr::editor::timeline::empty::keyboard_shortcuts(),
+                Some(tr::editor::timeline::empty::show_all_keys()),
+            ),
+            crate::editor_tabs::KeyLaneOffer::AddByHand => (
+                tr::editor::timeline::empty::keyboard(),
+                Some(tr::editor::timeline::empty::add_key()),
+            ),
+        },
         // `TL/AudioTrack.tsx:400-427`, `TL/ThreeDTrack.tsx:319-337`, and the
         // scene lane, which had no empty state at all.
         TrackKind::Audio => (
@@ -3077,8 +3091,10 @@ fn render_segment(
     selected: bool,
     hovered: bool,
     split_mode: bool,
+    marker_mode: bool,
     camera3d_editing_end: bool,
 ) -> AnyElement {
+    let placing = split_mode || marker_mode;
     let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
         muted_clip_color(theme)
     } else {
@@ -3288,7 +3304,7 @@ fn render_segment(
         // `interactMode === "split" && "timeline-scissors-cursor"`
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
         // this rev has the standard set only, so a crosshair stands in.
-        .when(split_mode, |this| this.cursor(gpui::CursorStyle::Crosshair))
+        .when(placing, |this| this.cursor(gpui::CursorStyle::Crosshair))
         .child(fill)
         .child(
             div()
@@ -3309,7 +3325,7 @@ fn render_segment(
                     }
                 }),
         )
-        .when(!split_mode, |this| {
+        .when(!placing, |this| {
             this.child(render_handle(theme, color, true, handle_opacity))
                 .child(render_handle(theme, color, false, handle_opacity))
         })

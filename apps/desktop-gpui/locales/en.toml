@@ -3095,8 +3095,11 @@ add_scene = "Add scene"
 audio = "Add background music or import your own audio"
 captions = "No captions"
 keyboard = "No keyboard events"
-keyboard_shortcuts = "No shortcuts"
+keyboard_recorded = { text = "Recorded keys aren't shown", context = "Empty keyboard lane while the recording has key presses that are not on the track (deleted or never added)." }
+keyboard_shortcuts = { text = "Showing shortcuts only", context = "Empty keyboard lane while the recording has ordinary typing that the Shortcuts setting hides." }
 scene = "Switch layouts between your screen and camera"
+show_all_keys = "Show all keys"
+show_keys = "Show keys"
 
 [editor.timeline.picker]
 audio = "Add background music or import your own audio."
@@ -3402,8 +3405,9 @@ set_default = "Set as default"
 [editor.window.preview]
 full = { text = "Full", context = "Preview quality option." }
 half = { text = "Half", context = "Preview quality option." }
-label = { text = "Preview", context = "Label in front of the preview quality picker." }
+label = { text = "Preview quality", context = "Label in front of the preview quality picker (Full, Half, Quarter)." }
 quarter = { text = "Quarter", context = "Preview quality option." }
+tooltip = "How sharp the preview draws while you edit. It never changes your export."
 
 [editor.window.text_menu]
 copy_style = "Copy style"
@@ -3474,7 +3478,10 @@ delete = "Delete marker"
 done = "Done"
 edit = "Edit marker"
 empty = "No markers yet. Press M to mark the playhead, or add markers while you record."
+finish = "Done marking"
 hidden = { one = "{count} marker is in a part you cut out.", other = "{count} markers are in parts you cut out." }
+list = "Show all markers"
+mode_tooltip = "Click the timeline to add a marker. Esc to finish."
 next = "Next marker"
 previous = "Previous marker"
 split = "Split clips at markers"

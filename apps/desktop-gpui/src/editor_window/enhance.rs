@@ -1,6 +1,7 @@
-//! Enhance in the player toolbar: a quiet chip that takes the accent while it
-//! is on, and a card that explains what it does and stays up while the pointer
-//! is on the chip, so toggling shows the change and the new state together.
+//! Enhance in the player toolbar: a quiet chip with a small switch that reads
+//! on or off at a glance, which takes the accent while it is on, and a card
+//! that explains what it does and stays up while the pointer is on the chip,
+//! so toggling shows the change and the new state together.
 //! The card is its own small view, so its entrance repaints only the card.
 
 use super::*;
@@ -82,7 +83,7 @@ impl Render for EnhanceCard {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(Hsla::from(editor.text_1))
-                            .child(svg().path("icons/scan-text.svg").size(px(14.)).text_color(
+                            .child(svg().path("icons/focus.svg").size(px(14.)).text_color(
                                 Hsla::from(if on { editor.accent_ink } else { editor.text_1 }),
                             ))
                             .child(tr::editor::window::transport::enhance()),
@@ -131,6 +132,49 @@ impl Render for EnhanceCard {
         )
         .into_any_element()
     }
+}
+
+/// The chip's switch: a filled track with the knob at the right while on, a
+/// quiet track with it at the left while off.
+fn enhance_switch(theme: &Theme, on: bool) -> impl IntoElement {
+    const TRACK_WIDTH: f32 = 22.;
+    const TRACK_HEIGHT: f32 = 13.;
+    const INSET: f32 = 2.;
+    const KNOB: f32 = TRACK_HEIGHT - INSET * 2.;
+    let editor = theme.editor;
+    div()
+        .flex_none()
+        .relative()
+        .w(px(TRACK_WIDTH))
+        .h(px(TRACK_HEIGHT))
+        .rounded_full()
+        .map(|this| {
+            if on {
+                this.bg(Hsla::from(editor.accent))
+            } else {
+                this.bg(Hsla::from(editor.text_3).opacity(0.45))
+            }
+        })
+        .child(
+            div()
+                .absolute()
+                .top(px(INSET))
+                .left(px(if on {
+                    TRACK_WIDTH - INSET - KNOB
+                } else {
+                    INSET
+                }))
+                .size(px(KNOB))
+                .rounded_full()
+                .bg(gpui::white())
+                .shadow(vec![gpui::BoxShadow {
+                    color: gpui::hsla(0., 0., 0., 0.25),
+                    offset: gpui::point(px(0.), px(0.5)),
+                    blur_radius: px(1.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }]),
+        )
 }
 
 impl EditorWindow {
@@ -198,7 +242,7 @@ impl EditorWindow {
             }))
             .child(
                 svg()
-                    .path("icons/scan-text.svg")
+                    .path("icons/focus.svg")
                     .size(px(14.))
                     .flex_none()
                     .text_color(ink)
@@ -211,6 +255,7 @@ impl EditorWindow {
             .when(labels, |this| {
                 this.child(tr::editor::window::transport::enhance())
             })
+            .child(enhance_switch(&theme, on))
             .child(
                 gpui::canvas(move |value, _, _| bounds.set(Some(value)), |_, _, _, _| {})
                     .absolute()

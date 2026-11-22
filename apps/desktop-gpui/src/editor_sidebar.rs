@@ -2719,8 +2719,14 @@ impl EditorWindow {
 /// panel's `p-4`. Fixed, because the column is `w-104 min-w-104 flex-none`.
 const SIDEBAR_INSET: f32 = 20.;
 const CONTENT_WIDTH: f32 = 416. - 2. - SIDEBAR_INSET * 2.;
-const SWATCH_SOURCE_GAP: f32 = 6.;
-const SWATCH_SOURCE_HEIGHT: f32 = 34.;
+/// The background source picker's trough, its cells and their previews.
+/// Each radius is the one around it less the padding between them.
+const SOURCE_TROUGH_PADDING: f32 = 3.;
+const SOURCE_TROUGH_RADIUS: f32 = 12.;
+const SOURCE_CELL_RADIUS: f32 = SOURCE_TROUGH_RADIUS - SOURCE_TROUGH_PADDING;
+const SOURCE_CELL_INSET: f32 = 3.;
+const SOURCE_PREVIEW_RADIUS: f32 = SOURCE_CELL_RADIUS - SOURCE_CELL_INSET;
+const SOURCE_PREVIEW_HEIGHT: f32 = 30.;
 
 const WALLPAPER_COLUMNS: f32 = 4.;
 const WALLPAPER_GAP: f32 = 8.;
@@ -2999,61 +3005,58 @@ impl EditorWindow {
             })
     }
 
-    /// The background sources as one row of small previews of what each gives,
-    /// labelled underneath, with the wallpaper grid's accent ring for the
-    /// selected one.
+    /// The background sources as one segmented control: a cell per source
+    /// with a small preview of what it gives over its name. The chosen cell
+    /// is raised like a segmented control's selected segment, and every
+    /// corner nests inside the one around it, so nothing reads as a square
+    /// in a rounded box.
     fn render_source_swatches(&self, tab: SourceTab, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let editor = theme.editor;
-        let columns = SourceTab::PICKER.len() as f32;
-        let width = ((CONTENT_WIDTH - SWATCH_SOURCE_GAP * (columns - 1.)) / columns).floor();
-        let chip = |item: SourceTab, cx: &mut Context<Self>| {
+        let cell = |item: SourceTab, cx: &mut Context<Self>| {
             let selected = tab == item;
             let group = SharedString::from(format!("background-source-{item:?}"));
             div()
                 .id(group.clone())
                 .group(group.clone())
-                .w(px(width))
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(5.))
+                .px(px(SOURCE_CELL_INSET))
+                .pt(px(SOURCE_CELL_INSET))
+                .pb(px(5.))
+                .rounded(px(SOURCE_CELL_RADIUS))
                 .cursor_pointer()
+                .map(|this| {
+                    if selected {
+                        this.bg(editor.pill_fill()).shadow(editor.pill_shadow())
+                    } else {
+                        this.hover(|style| style.bg(Hsla::from(editor.ctl_hover)))
+                    }
+                })
                 .child(
                     div()
+                        .relative()
                         .w_full()
-                        .h(px(SWATCH_SOURCE_HEIGHT + 2. * (RING_WIDTH + RING_GAP)))
-                        .rounded(px(12.))
-                        .selection_ring(self.panel_bg(), editor.accent, selected)
-                        .when(!selected, |this| {
-                            this.group_hover(group.clone(), |this| {
-                                this.border_color(Hsla::from(editor.line_strong))
-                            })
-                        })
+                        .h(px(SOURCE_PREVIEW_HEIGHT))
+                        .rounded(px(SOURCE_PREVIEW_RADIUS))
+                        .child(self.source_swatch(item, px(SOURCE_PREVIEW_RADIUS)))
                         .child(
                             div()
-                                .relative()
-                                .size_full()
-                                .rounded(px(8.))
-                                .overflow_hidden()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(self.source_swatch(item))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .rounded(px(8.))
-                                        .shadow(editor.trough_ring()),
-                                ),
+                                .absolute()
+                                .inset_0()
+                                .rounded(px(SOURCE_PREVIEW_RADIUS))
+                                .shadow(editor.trough_ring()),
                         ),
                 )
                 .child(
                     div()
                         .max_w_full()
                         .truncate()
-                        .text_size(px(11.5))
+                        .text_size(px(11.))
                         .text_color(Hsla::from(if selected {
                             editor.text_1
                         } else {
@@ -3075,23 +3078,28 @@ impl EditorWindow {
             .id("background-sources")
             .flex()
             .flex_row()
-            .gap(px(SWATCH_SOURCE_GAP))
-            .children(SourceTab::PICKER.map(|item| chip(item, cx)))
+            .w_full()
+            .p(px(SOURCE_TROUGH_PADDING))
+            .rounded(px(SOURCE_TROUGH_RADIUS))
+            .bg(Hsla::from(editor.ctl))
+            .shadow(editor.trough_ring())
+            .children(SourceTab::PICKER.map(|item| cell(item, cx)))
     }
 
     /// What one source swatch shows: the project's own value for that source
     /// when it has one, otherwise what picking it would start from.
-    fn source_swatch(&self, item: SourceTab) -> AnyElement {
+    fn source_swatch(&self, item: SourceTab, radius: Pixels) -> AnyElement {
         let editor = self.theme.editor;
         let source = &self.style_background().source;
         let picture = |image: Option<Arc<RenderImage>>, icon: &'static str| match image {
             Some(image) => img(image)
                 .size_full()
                 .object_fit(gpui::ObjectFit::Cover)
-                .rounded(px(8.))
+                .rounded(radius)
                 .into_any_element(),
             None => div()
                 .size_full()
+                .rounded(radius)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3130,7 +3138,7 @@ impl EditorWindow {
                     .or(self.sidebar.animated_gradient.library.last_used.as_ref())
                     .cloned()
                     .unwrap_or_default();
-                animated_gradient::palette(&config, px(0.)).into_any_element()
+                animated_gradient::palette(&config, radius).into_any_element()
             }
             SourceTab::Gradient => {
                 let (from, to, angle) = match source {
@@ -3141,6 +3149,7 @@ impl EditorWindow {
                 };
                 div()
                     .size_full()
+                    .rounded(radius)
                     .bg(linear_gradient(
                         angle,
                         linear_color_stop(color_to_hsla(from), 0.),
@@ -3155,6 +3164,7 @@ impl EditorWindow {
                 };
                 div()
                     .size_full()
+                    .rounded(radius)
                     .bg(color_to_hsla(value))
                     .into_any_element()
             }

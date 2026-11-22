@@ -27,6 +27,9 @@ pub(super) struct MarkersState {
     pub(super) placed: Vec<PlacedMarker>,
     pub(super) selected: Option<String>,
     pub(super) drag: Option<MarkerDrag>,
+    /// Marker mode, the Markers button's toggle: a press anywhere on the
+    /// timeline drops a marker there, until Esc or the button ends it.
+    pub(super) mode: bool,
     list: Option<Point<Pixels>>,
     editor: Option<MarkerEditor>,
     label_input: Entity<ui::TextInputState>,
@@ -156,6 +159,7 @@ impl MarkersState {
             placed: Vec::new(),
             selected: None,
             drag: None,
+            mode: false,
             list: None,
             editor: None,
             label_input,
@@ -242,13 +246,50 @@ impl EditorWindow {
         self.markers.selected = None;
     }
 
+    pub(super) fn add_marker_at_playhead(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.add_marker_at(self.playhead, window, cx);
+    }
+
+    /// Marker mode's press: a marker where the pointer is, on the playhead
+    /// when the press lands within a few pixels of it.
+    pub(super) fn place_marker_at_x(
+        &mut self,
+        x: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let viewport_width: f32 = window.viewport_size().width.into();
+        let total = self.total_duration();
+        let secs_per_pixel = self
+            .view
+            .transform
+            .secs_per_pixel(timeline::content_width(viewport_width));
+        let mut time = timeline::time_from_x(x, viewport_width, self.view.transform, total);
+        if ((time - self.playhead) / secs_per_pixel).abs() <= MARKER_SNAP_PX {
+            time = self.playhead;
+        }
+        self.add_marker_at(time, window, cx);
+    }
+
+    /// Switches marker mode, which ends split mode: both claim a press on
+    /// the timeline.
+    pub(super) fn toggle_marker_mode(&mut self, cx: &mut Context<Self>) {
+        self.markers.mode = !self.markers.mode;
+        if self.markers.mode {
+            self.split_mode = false;
+            self.split_preview = None;
+            self.markers.list = None;
+        }
+        cx.notify();
+    }
+
     /// A second press on the same frame selects the marker already there
     /// instead of stacking a duplicate.
-    pub(super) fn add_marker_at_playhead(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn add_marker_at(&mut self, time: f64, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_ready() {
             return;
         }
-        let time = self.playhead.clamp(0.0, self.total_duration());
+        let time = time.clamp(0.0, self.total_duration());
         let epsilon = 0.5 / EDITOR_PREVIEW_FPS as f64;
         if let Some(existing) = self
             .markers
@@ -545,6 +586,13 @@ impl EditorWindow {
             cx.notify();
             return true;
         }
+        if self.markers.mode {
+            self.markers.mode = false;
+            self.markers.drag = None;
+            self.markers.selected = None;
+            cx.notify();
+            return true;
+        }
         if self.markers.drag.take().is_some() || self.markers.selected.take().is_some() {
             cx.notify();
             return true;
@@ -801,6 +849,55 @@ impl EditorWindow {
         .collect()
     }
 
+    /// Marker mode's hover: a flag and a line where a press would drop the
+    /// marker, in the colour a new marker gets.
+    pub(super) fn render_marker_ghost(&self, viewport_width: f32) -> Option<gpui::AnyElement> {
+        if !self.markers.mode || !self.project_ready() {
+            return None;
+        }
+        let time = self.view.preview_time?;
+        let content = timeline::content_width(viewport_width);
+        let secs_per_pixel = self.view.transform.secs_per_pixel(content);
+        let mut x = ((time - self.view.transform.position) / secs_per_pixel) as f32;
+        let playhead_x = ((self.playhead - self.view.transform.position) / secs_per_pixel) as f32;
+        if ((x - playhead_x) as f64).abs() <= MARKER_SNAP_PX {
+            x = playhead_x;
+        }
+        if !(0. ..=content).contains(&x) {
+            return None;
+        }
+        let color = parse_marker_color(None);
+        Some(
+            div()
+                .absolute()
+                .left(px(TIMELINE_PADDING + TRACK_GUTTER + x))
+                .top(px(TIMELINE_TOP_PADDING))
+                .bottom(px(TIMELINE_BOTTOM_PADDING))
+                .w(px(1.))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(TIMELINE_HEADER_HEIGHT))
+                        .bottom_0()
+                        .left_0()
+                        .w(px(1.))
+                        .bg(color.opacity(0.6)),
+                )
+                .child(
+                    svg()
+                        .absolute()
+                        .top(px(3.))
+                        .left(px(-FLAG_POLE))
+                        .size(px(FLAG_ICON))
+                        .path("icons/flag-filled.svg")
+                        .text_color(color.opacity(0.75)),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The Markers toggle, like Split beside it: on, a press anywhere on the
+    /// timeline drops a marker. The arrow joined to it opens the list.
     pub(super) fn render_markers_button(
         &self,
         compact: bool,
@@ -808,35 +905,74 @@ impl EditorWindow {
     ) -> gpui::AnyElement {
         let theme = self.theme;
         let count = self.markers.placed.len();
-        let label: SharedString = match (compact, count) {
-            (true, _) => SharedString::from(count.to_string()),
-            (false, 0) => SharedString::new_static(tr::editor::markers::title()),
-            (false, _) => SharedString::from(tr::editor::markers::button(count)),
+        let mode = self.markers.mode;
+        let label: SharedString = match (compact, mode, count) {
+            (true, _, _) => SharedString::from(count.to_string()),
+            (false, true, _) => SharedString::new_static(tr::editor::markers::finish()),
+            (false, false, 0) => SharedString::new_static(tr::editor::markers::title()),
+            (false, false, _) => SharedString::from(tr::editor::markers::button(count)),
         };
         div()
-            .id("transport-markers-tooltip")
-            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
-            .tooltip(move |_, cx| ui::Tooltip::new(&theme, tr::editor::markers::title()).view(cx))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(2.))
             .child(
-                ui::Button::editor(
-                    &theme,
-                    "transport-markers",
-                    if self.markers.list.is_some() {
-                        ui::ButtonVariant::Primary
-                    } else {
-                        ui::ButtonVariant::Gray
-                    },
-                    ui::ButtonSize::Sm,
-                )
-                .icon("icons/flag.svg")
-                .label(label)
-                .radius(px(7.))
-                .disabled(!self.project_ready())
-                .on_click(cx.listener(
-                    |this, event: &gpui::ClickEvent, _window, cx| {
-                        this.toggle_marker_list(event.position(), cx);
-                    },
-                )),
+                div()
+                    .id("transport-markers-tooltip")
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::markers::mode_tooltip()).view(cx)
+                    })
+                    .child(
+                        ui::Button::editor(
+                            &theme,
+                            "transport-markers",
+                            if mode {
+                                ui::ButtonVariant::Primary
+                            } else {
+                                ui::ButtonVariant::Gray
+                            },
+                            ui::ButtonSize::Sm,
+                        )
+                        .icon("icons/flag.svg")
+                        .label(label)
+                        .radius(px(7.))
+                        .disabled(!self.project_ready())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_marker_mode(cx);
+                            window.refresh();
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("transport-marker-list-tooltip")
+                    .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                    .tooltip(move |_, cx| {
+                        ui::Tooltip::new(&theme, tr::editor::markers::list()).view(cx)
+                    })
+                    .child(
+                        ui::Button::editor(
+                            &theme,
+                            "transport-marker-list",
+                            if self.markers.list.is_some() {
+                                ui::ButtonVariant::Primary
+                            } else {
+                                ui::ButtonVariant::Gray
+                            },
+                            ui::ButtonSize::Sm,
+                        )
+                        .icon("icons/chevron-down.svg")
+                        .width(px(26.))
+                        .radius(px(7.))
+                        .disabled(!self.project_ready())
+                        .on_click(cx.listener(
+                            |this, event: &gpui::ClickEvent, _window, cx| {
+                                this.toggle_marker_list(event.position(), cx);
+                            },
+                        )),
+                    ),
             )
             .into_any_element()
     }

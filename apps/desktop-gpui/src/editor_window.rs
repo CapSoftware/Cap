@@ -200,6 +200,9 @@ const CLIP_RESIZE_ANIM_TICK: Duration = Duration::from_millis(16);
 
 /// The header row.
 const HEADER_HEIGHT: f32 = 52.;
+/// How wide the recording name may grow before it clips. It still gives way
+/// to the header's buttons in a narrow window.
+const TITLE_MAX_WIDTH: f32 = 480.;
 
 /// `w-104 min-w-104` on the sidebar column (`Editor.tsx:728`). Tailwind v4
 /// arbitrary spacing: 104 x 0.25rem = 26rem = 416px. The column also carries
@@ -248,7 +251,7 @@ const POPOVER_WINDOW_INSET: f32 = 8.;
 /// Every setting a look changes, as (icon, label) chips, worded with the
 /// sidebar's own names for them.
 fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
-    use crate::looks::{LookBackground, LookCursorStyle};
+    use crate::looks::LookBackground;
     use cap_project::FrameStyle;
     let mut changes = Vec::new();
     use crate::i18n::tr::editor::sidebar::{layout, source};
@@ -293,15 +296,13 @@ fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
         };
         changes.push(("icons/app-window.svg", name));
     }
-    let cursor = match look.pointer.style {
-        LookCursorStyle::MacOS => "macOS".to_string(),
-        LookCursorStyle::Tahoe => "Tahoe".to_string(),
-        LookCursorStyle::Windows => "Windows".to_string(),
-        LookCursorStyle::Recorded => tr::editor::sidebar::cursor::default().to_string(),
-    };
     changes.push((
         "icons/mouse-pointer-2.svg",
-        format!("{cursor} {}%", look.pointer.size),
+        format!(
+            "{} {}%",
+            tr::editor::sidebar::tab::cursor(),
+            look.pointer.size
+        ),
     ));
     if look.pointer.ripple {
         changes.push((
@@ -317,14 +318,6 @@ fn look_changes(look: &crate::looks::Look) -> Vec<(&'static str, String)> {
             (look.pointer.motion_blur * 100.0).round() as i32
         ),
     ));
-    if let Some(style) = look.keys.style {
-        let name = match style {
-            "mechanical" => tr::editor::tabs::keyboard::style_mechanical().to_string(),
-            "macos" => "macOS".to_string(),
-            other => other.to_string(),
-        };
-        changes.push(("icons/keyboard.svg", name));
-    }
     changes
 }
 
@@ -419,10 +412,7 @@ fn look_preview(
                     .child(div().h(px(3.)).w(px(40.)).rounded(px(2.)).bg(line))
                     .child(div().h(px(3.)).w(px(22.)).rounded(px(2.)).bg(line)),
             );
-    let style = KeycapStyle::from_setting(&look.keys.style.map_or_else(
-        cap_project::KeyboardSettings::platform_style,
-        str::to_string,
-    ));
+    let style = KeycapStyle::from_setting(&cap_project::KeyboardSettings::platform_style());
     let key_theme = KeycapTheme::from_setting(look.keys.theme);
     let keys = div()
         .absolute()
@@ -2007,6 +1997,13 @@ pub struct EditorWindow {
     hovering_generate_zoom: bool,
     pub(crate) generating_keyboard: bool,
     pub(crate) keyboard_generation_message: Option<String>,
+    /// What a press on the empty keyboard lane does, and the track and
+    /// settings it was worked out for.
+    pub(crate) key_lane_offer: crate::editor_tabs::KeyLaneOffer,
+    pub(crate) key_lane_probe: Option<Vec<u8>>,
+    /// The timeline was rebuilt since the empty keyboard lane's offer was
+    /// last checked.
+    pub(crate) key_lane_stale: bool,
     /// A setting changed while keys were generating; generate again after.
     pub(crate) keyboard_refresh_pending: bool,
     /// The history length right after a key setting changed, so the keys it
@@ -2807,6 +2804,9 @@ impl EditorWindow {
             hovering_generate_zoom: false,
             generating_keyboard: false,
             keyboard_generation_message: None,
+            key_lane_offer: crate::editor_tabs::KeyLaneOffer::AddByHand,
+            key_lane_probe: None,
+            key_lane_stale: true,
             keyboard_refresh_pending: false,
             keyboard_refresh_step: None,
             clip_speed: None,
@@ -3040,6 +3040,7 @@ impl EditorWindow {
     /// the waveforms arrive separately and later, so whatever has landed is
     /// carried across.
     fn rebuild_timeline(&mut self) {
+        self.key_lane_stale = true;
         self.dismiss_transient_menus();
         let mic = std::mem::take(&mut self.timeline.mic_waveforms);
         let system = std::mem::take(&mut self.timeline.system_waveforms);
@@ -5555,6 +5556,10 @@ impl EditorWindow {
             return;
         }
         self.focus_root(window, cx);
+        if self.markers.mode {
+            self.place_marker_at_x(f32::from(event.position.x), window, cx);
+            return;
+        }
         let viewport_width: f32 = window.viewport_size().width.into();
         let time = self.time_at(f32::from(event.position.x), viewport_width);
         if ruler {
@@ -5782,6 +5787,11 @@ impl EditorWindow {
             return;
         }
         self.focus_root(window, cx);
+        if self.markers.mode {
+            cx.stop_propagation();
+            self.place_marker_at_x(f32::from(event.position.x), window, cx);
+            return;
+        }
         if self.clip_anim.is_some() {
             self.clip_anim = None;
             self.clip_anim_generation += 1;
@@ -5861,11 +5871,8 @@ impl EditorWindow {
                         self.view.preview_time = None;
                     }
                 } else if kind == TrackKind::Keyboard {
-                    // Add Keystrokes opens where the track was pressed.
                     cx.stop_propagation();
-                    self.seek_to_time(press_time, cx);
-                    self.view.preview_time = None;
-                    self.open_key_prompt(press_time, window, cx);
+                    self.key_lane_pressed(press_time, window, cx);
                 } else if matches!(
                     kind,
                     TrackKind::Text | TrackKind::Shape | TrackKind::Mask | TrackKind::Scene
@@ -8323,6 +8330,10 @@ impl EditorWindow {
     /// (`Player.tsx:246-254, 409-427`).
     fn toggle_split_mode(&mut self, cx: &mut Context<Self>) {
         self.split_mode = !self.split_mode;
+        // Splitting and placing markers both claim a press on the timeline.
+        if self.split_mode {
+            self.markers.mode = false;
+        }
         if !self.split_mode {
             // `createEffect(() => { if (!split()) setSplitPreview(null) })`
             // (`TL/ClipTrack.tsx:566-568`).
@@ -12398,7 +12409,7 @@ impl EditorWindow {
             // The name field plus its literal `.cap` suffix, editable. The
             // Solid version is an `<input>` overlaying a measuring `<span>`;
             // here the field paints its own text, so the span is not needed and
-            // the `max-w-[200px]` sits on the field itself.
+            // the width cap sits on the field itself.
             .child(
                 div()
                     .flex()
@@ -12410,7 +12421,7 @@ impl EditorWindow {
                     .child(
                         div()
                             .min_w_0()
-                            .max_w(px(220.))
+                            .max_w(px(TITLE_MAX_WIDTH))
                             .overflow_hidden()
                             .border_b_1()
                             .border_color(if name_focused {
@@ -12747,14 +12758,34 @@ impl EditorWindow {
                     .flex_none()
                     .gap(px(8.))
                     .child(self.render_preview_enhance(!narrow, cx))
+                    .child(self.header_divider())
+                    // The quality picker and its name, one group with one
+                    // tooltip, so the name reads as the picker's and not as
+                    // part of Enhance beside it.
                     .child(
                         div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(theme.editor.text_2))
-                            .child(tr::editor::window::preview::label()),
-                    )
-                    .child(self.render_preview_quality(cx)),
+                            .id("preview-quality-group")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .flex_none()
+                            .gap(px(8.))
+                            .tooltip_show_delay(ui::TOOLTIP_SHOW_DELAY)
+                            .tooltip(move |_, cx| {
+                                ui::Tooltip::new(&theme, tr::editor::window::preview::tooltip())
+                                    .view(cx)
+                            })
+                            .when(!narrow, |group| {
+                                group.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(Hsla::from(theme.editor.text_2))
+                                        .child(tr::editor::window::preview::label()),
+                                )
+                            })
+                            .child(self.render_preview_quality(cx)),
+                    ),
             )
     }
 
@@ -13524,8 +13555,13 @@ impl EditorWindow {
             // The hover ghost (`TL/index.tsx:1246-1278`). Drawn only
             // while paused and while the pointer is over the content
             // column.
-            .children(ghost_x.map(|x| timeline::render_preview_line(&theme, x)))
+            .children(
+                ghost_x
+                    .filter(|_| !self.markers.mode)
+                    .map(|x| timeline::render_preview_line(&theme, x)),
+            )
             .children(self.render_marker_lines(viewport_width))
+            .children(self.render_marker_ghost(viewport_width))
             // The playhead (`:1279-1295`). It dims to 50 % in split
             // mode, where the cut line is the thing to watch
             // (`TL/index.tsx:1281`).
@@ -13695,7 +13731,7 @@ impl EditorWindow {
                     .child(
                         svg()
                             .path(if self.add_track.is_some() {
-                                "icons/x.svg"
+                                "icons/x-mark.svg"
                             } else {
                                 "icons/plus.svg"
                             })
@@ -13731,6 +13767,7 @@ impl EditorWindow {
         let ui = timeline::SegmentUi {
             selection: self.selection.as_ref(),
             split_mode: self.split_mode,
+            marker_mode: self.markers.mode,
             hovered: self.hovered_segment,
             dragging: self.drag.is_some(),
             audio_picker_lane: match self.audio_picker {
@@ -13742,8 +13779,7 @@ impl EditorWindow {
             scene_preview_time: self.scene_preview_time,
             camera3d_preview: &camera3d_preview,
             camera3d_editing_end: self.sidebar.editing_end_pose,
-            keyboard_shortcuts_only: !crate::editor_tabs::keyboard_settings(&self.project)
-                .show_typing,
+            key_lane_offer: self.key_lane_offer,
         };
         // The ghost trim and its release animation draw from a patched copy
         // of the model; everything else draws the real one.
@@ -13754,7 +13790,10 @@ impl EditorWindow {
             .flex_col()
             .gap(px(TRACK_ROW_GAP))
             .min_h_full()
-            .w_full();
+            .w_full()
+            .when(self.markers.mode, |rows| {
+                rows.cursor(gpui::CursorStyle::Crosshair)
+            });
 
         // The empty 3D lane's two openings, drawn like the zoom lane's
         // Generate row rather than as inert copy: this is where a shot is
@@ -14524,6 +14563,10 @@ impl Render for EditorWindow {
         self.sync_appearance(window, cx);
         self.sync_locale();
         self.sync_imported_waveforms(cx);
+        if self.key_lane_stale && self.project_ready() {
+            self.key_lane_stale = false;
+            self.ensure_key_lane_offer(cx);
+        }
         let title_disabled = !self.visual_ready();
         if self.name_input.read(cx).is_disabled() != title_disabled {
             self.name_input
@@ -17946,6 +17989,114 @@ mod tests {
             editor.read_with(cx, |editor, _| {
                 assert!(editor.transition_popover.is_none());
                 assert_eq!(editor.project.timeline.as_ref().unwrap().segments.len(), 2);
+            });
+        }
+
+        /// Marker mode, the Markers button's toggle: a press on a clip drops
+        /// a marker there instead of selecting or moving the clip, and the
+        /// mode stays on for the next one.
+        #[gpui::test]
+        fn marker_mode_drops_a_marker_where_the_timeline_is_pressed(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| editor.toggle_marker_mode(cx));
+            cx.run_until_parked();
+            for time in [2.0, 7.0] {
+                let (x, secs_per_pixel) = x_of(&editor, cx, time);
+                let y = clip_row_y(cx);
+                cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+                cx.simulate_click(point(px(x), y), gpui::Modifiers::default());
+                cx.run_until_parked();
+                editor.read_with(cx, |editor, _| {
+                    let placed = editor
+                        .markers
+                        .placed
+                        .iter()
+                        .find(|placed| (placed.time - time).abs() < secs_per_pixel * 2.);
+                    assert!(placed.is_some(), "{time}: {:?}", editor.markers.placed);
+                    assert!(editor.markers.mode);
+                    assert!(editor.selection.is_none());
+                });
+            }
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.project.markers.len(), 2);
+                let timeline = editor.project.timeline.as_ref().unwrap();
+                assert_eq!(timeline.segments.len(), 2, "no clip was split or moved");
+            });
+        }
+
+        /// Split and marker mode both claim a press, so turning one on turns
+        /// the other off, and Esc ends marker mode.
+        #[gpui::test]
+        fn marker_mode_and_split_mode_take_turns(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            editor.update(cx, |editor, cx| editor.toggle_marker_mode(cx));
+            editor.update(cx, |editor, cx| editor.toggle_split_mode(cx));
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.split_mode);
+                assert!(!editor.markers.mode);
+            });
+            editor.update(cx, |editor, cx| editor.toggle_marker_mode(cx));
+            editor.read_with(cx, |editor, _| {
+                assert!(editor.markers.mode);
+                assert!(!editor.split_mode);
+            });
+            editor.update_in(cx, |editor, window, cx| {
+                assert!(editor.marker_escape(window, cx));
+            });
+            editor.read_with(cx, |editor, _| assert!(!editor.markers.mode));
+        }
+
+        fn press_empty_key_lane(
+            editor: &Entity<EditorWindow>,
+            cx: &mut gpui::VisualTestContext,
+            offer: crate::editor_tabs::KeyLaneOffer,
+        ) {
+            editor.update(cx, |editor, cx| {
+                editor.tracks.keyboard = true;
+                editor.rebuild_timeline();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            editor.update(cx, |editor, cx| {
+                editor.key_lane_offer = offer;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let (x, _) = x_of(editor, cx, 5.0);
+            let y = cx
+                .debug_bounds("timeline-row-Keyboard-0")
+                .expect("the keyboard lane is drawn")
+                .center()
+                .y;
+            cx.simulate_mouse_move(point(px(x), y), None, gpui::Modifiers::default());
+            cx.simulate_click(point(px(x), y), gpui::Modifiers::default());
+            cx.run_until_parked();
+        }
+
+        /// The empty keyboard lane's press does what its copy says: with
+        /// typing hidden by showing shortcuts only, it shows every key.
+        #[gpui::test]
+        fn the_empty_key_lane_shows_the_typing_shortcuts_hide(cx: &mut gpui::TestAppContext) {
+            let (editor, cx) = split_clip(cx);
+            press_empty_key_lane(&editor, cx, crate::editor_tabs::KeyLaneOffer::Typing);
+            editor.read_with(cx, |editor, _| {
+                assert!(crate::editor_tabs::keyboard_settings(&editor.project).show_typing);
+                assert!(editor.key_prompt.is_none());
+            });
+        }
+
+        /// With nothing recorded to show, the lane's press opens Add
+        /// Keystrokes at the pressed time.
+        #[gpui::test]
+        fn the_empty_key_lane_adds_keys_by_hand_when_none_were_recorded(
+            cx: &mut gpui::TestAppContext,
+        ) {
+            let (editor, cx) = split_clip(cx);
+            press_empty_key_lane(&editor, cx, crate::editor_tabs::KeyLaneOffer::AddByHand);
+            editor.read_with(cx, |editor, _| {
+                let at = editor.key_prompt.expect("Add Keystrokes is open");
+                assert!((at - 5.0).abs() < 0.1, "{at}");
+                assert!(!crate::editor_tabs::keyboard_settings(&editor.project).show_typing);
             });
         }
 

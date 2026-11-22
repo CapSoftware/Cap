@@ -1121,6 +1121,31 @@ fn recorded_keys_match(
             .all(|(a, b)| serde_json::to_value(a).ok() == serde_json::to_value(b).ok())
 }
 
+/// What a press on the empty keyboard lane does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum KeyLaneOffer {
+    /// The recording has no key presses the settings could show: type some
+    /// in by hand.
+    #[default]
+    AddByHand,
+    /// The recording has keys the settings show, but none are on the track
+    /// (deleted, or never generated): put them back.
+    Recorded,
+    /// Only typing was pressed, and showing shortcuts only hides it: show
+    /// every key.
+    Typing,
+}
+
+pub(crate) fn key_lane_offer(would_show: bool, typing_hidden: bool) -> KeyLaneOffer {
+    if would_show {
+        KeyLaneOffer::Recorded
+    } else if typing_hidden {
+        KeyLaneOffer::Typing
+    } else {
+        KeyLaneOffer::AddByHand
+    }
+}
+
 /// Why generating found nothing to show: no keys pressed in the edit, or
 /// keys but no shortcuts.
 fn empty_generation_message(others_pressed: bool) -> &'static str {
@@ -2715,6 +2740,83 @@ impl EditorWindow {
     /// unless another edit came in between.
     /// Recorded keys the user has edited are kept as they are (see
     /// `generate_keyboard_segments`).
+    /// What the empty keyboard lane offers. Settled off the main thread for
+    /// the clips and key settings as they stand, after a timeline rebuild
+    /// that leaves the shown keyboard lane empty, and only when those have
+    /// changed since the last check.
+    pub(crate) fn ensure_key_lane_offer(&mut self, cx: &mut Context<Self>) {
+        let Some(timeline) = self.project.timeline.as_ref() else {
+            return;
+        };
+        if !self.tracks.keyboard || !timeline.keyboard_segments.is_empty() {
+            return;
+        }
+        let settings = keyboard_settings(&self.project);
+        let Ok(key) = serde_json::to_vec(&(
+            keyboard_generation_settings_fingerprint(&settings),
+            settings.show_typing,
+            &timeline.segments,
+        )) else {
+            return;
+        };
+        if self.key_lane_probe.as_deref() == Some(&key[..]) {
+            return;
+        }
+        self.key_lane_probe = Some(key.clone());
+        let timeline = timeline.clone();
+        let path = self.project_path.clone();
+        cx.spawn(async move |this, cx| {
+            let offer = cx
+                .background_executor()
+                .spawn(async move {
+                    let meta = RecordingMeta::load_for_project(&path).ok()?;
+                    let (segments, others_pressed) =
+                        cap_project::generate_project_keyboard_segments_reporting(
+                            &meta, &timeline, &settings,
+                        )
+                        .ok()?;
+                    Some(key_lane_offer(!segments.is_empty(), others_pressed))
+                })
+                .await
+                .unwrap_or_default();
+            let _ = this.update(cx, |this, cx| {
+                // A newer change asked again meanwhile; its answer stands.
+                if this.key_lane_probe.as_deref() != Some(&key[..]) {
+                    return;
+                }
+                if this.key_lane_offer != offer {
+                    this.key_lane_offer = offer;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// A press on the empty keyboard lane.
+    pub(crate) fn key_lane_pressed(
+        &mut self,
+        at: f64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.key_lane_offer {
+            KeyLaneOffer::Recorded => self.generate_keyboard_segments_clicked(window, cx),
+            KeyLaneOffer::Typing => self.change_shown_keys(
+                "keyboard-typing",
+                |settings| settings.show_typing = true,
+                window,
+                cx,
+            ),
+            KeyLaneOffer::AddByHand => {
+                // Add Keystrokes opens where the track was pressed.
+                self.seek_to_time(at, cx);
+                self.view.preview_time = None;
+                self.open_key_prompt(at, window, cx);
+            }
+        }
+    }
+
     pub(crate) fn change_shown_keys(
         &mut self,
         reason: &'static str,
@@ -5310,6 +5412,16 @@ mod tests {
         let mut trimmed = generated.clone();
         trimmed[0].end = 1.5;
         assert!(!recorded_keys_match(&trimmed, &generated));
+    }
+
+    /// The empty keyboard lane puts recorded keys back before it offers
+    /// hidden typing, and offers typing keys in by hand only when the
+    /// recording has nothing to show.
+    #[test]
+    fn the_empty_key_lane_offers_what_the_recording_has() {
+        assert_eq!(key_lane_offer(true, false), KeyLaneOffer::Recorded);
+        assert_eq!(key_lane_offer(false, true), KeyLaneOffer::Typing);
+        assert_eq!(key_lane_offer(false, false), KeyLaneOffer::AddByHand);
     }
 
     #[test]
