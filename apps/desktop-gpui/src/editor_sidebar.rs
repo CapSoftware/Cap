@@ -197,9 +197,13 @@ pub const GRADIENT_PRESETS: [([u16; 3], [u16; 3]); 18] = [
     ([255, 0, 255], [0, 255, 0]),
 ];
 
-/// `projectConfig.ts:15-16`.
-pub const DEFAULT_GRADIENT_FROM: Color = [71, 133, 255];
-pub const DEFAULT_GRADIENT_TO: Color = [255, 71, 102];
+/// The colour the Color tab starts from.
+pub const DEFAULT_COLOR: Color = [71, 133, 255];
+/// The gradient the Gradient tab starts from: sky blue into indigo, across
+/// the frame's diagonal.
+pub const DEFAULT_GRADIENT_FROM: Color = [14, 165, 233];
+pub const DEFAULT_GRADIENT_TO: Color = [79, 70, 229];
+pub const DEFAULT_GRADIENT_ANGLE: u16 = 135;
 /// `projectConfig.ts:18-19`.
 pub const DEFAULT_BACKGROUND_PADDING: f64 = 10.;
 pub const DEFAULT_BACKGROUND_ROUNDING: f64 = 7.5;
@@ -2507,7 +2511,7 @@ impl EditorWindow {
                     SourceTab::Color => BackgroundSource::Color {
                         value: match source {
                             BackgroundSource::Color { value, .. } => *value,
-                            _ => DEFAULT_GRADIENT_FROM,
+                            _ => DEFAULT_COLOR,
                         },
                         alpha: 255,
                     },
@@ -2526,7 +2530,7 @@ impl EditorWindow {
                         _ => BackgroundSource::Gradient {
                             from: DEFAULT_GRADIENT_FROM,
                             to: DEFAULT_GRADIENT_TO,
-                            angle: 90,
+                            angle: DEFAULT_GRADIENT_ANGLE,
                             noise_intensity: None,
                             noise_scale: None,
                             animated: None,
@@ -3495,7 +3499,7 @@ impl EditorWindow {
             _ => (
                 DEFAULT_GRADIENT_FROM,
                 DEFAULT_GRADIENT_TO,
-                90.,
+                f32::from(DEFAULT_GRADIENT_ANGLE),
                 0.,
                 DEFAULT_NOISE_SCALE,
             ),

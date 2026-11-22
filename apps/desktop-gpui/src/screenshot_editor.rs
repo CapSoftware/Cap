@@ -43,8 +43,9 @@ use gpui::{
 
 use crate::editor_edits::ProjectHistory;
 use crate::editor_sidebar::{
-    self, BACKGROUND_COLORS, BACKGROUND_IMAGE_EXTENSIONS, BACKGROUND_THEMES, DEFAULT_GRADIENT_FROM,
-    DEFAULT_GRADIENT_TO, GRADIENT_PRESETS, color_to_hsla, hex_to_rgb,
+    self, BACKGROUND_COLORS, BACKGROUND_IMAGE_EXTENSIONS, BACKGROUND_THEMES, DEFAULT_COLOR,
+    DEFAULT_GRADIENT_ANGLE, DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, GRADIENT_PRESETS,
+    color_to_hsla, hex_to_rgb,
 };
 use crate::i18n::tr;
 use crate::screenshot_annotations::{self as annotations, AnnotationState, Tool};
@@ -3352,13 +3353,13 @@ impl ScreenshotEditorWindow {
                         BgTab::Wallpaper => BackgroundSource::Wallpaper { path: None },
                         BgTab::Image => BackgroundSource::Image { path: None },
                         BgTab::Color => BackgroundSource::Color {
-                            value: DEFAULT_GRADIENT_FROM,
+                            value: DEFAULT_COLOR,
                             alpha: 255,
                         },
                         BgTab::Gradient => BackgroundSource::Gradient {
                             from: DEFAULT_GRADIENT_FROM,
                             to: DEFAULT_GRADIENT_TO,
-                            angle: 90,
+                            angle: DEFAULT_GRADIENT_ANGLE,
                             noise_intensity: None,
                             noise_scale: None,
                             animated: None,
@@ -3593,7 +3594,7 @@ impl ScreenshotEditorWindow {
             .gap(px(12.))
             .child(self.render_rgb_input(
                 HexTarget::BackgroundColor,
-                current.map_or(DEFAULT_GRADIENT_FROM, |(value, _)| value),
+                current.map_or(DEFAULT_COLOR, |(value, _)| value),
             ))
             .child(
                 div().flex().flex_row().flex_wrap().gap(px(8.)).children(
@@ -3657,7 +3658,11 @@ impl ScreenshotEditorWindow {
             BackgroundSource::Gradient {
                 from, to, angle, ..
             } => (*from, *to, *angle),
-            _ => (DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, 90),
+            _ => (
+                DEFAULT_GRADIENT_FROM,
+                DEFAULT_GRADIENT_TO,
+                DEFAULT_GRADIENT_ANGLE,
+            ),
         };
 
         div()
