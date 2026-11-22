@@ -845,6 +845,7 @@ async fn download_parakeet_model(model: &str) -> Result<(), String> {
         tracing::info!("Finalizing previously completed Parakeet model download");
         finalize_parakeet_model_download(&validated_dir, &staging_dir, model_files)?;
         invalidate_parakeet_cache_for_dir(&validated_dir);
+        split_after_download(validated_dir);
         return Ok(());
     }
 
@@ -932,6 +933,7 @@ async fn download_parakeet_model(model: &str) -> Result<(), String> {
 
     finalize_parakeet_model_download(&validated_dir, &staging_dir, model_files)?;
     invalidate_parakeet_cache_for_dir(&validated_dir);
+    split_after_download(validated_dir);
     Ok(())
 }
 
@@ -1864,17 +1866,10 @@ fn cached_parakeet(model_dir: &str) -> Result<Arc<Mutex<ParakeetTDT>>, String> {
 fn load_parakeet(model_dir: &str, threads: Option<usize>) -> Result<ParakeetTDT, String> {
     cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
     // Once per install: the encoder's weights move to a side file ONNX
-    // Runtime maps, which halves what the loaded model holds. A failure
-    // keeps the file as downloaded. Test builds never rewrite a model
-    // folder unless asked (the eval tests read the developer's own models).
-    if (!cfg!(test) || std::env::var_os("CAP_PARAKEET_SPLIT_IN_TESTS").is_some())
-        && let Err(error) = crate::parakeet_split::ensure_split(
-            Path::new(model_dir),
-            crate::meetings::health::free_bytes,
-        )
-    {
-        tracing::warn!(%error, "Parakeet encoder kept as downloaded");
-    }
+    // Runtime maps, which halves what the loaded model holds. Normally done
+    // right after the download; this catches a model downloaded before that,
+    // and waits for a split still running.
+    split_parakeet_encoder(Path::new(model_dir));
     // ONNX Runtime's workers spin between runs by default. A meeting runs the
     // model for a moment every couple of seconds, so they spun in between and
     // kept about two cores busy for the whole meeting. The speaker and aligner
@@ -1889,6 +1884,42 @@ fn load_parakeet(model_dir: &str, threads: Option<usize>) -> Result<ParakeetTDT,
         None => config,
     };
     ParakeetTDT::from_pretrained(model_dir, Some(config)).map_err(|e| format!("{e}"))
+}
+
+/// Moves the encoder's weights to their side file if they are still inside
+/// it. A failure keeps the file as downloaded. Test builds never rewrite a
+/// model folder unless asked (the eval tests read the developer's own models).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn split_parakeet_encoder(dir: &Path) {
+    if cfg!(test) && std::env::var_os("CAP_PARAKEET_SPLIT_IN_TESTS").is_none() {
+        return;
+    }
+    if let Err(error) =
+        crate::parakeet_split::ensure_split(dir, crate::meetings::health::free_bytes)
+    {
+        tracing::warn!(%error, "Parakeet encoder kept as downloaded");
+    }
+}
+
+/// Splits the encoder at low priority once the download is in place, so the
+/// first meeting's load no longer does it: on a slow disk that took over a
+/// minute, with no captions until it was done. A meeting that starts
+/// meanwhile waits for it, as it waited for its own split before. A meeting
+/// already running leaves it to the next load, as before. True when the
+/// split started.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn split_after_download(dir: PathBuf) -> bool {
+    if LIVE_MEETINGS.load(Ordering::Acquire) > 0 {
+        return false;
+    }
+    std::thread::Builder::new()
+        .name("cap-parakeet-split".into())
+        .spawn(move || {
+            lower_thread_priority();
+            split_parakeet_encoder(&dir);
+        })
+        .inspect_err(|error| tracing::warn!(%error, "could not start the Parakeet encoder split"))
+        .is_ok()
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -3715,6 +3746,13 @@ mod tests {
         assert!(parakeet_model_installed(&full));
         std::fs::remove_file(full.join("encoder-model.onnx.data")).unwrap();
         assert!(!parakeet_model_installed(&full));
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn a_download_never_starts_the_encoder_split_during_a_meeting() {
+        let _meeting = LiveMeeting::start();
+        assert!(!split_after_download(PathBuf::from("unused")));
     }
 
     #[test]
