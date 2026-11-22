@@ -83,12 +83,73 @@ pub struct EventFacts {
     pub calendar: Option<String>,
 }
 
-/// The item's text, folded once when the item is built.
+/// The item's text, folded once when the item is built: the title, the app
+/// and each person in one string, a NUL before every part after the title.
+/// A search keystroke walks every item, so each item's text is one
+/// allocation read by one `contains`. Folded parts never hold a NUL, so no
+/// match can run from one part into the next.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Folded {
-    pub title: String,
-    pub people: Vec<String>,
-    pub app: String,
+    text: String,
+    title_end: u32,
+    app_end: u32,
+}
+
+const PART_END: char = '\0';
+
+impl Folded {
+    fn new(title: &str, app: &str) -> Self {
+        let mut text = String::with_capacity(title.len() + 1 + app.len());
+        push_part(&mut text, title);
+        let title_end = text.len() as u32;
+        text.push(PART_END);
+        push_part(&mut text, app);
+        let app_end = text.len() as u32;
+        Self {
+            text,
+            title_end,
+            app_end,
+        }
+    }
+
+    fn title(&self) -> &str {
+        &self.text[..self.title_end as usize]
+    }
+
+    fn app(&self) -> &str {
+        &self.text[self.title_end as usize + 1..self.app_end as usize]
+    }
+
+    fn people(&self) -> impl Iterator<Item = &str> {
+        self.text[self.app_end as usize..].split(PART_END).skip(1)
+    }
+
+    /// Adds a folded name unless it is there already; true when added.
+    fn add_person(&mut self, folded: &str) -> bool {
+        let clean: std::borrow::Cow<'_, str> = if folded.contains(PART_END) {
+            folded.replace(PART_END, "").into()
+        } else {
+            folded.into()
+        };
+        if self.people().any(|p| p == clean) {
+            return false;
+        }
+        self.text.push(PART_END);
+        self.text.push_str(&clean);
+        true
+    }
+
+    fn contains(&self, folded_query: &str) -> bool {
+        !folded_query.contains(PART_END) && self.text.contains(folded_query)
+    }
+}
+
+fn push_part(text: &mut String, part: &str) {
+    if part.contains(PART_END) {
+        text.extend(part.chars().filter(|c| *c != PART_END));
+    } else {
+        text.push_str(part);
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -123,20 +184,12 @@ impl Item {
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())
             .collect();
-        let mut seen = Vec::with_capacity(people.len());
-        people.retain(|p| {
-            let folded = fold(p);
-            let fresh = !seen.contains(&folded);
-            if fresh {
-                seen.push(folded);
-            }
-            fresh
-        });
-        let folded = Folded {
-            title: fold(&title),
-            people: seen,
-            app: facts.app.as_deref().map(fold).unwrap_or_default(),
-        };
+        let mut folded = Folded::new(
+            &fold(&title),
+            &facts.app.as_deref().map(fold).unwrap_or_default(),
+        );
+        people.retain(|p| folded.add_person(&fold(p)));
+        folded.text.shrink_to_fit();
         Self {
             key,
             kind,
@@ -167,24 +220,22 @@ impl Item {
             if name.is_empty() {
                 continue;
             }
-            let folded = fold(name);
-            if !self.folded.people.contains(&folded) {
+            if self.folded.add_person(&fold(name)) {
                 self.people.push(name.to_string());
-                self.folded.people.push(folded);
             }
         }
     }
 
     pub fn folded_title(&self) -> &str {
-        &self.folded.title
+        self.folded.title()
     }
 
-    pub fn folded_people(&self) -> &[String] {
-        &self.folded.people
+    pub fn folded_people(&self) -> impl Iterator<Item = &str> {
+        self.folded.people()
     }
 
     pub fn folded_app(&self) -> &str {
-        &self.folded.app
+        self.folded.app()
     }
 
     /// Whether a search query (already folded) finds this item: title,
@@ -193,9 +244,7 @@ impl Item {
         if folded_query.is_empty() {
             return true;
         }
-        self.folded.title.contains(folded_query)
-            || self.folded.people.iter().any(|p| p.contains(folded_query))
-            || self.folded.app.contains(folded_query)
+        self.folded.contains(folded_query)
     }
 }
 
@@ -230,7 +279,7 @@ mod tests {
             },
         );
         assert_eq!(item.people, vec!["Ana".to_string()]);
-        assert_eq!(item.folded_people(), ["ana".to_string()]);
+        assert_eq!(item.folded_people().collect::<Vec<_>>(), ["ana"]);
     }
 
     #[test]
@@ -251,5 +300,44 @@ mod tests {
             vec!["José Álvarez".to_string(), "Bo".to_string()]
         );
         assert!(item.matches_query("bo"));
+    }
+
+    #[test]
+    fn search_finds_each_part_and_never_runs_across_two() {
+        let mut item = Item::new(
+            ItemKey::Doc("a".into()),
+            ItemKind::Meeting,
+            "Road\0map",
+            Utc::now(),
+            ItemFacts {
+                people: vec!["Ana".into(), "Bo".into()],
+                app: Some("Zoom".into()),
+                ..Default::default()
+            },
+        );
+        item.add_people(&["Cy".into()]);
+        assert_eq!(item.folded_title(), "roadmap");
+        assert_eq!(item.folded_app(), "zoom");
+        assert_eq!(
+            item.folded_people().collect::<Vec<_>>(),
+            ["ana", "bo", "cy"]
+        );
+        for query in ["", "roadmap", "zoo", "ana", "bo", "cy"] {
+            assert!(item.matches_query(query), "{query}");
+        }
+        for query in ["mapzoom", "zoomana", "anabo", "\0", "p\0z"] {
+            assert!(!item.matches_query(query), "{query:?}");
+        }
+
+        let bare = Item::new(
+            ItemKey::Doc("b".into()),
+            ItemKind::Note,
+            "Plan",
+            Utc::now(),
+            ItemFacts::default(),
+        );
+        assert_eq!(bare.folded_app(), "");
+        assert_eq!(bare.folded_people().count(), 0);
+        assert!(!bare.matches_query("ana"));
     }
 }

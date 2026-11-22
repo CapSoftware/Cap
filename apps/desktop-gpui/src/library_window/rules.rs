@@ -365,12 +365,12 @@ fn rule_matches(rule: &CompiledRule, item: &Item, cx: &EvalContext<'_>) -> bool 
             TextField::Title => text_matches(*op, item.folded_title(), needle),
             TextField::App => text_matches(*op, item.folded_app(), needle),
             TextField::Person => {
-                let people = item.folded_people();
+                let mut people = item.folded_people();
                 match op {
                     // "speaker does not contain Ana" = nobody in the meeting
                     // is Ana, not "someone other than Ana was there".
-                    TextOp::DoesNotContain => !people.iter().any(|p| contains(p, needle)),
-                    _ => people.iter().any(|p| text_matches(*op, p, needle)),
+                    TextOp::DoesNotContain => !people.any(|p| contains(p, needle)),
+                    _ => people.any(|p| text_matches(*op, p, needle)),
                 }
             }
         },
