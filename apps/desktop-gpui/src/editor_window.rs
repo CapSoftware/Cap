@@ -617,6 +617,14 @@ fn manual_run_keys(
         .collect()
 }
 
+/// Keys added from now on take the editor's appearance on a Mac: light keys
+/// in light mode, dark in dark mode. Elsewhere they start dark.
+fn new_keys_follow(theme: &Theme) {
+    cap_project::KeyboardSettings::set_new_keys_light(
+        cfg!(target_os = "macos") && !theme.is_dark(),
+    );
+}
+
 /// A hand-made key's presses, squeezed in step when the key has less room
 /// than its text asks for, so every press (and the beat to read the last
 /// one) lands inside it.
@@ -2757,7 +2765,11 @@ impl EditorWindow {
             // in the `(window-chrome)` layout and `/editor` is not one of its
             // routes, and `is_transparent()` (`windows.rs:1069-1082`) does not
             // list Editor. The root paints `bg-gray-2 dark:bg-gray-1`.
-            theme: Theme::for_window(window, cx, false),
+            theme: {
+                let theme = Theme::for_window(window, cx, false);
+                new_keys_follow(&theme);
+                theme
+            },
             sharing: RecordingMeta::load_for_project(&project_path)
                 .ok()
                 .and_then(|meta| meta.sharing),
@@ -8537,7 +8549,9 @@ impl EditorWindow {
     }
 
     fn sync_appearance(&mut self, window: &Window, cx: &gpui::App) {
-        self.theme.refresh(window, cx, false);
+        if self.theme.refresh(window, cx, false) {
+            new_keys_follow(&self.theme);
+        }
     }
 
     fn auto_zoom_prompt(&self) -> &'static str {

@@ -3159,8 +3159,23 @@ impl KeyboardSettings {
         }
     }
 
+    /// The colours a project saved before keycaps had a theme was drawn in.
     fn default_theme() -> String {
         "dark".to_string()
+    }
+
+    /// Whether keys added from now on start light. The desktop app sets this
+    /// from its appearance, so a Mac in light mode gets light keys.
+    pub fn set_new_keys_light(light: bool) {
+        NEW_KEYS_LIGHT.store(light, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn new_theme() -> String {
+        if NEW_KEYS_LIGHT.load(std::sync::atomic::Ordering::Relaxed) {
+            "light".to_string()
+        } else {
+            Self::default_theme()
+        }
     }
 
     /// The keycap style a new project starts with: the keyboard of the
@@ -3189,6 +3204,8 @@ impl KeyboardSettings {
     }
 }
 
+static NEW_KEYS_LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 const DEFAULT_KEYBOARD_FONT: &str = "System Sans-Serif";
 const DEFAULT_KEYBOARD_COLOR: &str = "#FFFFFF";
 const DEFAULT_KEYBOARD_BACKGROUND: &str = "#000000";
@@ -3214,7 +3231,7 @@ impl Default for KeyboardSettings {
             show_special_keys: false,
             uppercase: false,
             style: Self::platform_style(),
-            theme: Self::default_theme(),
+            theme: Self::new_theme(),
             show_typing: false,
             typing_split: "words".to_string(),
             key_sounds: false,
@@ -6201,6 +6218,24 @@ mod tests {
         assert_eq!(saved.preset, "soft");
         assert_eq!(saved.font, "Inter");
         assert_eq!(saved.size, new.size);
+    }
+
+    #[test]
+    fn new_keys_start_in_the_apps_appearance_and_older_ones_stay_dark() {
+        let older = serde_json::json!({
+            "enabled": true, "font": "System Sans-Serif", "size": 50,
+            "color": "#ffffff", "backgroundColor": "#000000", "backgroundOpacity": 95,
+            "position": "bottom-center", "fontWeight": 400, "fadeDuration": 0.15,
+            "lingerDuration": 0.8, "groupingThresholdMs": 500.0, "showModifiers": true,
+            "showSpecialKeys": true, "uppercase": false
+        });
+        KeyboardSettings::set_new_keys_light(true);
+        let light = KeyboardSettings::default();
+        let saved: KeyboardSettings = serde_json::from_value(older.clone()).unwrap();
+        KeyboardSettings::set_new_keys_light(false);
+        assert_eq!(light.theme, "light");
+        assert_eq!(saved.theme, "dark");
+        assert_eq!(KeyboardSettings::default().theme, "dark");
     }
 
     #[test]
