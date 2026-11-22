@@ -214,7 +214,7 @@ const BASE_TEXT_OPACITY: f32 = 0.8;
 /// The caption preset drawn as a card in the keycaps' material.
 pub const SOFT_PRESET: &str = "soft";
 /// The Soft card's shadow, as dark as the dark keycaps'.
-const SOFT_SHADOW: f32 = 0.42;
+const SOFT_SHADOW: f32 = 0.5;
 /// The Soft card's lit top edge.
 const SOFT_EDGE: f32 = 0.16;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
@@ -1227,7 +1227,7 @@ impl CaptionsLayer {
 
         // Room for the Soft card's shadow, which falls below and around it.
         let scissor_padding = if soft {
-            4.0 + draw_box_height * 0.42
+            4.0 + draw_box_height * 0.72
         } else {
             4.0
         };

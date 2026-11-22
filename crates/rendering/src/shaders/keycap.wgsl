@@ -88,8 +88,9 @@ fn grain(p: vec2<f32>) -> f32 {
     return fract(sin(dot(q, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5;
 }
 
-// The shadows a key casts on the desk: a wide, faint ambient shadow, then a
-// tight contact shadow that closes in as the key is pressed.
+// The shadows a key casts on the desk: a soft halo all round it that lifts it
+// off whatever lies behind, a wide ambient shadow below, then a tight contact
+// shadow that closes in as the key is pressed.
 fn desk_shadow(
     p: vec2<f32>,
     body_origin: vec2<f32>,
@@ -101,20 +102,28 @@ fn desk_shadow(
     shadow_strength: f32,
 ) -> vec4<f32> {
     var out = vec4<f32>(0.0);
-    let ambient_blur = max(height * 0.3, 2.0);
+    let halo_blur = max(height * HALO_REACH, 2.0);
+    let halo_d = box_sdf(p, body_origin + vec2<f32>(0.0, height * 0.06), body_size, radius);
+    let halo = (1.0 - smoothstep(-halo_blur * 0.3, halo_blur, halo_d)) * 0.34;
+    out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), halo * shadow_strength));
+    let ambient_blur = max(height * 0.32, 2.0);
     let ambient_d = box_sdf(
         p,
-        body_origin + vec2<f32>(0.0, depth * 1.6 + height * 0.04),
+        body_origin + vec2<f32>(0.0, depth * 1.6 + height * 0.05),
         body_size,
         radius,
     );
-    let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
+    let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.6;
     out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), ambient * shadow_strength));
     let contact_blur = max(depth * (1.3 - press * 0.6), 1.2);
     let contact_d = box_sdf(p, body_origin + vec2<f32>(0.0, depth * 0.45), body_size, radius);
     let contact = 1.0 - smoothstep(-contact_blur, contact_blur, contact_d);
     return over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), contact * shadow_strength));
 }
+
+// How far the halo reaches past a key, in key heights. The overlay's scissor
+// (`KEYCAP_SHADOW_REACH` in `layers/keyboard.rs`) leaves room for it.
+const HALO_REACH: f32 = 0.5;
 
 // A mechanical keycap seen from in front and above, lit from above and a
 // little to the left. Its top is a cylinder-dished face; around it the walls
@@ -225,21 +234,7 @@ fn draw_cap(cap: Cap, p: vec2<f32>, shadow_strength: f32) -> vec4<f32> {
     let body_origin = vec2<f32>(cap.rect.x, cap.rect.y + sink);
     let body_size = vec2<f32>(cap.rect.z, cap.rect.w - sink);
 
-    // A wide, faint ambient shadow, then a tight contact shadow that
-    // closes in as the key is pressed.
-    let ambient_blur = max(height * 0.3, 2.0);
-    let ambient_d = box_sdf(
-        p,
-        body_origin + vec2<f32>(0.0, depth * 1.6 + height * 0.04),
-        body_size,
-        radius,
-    );
-    let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
-    out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), ambient * shadow_strength));
-    let contact_blur = max(depth * (1.3 - press * 0.6), 1.2);
-    let contact_d = box_sdf(p, body_origin + vec2<f32>(0.0, depth * 0.45), body_size, radius);
-    let contact = 1.0 - smoothstep(-contact_blur, contact_blur, contact_d);
-    out = over(out, paint(vec4<f32>(0.0, 0.0, 0.0, 1.0), contact * shadow_strength));
+    out = desk_shadow(p, body_origin, body_size, height, depth, radius, press, shadow_strength);
 
     // The face, inset from the skirt and above it.
     let face_origin = vec2<f32>(cap.rect.x + inset, cap.rect.y + sink + inset * 0.4);
@@ -311,7 +306,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         let cap = uniforms.caps[i];
         let travel = cap.motion.xy;
         // Skip pixels this key and its shadow cannot reach.
-        let reach = cap.rect.w * 0.65 + cap.shape.y * 2.0 + abs(travel) * 0.5;
+        let reach = cap.rect.w * (HALO_REACH + 0.15) + cap.shape.y * 2.0 + abs(travel) * 0.5;
         if p.x < cap.rect.x - reach.x || p.x > cap.rect.x + cap.rect.z + reach.x
             || p.y < cap.rect.y - reach.y || p.y > cap.rect.y + cap.rect.w + reach.y {
             continue;

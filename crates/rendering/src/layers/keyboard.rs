@@ -107,9 +107,14 @@ impl KeyboardPosition {
 const BOUNCE_OFFSET_PIXELS: f32 = 6.0;
 const MIN_OVERLAY_GAP: f32 = 15.0;
 
-/// A keycap is this many times the size setting tall, at 1080p: the default
-/// size of 50 makes a key a tenth of the frame's height.
+/// A keycap is this many times the size setting tall, at 1080p: a size of 50
+/// makes a key a tenth of the frame's height, and the default of 62 about an
+/// eighth.
 const KEYCAP_HEIGHT_PER_SIZE: f32 = 2.15;
+
+/// How far a key's shadow and halo reach past it, in key heights: the halo's
+/// reach in `keycap.wgsl` (`HALO_REACH`) and its drop below the key.
+const KEYCAP_SHADOW_REACH: f32 = 0.6;
 
 /// The keycaps stand a little apart from the captions, more on a taller frame,
 /// so their shadows never touch the caption card.
@@ -1580,7 +1585,7 @@ impl KeyboardLayer {
         }
 
         // The shadow reaches below and around the keys.
-        let reach = cap_height * 0.5 + depth * 2.0 + 4.0;
+        let reach = cap_height * KEYCAP_SHADOW_REACH + depth * 2.0 + 4.0;
         let scissor_x = (reach_left - reach).max(0.0).floor() as u32;
         let scissor_y = (top - reach).max(0.0).floor() as u32;
         let scissor_w = ((reach_right - reach_left + reach * 2.0).ceil() as u32)

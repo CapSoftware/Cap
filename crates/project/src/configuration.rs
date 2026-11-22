@@ -3028,7 +3028,7 @@ impl Default for CaptionSettings {
         Self {
             enabled: false,
             font: "Inter".to_string(),
-            size: 46,
+            size: 54,
             color: "#FFFFFF".to_string(),
             background_color: "#1C1C1F".to_string(),
             background_opacity: 86,
@@ -3217,8 +3217,8 @@ impl Default for KeyboardSettings {
         Self {
             enabled: false,
             font: DEFAULT_KEYBOARD_FONT.to_string(),
-            // Keys a tenth of the frame tall.
-            size: 50,
+            // Keys an eighth of the frame tall.
+            size: 62,
             color: DEFAULT_KEYBOARD_COLOR.to_string(),
             background_color: DEFAULT_KEYBOARD_BACKGROUND.to_string(),
             background_opacity: DEFAULT_KEYBOARD_BACKGROUND_OPACITY,

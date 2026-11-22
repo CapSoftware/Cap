@@ -75,16 +75,21 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         return card;
     }
 
-    // A wide ambient shadow and a tight contact shadow, dropped below the
+    // A soft halo all round the card that lifts it off whatever lies behind,
+    // then a wide ambient shadow and a tight contact shadow, dropped below the
     // card the way light falls on the keys above it.
     let height = rect_size.y;
+    let halo_blur = max(height * 0.6, 2.0);
+    let halo_d = squircle_sdf(local - vec2<f32>(0.0, height * 0.06), half_size, radius);
+    let halo = (1.0 - smoothstep(-halo_blur * 0.3, halo_blur, halo_d)) * 0.4;
     let ambient_blur = max(height * 0.3, 2.0);
     let ambient_d = squircle_sdf(local - vec2<f32>(0.0, height * 0.08), half_size, radius);
     let ambient = (1.0 - smoothstep(-ambient_blur, ambient_blur, ambient_d)) * 0.5;
     let contact_blur = max(height * 0.04, 1.2);
     let contact_d = squircle_sdf(local - vec2<f32>(0.0, height * 0.02), half_size, radius);
     let contact = (1.0 - smoothstep(-contact_blur, contact_blur, contact_d)) * 0.6;
-    let shade = clamp((ambient + contact * (1.0 - ambient)) * uniforms.shadow, 0.0, 1.0);
+    let lift = halo + ambient * (1.0 - halo);
+    let shade = clamp((lift + contact * (1.0 - lift)) * uniforms.shadow, 0.0, 1.0);
 
     // The card over its shadow, both straight alpha.
     let out_a = card.a + shade * (1.0 - card.a);
