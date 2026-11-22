@@ -56,6 +56,7 @@ pub fn run_from_env(cx: &mut App) {
             "panel" => panel(cx).await,
             "switch" => switching(cx).await,
             "toggle-loop" => toggle_loop(cx).await,
+            "scroll-all" => scroll_all(cx).await,
             _ => library(cx).await,
         }
         sleep(cx, 200).await;
@@ -431,4 +432,55 @@ async fn toggle_loop(cx: &mut AsyncApp) {
         sleep(cx, 5).await;
     }
     println!("{PREFIX}: toggle loop end ({switches} switches)");
+}
+
+/// Memory: every item drawn once in both layouts (Screenshots and Notes, down
+/// and back up), then a quiet pause marked `settled` for an outside RSS read.
+async fn scroll_all(cx: &mut AsyncApp) {
+    if wait_for_items(cx).await.is_none() {
+        println!("{PREFIX}: no items, giving up");
+        return;
+    }
+    sleep(cx, 500).await;
+    let mut samples = Vec::new();
+    for layout in [Layout::List, Layout::Grid] {
+        for section in [
+            Section::Kind(KindView::Screenshots),
+            Section::Kind(KindView::Notes),
+        ] {
+            with_view(cx, |view, cx| {
+                view.set_layout(layout, cx);
+                view.show(section.clone(), cx);
+            });
+            draw(cx);
+            for down in [true, false] {
+                for _ in 0..5000 {
+                    let at_end = with_view(cx, |view, cx| {
+                        let handle = match view.layout {
+                            Layout::List => view.list_scroll.0.borrow().base_handle.clone(),
+                            Layout::Grid => view.grid_scroll.0.borrow().base_handle.clone(),
+                        };
+                        let offset = handle.offset();
+                        let max = handle.max_offset();
+                        let step = if down { -px(240.) } else { px(240.) };
+                        let y = (offset.y + step).min(px(0.)).max(-max.y);
+                        handle.set_offset(gpui::point(offset.x, y));
+                        cx.notify();
+                        if down { y <= -max.y } else { y >= px(0.) }
+                    })
+                    .unwrap_or(true);
+                    if let Some(us) = draw(cx) {
+                        samples.push(us);
+                    }
+                    if at_end {
+                        break;
+                    }
+                    sleep(cx, 2).await;
+                }
+            }
+        }
+    }
+    report(PREFIX, "scroll-all", &mut samples);
+    println!("{PREFIX}: settled");
+    sleep(cx, 4000).await;
 }
