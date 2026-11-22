@@ -1634,11 +1634,28 @@ fn is_special_token(token_text: &str) -> bool {
         || trimmed.contains("<|")
 }
 
+/// Threads for each Whisper pass: whisper.cpp's own default, at most 4 and
+/// no more than the cores, but counting the cores this process may run on.
+/// whisper.cpp counts every core of the computer (`hardware_concurrency`),
+/// so with fewer allowed (CPU affinity, a container's limit) its threads
+/// outnumber them and its spinning barriers starve each other.
+fn whisper_threads(available: Option<usize>) -> i32 {
+    available.unwrap_or(4).clamp(1, 4) as i32
+}
+
+fn whisper_params<'a, 'b>(strategy: SamplingStrategy) -> FullParams<'a, 'b> {
+    let mut params = FullParams::new(strategy);
+    params.set_n_threads(whisper_threads(
+        std::thread::available_parallelism().ok().map(|n| n.get()),
+    ));
+    params
+}
+
 fn detect_whisper_language(
     context: &WhisperContext,
     samples: &[f32],
 ) -> Result<&'static str, String> {
-    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    let mut params = whisper_params(SamplingStrategy::Greedy { best_of: 1 });
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -1683,7 +1700,7 @@ fn process_with_whisper(
             language
         };
 
-    let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+    let mut params = whisper_params(SamplingStrategy::BeamSearch {
         beam_size: 5,
         patience: 1.0,
     });
@@ -3690,6 +3707,18 @@ mod tests {
     }
 
     // -- Model paths ----------------------------------------------------------
+
+    #[test]
+    fn whisper_uses_its_own_default_counting_only_the_cores_it_may_use() {
+        // whisper.cpp's default is min(4, cores): unchanged wherever every
+        // core is available, fewer threads only where fewer cores are.
+        assert_eq!(whisper_threads(Some(1)), 1);
+        assert_eq!(whisper_threads(Some(2)), 2);
+        assert_eq!(whisper_threads(Some(3)), 3);
+        assert_eq!(whisper_threads(Some(4)), 4);
+        assert_eq!(whisper_threads(Some(16)), 4);
+        assert_eq!(whisper_threads(None), 4);
+    }
 
     #[test]
     fn model_paths_match_the_tauri_layout() {
