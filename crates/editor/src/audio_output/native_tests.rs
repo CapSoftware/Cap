@@ -825,3 +825,37 @@ fn studio_sound_refresh_changes_live_pcm_and_cannot_restart_stopped_audio() {
     }
     output.shutdown();
 }
+
+#[test]
+fn mono_1channel_output_produces_audible_preview() {
+    let spec = audible_spec();
+    let (tx, rx) = std_mpsc::channel();
+    let output = AudioOutput::new_headless_with_channels(
+        1,
+        Box::new(move |samples, _| {
+            let mean =
+                samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32;
+            let _ = tx.send(mean);
+        }),
+    );
+    let generation = output
+        .play(spec)
+        .expect("play must succeed on 1-channel mono output");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut audible = false;
+    while Instant::now() < deadline {
+        if rx
+            .recv_timeout(Duration::from_millis(500))
+            .is_ok_and(|mean| mean > 0.001)
+        {
+            audible = true;
+            break;
+        }
+    }
+    output.stop_playback(generation);
+    output.shutdown();
+    assert!(
+        audible,
+        "Mono 1-channel output must produce audible sound, not silence"
+    );
+}

@@ -1533,6 +1533,7 @@ pub struct AudioResampler {
     pub output_frame: FFAudio,
     delay: Option<resampling::Delay>,
     output: AudioInfo,
+    capacity: usize,
 }
 
 impl AudioResampler {
@@ -1562,7 +1563,17 @@ impl AudioResampler {
             context,
             output_frame: FFAudio::empty(),
             delay: None,
+            capacity: 0,
         })
+    }
+
+    fn prepare(&mut self, capacity: usize) {
+        if capacity > self.capacity {
+            let target = self.context.output();
+            self.output_frame = FFAudio::new(target.format, capacity, target.channel_layout);
+            self.capacity = capacity;
+        }
+        self.output_frame.set_samples(capacity);
     }
 
     fn current_frame_data(&self) -> &[u8] {
@@ -1571,6 +1582,8 @@ impl AudioResampler {
     }
 
     pub fn queue_and_process_frame<'a>(&'a mut self, frame: &FFAudio) -> &'a [u8] {
+        let capacity = resample_capacity(&self.context, frame.samples());
+        self.prepare(capacity);
         self.delay = self.context.run(frame, &mut self.output_frame).unwrap();
 
         // Teeechnically this doesn't work for planar output
@@ -1580,6 +1593,14 @@ impl AudioResampler {
     pub fn flush_frame(&mut self) -> Option<&[u8]> {
         self.delay?;
 
+        let pending = self
+            .context
+            .delay()
+            .map(|d| d.output.max(0) as usize)
+            .unwrap_or(0);
+        let capacity = pending.max(1).saturating_add(16);
+        self.prepare(capacity);
+
         self.delay = self.context.flush(&mut self.output_frame).unwrap();
 
         Some(self.current_frame_data())
@@ -1588,6 +1609,23 @@ impl AudioResampler {
     fn reset(&mut self) {
         *self = Self::new(self.output).unwrap();
     }
+}
+
+fn resample_capacity(resampler: &resampling::Context, input_samples: usize) -> usize {
+    let src_rate = resampler.input().rate.max(1) as u64;
+    let dst_rate = resampler.output().rate.max(1) as u64;
+    let pending_output_samples = resampler
+        .delay()
+        .map(|d| d.output.max(0) as u64)
+        .unwrap_or(0);
+    let resampled_from_input = (input_samples as u64)
+        .saturating_mul(dst_rate)
+        .div_ceil(src_rate);
+
+    pending_output_samples
+        .saturating_add(resampled_from_input)
+        .saturating_add(16)
+        .min(i32::MAX as u64) as usize
 }
 
 fn silent_audio_frame(samples: usize) -> FFAudio {
@@ -6119,5 +6157,61 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn audio_resampler_mono_downmix_produces_audible_samples_across_multiple_frames() {
+        let _ = ffmpeg::init();
+        let output_info = AudioInfo::new_raw(AudioData::SAMPLE_FORMAT, 48_000, 1);
+        let mut resampler = AudioResampler::new(output_info).unwrap();
+        let samples_per_frame = 1024;
+        let mut frame = FFAudio::new(
+            AudioData::SAMPLE_FORMAT,
+            samples_per_frame,
+            ChannelLayout::STEREO,
+        );
+        frame.set_rate(48_000);
+        let sample_count = samples_per_frame * usize::from(AudioRenderer::CHANNELS);
+        let values = vec![0.5f32; sample_count];
+        frame.data_mut(0)[..sample_count * f32::BYTE_SIZE]
+            .copy_from_slice(unsafe { cast_f32_slice_to_bytes(&values) });
+
+        let mut total_samples = 0;
+        let mut non_zero_samples = 0;
+        for frame_idx in 0..5 {
+            let bytes = resampler.queue_and_process_frame(&frame);
+            let frame_samples = bytes.len() / f32::BYTE_SIZE;
+            assert!(
+                frame_samples > 0,
+                "Resampler frame {frame_idx} must produce samples and not stall"
+            );
+            total_samples += frame_samples;
+            for chunk in bytes.chunks_exact(f32::BYTE_SIZE) {
+                let val = f32::from_bytes(chunk);
+                if val.abs() > 0.01 {
+                    non_zero_samples += 1;
+                }
+            }
+        }
+        while let Some(flushed) = resampler.flush_frame() {
+            if flushed.is_empty() {
+                break;
+            }
+            for chunk in flushed.chunks_exact(f32::BYTE_SIZE) {
+                total_samples += 1;
+                let val = f32::from_bytes(chunk);
+                if val.abs() > 0.01 {
+                    non_zero_samples += 1;
+                }
+            }
+        }
+        assert!(
+            total_samples >= 5 * samples_per_frame,
+            "Resampler downmix to mono must output at least all queued samples after flush"
+        );
+        assert!(
+            non_zero_samples > 0,
+            "Resampler downmix to mono must not be silent across frames"
+        );
     }
 }
