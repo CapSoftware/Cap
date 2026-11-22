@@ -2908,44 +2908,43 @@ fn toolbar_hints(
     mirror_failed: bool,
     blur_failed: bool,
 ) -> ToolbarHints {
-    use tr::camera::toolbar as t;
     let hint = |title: &'static str| Hint::new(title).pinned(HintSide::Below);
     let size = if state.size < CAMERA_PRESET_LARGE {
-        t::larger()
+        tr::camera::toolbar::larger()
     } else {
-        t::smaller()
+        tr::camera::toolbar::smaller()
     };
     let shape = match state.shape {
-        CameraShape::Round => t::shape_to_square(),
-        CameraShape::Square => t::shape_to_full(),
-        CameraShape::Full => t::shape_to_round(),
+        CameraShape::Round => tr::camera::toolbar::shape_to_square(),
+        CameraShape::Square => tr::camera::toolbar::shape_to_full(),
+        CameraShape::Full => tr::camera::toolbar::shape_to_round(),
     };
     let mirror = if mirror_failed {
         hint(tr::camera::effects::mirror_title()).body(tr::camera::effects::mirror_message())
     } else {
-        hint(t::mirror()).body(if state.mirrored {
-            t::mirror_on()
+        hint(tr::camera::toolbar::mirror()).body(if state.mirrored {
+            tr::camera::toolbar::mirror_on()
         } else {
-            t::mirror_off()
+            tr::camera::toolbar::mirror_off()
         })
     };
     let blur = if blur_failed {
         hint(tr::camera::effects::blur_title()).body(tr::camera::effects::blur_message())
     } else {
-        hint(t::blur()).body(match state.background_blur {
-            BlurMode::Off => t::blur_off(),
-            BlurMode::Light => t::blur_light(),
+        hint(tr::camera::toolbar::blur()).body(match state.background_blur {
+            BlurMode::Off => tr::camera::toolbar::blur_off(),
+            BlurMode::Light => tr::camera::toolbar::blur_light(),
             BlurMode::Heavy if state.background_blur.cycle() == BlurMode::Remove => {
-                t::blur_heavy_then_cutout()
+                tr::camera::toolbar::blur_heavy_then_cutout()
             }
-            BlurMode::Heavy => t::blur_heavy_then_off(),
-            BlurMode::Remove => t::blur_cutout(),
+            BlurMode::Heavy => tr::camera::toolbar::blur_heavy_then_off(),
+            BlurMode::Remove => tr::camera::toolbar::blur_cutout(),
         })
     };
     ToolbarHints {
-        close: hint(t::close()),
-        size: hint(size).body(t::size_body()),
-        shape: hint(t::shape()).body(shape),
+        close: hint(tr::camera::toolbar::close()),
+        size: hint(size).body(tr::camera::toolbar::size_body()),
+        shape: hint(tr::camera::toolbar::shape()).body(shape),
         mirror,
         blur,
     }
