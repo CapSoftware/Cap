@@ -246,8 +246,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // the Google and Microsoft marks, flattened to one fill.
     "google.svg",
     "microsoft.svg",
-    // The notes window's home, navigation and transcript panel.
-    "house.svg",
+    // The notes window's navigation and transcript panel.
     "folder-plus.svg",
     "languages.svg",
 );
