@@ -43,7 +43,9 @@ use crate::{
     meetings_ui::documents::format,
     platform,
     theme::{LocaleFont as _, Theme},
-    ui::{TextInput, TextInputEvent, TextInputState},
+    ui::{
+        KeptText, SharedTextCache, TextCache, TextInput, TextInputEvent, TextInputState, kept_text,
+    },
 };
 use cap_meetings::apps::AppInfo;
 
@@ -245,6 +247,7 @@ pub struct LibraryWindow {
     people_task: Option<Task<()>>,
     thumbs: thumbs::Thumbs,
     app_icons: app_icons::AppIcons,
+    texts: SharedTextCache,
     list_scroll: gpui::UniformListScrollHandle,
     grid_scroll: gpui::UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -463,6 +466,7 @@ impl LibraryWindow {
             people_task: None,
             thumbs: thumbs::Thumbs::default(),
             app_icons: app_icons::AppIcons::default(),
+            texts: TextCache::shared(),
             list_scroll: gpui::UniformListScrollHandle::new(),
             grid_scroll: gpui::UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
@@ -1317,6 +1321,10 @@ fn section_title(section: &Section, file: &store::LibraryFile, scan: &Scan) -> S
 }
 
 impl LibraryWindow {
+    fn text(&self, text: impl Into<SharedString>) -> KeptText {
+        kept_text(&self.texts, text)
+    }
+
     fn glass(&self) -> bool {
         self.theme.material.is_some()
     }
@@ -1496,7 +1504,7 @@ impl LibraryWindow {
                     .text_size(px(17.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(p.text)
-                    .child(title),
+                    .child(self.text(title)),
             )
             .when(show_layout, |el| {
                 el.child(
@@ -1559,7 +1567,7 @@ impl LibraryWindow {
                             .size(px(13.))
                             .text_color(p.text),
                     )
-                    .child(tr::library::new())
+                    .child(self.text(tr::library::new()))
                     .on_click(cx.listener(|_, _, _, cx| {
                         cx.defer(crate::meetings_ui::documents::new_note);
                     })),
@@ -1651,7 +1659,7 @@ impl LibraryWindow {
                     .line_height(px(band))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(gpui::white())
-                    .child(format::month_short(local.month())),
+                    .child(self.text(format::month_short(local.month()))),
             )
             .child(
                 div()
@@ -1663,7 +1671,7 @@ impl LibraryWindow {
                     .line_height(px((w * 0.5).round()))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(p.text)
-                    .child(local.day().to_string()),
+                    .child(self.text(local.day().to_string())),
             )
             .children(icon.map(|image| {
                 img(image)
@@ -1731,7 +1739,7 @@ impl LibraryWindow {
                                 .bg(gpui::hsla(0., 0., 0., 0.55))
                                 .text_size(px(11.))
                                 .text_color(gpui::white())
-                                .child(format::duration(ms)),
+                                .child(self.text(format::duration(ms))),
                         )
                     },
                 )
@@ -1772,7 +1780,7 @@ impl LibraryWindow {
                     .text_size(px(10.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(gpui::white())
-                    .child(initial)
+                    .child(self.text(initial))
             }));
         let footer = (!people.is_empty()).then(|| {
             div()
@@ -1787,11 +1795,11 @@ impl LibraryWindow {
                         .truncate()
                         .text_size(px(12.))
                         .text_color(p.muted)
-                        .child(if extra > 0 {
+                        .child(self.text(if extra > 0 {
                             format!("{} +{extra}", people.join(", "))
                         } else {
                             people.join(", ")
-                        }),
+                        })),
                 )
         });
         let event = item
@@ -1833,7 +1841,7 @@ impl LibraryWindow {
                                 .text_size(px(12.5))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(p.text)
-                                .child(span),
+                                .child(self.text(span)),
                         )
                         .when(!place.is_empty(), |el| {
                             el.child(
@@ -1841,7 +1849,7 @@ impl LibraryWindow {
                                     .truncate()
                                     .text_size(px(11.5))
                                     .text_color(p.muted)
-                                    .child(place),
+                                    .child(self.text(place)),
                             )
                         }),
                 )
@@ -1859,7 +1867,7 @@ impl LibraryWindow {
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(p.muted)
-                        .child(app.name),
+                        .child(self.text(app.name)),
                 )
         } else {
             div()
@@ -1875,13 +1883,13 @@ impl LibraryWindow {
                         .size(px(13.))
                         .text_color(tint),
                 )
-                .child(kind_word(item.kind))
+                .child(self.text(kind_word(item.kind)))
                 .child(div().flex_1())
                 .children(item.app.clone().map(|app| {
                     div()
                         .text_color(p.faint)
                         .font_weight(FontWeight::NORMAL)
-                        .child(app)
+                        .child(self.text(app))
                 }))
         };
         // Whole lines only: the excerpt gets the lines that fit, and the
@@ -1917,7 +1925,7 @@ impl LibraryWindow {
                 .max_h(px(lines as f32 * line_h))
                 .line_clamp(lines)
                 .text_color(p.text)
-                .child(text.clone())
+                .child(self.text(text.clone()))
                 .into_any_element(),
             // Nothing written yet: the page stays a page, with its glyph
             // where the words will go.
@@ -2025,7 +2033,7 @@ impl LibraryWindow {
                                     .text_size(px(13.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(p.text)
-                                    .child(item.title.clone()),
+                                    .child(self.text(item.title.clone())),
                             )
                             .when(item.pinned, |el| {
                                 el.child(
@@ -2041,11 +2049,11 @@ impl LibraryWindow {
                             .truncate()
                             .text_size(px(12.))
                             .text_color(p.muted)
-                            .child(format!(
+                            .child(self.text(format!(
                                 "{}  ·  {}",
                                 when_line(item, today),
                                 meta_line(item)
-                            )),
+                            ))),
                     ),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.open_item(index, cx)))
@@ -2083,14 +2091,14 @@ impl LibraryWindow {
                             .text_size(px(13.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(p.text)
-                            .child(item.title.clone()),
+                            .child(self.text(item.title.clone())),
                     )
                     .child(
                         div()
                             .truncate()
                             .text_size(px(12.))
                             .text_color(p.muted)
-                            .child(meta_line(item)),
+                            .child(self.text(meta_line(item))),
                     ),
             )
             .when(item.pinned, |el| {
@@ -2106,7 +2114,7 @@ impl LibraryWindow {
                     .flex_shrink_0()
                     .text_size(px(12.))
                     .text_color(p.faint)
-                    .child(when_line(item, today)),
+                    .child(self.text(when_line(item, today))),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.open_item(index, cx)))
             .into_any_element()
@@ -2120,7 +2128,7 @@ impl LibraryWindow {
             .text_size(px(15.))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.palette.text)
-            .child(text.into())
+            .child(self.text(text))
     }
 
     fn render_up_next(&self) -> Option<AnyElement> {
@@ -2159,7 +2167,7 @@ impl LibraryWindow {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(tint)
-                                .child(when),
+                                .child(self.text(when)),
                         )
                         .child(
                             div()
@@ -2167,7 +2175,7 @@ impl LibraryWindow {
                                 .text_size(px(14.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(p.text)
-                                .child(next.title.clone()),
+                                .child(self.text(next.title.clone())),
                         )
                         .when(!next.people.is_empty(), |el| {
                             el.child(
@@ -2175,7 +2183,7 @@ impl LibraryWindow {
                                     .truncate()
                                     .text_size(px(12.))
                                     .text_color(p.muted)
-                                    .child(next.people.join(", ")),
+                                    .child(self.text(next.people.join(", "))),
                             )
                         }),
                 )
@@ -2191,7 +2199,7 @@ impl LibraryWindow {
                         .text_size(px(13.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(gpui::white())
-                        .child(tr::library::take_notes()),
+                        .child(self.text(tr::library::take_notes())),
                 )
                 .into_any_element(),
         )
@@ -2339,7 +2347,7 @@ impl LibraryWindow {
                                     .text_color(tint)
                                     .into_any_element(),
                             })
-                            .child(item.title.clone())
+                            .child(self.text(item.title.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| this.open_item(i, cx)))
                     })),
             );
@@ -3023,6 +3031,7 @@ impl LibraryWindow {
 impl Render for LibraryWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_theme(window, cx);
+        self.texts.borrow_mut().next_frame();
         if !self.first_paint {
             self.first_paint = true;
             let opened_at = self.opened_at;
