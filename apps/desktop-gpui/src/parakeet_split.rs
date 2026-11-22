@@ -16,8 +16,8 @@
 use std::{
     fs::File,
     io::{BufWriter, Write},
-    path::Path,
-    sync::Mutex,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
 };
 
 pub const ENCODER: &str = "encoder-model.onnx";
@@ -235,7 +235,19 @@ fn needs_split_above(dir: &Path, above: u64) -> bool {
     std::fs::metadata(dir.join(ENCODER)).is_ok_and(|m| m.len() > above)
 }
 
-static SPLITTING: Mutex<()> = Mutex::new(());
+/// One lock per model folder: a split of one model (say right after its
+/// download) never makes another model's load wait for it.
+fn folder_lock(dir: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: Mutex<Vec<(PathBuf, Arc<Mutex<()>>)>> = Mutex::new(Vec::new());
+    let key = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let mut locks = LOCKS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, lock)) = locks.iter().find(|(folder, _)| *folder == key) {
+        return lock.clone();
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.push((key, lock.clone()));
+    lock
+}
 
 /// Splits the encoder in `dir` once. Safe to call before every load: it does
 /// nothing when the split is done, there is too little disk, or the file is
@@ -249,9 +261,8 @@ fn ensure_split_above(
     above: u64,
     free_bytes: impl Fn(&Path) -> Option<u64>,
 ) -> Result<bool, Error> {
-    let _one = SPLITTING
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lock = folder_lock(dir);
+    let _one = lock.lock().unwrap_or_else(PoisonError::into_inner);
     if !needs_split_above(dir, above) {
         return Ok(false);
     }
@@ -471,6 +482,22 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".split"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn a_split_of_one_model_never_holds_up_another() {
+        let best = tempfile::tempdir().unwrap();
+        let max = tempfile::tempdir().unwrap();
+        let held = folder_lock(best.path());
+        let _splitting = held.lock().unwrap();
+        assert!(
+            folder_lock(max.path()).try_lock().is_ok(),
+            "another model's folder is free while this one splits"
+        );
+        assert!(
+            folder_lock(&best.path().join(".")).try_lock().is_err(),
+            "the same folder, however it is spelled, shares the lock"
+        );
     }
 
     #[test]
