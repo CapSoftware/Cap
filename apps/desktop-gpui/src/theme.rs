@@ -85,6 +85,10 @@ impl Global for ThemePreference {}
 
 pub fn init(preference: AppTheme, cx: &mut App) {
     cx.set_global(ThemePreference(preference));
+    sync_new_keys(resolve_appearance(
+        preference,
+        Appearance::from_window(cx.window_appearance()),
+    ));
 }
 
 pub fn current_preference(cx: &App) -> AppTheme {
@@ -95,6 +99,20 @@ pub fn current_preference(cx: &App) -> AppTheme {
 
 pub fn set_preference(preference: AppTheme, cx: &mut App) {
     cx.set_global(ThemePreference(preference));
+    sync_new_keys(resolve_appearance(
+        preference,
+        Appearance::from_window(cx.window_appearance()),
+    ));
+}
+
+/// Keys added to a project from now on take the app's appearance on a Mac:
+/// light keys in light mode, dark in dark mode. Elsewhere they start dark.
+/// Set at launch, on a theme change, and whenever a window resolves its
+/// theme, so a project made before any editor opens gets it too.
+fn sync_new_keys(appearance: Appearance) {
+    cap_project::KeyboardSettings::set_new_keys_light(
+        cfg!(target_os = "macos") && appearance == Appearance::Light,
+    );
 }
 
 /// Light/Dark force that appearance; System follows the window (and therefore
@@ -907,7 +925,9 @@ impl Theme {
                 }
             })
             .unwrap_or_else(|| Appearance::from_window(window.appearance()));
-        let theme = Self::new(resolve_appearance(preference, system));
+        let appearance = resolve_appearance(preference, system);
+        sync_new_keys(appearance);
+        let theme = Self::new(appearance);
         if with_material {
             theme.with_material(platform::active_material(cx))
         } else {
