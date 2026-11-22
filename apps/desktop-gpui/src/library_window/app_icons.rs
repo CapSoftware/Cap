@@ -24,16 +24,14 @@ pub struct AppIcons {
 }
 
 pub enum Icon {
-    /// Looked up and found.
     Image(Arc<RenderImage>),
-    /// Still looking: draw nothing yet (the slot keeps its size).
+    /// Draws nothing, but keeps its slot's size so rows don't shift when
+    /// the icon arrives.
     Pending,
-    /// Not installed, or no icon: draw the meeting glyph.
     Missing,
 }
 
 impl AppIcons {
-    /// The app's icon, queued for lookup on first ask.
     pub fn get(&self, app: &'static AppInfo) -> Icon {
         match self.ready.get(app.id) {
             Some(Some(image)) => Icon::Image(image.clone()),
@@ -47,7 +45,6 @@ impl AppIcons {
         }
     }
 
-    /// Apps asked for since the last call, each once, now marked loading.
     pub fn take_wanted(&mut self) -> Vec<&'static AppInfo> {
         let mut wanted = std::mem::take(self.wanted.get_mut());
         wanted.sort_by_key(|a| a.id);
@@ -296,7 +293,7 @@ pub(crate) mod freedesktop {
     struct Entry {
         name: Option<String>,
         icon: Option<String>,
-        /// The binary's file name from `Exec`.
+        /// The binary's file name from `Exec`, not the whole command line.
         exec: Option<String>,
     }
 

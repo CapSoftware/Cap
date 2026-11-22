@@ -159,7 +159,6 @@ pub fn calendar_red(dark: bool) -> Hsla {
     }
 }
 
-/// The face of a calendar leaf.
 pub fn leaf_face(dark: bool) -> Hsla {
     if dark {
         hsla(240. / 360., 0.04, 0.22, 1.)

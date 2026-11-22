@@ -1579,7 +1579,6 @@ impl LibraryWindow {
         }
     }
 
-    /// The kind's glyph on a soft tile of its colour.
     fn glyph_tile(&self, kind: ItemKind, w: f32, h: f32) -> AnyElement {
         self.glyph_tile_with(kind_glyph(kind), kind, w, h)
     }
