@@ -14338,9 +14338,18 @@ impl EditorWindow {
             .relative()
             .flex_1()
             .min_h_0()
-            // The lane area clips at its own top edge: a scrolled first row
-            // must never bleed into the ruler above it.
-            .overflow_hidden()
+            // Clipped side to side only. The scroller keeps scrolled rows out
+            // of the ruler on its own; the glows under lit segments may spread
+            // past the lanes, up over the ruler, and fade out there.
+            .overflow_x_hidden()
+            .children(timeline::render_segment_glows(
+                &theme,
+                model,
+                self.view,
+                viewport_width,
+                ui,
+                f32::from(self.timeline_scroll.offset().y),
+            ))
             .child(
                 div()
                     .id("timeline-scroll")

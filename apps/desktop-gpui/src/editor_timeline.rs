@@ -244,7 +244,8 @@ fn seg_gloss() -> Vec<gpui::BoxShadow> {
 }
 
 /// The segment's own colour glowing under it: soft on hover, fuller once
-/// selected, so selection reads as lit rather than boxed in.
+/// selected, so selection reads as lit rather than boxed in. Drawn by
+/// [`render_segment_glows`] under every row, so it spreads freely.
 fn seg_glow(color: Hsla, dark: bool, selected: bool) -> Vec<gpui::BoxShadow> {
     let alpha = match (dark, selected) {
         (true, true) => 0.7,
@@ -2514,6 +2515,93 @@ pub fn render_row(
         .into_any_element()
 }
 
+/// The glow under every hovered or selected segment, as one layer the lane
+/// area draws beneath all of its rows. Lit there rather than on the segment,
+/// the glow spreads past its own lane, across the gaps and up over the ruler
+/// without a row edge cutting it off, and it never washes over another clip.
+/// Positions are in the lane area's space; `scroll_y` is the rows' scroll
+/// offset (zero or negative).
+pub fn render_segment_glows(
+    theme: &Theme,
+    model: &TimelineModel,
+    view: TimelineView,
+    viewport_width: f32,
+    ui: SegmentUi<'_>,
+    scroll_y: f32,
+) -> Vec<AnyElement> {
+    if ui.selection.is_none() && ui.hovered.is_none() {
+        return Vec::new();
+    }
+    let width = content_width(viewport_width);
+    let secs_per_pixel = view.transform.secs_per_pixel(width);
+    let height = model.track_height();
+    let dark = theme.is_dark();
+    let mut glows = Vec::new();
+    for (row_index, row) in model.rows.iter().enumerate() {
+        let segments = model.segments_for(*row);
+        let visible_ends = if row.kind == TrackKind::Keyboard {
+            keyboard_visible_ends(segments, secs_per_pixel)
+        } else {
+            Vec::new()
+        };
+        let top = row_index as f32 * (height + TRACK_ROW_GAP) + scroll_y;
+        for (index, segment) in segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| segment.lane == row.lane)
+        {
+            let selected = ui.is_selected(row.kind, index);
+            if !selected && !ui.is_hovered(row.kind, row.lane, index) {
+                continue;
+            }
+            let end = visible_ends
+                .get(index)
+                .copied()
+                .flatten()
+                .unwrap_or(segment.end);
+            if !view.transform.segment_visible(segment.start, end) {
+                continue;
+            }
+            let left =
+                (((segment.start - view.transform.position) / secs_per_pixel) as f32).max(0.);
+            let right = (((end - view.transform.position) / secs_per_pixel) as f32).min(width);
+            if right <= left {
+                continue;
+            }
+            let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
+                muted_clip_color(theme)
+            } else {
+                row.kind.color()
+            };
+            // A disabled segment glows as faintly as it draws.
+            let dim = match &segment.detail {
+                SegmentDetail::Text { enabled, .. }
+                | SegmentDetail::Shape { enabled, .. }
+                | SegmentDetail::Style { enabled, .. }
+                | SegmentDetail::Image { enabled, .. }
+                    if !enabled =>
+                {
+                    0.6
+                }
+                SegmentDetail::Audio { enabled, .. } if !enabled => 0.5,
+                _ => 1.,
+            };
+            glows.push(
+                div()
+                    .absolute()
+                    .top(px(top))
+                    .left(px(TRACK_GUTTER + left))
+                    .w(px(right - left))
+                    .h(px(height))
+                    .rounded(px(SEGMENT_RADIUS))
+                    .shadow(seg_glow(color.opacity(dim), dark, selected))
+                    .into_any_element(),
+            );
+        }
+    }
+    glows
+}
+
 /// The content column of one row: its segments, or the track's own empty state.
 #[allow(clippy::too_many_arguments)]
 fn render_track_content(
@@ -3297,9 +3385,6 @@ fn render_segment(
         .left(px(x))
         .w(px(width))
         .rounded(px(SEGMENT_RADIUS))
-        .when(hovered || selected, |this| {
-            this.shadow(seg_glow(color, theme.is_dark(), selected))
-        })
         .when_some(dim, |this, opacity| this.opacity(opacity))
         // `interactMode === "split" && "timeline-scissors-cursor"`
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
