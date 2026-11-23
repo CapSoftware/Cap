@@ -111,6 +111,10 @@ pub struct PersistedState {
     pub editor_window: Option<EditorWindowMemory>,
     #[serde(default)]
     pub meeting_indicator: Option<MeetingIndicatorMemory>,
+    /// The main window library's last tab (`recordings`, `screenshots` or
+    /// `notes`), so the Library button opens where the person left it.
+    #[serde(default)]
+    pub library_tab: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

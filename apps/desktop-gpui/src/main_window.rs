@@ -880,6 +880,19 @@ impl LibraryKind {
         }
     }
 
+    fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.id() == id)
+    }
+
+    /// The tab the Library button opens: the one last used, else Recordings.
+    fn remembered(state: &crate::store::PersistedState) -> Self {
+        state
+            .library_tab
+            .as_deref()
+            .and_then(Self::from_id)
+            .unwrap_or(Self::Recordings)
+    }
+
     fn tab_label(self) -> &'static str {
         match self {
             Self::Recordings => tr::main::header::recordings(),
@@ -1427,7 +1440,7 @@ impl MainWindow {
             sign_in_prompt: None,
             copied_error: None,
             library: None,
-            library_kind: LibraryKind::Recordings,
+            library_kind: LibraryKind::remembered(&crate::store::load()),
             library_task: None,
             incomplete_recording: None,
             recovery_error: None,
@@ -4986,6 +4999,12 @@ impl MainWindow {
     }
 
     fn refresh_library(&mut self, kind: LibraryKind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.library_kind != kind {
+            let id = kind.id().to_string();
+            cx.background_executor()
+                .spawn(async move { crate::store::update(|state| state.library_tab = Some(id)) })
+                .detach();
+        }
         self.library_kind = kind;
         if kind == LibraryKind::Notes {
             self.refresh_notes(window, cx);
@@ -8345,6 +8364,32 @@ mod recording_start_permit_tests {
         assert_eq!(Mode::Studio.for_recording(), Mode::Studio);
         assert_eq!(Mode::Instant.for_recording(), Mode::Instant);
         assert_eq!(Mode::Screenshot.for_recording(), Mode::Studio);
+    }
+
+    #[test]
+    fn the_library_opens_on_the_tab_last_used() {
+        let saved = |tab: Option<&str>| crate::store::PersistedState {
+            library_tab: tab.map(str::to_string),
+            ..Default::default()
+        };
+        assert_eq!(
+            LibraryKind::remembered(&saved(None)),
+            LibraryKind::Recordings
+        );
+        for kind in LibraryKind::ALL {
+            let state = saved(Some(kind.id()));
+            let json = serde_json::to_string(&state).unwrap();
+            let read: crate::store::PersistedState = serde_json::from_str(&json).unwrap();
+            assert_eq!(LibraryKind::remembered(&read), kind);
+        }
+        assert_eq!(
+            LibraryKind::remembered(&saved(Some("albums"))),
+            LibraryKind::Recordings
+        );
+        // A state file written before the tab was remembered (0.6.x).
+        let old: crate::store::PersistedState =
+            serde_json::from_str(r#"{"camera_window":null,"editor_window":null}"#).unwrap();
+        assert_eq!(LibraryKind::remembered(&old), LibraryKind::Recordings);
     }
 }
 
