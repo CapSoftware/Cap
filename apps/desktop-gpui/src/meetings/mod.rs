@@ -414,6 +414,9 @@ pub struct Meetings {
     capabilities: Option<(String, Capabilities)>,
     capabilities_task: Option<Task<()>>,
     capabilities_error: Option<(String, cloud::CloudError)>,
+    /// A fetch scheduled after a passing error while meetings wait on it.
+    capabilities_retry: Option<Task<()>>,
+    capabilities_backoff: Duration,
     notes: HashMap<String, NotesState>,
     auto_notes: HashMap<String, Task<Result<(), NotesError>>>,
     /// Summary renames a late speaker correction asked for while that
@@ -433,6 +436,8 @@ pub struct Meetings {
     pub(crate) dev_mic: Option<flume::Receiver<capture::RawBatch>>,
 }
 
+const CAPABILITIES_RETRY_FIRST: Duration = Duration::from_secs(30);
+const CAPABILITIES_RETRY_MAX: Duration = Duration::from_secs(5 * 60);
 const AUDIO_RETENTION_FIRST_SWEEP: Duration = Duration::from_secs(120);
 const AUDIO_RETENTION_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -632,6 +637,8 @@ impl Meetings {
             capabilities: None,
             capabilities_task: None,
             capabilities_error: None,
+            capabilities_retry: None,
+            capabilities_backoff: CAPABILITIES_RETRY_FIRST,
             notes: HashMap::new(),
             auto_notes: HashMap::new(),
             late_summary_renames: HashMap::new(),
@@ -1447,26 +1454,64 @@ impl Meetings {
             return;
         }
         let key = auth_key();
+        self.capabilities_retry = None;
         self.capabilities_task = Some(cx.spawn(async move |this, cx| {
             let result = gpui_tokio::Tokio::spawn(cx, cloud::capabilities()).await;
             this.update(cx, |this, cx| {
                 this.capabilities_task = None;
+                let mut retry_after = None;
                 let caps = match result {
                     Ok(Ok(caps)) => Some(caps),
                     Ok(Err(error)) => {
                         tracing::info!(?error, "meeting capabilities unavailable");
+                        if !error.is_final() {
+                            retry_after = Some(match &error {
+                                cloud::CloudError::RateLimited { retry_after_secs } => {
+                                    Duration::from_secs(*retry_after_secs)
+                                }
+                                _ => Duration::ZERO,
+                            });
+                        }
                         this.capabilities_error = Some((key.clone(), error));
                         None
                     }
-                    Err(_) => None,
+                    Err(_) => {
+                        retry_after = Some(Duration::ZERO);
+                        None
+                    }
                 };
                 if let Some(caps) = &caps {
                     this.capabilities_error = None;
                     this.capabilities = Some((key, caps.clone()));
                 }
                 this.resolve_pending_engine(caps.as_ref(), cx);
-                this.capabilities_settled(cx);
+                match retry_after {
+                    // Meetings waiting on a free account's trial are asked again
+                    // later; deciding them now would skip their notes.
+                    Some(at_least) if this.ai.has_waiting() => {
+                        this.retry_capabilities(at_least, cx)
+                    }
+                    _ => {
+                        if retry_after.is_none() {
+                            this.capabilities_backoff = CAPABILITIES_RETRY_FIRST;
+                        }
+                        this.capabilities_settled(cx);
+                    }
+                }
                 cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn retry_capabilities(&mut self, at_least: Duration, cx: &mut Context<Self>) {
+        let wait = self.capabilities_backoff.max(at_least);
+        self.capabilities_backoff = (self.capabilities_backoff * 2).min(CAPABILITIES_RETRY_MAX);
+        self.capabilities_retry = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            this.update(cx, |this, cx| {
+                this.capabilities_retry = None;
+                this.fetch_capabilities(cx);
             })
             .ok();
         }));

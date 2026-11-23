@@ -46,6 +46,15 @@ pub enum CloudError {
 }
 
 impl CloudError {
+    /// The server's answer for this account, as opposed to a failure that
+    /// may clear on its own (offline, rate limited, a server error).
+    pub fn is_final(&self) -> bool {
+        matches!(
+            self,
+            CloudError::NotSignedIn | CloudError::UpgradeRequired | CloudError::NotConfigured
+        )
+    }
+
     pub fn describe(&self) -> String {
         match self {
             CloudError::NotSignedIn => "Sign in to use cloud transcription".into(),

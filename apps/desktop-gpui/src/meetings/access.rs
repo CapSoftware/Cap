@@ -101,7 +101,10 @@ fn holds_ai_notes(library: &cap_meetings::library::Library, doc_id: &str) -> boo
 }
 
 pub fn settled(input: AccessInput<'_>) -> bool {
-    !input.signed_in || input.pro || input.caps.is_some() || input.error.is_some()
+    !input.signed_in
+        || input.pro
+        || input.caps.is_some()
+        || input.error.is_some_and(CloudError::is_final)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +139,10 @@ impl AiState {
         }
         self.waiting.retain(|id| id != doc_id);
         AutoDecision::Skip
+    }
+
+    pub fn has_waiting(&self) -> bool {
+        !self.waiting.is_empty()
     }
 
     pub fn take_waiting(&mut self) -> Vec<String> {
@@ -222,7 +229,8 @@ impl Meetings {
         }
         if self.capabilities().is_none()
             && !self.capabilities_pending()
-            && self.capabilities_error().is_none()
+            && self.capabilities_retry.is_none()
+            && self.capabilities_error().is_none_or(|e| !e.is_final())
         {
             self.fetch_capabilities(cx);
         }
@@ -499,6 +507,37 @@ mod tests {
         assert!(!settled(input(true, false, None, None)));
         assert!(settled(input(true, false, Some(&two), None)));
         assert!(settled(input(true, false, None, Some(&upgrade))));
+        for passing in [
+            CloudError::Offline("no route".into()),
+            CloudError::Failed("503".into()),
+            CloudError::RateLimited {
+                retry_after_secs: 30,
+            },
+        ] {
+            assert!(
+                !settled(input(true, false, None, Some(&passing))),
+                "{passing:?} may clear, so a free account's trial is still unknown"
+            );
+        }
+    }
+
+    #[test]
+    fn a_free_meeting_waits_out_a_passing_error_instead_of_skipping_notes() {
+        let offline = CloudError::Offline("no route".into());
+        let free = input(true, false, None, Some(&offline));
+        let mut state = AiState::default();
+        assert_eq!(
+            state.decide("a", resolve(free), settled(free)),
+            AutoDecision::Wait
+        );
+        assert!(state.has_waiting());
+        let two = caps(false, Some(2));
+        let answered = input(true, false, Some(&two), None);
+        assert_eq!(state.take_waiting(), vec!["a".to_string()]);
+        assert_eq!(
+            state.decide("a", resolve(answered), settled(answered)),
+            AutoDecision::Start
+        );
     }
 
     #[test]
