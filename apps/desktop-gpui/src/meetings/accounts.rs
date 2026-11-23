@@ -35,6 +35,7 @@ const ACCOUNTS_FILE: &str = "calendar-accounts.json";
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 const ACCEPT_POLL: Duration = Duration::from_millis(40);
 const REQUEST_LIMIT: usize = 16 * 1024;
+const REQUEST_DEADLINE: Duration = Duration::from_secs(2);
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const MAX_CALENDARS: usize = 12;
 const MAX_PAGES: usize = 8;
@@ -226,15 +227,22 @@ fn respond(stream: &mut TcpStream, status: &str, page: &str) {
     let _ = stream.flush();
 }
 
+/// One deadline for the whole request line: the listener serves one
+/// connection at a time, so a client that trickles bytes must not hold the
+/// browser's redirect behind it.
 fn request_target(stream: &mut TcpStream) -> Option<String> {
     stream.set_nonblocking(false).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let deadline = Instant::now() + REQUEST_DEADLINE;
     let mut buffer = Vec::with_capacity(2048);
     let mut chunk = [0u8; 2048];
     while !buffer.windows(2).any(|pair| pair == b"\r\n") {
         if buffer.len() >= REQUEST_LIMIT {
             return None;
         }
+        let left = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())?;
+        stream.set_read_timeout(Some(left)).ok()?;
         match stream.read(&mut chunk) {
             Ok(0) | Err(_) => return None,
             Ok(read) => buffer.extend_from_slice(&chunk[..read]),
@@ -972,6 +980,34 @@ mod tests {
         drop(stream);
         assert!(get(port, "/?code=ok&state=expected-state").starts_with("HTTP/1.1 200"));
         assert_eq!(handle.join().unwrap(), Ok("ok".to_string()));
+    }
+
+    #[test]
+    fn a_client_that_trickles_bytes_cannot_hold_the_redirect_back() {
+        let (port, _cancel, handle) = serve("expected-state");
+        let mut slow = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        // One byte every 300 ms and never a full line, for at most 8 s: each
+        // read finishes well inside any per-read timeout.
+        let trickle = std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(8);
+            while Instant::now() < until && slow.write_all(b"G").is_ok() {
+                if stopped.recv_timeout(Duration::from_millis(300)).is_ok() {
+                    return;
+                }
+            }
+        });
+        let started = Instant::now();
+        let response = get(port, "/?code=real&state=expected-state");
+        let waited = started.elapsed();
+        let _ = stop.send(());
+        trickle.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert_eq!(handle.join().unwrap(), Ok("real".to_string()));
+        assert!(
+            waited < REQUEST_DEADLINE + Duration::from_secs(2),
+            "the real redirect waited {waited:?}"
+        );
     }
 
     /// The refresh tokens are owner-only from the first byte: the temp file
