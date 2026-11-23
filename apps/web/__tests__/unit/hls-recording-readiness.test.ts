@@ -79,6 +79,7 @@ vi.mock("hls.js", () => ({
 			MANIFEST_LOADED: "manifestLoaded",
 			MANIFEST_PARSED: "manifestParsed",
 			FRAG_LOADED: "fragLoaded",
+			MEDIA_ATTACHING: "mediaAttaching",
 		};
 		static ErrorTypes = { NETWORK_ERROR: "network", MEDIA_ERROR: "media" };
 		static ErrorDetails = {
@@ -93,6 +94,9 @@ vi.mock("hls.js", () => ({
 		destroy() {}
 		on(event: string, callback: (...args: unknown[]) => void) {
 			mocks.handlers.set(event, callback);
+		}
+		off(event: string) {
+			mocks.handlers.delete(event);
 		}
 	},
 }));
@@ -128,6 +132,7 @@ vi.mock("@/app/s/[videoId]/_components/video/media-player", async () => {
 });
 
 import { HLSVideoPlayer } from "@/app/s/[videoId]/_components/HLSVideoPlayer";
+import { displayedMediaTime } from "@/app/s/[videoId]/_components/media-source-refresh";
 
 describe("Instant player readiness and failure UX", () => {
 	let container: HTMLDivElement;
@@ -293,6 +298,35 @@ describe("Instant player readiness and failure UX", () => {
 			expect(mocks.hlsConfig.startPosition).toBe(754.5);
 			expect(video.playbackRate).toBe(1.5);
 			expect(play).toHaveBeenCalledTimes(1);
+		});
+
+		it("shows the viewer's time while hls.js rebuilds the media", async () => {
+			const { video } = await renderPlaying({
+				currentTime: 754.5,
+				playbackRate: 1,
+			});
+			mocks.loadSource.mockImplementation(() => {
+				mocks.handlers.get("mediaAttaching")?.();
+				video.currentTime = 0;
+			});
+
+			await failFragment(251);
+
+			expect(displayedMediaTime(video)).toBe(754.5);
+			expect(mocks.handlers.has("mediaAttaching")).toBe(false);
+		});
+
+		it("lets the shown time go when hls.js keeps the media", async () => {
+			const { video } = await renderPlaying({
+				currentTime: 0,
+				playbackRate: 1,
+			});
+			mocks.loadSource.mockImplementation(() => undefined);
+
+			await failFragment(0);
+			video.currentTime = 4;
+
+			expect(displayedMediaTime(video)).toBe(4);
 		});
 
 		it("stays paused when the viewer had paused", async () => {

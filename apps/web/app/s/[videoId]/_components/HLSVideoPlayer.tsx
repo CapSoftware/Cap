@@ -467,14 +467,26 @@ export function HLSVideoPlayer({
 						"HLSVideoPlayer: Presigned URL expired, reloading playlist for fresh URLs",
 					);
 					// Reloading the same URL rebuilds the MediaSource, which resets the
-					// element to 0:00, paused, at normal speed.
+					// element to 0:00, paused, at normal speed. hls.js only rebuilds it
+					// once media has been buffered, so with nothing buffered yet the
+					// element keeps its position and the shown time is let go at once.
 					const { paused, playbackRate } = video;
 					const currentTime = displayedMediaTime(video);
 					const previousHold = releaseHeldTime;
 					releaseHeldTime = holdDisplayedTime(video, currentTime);
 					previousHold?.();
+					let mediaReattached = false;
+					const handleMediaAttaching = () => {
+						mediaReattached = true;
+					};
+					hls.on(Hls.Events.MEDIA_ATTACHING, handleMediaAttaching);
 					hls.config.startPosition = currentTime;
 					hls.loadSource(playbackSrc);
+					hls.off(Hls.Events.MEDIA_ATTACHING, handleMediaAttaching);
+					if (!mediaReattached) {
+						releaseHeldTime();
+						releaseHeldTime = null;
+					}
 					video.playbackRate = playbackRate;
 					if (!paused) void video.play().catch(() => {});
 					return;
