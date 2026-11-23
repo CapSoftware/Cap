@@ -113,7 +113,8 @@ class App:
                     cpu += c.user + c.system
                     rss += p.memory_info().rss
                     threads += p.num_threads()
-                    for conn in p.net_connections(kind="inet"):
+                    conns = p.net_connections(kind="inet") if hasattr(p, "net_connections") else p.connections(kind="inet")
+                    for conn in conns:
                         if conn.raddr:
                             self.remotes.add(f"{conn.raddr.ip}:{conn.raddr.port}")
                 except psutil.Error:
@@ -209,6 +210,8 @@ class App:
             "panics": text.count("panicked at"),
             "errors": len([l for l in text.splitlines() if " ERROR " in l or "ERROR " in l[:40]]),
             "remotes": sorted(self.remotes),
+            "launch_error": [l for l in text.splitlines()
+                             if re.search(r"Library not loaded|error while loading shared|cannot open shared object|was not found|0xc0000135", l)][:3],
         }
         with open(os.path.join(self.dir, "result.json"), "w") as f:
             json.dump(res, f, indent=1)
@@ -344,6 +347,15 @@ class Flow:
         self.bins = {"old": args.old, "base": args.base, "head": args.head, "fix": args.fix}
         self.libs = {"old": args.old_libs, "base": args.base_libs, "head": args.head_libs, "fix": args.fix_libs}
 
+    def ensure_target_window(self):
+        if getattr(self, "_target", None) and self._target.poll() is None:
+            return
+        self._target = subprocess.Popen(
+            ["xmessage", "-geometry", "480x270+700+300", "-title", "BM window to record",
+             "A window to record, with some text in it."],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+
     def profile(self, name):
         p = os.path.join(self.out, "profiles", name)
         os.makedirs(p, exist_ok=True)
@@ -351,6 +363,9 @@ class Flow:
 
     def app(self, tag, profile, name, env=None):
         base_env = {"CAP_GPUI_AUTO_NO_MIC": "1"}
+        if OS == "linux" and env and "CAP_GPUI_AUTO_RECORD" in env and env["CAP_GPUI_AUTO_RECORD"] != "screenshot":
+            self.ensure_target_window()
+            base_env.update({"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": "BM window to record"})
         base_env.update(env or {})
         return App(self.bins[tag], profile, self.out, name, base_env, self.libs[tag]).start()
 
@@ -707,11 +722,19 @@ class Flow:
         store = json.load(open(store_path))
         store["gpui"] = {"selectedTranscriptionModel": "small", "selectedTranscriptionLanguage": "en"}
         json.dump(store, open(store_path, "w"))
-        r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
-        self.record("captions.record", r)
-        if not proj:
-            return
-        mics = glob.glob(os.path.join(proj, "**", "audio-input.*"), recursive=True)
+        if self.a.fixture:
+            proj = os.path.join(p0, "recordings", "fixture.cap")
+            shutil.copytree(self.a.fixture, proj)
+            self.record("captions.fixture_files", sorted(
+                os.path.relpath(f, proj) for f in glob.glob(os.path.join(proj, "**", "*"), recursive=True)
+                if os.path.isfile(f))[:60])
+        else:
+            r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
+            self.record("captions.record", r)
+            if not proj:
+                return
+        mics = [f for f in glob.glob(os.path.join(proj, "**", "*"), recursive=True)
+                if re.search(r"(audio-input|system_audio|mic)[^/\\]*\.(m4a|ogg|mp3|wav|aac|opus|flac)$", f)]
         self.record("captions.mic_files", mics)
         wav = os.path.join(self.out, "speech.wav")
         subprocess.run(["espeak-ng", "-s", "150", "-w", wav, text], check=True)
@@ -719,8 +742,13 @@ class Flow:
             info = mp4_info(mic)
             dur = float(info.get("format", {}).get("duration", 12))
             tmp = mic + ".new" + os.path.splitext(mic)[1]
+            ext = os.path.splitext(mic)[1].lower()
+            codec = {".m4a": "aac", ".aac": "aac", ".ogg": "libopus", ".opus": "libopus",
+                     ".mp3": "libmp3lame", ".wav": "pcm_s16le", ".flac": "flac"}[ext]
+            streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]
             subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", wav, "-af", f"apad,atrim=0:{dur}",
-                            "-ar", "48000", "-ac", "1", "-c:a", "aac", "-b:a", "128k", tmp], check=True)
+                            "-ar", "48000", "-ac", "1", "-c:a", codec, tmp], check=True)
+            self.record(f"captions.replaced.{os.path.basename(mic)}", {"duration": dur, "codec": codec, "orig_streams": streams})
             os.replace(tmp, mic)
         dumps = {}
         for tag in ("base", "head", "fix"):
@@ -783,6 +811,7 @@ def main():
     ap.add_argument("--base-libs")
     ap.add_argument("--head-libs")
     ap.add_argument("--fix")
+    ap.add_argument("--fixture")
     ap.add_argument("--fix-libs")
     ap.add_argument("--out", required=True)
     ap.add_argument("--rounds", type=int, default=3)

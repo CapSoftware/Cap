@@ -1,0 +1,230 @@
+name: Scratch Linux upgrade, old versions and web uploads (temporary)
+
+on:
+  push:
+    branches: [ci/bm-linux]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-linux
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: 031ad14ec6f3024a193d95c517d06210d9368c92
+  MAIN_RUN: "45167422846"
+  OLD_RUN: "45169123172"
+
+jobs:
+  linux:
+    name: Upgrade on Linux
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xdotool imagemagick dbus \
+            pulseaudio pulseaudio-utils ffmpeg python3-psutil openbox > /dev/null
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - name: Unpack and install
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/apps"
+          for t in base head; do tar -C "$RUNNER_TEMP/apps" -xf "$RUNNER_TEMP/dl/app-linux-$t/app-linux-$t.tar"; done
+          sudo apt-get install -y -qq "$RUNNER_TEMP/dl/releases/latest-linux.deb" > /dev/null
+          dpkg -l | grep -i ' cap ' || true
+          old=$(dpkg -L cap 2>/dev/null | grep -E '/bin/[^/]+$' | head -1)
+          echo "OLD_BIN=$old" >> "$GITHUB_ENV"
+          echo "old binary: $old"; ls -la "$old"
+          cat "$RUNNER_TEMP"/apps/*/sha.txt
+      - name: Run the upgrade flow
+        run: |
+          export DISPLAY=:79 XDG_SESSION_TYPE=x11
+          unset WAYLAND_DISPLAY
+          Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          pulse_dir=$(mktemp -d)
+          export PULSE_SERVER=unix:$pulse_dir/native
+          pulseaudio -n --daemonize=no --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=bm_out" \
+            -L "module-remap-source master=bm_out.monitor source_name=bm_mic" >/dev/null 2>&1 &
+          sleep 2
+          pactl set-default-sink bm_out || true
+          pactl set-default-source bm_mic || true
+          A="$RUNNER_TEMP/apps"
+          dbus-run-session -- python3 .bm/bm.py --old "$OLD_BIN" \
+            --base "$A/base/cap-gpui" --base-libs "$A/base/libs" \
+            --head "$A/head/cap-gpui" --head-libs "$A/head/libs" \
+            --out "$RUNNER_TEMP/bm" --rounds 3 --idle 40
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-linux
+          path: |
+            ${{ runner.temp }}/bm/summary.*
+            ${{ runner.temp }}/bm/snap-old.json
+            ${{ runner.temp }}/bm/runs/**/app.log
+            ${{ runner.temp }}/bm/runs/**/result.json
+            ${{ runner.temp }}/bm/runs/**/*.png
+            ${{ runner.temp }}/bm/exports/**
+          retention-days: 7
+
+  web:
+    name: Server parity and real uploads (Linux)
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_ROOT_HOST: "%"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/install-desktop-deps
+      - run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils dbus pulseaudio pulseaudio-utils ffmpeg \
+            python3-psutil mysql-client > /dev/null
+      - uses: ./.github/actions/setup-js
+      - name: Base web checkout
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          cd "$RUNNER_TEMP/base" && bun install --frozen-lockfile > /dev/null
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - name: Desktop apps
+        run: |
+          mkdir -p "$RUNNER_TEMP/apps"
+          for t in base head; do tar -C "$RUNNER_TEMP/apps" -xf "$RUNNER_TEMP/dl/app-linux-$t/app-linux-$t.tar"; done
+          sudo apt-get install -y -qq "$RUNNER_TEMP/dl/releases/latest-linux.deb" > /dev/null
+          echo "OLD_BIN=$(dpkg -L cap | grep -E '/bin/[^/]+$' | head -1)" >> "$GITHUB_ENV"
+      - name: Server parity, deploy window and real desktop uploads
+        run: bash .bm/web.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-web
+          path: ${{ runner.temp }}/web
+          retention-days: 7
+
+  upgrade-old:
+    name: Upgrade from ${{ matrix.ver }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux]
+        ver: ["0.6.1", "0.6.2"]
+        include:
+          - { os: linux, runner: blacksmith-8vcpu-ubuntu-2404 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - if: matrix.os == 'linux'
+        uses: ./.github/actions/install-desktop-deps
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-${{ matrix.os }}-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: old-${{ matrix.os }}-${{ matrix.ver }}
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.OLD_RUN }}
+          github-token: ${{ github.token }}
+      - name: Unpack
+        shell: bash
+        run: |
+          set -euo pipefail
+          A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar --force-local -C "$A" -xf {} \;
+          else
+            find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          fi
+          cat "$A"/*/sha.txt
+      - if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          foreach ($t in 'old','base','head') {
+            $app = "$env:RUNNER_TEMP\apps\$t"
+            $workspace = (Get-Content "$app\build-workspace.txt" -Raw).Trim()
+            if ($workspace -ne $env:GITHUB_WORKSPACE -and -not (Test-Path $workspace)) {
+              New-Item -ItemType Directory -Force (Split-Path $workspace) | Out-Null
+              cmd /c mklink /J "$workspace" "$env:GITHUB_WORKSPACE"
+            }
+            $shaders = Join-Path (Get-Content "$app\build-zed.txt" -Raw).Trim() "crates\gpui_windows\src"
+            New-Item -ItemType Directory -Force $shaders | Out-Null
+            Copy-Item "$app\gpui-windows-shaders\*.hlsl" $shaders -Force
+          }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
+          python -m pip install -q psutil
+          $env:Path = "$env:ProgramData\chocolatey\bin;$env:Path"
+          $a = "$env:RUNNER_TEMP\apps"
+          python .bm/bm.py --old "$a\old\cap-gpui.exe" --base "$a\base\cap-gpui.exe" --head "$a\head\cap-gpui.exe" --out "$env:RUNNER_TEMP\bm" --rounds 0
+      - if: matrix.os == 'linux'
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils dbus pulseaudio pulseaudio-utils ffmpeg python3-psutil openbox > /dev/null
+          export DISPLAY=:79 XDG_SESSION_TYPE=x11
+          unset WAYLAND_DISPLAY
+          Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          pulse_dir=$(mktemp -d)
+          export PULSE_SERVER=unix:$pulse_dir/native
+          pulseaudio -n --daemonize=no --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=bm_out" >/dev/null 2>&1 &
+          sleep 2
+          A="$RUNNER_TEMP/apps"
+          dbus-run-session -- python3 .bm/bm.py --old "$A/old/cap-gpui" --old-libs "$A/old/libs" \
+            --base "$A/base/cap-gpui" --base-libs "$A/base/libs" --head "$A/head/cap-gpui" --head-libs "$A/head/libs" \
+            --out "$RUNNER_TEMP/bm" --rounds 0
+      - if: matrix.os == 'macos'
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil
+          command -v ffmpeg || HOMEBREW_NO_AUTO_UPDATE=1 brew install -q ffmpeg
+          A="$RUNNER_TEMP/apps"
+          "$RUNNER_TEMP/venv/bin/python" .bm/bm.py --old "$A/old/cap-gpui" --base "$A/base/cap-gpui" --head "$A/head/cap-gpui" \
+            --out "$RUNNER_TEMP/bm" --rounds 0
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-${{ matrix.os }}-from-${{ matrix.ver }}
+          path: |
+            ${{ runner.temp }}/bm/summary.*
+            ${{ runner.temp }}/bm/snap-old.json
+            ${{ runner.temp }}/bm/runs/**/app.log
+            ${{ runner.temp }}/bm/runs/**/result.json
+            ${{ runner.temp }}/bm/runs/**/*.png
+          retention-days: 7
