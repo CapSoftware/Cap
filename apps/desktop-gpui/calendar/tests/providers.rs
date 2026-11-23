@@ -516,33 +516,33 @@ fn a_shared_calendars_self_flag_is_replaced_by_the_users_address() {
         owner_email: Some("boss@example.com".into()),
         ..CalendarInfo::default()
     };
-    assert!(!shared.is_own("me@example.com"));
+    assert!(!shared.is_own(&["me@example.com".to_string()]));
     assert!(
         !CalendarInfo {
             owner_email: None,
             ..shared.clone()
         }
-        .is_own("")
+        .is_own(&[])
     );
     assert!(
         CalendarInfo {
             primary: true,
             ..shared.clone()
         }
-        .is_own("me@example.com")
+        .is_own(&["me@example.com".to_string()])
     );
     assert!(
         CalendarInfo {
             access_role: Some("owner".into()),
             ..shared.clone()
         }
-        .is_own("")
+        .is_own(&[])
     );
     assert!(
         CalendarInfo {
             owner_email: Some("ME@example.com".into()),
             ..shared
         }
-        .is_own("me@example.com")
+        .is_own(&["me@example.com".to_string()])
     );
 }

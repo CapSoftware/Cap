@@ -127,14 +127,12 @@ pub struct CalendarInfo {
 
 impl CalendarInfo {
     /// The account's own calendar: its main one, one it owns, or one whose
-    /// owner is the account. Anything else was shared by someone else.
-    pub fn is_own(&self, account_email: &str) -> bool {
+    /// owner is one of the account's addresses. Anything else was shared by
+    /// someone else.
+    pub fn is_own(&self, self_emails: &[String]) -> bool {
         self.primary
             || self.access_role.as_deref() == Some("owner")
-            || self
-                .owner_email
-                .as_deref()
-                .is_some_and(|owner| !account_email.is_empty() && email_eq(owner, account_email))
+            || is_self_email(self.owner_email.as_deref(), self_emails)
     }
 }
 

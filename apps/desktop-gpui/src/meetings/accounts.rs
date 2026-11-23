@@ -549,7 +549,7 @@ pub async fn fetch(
     let client = client(provider).ok_or(FetchError::NotConfigured)?;
     let http = http_client().map_err(|_| FetchError::Offline)?;
     let token = access_token(&http, dir, id, &client).await?;
-    let self_emails: Vec<String> = Some(email.to_string())
+    let mut self_emails: Vec<String> = Some(email.to_string())
         .filter(|email| !email.is_empty())
         .into_iter()
         .collect();
@@ -573,6 +573,8 @@ pub async fn fetch(
             break;
         }
     }
+
+    self_emails = self_addresses(self_emails, &calendars);
 
     // Google marks the calendars ticked in its own sidebar; Outlook has no
     // such flag, so every calendar of the account counts there.
@@ -622,7 +624,7 @@ pub async fn fetch(
                 ),
             }
             .map_err(shape)?;
-            events.extend(keep_for_account(calendar, email, &self_emails, page.items));
+            events.extend(keep_for_account(calendar, &self_emails, page.items));
             next = page.next;
             if next.is_none() {
                 break;
@@ -635,16 +637,35 @@ pub async fn fetch(
     })
 }
 
+/// The account's addresses: the one it signed in with, plus the owner of its
+/// main calendar. In Microsoft tenants the sign-in name (UPN) can differ from
+/// the mailbox address that Outlook puts on the user's calendars and
+/// invitations.
+fn self_addresses(mut emails: Vec<String>, calendars: &[CalendarInfo]) -> Vec<String> {
+    for owner in calendars
+        .iter()
+        .filter(|calendar| calendar.primary)
+        .filter_map(|calendar| calendar.owner_email.as_deref())
+    {
+        if !emails
+            .iter()
+            .any(|e| e.trim().eq_ignore_ascii_case(owner.trim()))
+        {
+            emails.push(owner.to_string());
+        }
+    }
+    emails
+}
+
 /// A calendar shared by someone else (a coworker's, ticked in Google's
 /// sidebar) only adds the meetings the user is on, so their private meetings
 /// never become the user's prompts or notes.
 fn keep_for_account(
     calendar: &CalendarInfo,
-    account_email: &str,
     self_emails: &[String],
     events: Vec<CalendarEvent>,
 ) -> Vec<CalendarEvent> {
-    if calendar.is_own(account_email) {
+    if calendar.is_own(self_emails) {
         return events;
     }
     events
@@ -656,6 +677,59 @@ fn keep_for_account(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_outlook_account_whose_sign_in_name_is_not_its_mailbox_keeps_its_own_calendars() {
+        use cap_calendar::{Person, Response};
+        // Signed in as the tenant UPN; Outlook names the mailbox address.
+        let upn = vec!["jo@corp.onmicrosoft.com".to_string()];
+        let calendar = |id: &str, primary: bool, owner: &str| CalendarInfo {
+            id: id.into(),
+            primary,
+            access_role: Some("writer".into()),
+            owner_email: Some(owner.into()),
+            ..CalendarInfo::default()
+        };
+        let calendars = vec![
+            calendar("default", true, "Jo@corp.com"),
+            calendar("side project", false, "jo@corp.com"),
+            calendar("boss", false, "boss@corp.com"),
+        ];
+        let selfs = self_addresses(upn, &calendars);
+        assert_eq!(selfs, ["jo@corp.onmicrosoft.com", "Jo@corp.com"]);
+
+        let solo = CalendarEvent {
+            id: "focus".into(),
+            ..CalendarEvent::default()
+        };
+        assert_eq!(
+            keep_for_account(&calendars[1], &selfs, vec![solo.clone()]),
+            vec![solo.clone()],
+            "an event alone on the user's own second calendar stays"
+        );
+        let invited = CalendarEvent {
+            id: "review".into(),
+            organizer: Some(Person {
+                email: Some("boss@corp.com".into()),
+                is_self: true,
+                response: Response::Accepted,
+                ..Person::default()
+            }),
+            attendees: vec![Person {
+                email: Some("jo@corp.com".into()),
+                response: Response::Accepted,
+                ..Person::default()
+            }],
+            ..CalendarEvent::default()
+        };
+        let kept = keep_for_account(&calendars[2], &selfs, vec![solo, invited]);
+        assert_eq!(kept.len(), 1, "the boss's own block stays out");
+        assert_eq!(
+            kept[0].id, "review",
+            "an invitation to the mailbox address counts"
+        );
+        assert!(kept[0].attendees[0].is_self);
+    }
 
     #[test]
     fn a_shared_calendar_adds_only_the_meetings_the_user_is_on() {
@@ -699,7 +773,6 @@ mod tests {
 
         let kept = keep_for_account(
             &shared,
-            me,
             &selfs,
             vec![private.clone(), invited.clone(), organized],
         );
@@ -745,13 +818,13 @@ mod tests {
         ];
         for own in own_calendars {
             assert_eq!(
-                keep_for_account(&own, me, &selfs, vec![private.clone(), invited.clone()]),
+                keep_for_account(&own, &selfs, vec![private.clone(), invited.clone()]),
                 vec![private.clone(), invited.clone()],
                 "the user's own calendar keeps every event as it was: {own:?}"
             );
         }
         assert!(
-            keep_for_account(&shared, "", &[], vec![invited]).is_empty(),
+            keep_for_account(&shared, &[], vec![invited]).is_empty(),
             "without the account's address a shared calendar adds nothing"
         );
     }
