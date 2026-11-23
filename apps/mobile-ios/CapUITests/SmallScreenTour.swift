@@ -10,7 +10,7 @@ final class SmallScreenTour: XCTestCase {
     }
 
     private func launch(route: String? = nil, signedOut: Bool = false) -> XCUIApplication {
-        continueAfterFailure = true
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["CAP_API_BASE_URL"] = fixtureURL
         app.launchEnvironment["CAP_DEBUG_STOREFRONT"] = "GBR"
@@ -30,20 +30,31 @@ final class SmallScreenTour: XCTestCase {
         try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
     }
 
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line) {
+        let hittable = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND isHittable == true"), object: element)
+        XCTAssertEqual(XCTWaiter().wait(for: [hittable], timeout: timeout), .completed, "\(element) never became hittable", file: file, line: line)
+    }
+
+    private func waitForKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "No keyboard", file: file, line: line)
+    }
+
+    private func sectionButton(_ app: XCUIApplication, _ prefix: String) -> XCUIElement {
+        app.segmentedControls.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+    }
+
     func testSignInTyping() {
         let app = launch(signedOut: true)
         let email = app.textFields["Email address"]
-        XCTAssertTrue(email.waitForExistence(timeout: 20))
-        sleep(4)
-        shot("t01-sign-in")
+        waitUntilHittable(email, timeout: 20)
         email.tap()
         email.typeText("richie@cap.so")
-        sleep(1)
+        waitForKeyboard(app)
+        waitUntilHittable(app.buttons["Continue with email"])
         shot("t02-sign-in-typing")
         app.buttons["Continue with email"].tap()
         XCTAssertTrue(app.staticTexts["Check your email"].waitForExistence(timeout: 10))
-        sleep(1)
-        shot("t03-code")
+        waitForKeyboard(app)
         app.typeText("12")
         shot("t04-code-typing")
     }
@@ -51,82 +62,74 @@ final class SmallScreenTour: XCTestCase {
     func testRecorderModes() {
         let app = launch()
         let tab = app.tabBars.buttons["Record"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 20))
-        sleep(2)
+        waitUntilHittable(tab, timeout: 20)
         tab.tap()
-        XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 10))
-        sleep(2)
+        waitUntilHittable(app.buttons["Close"])
         shot("t10-record-camera")
-        for (mode, name) in [("Screen", "t11-record-screen"), ("Screen + Camera", "t12-record-screen-camera")] {
+        for (mode, title, name) in [
+            ("Screen", "Record your screen", "t11-record-screen"),
+            ("Screen + Camera", "Record your screen and camera", "t12-record-screen-camera"),
+        ] {
             let button = app.buttons[mode]
-            if button.waitForExistence(timeout: 5) {
-                button.tap()
-                let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
-                if allow.waitForExistence(timeout: 3) { allow.tap() }
-                sleep(2)
-                shot(name)
-            }
+            guard button.waitForExistence(timeout: 5) else { continue }
+            button.tap()
+            let allow = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Allow"]
+            if allow.waitForExistence(timeout: 3) { allow.tap() }
+            XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 10))
+            waitUntilHittable(app.buttons["Close"])
+            shot(name)
         }
     }
 
-    func testAddMenuAndCapComposer() {
-        var app = launch()
-        XCTAssertTrue(app.buttons["My Caps"].waitForExistence(timeout: 20))
-        sleep(2)
-        app.navigationBars.buttons["Add"].firstMatch.tap()
-        sleep(2)
+    func testAddMenu() {
+        let app = launch()
+        let add = app.navigationBars.buttons["Add"].firstMatch
+        waitUntilHittable(add, timeout: 20)
+        add.tap()
+        waitUntilHittable(app.buttons["Upload from Photos"].firstMatch)
         shot("t20-add-menu")
-        app.terminate()
+    }
 
-        app = launch(route: "cap:cap_london?t=20")
-        let comments = app.segmentedControls.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Comments'")).firstMatch
-        XCTAssertTrue(comments.waitForExistence(timeout: 20))
-        sleep(3)
+    func testCapComposer() {
+        let app = launch(route: "cap:cap_london?t=20")
+        waitUntilHittable(sectionButton(app, "Comments"), timeout: 20)
         shot("t21-cap")
-        app.swipeUp()
-        sleep(1)
-        shot("t22-cap-scrolled")
         let field = app.textViews.firstMatch.exists ? app.textViews.firstMatch : app.textFields.firstMatch
         field.tap()
-        sleep(1)
-        shot("t23-cap-composing")
+        waitForKeyboard(app)
+        waitUntilHittable(sectionButton(app, "Comments"))
         field.typeText("Love this part, the new handles feel so much better")
-        sleep(1)
         shot("t24-cap-composing-typed")
     }
 
     func testReplying() {
         let app = launch(route: "cap:cap_london?t=20")
-        let comments = app.segmentedControls.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Comments'")).firstMatch
-        XCTAssertTrue(comments.waitForExistence(timeout: 20))
-        sleep(2)
+        waitUntilHittable(sectionButton(app, "Comments"), timeout: 20)
         app.swipeUp()
-        sleep(1)
         let replies = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Reply to'"))
         guard let reply = replies.allElementsBoundByIndex.last(where: { $0.isHittable }) else {
             XCTFail("No visible Reply button")
             return
         }
         reply.tap()
-        sleep(2)
-        shot("t25-cap-replying")
+        waitForKeyboard(app)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Replying to'")).firstMatch.waitForExistence(timeout: 5))
         app.typeText("Fixed in the next build")
-        sleep(1)
         shot("t26-cap-replying-typed")
     }
 
     func testTranscriptSearch() {
         let app = launch(route: "cap:cap_london?t=20")
-        let transcript = app.segmentedControls.buttons["Transcript"]
-        XCTAssertTrue(transcript.waitForExistence(timeout: 20))
+        let transcript = sectionButton(app, "Transcript")
+        waitUntilHittable(transcript, timeout: 20)
         transcript.tap()
         let search = app.textFields["Search transcript"]
-        XCTAssertTrue(search.waitForExistence(timeout: 10))
-        sleep(1)
-        shot("t30-transcript")
+        waitUntilHittable(search)
         search.tap()
         search.typeText("editor")
-        sleep(1)
+        waitForKeyboard(app)
+        let match = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'editor'")).firstMatch
+        waitUntilHittable(match)
         shot("t31-transcript-search")
     }
 }
