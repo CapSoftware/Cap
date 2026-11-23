@@ -752,12 +752,8 @@ pub struct Feeds {
     /// A still picture standing in for the camera. Never set together with
     /// `camera`: choosing either one clears the other.
     pub camera_picture: Option<Arc<crate::camera_picture::CameraPicture>>,
-    /// The picture last used as the camera, offered again by the camera menu
-    /// and the bubble.
     pub remembered_camera_picture: Option<std::path::PathBuf>,
-    /// A picture file dialog is open, from the menu or the bubble.
     pub picking_camera_picture: bool,
-    /// The camera a picture replaced, which the bubble can switch back to.
     pub previous_camera: Option<SelectedCamera>,
     /// Selected microphone name.
     pub microphone: Option<String>,
@@ -1024,8 +1020,6 @@ impl Feeds {
         self.camera_epoch
     }
 
-    /// Use `picture` as the camera, or stop using one. A picture replaces
-    /// the selected camera; clearing it closes the bubble.
     pub fn set_camera_picture(
         &mut self,
         picture: Option<Arc<crate::camera_picture::CameraPicture>>,
@@ -1048,6 +1042,10 @@ impl Feeds {
         }
         if let Some(picture) = &picture {
             self.remembered_camera_picture = Some(picture.path.clone());
+            let kept = picture.path.clone();
+            cx.background_executor()
+                .spawn(async move { crate::camera_picture::retire_others(&kept) })
+                .detach();
         }
         let had_picture = self.camera_picture.is_some();
         self.camera_picture = picture.clone();
@@ -1066,14 +1064,12 @@ impl Feeds {
         }
     }
 
-    /// Drops a remembered picture that can no longer be read.
     pub fn forget_camera_picture(&mut self, cx: &mut Context<Self>) {
         if self.remembered_camera_picture.take().is_some() {
             cx.notify();
         }
     }
 
-    /// Goes back to the camera a picture replaced.
     pub fn use_previous_camera(&mut self, cx: &mut Context<Self>) {
         if let Some(camera) = self.previous_camera.clone() {
             self.set_camera(Some(camera), cx);

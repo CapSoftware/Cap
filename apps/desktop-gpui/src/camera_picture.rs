@@ -19,10 +19,8 @@ pub(crate) const EXTENSIONS: &[&str] = crate::import::OVERLAY_IMAGE_EXTENSIONS;
 const MAX_EDGE: u32 = 1024;
 const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 const JPEG_QUALITY: u8 = 90;
-/// Where [`save_for_recording`] keeps the picture picked in the camera menu.
 const RECORDING_DIR: &str = "camera-pictures";
 
-/// A picture ready to show: its normalized file and the decoded image.
 pub struct CameraPicture {
     pub path: PathBuf,
     pub image: Arc<RenderImage>,
@@ -65,8 +63,7 @@ fn decode_upright(source: &Path) -> Result<DynamicImage, String> {
     Ok(image)
 }
 
-/// The picture at `source`, upright, scaled to fit [`MAX_EDGE`] and flattened
-/// onto white: the camera slot is drawn opaque everywhere it appears.
+/// Flattened onto white: the camera slot is drawn opaque wherever it appears.
 pub(crate) fn normalize(source: &Path) -> Result<RgbImage, String> {
     let image = decode_upright(source)?;
     if image.width() == 0 || image.height() == 0 {
@@ -125,25 +122,31 @@ fn write_new(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Normalizes `source` into the app's data folder for the camera menu, and
-/// removes the picture it replaces.
 pub(crate) fn save_for_recording(source: &Path) -> Result<PathBuf, String> {
     let bytes = encode(&normalize(source)?)?;
     let dir = crate::store::app_data_dir().join(RECORDING_DIR);
     let destination = dir.join(unique_name());
     write_new(&destination, &bytes)?;
+    Ok(destination)
+}
+
+/// Deletes the camera menu's other saved pictures once `kept` is the one in
+/// use. Not done on import: an import that is turned away (a recording began
+/// meanwhile) must leave the picture in use on disk.
+pub(crate) fn retire_others(kept: &Path) {
+    let dir = crate::store::app_data_dir().join(RECORDING_DIR);
+    if kept.parent() != Some(dir.as_path()) {
+        return;
+    }
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
-            if entry.path() != destination {
+            if entry.path() != kept {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
     }
-    Ok(destination)
 }
 
-/// Normalizes `source` into the project, returning the path to store in
-/// `ProjectConfiguration::camera_picture`.
 pub(crate) fn import_into_project(project: &Path, source: &Path) -> Result<String, String> {
     let bytes = encode(&normalize(source)?)?;
     let relative = format!("content/images/{}", unique_name());
@@ -151,14 +154,11 @@ pub(crate) fn import_into_project(project: &Path, source: &Path) -> Result<Strin
     Ok(relative)
 }
 
-/// Whether the camera can change now: only between recordings.
 pub(crate) fn can_change(cx: &gpui::App) -> bool {
     crate::session::RecordingSession::try_global(cx)
         .is_none_or(|session| session.read(cx).phase == crate::session::Phase::Idle)
 }
 
-/// Shows the normalized picture at `path` as the camera, decoded off the main
-/// thread. A picture that can no longer be read is forgotten.
 pub(crate) fn select(path: PathBuf, cx: &mut gpui::App) {
     cx.spawn(async move |cx| {
         let loaded = cx
@@ -185,7 +185,6 @@ pub(crate) fn select(path: PathBuf, cx: &mut gpui::App) {
     .detach();
 }
 
-/// The remembered picture when there is one, else [`choose`].
 pub(crate) fn select_or_choose(window: &mut gpui::Window, cx: &mut gpui::App) {
     match crate::feeds::Feeds::global(cx)
         .read(cx)
@@ -197,7 +196,6 @@ pub(crate) fn select_or_choose(window: &mut gpui::Window, cx: &mut gpui::App) {
     }
 }
 
-/// Asks for a picture file, normalizes it and shows it as the camera.
 pub(crate) fn choose(window: &mut gpui::Window, cx: &mut gpui::App) {
     let feeds = crate::feeds::Feeds::global(cx);
     if feeds.read(cx).picking_camera_picture || !can_change(cx) {
@@ -244,7 +242,6 @@ pub(crate) fn choose(window: &mut gpui::Window, cx: &mut gpui::App) {
         .detach();
 }
 
-/// Decodes a normalized picture for the bubble and the menus.
 pub(crate) fn load(path: &Path) -> Result<CameraPicture, String> {
     let rgba = image::open(path)
         .map_err(|error| error.to_string())?
