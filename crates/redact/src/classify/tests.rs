@@ -1,0 +1,426 @@
+use super::*;
+use RedactCategory::*;
+
+fn spans(text: &str) -> Vec<(RedactCategory, String)> {
+    classify_line(text)
+        .into_iter()
+        .map(|f| {
+            (
+                f.category,
+                text.chars().skip(f.start).take(f.end - f.start).collect(),
+            )
+        })
+        .collect()
+}
+
+fn has(text: &str, category: RedactCategory, value: &str) {
+    let found = spans(text);
+    assert!(
+        found.iter().any(|(c, v)| *c == category && v == value),
+        "{text:?}: expected {category:?} {value:?}, got {found:?}"
+    );
+}
+
+fn none_of(text: &str, category: RedactCategory) {
+    let found = spans(text);
+    assert!(
+        !found.iter().any(|(c, _)| *c == category),
+        "{text:?}: unexpected {category:?} in {found:?}"
+    );
+}
+
+#[test]
+fn emails_inside_sentences() {
+    has(
+        "Send it to jane.doe+cap@example.co.uk today",
+        Email,
+        "jane.doe+cap@example.co.uk",
+    );
+    has(
+        "From: Bob <bob_smith@mail.company.io>",
+        Email,
+        "bob_smith@mail.company.io",
+    );
+    has("contact richie @ cap.so", Email, "richie @ cap.so");
+    has("typing jane.doe@exam", Email, "jane.doe@exam");
+}
+
+#[test]
+fn email_lookalikes() {
+    none_of("@Override public void run()", Email);
+    none_of("follow @capdotso for updates", Email);
+    none_of("npm i @types/node", Email);
+}
+
+#[test]
+fn cards_pass_luhn_only() {
+    has(
+        "Card 4242 4242 4242 4242 exp 12/30",
+        Card,
+        "4242 4242 4242 4242",
+    );
+    has("amex 3782-822463-10005", Card, "3782-822463-10005");
+    has("4111111111111111", Card, "4111111111111111");
+    has("card 40O0 0566 5566 5556", Card, "40O0 0566 5566 5556");
+    none_of("order 4242 4242 4242 4241", Card);
+    none_of("0000 0000 0000 0000", Card);
+    none_of("•••• •••• •••• 4242", Card);
+}
+
+#[test]
+fn ibans_and_bank_numbers() {
+    has(
+        "IBAN: GB82 WEST 1234 5698 7654 32",
+        Card,
+        "IBAN: GB82 WEST 1234 5698 7654 32",
+    );
+    has("DE89370400440532013000", Card, "DE89370400440532013000");
+    has(
+        "Account number 12345678 sort code 12-34-56",
+        Card,
+        "Account number 12345678",
+    );
+    has(
+        "Account number 12345678 sort code 12-34-56",
+        Card,
+        "sort code 12-34-56",
+    );
+    has("Routing 021000021", Card, "Routing 021000021");
+    none_of("GB82 WEST 1234 5698 7654 33", Card);
+}
+
+#[test]
+fn phones_in_common_formats() {
+    has("Call (415) 555-0132 now", Phone, "(415) 555-0132");
+    has("415.555.0132", Phone, "415.555.0132");
+    has("+44 20 7946 0958", Phone, "+44 20 7946 0958");
+    has("+1-202-555-0175", Phone, "+1-202-555-0175");
+    has("Mobile: 07700 900123", Phone, "07700 900123");
+    has("Tel: 030 1234567", Phone, "030 1234567");
+    has("phone 5551234567", Phone, "5551234567");
+}
+
+#[test]
+fn numbers_that_are_not_phones() {
+    none_of("2024-03-15 10:42:00", Phone);
+    none_of("12/05/2023", Phone);
+    none_of("version 1.24.3 build 20231115", Phone);
+    none_of("Total: $1,234,567.89", Phone);
+    none_of("192.168.1.10", Phone);
+    none_of("commit 3f9a2b1 on 2024-01-02", Phone);
+    none_of("1920 x 1080 at 60 fps", Phone);
+    none_of("Order #12345678", Phone);
+    none_of("ISBN 978-3-16-148410-0", Phone);
+    none_of("page 123 of 4567", Phone);
+}
+
+#[test]
+fn known_secret_prefixes() {
+    has(
+        "STRIPE_SECRET_KEY=sk_live_51HxAbCdEfGhIjKlMn",
+        Secret,
+        "sk_live_51HxAbCdEfGhIjKlMn",
+    );
+    has(
+        "token ghp_0123456789abcdefABCDEF0123456789abcd",
+        Secret,
+        "ghp_0123456789abcdefABCDEF0123456789abcd",
+    );
+    has("aws AKIAIOSFODNN7EXAMPLE", Secret, "AKIAIOSFODNN7EXAMPLE");
+    has(
+        "OPENAI_API_KEY=sk-proj-abcDEF123456ghiJKL789",
+        Secret,
+        "sk-proj-abcDEF123456ghiJKL789",
+    );
+    has(
+        "xoxb-123456789012-abcdefghijkl",
+        Secret,
+        "xoxb-123456789012-abcdefghijkl",
+    );
+    has(
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        Secret,
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    );
+    has(
+        "-----BEGIN RSA PRIVATE KEY-----",
+        Secret,
+        "-----BEGIN RSA PRIVATE KEY-----",
+    );
+}
+
+#[test]
+fn assigned_passwords_and_tokens() {
+    has("password: hunter2!", Secret, "hunter2!");
+    has("DB_PASSWORD=Tr0ub4dor&3", Secret, "Tr0ub4dor&3");
+    has("\"api_key\": \"9f8e7d6c5b4a\"", Secret, "9f8e7d6c5b4a");
+    has(
+        "Authorization: Bearer abcdef1234567890ABCDEF",
+        Secret,
+        "abcdef1234567890ABCDEF",
+    );
+    has(
+        "postgres://admin:s3cr3tpass@db.internal:5432/app",
+        Secret,
+        "s3cr3tpass",
+    );
+}
+
+#[test]
+fn secret_lookalikes() {
+    none_of("password: ********", Secret);
+    none_of("const password = process.env.DB_PASSWORD;", Secret);
+    none_of("type=\"password\"", Secret);
+    none_of("token: string;", Secret);
+    none_of("passwordLength = 12", Secret);
+    none_of(
+        "git checkout 3f9a2b1c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+        Secret,
+    );
+    none_of("id 123e4567-e89b-12d3-a456-426614174000", Secret);
+    none_of("getUserProfileSettingsForAccount", Secret);
+    none_of("src/components/settings/AccountPanel.tsx", Secret);
+    none_of("com.example.application.services", Secret);
+    none_of("API_KEY=${API_KEY}", Secret);
+}
+
+#[test]
+fn high_entropy_tokens() {
+    has(
+        "key Zx9Qp2Lm7Rt4Vb8Nc3Kd6Hf1",
+        Secret,
+        "Zx9Qp2Lm7Rt4Vb8Nc3Kd6Hf1",
+    );
+}
+
+#[test]
+fn ip_addresses() {
+    has("ssh root@203.0.113.42", Ip, "203.0.113.42");
+    has("server 10.0.0.12:8080 up", Ip, "10.0.0.12:8080");
+    has(
+        "addr 2001:db8:85a3::8a2e:370:7334",
+        Ip,
+        "2001:db8:85a3::8a2e:370:7334",
+    );
+    none_of("version 1.2.3.4", Ip);
+    none_of("v1.2.3.4", Ip);
+    none_of("localhost 127.0.0.1", Ip);
+    none_of("at 12:30:45 today", Ip);
+}
+
+#[test]
+fn links() {
+    has(
+        "see https://dashboard.example.com/acct/123?x=1.",
+        Url,
+        "https://dashboard.example.com/acct/123?x=1",
+    );
+    has("www.example.org/path", Url, "www.example.org/path");
+    has("go to example.com/pricing", Url, "example.com/pricing");
+    none_of("open main.rs and lib.rs", Url);
+    none_of("config.json", Url);
+}
+
+#[test]
+fn addresses() {
+    has(
+        "Ship to 1600 Pennsylvania Avenue NW",
+        Address,
+        "1600 Pennsylvania Avenue",
+    );
+    has("Springfield, IL 62704", Address, "Springfield, IL 62704");
+    has("London SW1A 1AA", Address, "SW1A 1AA");
+    none_of("Updated 3 Files Today", Address);
+}
+
+#[test]
+fn secret_inside_url_keeps_both() {
+    let text = "https://api.example.com/v1?key=AIzaSyA1234567890abcdefghijklmnopqrstu";
+    let found = spans(text);
+    assert!(
+        found
+            .iter()
+            .any(|(c, v)| *c == Secret && v.starts_with("AIza")),
+        "{found:?}"
+    );
+    assert!(
+        found.iter().any(|(c, v)| *c == Url && v == text),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn label_on_the_line_above() {
+    let lines = [
+        LineContext {
+            text: "Password",
+            x: 0.1,
+            y: 0.1,
+            w: 0.08,
+            h: 0.02,
+        },
+        LineContext {
+            text: "correct horse",
+            x: 0.1,
+            y: 0.13,
+            w: 0.15,
+            h: 0.02,
+        },
+        LineContext {
+            text: "Forgot password?",
+            x: 0.1,
+            y: 0.30,
+            w: 0.15,
+            h: 0.02,
+        },
+    ];
+    let results = classify_frame(&lines);
+    let beside = classify_frame(&[
+        LineContext {
+            text: "Restricted key",
+            x: 0.48,
+            y: 0.50,
+            w: 0.057,
+            h: 0.02,
+        },
+        LineContext {
+            text: "Falcon#740Q",
+            x: 0.58,
+            y: 0.50,
+            w: 0.057,
+            h: 0.019,
+        },
+    ]);
+    assert_eq!(beside[1].len(), 1);
+    assert_eq!(results[1].len(), 1);
+    assert_eq!(results[1][0].category, Secret);
+    assert!(results[2].is_empty());
+}
+
+#[test]
+fn split_tokens_are_glued_back() {
+    has(
+        "export GITHUB_T0KEN=ghp_x7Kq2LmN9pR4sT6vW8yZ0bC3dF5gH1j K21Mn",
+        Secret,
+        "ghp_x7Kq2LmN9pR4sT6vW8yZ0bC3dF5gH1j K21Mn",
+    );
+    has(
+        "mail jane.doe@examp le.com now",
+        Email,
+        "jane.doe@examp le.com",
+    );
+    has(
+        "STRIPE_SECRET_KEY=sk_1ive_51HxQp L2eZvKY1o2C8nT0aB7d",
+        Secret,
+        "sk_1ive_51HxQp L2eZvKY1o2C8nT0aB7d",
+    );
+    none_of("call me now please", Secret);
+}
+
+#[test]
+fn unicode_offsets_are_chars() {
+    let text = "Ünïcödé jane@example.com";
+    let found = classify_line(text);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].start, 8);
+    assert_eq!(found[0].end, text.chars().count());
+}
+
+/// Scores the classifier on a corpora directory (`CAP_REDACT_CORPORA`):
+/// `<category>.txt` true strings, `<category>.neg.txt` strings that must not
+/// be flagged as that category, `<category>.lines.tsv` lines with the
+/// sensitive span (`line<TAB>start<TAB>end`). Prints misses per category and
+/// fails when any category falls under the floors below.
+#[test]
+#[ignore = "needs CAP_REDACT_CORPORA"]
+fn corpora() {
+    let Some(root) = std::env::var_os("CAP_REDACT_CORPORA") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let verbose = std::env::var_os("CAP_REDACT_CORPORA_VERBOSE").is_some();
+    let read = |name: String| {
+        std::fs::read_to_string(root.join(name))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let covers = |finding: &Finding, start: usize, end: usize| {
+        finding.start <= start + 1 && finding.end + 1 >= end
+    };
+    let mut failed = Vec::new();
+    for category in RedactCategory::ALL {
+        let name = category.as_str();
+        let positives = read(format!("{name}.txt"));
+        let negatives = read(format!("{name}.neg.txt"));
+        let lines = read(format!("{name}.lines.tsv"));
+        let mut misses = Vec::new();
+        for value in &positives {
+            let hit = classify_line(value).iter().any(|f| f.category == category);
+            if !hit {
+                misses.push(value.clone());
+            }
+        }
+        let mut false_hits = Vec::new();
+        for value in &negatives {
+            if classify_line(value).iter().any(|f| f.category == category) {
+                false_hits.push(value.clone());
+            }
+        }
+        let mut span_misses = Vec::new();
+        for row in &lines {
+            let mut parts = row.split('\t');
+            let (Some(line), Some(start), Some(end)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let (Ok(start), Ok(end)) = (start.parse::<usize>(), end.parse::<usize>()) else {
+                continue;
+            };
+            if !classify_line(line)
+                .iter()
+                .any(|f| f.category == category && covers(f, start, end))
+            {
+                span_misses.push(format!("{line} [{start}..{end}]"));
+            }
+        }
+        let recall = 1.0 - misses.len() as f64 / positives.len().max(1) as f64;
+        let span_recall = 1.0 - span_misses.len() as f64 / lines.len().max(1) as f64;
+        let false_rate = false_hits.len() as f64 / negatives.len().max(1) as f64;
+        eprintln!(
+            "{name:8} recall {:.3} ({}/{}), lines {:.3} ({}/{}), false {:.3} ({}/{})",
+            recall,
+            positives.len() - misses.len(),
+            positives.len(),
+            span_recall,
+            lines.len() - span_misses.len(),
+            lines.len(),
+            false_rate,
+            false_hits.len(),
+            negatives.len()
+        );
+        let shown = if verbose { usize::MAX } else { 8 };
+        for miss in misses.iter().take(shown) {
+            eprintln!("    miss  {miss}");
+        }
+        for miss in span_misses.iter().take(shown) {
+            eprintln!("    line  {miss}");
+        }
+        for hit in false_hits.iter().take(shown) {
+            eprintln!("    false {hit}");
+        }
+        let floor = match category {
+            RedactCategory::Name | RedactCategory::Address => 0.8,
+            _ => 0.97,
+        };
+        if positives.is_empty() {
+            continue;
+        }
+        if recall < floor || span_recall < floor || false_rate > 0.05 {
+            failed.push(name);
+        }
+    }
+    assert!(failed.is_empty(), "below the floor: {failed:?}");
+}

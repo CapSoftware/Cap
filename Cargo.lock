@@ -1686,6 +1686,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-redact"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-camera-effects",
+ "cap-project",
+ "cap-video-decode",
+ "ffmpeg-next",
+ "ort",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "workspace-hack",
+]
+
+[[package]]
 name = "cap-render-farm"
 version = "0.1.0"
 dependencies = [

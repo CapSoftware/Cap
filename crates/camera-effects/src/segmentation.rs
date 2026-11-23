@@ -365,8 +365,7 @@ fn try_register_directml(
     // the second blur session (the next export, or the editor reopening) ended
     // the process wherever ONNX Runtime has no DirectML. Ask the runtime once,
     // ourselves, and only hand registration to ort when DirectML is there.
-    static DIRECTML: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
-    if let Err(reason) = DIRECTML.get_or_init(directml_available) {
+    if let Err(reason) = directml_status() {
         tracing::warn!(
             "Camera background blur: DirectML EP registration failed, using CPU: {reason}"
         );
@@ -388,6 +387,12 @@ fn try_register_directml(
             e.recover()
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn directml_status() -> &'static Result<(), String> {
+    static DIRECTML: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    DIRECTML.get_or_init(directml_available)
 }
 
 /// Whether the loaded ONNX Runtime provides the DirectML execution provider,
