@@ -447,12 +447,13 @@ export function CapVideoPlayer({
 			// Safari can take a frame or two to show a newly drawn canvas, so the
 			// still goes up before the source is swapped out from under it.
 			replaceHeldTime(heldTime, video, video.currentTime);
+			const coverHold = heldTime.current;
 			await new Promise((resolve) => setTimeout(resolve, FRAME_COVER_LEAD_MS));
 			if (
 				videoRef.current !== video ||
 				initialPlaybackSourceRetryPending.current
 			) {
-				releaseHeldTime(heldTime);
+				if (heldTime.current === coverHold) releaseHeldTime(heldTime);
 				return false;
 			}
 			replaceHeldTime(heldTime, video, video.currentTime);
