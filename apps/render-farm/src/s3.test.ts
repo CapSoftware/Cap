@@ -1,30 +1,10 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localS3, stopLocalS3 } from "./local-s3.test-util";
 import { decodeXml, S3, type S3Config } from "./s3";
 
-const servers: ReturnType<typeof Bun.serve>[] = [];
-
-afterEach(() => {
-	for (const server of servers.splice(0)) server.stop(true);
-});
-
-function localS3(
-	handle: (request: Request) => Response | Promise<Response>,
-	config: Partial<S3Config> = {},
-) {
-	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handle });
-	servers.push(server);
-	return new S3({
-		region: "us-east-1",
-		bucket: "bucket",
-		accessKeyId: "a",
-		secretAccessKey: "b",
-		virtualHost: false,
-		...config,
-		endpoint: `http://127.0.0.1:${server.port}`,
-	});
-}
+afterEach(stopLocalS3);
 
 describe("decodeXml", () => {
 	test("decodes the predefined entities", () => {

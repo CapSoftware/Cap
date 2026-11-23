@@ -64,7 +64,7 @@ export function parsePrepareRequest(value: unknown): PrepareRequest {
 
 type ManifestFile = { path: string; size?: number; [key: string]: unknown };
 
-export type PrepareDeps = {
+export type PrepareStorage = {
 	getBounded(key: string, limit: number): Promise<Uint8Array>;
 	put(
 		key: string,
@@ -73,23 +73,32 @@ export type PrepareDeps = {
 	): Promise<unknown>;
 	presignGet(key: string): Promise<string>;
 	inScope(key: string): boolean;
-	engine<T>(op: string, body: Record<string, unknown>): Promise<T>;
 	onManifest?(manifest: { files: ManifestFile[] }): void;
 };
 
-export async function prepareRecording(
+export type PrepareDeps = PrepareStorage & {
+	engine<T>(op: string, body: Record<string, unknown>): Promise<T>;
+};
+
+export type StagedPrepare = {
+	manifest: { files: ManifestFile[] };
+	project: string;
+	engineRequest: Record<string, unknown>;
+};
+
+export async function stagePrepare(
 	prefix: string,
 	name: string,
 	workDir: string,
-	deps: PrepareDeps,
-) {
+	deps: PrepareStorage,
+): Promise<StagedPrepare | null> {
 	const manifest = JSON.parse(
 		new TextDecoder().decode(
 			await deps.getBounded(`${prefix}/manifest.json`, MAX_PREPARE_BYTES),
 		),
 	) as { files: ManifestFile[] };
 	if (manifest.files.some((file) => file.path === "recording-meta.json")) {
-		return false;
+		return null;
 	}
 	const request = parsePrepareRequest(
 		JSON.parse(
@@ -118,16 +127,32 @@ export async function prepareRecording(
 		inputEvents = join(workDir, "input-events.ndjson");
 		writeFileSync(inputEvents, bytes);
 	}
+	return {
+		manifest,
+		project,
+		engineRequest: {
+			project,
+			sources: request.sources,
+			input_events: inputEvents,
+			display_source: await deps.presignGet(request.display.key),
+			display_content_type: request.display.contentType,
+			session_defaults: request.sessionDefaults,
+		},
+	};
+}
+
+export async function prepareRecording(
+	prefix: string,
+	name: string,
+	workDir: string,
+	deps: PrepareDeps,
+) {
+	const staged = await stagePrepare(prefix, name, workDir, deps);
+	if (!staged) return false;
+	const { manifest, project } = staged;
 	const written = await deps.engine<{
 		files: { path: string; size: number }[];
-	}>("prepare", {
-		project,
-		sources: request.sources,
-		input_events: inputEvents,
-		display_source: await deps.presignGet(request.display.key),
-		display_content_type: request.display.contentType,
-		session_defaults: request.sessionDefaults,
-	});
+	}>("prepare", staged.engineRequest);
 	const listed = new Set(manifest.files.map((file) => file.path));
 	await Promise.all(
 		written.files.map((file) =>
