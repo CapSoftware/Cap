@@ -442,6 +442,12 @@ fn remove_stale_spools(dir: &std::path::Path, own_pid: u32) -> usize {
     removed
 }
 
+/// Removes the speech files a crash or quit left in the temp folder before
+/// their pass ran. The app calls it once at launch; returns how many went.
+pub fn clear_stale_spools() -> usize {
+    remove_stale_spools(&std::env::temp_dir(), std::process::id())
+}
+
 /// The meeting's speech sits in the shared temp folder until Stop, so the
 /// name can't be guessed from the process id alone.
 fn spool_name(pid: u32, n: u64) -> String {

@@ -575,6 +575,14 @@ impl Meetings {
             let mut this = Self::new(settings);
             this.start_recovery(cx);
             this.start_library_cleanup(cx);
+            cx.background_executor()
+                .spawn(async {
+                    let removed = cap_diarize::nemotron::clear_stale_spools();
+                    if removed > 0 {
+                        tracing::info!(removed, "deleted speech files a quit left behind");
+                    }
+                })
+                .detach();
             this.resume_unwritten(cx);
             this.apply_lifecycle(cx);
             this
