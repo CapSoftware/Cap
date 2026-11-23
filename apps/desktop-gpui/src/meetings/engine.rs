@@ -1831,12 +1831,23 @@ impl Worker {
     fn gap_jobs(&mut self, gap: &Gap) -> Option<Vec<SegmentJob>> {
         let mut jobs = Vec::new();
         if gap.segments.is_empty() {
-            let samples = self.read_audio(gap.source, gap.start_sample, gap.end_sample - gap.start_sample)?;
             let mut segmenter = Segmenter::new(match gap.source {
                 Source::Mic => SegmenterConfig::microphone(),
                 Source::System => SegmenterConfig::default(),
             });
-            let mut found = segmenter.push(gap.start_sample, &samples);
+            // In fixed reads: a long tail is hours of silence at most, and
+            // only the speech found in it is kept.
+            let mut found = Vec::new();
+            let mut at = gap.start_sample;
+            while at < gap.end_sample {
+                let want = SWEEP_READ_SAMPLES.min(gap.end_sample - at);
+                let samples = self.read_audio(gap.source, at, want)?;
+                found.extend(segmenter.push(at, &samples));
+                at += samples.len() as u64;
+                if (samples.len() as u64) < want {
+                    break;
+                }
+            }
             found.extend(segmenter.flush());
             for segment in found {
                 jobs.push(SegmentJob {

@@ -1351,3 +1351,49 @@ fn a_segment_across_the_unsaved_stretch_reads_on_into_the_next_file() {
         "hello from here"
     );
 }
+
+#[test]
+fn a_long_tail_is_read_in_fixed_pieces_and_finds_the_same_speech() {
+    // Speech for 2 s in every 40 s of an 11-minute tail, then the file ends.
+    fn said(at: u64) -> f32 {
+        let s = at % (40 * 16_000);
+        if (8 * 16_000..10 * 16_000).contains(&s) {
+            0.3 * ((at as f32) * 0.37).sin() * if at % 7 < 4 { 1.0 } else { -0.6 }
+        } else {
+            0.0005 * if at % 3 == 0 { 1.0 } else { -1.0 }
+        }
+    }
+    let total: u64 = 11 * 60 * 16_000;
+    let saved = total - 5_000;
+    let gap = Gap {
+        id: Gap::id_for(Source::System, START),
+        source: Source::System,
+        start_sample: START,
+        end_sample: START + total,
+        segments: Vec::new(),
+        reason: reason::TAIL.into(),
+    };
+    let mut b = bench(gap.clone(), Vec::new());
+    let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
+    b.worker.hooks.audio = Some(Arc::new({
+        let reads = reads.clone();
+        move |_, start, len| {
+            reads.lock().unwrap().push(len);
+            let end = (start + len).min(START + saved);
+            Some((start..end.max(start)).map(|at| said(at - START)).collect())
+        }
+    }));
+    b.worker.finishing = true;
+    let jobs = b.worker.gap_jobs(&gap).expect("the tail's audio");
+
+    let whole: Vec<f32> = (0..saved).map(said).collect();
+    let mut segmenter = Segmenter::new(SegmenterConfig::default());
+    let mut expected = segmenter.push(START, &whole);
+    expected.extend(segmenter.flush());
+    assert!(expected.len() >= 10, "{} segments", expected.len());
+    let got: Vec<_> = jobs.iter().map(|j| (j.start_sample, j.samples.clone())).collect();
+    let want: Vec<_> = expected.into_iter().map(|s| (s.start_sample, s.samples)).collect();
+    assert_eq!(got, want);
+    let reads = reads.lock().unwrap();
+    assert!(reads.iter().all(|len| *len <= SWEEP_READ_SAMPLES), "{reads:?}");
+}
