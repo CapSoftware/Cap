@@ -272,9 +272,27 @@ fn rss_case_child() {
 
 const RSS_PEAK: &str = "rss_peak=";
 
-/// This process's own peak RSS, so no earlier child's peak can mask it.
+/// This process's own peak RSS, so no earlier child's peak can mask it. On
+/// Linux `ru_maxrss` keeps the spawning test process's peak across exec, so a
+/// case spawned while other tests ran reported their memory; VmHWM is the
+/// child's own.
 #[cfg(unix)]
 fn own_peak_rss() -> u64 {
+    #[cfg(target_os = "linux")]
+    if let Some(kilobytes) = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmHWM:"))?
+                .split_whitespace()
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
+    {
+        return kilobytes * 1024;
+    }
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
     let peak = usage.ru_maxrss as u64;
