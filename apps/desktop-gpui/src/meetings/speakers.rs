@@ -182,7 +182,7 @@ async fn download_nemotron(dir: &Path) -> Result<(), String> {
                 file.write_all(&chunk).map_err(|e| format!("Error while writing Nemotron: {e}"))?;
                 NEMOTRON_RECEIVED.fetch_add(chunk.len() as u64, Ordering::AcqRel);
             }
-            file.flush().map_err(|e| format!("Failed to flush Nemotron: {e}"))?;
+            file.sync_all().map_err(|e| format!("Failed to flush Nemotron: {e}"))?;
             let hex: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
             if hex != sha {
                 return Err(format!("The Nemotron download is corrupt ({name}: sha256 {hex})"));
@@ -333,7 +333,7 @@ async fn download(path: &Path) -> Result<(), String> {
             file.write_all(&chunk)
                 .map_err(|e| format!("Error while writing the speaker model: {e}"))?;
         }
-        file.flush()
+        file.sync_all()
             .map_err(|e| format!("Failed to flush the speaker model: {e}"))?;
         let hex: String = hasher
             .finalize()

@@ -31,6 +31,9 @@ pub const MIN_GAP: usize = 3_200;
 pub const MAX_GAP_MS: u64 = 3_600_000;
 
 fn max_gap_ms() -> u64 {
+    if !cfg!(debug_assertions) {
+        return MAX_GAP_MS;
+    }
     std::env::var("CAP_DIARIZE_NEMO_MAX_GAP_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(MAX_GAP_MS)
 }
 /// A voice counts as speaking in a 10 ms frame above this probability.
