@@ -219,6 +219,39 @@ impl TranscriptionSettings {
         self.dictionary.as_deref().unwrap_or(&[])
     }
 
+    /// The entries someone added: Cap's built-in spellings and their
+    /// sounds-like forms come out, so a dictionary nobody touched is empty.
+    /// A form someone taught a built-in spelling stays.
+    pub fn user_entries(&self) -> Vec<Entry> {
+        let builtins = dictionary::builtins();
+        self.entries()
+            .iter()
+            .filter_map(|entry| {
+                let Some(builtin) = builtins
+                    .iter()
+                    .find(|b| b.spelling.eq_ignore_ascii_case(&entry.spelling))
+                else {
+                    return Some(entry.clone());
+                };
+                let taught: Vec<String> = entry
+                    .sounds_like
+                    .iter()
+                    .filter(|form| {
+                        !builtin
+                            .sounds_like
+                            .iter()
+                            .any(|b| b.eq_ignore_ascii_case(form))
+                    })
+                    .cloned()
+                    .collect();
+                (!taught.is_empty()).then(|| Entry {
+                    spelling: entry.spelling.clone(),
+                    sounds_like: taught,
+                })
+            })
+            .collect()
+    }
+
     /// Words a user saved for Cap's captions before there was one
     /// dictionary join it once. The examples Cap shipped are not words
     /// anyone chose, so they stay out.
