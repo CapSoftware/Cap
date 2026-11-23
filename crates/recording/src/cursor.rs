@@ -698,9 +698,10 @@ pub(crate) fn spawn_wayland_cursor_recorder(
     incremental_outputs: IncrementalCaptureOutputs,
     wayland_pointer: Option<crate::wayland_pointer::WaylandPointerFeed>,
     readers: Vec<std::os::fd::OwnedFd>,
+    session_devices: bool,
 ) -> CursorActor {
-    use crate::wayland_pointer::{ClickSource, PointerPlace, PointerTrack};
-    use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+    use crate::wayland_pointer::{ClickSource, PointerButtons, PointerPlace, PointerTrack};
+    use std::sync::mpsc::TryRecvError;
     use std::time::Duration;
 
     let stop_token = CancellationToken::new();
@@ -714,7 +715,11 @@ pub(crate) fn spawn_wayland_cursor_recorder(
     let stop_token_child = stop_token.child_token();
     let thread = std::thread::spawn(move || {
         let _completion = completion;
-        let (mut click_source, mut buttons) = ClickSource::open();
+        let (mut click_source, mut buttons) = if session_devices {
+            ClickSource::open()
+        } else {
+            (ClickSource::detached(), PointerButtons::default())
+        };
         for reader in readers {
             click_source.push_reader(reader);
         }
@@ -747,24 +752,14 @@ pub(crate) fn spawn_wayland_cursor_recorder(
                     stop_wakeup_rx.try_recv(),
                     Ok(()) | Err(TryRecvError::Disconnected)
                 );
-            let changes = if click_source.is_empty() {
+            let changes = click_source.poll(
+                &mut buttons,
                 if stop_requested {
-                    break;
-                }
-                match stop_wakeup_rx.recv_timeout(Duration::from_millis(16)) {
-                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
-                    Err(RecvTimeoutError::Timeout) => continue,
-                }
-            } else {
-                click_source.poll(
-                    &mut buttons,
-                    if stop_requested {
-                        Duration::ZERO
-                    } else {
-                        Duration::from_millis(16)
-                    },
-                )
-            };
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(16)
+                },
+            );
 
             let Some(epoch) = input_epoch(start_gate.as_ref(), start_time) else {
                 if stop_requested {
@@ -904,6 +899,7 @@ pub fn spawn_cursor_recorder(
             incremental_outputs,
             wayland_pointer,
             Vec::new(),
+            true,
         );
     }
     #[cfg(target_os = "linux")]

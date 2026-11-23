@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
@@ -10,6 +12,11 @@ const BTN_TASK: u16 = 0x117;
 const KEY_BITS: u32 = 96;
 // spa_meta_cursor.flags bit 0. This spa header does not name it.
 const CURSOR_HIDDEN: u32 = 1;
+const DEVICE_SCAN_INTERVAL: Duration = Duration::from_secs(1);
+// Playback clips a coordinate outside the captured frame to the card edge.
+// Hidden metadata has no off-frame position, so one full frame outside stands
+// in for it and the pointer comes back on the next finite position.
+const CONCEALED_POSITION: (f64, f64) = (-1.0, -1.0);
 
 const fn ioc(dir: u32, ty: u32, nr: u32, size: u32) -> u64 {
     ((dir << 30) | (size << 16) | (ty << 8) | nr) as u64
@@ -107,7 +114,7 @@ pub struct CaptureRect {
 pub enum CursorMetaUpdate {
     Unchanged,
     Hidden,
-    At(Option<(f64, f64)>),
+    At(f64, f64),
 }
 
 pub fn cursor_meta_update(
@@ -123,27 +130,28 @@ pub fn cursor_meta_update(
     if flags & CURSOR_HIDDEN != 0 {
         return CursorMetaUpdate::Hidden;
     }
-    CursorMetaUpdate::At(normalize_pointer(x, y, frame))
+    let Some((x, y)) = pointer_ratio(x, y, frame) else {
+        return CursorMetaUpdate::Unchanged;
+    };
+    CursorMetaUpdate::At(x, y)
 }
 
-pub fn normalize_pointer(x: i32, y: i32, frame: CaptureRect) -> Option<(f64, f64)> {
+fn pointer_ratio(x: i32, y: i32, frame: CaptureRect) -> Option<(f64, f64)> {
     if frame.width == 0 || frame.height == 0 {
         return None;
     }
-    let dx = x.checked_sub(frame.x)?;
-    let dy = y.checked_sub(frame.y)?;
-    if dx < 0 || dy < 0 {
-        return None;
-    }
-    let dx = dx as u32;
-    let dy = dy as u32;
-    if dx >= frame.width || dy >= frame.height {
-        return None;
-    }
-    Some((
-        f64::from(dx) / f64::from(frame.width),
-        f64::from(dy) / f64::from(frame.height),
-    ))
+    let x = (f64::from(x) - f64::from(frame.x)) / f64::from(frame.width);
+    let y = (f64::from(y) - f64::from(frame.y)) / f64::from(frame.height);
+    (x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
+fn inside_capture(x: f64, y: f64) -> bool {
+    (0.0..1.0).contains(&x) && (0.0..1.0).contains(&y)
+}
+
+pub fn normalize_pointer(x: i32, y: i32, frame: CaptureRect) -> Option<(f64, f64)> {
+    let (x, y) = pointer_ratio(x, y, frame)?;
+    inside_capture(x, y).then_some((x, y))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,7 +212,7 @@ pub struct WaylandCursorSprite {
 pub enum PointerPlace {
     Pending,
     Hidden,
-    Outside,
+    Outside(f64, f64),
     At(f64, f64),
 }
 
@@ -231,8 +239,8 @@ impl WaylandPointerFeed {
         state.place = match update {
             CursorMetaUpdate::Unchanged => return,
             CursorMetaUpdate::Hidden => PointerPlace::Hidden,
-            CursorMetaUpdate::At(None) => PointerPlace::Outside,
-            CursorMetaUpdate::At(Some((x, y))) => PointerPlace::At(x, y),
+            CursorMetaUpdate::At(x, y) if inside_capture(x, y) => PointerPlace::At(x, y),
+            CursorMetaUpdate::At(x, y) => PointerPlace::Outside(x, y),
         };
     }
 
@@ -271,19 +279,21 @@ impl PointerTrack {
 
     pub fn tick(&mut self, place: PointerPlace, changes: &[PointerButtonChange]) -> PointerTick {
         self.kept.clear();
-        let moved_to = match place {
+        let position = match place {
             PointerPlace::At(x, y) => {
                 self.kept.extend_from_slice(changes);
-                (self.last != Some((x, y))).then_some((x, y))
+                Some((x, y))
             }
+            PointerPlace::Outside(x, y) => Some((x, y)),
+            PointerPlace::Hidden => Some(CONCEALED_POSITION),
             PointerPlace::Pending => {
                 self.kept.extend_from_slice(changes);
                 None
             }
-            PointerPlace::Hidden | PointerPlace::Outside => None,
         };
-        if let PointerPlace::At(x, y) = place {
-            self.last = Some((x, y));
+        let moved_to = position.filter(|position| self.last != Some(*position));
+        if let Some(position) = position {
+            self.last = Some(position);
         }
         PointerTick {
             moved_to,
@@ -302,8 +312,18 @@ impl Default for PointerTrack {
     }
 }
 
+struct OpenNode {
+    path: Option<PathBuf>,
+    fd: OwnedFd,
+}
+
 pub struct ClickSource {
-    fds: Vec<OwnedFd>,
+    nodes: Vec<OpenNode>,
+    open_paths: HashSet<PathBuf>,
+    directory: Option<PathBuf>,
+    last_scan: Instant,
+    pending_rescan: bool,
+    inotify: Option<OwnedFd>,
 }
 
 impl ClickSource {
@@ -311,51 +331,93 @@ impl ClickSource {
     // desktop user can read them without the input group. Key codes stay out
     // of the recording: only BTN_LEFT through BTN_TASK become clicks.
     pub fn open() -> (Self, PointerButtons) {
+        let directory = PathBuf::from("/dev/input");
+        let mut source = Self::detached();
+        source.directory = Some(directory.clone());
+        source.inotify = arm_inotify(&directory);
         let mut buttons = PointerButtons::default();
-        let mut nodes = Vec::new();
-        if let Ok(entries) = std::fs::read_dir("/dev/input") {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let Some(name) = name.to_str() else {
-                    continue;
-                };
-                if is_event_node(name) {
-                    nodes.push(entry.path());
-                }
-            }
-        }
-        nodes.sort();
-        let mut fds = Vec::new();
-        for path in nodes {
-            let Some(fd) = open_readonly(&path) else {
-                continue;
-            };
-            let Some(bits) = read_key_bits(fd.as_raw_fd(), eviocgbit(u32::from(EV_KEY), KEY_BITS))
-            else {
-                continue;
-            };
-            if !has_left_button(&bits) {
-                continue;
-            }
-            if let Some(held) = read_key_bits(fd.as_raw_fd(), eviocgkey(KEY_BITS)) {
-                buttons.absorb_bits(&held);
-            }
-            fds.push(fd);
-        }
-        if fds.is_empty() {
+        source.rescan(&mut buttons);
+        if source.nodes.is_empty() {
             tracing::info!("Wayland click source has no pointer the session can read");
         } else {
-            tracing::info!(pointers = fds.len(), "Wayland click source opened");
+            tracing::info!(pointers = source.nodes.len(), "Wayland click source opened");
         }
-        (Self { fds }, buttons)
+        (source, buttons)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.fds.is_empty()
+    pub(crate) fn detached() -> Self {
+        Self {
+            nodes: Vec::new(),
+            open_paths: HashSet::new(),
+            directory: None,
+            last_scan: Instant::now(),
+            pending_rescan: false,
+            inotify: None,
+        }
     }
 
     pub(crate) fn push_reader(&mut self, fd: OwnedFd) {
-        self.fds.push(fd);
+        self.nodes.push(OpenNode { path: None, fd });
+    }
+
+    fn scan_due(&self) -> bool {
+        self.directory.is_some()
+            && (self.pending_rescan || self.last_scan.elapsed() >= DEVICE_SCAN_INTERVAL)
+    }
+
+    // Readdir at most once a second, and again when a node disconnects or
+    // inotify reports a change. The 16 ms poll must not scan /dev/input.
+    fn rescan(&mut self, buttons: &mut PointerButtons) {
+        self.pending_rescan = false;
+        self.last_scan = Instant::now();
+        let Some(directory) = self.directory.clone() else {
+            return;
+        };
+        for path in event_node_paths(&directory) {
+            if self.open_paths.contains(&path) {
+                continue;
+            }
+            self.try_open(&path, buttons);
+        }
+    }
+
+    fn try_open(&mut self, path: &Path, buttons: &mut PointerButtons) -> bool {
+        if self.open_paths.contains(path) {
+            return false;
+        }
+        let Some(fd) = open_readonly(path) else {
+            return false;
+        };
+        self.adopt(path.to_path_buf(), fd, buttons, None)
+    }
+
+    fn adopt(
+        &mut self,
+        path: PathBuf,
+        fd: OwnedFd,
+        buttons: &mut PointerButtons,
+        bits: Option<[u8; KEY_BITS as usize]>,
+    ) -> bool {
+        if self.open_paths.contains(&path) {
+            return false;
+        }
+        let Some(bits) =
+            bits.or_else(|| read_key_bits(fd.as_raw_fd(), eviocgbit(u32::from(EV_KEY), KEY_BITS)))
+        else {
+            return false;
+        };
+        if !has_left_button(&bits) {
+            return false;
+        }
+        if let Some(held) = read_key_bits(fd.as_raw_fd(), eviocgkey(KEY_BITS)) {
+            buttons.absorb_bits(&held);
+        }
+        self.open_paths.insert(path.clone());
+        self.nodes.push(OpenNode {
+            path: Some(path),
+            fd,
+        });
+        true
     }
 
     pub fn poll(
@@ -363,18 +425,31 @@ impl ClickSource {
         buttons: &mut PointerButtons,
         timeout: Duration,
     ) -> Vec<PointerButtonChange> {
-        if self.fds.is_empty() {
+        if self.scan_due() {
+            self.rescan(buttons);
+        }
+        let device_count = self.nodes.len();
+        if device_count == 0 && self.inotify.is_none() {
+            if !timeout.is_zero() {
+                std::thread::sleep(timeout);
+            }
             return Vec::new();
         }
-        let mut polls: Vec<libc::pollfd> = self
-            .fds
-            .iter()
-            .map(|fd| libc::pollfd {
-                fd: fd.as_raw_fd(),
+        let mut polls = Vec::with_capacity(device_count + usize::from(self.inotify.is_some()));
+        for node in &self.nodes {
+            polls.push(libc::pollfd {
+                fd: node.fd.as_raw_fd(),
                 events: libc::POLLIN,
                 revents: 0,
-            })
-            .collect();
+            });
+        }
+        if let Some(watch) = &self.inotify {
+            polls.push(libc::pollfd {
+                fd: watch.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            });
+        }
         let millis = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
         let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as libc::nfds_t, millis) };
         if ready <= 0 {
@@ -382,7 +457,7 @@ impl ClickSource {
         }
         let mut changes = Vec::new();
         let mut dead = Vec::new();
-        for (index, poll) in polls.iter().enumerate() {
+        for (index, poll) in polls.iter().enumerate().take(device_count) {
             if poll.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) == 0 {
                 continue;
             }
@@ -396,11 +471,76 @@ impl ClickSource {
                 Err(ReadEvents::Closed) => dead.push(index),
             }
         }
+        if self.inotify.is_some()
+            && let Some(watch) = polls.last()
+        {
+            if watch.revents & libc::POLLIN != 0 {
+                self.drain_inotify();
+                self.pending_rescan = true;
+            }
+            if watch.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                self.inotify = None;
+            }
+        }
         for index in dead.into_iter().rev() {
-            self.fds.swap_remove(index);
+            if let Some(path) = self.nodes.swap_remove(index).path {
+                self.open_paths.remove(&path);
+            }
+            self.pending_rescan = true;
+        }
+        if self.pending_rescan {
+            self.rescan(buttons);
         }
         changes
     }
+
+    fn drain_inotify(&self) {
+        let Some(watch) = &self.inotify else {
+            return;
+        };
+        let mut buffer = [0u8; 4096];
+        loop {
+            let read =
+                unsafe { libc::read(watch.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len()) };
+            if read <= 0 {
+                break;
+            }
+        }
+    }
+}
+
+fn event_node_paths(directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_event_node(name) {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    paths
+}
+
+fn arm_inotify(directory: &Path) -> Option<OwnedFd> {
+    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    if fd < 0 {
+        return None;
+    }
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    let path = std::ffi::CString::new(directory.as_os_str().as_encoded_bytes()).ok()?;
+    let mask = libc::IN_CREATE
+        | libc::IN_MOVED_TO
+        | libc::IN_DELETE
+        | libc::IN_MOVED_FROM
+        | libc::IN_ATTRIB;
+    let watch = unsafe { libc::inotify_add_watch(fd.as_raw_fd(), path.as_ptr(), mask) };
+    (watch >= 0).then_some(fd)
 }
 
 enum ReadEvents {
@@ -565,11 +705,11 @@ mod tests {
         );
         assert_eq!(
             cursor_meta_update(4, 0, 60, 45, frame),
-            CursorMetaUpdate::At(Some((0.5, 0.5)))
+            CursorMetaUpdate::At(0.5, 0.5)
         );
         assert_eq!(
             cursor_meta_update(4, 0, 9, 20, frame),
-            CursorMetaUpdate::At(None)
+            CursorMetaUpdate::At(-1.0 / 100.0, 0.0)
         );
     }
 
@@ -597,6 +737,7 @@ mod tests {
         let outside_press = buttons.observe(EV_KEY, BTN_LEFT, 1).unwrap();
         let outside = track.tick(feed.place(), &[outside_press]);
         assert_eq!(outside.clicks, 0);
+        assert_eq!(outside.moved_to, Some((-5.0 / 1000.0, 10.0 / 500.0)));
         let clicks = vec![click(&early, 5_000.0)];
         assert_eq!(generate_auto_zoom_segments(&clicks, 20.0, 2.0).len(), 1);
         let dir = tempfile::tempdir().unwrap();
@@ -655,6 +796,7 @@ mod tests {
             },
             Some(feed.clone()),
             vec![read],
+            true,
         );
         actor.stop();
         drop(write);
@@ -691,6 +833,7 @@ mod tests {
         outside.publish_position(cursor_meta_update(8, 0, -20, 10, frame));
         let dropped = record(&outside, &event_bytes(EV_KEY, BTN_LEFT + 1, 1));
         assert!(dropped.clicks.is_empty());
+        assert!(dropped.moves.iter().any(|move_| move_.x < 0.0));
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cursor.json");
         let events = cap_project::CursorEvents {
@@ -700,6 +843,135 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&events).unwrap()).unwrap();
         let loaded = cap_project::CursorEvents::load_from_file(&path).unwrap();
         assert!(!generate_auto_zoom_segments(&loaded.clicks, 20.0, 2.0).is_empty());
+    }
+
+    #[test]
+    fn the_pointer_leaves_the_card_and_comes_back() {
+        let mut track = PointerTrack::new();
+        assert_eq!(
+            track.tick(PointerPlace::At(0.25, 0.2), &[]).moved_to,
+            Some((0.25, 0.2))
+        );
+        let outside = track.tick(PointerPlace::Outside(-0.1, 0.2), &[]);
+        assert_eq!(outside.moved_to, Some((-0.1, 0.2)));
+        assert_eq!(outside.clicks, 0);
+        assert_eq!(
+            track.tick(PointerPlace::Outside(-0.1, 0.2), &[]).moved_to,
+            None
+        );
+        assert_eq!(
+            track.tick(PointerPlace::At(0.25, 0.2), &[]).moved_to,
+            Some((0.25, 0.2))
+        );
+
+        assert_eq!(
+            track.tick(PointerPlace::Hidden, &[]).moved_to,
+            Some(CONCEALED_POSITION)
+        );
+        assert_eq!(track.tick(PointerPlace::Hidden, &[]).moved_to, None);
+        assert_eq!(
+            track.tick(PointerPlace::At(0.25, 0.2), &[]).moved_to,
+            Some((0.25, 0.2))
+        );
+    }
+
+    #[test]
+    fn pipewire_cursor_moves_are_written_without_a_click_source() {
+        let frame = CaptureRect {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 500,
+        };
+        let feed = WaylandPointerFeed::default();
+        feed.publish_position(cursor_meta_update(7, 0, 250, 100, frame));
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = crate::cursor::spawn_wayland_cursor_recorder(
+            dir.path().join("cursors"),
+            Default::default(),
+            0,
+            cap_timestamp::Timestamps::now(),
+            None,
+            crate::cursor::IncrementalCaptureOutputs {
+                cursor: None,
+                keyboard: None,
+            },
+            Some(feed),
+            Vec::new(),
+            false,
+        );
+        actor.stop();
+        let response = futures::executor::block_on(actor.rx).expect("cursor recorder response");
+        assert!(response.clicks.is_empty());
+        assert!(
+            response
+                .moves
+                .iter()
+                .any(|move_| move_.x == 0.25 && move_.y == 0.2)
+        );
+    }
+
+    fn left_button_bits() -> [u8; KEY_BITS as usize] {
+        let mut bits = [0u8; KEY_BITS as usize];
+        let code = usize::from(BTN_LEFT);
+        bits[code / 8] |= 1 << (code % 8);
+        bits
+    }
+
+    fn pipe_pair() -> (OwnedFd, OwnedFd) {
+        let mut ends = [0; 2];
+        assert_eq!(
+            unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) },
+            0
+        );
+        unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) }
+    }
+
+    #[test]
+    fn a_reconnected_pointer_is_adopted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mouse0"), b"").unwrap();
+        std::fs::write(dir.path().join("event"), b"").unwrap();
+        std::fs::File::create(dir.path().join("event0")).unwrap();
+        let mut source = ClickSource::detached();
+        source.directory = Some(dir.path().to_path_buf());
+        let mut buttons = PointerButtons::default();
+        source.rescan(&mut buttons);
+        assert!(source.nodes.is_empty());
+
+        let event1 = dir.path().join("event1");
+        let (reader, writer) = pipe_pair();
+        assert!(source.adopt(
+            event1.clone(),
+            reader,
+            &mut buttons,
+            Some(left_button_bits())
+        ));
+        let (duplicate, _keep) = pipe_pair();
+        assert!(!source.adopt(
+            event1.clone(),
+            duplicate,
+            &mut buttons,
+            Some(left_button_bits())
+        ));
+        assert_eq!(source.nodes.len(), 1);
+        assert!(source.open_paths.contains(&event1));
+
+        drop(writer);
+        assert!(source.poll(&mut buttons, Duration::ZERO).is_empty());
+        assert!(source.nodes.is_empty());
+        assert!(!source.open_paths.contains(&event1));
+
+        let (reader, _writer) = pipe_pair();
+        assert!(source.adopt(
+            event1.clone(),
+            reader,
+            &mut buttons,
+            Some(left_button_bits())
+        ));
+        assert_eq!(source.nodes.len(), 1);
+        let paths = event_node_paths(dir.path());
+        assert_eq!(paths, vec![dir.path().join("event0")]);
     }
 
     #[test]
