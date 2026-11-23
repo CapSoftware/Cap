@@ -194,24 +194,34 @@ function AddSeats({
 	const [seats, setSeats] = useState(() =>
 		Math.min(MAX_SEATS, Math.max(current + 1, requestedSeats)),
 	);
-	const [preview, setPreview] = useState<SeatPreviewResult | null>(null);
+	const planVersion = `${details.billingInterval}:${details.currentPeriodEnd}`;
+	const [quote, setQuote] = useState<{
+		plan: string;
+		preview: SeatPreviewResult;
+	} | null>(null);
+	const preview = quote?.plan === planVersion ? quote.preview : null;
 	const [submitting, setSubmitting] = useState(false);
 	const [result, setResult] = useState<AddSeatsResult | null>(null);
 	const [friday, setFriday] = useState<CapFridayView | null>(capFriday);
 	const [fridayResult, setFridayResult] =
 		useState<CapFridayRedeemResult | null>(null);
 	const dark = friday !== null && !result?.ok;
+	const offerRequest = useRef(0);
 
 	const applyCode = () => {
+		const request = ++offerRequest.current;
 		setFriday({ type: "loading" });
 		setFridayResult(null);
 		setPromoParam(CODE);
 		getCapFridayOffer()
-			.then(setFriday)
-			.catch(() => setFriday({ type: "unavailable", reason: "custom" }));
+			.catch((): CapFridayState => ({ type: "unavailable", reason: "custom" }))
+			.then((offer) => {
+				if (offerRequest.current === request) setFriday(offer);
+			});
 	};
 
 	const removeCode = () => {
+		offerRequest.current++;
 		setFriday(null);
 		setFridayResult(null);
 		setPromoParam(null);
@@ -225,17 +235,20 @@ function AddSeats({
 	useEffect(() => {
 		if (pastDue || seats <= current) return;
 		let active = true;
-		setPreview(null);
+		setQuote(null);
 		const timer = setTimeout(() => {
 			previewAddSeats(seats)
 				.then((next) => {
-					if (active) setPreview(next);
+					if (active) setQuote({ plan: planVersion, preview: next });
 				})
 				.catch(() => {
 					if (active) {
-						setPreview({
-							ok: false,
-							message: "Couldn't price the extra seats.",
+						setQuote({
+							plan: planVersion,
+							preview: {
+								ok: false,
+								message: "Couldn't price the extra seats.",
+							},
 						});
 					}
 				});
@@ -244,7 +257,7 @@ function AddSeats({
 			active = false;
 			clearTimeout(timer);
 		};
-	}, [seats, current, pastDue]);
+	}, [seats, current, pastDue, planVersion]);
 
 	const added = seats - current;
 	const dueToday =
