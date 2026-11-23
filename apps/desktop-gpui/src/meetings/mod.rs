@@ -449,6 +449,9 @@ pub struct Meetings {
     /// a time while nothing records.
     repair_queue: VecDeque<String>,
     last_start_error: Option<MeetingError>,
+    /// Why a start the prompt planner asked for failed, for the accept that
+    /// asked (`start_internal` consumes `last_start_error` itself).
+    prompt_start_error: Option<MeetingError>,
     pending_restore_mic: Option<(Option<String>, Option<String>)>,
     #[cfg(debug_assertions)]
     pub(crate) dev_mic: Option<flume::Receiver<capture::RawBatch>>,
@@ -680,6 +683,7 @@ impl Meetings {
             library_cleanup: None,
             repair_queue: VecDeque::new(),
             last_start_error: None,
+            prompt_start_error: None,
             pending_restore_mic: None,
             #[cfg(debug_assertions)]
             dev_mic: None,
@@ -1088,6 +1092,7 @@ impl Meetings {
                     let origin = self.origin_for(&source);
                     if let Err(error) = self.start_internal(origin, cx) {
                         tracing::warn!(%error, "could not start the meeting recording");
+                        self.prompt_start_error = Some(error);
                         let actions = self
                             .planner
                             .set_recording(self.now_pair(), RecordingState::Idle);
@@ -1132,16 +1137,18 @@ impl Meetings {
         }
     }
 
-    pub fn accept_prompt(&mut self, id: u64, cx: &mut Context<Self>) {
+    /// Accepts a prompt. `Err` when the meeting it started could not start,
+    /// so the person can be told; an earlier failure (an automatic start)
+    /// never counts for this accept.
+    pub fn accept_prompt(&mut self, id: u64, cx: &mut Context<Self>) -> Result<(), MeetingError> {
+        self.prompt_start_error = None;
         let actions = self.planner.accept(self.now_pair(), id);
         self.apply_prompt_actions(actions, cx);
         self.rearm(cx);
-    }
-
-    /// Why the last start failed, once: for entry points (an accepted
-    /// prompt) that start through the session rather than `start_recording`.
-    pub fn take_start_error(&mut self) -> Option<MeetingError> {
-        self.last_start_error.take()
+        match self.prompt_start_error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     pub fn dismiss_prompt(&mut self, id: u64, cx: &mut Context<Self>) {

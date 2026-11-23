@@ -1467,16 +1467,53 @@ fn each_resume_of_a_meeting_without_kept_audio_gets_its_own_files() {
     assert_eq!(persist::resume_suffix(&MeetingDetails::default()), "-2");
 }
 
-#[test]
-fn a_failed_start_is_reported_once() {
-    // An accepted prompt reads why its start failed. The error is taken, so an
-    // older failure can never be shown again for a later start that worked.
-    let mut meetings = super::Meetings::new(cap_meetings::settings::MeetingSettings::default());
-    assert_eq!(meetings.take_start_error(), None);
-    meetings.last_start_error = Some(super::MeetingError::Library("denied".into()));
-    assert_eq!(
-        meetings.take_start_error(),
-        Some(super::MeetingError::Library("denied".into()))
+/// Accepting a meeting prompt whose start fails reports why to the caller,
+/// so the notes window can say so, through the real planner path. A failure
+/// left by an earlier (automatic) start never counts for a later accept.
+#[gpui::test]
+fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = cap_meetings::settings::MeetingSettings::default();
+    settings.enabled = true;
+    settings.notifications.scheduled = true;
+    settings.notifications.lead_secs = 60;
+    let meetings = cx
+        .update(|cx| super::Meetings::install_for_tests(settings, dir.path().join("calendar"), cx));
+    // The notes library's folder became a file: no new note can be saved.
+    let root = dir.path().join("documents");
+    let library = cap_meetings::library::Library::open(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::write(&root, b"not a folder").unwrap();
+    let prompt = meetings.update(cx, |m, cx| {
+        m.library = Some(library);
+        let soon = Utc::now() + chrono::Duration::seconds(30);
+        let event = cap_meetings::prompt::EventInfo {
+            id: "planning".into(),
+            title: "Planning".into(),
+            start: soon,
+            end: soon + chrono::Duration::minutes(30),
+            has_link: true,
+            link_provider_name: Some("Zoom".into()),
+            attendee_count: 3,
+        };
+        let actions = m.planner.set_events(m.now_pair(), vec![event]);
+        m.apply_prompt_actions(actions, cx);
+        m.prompts.first().map(|p| p.id)
+    });
+    let prompt = prompt.expect("a prompt for the meeting about to start");
+
+    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, cx));
+    assert!(
+        matches!(accepted, Err(super::MeetingError::Library(_))),
+        "{accepted:?}"
     );
-    assert_eq!(meetings.take_start_error(), None);
+    assert!(meetings.read_with(cx, |m, _| m.recording.is_none()));
+
+    // An automatic start that failed earlier left its error behind: an accept
+    // that starts nothing must not report it.
+    let accepted = meetings.update(cx, |m, cx| {
+        m.prompt_start_error = Some(super::MeetingError::Library("an older failure".into()));
+        m.accept_prompt(prompt + 1000, cx)
+    });
+    assert_eq!(accepted, Ok(()));
 }

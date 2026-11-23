@@ -419,11 +419,7 @@ pub fn accept_prompt(id: u64, join: Option<String>, cx: &mut App) {
         debug::start(StartSource::Prompt(id), cx);
         return;
     }
-    update_meetings(cx, |meetings, cx| {
-        // Only this accept's failure counts, not one left by an older start.
-        meetings.take_start_error();
-        meetings.accept_prompt(id, cx)
-    });
+    let accepted = update_meetings(cx, |meetings, cx| meetings.accept_prompt(id, cx));
     let started = Meetings::try_global(cx).and_then(|meetings| {
         meetings
             .read(cx)
@@ -432,9 +428,7 @@ pub fn accept_prompt(id: u64, join: Option<String>, cx: &mut App) {
     });
     if let Some(doc_id) = started {
         crate::meetings_ui::documents::open_to_type(doc_id, cx);
-    } else if let Some(error) =
-        update_meetings(cx, |meetings, _| meetings.take_start_error()).flatten()
-    {
+    } else if let Some(Err(error)) = accepted {
         crate::meetings_ui::documents::start_failed(error, cx);
     }
 }
