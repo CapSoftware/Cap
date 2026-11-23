@@ -109,6 +109,17 @@ pub struct PersistedState {
     pub screenshot_crop_snap_to_ratio: Option<bool>,
     #[serde(default)]
     pub editor_window: Option<EditorWindowMemory>,
+    /// The picture last chosen as the camera, and whether it is the current
+    /// camera. Kept apart from `recording_settings.cameraId`, which the
+    /// shared store reads as a device.
+    #[serde(default)]
+    pub camera_picture: Option<CameraPictureChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraPictureChoice {
+    pub path: PathBuf,
+    pub selected: bool,
 }
 
 /// Where the editor window last sat on each display, keyed by display UUID.

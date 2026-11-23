@@ -1013,6 +1013,13 @@ no_microphones = "No se encontraron micrófonos"
 system_audio_off = "Sin audio del sistema"
 system_audio_on = "Con audio del sistema"
 
+[main.device.picture]
+label = "Imagen"
+choose = "Usar una imagen"
+detail = "Se muestra en lugar de una cámara"
+change = "Elegir otra imagen"
+filter = "Imágenes"
+
 [main.device.access]
 allow_access = "Permitir acceso"
 camera_denied = "Cap no puede usar tu cámara. Actívala en Ajustes del Sistema."
@@ -1272,6 +1279,31 @@ not_found = "Esta cámara ya no está disponible. Comprueba que esté conectada 
 start_failed = "El sistema no pudo iniciar esta cámara. Puede que no esté disponible o que otra app la esté usando."
 timeout = "No se recibieron imágenes de esta cámara. Puede que esté cerrada, desconectada, tapada o en uso por otra app."
 unavailable_title = "Cámara no disponible"
+
+[camera.toolbar]
+close = "Cerrar cámara"
+larger = "Agrandar"
+smaller = "Reducir"
+size_body = "O arrastra cualquier esquina."
+shape = "Cambiar forma"
+shape_to_square = "Cambiar a un cuadrado."
+shape_to_full = "Cambiar a un rectángulo que muestra toda la cámara."
+shape_to_round = "Volver a un círculo."
+mirror = "Vista previa en espejo"
+mirror_off = "Invierte la vista previa como un espejo."
+mirror_on = "En espejo. Haz clic para quitarlo."
+blur = "Desenfoque de fondo"
+blur_off = "Desactivado. Haz clic para un desenfoque suave."
+blur_light = "Suave. Haz clic para más desenfoque."
+blur_heavy_then_cutout = "Fuerte. Haz clic para quitar el fondo."
+blur_heavy_then_off = "Fuerte. Haz clic para desactivarlo."
+blur_cutout = "Fondo quitado. Haz clic para desactivarlo."
+picture = "Usar una imagen"
+picture_body = "Muestra una imagen fija en lugar de tu cámara."
+change_picture = "Cambiar imagen"
+change_picture_body = "Elige otra imagen para mostrar."
+use_camera = "Usar tu cámara"
+use_camera_body = "Vuelve a mostrar tu cámara en lugar de la imagen."
 
 [camera.blur]
 light = "Suave"
@@ -2766,6 +2798,14 @@ shape_label = "Forma"
 size_during_zoom = "Tamaño durante el zoom"
 size_label = "Tamaño"
 title = "Cámara"
+
+[editor.tabs.camera.picture]
+title = "Imagen"
+empty = "Añade una imagen para mostrarla donde estaría tu cámara."
+shown = "Se muestra donde estaría tu cámara."
+add = "Añadir imagen"
+replace = "Reemplazar"
+remove = "Quitar"
 
 [editor.tabs.camera.blur]
 heavy = "Desenfoque intenso"

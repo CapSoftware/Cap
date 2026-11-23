@@ -1013,6 +1013,13 @@ no_microphones = "未找到麦克风"
 system_audio_off = "不录制系统音频"
 system_audio_on = "录制系统音频"
 
+[main.device.picture]
+label = "图片"
+choose = "使用图片"
+detail = "代替摄像头显示"
+change = "选择其他图片"
+filter = "图片"
+
 [main.device.access]
 allow_access = "允许访问"
 camera_denied = "Cap 无法使用你的摄像头。请在系统设置中开启。"
@@ -1272,6 +1279,31 @@ not_found = "此摄像头已不可用。请检查它是否已连接，并已在�
 start_failed = "系统无法启动此摄像头。它可能不可用，或正被其他应用使用。"
 timeout = "未从此摄像头收到任何画面。它可能已关闭、断开连接、被遮挡，或正被其他应用使用。"
 unavailable_title = "摄像头不可用"
+
+[camera.toolbar]
+close = "关闭摄像头"
+larger = "放大"
+smaller = "缩小"
+size_body = "也可以拖动任意一角调整大小。"
+shape = "更改形状"
+shape_to_square = "切换为正方形。"
+shape_to_full = "切换为显示完整摄像头画面的矩形。"
+shape_to_round = "切回圆形。"
+mirror = "镜像预览"
+mirror_off = "像照镜子一样翻转预览。"
+mirror_on = "已镜像。点击可翻转回来。"
+blur = "背景模糊"
+blur_off = "关闭。点击开启轻度模糊。"
+blur_light = "轻度。点击加强模糊。"
+blur_heavy_then_cutout = "强。点击移除背景。"
+blur_heavy_then_off = "强。点击关闭。"
+blur_cutout = "已移除背景。点击关闭。"
+picture = "使用图片"
+picture_body = "用一张静态图片代替你的摄像头。"
+change_picture = "更换图片"
+change_picture_body = "选择另一张要显示的图片。"
+use_camera = "使用摄像头"
+use_camera_body = "重新显示你的摄像头，而不是图片。"
 
 [camera.blur]
 light = "轻"
@@ -2766,6 +2798,14 @@ shape_label = "形状"
 size_during_zoom = "缩放时的大小"
 size_label = "大小"
 title = "摄像头"
+
+[editor.tabs.camera.picture]
+title = "图片"
+empty = "添加一张图片，显示在摄像头的位置。"
+shown = "显示在摄像头的位置。"
+add = "添加图片"
+replace = "替换"
+remove = "移除"
 
 [editor.tabs.camera.blur]
 heavy = "强模糊"

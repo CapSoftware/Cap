@@ -1015,6 +1015,13 @@ no_microphones = "No microphones found"
 system_audio_off = { text = "No System Audio", max_px = 180, size = 14 }
 system_audio_on = { text = "Record System Audio", max_px = 180, size = 14 }
 
+[main.device.picture]
+label = { text = "Picture", max_px = 180, size = 14, context = "The camera row label when a still picture is used instead of a camera." }
+choose = "Use a picture"
+detail = "Shows in place of a camera"
+change = "Choose another picture"
+filter = "Images"
+
 [main.device.access]
 allow_access = { text = "Allow access", max_px = 130, size = 11 }
 camera_denied = "Cap can't use your camera. Turn it on in System Settings."
@@ -1274,6 +1281,31 @@ not_found = "This camera is no longer available. Check that it is connected and 
 start_failed = "The system could not start this camera. It may be unavailable or in use by another app."
 timeout = "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app."
 unavailable_title = "Camera unavailable"
+
+[camera.toolbar]
+close = { text = "Close camera", context = "Hint title over the X button in the floating camera preview. The window is often only 230px wide." }
+larger = "Make larger"
+smaller = "Make smaller"
+size_body = "Or drag any corner to resize."
+shape = "Change shape"
+shape_to_square = "Switch to a square."
+shape_to_full = "Switch to a rectangle that shows your whole camera."
+shape_to_round = "Switch back to a circle."
+mirror = { text = "Mirror preview", context = "Hint title over the mirror button in the camera preview. Only the preview is flipped." }
+mirror_off = "Flip the preview like a mirror."
+mirror_on = "Mirrored now. Click to flip it back."
+blur = { text = "Background blur", context = "Hint title over the background blur button in the camera preview." }
+blur_off = "Off. Click for a light blur."
+blur_light = "Light. Click for a heavier blur."
+blur_heavy_then_cutout = "Heavy. Click to remove the background."
+blur_heavy_then_off = "Heavy. Click to turn it off."
+blur_cutout = "Background removed. Click to turn it off."
+picture = "Use a picture"
+picture_body = "Show a still picture instead of your camera."
+change_picture = "Change picture"
+change_picture_body = "Choose another picture to show."
+use_camera = "Use your camera"
+use_camera_body = "Show your camera again instead of the picture."
 
 [camera.blur]
 light = { text = "Light", context = "Tiny 7px label under the background blur button in the camera preview. Keep it to one short word." }
@@ -2768,6 +2800,14 @@ shape_label = "Shape"
 size_during_zoom = "Size During Zoom"
 size_label = "Size"
 title = "Camera"
+
+[editor.tabs.camera.picture]
+title = "Picture"
+empty = "Add a picture to show where your camera would be."
+shown = "Shown where your camera would be."
+add = "Add picture"
+replace = "Replace"
+remove = "Remove"
 
 [editor.tabs.camera.blur]
 heavy = "Heavy Blur"

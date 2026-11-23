@@ -1013,6 +1013,13 @@ no_microphones = "Keine Mikrofone gefunden"
 system_audio_off = "Kein Systemaudio"
 system_audio_on = "Systemaudio aufnehmen"
 
+[main.device.picture]
+label = "Bild"
+choose = "Bild verwenden"
+detail = "Wird statt einer Kamera gezeigt"
+change = "Anderes Bild wählen"
+filter = "Bilder"
+
 [main.device.access]
 allow_access = "Zugriff erlauben"
 camera_denied = "Cap kann Ihre Kamera nicht verwenden. Aktivieren Sie sie in den Systemeinstellungen."
@@ -1272,6 +1279,31 @@ not_found = "Diese Kamera ist nicht mehr verfügbar. Prüfen Sie, ob sie verbund
 start_failed = "Das System konnte diese Kamera nicht starten. Sie ist möglicherweise nicht verfügbar oder wird von einer anderen App verwendet."
 timeout = "Von dieser Kamera kamen keine Bilder. Sie ist möglicherweise geschlossen, getrennt, abgedeckt oder wird von einer anderen App verwendet."
 unavailable_title = "Kamera nicht verfügbar"
+
+[camera.toolbar]
+close = "Kamera schließen"
+larger = "Vergrößern"
+smaller = "Verkleinern"
+size_body = "Oder ziehen Sie an einer Ecke."
+shape = "Form ändern"
+shape_to_square = "Zu einem Quadrat wechseln."
+shape_to_full = "Zu einem Rechteck wechseln, das die ganze Kamera zeigt."
+shape_to_round = "Zurück zum Kreis wechseln."
+mirror = "Vorschau spiegeln"
+mirror_off = "Die Vorschau wie einen Spiegel umdrehen."
+mirror_on = "Gespiegelt. Klicken Sie, um es aufzuheben."
+blur = "Hintergrundunschärfe"
+blur_off = "Aus. Klicken für leichte Unschärfe."
+blur_light = "Leicht. Klicken für stärkere Unschärfe."
+blur_heavy_then_cutout = "Stark. Klicken, um den Hintergrund zu entfernen."
+blur_heavy_then_off = "Stark. Klicken zum Ausschalten."
+blur_cutout = "Hintergrund entfernt. Klicken zum Ausschalten."
+picture = "Bild verwenden"
+picture_body = "Ein Standbild statt Ihrer Kamera zeigen."
+change_picture = "Bild ändern"
+change_picture_body = "Ein anderes Bild auswählen."
+use_camera = "Kamera verwenden"
+use_camera_body = "Wieder Ihre Kamera statt des Bildes zeigen."
 
 [camera.blur]
 light = "Leicht"
@@ -2766,6 +2798,14 @@ shape_label = "Form"
 size_during_zoom = "Größe beim Zoomen"
 size_label = "Größe"
 title = "Kamera"
+
+[editor.tabs.camera.picture]
+title = "Bild"
+empty = "Fügen Sie ein Bild hinzu, das an der Stelle Ihrer Kamera erscheint."
+shown = "Wird an der Stelle Ihrer Kamera gezeigt."
+add = "Bild hinzufügen"
+replace = "Ersetzen"
+remove = "Entfernen"
 
 [editor.tabs.camera.blur]
 heavy = "Starke Unschärfe"

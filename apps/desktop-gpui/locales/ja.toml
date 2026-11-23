@@ -1013,6 +1013,13 @@ no_microphones = "マイクが見つかりません"
 system_audio_off = "システム音声なし"
 system_audio_on = "システム音声を録音"
 
+[main.device.picture]
+label = "画像"
+choose = "画像を使う"
+detail = "カメラの代わりに表示します"
+change = "別の画像を選ぶ"
+filter = "画像"
+
 [main.device.access]
 allow_access = "アクセスを許可"
 camera_denied = "Capはカメラを使用できません。システム設定でオンにしてください。"
@@ -1272,6 +1279,31 @@ not_found = "このカメラは使用できなくなりました。接続され�
 start_failed = "システムがこのカメラを起動できませんでした。使用できないか、ほかのアプリで使用中の可能性があります。"
 timeout = "このカメラから映像が届きませんでした。閉じている、接続が切れている、覆われている、またはほかのアプリで使用中の可能性があります。"
 unavailable_title = "カメラを使用できません"
+
+[camera.toolbar]
+close = "カメラを閉じる"
+larger = "大きくする"
+smaller = "小さくする"
+size_body = "角をドラッグしてもサイズを変えられます。"
+shape = "形を変更"
+shape_to_square = "正方形に切り替えます。"
+shape_to_full = "カメラ全体を映す長方形に切り替えます。"
+shape_to_round = "円に戻します。"
+mirror = "プレビューを反転"
+mirror_off = "プレビューを鏡のように反転します。"
+mirror_on = "反転中です。クリックすると元に戻ります。"
+blur = "背景ぼかし"
+blur_off = "オフ。クリックすると弱くぼかします。"
+blur_light = "弱。クリックすると強くぼかします。"
+blur_heavy_then_cutout = "強。クリックすると背景を消します。"
+blur_heavy_then_off = "強。クリックするとオフにします。"
+blur_cutout = "背景を消しています。クリックするとオフにします。"
+picture = "画像を使う"
+picture_body = "カメラの代わりに静止画を表示します。"
+change_picture = "画像を変更"
+change_picture_body = "表示する別の画像を選びます。"
+use_camera = "カメラを使う"
+use_camera_body = "画像の代わりにカメラを再び表示します。"
 
 [camera.blur]
 light = "弱"
@@ -2766,6 +2798,14 @@ shape_label = "形"
 size_during_zoom = "ズーム中のサイズ"
 size_label = "サイズ"
 title = "カメラ"
+
+[editor.tabs.camera.picture]
+title = "画像"
+empty = "カメラの位置に表示する画像を追加します。"
+shown = "カメラの位置に表示されます。"
+add = "画像を追加"
+replace = "置き換え"
+remove = "削除"
 
 [editor.tabs.camera.blur]
 heavy = "強いぼかし"
