@@ -2064,3 +2064,19 @@ fn copy_notes_has_the_edits_whose_save_is_still_queued(cx: &mut TestAppContext) 
         "the copy waits for the save made just before it"
     );
 }
+
+#[gpui::test]
+fn a_title_typed_just_before_quitting_is_saved(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (f, cx) = fixture(cx);
+    let id = f.store.read_with(cx, |s, _| s.open.clone().unwrap());
+    let title = f.pane.read_with(cx, |p, _| p.title.clone());
+    cx.update(|window, cx| {
+        title.update(cx, |t, cx| t.replace_text_in_range(None, " renamed", window, cx))
+    });
+    // Quit lands inside the title's debounce: only the flush runs.
+    f.pane.update_in(cx, |p, _, cx| p.flush_saves(cx));
+    cx.run_until_parked();
+    let saved = f.library.load(&id).unwrap().title;
+    assert!(saved.contains("renamed"), "{saved}");
+}

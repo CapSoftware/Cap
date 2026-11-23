@@ -2339,6 +2339,8 @@ impl Pane {
     }
 
     pub fn flush_saves(&mut self, cx: &mut Context<Self>) {
+        // Quitting runs only this, inside the title's debounce.
+        self.commit_title(cx);
         // Home's line follows an edited summary when the note is left, not
         // on every save while typing.
         if self.enhanced_edited {
