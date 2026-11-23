@@ -259,7 +259,7 @@ impl Fixture {
         let mut changes = self.library.subscribe();
         let library = self.library.clone();
         let met = self.runtime.block_on(async move {
-            tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::time::timeout(Duration::from_secs(4), async {
                 loop {
                     if condition(&library) {
                         return;
@@ -928,6 +928,11 @@ fn a_legacy_project_path_resolves_to_its_catalogue_wallpaper() {
     unknown_background.source = cap_project::BackgroundSource::Wallpaper {
         path: Some("/gone/assets/backgrounds/later/added.jpg".into()),
     };
+    // A disabled section is never drawn, so it needs nothing.
+    let mut disabled_background = project.background.clone();
+    disabled_background.source = cap_project::BackgroundSource::Wallpaper {
+        path: Some("/gone/assets/backgrounds/zztest/two.jpg".into()),
+    };
     let timeline = project.timeline.get_or_insert_with(|| {
         serde_json::from_value(serde_json::json!({ "segments": [], "zoomSegments": [] })).unwrap()
     });
@@ -936,6 +941,10 @@ fn a_legacy_project_path_resolves_to_its_catalogue_wallpaper() {
         segment.overrides.background = Some(background);
         timeline.style_segments.push(segment);
     }
+    let mut disabled = cap_project::StyleSegment::default();
+    disabled.enabled = false;
+    disabled.overrides.background = Some(disabled_background);
+    timeline.style_segments.push(disabled);
     assert_eq!(
         fixture.library.missing_project_wallpapers(&project),
         vec![Ok("zztest/one"), Err("later/added.jpg".to_string())]

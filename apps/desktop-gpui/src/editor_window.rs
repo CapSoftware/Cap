@@ -2186,9 +2186,9 @@ pub struct EditorWindow {
     pub(crate) audio_picker_generation: u64,
     pub(crate) audio_import_pending: Option<u64>,
     audio_picker_request: Option<AudioImportRequest>,
-    /// The last frame sent to the renderer stood a wallpaper's thumbnail in
-    /// for the file still downloading; a landed download republishes.
-    preview_placeholder: Cell<bool>,
+    /// How many wallpapers the last frame sent to the renderer stood a
+    /// thumbnail in for; each one that lands republishes.
+    preview_placeholder: Cell<usize>,
     _asset_watch: gpui::Task<()>,
     /// A transient line over the player: the one place an action that cannot
     /// apply says so (the editor has no toast host of its own).
@@ -2915,7 +2915,7 @@ impl EditorWindow {
             audio_picker_generation: 0,
             audio_import_pending: None,
             audio_picker_request: None,
-            preview_placeholder: Cell::new(false),
+            preview_placeholder: Cell::new(0),
             _asset_watch: asset_watch,
             notice: None,
             notice_seq: 0,
@@ -4083,7 +4083,7 @@ impl EditorWindow {
         // A restored Enhance toggle reaches the renderer before its first
         // frame, not only once something publishes the project.
         let enhancement = self.preview_screen_enhancement();
-        let mut placeholder = false;
+        let mut placeholder = 0;
         instance.project_config.0.send_modify(|config| {
             config.screen_enhancement = enhancement;
             placeholder = crate::asset_library::apply_preview_placeholder(config);
@@ -4094,10 +4094,10 @@ impl EditorWindow {
 
     /// An asset download moved, landed or failed, or the catalogue grew.
     fn assets_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Once, when the wallpaper the preview stood a thumbnail in for lands.
-        if self.preview_placeholder.get()
-            && !crate::asset_library::project_misses_wallpaper(&self.project)
-        {
+        // Each time one of the wallpapers the preview stood a thumbnail in
+        // for lands, whether or not the others have.
+        let stood_in = self.preview_placeholder.get();
+        if stood_in > 0 && crate::asset_library::missing_wallpaper_count(&self.project) < stood_in {
             self.publish_project();
         }
         let wallpapers_shown = self.sidebar.tab == crate::editor_sidebar::SidebarTab::Background

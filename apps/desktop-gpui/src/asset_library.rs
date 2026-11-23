@@ -915,14 +915,15 @@ pub fn error_message(error: &FetchError) -> String {
     }
 }
 
-/// The background and every style section's, the sources a render of
-/// `project` can draw.
+/// The background and every enabled style section's, the sources a render
+/// of `project` can draw.
 fn background_sources(project: &ProjectConfiguration) -> impl Iterator<Item = &BackgroundSource> {
     std::iter::once(&project.background.source).chain(
         project
             .timeline
             .iter()
             .flat_map(|timeline| &timeline.style_segments)
+            .filter(|segment| segment.enabled)
             .filter_map(|segment| segment.overrides.background.as_ref())
             .map(|background| &background.source),
     )
@@ -936,29 +937,31 @@ fn background_sources_mut(
             .timeline
             .iter_mut()
             .flat_map(|timeline| &mut timeline.style_segments)
+            .filter(|segment| segment.enabled)
             .filter_map(|segment| segment.overrides.background.as_mut())
             .map(|background| &mut background.source),
     )
 }
 
-/// Whether a render of `project` would miss a wallpaper right now.
-pub fn project_misses_wallpaper(project: &ProjectConfiguration) -> bool {
-    !library().missing_project_wallpapers(project).is_empty()
+/// How many wallpapers a render of `project` would miss right now.
+pub fn missing_wallpaper_count(project: &ProjectConfiguration) -> usize {
+    library().missing_project_wallpapers(project).len()
 }
 
 /// What the editor preview renders instead of `config` while its wallpaper
 /// is still on the way: the bundled thumbnail, which sharpens into the real
 /// picture when the download lands. Starts the download if nothing has.
 /// Only ever applied to the copy sent to a preview renderer, never to a
-/// saved or exported project. Returns whether it stood in.
-pub fn apply_preview_placeholder(config: &mut ProjectConfiguration) -> bool {
+/// saved or exported project. Returns how many wallpapers were missing,
+/// so a caller can republish as each one lands.
+pub fn apply_preview_placeholder(config: &mut ProjectConfiguration) -> usize {
     let library = library();
-    let mut stood_in = false;
+    let mut stood_in = 0;
     for source in background_sources_mut(config) {
         let Some(missing) = library.missing_wallpaper(source) else {
             continue;
         };
-        stood_in = true;
+        stood_in += 1;
         let Ok(id) = missing else {
             continue;
         };

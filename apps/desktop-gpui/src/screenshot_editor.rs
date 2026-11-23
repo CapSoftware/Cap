@@ -965,8 +965,8 @@ pub struct ScreenshotEditorWindow {
     wallpaper_theme: usize,
     wallpapers: HashMap<&'static str, Arc<RenderImage>>,
     wallpaper_task: Option<gpui::Task<()>>,
-    /// The preview stood a wallpaper's thumbnail in for its download.
-    preview_placeholder: bool,
+    /// How many wallpapers the preview stood a thumbnail in for.
+    preview_placeholder: usize,
     _asset_watch: gpui::Task<()>,
     /// The Image tab's `h-48` preview, decoded off-thread and keyed by path.
     bg_image: Option<(String, Arc<RenderImage>)>,
@@ -1054,7 +1054,7 @@ impl ScreenshotEditorWindow {
             wallpaper_theme: 0,
             wallpapers: HashMap::new(),
             wallpaper_task: None,
-            preview_placeholder: false,
+            preview_placeholder: 0,
             _asset_watch: asset_library::watch(window, cx, Self::assets_changed),
             bg_image: None,
             bg_image_task: None,
@@ -1141,8 +1141,9 @@ impl ScreenshotEditorWindow {
         // A wallpaper this install has not downloaded yet: the renderer got
         // the stored path, so show the thumbnail now and fetch the file.
         let mut preview = self.project.clone();
-        if asset_library::apply_preview_placeholder(&mut preview) {
-            self.preview_placeholder = true;
+        let stood_in = asset_library::apply_preview_placeholder(&mut preview);
+        if stood_in > 0 {
+            self.preview_placeholder = stood_in;
             self.revision += 1;
             let _ = config_tx.send(ConfigUpdate {
                 revision: self.revision,
@@ -1526,18 +1527,19 @@ impl ScreenshotEditorWindow {
     /// `ensure_wallpapers` on the video editor, against this window's own map.
     /// An asset download moved, landed or failed, or the catalogue grew.
     fn assets_changed(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        // Once, when the wallpaper the preview stood a thumbnail in for
-        // lands. Straight to the renderer: the gate only admits changes to
-        // the project, and the project did not change.
-        if self.preview_placeholder
-            && !asset_library::project_misses_wallpaper(&self.project)
+        // Each time one of the wallpapers the preview stood a thumbnail in
+        // for lands. Straight to the renderer: the gate only admits changes
+        // to the project, and the project did not change.
+        if self.preview_placeholder > 0
+            && asset_library::missing_wallpaper_count(&self.project) < self.preview_placeholder
             && let Some(config_tx) = &self.config_tx
         {
-            self.preview_placeholder = false;
+            let mut config = self.project.clone();
+            self.preview_placeholder = asset_library::apply_preview_placeholder(&mut config);
             self.revision += 1;
             let _ = config_tx.send(ConfigUpdate {
                 revision: self.revision,
-                config: self.project.clone(),
+                config,
             });
         }
         if self.bg_tab == BgTab::Wallpaper {
