@@ -1755,6 +1755,21 @@ impl Meetings {
             return;
         };
         let doc_id = recording.doc_id.clone();
+        // The first try on the meeting's own microphone reopens it at once,
+        // with no look at the device list: after a sample rate change or a
+        // device reset it is still there, and the audio system can be slow to
+        // list devices while one reconfigures. Opening it again takes its
+        // new rate; the timeline carries on from its timestamps.
+        if tries == 1
+            && let Some(own) = recording.mic_own.clone()
+            && current.as_deref() == Some(own.as_str())
+        {
+            self.move_mic(&doc_id, Some(tries), std::slice::from_ref(&own), None, cx);
+            if let Some(recording) = self.recording.as_mut() {
+                recording.mic_watch.done();
+            }
+            return;
+        }
         let candidates: Vec<String> = [recording.mic_own.clone(), current]
             .into_iter()
             .flatten()
