@@ -25,7 +25,10 @@ import {
 	isMediaLoadError,
 	isSignedMediaUrl,
 	type PlaybackSnapshot,
+	signedUrlRefreshDueAt,
 	sourceMayHaveExpired,
+	trackPlaybackIntent,
+	whenSourceRefreshDue,
 } from "./media-source-refresh";
 import {
 	createLevelPatchedMp4ObjectUrl,
@@ -386,6 +389,69 @@ export function CapVideoPlayer({
 		};
 	}, [resolvedSrc.data?.url, resolvedSrc.data?.type]);
 
+	const currentSourceUrl = resolvedSrc.data?.url;
+	const currentSourceType = resolvedSrc.data?.type;
+	useEffect(() => {
+		const video = videoRef.current;
+		if (
+			!video ||
+			!currentSourceUrl ||
+			!currentSourceType ||
+			iosLevelPatchedUrl ||
+			!isSignedMediaUrl(currentSourceUrl)
+		)
+			return;
+		const dueAt = signedUrlRefreshDueAt(currentSourceUrl);
+		if (dueAt === null) return;
+		const intent = trackPlaybackIntent(video);
+		const stopDueCheck = whenSourceRefreshDue(video, dueAt, async () => {
+			if (initialPlaybackSourceRetryPending.current) return false;
+			const fresh = await resolvePlaybackSource({
+				videoSrc,
+				rawFallbackSrc,
+				enableCrossOrigin,
+				preferredSource,
+			});
+			if (
+				!fresh ||
+				fresh.type !== currentSourceType ||
+				fresh.url === currentSourceUrl ||
+				videoRef.current !== video ||
+				initialPlaybackSourceRetryPending.current
+			)
+				return false;
+			const snapshot = capturePlayback(video, intent.isPlaying());
+			playbackToRestore.current = { ...snapshot, sourceUrl: currentSourceUrl };
+			if (!snapshot.wasPlaying) video.autoplay = false;
+			setIsRefreshingInitialPlaybackSource(true);
+			queryClient.setQueryData(
+				[
+					"resolvedSrc",
+					videoSrc,
+					rawFallbackSrc,
+					enableCrossOrigin,
+					preferredSource,
+				],
+				fresh,
+			);
+			return true;
+		});
+		return () => {
+			stopDueCheck();
+			intent.stop();
+		};
+	}, [
+		currentSourceType,
+		currentSourceUrl,
+		enableCrossOrigin,
+		iosLevelPatchedUrl,
+		preferredSource,
+		queryClient,
+		rawFallbackSrc,
+		videoRef,
+		videoSrc,
+	]);
+
 	useEffect(() => {
 		return () => {
 			setIosLevelPatchedUrl((previous) => {
@@ -517,7 +583,7 @@ export function CapVideoPlayer({
 			keepPlayerVisible: boolean,
 		) => {
 			initialPlaybackSourceRetryPending.current = true;
-			const snapshot = capturePlayback(video);
+			const snapshot = capturePlayback(video, playbackIntent.isPlaying());
 			playbackToRestore.current = { ...snapshot, sourceUrl };
 			// A viewer who paused stays paused; the autoplay attribute would start
 			// the new source on its own.
@@ -616,6 +682,7 @@ export function CapVideoPlayer({
 		};
 
 		const cleanupCaptionTracks = bindCaptionTrackCueText(video, setCurrentCue);
+		const playbackIntent = trackPlaybackIntent(video);
 		const finishPlaybackSourceRestore = () => {
 			const restore = playbackToRestore.current;
 			if (!restore) return;
@@ -691,6 +758,7 @@ export function CapVideoPlayer({
 				handleLoadedMetadataWithTracks,
 			);
 			cleanupCaptionTracks();
+			playbackIntent.stop();
 		};
 	}, [
 		hasPlayedOnce,

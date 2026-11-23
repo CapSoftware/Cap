@@ -537,6 +537,52 @@ describe("share MP4 playback after its initial signature expires", () => {
 			}
 		});
 
+		it("resumes a viewer the browser paused while reporting the failure", async () => {
+			const now = vi.spyOn(Date, "now");
+			const start = Date.UTC(2026, 10, 23, 12);
+			now.mockReturnValue(start);
+			const fetchImpl = vi
+				.fn<typeof fetch>()
+				.mockResolvedValueOnce(response(signed("first"), 206, true))
+				.mockResolvedValueOnce(response(signed("second"), 206, true));
+			const { player, video, state, play } = await renderPlaying(
+				fetchImpl,
+				signed("first"),
+			);
+			try {
+				state.paused = false;
+				await act(async () => {
+					video.dispatchEvent(new Event("play"));
+				});
+				state.currentTime = 90;
+				now.mockReturnValue(start + 25 * 60 * MINUTE);
+
+				state.paused = true;
+				await failLoad(video, state);
+				await act(async () => {
+					video.dispatchEvent(new Event("pause"));
+				});
+				await settleFetch(fetchImpl, 2);
+				await vi.waitFor(() => {
+					expect(video.getAttribute("src")).toBe(signed("second"));
+				});
+				await act(async () => {
+					state.currentTime = 0;
+					state.error = null;
+					video.dispatchEvent(new Event("loadedmetadata"));
+				});
+				await act(async () => {
+					video.dispatchEvent(new Event("seeked"));
+				});
+				expect(video.currentTime).toBe(90);
+				expect(play).toHaveBeenCalledOnce();
+			} finally {
+				now.mockRestore();
+				await act(async () => player.root.unmount());
+				player.client.clear();
+			}
+		});
+
 		it("keeps a paused viewer paused", async () => {
 			const now = vi.spyOn(Date, "now");
 			const start = Date.UTC(2026, 10, 23, 12);
@@ -704,6 +750,119 @@ describe("share MP4 playback after its initial signature expires", () => {
 				await act(async () => player.root.unmount());
 				player.client.clear();
 			}
+		});
+
+		describe("before the URL expires", () => {
+			const HOUR = 60 * MINUTE;
+			const policyUrl = (name: string, expiresAtMs: number) => {
+				const policy = btoa(
+					JSON.stringify({
+						Statement: [
+							{
+								Resource: `https://cdn.example.com/owner/video/${name}.mp4`,
+								Condition: {
+									DateLessThan: { "AWS:EpochTime": expiresAtMs / 1000 },
+								},
+							},
+						],
+					}),
+				)
+					.replace(/\+/g, "-")
+					.replace(/=/g, "_")
+					.replace(/\//g, "~");
+				return `https://cdn.example.com/owner/video/${name}.mp4?Policy=${policy}&Key-Pair-Id=KTEST&Signature=sig-${name}`;
+			};
+
+			it("swaps in a fresh URL at the same time and play state", async () => {
+				const now = vi.spyOn(Date, "now");
+				const start = Date.UTC(2026, 10, 23, 12);
+				now.mockReturnValue(start);
+				const first = policyUrl("first", start + 24 * HOUR);
+				const second = policyUrl("second", start + 46 * HOUR);
+				const fetchImpl = vi
+					.fn<typeof fetch>()
+					.mockResolvedValueOnce(response(first, 206, true))
+					.mockResolvedValueOnce(response(second, 206, true));
+				const { player, video, state, play } = await renderPlaying(
+					fetchImpl,
+					first,
+				);
+				try {
+					state.paused = false;
+					await act(async () => {
+						video.dispatchEvent(new Event("play"));
+					});
+					state.currentTime = 600;
+					video.playbackRate = 2;
+
+					now.mockReturnValue(start + 21 * HOUR);
+					await act(async () => {
+						video.dispatchEvent(new Event("waiting"));
+						await waitForQueryNotification();
+					});
+					expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+					now.mockReturnValue(start + 22 * HOUR);
+					await act(async () => {
+						video.dispatchEvent(new Event("waiting"));
+					});
+					await settleFetch(fetchImpl, 2);
+					await vi.waitFor(() => {
+						expect(video.getAttribute("src")).toBe(second);
+					});
+					await act(async () => {
+						state.currentTime = 0;
+						state.paused = true;
+						video.playbackRate = 1;
+						video.dispatchEvent(new Event("loadedmetadata"));
+					});
+					await act(async () => {
+						video.dispatchEvent(new Event("seeked"));
+					});
+					expect(state.currentTime).toBe(600);
+					expect(video.playbackRate).toBe(2);
+					expect(play).toHaveBeenCalledOnce();
+					expect(
+						player.container.querySelector(
+							'[data-testid="media-player-error"]',
+						),
+					).toBeNull();
+				} finally {
+					now.mockRestore();
+					await act(async () => player.root.unmount());
+					player.client.clear();
+				}
+			});
+
+			it("keeps the current URL when the route can't sign a fresh one", async () => {
+				const now = vi.spyOn(Date, "now");
+				const start = Date.UTC(2026, 10, 23, 12);
+				now.mockReturnValue(start);
+				const first = policyUrl("first", start + 24 * HOUR);
+				const fetchImpl = vi
+					.fn<typeof fetch>()
+					.mockResolvedValueOnce(response(first, 206, true))
+					.mockResolvedValueOnce(response("/api/playlist?videoType=mp4", 404));
+				const { player, video } = await renderPlaying(fetchImpl, first);
+				try {
+					now.mockReturnValue(start + 22 * HOUR);
+					await act(async () => {
+						video.dispatchEvent(new Event("play"));
+					});
+					await settleFetch(fetchImpl, 2);
+					await act(async () => {
+						await waitForQueryNotification();
+					});
+					expect(video.getAttribute("src")).toBe(first);
+					expect(player.container.textContent).not.toContain(
+						"Could not load a playable video source",
+					);
+				} finally {
+					now.mockRestore();
+					await act(async () => player.root.unmount());
+					player.client.clear();
+				}
+			});
 		});
 	});
 });

@@ -28,6 +28,9 @@ import {
 	isMediaLoadError,
 	restorePlaybackOnLoad,
 	sourceMayHaveExpired,
+	streamRefreshDueAt,
+	trackPlaybackIntent,
+	whenSourceRefreshDue,
 } from "./media-source-refresh";
 import { waitForSegmentPlayback } from "./segment-playback-probe";
 import {
@@ -546,9 +549,33 @@ export function HLSVideoPlayer({
 			// loaded, so one that expired is refused; loading the playlist again
 			// signs them afresh.
 			const refreshes = createSourceRefreshBudget();
+			const intent = trackPlaybackIntent(video);
 			let obtainedAt = Date.now();
 			let refreshCount = 0;
 			let cancelRestore: (() => void) | null = null;
+			let stopDueCheck: (() => void) | null = null;
+			const reloadPlaylist = () => {
+				cancelRestore?.();
+				cancelRestore = restorePlaybackOnLoad(
+					video,
+					capturePlayback(video, intent.isPlaying()),
+				);
+				obtainedAt = Date.now();
+				refreshCount += 1;
+				video.src = `${playbackSrc}${playbackSrc.includes("?") ? "&" : "?"}_r=${refreshCount}`;
+				armDueCheck();
+			};
+			const armDueCheck = () => {
+				stopDueCheck?.();
+				const dueAt = streamRefreshDueAt(obtainedAt);
+				stopDueCheck =
+					dueAt === null
+						? null
+						: whenSourceRefreshDue(video, dueAt, () => {
+								reloadPlaylist();
+								return true;
+							});
+			};
 			const handleNativeLoaded = () => refreshes.markLoaded();
 			const handleNativeError = () => {
 				if (
@@ -558,12 +585,9 @@ export function HLSVideoPlayer({
 				)
 					return;
 				setHlsInitFailed(false);
-				cancelRestore?.();
-				cancelRestore = restorePlaybackOnLoad(video, capturePlayback(video));
-				obtainedAt = Date.now();
-				refreshCount += 1;
-				video.src = `${playbackSrc}${playbackSrc.includes("?") ? "&" : "?"}_r=${refreshCount}`;
+				reloadPlaylist();
 			};
+			armDueCheck();
 			video.addEventListener("loadeddata", handleNativeLoaded);
 			video.addEventListener("error", handleNativeError);
 			video.src = playbackSrc;
@@ -571,6 +595,8 @@ export function HLSVideoPlayer({
 			console.log("HLSVideoPlayer: Using native HLS support");
 			return () => {
 				cancelRestore?.();
+				stopDueCheck?.();
+				intent.stop();
 				video.removeEventListener("loadeddata", handleNativeLoaded);
 				video.removeEventListener("error", handleNativeError);
 			};

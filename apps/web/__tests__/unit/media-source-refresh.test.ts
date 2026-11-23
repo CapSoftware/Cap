@@ -5,7 +5,12 @@ import {
 	createSourceRefreshBudget,
 	isMediaLoadError,
 	isSignedMediaUrl,
+	refreshDueAt,
+	signedUrlExpiresAt,
+	signedUrlRefreshDueAt,
+	streamRefreshDueAt,
 	watchExpiredMediaSource,
+	whenSourceRefreshDue,
 } from "@/app/s/[videoId]/_components/media-source-refresh";
 
 const MINUTE = 60 * 1000;
@@ -115,6 +120,29 @@ describe("media source refresh", () => {
 		stop();
 	});
 
+	it("resumes a viewer the browser paused while reporting the failure", () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(0);
+		const { media, state, load, play, fail } = fakeMedia();
+		const stop = watchExpiredMediaSource(media);
+		media.dispatchEvent(new Event("loadeddata"));
+		state.paused = false;
+		media.dispatchEvent(new Event("play"));
+		state.currentTime = 12;
+		now.mockReturnValue(30 * MINUTE);
+
+		state.paused = true;
+		fail();
+		media.dispatchEvent(new Event("pause"));
+		expect(load).toHaveBeenCalledOnce();
+
+		state.error = null;
+		media.dispatchEvent(new Event("loadedmetadata"));
+		media.dispatchEvent(new Event("seeked"));
+		expect(state.currentTime).toBe(12);
+		expect(play).toHaveBeenCalledOnce();
+		stop();
+	});
+
 	it("leaves early failures and decode errors alone", () => {
 		const now = vi.spyOn(Date, "now").mockReturnValue(0);
 		const { media, load, fail } = fakeMedia();
@@ -140,5 +168,151 @@ describe("media source refresh", () => {
 		now.mockReturnValue(60 * MINUTE);
 		fail();
 		expect(load).toHaveBeenCalledOnce();
+	});
+
+	describe("refreshing before a signed URL expires", () => {
+		const HOUR = 60 * MINUTE;
+		const now = Date.UTC(2026, 10, 23, 12);
+		const policyUrl = (expiresAtSeconds: number) => {
+			const policy = btoa(
+				JSON.stringify({
+					Statement: [
+						{
+							Resource: "https://v.cap.so/o/v/result.mp4",
+							Condition: {
+								DateLessThan: { "AWS:EpochTime": expiresAtSeconds },
+							},
+						},
+					],
+				}),
+			)
+				.replace(/\+/g, "-")
+				.replace(/=/g, "_")
+				.replace(/\//g, "~");
+			return `https://v.cap.so/o/v/result.mp4?Policy=${policy}&Key-Pair-Id=K&Signature=s`;
+		};
+
+		it("reads the expiry of CloudFront and S3 signed URLs", () => {
+			const expiresAt = now + 24 * HOUR;
+			expect(signedUrlExpiresAt(policyUrl(expiresAt / 1000))).toBe(expiresAt);
+			expect(
+				signedUrlExpiresAt(
+					`https://v.cap.so/o/v/result.mp4?Expires=${expiresAt / 1000}&Signature=s&Key-Pair-Id=K`,
+				),
+			).toBe(expiresAt);
+			expect(
+				signedUrlExpiresAt(
+					"https://b.s3.amazonaws.com/o/v/result.mp4?X-Amz-Date=20261123T120000Z&X-Amz-Expires=86400&X-Amz-Signature=s",
+				),
+			).toBe(now + 24 * HOUR);
+			expect(signedUrlExpiresAt("/api/playlist?videoType=mp4")).toBeNull();
+			expect(
+				signedUrlExpiresAt("https://v.cap.so/x?Policy=not-json&Signature=s"),
+			).toBeNull();
+		});
+
+		it("refreshes a tenth of the lifetime early, and never for a lifetime it can't trust", () => {
+			expect(refreshDueAt(24 * HOUR, now)).toBe(now + 21.6 * HOUR);
+			expect(refreshDueAt(HOUR, now)).toBe(now + 54 * MINUTE);
+			expect(refreshDueAt(30 * MINUTE, now)).toBe(now + 25 * MINUTE);
+			expect(refreshDueAt(9 * MINUTE, now)).toBeNull();
+			expect(refreshDueAt(-HOUR, now)).toBeNull();
+			expect(streamRefreshDueAt(now)).toBe(now + 10.8 * HOUR);
+			expect(
+				signedUrlRefreshDueAt(policyUrl((now + 24 * HOUR) / 1000), now),
+			).toBe(now + 21.6 * HOUR);
+		});
+
+		it("acts once when due, on playback activity or the minute check", async () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(now);
+				const { media } = fakeMedia();
+				const onDue = vi.fn(() => true);
+				const stop = whenSourceRefreshDue(media, now + HOUR, onDue);
+				media.dispatchEvent(new Event("play"));
+				await vi.advanceTimersByTimeAsync(0);
+				expect(onDue).not.toHaveBeenCalled();
+
+				vi.setSystemTime(now + 2 * HOUR);
+				media.dispatchEvent(new Event("seeking"));
+				await vi.advanceTimersByTimeAsync(0);
+				expect(onDue).toHaveBeenCalledOnce();
+
+				media.dispatchEvent(new Event("play"));
+				await vi.advanceTimersByTimeAsync(2 * MINUTE);
+				expect(onDue).toHaveBeenCalledOnce();
+				stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("waits for a finished video to be played again", async () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(now + 2 * HOUR);
+				const { media } = fakeMedia();
+				let ended = true;
+				Object.defineProperty(media, "ended", {
+					configurable: true,
+					get: () => ended,
+				});
+				const onDue = vi.fn(() => true);
+				const stop = whenSourceRefreshDue(media, now + HOUR, onDue);
+				await vi.advanceTimersByTimeAsync(5 * MINUTE);
+				expect(onDue).not.toHaveBeenCalled();
+
+				ended = false;
+				media.dispatchEvent(new Event("play"));
+				await vi.advanceTimersByTimeAsync(0);
+				expect(onDue).toHaveBeenCalledOnce();
+				stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("tries again later when a refresh could not get a fresh URL", async () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(now + 2 * HOUR);
+				const { media } = fakeMedia();
+				const onDue = vi
+					.fn<() => Promise<boolean>>()
+					.mockResolvedValueOnce(false)
+					.mockResolvedValueOnce(true);
+				const stop = whenSourceRefreshDue(media, now + HOUR, onDue);
+				await vi.advanceTimersByTimeAsync(MINUTE);
+				expect(onDue).toHaveBeenCalledOnce();
+				await vi.advanceTimersByTimeAsync(MINUTE);
+				expect(onDue).toHaveBeenCalledTimes(2);
+				await vi.advanceTimersByTimeAsync(5 * MINUTE);
+				expect(onDue).toHaveBeenCalledTimes(2);
+				stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("reloads a route source before its signed URL expires", async () => {
+			const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+			const { media, state, load, play } = fakeMedia();
+			const stop = watchExpiredMediaSource(media);
+			state.paused = false;
+			media.dispatchEvent(new Event("play"));
+			state.currentTime = 8;
+			load.mockClear();
+
+			clock.mockReturnValue(now + 22 * HOUR);
+			media.dispatchEvent(new Event("waiting"));
+			await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+			state.currentTime = 0;
+			media.dispatchEvent(new Event("loadedmetadata"));
+			media.dispatchEvent(new Event("seeked"));
+			expect(state.currentTime).toBe(8);
+			expect(play).toHaveBeenCalled();
+			stop();
+		});
 	});
 });
