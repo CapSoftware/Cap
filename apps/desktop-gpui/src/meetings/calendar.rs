@@ -491,8 +491,21 @@ impl CalendarState {
                     {
                         source.name = name;
                     }
-                    source.status.event_count = fetched.events.len();
-                    self.per_source.insert(result.id, fetched.events);
+                    let mut events = fetched.events;
+                    if !fetched.unread_calendars.is_empty()
+                        && let Some(previous) = self.per_source.get(&result.id)
+                    {
+                        events.extend(
+                            previous
+                                .iter()
+                                .filter(|event| {
+                                    fetched.unread_calendars.contains(&event.calendar_id)
+                                })
+                                .cloned(),
+                        );
+                    }
+                    source.status.event_count = events.len();
+                    self.per_source.insert(result.id, events);
                 }
                 Err(error) => {
                     source.status.error = Some(error.detail);
@@ -545,6 +558,9 @@ pub struct Fetched {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub calendars: Option<Vec<SubCalendar>>,
+    /// Calendars of the source that failed this time: their last events
+    /// are kept instead of dropped.
+    pub unread_calendars: Vec<String>,
 }
 
 pub struct RefreshResult {
@@ -605,7 +621,13 @@ async fn refresh_account(
                 SyncErrorKind::Offline,
                 "The calendar service is unreachable",
             ),
-            accounts::FetchError::Server(detail) => SyncError::new(SyncErrorKind::Server, detail),
+            accounts::FetchError::RateLimited => SyncError::new(
+                SyncErrorKind::Server,
+                "The calendar service asked Cap to slow down",
+            ),
+            accounts::FetchError::Forbidden(detail) | accounts::FetchError::Server(detail) => {
+                SyncError::new(SyncErrorKind::Server, detail)
+            }
         })?;
     Ok(Fetched {
         events: fetched.events,
@@ -620,6 +642,7 @@ async fn refresh_account(
                 })
                 .collect(),
         ),
+        unread_calendars: fetched.unread,
         ..Fetched::default()
     })
 }
@@ -721,6 +744,7 @@ async fn refresh_ics(
         etag,
         last_modified,
         calendars: None,
+        unread_calendars: Vec::new(),
     })
 }
 

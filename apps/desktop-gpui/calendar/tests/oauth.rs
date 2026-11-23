@@ -2,7 +2,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use cap_calendar::HttpMethod;
 use cap_calendar::oauth::{
-    AuthError, OAuthClient, Pkce, authorize_url, id_token_email, parse_redirect,
+    AuthError, OAuthClient, Pkce, authorize_url, grants_calendar, id_token_email, parse_redirect,
     parse_token_response, refresh_request, state_from_random, token_request,
 };
 
@@ -255,4 +255,26 @@ fn redirects() {
         parse_redirect("state=xyz&code=", "xyz"),
         Err(AuthError::MissingCode)
     );
+}
+
+#[test]
+fn google_sign_in_without_the_calendar_box_ticked_is_not_calendar_access() {
+    let google = OAuthClient::google("id", None);
+    assert!(grants_calendar(
+        &google,
+        Some(
+            "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.readonly"
+        )
+    ));
+    assert!(!grants_calendar(
+        &google,
+        Some("openid https://www.googleapis.com/auth/userinfo.email")
+    ));
+    assert!(!grants_calendar(
+        &google,
+        Some("https://www.googleapis.com/auth/calendar.readonly.extra")
+    ));
+    assert!(grants_calendar(&google, None));
+    let microsoft = OAuthClient::microsoft("id");
+    assert!(grants_calendar(&microsoft, Some("User.Read")));
 }

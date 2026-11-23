@@ -8,6 +8,7 @@ use crate::text::non_empty;
 
 pub const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+pub const GOOGLE_CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly";
 pub const GOOGLE_SCOPES: &str = "openid email https://www.googleapis.com/auth/calendar.readonly";
 pub const MICROSOFT_SCOPES: &str = "openid email offline_access Calendars.Read User.Read";
 
@@ -196,6 +197,19 @@ pub fn refresh_request(client: &OAuthClient, refresh_token: &str) -> HttpRequest
     ];
     client_pairs(client, &mut form);
     HttpRequestSpec::post_form(client.token_endpoint(), form)
+}
+
+/// Whether the sign-in granted calendar access. Google lets the person
+/// untick it on the consent screen and still returns tokens; its token
+/// response always lists what was granted. Microsoft grants every scope or
+/// none.
+pub fn grants_calendar(client: &OAuthClient, scope: Option<&str>) -> bool {
+    match (client.provider, scope) {
+        (OAuthProvider::Google, Some(scope)) => scope
+            .split_whitespace()
+            .any(|granted| granted == GOOGLE_CALENDAR_SCOPE),
+        _ => true,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

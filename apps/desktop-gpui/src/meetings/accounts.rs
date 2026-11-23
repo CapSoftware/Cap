@@ -206,6 +206,10 @@ impl Pending {
                 _ => ConnectError::Rejected,
             }
         })?;
+        if !oauth::grants_calendar(&client, tokens.scope.as_deref()) {
+            tracing::warn!(?provider, "calendar sign-in did not grant calendar access");
+            return Err(ConnectError::Denied);
+        }
         let Some(refresh_token) = tokens.refresh_token else {
             tracing::warn!(?provider, "calendar sign-in returned no refresh token");
             return Err(ConnectError::Rejected);
@@ -434,12 +438,78 @@ fn access_tokens() -> &'static Mutex<HashMap<String, (String, Instant)>> {
     TOKENS.get_or_init(Default::default)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FetchError {
     SignInAgain,
     NotConfigured,
     Offline,
+    /// The provider asked Cap to slow down; the sign-in is fine.
+    RateLimited,
+    /// Refused for this one resource (a calendar Cap may not read), not for
+    /// the account.
+    Forbidden(String),
     Server(String),
+}
+
+impl FetchError {
+    /// Whether every other request of the account would fail the same way.
+    fn ends_the_account(&self) -> bool {
+        matches!(
+            self,
+            Self::SignInAgain | Self::NotConfigured | Self::Offline | Self::RateLimited
+        )
+    }
+}
+
+/// Reads why a 403 or 429 was sent. Google lists `reason`s (and a `status`)
+/// under `error`; Graph puts a `code` there.
+fn refusal(status: u16, body: &str) -> FetchError {
+    if status == 429 {
+        return FetchError::RateLimited;
+    }
+    let value: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let error = &value["error"];
+    let mut reasons: Vec<&str> = error["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|item| [item["reason"].as_str(), item["domain"].as_str()])
+        .chain(
+            error["details"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|item| item["reason"].as_str()),
+        )
+        .flatten()
+        .collect();
+    reasons.extend(error["status"].as_str());
+    reasons.extend(error["code"].as_str());
+    let rate_limited = reasons.iter().any(|reason| {
+        matches!(
+            *reason,
+            "usageLimits"
+                | "rateLimitExceeded"
+                | "userRateLimitExceeded"
+                | "quotaExceeded"
+                | "dailyLimitExceeded"
+                | "RATE_LIMIT_EXCEEDED"
+                | "RESOURCE_EXHAUSTED"
+        )
+    });
+    let not_granted = reasons.iter().any(|reason| {
+        matches!(
+            *reason,
+            "insufficientPermissions" | "ACCESS_TOKEN_SCOPE_INSUFFICIENT" | "authError"
+        )
+    });
+    if rate_limited {
+        FetchError::RateLimited
+    } else if not_granted {
+        FetchError::SignInAgain
+    } else {
+        FetchError::Forbidden(format!("the calendar service answered {status}"))
+    }
 }
 
 async fn access_token(
@@ -531,7 +601,7 @@ async fn get_json(
                 .remove(id);
             Err(FetchError::SignInAgain)
         }
-        403 => Err(FetchError::SignInAgain),
+        403 | 429 => Err(refusal(status, &body)),
         _ => Err(FetchError::Server(format!(
             "the calendar service answered {status}"
         ))),
@@ -541,6 +611,9 @@ async fn get_json(
 pub struct AccountFetch {
     pub events: Vec<CalendarEvent>,
     pub calendars: Vec<(CalendarInfo, bool)>,
+    /// Calendars that could not be read this time; their events from the
+    /// last good read stay.
+    pub unread: Vec<String>,
 }
 
 fn shape(error: cap_calendar::Error) -> FetchError {
@@ -569,7 +642,12 @@ pub async fn fetch(
             Provider::Google => google_calendar_list_request(next.as_deref()),
             Provider::Microsoft => graph_calendars_request(next.as_deref()).map_err(shape)?,
         };
-        let body = get_json(&http, &spec, &token, id).await?;
+        let body = get_json(&http, &spec, &token, id)
+            .await
+            .map_err(|error| match error {
+                FetchError::Forbidden(_) => FetchError::SignInAgain,
+                error => error,
+            })?;
         let page = match provider {
             Provider::Google => parse_google_calendar_list(&body),
             Provider::Microsoft => parse_graph_calendars(&body),
@@ -601,47 +679,18 @@ pub async fn fetch(
         *wanted &= index < MAX_CALENDARS;
     }
 
-    let mut events = Vec::new();
+    let mut gathered = Gathered::default();
     for (calendar, _) in chosen.iter().filter(|(_, wanted)| *wanted) {
-        let mut next: Option<String> = None;
-        for _ in 0..MAX_PAGES {
-            let spec = match provider {
-                Provider::Google => google_events_request(&calendar.id, &window, next.as_deref()),
-                Provider::Microsoft => {
-                    graph_calendar_view_request(Some(&calendar.id), &window, next.as_deref())
-                        .map_err(shape)?
-                }
-            };
-            let body = get_json(&http, &spec, &token, id).await?;
-            let page = match provider {
-                Provider::Google => parse_google_events_with(
-                    &body,
-                    &calendar.id,
-                    &GoogleOptions {
-                        self_emails: self_emails.clone(),
-                        ..GoogleOptions::default()
-                    },
-                ),
-                Provider::Microsoft => parse_graph_events_with(
-                    &body,
-                    &calendar.id,
-                    &GraphOptions {
-                        self_emails: self_emails.clone(),
-                        ..GraphOptions::default()
-                    },
-                ),
-            }
-            .map_err(shape)?;
-            events.extend(keep_for_account(calendar, &self_emails, page.items));
-            next = page.next;
-            if next.is_none() {
-                break;
-            }
-        }
+        let read = calendar_events(&http, &token, id, provider, calendar, &window, &self_emails)
+            .await
+            .map(|events| keep_for_account(calendar, &self_emails, events));
+        gathered.add(&calendar.id, read)?;
     }
+    let (events, unread) = gathered.finish()?;
     Ok(AccountFetch {
         events,
         calendars: chosen,
+        unread,
     })
 }
 
@@ -663,6 +712,94 @@ fn self_addresses(mut emails: Vec<String>, calendars: &[CalendarInfo]) -> Vec<St
         }
     }
     emails
+}
+
+/// The account's calendars as they are read: one Cap may not read (or that
+/// fails on its own) is skipped, so the others still sync; an error that
+/// every request would hit ends the account's refresh.
+#[derive(Default)]
+struct Gathered {
+    events: Vec<CalendarEvent>,
+    read: usize,
+    unread: Vec<String>,
+    first_failure: Option<FetchError>,
+}
+
+impl Gathered {
+    fn add(
+        &mut self,
+        calendar_id: &str,
+        read: Result<Vec<CalendarEvent>, FetchError>,
+    ) -> Result<(), FetchError> {
+        match read {
+            Ok(events) => {
+                self.read += 1;
+                self.events.extend(events);
+            }
+            Err(error) if error.ends_the_account() => return Err(error),
+            Err(error) => {
+                tracing::warn!(?error, "skipped a calendar that could not be read");
+                self.unread.push(calendar_id.to_string());
+                self.first_failure.get_or_insert(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<(Vec<CalendarEvent>, Vec<String>), FetchError> {
+        match self.first_failure {
+            Some(error) if self.read == 0 => Err(error),
+            _ => Ok((self.events, self.unread)),
+        }
+    }
+}
+
+async fn calendar_events(
+    http: &reqwest::Client,
+    token: &str,
+    id: &str,
+    provider: Provider,
+    calendar: &CalendarInfo,
+    window: &std::ops::Range<DateTime<Utc>>,
+    self_emails: &[String],
+) -> Result<Vec<CalendarEvent>, FetchError> {
+    let mut events = Vec::new();
+    let mut next: Option<String> = None;
+    for _ in 0..MAX_PAGES {
+        let spec = match provider {
+            Provider::Google => google_events_request(&calendar.id, window, next.as_deref()),
+            Provider::Microsoft => {
+                graph_calendar_view_request(Some(&calendar.id), window, next.as_deref())
+                    .map_err(shape)?
+            }
+        };
+        let body = get_json(http, &spec, token, id).await?;
+        let page = match provider {
+            Provider::Google => parse_google_events_with(
+                &body,
+                &calendar.id,
+                &GoogleOptions {
+                    self_emails: self_emails.to_vec(),
+                    ..GoogleOptions::default()
+                },
+            ),
+            Provider::Microsoft => parse_graph_events_with(
+                &body,
+                &calendar.id,
+                &GraphOptions {
+                    self_emails: self_emails.to_vec(),
+                    ..GraphOptions::default()
+                },
+            ),
+        }
+        .map_err(shape)?;
+        events.extend(page.items);
+        next = page.next;
+        if next.is_none() {
+            break;
+        }
+    }
+    Ok(events)
 }
 
 /// A calendar shared by someone else (a coworker's, ticked in Google's
@@ -835,6 +972,97 @@ mod tests {
             keep_for_account(&shared, &[], vec![invited]).is_empty(),
             "without the account's address a shared calendar adds nothing"
         );
+    }
+
+    #[test]
+    fn a_google_rate_limit_is_not_a_reason_to_sign_in_again() {
+        let google = |reason: &str| {
+            format!(
+                r#"{{"error":{{"code":403,"message":"Rate Limit Exceeded","errors":[{{"domain":"usageLimits","reason":"{reason}"}}],"status":"PERMISSION_DENIED"}}}}"#
+            )
+        };
+        for reason in [
+            "rateLimitExceeded",
+            "userRateLimitExceeded",
+            "quotaExceeded",
+        ] {
+            assert_eq!(
+                refusal(403, &google(reason)),
+                FetchError::RateLimited,
+                "{reason}"
+            );
+        }
+        assert_eq!(refusal(429, ""), FetchError::RateLimited);
+        assert_eq!(
+            refusal(
+                403,
+                r#"{"error":{"code":403,"errors":[{"domain":"global","reason":"insufficientPermissions"}],"status":"PERMISSION_DENIED","details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#
+            ),
+            FetchError::SignInAgain,
+            "a token without calendar access needs a new sign-in"
+        );
+        for body in [
+            r#"{"error":{"code":403,"errors":[{"domain":"global","reason":"forbidden"}]}}"#,
+            r#"{"error":{"code":"ErrorAccessDenied","message":"Access is denied."}}"#,
+            "<html>Forbidden</html>",
+        ] {
+            assert!(
+                matches!(refusal(403, body), FetchError::Forbidden(_)),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_calendar_that_fails_leaves_the_others_syncing() {
+        let event = |id: &str, calendar: &str| CalendarEvent {
+            id: id.into(),
+            calendar_id: calendar.into(),
+            ..CalendarEvent::default()
+        };
+        let mut gathered = Gathered::default();
+        gathered
+            .add("work", Ok(vec![event("standup", "work")]))
+            .unwrap();
+        gathered
+            .add(
+                "boss",
+                Err(FetchError::Forbidden(
+                    "the calendar service answered 403".into(),
+                )),
+            )
+            .unwrap();
+        gathered
+            .add(
+                "team",
+                Err(FetchError::Server(
+                    "the calendar service answered 500".into(),
+                )),
+            )
+            .unwrap();
+        let (events, unread) = gathered.finish().unwrap();
+        assert_eq!(events, vec![event("standup", "work")]);
+        assert_eq!(unread, ["boss", "team"]);
+
+        let mut all_failed = Gathered::default();
+        all_failed
+            .add("boss", Err(FetchError::Forbidden("403".into())))
+            .unwrap();
+        assert_eq!(
+            all_failed.finish().unwrap_err(),
+            FetchError::Forbidden("403".into()),
+            "nothing read is an error, so the last good events stay"
+        );
+
+        for ends in [
+            FetchError::SignInAgain,
+            FetchError::Offline,
+            FetchError::RateLimited,
+        ] {
+            let mut gathered = Gathered::default();
+            gathered.add("work", Ok(vec![])).unwrap();
+            assert_eq!(gathered.add("team", Err(ends.clone())), Err(ends));
+        }
     }
 
     fn listener() -> (TcpListener, u16) {

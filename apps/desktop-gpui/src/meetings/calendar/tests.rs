@@ -439,6 +439,39 @@ fn connecting_the_same_account_twice_keeps_one_source_and_the_newest_token() {
     assert!(!stored.contains("token-2") && stored.contains("token-3"));
 }
 
+#[test]
+fn a_calendar_that_could_not_be_read_keeps_its_last_events() {
+    use super::accounts::Provider;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = CalendarState::in_dir(dir.path().to_path_buf());
+    let id = state
+        .add_account(Provider::Google, "ada@example.com", "token-1")
+        .unwrap();
+    let fetched = |events: Vec<CalendarEvent>, unread: &[&str]| RefreshResult {
+        id: id.clone(),
+        at: Utc::now(),
+        outcome: Ok(Fetched {
+            events,
+            unread_calendars: unread.iter().map(|id| id.to_string()).collect(),
+            ..Fetched::default()
+        }),
+    };
+    state.apply(vec![fetched(
+        vec![timed("a", "work", 10, 30), timed("b", "team", 20, 30)],
+        &[],
+    )]);
+    state.apply(vec![fetched(vec![timed("a2", "work", 40, 30)], &["team"])]);
+    let mut ids: Vec<String> = state.events().iter().map(|e| e.id.clone()).collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        ["a2", "b"],
+        "work is replaced, team keeps its last read"
+    );
+    assert_eq!(state.sources[0].status.event_count, 2);
+}
+
 fn timed(id: &str, calendar: &str, minutes: i64, length: i64) -> CalendarEvent {
     let start = Utc::now() + Duration::minutes(minutes);
     CalendarEvent {
