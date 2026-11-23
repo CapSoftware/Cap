@@ -22,6 +22,8 @@ pub mod track_heal;
 pub mod upload_preparation;
 pub mod upload_resume;
 pub mod upload_verification;
+#[cfg(target_os = "linux")]
+pub mod wayland_pointer;
 
 #[cfg(target_os = "linux")]
 pub use capture_pipeline::target_to_display_and_crop;

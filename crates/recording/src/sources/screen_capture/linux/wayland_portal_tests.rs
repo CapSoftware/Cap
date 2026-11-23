@@ -289,10 +289,12 @@ async fn probe(case: &str) -> anyhow::Result<()> {
             );
         }
         assert_eq!(capture.stream.pipe_wire_node_id(), 42);
+        assert!(!capture.cursor_embedded);
         let WaylandPortalCapture {
             stream,
             fd,
             portal_session,
+            cursor_embedded: _,
         } = capture;
         drop(stream);
         drop(fd);
@@ -381,5 +383,64 @@ fn portal_sessions_end_with_capture() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs headless sway, pipewire, and xdg-desktop-portal-wlr"]
+async fn headless_sway_cursor_metadata_reaches_the_feed() {
+    pipewire::init();
+    let portal = open_wayland_portal(&LinuxCaptureSource::Display, false)
+        .await
+        .expect("open the sway screencast portal");
+    assert!(!portal.cursor_embedded);
+    let feed = crate::wayland_pointer::WaylandPointerFeed::default();
+    let feed_thread = feed.clone();
+    let (video_tx, mut video_rx) = futures::channel::mpsc::channel(8);
+    let stop = tokio_util::sync::CancellationToken::new();
+    let stop_thread = stop.clone();
+    let (health_tx, _health_rx) = tokio::sync::mpsc::channel(8);
+    let node_id = portal.stream.pipe_wire_node_id();
+    let fd = portal.fd;
+    let capture = std::thread::spawn(move || {
+        super::capture_pipewire_node(
+            cap_media_info::VideoInfo::from_raw_ffmpeg(cap_media_info::Pixel::BGRA, 1280, 720, 30),
+            super::PipewireNodeInput {
+                fd,
+                node_id,
+                fps: 30,
+                crop_bounds: None,
+                pointer: Some(feed_thread),
+                publish_sprites: true,
+            },
+            video_tx,
+            stop_thread,
+            health_tx,
+        )
+    });
+    let mut place = None;
+    for _ in 0..40 {
+        let _ = Command::new("wlrctl")
+            .args(["pointer", "move", "640", "360"])
+            .status();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while video_rx.try_next().ok().flatten().is_some() {}
+        if let crate::wayland_pointer::PointerPlace::At(x, y) = feed.place() {
+            place = Some((x, y));
+            break;
+        }
+    }
+    let metadata = !portal.cursor_embedded;
+    stop.cancel();
+    let capture = capture.join().expect("capture thread");
+    drop(portal.portal_session);
+    assert!(capture.is_ok(), "capture failed: {capture:?}");
+    if let Some((x, y)) = place {
+        assert!(
+            (0.3..0.7).contains(&x) && (0.3..0.7).contains(&y),
+            "cursor {x},{y} was not near the virtual pointer"
+        );
+    } else if metadata {
+        panic!("PipeWire cursor metadata never published a position");
     }
 }

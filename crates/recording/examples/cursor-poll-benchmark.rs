@@ -64,6 +64,8 @@ fn main() -> anyhow::Result<()> {
             keyboard: None,
         },
         keyboard,
+        #[cfg(target_os = "linux")]
+        None,
     );
     std::thread::sleep(Duration::from_secs(seconds));
     actor.stop();
