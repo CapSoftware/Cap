@@ -97,17 +97,19 @@ const transactionToPromise = (transaction: IDBTransaction) =>
 		transaction.onerror = () => reject(normalizeError(transaction.error));
 	});
 
-export const createRecordingSessionId = () => {
-	if (typeof crypto.randomUUID === "function") {
-		return crypto.randomUUID();
-	}
-
+export const fallbackRecordingSessionId = () => {
 	const random = Array.from(
 		crypto.getRandomValues(new Uint8Array(16)),
 		(byte) => byte.toString(16).padStart(2, "0"),
 	).join("");
 	return `recording-${Date.now()}-${random}`;
 };
+
+// randomUUID is limited to secure contexts; getRandomValues works everywhere.
+export const createRecordingSessionId = () =>
+	typeof crypto.randomUUID === "function"
+		? crypto.randomUUID()
+		: fallbackRecordingSessionId();
 
 export class RecordingSpoolStalledError extends Error {
 	constructor(operation: string) {
