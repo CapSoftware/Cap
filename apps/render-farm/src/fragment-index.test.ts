@@ -256,8 +256,8 @@ describe("fragment index", () => {
 			),
 		);
 		readMoof(moof, 5000, init, samples, 5030);
-		expect(samples.positions).toEqual([5000, 5010, 5020]);
-		expect(samples.offsets).toEqual([2000, -1000, 0]);
+		expect([...samples.positions]).toEqual([5000, 5010, 5020]);
+		expect([...samples.offsets]).toEqual([2000, -1000, 0]);
 		expect(remuxBlocker(init, samples)).toBe(
 			"presentation and decode times differ",
 		);
@@ -280,16 +280,14 @@ describe("fragment index", () => {
 			sync: index % 150 === 0,
 		});
 		for (let index = 0; index < 300; index++) {
-			samples.dts.push(start(index).dts);
-			samples.offsets.push(0);
-			samples.sizes.push(1);
-			samples.positions.push(index);
-			samples.sync.push(start(index).sync);
+			samples.push(start(index).dts, 0, 1, index, start(index).sync);
 		}
 		samples.firstDts = 0;
 		samples.lastDuration = 1000;
 		expect(remuxBlocker(init, samples)).toBe("keyframes too far apart");
-		samples.sync = samples.sync.map((_, index) => index % 60 === 0);
+		samples.sync.forEach((_, index, sync) => {
+			sync[index] = index % 60 === 0 ? 1 : 0;
+		});
 		expect(remuxBlocker(init, samples)).toBeNull();
 		expect(remuxBlocker({ ...init, codec: "hvc1" }, samples)).toBe(
 			"codec hvc1",
@@ -356,8 +354,8 @@ describe("fragment index", () => {
 		const samples = new FragmentSamples();
 		readMoof(moof, 5000, init, samples, 5030);
 		expect(samples.otherSamples).toBe(0);
-		expect(samples.sizes).toEqual([10, 20]);
-		expect(samples.positions).toEqual([5000, 5010]);
+		expect([...samples.sizes]).toEqual([10, 20]);
+		expect([...samples.positions]).toEqual([5000, 5010]);
 
 		// With per-sample fields the count is walked, so every track is capped.
 		const sized = box(
@@ -426,7 +424,7 @@ describe("fragment index", () => {
 		).toThrow("samples point past the end of the file");
 		const held = new FragmentSamples();
 		readMoof(honest, 5000, init, held, 5003);
-		expect(held.positions).toEqual([5000, 5001, 5002]);
+		expect([...held.positions]).toEqual([5000, 5001, 5002]);
 	});
 
 	test("moofs an mfra lists are fetched a window ahead of the walk", async () => {

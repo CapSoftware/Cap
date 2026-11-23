@@ -3,7 +3,6 @@ import {
 	build,
 	MAX_SAMPLES,
 	MAX_SOURCE_SECONDS,
-	type Run,
 	sampleTable,
 	type TrackIndex,
 	UnsupportedSource,
@@ -205,14 +204,18 @@ export function parseFragmentedInit(
 	throw new UnsupportedSource("no video track");
 }
 
-/** Video samples of a fragmented file, in decode order. */
+/**
+ * Video samples of a fragmented file, in decode order, as typed columns
+ * (25 bytes a sample) grown as runs arrive.
+ */
 export class FragmentSamples {
-	dts: number[] = [];
-	/** Composition offsets: presentation time = decode time + offset. */
-	offsets: number[] = [];
-	sizes: number[] = [];
-	positions: number[] = [];
-	sync: boolean[] = [];
+	count = 0;
+	private capacity = 0;
+	private dtsColumn = new Float64Array(0);
+	private offsetColumn = new Int32Array(0);
+	private sizeColumn = new Uint32Array(0);
+	private positionColumn = new Float64Array(0);
+	private syncColumn = new Uint8Array(0);
 	lastDuration = 0;
 	/** Other tracks' samples walked one by one for their per-sample fields. */
 	otherSamples = 0;
@@ -220,8 +223,73 @@ export class FragmentSamples {
 	nextDts = 0;
 	firstDts: number | null = null;
 
-	get count() {
-		return this.dts.length;
+	get dts() {
+		return this.dtsColumn.subarray(0, this.count);
+	}
+
+	/**
+	 * Composition offsets: presentation time = decode time + offset. Signed,
+	 * as FFmpeg reads them from either trun version.
+	 */
+	get offsets() {
+		return this.offsetColumn.subarray(0, this.count);
+	}
+
+	get sizes() {
+		return this.sizeColumn.subarray(0, this.count);
+	}
+
+	get positions() {
+		return this.positionColumn.subarray(0, this.count);
+	}
+
+	/** 1 for samples that start a GOP. */
+	get sync() {
+		return this.syncColumn.subarray(0, this.count);
+	}
+
+	/** Room for `more` samples, at most MAX_SAMPLES in all. */
+	reserve(more: number) {
+		const needed = this.count + more;
+		if (needed > MAX_SAMPLES) {
+			throw new UnsupportedSource(`more than ${MAX_SAMPLES} video samples`);
+		}
+		if (needed <= this.capacity) return;
+		this.capacity = Math.min(
+			MAX_SAMPLES,
+			Math.max(needed, this.capacity * 2, 1024),
+		);
+		const dts = new Float64Array(this.capacity);
+		dts.set(this.dts);
+		const offsets = new Int32Array(this.capacity);
+		offsets.set(this.offsets);
+		const sizes = new Uint32Array(this.capacity);
+		sizes.set(this.sizes);
+		const positions = new Float64Array(this.capacity);
+		positions.set(this.positions);
+		const sync = new Uint8Array(this.capacity);
+		sync.set(this.sync);
+		this.dtsColumn = dts;
+		this.offsetColumn = offsets;
+		this.sizeColumn = sizes;
+		this.positionColumn = positions;
+		this.syncColumn = sync;
+	}
+
+	push(
+		dts: number,
+		offset: number,
+		size: number,
+		position: number,
+		sync: boolean,
+	) {
+		this.reserve(1);
+		const index = this.count++;
+		this.dtsColumn[index] = dts;
+		this.offsetColumn[index] = offset;
+		this.sizeColumn[index] = size;
+		this.positionColumn[index] = position;
+		this.syncColumn[index] = sync ? 1 : 0;
 	}
 }
 
@@ -338,7 +406,6 @@ export function readMoof(
 		for (const trun of trafChildren) {
 			if (trun.type !== "trun") continue;
 			requireBody(trun, 8);
-			const version = view.getUint8(trun.body);
 			const flags = view.getUint32(trun.body) & 0xffffff;
 			const count = view.getUint32(trun.body + 4);
 			let cursor = trun.body + 8;
@@ -369,6 +436,7 @@ export function readMoof(
 			) {
 				throw new UnsupportedSource("samples point past the end of the file");
 			}
+			if (video) samples.reserve(count);
 			if (!video && !(flags & TRUN_SIZE)) {
 				// Only the run's length matters here, and with one size for every
 				// sample that is a product: a count of 2^32 costs nothing.
@@ -402,17 +470,16 @@ export function readMoof(
 					cursor += 4;
 				}
 				if (flags & TRUN_COMPOSITION) {
-					composition =
-						version === 0 ? view.getUint32(cursor) : view.getInt32(cursor);
+					composition = view.getInt32(cursor);
 					cursor += 4;
 				}
 				if (video) {
 					samples.firstDts ??= dts;
-					samples.dts.push(dts);
-					samples.offsets.push(composition);
-					samples.sizes.push(size);
-					samples.positions.push(dataAt);
-					samples.sync.push(
+					samples.push(
+						dts,
+						composition,
+						size,
+						dataAt,
 						(sampleFlags & (SAMPLE_NON_SYNC | SAMPLE_DEPENDS_YES)) === 0,
 					);
 					samples.lastDuration = duration;
@@ -812,6 +879,42 @@ export type Provenance = {
 	size: number;
 };
 
+/** A box as its header and the parts of its body, not yet joined. */
+function nest(type: string, ...bodies: Uint8Array[][]) {
+	const parts = bodies.flat();
+	const header = new Uint8Array(8);
+	new DataView(header.buffer).setUint32(
+		0,
+		parts.reduce((total, part) => total + part.byteLength, 8),
+	);
+	header.set(new TextEncoder().encode(type), 4);
+	return [header, ...parts];
+}
+
+/**
+ * [count, value] pairs of the runs of equal `value(index)` over `length`
+ * indexes, counted first so the pairs fill an array of their exact size.
+ */
+function runLengths<T extends Uint32Array | Int32Array>(
+	length: number,
+	value: (index: number) => number,
+	make: (length: number) => T,
+): T {
+	const starts = (index: number) =>
+		index === 0 || value(index) !== value(index - 1);
+	let runs = 0;
+	for (let index = 0; index < length; index++) if (starts(index)) runs++;
+	const pairs = make(runs * 2);
+	for (let index = 0, at = -2; index < length; index++) {
+		if (starts(index)) {
+			at += 2;
+			pairs[at + 1] = value(index);
+		}
+		(pairs[at] as number)++;
+	}
+	return pairs;
+}
+
 /**
  * The prefix for a fragmented source (see the top of this file) and the index
  * the planner uses, with sample offsets counted in the prefixed file.
@@ -827,58 +930,59 @@ export function buildPrefix(
 		// A remux keeps that start with an edit list; not worth matching.
 		throw new UnsupportedSource("video doesn't start at time 0");
 	}
-	const stts: [number, number][] = [];
-	for (let index = 0; index < count; index++) {
-		const delta =
-			index + 1 < count
-				? (samples.dts[index + 1] as number) - (samples.dts[index] as number)
-				: samples.lastDuration;
-		if (delta < 0) throw new UnsupportedSource("decode times go backwards");
-		const last = stts[stts.length - 1];
-		if (last && last[1] === delta) last[0]++;
-		else stts.push([1, delta]);
+	const dts = samples.dts;
+	const offsets = samples.offsets;
+	const positions = samples.positions;
+	const sync = samples.sync;
+	const sizes = samples.sizes.slice();
+	const delta = (index: number) =>
+		index + 1 < count
+			? (dts[index + 1] as number) - (dts[index] as number)
+			: samples.lastDuration;
+	for (let index = 0; index + 1 < count; index++) {
+		if (delta(index) < 0) {
+			throw new UnsupportedSource("decode times go backwards");
+		}
 	}
-	const mediaDuration =
-		(samples.dts[count - 1] as number) + samples.lastDuration;
+	const mediaDuration = (dts[count - 1] as number) + samples.lastDuration;
 	if (mediaDuration / init.timescale > MAX_SOURCE_SECONDS) {
 		throw new UnsupportedSource(
 			`a ${Math.round(mediaDuration / init.timescale)} s video track`,
 		);
 	}
-	let ctts: [number, number][] | null = null;
-	if (samples.offsets.some((offset) => offset !== 0)) {
-		ctts = [];
-		for (const offset of samples.offsets) {
-			const last = ctts[ctts.length - 1];
-			if (last && last[1] === offset) last[0]++;
-			else ctts.push([1, offset]);
-		}
+	const stts = runLengths(count, delta, (length) => new Uint32Array(length));
+	const ctts = offsets.some((offset) => offset !== 0)
+		? runLengths(
+				count,
+				(index) => offsets[index] as number,
+				(length) => new Int32Array(length),
+			)
+		: null;
+	const keyframes = new Uint32Array(sync.reduce((total, at) => total + at, 0));
+	let runCount = 0;
+	let sourceEnd = 0;
+	const continues = (index: number) =>
+		index > 0 &&
+		(positions[index - 1] as number) + (sizes[index - 1] as number) ===
+			positions[index];
+	for (let index = 0, keyframe = 0; index < count; index++) {
+		if (sync[index]) keyframes[keyframe++] = index;
+		if (!continues(index)) runCount++;
+		sourceEnd = Math.max(
+			sourceEnd,
+			(positions[index] as number) + (sizes[index] as number),
+		);
 	}
-	const keyframes: number[] = [];
-	const runs: Run[] = [];
-	for (let index = 0; index < count; index++) {
-		if (samples.sync[index]) keyframes.push(index);
-		const position = samples.positions[index] as number;
-		const last = runs[runs.length - 1];
-		if (
-			last &&
-			(samples.positions[index - 1] as number) +
-				(samples.sizes[index - 1] as number) ===
-				position
-		) {
-			last.count++;
-		} else {
-			runs.push({ first: index, count: 1, offset: position });
-		}
-	}
-	const sizes = Uint32Array.from(samples.sizes);
-	const sourceEnd = samples.positions.reduce(
-		(end, position, index) =>
-			Math.max(end, position + (samples.sizes[index] as number)),
-		0,
-	);
 	if (sourceEnd > provenance.size) {
 		throw new UnsupportedSource("samples point past the end of the file");
+	}
+	const runs = {
+		counts: new Uint32Array(runCount),
+		offsets: new Float64Array(runCount),
+	};
+	for (let index = 0, run = -1; index < count; index++) {
+		if (!continues(index)) runs.offsets[++run] = positions[index] as number;
+		(runs.counts[run] as number)++;
 	}
 
 	const movieTimescale = new DataView(init.reuse.mvhd.buffer).getUint32(
@@ -899,41 +1003,33 @@ export function buildPrefix(
 		"free",
 		new TextEncoder().encode(JSON.stringify(provenance)),
 	);
-	const make = (shift: number) =>
-		box(
+	// The moov is laid out as a list of parts and copied once, into `bytes`:
+	// nesting `box` calls would copy its tables at every level.
+	const stbl = (shift: number) =>
+		sampleTable({ sizes, runs, shift }, init.reuse.stsd, stts, keyframes, ctts);
+	const moov = (table: Uint8Array) =>
+		nest(
 			"moov",
-			patchDuration(init.reuse.mvhd, { v0: 24, v1: 32 }, movieDuration),
-			box(
+			[patchDuration(init.reuse.mvhd, { v0: 24, v1: 32 }, movieDuration)],
+			nest(
 				"trak",
-				patchDuration(init.reuse.tkhd, { v0: 28, v1: 36 }, movieDuration),
-				box(
+				[patchDuration(init.reuse.tkhd, { v0: 28, v1: 36 }, movieDuration)],
+				nest(
 					"mdia",
-					patchDuration(init.reuse.mdhd, { v0: 24, v1: 32 }, mediaDuration),
-					init.reuse.hdlr,
-					box(
-						"minf",
-						init.reuse.mediaHeader,
-						init.reuse.dinf,
-						sampleTable(
-							{
-								sizes,
-								runs: runs.map((run) => ({
-									...run,
-									offset: run.offset + shift,
-								})),
-							},
-							init.reuse.stsd,
-							stts,
-							Uint32Array.from(keyframes),
-							ctts,
-						),
-					),
+					[
+						patchDuration(init.reuse.mdhd, { v0: 24, v1: 32 }, mediaDuration),
+						init.reuse.hdlr,
+					],
+					nest("minf", [init.reuse.mediaHeader, init.reuse.dinf], [table]),
 				),
 			),
 		);
 	// co64 is fixed width, so the moov's size doesn't depend on the shift.
-	const shift = ftyp.byteLength + free.byteLength + make(0).byteLength + 16;
-	const moov = make(shift);
+	const shift =
+		ftyp.byteLength +
+		free.byteLength +
+		moov(stbl(0)).reduce((total, part) => total + part.byteLength, 0) +
+		16;
 	const mdat = new Uint8Array(16);
 	const mdatView = new DataView(mdat.buffer);
 	mdatView.setUint32(0, 1);
@@ -941,7 +1037,7 @@ export function buildPrefix(
 	mdatView.setBigUint64(8, BigInt(16 + provenance.size));
 	const bytes = new Uint8Array(shift);
 	let at = 0;
-	for (const part of [ftyp, free, moov, mdat]) {
+	for (const part of [ftyp, free, ...moov(stbl(shift)), mdat]) {
 		bytes.set(part, at);
 		at += part.byteLength;
 	}
@@ -950,16 +1046,12 @@ export function buildPrefix(
 	const index: TrackIndex = {
 		timescale: init.timescale,
 		times: Float64Array.from(
-			samples.dts,
-			(dts, sample) =>
-				(dts + (samples.offsets[sample] as number)) / init.timescale,
+			dts,
+			(time, sample) => (time + (offsets[sample] as number)) / init.timescale,
 		),
-		offsets: Float64Array.from(
-			samples.positions,
-			(position) => position + shift,
-		),
+		offsets: Float64Array.from(positions, (position) => position + shift),
 		sizes,
-		keyframes: Uint32Array.from(keyframes),
+		keyframes,
 	};
 	return { bytes, index };
 }
@@ -1160,11 +1252,13 @@ export function remuxBlocker(
 	if (samples.offsets.some((offset) => offset !== 0)) {
 		return "presentation and decode times differ";
 	}
+	const dts = samples.dts;
+	const sync = samples.sync;
 	let previous = 0;
 	let keyframes = 0;
 	for (let index = 0; index < samples.count; index++) {
-		if (!samples.sync[index]) continue;
-		const time = (samples.dts[index] as number) / init.timescale;
+		if (!sync[index]) continue;
+		const time = (dts[index] as number) / init.timescale;
 		if (time - previous > MAX_REMUX_KEYFRAME_GAP_SECONDS) {
 			return "keyframes too far apart";
 		}
@@ -1172,7 +1266,7 @@ export function remuxBlocker(
 		keyframes++;
 	}
 	if (keyframes === 0) return "no keyframes";
-	const last = (samples.dts[samples.count - 1] as number) / init.timescale;
+	const last = (dts[samples.count - 1] as number) / init.timescale;
 	if (last - previous > MAX_REMUX_KEYFRAME_GAP_SECONDS) {
 		return "keyframes too far apart";
 	}

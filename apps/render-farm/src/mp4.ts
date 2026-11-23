@@ -518,95 +518,105 @@ export type TrackTable = {
 	runs: Run[];
 };
 
+/** Runs as columns: run `index` is `counts[index]` samples from `offsets[index]`. */
+export type RunColumns = { counts: Uint32Array; offsets: Float64Array };
+
+export function runColumns(runs: Run[]): RunColumns {
+	return {
+		counts: Uint32Array.from(runs, (run) => run.count),
+		offsets: Float64Array.from(runs, (run) => run.offset),
+	};
+}
+
+/** A full box of `bytes` body bytes that `fill` writes. */
+function tableBox(
+	type: string,
+	version: number,
+	bytes: number,
+	fill: (view: DataView) => void,
+) {
+	const body = new Uint8Array(bytes);
+	fill(new DataView(body.buffer));
+	return fullBox(type, version, 0, body);
+}
+
+/**
+ * `stts` and `ctts` are flat [count, value] pairs, and every run offset is
+ * moved by `table.shift`. Tables go straight from typed arrays into their
+ * box: a source can list millions of samples, and a JS value per entry costs
+ * GBs.
+ */
 export function sampleTable(
-	table: TrackTable,
+	table: { sizes: Uint32Array; runs: RunColumns; shift: number },
 	stsd: Uint8Array,
-	stts: [number, number][],
+	stts: Uint32Array,
 	sync: Uint32Array | null,
 	// Negative composition offsets need a v1 ctts box.
-	ctts: [number, number][] | null = null,
+	ctts: Int32Array | null = null,
 ) {
 	const parts: Uint8Array[] = [stsd];
-	parts.push(
-		fullBox(
-			"stts",
-			0,
-			0,
-			build((writer) => {
-				writer.u32(stts.length);
-				for (const [count, delta] of stts) {
-					writer.u32(count);
-					writer.u32(delta);
-				}
-			}),
-		),
-	);
+	const pairs = (
+		type: string,
+		version: number,
+		values: Uint32Array | Int32Array,
+	) =>
+		tableBox(type, version, 4 + values.length * 4, (view) => {
+			view.setUint32(0, values.length / 2);
+			for (let index = 0; index < values.length; index++) {
+				view.setUint32(4 + index * 4, (values[index] as number) >>> 0);
+			}
+		});
+	parts.push(pairs("stts", 0, stts));
 	if (ctts) {
-		parts.push(
-			fullBox(
-				"ctts",
-				ctts.some(([, offset]) => offset < 0) ? 1 : 0,
-				0,
-				build((writer) => {
-					writer.u32(ctts.length);
-					for (const [count, offset] of ctts) {
-						writer.u32(count);
-						writer.u32(offset);
-					}
-				}),
-			),
-		);
+		let negative = false;
+		for (let index = 1; index < ctts.length; index += 2) {
+			if ((ctts[index] as number) < 0) negative = true;
+		}
+		parts.push(pairs("ctts", negative ? 1 : 0, ctts));
 	}
 	if (sync) {
 		parts.push(
-			fullBox(
-				"stss",
-				0,
-				0,
-				build((writer) => {
-					writer.u32(sync.length);
-					for (const sample of sync) writer.u32(sample + 1);
-				}),
-			),
+			tableBox("stss", 0, 4 + sync.length * 4, (view) => {
+				view.setUint32(0, sync.length);
+				sync.forEach((sample, index) => {
+					view.setUint32(4 + index * 4, sample + 1);
+				});
+			}),
 		);
 	}
-	const stsc: [number, number][] = [];
-	table.runs.forEach((run, index) => {
-		const last = stsc[stsc.length - 1];
-		if (!last || last[1] !== run.count) stsc.push([index + 1, run.count]);
-	});
+	const { counts, offsets } = table.runs;
+	let stscEntries = 0;
+	for (let index = 0; index < counts.length; index++) {
+		if (index === 0 || counts[index] !== counts[index - 1]) stscEntries++;
+	}
 	parts.push(
-		fullBox(
-			"stsc",
-			0,
-			0,
-			build((writer) => {
-				writer.u32(stsc.length);
-				for (const [firstChunk, count] of stsc) {
-					writer.u32(firstChunk);
-					writer.u32(count);
-					writer.u32(1);
-				}
-			}),
-		),
+		tableBox("stsc", 0, 4 + stscEntries * 12, (view) => {
+			view.setUint32(0, stscEntries);
+			let at = 4;
+			for (let index = 0; index < counts.length; index++) {
+				if (index > 0 && counts[index] === counts[index - 1]) continue;
+				view.setUint32(at, index + 1);
+				view.setUint32(at + 4, counts[index] as number);
+				view.setUint32(at + 8, 1);
+				at += 12;
+			}
+		}),
 	);
-	const sampleSizes = new Uint8Array(8 + table.sizes.length * 4);
-	const sampleSizesView = new DataView(sampleSizes.buffer);
-	sampleSizesView.setUint32(4, table.sizes.length);
-	table.sizes.forEach((size, index) => {
-		sampleSizesView.setUint32(8 + index * 4, size);
-	});
-	parts.push(fullBox("stsz", 0, 0, sampleSizes));
 	parts.push(
-		fullBox(
-			"co64",
-			0,
-			0,
-			build((writer) => {
-				writer.u32(table.runs.length);
-				for (const run of table.runs) writer.u64(run.offset);
-			}),
-		),
+		tableBox("stsz", 0, 8 + table.sizes.length * 4, (view) => {
+			view.setUint32(4, table.sizes.length);
+			table.sizes.forEach((size, index) => {
+				view.setUint32(8 + index * 4, size);
+			});
+		}),
+	);
+	parts.push(
+		tableBox("co64", 0, 4 + offsets.length * 8, (view) => {
+			view.setUint32(0, offsets.length);
+			offsets.forEach((offset, index) => {
+				view.setBigUint64(4 + index * 8, BigInt(offset + table.shift));
+			});
+		}),
 	);
 	return box("stbl", ...parts);
 }
@@ -757,9 +767,9 @@ export function buildHeader(input: HeaderInput) {
 	const videoDuration = frameCount * 1000;
 	const durationMs = Math.round((frameCount / input.fps) * 1000);
 
+	const videoRuns = runColumns(input.video.runs);
+	const audioRuns = input.audio && runColumns(input.audio.runs);
 	const make = (headerSize: number) => {
-		const rebase = (runs: Run[]) =>
-			runs.map((run) => ({ ...run, offset: run.offset + headerSize }));
 		const ftyp = box(
 			"ftyp",
 			build((writer) => {
@@ -797,7 +807,7 @@ export function buildHeader(input: HeaderInput) {
 					fullBox("vmhd", 0, 1, new Uint8Array(8)),
 					dinf(),
 					sampleTable(
-						{ sizes: input.video.sizes, runs: rebase(input.video.runs) },
+						{ sizes: input.video.sizes, runs: videoRuns, shift: headerSize },
 						fullBox(
 							"stsd",
 							0,
@@ -805,7 +815,7 @@ export function buildHeader(input: HeaderInput) {
 							build((writer) => writer.u32(1)),
 							avc1(input.width, input.height, input.video.avcC),
 						),
-						[[frameCount, 1000]],
+						Uint32Array.of(frameCount, 1000),
 						input.video.keyframes,
 					),
 				),
@@ -813,7 +823,7 @@ export function buildHeader(input: HeaderInput) {
 		);
 
 		const tracks = [videoTrak];
-		if (input.audio) {
+		if (input.audio && audioRuns) {
 			const audio = input.audio;
 			const packets = audio.sizes.length;
 			const mediaDuration = packets * 1024;
@@ -848,7 +858,7 @@ export function buildHeader(input: HeaderInput) {
 							fullBox("smhd", 0, 0, new Uint8Array(4)),
 							dinf(),
 							sampleTable(
-								{ sizes: audio.sizes, runs: rebase(audio.runs) },
+								{ sizes: audio.sizes, runs: audioRuns, shift: headerSize },
 								fullBox(
 									"stsd",
 									0,
@@ -856,7 +866,7 @@ export function buildHeader(input: HeaderInput) {
 									build((writer) => writer.u32(1)),
 									mp4a(audio.asc),
 								),
-								[[packets, 1024]],
+								Uint32Array.of(packets, 1024),
 								null,
 							),
 						),
