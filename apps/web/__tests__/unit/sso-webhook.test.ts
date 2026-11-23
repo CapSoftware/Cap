@@ -46,6 +46,7 @@ import {
 	STRIPE_SAML_SSO_LEGACY_PRICE_ID,
 	STRIPE_SAML_SSO_PRICE_ID,
 	STRIPE_SAML_SSO_PRODUCT_ID,
+	STRIPE_SCIM_PRICE_ID,
 } from "@cap/utils";
 import { POST } from "@/app/api/webhooks/stripe/route";
 
@@ -99,6 +100,56 @@ describe("organization-scoped SAML SSO webhooks", () => {
 		}
 		expectProUntouched();
 	});
+
+	it.each([
+		"customer.subscription.created",
+		"customer.subscription.updated",
+		"customer.subscription.deleted",
+	])(
+		"acknowledges standalone SCIM %s without touching Pro or SSO",
+		async (eventType) => {
+			const response = await deliver(eventType, {
+				...subscription(STRIPE_SCIM_PRICE_ID),
+				id: "sub_scim",
+			});
+			expect(response.status).toBe(200);
+			expect(mocks.syncSsoSubscription).not.toHaveBeenCalled();
+			expectProUntouched();
+		},
+	);
+
+	it("acknowledges a checkout whose subscription is standalone SCIM", async () => {
+		mocks.retrieveSubscription.mockResolvedValue({
+			...subscription(STRIPE_SCIM_PRICE_ID),
+			id: "sub_scim",
+		});
+		const response = await deliver("checkout.session.completed", {
+			id: "cs_scim",
+			customer: "cus_owner",
+			subscription: "sub_scim",
+			metadata: {},
+			payment_status: "paid",
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.attachSsoCheckout).not.toHaveBeenCalled();
+		expectProUntouched();
+	});
+
+	it.each(["invoice.paid", "invoice.payment_failed"])(
+		"acknowledges a standalone SCIM %s without Pro dunning",
+		async (eventType) => {
+			const response = await deliver(eventType, {
+				id: "in_scim",
+				subscription: "sub_scim",
+				customer: "cus_owner",
+				subscription_details: { metadata: {} },
+				lines: { data: [{ price: { id: STRIPE_SCIM_PRICE_ID } }] },
+			});
+			expect(response.status).toBe(200);
+			expect(mocks.syncSsoSubscription).not.toHaveBeenCalled();
+			expectProUntouched();
+		},
+	);
 
 	it("isolates an SSO product even when its price is not approved for access", async () => {
 		const response = await deliver("customer.subscription.updated", {

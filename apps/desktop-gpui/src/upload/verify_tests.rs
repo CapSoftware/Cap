@@ -193,6 +193,7 @@ struct Multipart {
 
 #[derive(Default)]
 struct MockState {
+    api_key: Option<&'static str>,
     rules: Vec<Rule>,
     requests: Vec<(String, String, u16, Duration)>,
     epoch: Option<tokio::time::Instant>,
@@ -208,7 +209,10 @@ struct MockState {
     confirmations: Vec<Value>,
     deletes: u32,
     created: Vec<String>,
+    created_orgs: Vec<Option<String>>,
     deleted: Vec<String>,
+    deleted_on_web: Vec<String>,
+    delete_on_completion: Vec<String>,
     problems: Vec<String>,
 }
 
@@ -443,8 +447,26 @@ impl MockCap {
         self.lock().created.clone()
     }
 
+    #[cfg(target_os = "macos")]
+    pub(super) fn created_orgs(&self) -> Vec<Option<String>> {
+        self.lock().created_orgs.clone()
+    }
+
     pub(super) fn deleted(&self) -> Vec<String> {
         self.lock().deleted.clone()
+    }
+
+    /// Deletes the cap on the web, as its owner can at any time: the server
+    /// then answers its upload URL and completion calls with 404 "Video not
+    /// found".
+    pub(super) fn delete_on_web(&self, video_id: &str) {
+        self.lock().deleted_on_web.push(video_id.to_string());
+    }
+
+    /// Deletes the cap on the web just before its first completion call, after
+    /// every upload URL was issued and the media uploaded.
+    pub(super) fn delete_on_web_before_completion(&self, video_id: &str) {
+        self.lock().delete_on_completion.push(video_id.to_string());
     }
 
     pub(super) fn deletes(&self) -> u32 {
@@ -778,7 +800,7 @@ impl Server {
         }
 
         if head.headers.get("authorization").map(String::as_str)
-            != Some(format!("Bearer {API_KEY}").as_str())
+            != Some(format!("Bearer {}", state.api_key.unwrap_or(API_KEY)).as_str())
         {
             state
                 .problems
@@ -815,6 +837,7 @@ impl Server {
                     format!("verifyvideo{:04}", state.next_id)
                 });
                 state.created.push(id.clone());
+                state.created_orgs.push(query.get("orgId").cloned());
                 reply(200, json!({ "id": id }))
             }
             ("POST", "/api/upload/multipart/initiate") => {
@@ -899,6 +922,9 @@ impl Server {
                 reply(200, json!({ "success": true }))
             }
             ("POST", "/api/upload/signed") => {
+                if state.deleted_on_web.contains(&text(&request, "videoId")) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
                 let url = format!(
                     "{}/s3/{}/{}",
                     self.url,
@@ -912,6 +938,9 @@ impl Server {
             }
             ("POST", "/api/upload/signed/batch") => {
                 let video_id = text(&request, "videoId");
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
                 let urls = request
                     .get("subpaths")
                     .and_then(Value::as_array)
@@ -929,8 +958,16 @@ impl Server {
             }
             ("POST", "/api/recording/prepare") => reply(404, json!({ "error": "not found" })),
             ("POST", "/api/upload/recording-complete") => {
-                state.confirmations.push(request.clone());
                 let video_id = text(&request, "videoId");
+                if state.delete_on_completion.contains(&video_id)
+                    && !state.deleted_on_web.contains(&video_id)
+                {
+                    state.deleted_on_web.push(video_id.clone());
+                }
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
+                state.confirmations.push(request.clone());
                 let Some(verification) = request.get("verification") else {
                     return reply(200, json!({ "success": true }));
                 };
@@ -1400,6 +1437,110 @@ fn studio_share_clean() {
             assert_eq!(mock.count("PUT", "/s3mp/"), 6);
         },
     );
+}
+
+#[test]
+fn studio_share_stops_when_the_server_changes_before_video_creation() {
+    ffmpeg::init().unwrap();
+    let scratch = Scratch::new("studio_share_server_change");
+    virtual_time(async {
+        let original = MockCap::start(Vec::new()).await;
+        let other = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&original.url);
+        let project = studio_project(&scratch.0);
+        let result = upload_exported_video(
+            project.clone(),
+            None,
+            |progress| {
+                if progress == 0.0 {
+                    assert!(crate::store::set_store_setting(
+                        "general_settings",
+                        "serverUrl",
+                        json!(other.url),
+                    ));
+                }
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+        assert_eq!(other.stats().requests, 0, "share reached the new server");
+        assert_eq!(result, Ok(UploadResult::NotAuthenticated));
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        assert!(meta.sharing.is_none());
+        assert!(meta.upload.is_none());
+        assert_eq!(original.stats().requests, 0);
+    });
+}
+
+#[test]
+fn studio_share_stops_when_the_account_changes_after_a_part() {
+    ffmpeg::init().unwrap();
+    let scratch = Scratch::new("studio_share_account_change");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let project = studio_project(&scratch.0);
+        let result = upload_exported_video(
+            project.clone(),
+            None,
+            |progress| {
+                if progress > 0.0 {
+                    let mut auth = crate::store::store_section("auth");
+                    auth.insert("user_id".into(), json!("other-owner"));
+                    assert!(crate::store::set_auth(Some(Value::Object(auth))));
+                }
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+        let error = result.expect_err("share continued with another account");
+        assert!(error.contains("not authenticated"), "{error}");
+        assert_eq!(mock.count("PUT", "/s3mp/"), 1);
+        assert_eq!(mock.count("POST", "multipart/presign-part"), 1);
+        assert_eq!(mock.count("POST", "multipart/complete"), 0);
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        assert!(meta.sharing.is_none());
+        assert!(matches!(
+            meta.upload,
+            Some(UploadMeta::SinglePartUpload { .. })
+        ));
+        assert_eq!(
+            crate::store::store_section("auth")["user_id"],
+            "other-owner"
+        );
+    });
+}
+
+#[test]
+fn studio_share_continues_when_the_same_account_refreshes_its_token() {
+    ffmpeg::init().unwrap();
+    let scratch = Scratch::new("studio_share_token_refresh");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let project = studio_project(&scratch.0);
+        let result = upload_exported_video(
+            project.clone(),
+            None,
+            |progress| {
+                if progress > 0.0 {
+                    let mut auth = crate::store::store_section("auth");
+                    auth.insert("secret".into(), json!({ "api_key": "refreshed-key" }));
+                    assert!(crate::store::set_auth(Some(Value::Object(auth))));
+                    mock.lock().api_key = Some("refreshed-key");
+                }
+            },
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+        assert!(matches!(result, Ok(UploadResult::Success(_))));
+        assert_eq!(mock.count("PUT", "/s3mp/"), 6);
+        assert_eq!(mock.count("POST", "multipart/complete"), 1);
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        assert!(meta.sharing.is_some());
+        assert!(matches!(meta.upload, Some(UploadMeta::Complete)));
+        mock.assert_clean();
+    });
 }
 
 #[test]

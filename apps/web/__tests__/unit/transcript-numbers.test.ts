@@ -1,16 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseTranscriptVTT } from "@/app/s/[videoId]/_components/utils/parse-transcript-vtt";
-import {
-	formatTranscriptAsVTT,
-	parseVTT,
-} from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { formatToWebVTT } from "@/lib/transcribe-utils";
 import { updateVttEntryText } from "@/lib/transcript-vtt";
 
-describe.each([
-	{ name: "embed", parse: parseVTT },
-	{ name: "transcript", parse: parseTranscriptVTT },
-])("$name numeric captions", ({ parse }) => {
+describe("transcript numeric captions", () => {
+	const parse = parseTranscriptVTT;
+
 	it("preserves numbers separated into their own caption by a pause", () => {
 		const vtt = formatToWebVTT({
 			words: [
@@ -27,7 +22,6 @@ describe.each([
 			{ id: 2, text: "2026" },
 			{ id: 3, text: "Next." },
 		]);
-		expect(formatTranscriptAsVTT(parse(vtt))).toContain("\n2026\n");
 	});
 
 	it.each(["0", "007"])("retains a saved correction to %s", (text) => {

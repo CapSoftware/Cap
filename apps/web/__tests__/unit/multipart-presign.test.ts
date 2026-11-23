@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 	complete: vi.fn(),
 	create: vi.fn(),
 	abort: vi.fn(),
+	copy: vi.fn(),
 }));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ NEXTAUTH_SECRET: "test-reupload-secret" }),
@@ -167,7 +168,10 @@ describe("desktop reupload completion", () => {
 	const oldKey = "owner/video/.recording/outputs/original/result.mp4";
 	let events: string[];
 	let updates: Record<string, unknown>[];
-	let objects: Map<string, { ETag: string; ContentLength: number }>;
+	let objects: Map<
+		string,
+		{ ETag: string; ContentLength: number; ContentType?: string }
+	>;
 	let video: {
 		id: Video.VideoId;
 		ownerId: User.UserId;
@@ -309,10 +313,12 @@ describe("desktop reupload completion", () => {
 						getPresignedUploadPartUrl: mocks.sign,
 					},
 					headObject: (key: string) => Effect.suspend(() => mocks.head(key)),
-					copyObject: () =>
-						Effect.succeed({ CopyObjectResult: { ETag: "new-video" } }),
+					copyObject: (...args: unknown[]) => mocks.copy(...args),
 				},
 			]),
+		);
+		mocks.copy.mockReturnValue(
+			Effect.succeed({ CopyObjectResult: { ETag: "new-video" } }),
 		);
 		mocks.sign.mockReturnValue(Effect.succeed("https://uploads.example/part"));
 		mocks.prepareReplacement.mockImplementation(
@@ -610,6 +616,87 @@ describe("desktop reupload completion", () => {
 		expect(objects.get(oldKey)?.ETag).toBe("original");
 		expect(mocks.complete).toHaveBeenCalledTimes(1);
 	});
+	it.each([
+		["raw-upload.html", "text/html", "application/octet-stream"],
+		["raw-upload.mp4", "text/html; charset=utf-8", "application/octet-stream"],
+		["raw-upload.svg", "image/svg+xml", "application/octet-stream"],
+		["raw-upload.xhtml", "application/xhtml+xml", "application/octet-stream"],
+		[
+			"raw-upload.webm",
+			"video/webm;codecs=vp9,opus",
+			"video/webm;codecs=vp9,opus",
+		],
+		["raw-upload.m4a", "audio/mp4", "audio/mp4"],
+		["screenshot/screen-capture.png", "image/png", "image/png"],
+	])(
+		"stores a %s upload sent as %s with content type %s",
+		async (subpath, contentType, stored) => {
+			const response = await app.request("/initiate", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ videoId: "video", subpath, contentType }),
+			});
+			expect(response.status).toBe(200);
+			expect(mocks.create).toHaveBeenCalledWith(
+				`owner/video/${subpath}`,
+				expect.objectContaining({ ContentType: stored }),
+			);
+		},
+	);
+
+	it.each([
+		["page.html", "application/octet-stream", "application/octet-stream"],
+		["result.mp4", "application/octet-stream", "video/mp4"],
+		["result.mp4", "video/mp4", "video/mp4"],
+	])(
+		"completes a %s upload stored as %s with content type %s",
+		async (subpath, storedType, completedType) => {
+			mocks.complete.mockImplementation((key: string) =>
+				Effect.sync(() => {
+					objects.set(key, {
+						ETag: "upload",
+						ContentLength: 100,
+						ContentType: storedType,
+					});
+					return { ETag: "upload" };
+				}),
+			);
+			const response = await app.request("/complete", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoId: "video",
+					uploadId: "backend-upload",
+					subpath,
+					parts: [{ partNumber: 1, etag: "part", size: 100 }],
+				}),
+			});
+			expect(response.status).toBe(200);
+			expect(mocks.copy).toHaveBeenCalledWith(
+				expect.any(String),
+				`owner/video/${subpath}`,
+				expect.objectContaining({ ContentType: completedType }),
+			);
+		},
+	);
+
+	it("stores a replacement upload sent as a web page as plain bytes", async () => {
+		const response = await app.request("/initiate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				contentType: "text/html",
+				replaceExisting: true,
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.create).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({ ContentType: "application/octet-stream" }),
+		);
+	});
+
 	it("signs only the authenticated replacement key and backend session", async () => {
 		const response = await app.request("/presign-part", {
 			method: "POST",

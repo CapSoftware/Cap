@@ -96,10 +96,41 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 					)
 					.pipe(Effect.map(Array.get(0))),
 
-			getById: (spaceId: Space.SpaceIdOrOrganisationId) =>
+			creatorWithOrganizationAccess: (
+				userId: User.UserId,
+				spaceId: Space.SpaceIdOrOrganisationId,
+			) =>
 				db
 					.use((db) =>
-						db.select().from(Db.spaces).where(Dz.eq(Db.spaces.id, spaceId)),
+						db
+							.select({ id: Db.spaces.id })
+							.from(Db.spaces)
+							.innerJoin(
+								Db.organizations,
+								Dz.eq(Db.organizations.id, Db.spaces.organizationId),
+							)
+							.leftJoin(
+								Db.organizationMembers,
+								Dz.and(
+									Dz.eq(
+										Db.organizationMembers.organizationId,
+										Db.spaces.organizationId,
+									),
+									Dz.eq(Db.organizationMembers.userId, userId),
+								),
+							)
+							.where(
+								Dz.and(
+									Dz.eq(Db.spaces.id, spaceId),
+									Dz.eq(Db.spaces.createdById, userId),
+									Dz.isNull(Db.organizations.tombstoneAt),
+									Dz.or(
+										Dz.eq(Db.organizations.ownerId, userId),
+										Dz.isNotNull(Db.organizationMembers.id),
+									),
+								),
+							)
+							.limit(1),
 					)
 					.pipe(Effect.map(Array.get(0))),
 		};

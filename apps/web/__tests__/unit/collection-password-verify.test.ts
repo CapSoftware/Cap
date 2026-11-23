@@ -97,15 +97,18 @@ describe("verifyCollectionPassword attempt limits", () => {
 	it("stops verifying one collection after many attempts across clients", async () => {
 		const verifyCollectionPassword = await loadAction();
 
-		for (let client = 0; client < 10; client++) {
+		for (let client = 0; client < 11; client++) {
 			fromIp(`198.51.100.${client}`);
 			for (let attempt = 0; attempt < 20; attempt++) {
 				await verifyCollectionPassword("collection-1", "nope");
 			}
 		}
-		mocks.verifyPassword.mockClear();
 
 		fromIp("192.0.2.200");
+		expect(await verifyCollectionPassword("collection-1", "nope")).toEqual(
+			WRONG,
+		);
+		mocks.verifyPassword.mockClear();
 		expect(
 			await verifyCollectionPassword("collection-1", "collection-1-secret"),
 		).toEqual(TOO_MANY);
@@ -123,7 +126,7 @@ describe("verifyCollectionPassword attempt limits", () => {
 		);
 		const verifyCollectionPassword = await loadAction();
 
-		for (let client = 0; client < 10; client++) {
+		for (let client = 0; client < 11; client++) {
 			fromIp(`198.51.100.${client}`);
 			for (let attempt = 0; attempt < 20; attempt++) {
 				await verifyCollectionPassword(
@@ -132,13 +135,35 @@ describe("verifyCollectionPassword attempt limits", () => {
 				);
 			}
 		}
-		mocks.verifyPassword.mockClear();
 
 		fromIp("192.0.2.200");
+		expect(await verifyCollectionPassword("Collection-1", "nope")).toEqual(
+			WRONG,
+		);
+		mocks.verifyPassword.mockClear();
 		expect(
 			await verifyCollectionPassword("Collection-1", "collection-1-secret"),
 		).toEqual(TOO_MANY);
 		expect(mocks.verifyPassword).not.toHaveBeenCalled();
+	});
+
+	it("still verifies a new visitor's password after many attempts across clients", async () => {
+		const verifyCollectionPassword = await loadAction();
+
+		for (let client = 0; client < 11; client++) {
+			fromIp(`198.51.100.${client}`);
+			for (let attempt = 0; attempt < 20; attempt++) {
+				await verifyCollectionPassword("collection-1", "nope");
+			}
+		}
+
+		fromIp("192.0.2.200");
+		expect(
+			await verifyCollectionPassword("collection-1", "collection-1-secret"),
+		).toEqual(VERIFIED);
+		expect(mocks.setVerifiedPasswordCookie).toHaveBeenCalledWith(
+			"hash:collection-1-secret",
+		);
 	});
 
 	it("rejects ids outside the id alphabet before any lookup", async () => {

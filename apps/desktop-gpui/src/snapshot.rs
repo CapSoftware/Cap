@@ -10,6 +10,7 @@ use gpui::App;
 
 pub fn arm_from_env(cx: &mut App) {
     crate::permission_guide::preview_from_env(cx);
+    crate::permission_help::preview_from_env(cx);
     let Ok(spec) = std::env::var("CAP_GPUI_SNAPSHOT") else {
         return;
     };

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DownloadTooLargeError,
 	downloadUrlToPathParallel,
 	parallelDownloadOptionsFromEnv,
 	planRanges,
@@ -14,6 +15,10 @@ const payload = randomBytes(5 * MB + 12345);
 let dir: string;
 let server: ReturnType<typeof Bun.serve>;
 let rangeRequests = 0;
+// Range requests from the abort test only. A download that failed in an earlier
+// test can still have requests reach the server after it rejects, so the shared
+// count above is not safe to compare across tests.
+let abortedRangeRequests = 0;
 
 beforeAll(async () => {
 	dir = await mkdtemp(join(tmpdir(), "parallel-download-"));
@@ -26,6 +31,7 @@ beforeAll(async () => {
 				return new Response(payload, { headers: { ETag: '"v1"' } });
 			}
 			rangeRequests++;
+			if (url.searchParams.has("aborted")) abortedRangeRequests++;
 			if (url.pathname === "/no-total" || url.pathname === "/capped") {
 				const end =
 					url.pathname === "/capped" ? 64 * 1024 - 1 : Number(range[2]);
@@ -135,6 +141,28 @@ describe("parallel download", () => {
 		);
 		expect(result.ranged).toBe(true);
 		expect(result.parts).toBe(6);
+		expect(Buffer.compare(await readFile(path), payload)).toBe(0);
+	});
+
+	test("stops at the byte cap, ranged or streamed", async () => {
+		for (const [name, concurrency] of [
+			["file", 4],
+			["plain", 1],
+		] as const) {
+			await expect(
+				downloadUrlToPathParallel(
+					`http://localhost:${server.port}/${name}`,
+					join(dir, `capped-${name}.bin`),
+					{ concurrency, partBytes: MB, maxBytes: 2 * MB },
+				),
+			).rejects.toBeInstanceOf(DownloadTooLargeError);
+		}
+		const path = join(dir, "under-cap.bin");
+		await downloadUrlToPathParallel(
+			`http://localhost:${server.port}/file`,
+			path,
+			{ concurrency: 4, partBytes: MB, maxBytes: payload.length },
+		);
 		expect(Buffer.compare(await readFile(path), payload)).toBe(0);
 	});
 
@@ -296,14 +324,13 @@ describe("parallel download", () => {
 	test("stops on abort", async () => {
 		const controller = new AbortController();
 		controller.abort();
-		const before = rangeRequests;
 		await expect(
 			downloadUrlToPathParallel(
-				`http://localhost:${server.port}/file`,
+				`http://localhost:${server.port}/file?aborted`,
 				join(dir, "aborted.bin"),
 				{ concurrency: 4, partBytes: MB, signal: controller.signal },
 			),
 		).rejects.toThrow();
-		expect(rangeRequests).toBe(before);
+		expect(abortedRangeRequests).toBe(0);
 	});
 });

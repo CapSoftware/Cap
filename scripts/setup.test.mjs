@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import {
 	copyFileSync,
@@ -16,9 +17,43 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { crc32 } from "node:zlib";
 
 const execFile = promisify(execFileCallback);
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+
+// A stored (uncompressed) zip, so the fixture needs no zip tool.
+function zipArchive(name, contents) {
+	const fileName = Buffer.from(name);
+	const data = Buffer.from(contents);
+	const header = (signature, size) => {
+		const buffer = Buffer.alloc(size);
+		buffer.writeUInt32LE(signature, 0);
+		return buffer;
+	};
+	const local = header(0x04034b50, 30);
+	local.writeUInt16LE(20, 4);
+	local.writeUInt16LE(0x21, 12);
+	local.writeUInt32LE(crc32(data), 14);
+	local.writeUInt32LE(data.length, 18);
+	local.writeUInt32LE(data.length, 22);
+	local.writeUInt16LE(fileName.length, 26);
+	const central = header(0x02014b50, 46);
+	central.writeUInt16LE(20, 4);
+	central.writeUInt16LE(20, 6);
+	central.writeUInt16LE(0x21, 14);
+	central.writeUInt32LE(crc32(data), 16);
+	central.writeUInt32LE(data.length, 20);
+	central.writeUInt32LE(data.length, 24);
+	central.writeUInt16LE(fileName.length, 28);
+	const centralOffset = local.length + fileName.length + data.length;
+	const end = header(0x06054b50, 22);
+	end.writeUInt16LE(1, 8);
+	end.writeUInt16LE(1, 10);
+	end.writeUInt32LE(central.length + fileName.length, 12);
+	end.writeUInt32LE(centralOffset, 16);
+	return Buffer.concat([local, fileName, data, central, fileName, end]);
+}
 
 test(
 	"setup retries failed downloads without poisoning the archive cache",
@@ -40,30 +75,48 @@ test(
 			copyFileSync(path.join(repositoryRoot, file), destination);
 		}
 
+		const setupPath = path.join(fixture, "scripts/setup.js");
+		const setupSource = readFileSync(setupPath, "utf8");
+		const onnxVersion = setupSource.match(
+			/const ONNX_RUNTIME_VERSION = "([^"]+)"/,
+		)[1];
+		const pinnedHash = setupSource.match(
+			new RegExp(`"${onnxVersion.replaceAll(".", "\\.")}": "([0-9a-f]{64})"`),
+		)[1];
+
 		const nativeName = "native-deps-x86_64-linux-gnu.tar.xz";
-		const onnxName = "onnxruntime-linux-x64-1.24.3.tgz";
+		const onnxId = `microsoft.ml.onnxruntime.${onnxVersion}`;
 		const nativeUrl = `/spacedriveapp/native-deps/releases/download/v0.26/${nativeName}`;
-		const onnxUrl = `/microsoft/onnxruntime/releases/download/v1.24.3/${onnxName}`;
+		const onnxUrl = `/v3-flatcontainer/microsoft.ml.onnxruntime/${onnxVersion}/${onnxId}.nupkg`;
 		const nativeLibrary = "synthetic native library\n";
 		const onnxLibrary = "synthetic ONNX library\n";
 		const archives = new Map();
-		for (const [url, entry, contents] of [
-			[nativeUrl, "lib/libavcodec.so.61", nativeLibrary],
-			[onnxUrl, `${onnxName.slice(0, -4)}/lib/libonnxruntime.so`, onnxLibrary],
-		]) {
-			const archive = path.join(fixture, "assets", path.basename(url));
+		{
+			const archive = path.join(fixture, "assets", nativeName);
 			const directory = `${archive}.contents`;
-			mkdirSync(path.dirname(path.join(directory, entry)), { recursive: true });
-			writeFileSync(path.join(directory, entry), contents);
-			await execFile(
-				"tar",
-				[url.endsWith(".xz") ? "-cJf" : "-czf", archive, "-C", directory, "."],
-				{ signal: t.signal },
+			mkdirSync(path.join(directory, "lib"), { recursive: true });
+			writeFileSync(
+				path.join(directory, "lib/libavcodec.so.61"),
+				nativeLibrary,
 			);
-			archives.set(url, readFileSync(archive));
+			await execFile("tar", ["-cJf", archive, "-C", directory, "."], {
+				signal: t.signal,
+			});
+			archives.set(nativeUrl, readFileSync(archive));
 		}
+		archives.set(
+			onnxUrl,
+			zipArchive("runtimes/linux-x64/native/libonnxruntime.so", onnxLibrary),
+		);
+		// The synthetic package stands in for Microsoft's, so pin its hash in
+		// this fixture's copy of setup.js.
+		const onnxHash = createHash("sha256")
+			.update(archives.get(onnxUrl))
+			.digest("hex");
+		writeFileSync(setupPath, setupSource.replaceAll(pinnedHash, onnxHash));
 
 		let failNative = true;
+		let tamperOnnx = false;
 		let networkFailures = 0;
 		const requests = [];
 		const server = createServer((request, response) => {
@@ -79,7 +132,9 @@ test(
 			}
 			const archive = archives.get(request.url);
 			response.writeHead(archive ? 200 : 404);
-			response.end(archive ?? "Unexpected setup download");
+			if (archive && tamperOnnx && request.url === onnxUrl)
+				response.end(Buffer.concat([archive, Buffer.from("tampered")]));
+			else response.end(archive ?? "Unexpected setup download");
 		});
 		server.listen(0, "127.0.0.1");
 		await once(server, "listening");
@@ -94,7 +149,7 @@ test(
 			`const networkFetch = globalThis.fetch;
 globalThis.fetch = (input, options) => {
 	const url = new URL(input);
-	if (url.origin !== "https://github.com")
+	if (!["https://github.com", "https://api.nuget.org"].includes(url.origin))
 		throw new Error(\`Unexpected external request: \${url}\`);
 	return networkFetch(new URL(url.pathname, ${JSON.stringify(origin)}), options);
 };
@@ -186,5 +241,35 @@ globalThis.fetch = (input, options) => {
 				/ORT_DYLIB_PATH = .*native-deps\/onnxruntime\/lib\/libonnxruntime\.so/,
 			);
 		}
+
+		const onnxCache = path.join(fixture, "target", `${onnxId}.zip`);
+		const onnxOutput = path.join(fixture, "target/native-deps/onnxruntime");
+		rmSync(onnxCache);
+		rmSync(onnxOutput, { recursive: true });
+		tamperOnnx = true;
+		requests.length = 0;
+		const tampered = await runSetup();
+		assert.equal(tampered.code, 1, tampered.stderr);
+		assert.deepEqual(requests, [onnxUrl]);
+		assert.match(tampered.stderr, /SHA-256 mismatch/);
+		assert.equal(
+			existsSync(onnxCache),
+			false,
+			"a package with the wrong hash must not be cached",
+		);
+		assert.equal(
+			existsSync(path.join(onnxOutput, "lib/libonnxruntime.so")),
+			false,
+		);
+
+		tamperOnnx = false;
+		requests.length = 0;
+		const verified = await runSetup();
+		assert.equal(verified.code, 0, verified.stderr);
+		assert.deepEqual(requests, [onnxUrl]);
+		assert.equal(
+			readFileSync(path.join(onnxOutput, "lib/libonnxruntime.so"), "utf8"),
+			onnxLibrary,
+		);
 	},
 );
