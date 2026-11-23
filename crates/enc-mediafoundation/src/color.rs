@@ -12,8 +12,8 @@ const NOMINAL_FULL: u32 = 2;
 const SD_SHORT_SIDE: u32 = 576;
 const MF_VIDEO_TRANSFER_MATRIX_BT709: u32 = 1;
 const MF_VIDEO_TRANSFER_MATRIX_BT601: u32 = 2;
-const MF_NOMINAL_RANGE_16_235: u32 = 1;
-const MF_NOMINAL_RANGE_0_255: u32 = 2;
+const MF_NOMINAL_RANGE_0_255: u32 = 1;
+const MF_NOMINAL_RANGE_16_235: u32 = 2;
 const MF_NOMINAL_RANGE_48_208: u32 = 3;
 const MF_NOMINAL_RANGE_64_127: u32 = 4;
 
@@ -400,9 +400,10 @@ fn fixed_16(row: [i32; 3], r: i32, g: i32, b: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColorTag, InputColorSpace, ProcessorColorWords, TagProbe, YuvMatrix,
-        accepted_after_two_passes, bt709_limited_yuv, color_tag_report, format_tag_list,
-        probe_color_tags, resolved_processor_words,
+        ColorTag, InputColorSpace, MF_NOMINAL_RANGE_0_255, MF_NOMINAL_RANGE_16_235,
+        MF_VIDEO_TRANSFER_MATRIX_BT601, MF_VIDEO_TRANSFER_MATRIX_BT709, ProcessorColorWords,
+        TagProbe, YuvMatrix, accepted_after_two_passes, bt709_limited_yuv, color_tag_report,
+        format_tag_list, probe_color_tags, resolved_processor_words,
     };
 
     fn fields(word: u32) -> (u32, u32, u32, u32) {
@@ -434,8 +435,19 @@ mod tests {
     }
 
     #[test]
+    fn mf_nominal_range_names_match_the_media_foundation_enum() {
+        assert_eq!(MF_NOMINAL_RANGE_0_255, 1);
+        assert_eq!(MF_NOMINAL_RANGE_16_235, 2);
+        assert_eq!(MF_VIDEO_TRANSFER_MATRIX_BT709, 1);
+        assert_eq!(MF_VIDEO_TRANSFER_MATRIX_BT601, 2);
+    }
+
+    #[test]
     fn explicit_bt601_hd_yuv_converts_to_bt709() {
-        let source = InputColorSpace::from_media_type(Some(2), Some(1));
+        let source = InputColorSpace::from_media_type(
+            Some(MF_VIDEO_TRANSFER_MATRIX_BT601),
+            Some(MF_NOMINAL_RANGE_16_235),
+        );
         assert_eq!(source.matrix, Some(YuvMatrix::Bt601));
         assert_eq!(source.full_range, Some(false));
         assert_eq!(words(false, 1280, 720, source), (21, 17));
@@ -444,21 +456,34 @@ mod tests {
 
     #[test]
     fn explicit_bt709_yuv_stays_bt709() {
-        let source = InputColorSpace::from_media_type(Some(1), Some(1));
+        let source = InputColorSpace::from_media_type(
+            Some(MF_VIDEO_TRANSFER_MATRIX_BT709),
+            Some(MF_NOMINAL_RANGE_16_235),
+        );
         assert_eq!(source.matrix, Some(YuvMatrix::Bt709));
+        assert_eq!(source.full_range, Some(false));
         assert_eq!(words(false, 1280, 720, source), (21, 21));
         assert_eq!(words(false, 1920, 1080, source), (21, 21));
     }
 
     #[test]
     fn explicit_nominal_range_selects_full_or_studio() {
-        let full = InputColorSpace::from_media_type(Some(1), Some(2));
-        let studio = InputColorSpace::from_media_type(Some(1), Some(1));
+        let full = InputColorSpace::from_media_type(
+            Some(MF_VIDEO_TRANSFER_MATRIX_BT709),
+            Some(MF_NOMINAL_RANGE_0_255),
+        );
+        let studio = InputColorSpace::from_media_type(
+            Some(MF_VIDEO_TRANSFER_MATRIX_BT709),
+            Some(MF_NOMINAL_RANGE_16_235),
+        );
         assert_eq!(full.full_range, Some(true));
         assert_eq!(studio.full_range, Some(false));
         assert_eq!(words(false, 1920, 1080, full), (21, 37));
         assert_eq!(words(false, 1920, 1080, studio), (21, 21));
-        let full_601 = InputColorSpace::from_media_type(Some(2), Some(2));
+        let full_601 = InputColorSpace::from_media_type(
+            Some(MF_VIDEO_TRANSFER_MATRIX_BT601),
+            Some(MF_NOMINAL_RANGE_0_255),
+        );
         assert_eq!(words(false, 1280, 720, full_601), (21, 33));
     }
 
@@ -478,26 +503,37 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn media_foundation_enum_values_match_the_attribute_decoder() {
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255, D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235,
+        };
         use windows::Win32::Media::MediaFoundation::{
             MFNominalRange_0_255, MFNominalRange_16_235, MFVideoTransferMatrix_BT601,
             MFVideoTransferMatrix_BT709,
         };
+        assert_eq!(MFNominalRange_0_255.0 as u32, 1);
+        assert_eq!(MFNominalRange_16_235.0 as u32, 2);
+        assert_eq!(MFVideoTransferMatrix_BT709.0 as u32, 1);
+        assert_eq!(MFVideoTransferMatrix_BT601.0 as u32, 2);
         assert_eq!(
-            InputColorSpace::from_media_type(
-                Some(MFVideoTransferMatrix_BT601.0 as u32),
-                Some(MFNominalRange_16_235.0 as u32),
-            )
-            .matrix,
-            Some(YuvMatrix::Bt601)
+            D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235.0 as u32,
+            super::NOMINAL_STUDIO
         );
         assert_eq!(
-            InputColorSpace::from_media_type(
-                Some(MFVideoTransferMatrix_BT709.0 as u32),
-                Some(MFNominalRange_0_255.0 as u32),
-            )
-            .full_range,
-            Some(true)
+            D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255.0 as u32,
+            super::NOMINAL_FULL
         );
+        let limited = InputColorSpace::from_media_type(
+            Some(MFVideoTransferMatrix_BT601.0 as u32),
+            Some(MFNominalRange_16_235.0 as u32),
+        );
+        assert_eq!(limited.matrix, Some(YuvMatrix::Bt601));
+        assert_eq!(limited.full_range, Some(false));
+        let full = InputColorSpace::from_media_type(
+            Some(MFVideoTransferMatrix_BT709.0 as u32),
+            Some(MFNominalRange_0_255.0 as u32),
+        );
+        assert_eq!(full.matrix, Some(YuvMatrix::Bt709));
+        assert_eq!(full.full_range, Some(true));
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
