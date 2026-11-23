@@ -63,7 +63,11 @@ if ENGINE == "local":
     if truth_tracks.get("mic", 0):
         check("user is You", bool(score.get("you_ok")), str(score.get("you_ok")))
     check("after-Stop speaker pass ran", bool(re.search(r"final pass over the meeting|Nemotron", clean)))
-    if score and "call-ended" not in open(os.path.join(R, "run.txt")).read():
+    late_ms = (load(os.path.join(R, "offsets.json"), {}) or {}).get("system", 0)
+    if late_ms > 15000:
+        # The call's audio began too late to be heard in full: not words the app lost.
+        check("call page started on time (run invalid: re-run it)", False, f"{late_ms / 1000:.1f} s after the meeting started")
+    elif score and "call-ended" not in open(os.path.join(R, "run.txt")).read():
         check("words lost under 10%", score.get("lost_pct", 100) < 10, str(score.get("lost_pct")))
         check("speaker accuracy over 85%", score.get("speaker_acc", 0) >= 85, str(score.get("speaker_acc")))
 else:

@@ -102,6 +102,8 @@ function Meeting($Case, $Engine, $Ask) {
   $env:CAP_GPUI_AUTO_MEETING = "$secs"; $env:CAP_GPUI_AUTO_MEETING_LINGER = "$linger"
   $env:CAP_GPUI_AUTO_MEETING_OUT = "$R\summary.json"; $env:CAP_GPUI_AUTO_MEETING_MIC_SCRIPT = "$R\mic_script.txt"
   $env:CAP_GPUI_AUTO_MEETING_MARKS = "$R\marks.txt"
+  # The meeting's length counts from when the call page starts playing.
+  $env:CAP_GPUI_AUTO_MEETING_STOP_FILE = "$R\page_started.log"
   New-Item -ItemType Directory -Force "$R\logs" | Out-Null
   $p = Start-Process -PassThru -FilePath $Bin -RedirectStandardOutput "$R\app.out" -RedirectStandardError "$R\app.err"
   $log = "$R\logs\cap-gpui.log*"
@@ -152,7 +154,7 @@ function Meeting($Case, $Engine, $Ask) {
 function Indicator {
   $R = "$Work\indicator"; New-Item -ItemType Directory -Force "$R\data" | Out-Null
   '{"general_settings":{"hasCompletedOnboarding":true,"hasCompletedStartup":true,"enableNotifications":false,"enableTelemetry":false}}' | Set-Content -Encoding ascii "$R\data\store"
-  foreach ($k in 'CAP_GPUI_AUTO_MEETING', 'CAP_GPUI_AUTO_MEETING_MIC_SCRIPT', 'CAP_GPUI_DOCS_OPEN') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+  foreach ($k in 'CAP_GPUI_AUTO_MEETING', 'CAP_GPUI_AUTO_MEETING_MIC_SCRIPT', 'CAP_GPUI_AUTO_MEETING_STOP_FILE', 'CAP_GPUI_DOCS_OPEN') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
   $env:CAP_GPUI_APP_DATA_DIR = "$R\data"; $env:CAP_GPUI_LOG_DIR = "$R\logs"; $env:CAP_GPUI_MEETING_UI = 'ind-ending'
   $p = Start-Process -PassThru -FilePath $Bin -WindowStyle Minimized
   Start-Sleep -Seconds 15; Shot "$R\indicator.png"

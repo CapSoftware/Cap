@@ -76,6 +76,7 @@ meeting() { # <case> <local|cloud> [ask question]
   env HOME="$R/home" CAP_GPUI_APP_DATA_DIR="$R/data" CAP_GPUI_NO_TRAY=1 \
     RUST_LOG=warn,cap_gpui=info,cap_meetings=info CAP_GPUI_DOCS_OPEN=live \
     CAP_GPUI_AUTO_MEETING=$SECS CAP_GPUI_AUTO_MEETING_LINGER=$LINGER CAP_GPUI_AUTO_MEETING_OUT="$R/summary.json" \
+    CAP_GPUI_AUTO_MEETING_STOP_FILE="$R/page_started.log" \
     "$BIN" < /dev/null > "$R/app.log" 2>&1 &
   local P=$!
   echo "pid $P" > "$R/run.txt"

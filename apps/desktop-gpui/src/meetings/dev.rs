@@ -224,6 +224,25 @@ pub fn run_from_env(cx: &mut App) {
                 })
                 .detach();
             }
+            // CAP_GPUI_AUTO_MEETING_STOP_FILE=<path>: the meeting's length
+            // counts from when the scripted call says it started playing (a
+            // `started ` line there), so a slow call page never cuts it short.
+            if let Some(path) = std::env::var("CAP_GPUI_AUTO_MEETING_STOP_FILE")
+                .ok()
+                .filter(|_| cycle == 0)
+            {
+                let waited = Instant::now();
+                while waited.elapsed() < Duration::from_secs(120)
+                    && !std::fs::read_to_string(&path)
+                        .is_ok_and(|s| s.lines().any(|l| l.starts_with("started ")))
+                {
+                    sleep(cx, Duration::from_millis(200)).await;
+                }
+                tracing::info!(
+                    waited_ms = waited.elapsed().as_millis() as u64,
+                    "CAP_GPUI_AUTO_MEETING: the stop clock starts with the call"
+                );
+            }
             sleep(cx, Duration::from_secs(seconds)).await;
             before_stop = cx.update(|cx| {
                 let m = meetings.read(cx);
