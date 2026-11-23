@@ -1,0 +1,18 @@
+diff --git a/apps/desktop-gpui/src/main_window.rs b/apps/desktop-gpui/src/main_window.rs
+index 24d6b17b48..77587bcd53 100644
+--- a/apps/desktop-gpui/src/main_window.rs
++++ b/apps/desktop-gpui/src/main_window.rs
+@@ -886,11 +886,8 @@ impl LibraryKind {
+ 
+     /// The tab the Library button opens: the one last used, else Recordings.
+     fn remembered(state: &crate::store::PersistedState) -> Self {
+-        state
+-            .library_tab
+-            .as_deref()
+-            .and_then(Self::from_id)
+-            .unwrap_or(Self::Recordings)
++        let _ = state;
++        Self::Recordings
+     }
+ 
+     fn tab_label(self) -> &'static str {

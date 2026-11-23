@@ -1,0 +1,75 @@
+name: Scratch idle memory breakdown (temporary)
+
+on:
+  push:
+    branches: [ci/bm-mem]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-mem
+  cancel-in-progress: true
+
+env:
+  MAIN_RUN: "45167422846"
+
+jobs:
+  header:
+    name: Idle RSS by mapping, base vs head (Linux)
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xdotool imagemagick dbus pulseaudio pulseaudio-utils \
+            ffmpeg python3-psutil openbox at-spi2-core gir1.2-atspi-2.0 python3-gi > /dev/null
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-linux-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - name: Audit
+        run: |
+          export A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          cat "$A"/*/sha.txt
+          cat > "$RUNNER_TEMP/run.sh" <<'EOF'
+          set -x
+          export DISPLAY=:79 XDG_SESSION_TYPE=x11 NO_AT_BRIDGE=0
+          unset WAYLAND_DISPLAY
+          Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          pulse_dir=$(mktemp -d)
+          export PULSE_SERVER=unix:$pulse_dir/native
+          pulseaudio -n --daemonize=no --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=bm_out" >/dev/null 2>&1 &
+          launcher=$(ls /usr/libexec/at-spi-bus-launcher /usr/lib/at-spi2-core/at-spi-bus-launcher 2>/dev/null | head -1)
+          "$launcher" --launch-immediately >/dev/null 2>&1 &
+          sleep 2
+          dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
+            string:org.a11y.Status string:IsEnabled variant:boolean:true || true
+          dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
+            string:org.a11y.Status string:ScreenReaderEnabled variant:boolean:true || true
+          python3 .bm/bm.py --mode mem --base "$A/base/cap-gpui" --base-libs "$A/base/libs" \
+            --head "$A/head/cap-gpui" --head-libs "$A/head/libs" --out "$RUNNER_TEMP/mem"
+          EOF
+          dbus-run-session -- bash "$RUNNER_TEMP/run.sh"
+          python3 -c "import json;s=json.load(open('$RUNNER_TEMP/mem/summary.json'))['steps'];print(json.dumps({k:s[k] for k in ('mem.avg_mb','mem.delta_mb')},indent=1))"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-mem
+          path: |
+            ${{ runner.temp }}/mem/summary.*
+            ${{ runner.temp }}/mem/runs/**/app.log
+            ${{ runner.temp }}/mem/runs/**/tree.txt
+            ${{ runner.temp }}/mem/runs/**/*.png
+          retention-days: 7
