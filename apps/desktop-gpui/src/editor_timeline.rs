@@ -2004,11 +2004,11 @@ impl TimelineModel {
             return;
         }
         let settings = &config.auto_redact;
+        // Kept (visible) detections stay on the lane so their span can still
+        // be selected to hide them again; the label counts what is hidden.
         let mut spans = redact_region_spans(config, redactions, video_offsets)
             .into_iter()
-            .filter(|(_, _, region)| {
-                settings.has_category(region.category) && !settings.is_excluded(&region.id)
-            })
+            .filter(|(_, _, region)| settings.has_category(region.category))
             .map(|(start, end, region)| (start, end, region.id.as_str()))
             .collect::<Vec<_>>();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -2032,7 +2032,7 @@ impl TimelineModel {
                 end,
                 lane: 0,
                 detail: SegmentDetail::Redact {
-                    count: ids.len() as u32,
+                    count: ids.iter().filter(|id| !settings.is_excluded(id)).count() as u32,
                 },
             })
             .collect();
@@ -4941,7 +4941,11 @@ mod tests {
         assert_eq!(model.redact.len(), 2);
         config.auto_redact.excluded.push("a".into());
         model.set_redact(&config, Some(&redactions), &[0.5]);
-        assert_eq!(model.redact.len(), 1);
+        assert_eq!(model.redact.len(), 2);
+        assert!(matches!(
+            model.redact[0].detail,
+            SegmentDetail::Redact { count: 0 }
+        ));
         config.auto_redact.enabled = false;
         model.set_redact(&config, Some(&redactions), &[0.5]);
         assert!(model.redact.is_empty());
