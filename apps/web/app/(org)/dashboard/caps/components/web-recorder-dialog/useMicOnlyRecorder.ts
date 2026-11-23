@@ -33,6 +33,10 @@ const CONVERT_SHARE = 0.2;
 const FREE_PLAN_STOP_AT_MS = FREE_PLAN_MAX_RECORDING_MS - 1000;
 const MAX_STOP_AT_MS = MAX_AUDIO_VIDEO_SECONDS * 1000 - 1000;
 
+// An encoder error stops the recorder on its own and fires `stop` before Stop
+// is pressed, so the promise is taken when the recorder is made.
+const recorderStops = new WeakMap<MediaRecorder, Promise<void>>();
+
 // Every Cap needs a video track, so a microphone take can't stream to
 // storage: on stop it's wrapped in a title-card video like an imported audio
 // file. Until then it lives in memory and, where allowed, in a local spool.
@@ -209,6 +213,22 @@ export function useMicOnlyRecorder({
 					);
 				});
 			};
+			recorderStops.set(
+				recorder,
+				new Promise<void>((resolve) =>
+					recorder.addEventListener("stop", () => resolve(), { once: true }),
+				),
+			);
+			recorder.addEventListener("error", (event) => {
+				if (recorderRef.current !== recorder) return;
+				console.error("Microphone recorder failed", event);
+				toast.error(
+					"Your browser stopped the recording. Saving what was recorded.",
+				);
+			});
+			recorder.addEventListener("stop", () => {
+				if (recorderRef.current === recorder) void stopRef.current?.();
+			});
 			stream.getAudioTracks()[0]?.addEventListener("ended", () => {
 				if (recorderRef.current === recorder) void stopRef.current?.();
 			});
@@ -297,9 +317,7 @@ export function useMicOnlyRecorder({
 		const session = sessionRef.current;
 		recorderRef.current = null;
 		onRecordingStop?.();
-		const stopped = new Promise<void>((resolve) =>
-			recorder.addEventListener("stop", () => resolve(), { once: true }),
-		);
+		const stopped = recorderStops.get(recorder) ?? Promise.resolve();
 		if (recorder.state !== "inactive") recorder.stop();
 		await stopped;
 		syncDurationFromClock();
@@ -430,6 +448,7 @@ export function useMicOnlyRecorder({
 		() => () => {
 			sessionRef.current += 1;
 			const recorder = recorderRef.current;
+			recorderRef.current = null;
 			if (recorder) {
 				recorder.ondataavailable = null;
 				if (recorder.state !== "inactive") {
