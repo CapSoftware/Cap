@@ -832,3 +832,19 @@ fn auto_titles() {
     assert_eq!(auto_title_from(&TitleHint::default()), "Untitled");
     assert_eq!(first_markdown_heading("####### too deep"), None);
 }
+
+#[cfg(unix)]
+#[test]
+fn the_library_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("docs");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Library::open(&root).unwrap();
+    let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(
+        mode, 0o700,
+        "an existing library folder is closed to other users"
+    );
+}

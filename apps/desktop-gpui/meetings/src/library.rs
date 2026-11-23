@@ -379,6 +379,14 @@ impl Library {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         fs::create_dir_all(&root)?;
+        // Transcripts, titles and attendees live below: owner-only, like the
+        // audio, wherever the home folder's own mode would let others read.
+        // Best effort, since some file systems keep no modes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&root, fs::Permissions::from_mode(0o700));
+        }
         Ok(Self { root })
     }
 
