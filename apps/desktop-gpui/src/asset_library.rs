@@ -956,13 +956,11 @@ pub fn missing_wallpaper_count(project: &ProjectConfiguration) -> usize {
 /// so a caller can republish as each one lands.
 pub fn apply_preview_placeholder(config: &mut ProjectConfiguration) -> usize {
     let library = library();
-    let mut stood_in = 0;
+    // Counted the way `missing_wallpaper_count` counts, once per wallpaper
+    // however many sections use it.
+    let missing = library.missing_project_wallpapers(config).len();
     for source in background_sources_mut(config) {
-        let Some(missing) = library.missing_wallpaper(source) else {
-            continue;
-        };
-        stood_in += 1;
-        let Ok(id) = missing else {
+        let Some(Ok(id)) = library.missing_wallpaper(source) else {
             continue;
         };
         if library.status(Kind::Wallpaper, id) == ItemStatus::Missing {
@@ -976,7 +974,7 @@ pub fn apply_preview_placeholder(config: &mut ProjectConfiguration) -> usize {
             };
         }
     }
-    stood_in
+    missing
 }
 
 /// Makes sure the wallpapers a render of `project` needs are on disk. An

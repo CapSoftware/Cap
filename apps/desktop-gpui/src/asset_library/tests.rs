@@ -1136,3 +1136,32 @@ fn a_cancelled_export_stops_waiting_for_its_wallpaper() {
     ));
     let _ = cancel;
 }
+
+#[test]
+fn a_wallpaper_used_twice_counts_once() {
+    let server = Server::start();
+    let data = body(1_000, 80);
+    let fixture = Fixture::new(&server, vec![wallpaper(&server, "zztest/twice", &data)]);
+    let mut project = cap_project::ProjectConfiguration::default();
+    let missing = cap_project::BackgroundSource::Wallpaper {
+        path: Some("/gone/assets/backgrounds/zztest/twice.jpg".into()),
+    };
+    project.background.source = missing.clone();
+    let mut style = project.background.clone();
+    style.source = missing;
+    let mut segment = cap_project::StyleSegment::default();
+    segment.overrides.background = Some(style);
+    project
+        .timeline
+        .get_or_insert_with(|| {
+            serde_json::from_value(serde_json::json!({ "segments": [], "zoomSegments": [] }))
+                .unwrap()
+        })
+        .style_segments
+        .push(segment);
+
+    assert_eq!(
+        fixture.library.missing_project_wallpapers(&project),
+        vec![Ok("zztest/twice")]
+    );
+}
