@@ -15,6 +15,7 @@ import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
 import { runPromise } from "@/lib/server";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 
@@ -230,7 +231,7 @@ export async function GET(request: NextRequest) {
 		if (!("getObjectResponse" in storage)) {
 			const url = downloadName
 				? yield* storage.getSignedDownloadUrl(key, downloadName)
-				: yield* storage.getSignedObjectUrl(key);
+				: yield* storage.getSignedObjectUrl(key, playbackUrlValidity());
 			return Response.redirect(url);
 		}
 
