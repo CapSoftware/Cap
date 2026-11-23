@@ -78,6 +78,31 @@ const perUserAmount = (
 	);
 };
 
+const discountedPerUser = (
+	checkout: Checkout,
+	lineItem: Checkout["lineItems"][number],
+) => {
+	const discounts = checkout.discountAmounts ?? [];
+	const discount = discounts.reduce(
+		(total, entry) => total + entry.minorUnitsAmount,
+		0,
+	);
+	if (discount <= 0 || lineItem.quantity < 1) return null;
+	const recurring = discounts[0]?.recurring ?? null;
+	return {
+		amount: new Intl.NumberFormat(undefined, {
+			style: "currency",
+			currency: checkout.currency,
+		}).format(
+			(checkout.total.subtotal.minorUnitsAmount - discount) /
+				lineItem.quantity /
+				checkout.minorUnitsAmountDivisor,
+		),
+		recurring: recurring?.type ?? "once",
+		months: recurring?.type === "repeating" ? recurring.durationInMonths : 0,
+	};
+};
+
 const INPUT =
 	"h-[44px] w-full rounded-[10px] border border-[#D3DCE6] bg-white px-3 text-[16px] text-[#111111] shadow-[0_1px_1px_rgba(17,17,17,0.03)] sm:text-[15px] outline-none transition-[border-color,box-shadow] placeholder:text-[rgba(17,17,17,0.38)] hover:border-[#B9C6D4] focus:border-[#55A0EA] focus:shadow-[0_0_0_3px_rgba(85,160,234,0.22)] aria-[invalid=true]:border-[#B4322E]";
 
@@ -200,6 +225,7 @@ function OrderSummary({
 
 	const yearly = (pendingPlan ?? plan) === "yearly";
 	const period = plan === "yearly" ? "year" : "month";
+	const discounted = discountedPerUser(checkout, lineItem);
 	const renewal = checkout.recurring?.dueNext.total.amount;
 
 	const changePlan = async (next: CheckoutPlan) => {
@@ -227,10 +253,19 @@ function OrderSummary({
 
 			<div className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1.5 sm:mt-6">
 				<span className="whitespace-nowrap text-[38px] sm:text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
-					{perUserAmount(checkout, lineItem)}
+					{discounted?.amount ?? perUserAmount(checkout, lineItem)}
 				</span>
+				{discounted ? (
+					<span className="text-[16px] tabular-nums text-[rgba(17,17,17,0.45)] line-through decoration-[rgba(17,17,17,0.45)]">
+						{perUserAmount(checkout, lineItem)}
+					</span>
+				) : null}
 				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
-					per user, per {period}
+					{!discounted || discounted.recurring === "forever"
+						? `per user, per ${period}`
+						: discounted.recurring === "repeating"
+							? `per user, per ${period} for ${discounted.months} months`
+							: `per user, first ${period}`}
 				</span>
 				{pendingPlan ? (
 					<Loader2
