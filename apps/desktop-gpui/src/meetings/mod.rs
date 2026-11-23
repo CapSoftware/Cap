@@ -57,7 +57,7 @@ pub use cap_meetings::{session::StopReason, transcript::Source};
 pub use capture::{CaptureStats, HealthIssue, SourceHealth};
 pub use cloud::Capabilities;
 pub use engine::EngineStatus;
-pub use generate::{AskTurn, GenerateOptions, NotesError};
+pub use generate::{AskAnswer, AskTurn, GenerateOptions, NotesError};
 
 use capture::{CaptureConfig, CaptureEvent, MeetingCapture, MicInput};
 use engine::{
@@ -3554,13 +3554,15 @@ impl Meetings {
     /// Applies a change to the meeting's latest transcript and keeps the line
     /// it makes: in memory while the meeting records or finishes, else on
     /// the documents writer after every edit already queued, so two quick
-    /// changes never undo each other.
+    /// changes never undo each other. A summary written under other choices
+    /// on who is left out is then offered for an update.
     fn rewrite_transcript(
         &mut self,
         doc_id: &str,
         change: impl FnOnce(&Transcript) -> Option<LogLine> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        let library = self.library().cloned();
         let live = self
             .recording
             .as_ref()
@@ -3577,21 +3579,31 @@ impl Meetings {
                 return;
             };
             self.edit_transcript(doc_id, line, cx);
+            if let (Some(library), Some(transcript)) = (library, self.transcript(doc_id)) {
+                persist::follow_left_out(&library, doc_id, &transcript);
+            }
             return;
         }
-        let Some(path) = self.library().and_then(|l| l.transcript_path(doc_id).ok()) else {
+        let Some(library) = library else {
             return;
         };
+        let Ok(path) = library.transcript_path(doc_id) else {
+            return;
+        };
+        let doc = doc_id.to_string();
         crate::meetings_ui::documents::queue_after_saves(move || {
-            let transcript = Transcript::load_jsonl(&path)
+            let mut transcript = Transcript::load_jsonl(&path)
                 .map(|(t, _)| t)
                 .unwrap_or_default();
             let Some(line) = change(&transcript) else {
                 return;
             };
-            if let Err(error) = append_jsonl(&path, &[line]) {
+            if let Err(error) = append_jsonl(&path, std::slice::from_ref(&line)) {
                 tracing::warn!(%error, "could not edit the meeting transcript");
+                return;
             }
+            transcript.apply(line);
+            persist::follow_left_out(&library, &doc, &transcript);
         });
         cx.emit(MeetingEvent::TranscriptChanged {
             doc_id: doc_id.to_string(),
@@ -4621,7 +4633,7 @@ impl Meetings {
         cx: &mut Context<Self>,
     ) -> Task<Result<(), NotesError>> {
         let prepared = self.prepare_notes(doc_id, &options);
-        let (body, title_requested, template_id) = match prepared {
+        let (body, title_requested, template_id, left_out) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.notes.insert(
@@ -4701,7 +4713,7 @@ impl Meetings {
                 }
             };
             this.update(cx, |this, cx| {
-                this.finish_notes(&doc, result, title_requested, template_id, cx)
+                this.finish_notes(&doc, result, title_requested, template_id, left_out, cx)
             })
             .unwrap_or(Err(NotesError::Failed("the app is closing".into())))
         })
@@ -4711,7 +4723,7 @@ impl Meetings {
         &mut self,
         doc_id: &str,
         options: &GenerateOptions,
-    ) -> Result<(serde_json::Value, bool, String), NotesError> {
+    ) -> Result<(serde_json::Value, bool, String, String), NotesError> {
         let auth = crate::store::auth_snapshot();
         if !auth.signed_in() {
             return Err(NotesError::NotSignedIn);
@@ -4743,14 +4755,22 @@ impl Meetings {
             .or_else(|| templates::find_template(&templates, templates::DEFAULT_TEMPLATE_ID))
             .cloned()
             .unwrap_or_default();
-        let previous = options.instruction.as_ref().and_then(|_| {
-            library
-                .read_enhanced(doc_id)
-                .ok()
-                .flatten()
-                .and_then(|json| cap_notes::Document::from_json(&json).ok())
-                .map(|d| d.to_markdown())
-        });
+        // A summary written under other choices on who is left out can hold
+        // their words: it is never rewritten, only written again.
+        let left_out = transcript.left_out_basis();
+        let follows = persist::notes_left_out(&meta) == left_out;
+        let previous = options
+            .instruction
+            .as_ref()
+            .filter(|_| follows)
+            .and_then(|_| {
+                library
+                    .read_enhanced(doc_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|json| cap_notes::Document::from_json(&json).ok())
+                    .map(|d| d.to_markdown())
+            });
         let self_name = Self::self_name(&meta);
         let body = generate::notes_body(generate::NotesInput {
             meta: &meta,
@@ -4764,7 +4784,7 @@ impl Meetings {
             time_zone: iana_time_zone::get_timezone().ok(),
             self_name: self_name.as_deref(),
         })?;
-        Ok((body.body, body.title_requested, template.id))
+        Ok((body.body, body.title_requested, template.id, left_out))
     }
 
     fn notes_waiting(
@@ -4811,6 +4831,7 @@ impl Meetings {
         result: Result<(), NotesError>,
         title_requested: bool,
         template_id: String,
+        left_out: String,
         cx: &mut Context<Self>,
     ) -> Result<(), NotesError> {
         self.auto_notes.remove(doc_id);
@@ -4837,6 +4858,7 @@ impl Meetings {
                 meeting.has_enhanced = true;
             }
             persist::set_flag(&mut meta, persist::NOTES_STALE_KEY, false);
+            persist::set_notes_left_out(&mut meta, &left_out);
             meta.template_id = Some(template_id);
             if title_requested
                 && meta.title_is_auto
@@ -4885,28 +4907,35 @@ impl Meetings {
         outcome
     }
 
-    pub fn ask(
+    /// What Ask is sent for `question`, and which lines were left out of it.
+    fn ask_request(
         &mut self,
         doc_id: &str,
         question: &str,
         history: &[AskTurn],
-        cx: &mut Context<Self>,
-    ) -> Task<Result<String, NotesError>> {
-        let auth = crate::store::auth_snapshot();
-        if !auth.signed_in() {
-            return Task::ready(Err(NotesError::NotSignedIn));
-        }
+    ) -> Result<(serde_json::Value, String), NotesError> {
         let Some(library) = self.library().cloned() else {
-            return Task::ready(Err(NotesError::NotFound));
+            return Err(NotesError::NotFound);
         };
         let Ok(meta) = library.load(doc_id) else {
-            return Task::ready(Err(NotesError::NotFound));
+            return Err(NotesError::NotFound);
         };
         let transcript = self
             .transcript(doc_id)
             .map(Cow::into_owned)
             .unwrap_or_default();
-        let notes = [library.read_enhanced(doc_id), library.read_notes(doc_id)]
+        // A summary or answer made before the person changed who is left
+        // out of the notes can hold words now left out: Ask gets neither
+        // until the notes are written again.
+        let left_out = transcript.left_out_basis();
+        let summary =
+            (persist::notes_left_out(&meta) == left_out).then(|| library.read_enhanced(doc_id));
+        let history: Vec<AskTurn> = history
+            .iter()
+            .filter(|turn| turn.left_out == left_out)
+            .cloned()
+            .collect();
+        let notes = [summary.unwrap_or(Ok(None)), library.read_notes(doc_id)]
             .into_iter()
             .filter_map(|r| r.ok().flatten())
             .filter_map(|json| cap_notes::Document::from_json(&json).ok())
@@ -4914,17 +4943,32 @@ impl Meetings {
             .collect::<Vec<_>>()
             .join("\n\n");
         let self_name = Self::self_name(&meta);
-        let body = match generate::ask_body(
+        let body = generate::ask_body(
             doc_id,
             &meta.title,
             &transcript,
             &notes,
             question,
-            history,
+            &history,
             self_name.as_deref(),
             &self.settings.transcription.vocabulary,
-        ) {
-            Ok(body) => body,
+        )?;
+        Ok((body, left_out))
+    }
+
+    pub fn ask(
+        &mut self,
+        doc_id: &str,
+        question: &str,
+        history: &[AskTurn],
+        cx: &mut Context<Self>,
+    ) -> Task<Result<AskAnswer, NotesError>> {
+        let auth = crate::store::auth_snapshot();
+        if !auth.signed_in() {
+            return Task::ready(Err(NotesError::NotSignedIn));
+        }
+        let (body, left_out) = match self.ask_request(doc_id, question, history) {
+            Ok(request) => request,
             Err(error) => return Task::ready(Err(error)),
         };
         let doc = doc_id.to_string();
@@ -4947,7 +4991,10 @@ impl Meetings {
                 }
             }
             match request.await {
-                Ok(Ok(())) => Ok(answer),
+                Ok(Ok(())) => Ok(AskAnswer {
+                    text: answer,
+                    left_out,
+                }),
                 Ok(Err(error)) => Err(error),
                 Err(error) => Err(NotesError::Failed(error.to_string())),
             }

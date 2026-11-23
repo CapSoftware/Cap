@@ -75,6 +75,8 @@ struct Exchange {
     error: Option<NotesError>,
     locked: Option<Lock>,
     done: bool,
+    /// Which lines were left out of what the answer was given.
+    left_out: String,
 }
 
 pub struct AskPanel {
@@ -370,10 +372,12 @@ impl AskPanel {
                     AskTurn {
                         role: AskRole::User,
                         content: e.question.clone(),
+                        left_out: e.left_out.clone(),
                     },
                     AskTurn {
                         role: AskRole::Assistant,
                         content: e.answer.clone(),
+                        left_out: e.left_out.clone(),
                     },
                 ]
             })
@@ -389,6 +393,7 @@ impl AskPanel {
                 error: None,
                 locked: Some(lock),
                 done: true,
+                left_out: String::new(),
             });
             self.scroll.scroll_to_bottom();
             cx.emit(AskEvent::Asked);
@@ -401,6 +406,7 @@ impl AskPanel {
             error: None,
             locked: None,
             done: false,
+            left_out: String::new(),
         });
         let task = meetings.update(cx, |m, cx| m.ask(&doc_id, &question, &history, cx));
         self.task = Some(cx.spawn(async move |this, cx| {
@@ -414,7 +420,8 @@ impl AskPanel {
                     last.done = true;
                     match result {
                         Ok(answer) => {
-                            last.answer = answer;
+                            last.answer = answer.text;
+                            last.left_out = answer.left_out;
                             cx.emit(AskEvent::Answered(index));
                         }
                         Err(NotesError::UpgradeRequired) => last.locked = Some(Lock::Upgrade),
@@ -1154,6 +1161,7 @@ impl AskPanel {
             error: None,
             locked: None,
             done: true,
+            left_out: String::new(),
         }];
         cx.notify();
     }
@@ -1166,6 +1174,7 @@ impl AskPanel {
             error: None,
             locked: None,
             done: true,
+            left_out: String::new(),
         }];
         cx.notify();
     }

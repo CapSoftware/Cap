@@ -119,10 +119,61 @@ pub fn drop_stale_scratch_in(root: &Path, needed: impl Fn(&str) -> bool) -> Vec<
     removed
 }
 
-/// Set when a repair added words after the notes were written.
+/// Set when a repair added words after the notes were written, or the
+/// person changed who is left out of them.
 pub const NOTES_STALE_KEY: &str = "notesStale";
 /// A repair that adds this many characters is worth new notes.
 pub const NOTES_STALE_CHARS: usize = 80;
+/// Which lines were left out of the notes when the summary was written
+/// ([`Transcript::left_out_basis`]). Missing: none were.
+pub const NOTES_LEFT_OUT_KEY: &str = "notesLeftOut";
+
+/// Which lines were left out when the summary was written.
+pub fn notes_left_out(meta: &DocMeta) -> &str {
+    meta.meeting
+        .as_ref()
+        .and_then(|m| m.extra.get(NOTES_LEFT_OUT_KEY))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+pub fn set_notes_left_out(meta: &mut DocMeta, basis: &str) {
+    let Some(meeting) = meta.meeting.as_mut() else {
+        return;
+    };
+    if basis.is_empty() {
+        meeting.extra.remove(NOTES_LEFT_OUT_KEY);
+    } else {
+        meeting
+            .extra
+            .insert(NOTES_LEFT_OUT_KEY.into(), serde_json::Value::from(basis));
+    }
+}
+
+/// Whether the saved summary was written with the lines left out that
+/// `transcript` leaves out now. One written before a voice was left out
+/// can hold its words.
+pub fn summary_follows(meta: &DocMeta, transcript: &Transcript) -> bool {
+    notes_left_out(meta) == transcript.left_out_basis()
+}
+
+/// After the person changed who is left out of the notes: a summary written
+/// under other choices is offered for an update.
+pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript) {
+    let _lock = cap_meetings::library::lock_meta();
+    let Ok(mut meta) = library.load(doc_id) else {
+        return;
+    };
+    if !meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
+        || summary_follows(&meta, transcript)
+        || !set_flag(&mut meta, NOTES_STALE_KEY, true)
+    {
+        return;
+    }
+    if let Err(error) = library.save(&meta) {
+        tracing::warn!(%error, "could not offer to update the notes");
+    }
+}
 
 /// The gaps a meeting can still fill: their track's audio was kept.
 pub fn repairable(gaps: &[Gap], parts: &[AudioPart]) -> Vec<Gap> {

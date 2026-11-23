@@ -42,6 +42,17 @@ pub enum AskRole {
 pub struct AskTurn {
     pub role: AskRole,
     pub content: String,
+    /// [`Transcript::left_out_basis`] when it was answered. A turn made
+    /// before the person changed who is left out is not sent again.
+    #[serde(skip)]
+    pub left_out: String,
+}
+
+/// Ask's answer, and which lines were left out of what it was given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AskAnswer {
+    pub text: String,
+    pub left_out: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

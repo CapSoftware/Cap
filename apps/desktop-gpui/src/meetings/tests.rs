@@ -602,6 +602,7 @@ fn the_ask_body_keeps_the_latest_history() {
                 generate::AskRole::Assistant
             },
             content: format!("turn {i}"),
+            left_out: String::new(),
         })
         .collect();
     let body = generate::ask_body(
@@ -2048,4 +2049,69 @@ fn a_voice_put_back_in_beats_its_tracks_choice(cx: &mut gpui::TestAppContext) {
         None
     );
     assert!(prompt(&t).contains("Dinner") && prompt(&t).contains("budget"));
+}
+
+/// After a voice is left out, Ask is sent neither the summary written
+/// before (it can quote the voice) nor answers given before, the note
+/// offers to update its notes, and new notes bring the summary back.
+#[gpui::test]
+fn ask_leaves_out_a_summary_and_answers_older_than_the_choice(cx: &mut gpui::TestAppContext) {
+    let (meetings, doc, _dir) = voice_choice_meeting(cx);
+    let library = meetings.read_with(cx, |m, _| m.library.clone().unwrap());
+    let summary = cap_notes::Document::from_markdown("- Dinner is ready\n- Budget reviewed");
+    library.write_enhanced(&doc, &summary.to_json()).unwrap();
+    let mut meta = library.load(&doc).unwrap();
+    meta.meeting.as_mut().unwrap().has_enhanced = true;
+    library.save(&meta).unwrap();
+    let turn = |content: &str, left_out: &str| generate::AskTurn {
+        role: generate::AskRole::Assistant,
+        content: content.into(),
+        left_out: left_out.into(),
+    };
+    let ask = |meetings: &gpui::Entity<super::Meetings>,
+               history: &[generate::AskTurn],
+               cx: &mut gpui::TestAppContext| {
+        meetings
+            .update(cx, |m, _| m.ask_request(&doc, "What was said?", history))
+            .unwrap()
+    };
+
+    let (body, _) = ask(&meetings, &[turn("They said dinner is ready.", "")], cx);
+    assert!(body["notesMarkdown"].as_str().unwrap().contains("Dinner"));
+    assert_eq!(body["history"].as_array().unwrap().len(), 1);
+
+    meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Id(2), true, cx)
+        })
+        .unwrap();
+    saved_transcript(&meetings, &doc, cx);
+    let (body, left_out) = ask(&meetings, &[turn("They said dinner is ready.", "")], cx);
+    let sent = body.to_string();
+    assert!(
+        !sent.contains("Dinner") && !sent.contains("dinner"),
+        "{sent}"
+    );
+    assert!(body["transcript"].as_str().unwrap().contains("budget"));
+    assert!(!left_out.is_empty());
+    assert!(persist::flag(
+        &library.load(&doc).unwrap(),
+        persist::NOTES_STALE_KEY
+    ));
+    // Answers given since are sent again.
+    let (body, _) = ask(&meetings, &[turn("The budget is fine.", &left_out)], cx);
+    assert_eq!(body["history"].as_array().unwrap().len(), 1);
+
+    // New notes, written with the voice left out, are sent again.
+    meetings.update(cx, |m, cx| {
+        m.notes.entry(doc.clone()).or_default().markdown = "- Budget reviewed".into();
+        m.finish_notes(&doc, Ok(()), false, "default".into(), left_out.clone(), cx)
+            .unwrap();
+    });
+    let (body, _) = ask(&meetings, &[], cx);
+    assert!(body["notesMarkdown"].as_str().unwrap().contains("Budget"));
+    assert!(!persist::flag(
+        &library.load(&doc).unwrap(),
+        persist::NOTES_STALE_KEY
+    ));
 }
