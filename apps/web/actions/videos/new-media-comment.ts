@@ -15,6 +15,7 @@ import { type Comment, Policy } from "@cap/web-domain";
 import { Effect, Exit, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeWaveform } from "@/lib/comment-media";
+import { MAX_MEDIA_OBJECT_BYTES } from "@/lib/comment-media-quota";
 import { isReplyParentOnVideo } from "@/lib/comment-reply-parent";
 import { canUseMediaComments } from "@/lib/media-comments";
 import { createNotification } from "@/lib/Notification";
@@ -88,24 +89,45 @@ export async function newMediaComment(data: {
 	const verifyExit = await Effect.gen(function* () {
 		const [bucket] = yield* Storage.getAccessForVideo(video);
 		const head = yield* bucket.headObject(claims.key);
+		// Upload targets are signed for their size; this backs that up for
+		// providers that do not enforce it.
+		if ((head.ContentLength ?? 0) > MAX_MEDIA_OBJECT_BYTES) {
+			yield* bucket
+				.deleteObject(claims.key)
+				.pipe(Effect.catchAll(Effect.logError));
+			return { tooLarge: true as const };
+		}
 
 		let thumbnailKey =
 			data.hasThumbnail && claims.thumbnailKey ? claims.thumbnailKey : null;
 		if (thumbnailKey) {
 			// A missing thumbnail degrades the card, it doesn't block the comment.
-			const thumbnailExists = yield* bucket.headObject(thumbnailKey).pipe(
-				Effect.map(() => true),
+			const thumbnail = yield* bucket.headObject(thumbnailKey).pipe(
+				Effect.map((thumbnailHead) =>
+					(thumbnailHead.ContentLength ?? 0) > MAX_MEDIA_OBJECT_BYTES
+						? ("too-large" as const)
+						: ("ok" as const),
+				),
 				Effect.catchAll((error) =>
-					Effect.succeed(!isStorageObjectNotFound(error)),
+					Effect.succeed(
+						isStorageObjectNotFound(error)
+							? ("missing" as const)
+							: ("ok" as const),
+					),
 				),
 			);
-			if (!thumbnailExists) thumbnailKey = null;
+			if (thumbnail === "too-large")
+				yield* bucket
+					.deleteObject(thumbnailKey)
+					.pipe(Effect.catchAll(Effect.logError));
+			if (thumbnail !== "ok") thumbnailKey = null;
 		}
 
-		return { size: head.ContentLength, thumbnailKey };
+		return { tooLarge: false as const, size: head.ContentLength, thumbnailKey };
 	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
 	if (Exit.isFailure(verifyExit)) throw new Error("Upload not found");
+	if (verifyExit.value.tooLarge) throw new Error("Recording is too large");
 	const { size, thumbnailKey } = verifyExit.value;
 
 	const content = (data.content ?? "").trim();
