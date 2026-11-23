@@ -2,7 +2,7 @@ use crate::{
     AudioFrame, AudioMuxer, Muxer, TaskPool, VideoFrame, VideoMuxer,
     output_pipeline::{
         HealthSender, PipelineHealthEvent, SharedHealthSender, emit_health,
-        frame_pacing::{FramePacer, Paced},
+        frame_pacing::{FramePacer, Paced, PacedPixels, frame_to_encode},
         mjpeg::MjpegDecoder,
     },
     screen_capture,
@@ -374,7 +374,7 @@ impl Muxer for WindowsMuxer {
                         _media_foundation_session = Some(session);
                         trace!("Running native encoder with frame pacing");
                         let mut pacer = FramePacer::new(config.frame_rate);
-                        let mut last_texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
+                        let mut last_screen_frame: Option<screen_capture::ScreenFrame> = None;
                         let mut first_timestamp: Option<Duration> = None;
                         let mut frame_count: u64 = 0;
                         let mut frames_reused: u64 = 0;
@@ -385,11 +385,11 @@ impl Muxer for WindowsMuxer {
                                 let (texture, timestamp) = match pacer.next(&video_rx, &pause_flag) {
                                     Paced::Frame(frame, timestamp) => {
                                         let texture = frame.texture().clone();
-                                        last_texture = Some(texture.clone());
+                                        last_screen_frame = Some(frame);
                                         (texture, timestamp)
                                     }
                                     Paced::Repeat(timestamp) => {
-                                        let Some(texture) = &last_texture else {
+                                        let Some(frame) = last_screen_frame.as_ref() else {
                                             continue;
                                         };
                                         frames_reused += 1;
@@ -400,7 +400,7 @@ impl Muxer for WindowsMuxer {
                                                 "Frame pacing: reusing frames due to slow capture"
                                             );
                                         }
-                                        (texture.clone(), timestamp)
+                                        (frame.texture().clone(), timestamp)
                                     }
                                     Paced::End => {
                                         trace!("End of stream signal received");
@@ -435,6 +435,20 @@ impl Muxer for WindowsMuxer {
                             }
                             Err(e) if e.should_fallback() => {
                                 encoder_preferences.force_software_only();
+                                let carried_frame =
+                                    last_screen_frame.as_ref().and_then(|frame| {
+                                        match frame.as_ffmpeg() {
+                                            Ok(ffmpeg_frame) => {
+                                                Some(reference_video_frame(&ffmpeg_frame))
+                                            }
+                                            Err(err) => {
+                                                warn!(
+                                                    "Could not read the last screen frame for libx264: {err}"
+                                                );
+                                                None
+                                            }
+                                        }
+                                    });
                                 let (last_dts, stream_index) = {
                                     let last_dts = muxer.last_written_pts();
                                     let stream_index = muxer.stream_index();
@@ -469,35 +483,31 @@ impl Muxer for WindowsMuxer {
                                     backend: "libx264".to_string(),
                                     attempt: 1,
                                 });
-                                let mut last_ffmpeg_frame: Option<ffmpeg::frame::Video> = None;
+                                let mut last_ffmpeg_frame = carried_frame;
                                 loop {
-                                    let (ffmpeg_frame, ts) = match pacer.next(&video_rx, &pause_flag)
-                                    {
+                                    let next = pacer.next(&video_rx, &pause_flag);
+                                    let (step, ts) = match next {
                                         Paced::Frame(frame, timestamp) => match frame.as_ffmpeg() {
-                                            Ok(frame) => {
-                                                last_ffmpeg_frame =
-                                                    Some(reference_video_frame(&frame));
-                                                (Some(frame), timestamp)
-                                            }
+                                            Ok(frame) => (
+                                                PacedPixels::New(reference_video_frame(&frame)),
+                                                timestamp,
+                                            ),
                                             Err(err) => {
                                                 warn!("Failed to convert frame: {err:?}");
-                                                (
-                                                    last_ffmpeg_frame
-                                                        .as_ref()
-                                                        .map(reference_video_frame),
-                                                    timestamp,
-                                                )
+                                                (PacedPixels::Repeat, timestamp)
                                             }
                                         },
-                                        Paced::Repeat(timestamp) => (
-                                            last_ffmpeg_frame.as_ref().map(reference_video_frame),
-                                            timestamp,
-                                        ),
+                                        Paced::Repeat(timestamp) => {
+                                            (PacedPixels::Repeat, timestamp)
+                                        }
                                         Paced::End => break,
                                     };
-                                    let Some(ffmpeg_frame) = ffmpeg_frame else {
+                                    let Some(stored) =
+                                        frame_to_encode(&mut last_ffmpeg_frame, step)
+                                    else {
                                         continue;
                                     };
+                                    let ffmpeg_frame = reference_video_frame(stored);
                                     let normalized_ts =
                                         normalize_timestamp(ts, &mut first_timestamp);
                                     let Ok(mut output_guard) = output.lock() else {
