@@ -45,6 +45,9 @@ mod x11_tests;
 mod system_audio_channel_tests;
 
 #[cfg(test)]
+mod audio_only_null_sink_tests;
+
+#[cfg(test)]
 mod wayland_portal_tests;
 
 use frame_scaler::FrameScaler;
@@ -1421,6 +1424,14 @@ pub struct SystemAudioSourceConfig {
     device_name: String,
     monitor_route: Option<PactlMonitorRoute>,
     feed: OwnedSystemAudioFeed,
+    ends_take_when_lost: bool,
+}
+
+impl SystemAudioSourceConfig {
+    pub(crate) fn end_take_when_lost(mut self) -> Self {
+        self.ends_take_when_lost = true;
+        self
+    }
 }
 
 pub struct SystemAudioSource {
@@ -1857,12 +1868,18 @@ impl AudioSource for SystemAudioSource {
         Self: Sized,
     {
         let device_name = config.device_name.clone();
+        let loss = if config.ends_take_when_lost {
+            crate::sources::microphone::LinuxSourceLoss::EndThisTrack
+        } else {
+            crate::sources::microphone::LinuxSourceLoss::FailRecording
+        };
         let setup = crate::sources::Microphone::setup_with_channels(
             config.feed_lock,
             tx,
             ctx,
             X11Capture::audio_info().channels,
             None,
+            loss,
         );
         async move {
             let inner = setup
@@ -1960,6 +1977,7 @@ pub async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSo
         device_name,
         monitor_route,
         feed: owned_feed,
+        ends_take_when_lost: false,
     })
 }
 

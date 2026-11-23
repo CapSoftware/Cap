@@ -512,6 +512,34 @@ struct RecordingSourceHealthState {
     pending: Option<Arc<StreamHealth>>,
     recovery_origin: Option<u32>,
     terminal: Option<String>,
+    deferred: Option<(std::time::Instant, String)>,
+    defer_for: std::time::Duration,
+}
+
+#[cfg(target_os = "linux")]
+impl RecordingSourceHealthState {
+    fn remember_loss(&mut self, error: String) {
+        if self.terminal.is_some() {
+            return;
+        }
+        if self.defer_for.is_zero() {
+            self.terminal.get_or_insert(error);
+            return;
+        }
+        if self.deferred.is_none() {
+            self.deferred = Some((std::time::Instant::now(), error));
+        }
+    }
+
+    fn promote_deferred_loss(&mut self) {
+        let ready = self
+            .deferred
+            .as_ref()
+            .is_some_and(|(since, _)| since.elapsed() >= self.defer_for);
+        if ready && let Some((_, error)) = self.deferred.take() {
+            self.terminal.get_or_insert(error);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -524,8 +552,14 @@ impl RecordingSourceHealth {
                 pending: None,
                 recovery_origin: None,
                 terminal: None,
+                deferred: None,
+                defer_for: std::time::Duration::ZERO,
             },
         )))
+    }
+
+    pub(crate) fn defer_loss(&self, defer_for: std::time::Duration) {
+        self.0.lock().unwrap().defer_for = defer_for;
     }
 
     #[cfg(test)]
@@ -595,9 +629,10 @@ impl RecordingSourceHealth {
             return;
         };
         if pending.failed.load(Ordering::Acquire) {
-            state.terminal = Some("Replacement audio stream failed before acceptance".into());
+            state.remember_loss("Replacement audio stream failed before acceptance".into());
             return;
         }
+        state.deferred = None;
         if state.current.failed.load(Ordering::Acquire) || state.recovery_origin.is_some() {
             state.recovery_origin = Some(state.current.id);
         }
@@ -621,7 +656,7 @@ impl RecordingSourceHealth {
                 .as_ref()
                 .is_some_and(|pending| pending.id == id)
         {
-            state.terminal.get_or_insert(error);
+            state.remember_loss(error);
         }
     }
 
@@ -630,7 +665,23 @@ impl RecordingSourceHealth {
     }
 
     pub(crate) fn terminal_error(&self) -> Option<String> {
-        self.0.lock().unwrap().terminal.clone()
+        let mut state = self.0.lock().unwrap();
+        state.promote_deferred_loss();
+        state.terminal.clone()
+    }
+
+    pub(crate) fn reconnectable_frame(&self, id: u32) -> bool {
+        let state = self.0.lock().unwrap();
+        state.terminal.is_none()
+            && state.current.id == id
+            && !state.current.failed.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_recover_backend(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.current.failed.store(false, Ordering::Release);
+        state.deferred = None;
     }
 
     pub(crate) fn frame_is_current(&self, id: u32) -> bool {
@@ -3863,6 +3914,29 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
+    async fn lost_system_audio_device_sets_terminal_health() {
+        let (mut feed, _token, _config) = system_recovery_fixture();
+        let health = RecordingSourceHealth::new(11, Arc::new(StreamHealth::new(7)));
+        feed.recording_health = Some(health.clone());
+        let actor = MicrophoneFeed::spawn(feed);
+        let ready = actor
+            .ask(ReconnectSystemInput {
+                id: 7,
+                generation: 11,
+            })
+            .await
+            .unwrap();
+        let error = ready.await.expect_err("missing monitor must not reopen");
+        assert!(
+            health.terminal_error().is_some(),
+            "reconnect error {error} left system audio healthy"
+        );
+        actor.kill();
+        actor.wait_for_stop().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
     async fn watchdog_joins_pending_system_reconnect_without_reopening_device() {
         let (mut feed, _token, config) = system_recovery_fixture();
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -4598,6 +4672,30 @@ mod required_recording_health_tests {
         health.commit_reconnect(1, 1);
         health.accepted_frame(1);
         assert!(health.stop_error().is_some());
+    }
+
+    #[test]
+    fn system_audio_reconnect_failure_stays_quiet_until_the_grace_ends() {
+        let health = RecordingSourceHealth::new(1, Arc::new(StreamHealth::new(7)));
+        health.defer_loss(Duration::from_millis(40));
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(8)));
+        health.fail_reconnect(1, 8, "DeviceNotFound".into());
+        assert!(health.terminal_error().is_none());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(health.terminal_error().unwrap().contains("DeviceNotFound"));
+    }
+
+    #[test]
+    fn system_audio_reconnect_during_the_grace_clears_the_loss() {
+        let health = RecordingSourceHealth::new(1, Arc::new(StreamHealth::new(7)));
+        health.defer_loss(Duration::from_millis(40));
+        let replacement = Arc::new(StreamHealth::new(8));
+        health.begin_reconnect(1, replacement.clone());
+        health.fail_reconnect(1, 8, "DeviceNotFound".into());
+        health.commit_reconnect(1, 8);
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(health.terminal_error().is_none());
+        assert!(health.reconnectable_frame(8));
     }
 
     #[test]

@@ -1,7 +1,10 @@
 use super::*;
 use crate::{
     feeds::microphone::synthetic::SyntheticMicrophone,
-    output_pipeline::{AudioMuxer, Muxer, OutputPipeline, TaskPool},
+    output_pipeline::{
+        AudioFrame, AudioMuxer, ChannelAudioSource, ChannelAudioSourceConfig, Muxer,
+        OutputPipeline, PipelineBuildScope, TaskPool,
+    },
 };
 use std::ops::Deref;
 
@@ -54,6 +57,7 @@ async fn linux_system_audio_preserves_stereo_channels() {
                 build_scope: None,
                 stopped: false,
             },
+            ends_take_when_lost: false,
         };
         let (frames, received) = flume::unbounded();
         let temp = tempfile::tempdir().unwrap();
@@ -85,4 +89,150 @@ async fn linux_system_audio_preserves_stereo_channels() {
             assert!((right + 0.25).abs() < 0.001, "right channel: {right}");
         }
     }
+}
+
+#[tokio::test]
+async fn terminal_system_audio_failure_ends_its_pipeline_and_leaves_the_mic() {
+    let scope = PipelineBuildScope::new_studio_lifetime();
+    let input = SyntheticMicrophone::spawn("speakers.monitor", 48_000, 2);
+    let lock = input.lock().await.unwrap();
+    let health = lock.source_health();
+    let actor = lock.deref().clone();
+    let (frames, received) = flume::unbounded();
+    let (mic_frames, mic_received) = flume::unbounded();
+    let temp = tempfile::tempdir().unwrap();
+    let built = scope
+        .run(async {
+            let pipeline = OutputPipeline::builder(temp.path().join("system.ogg"))
+                .with_audio_source::<SystemAudioSource>(SystemAudioSourceConfig {
+                    feed_lock: Arc::new(lock),
+                    device_name: "speakers.monitor".into(),
+                    monitor_route: None,
+                    feed: OwnedSystemAudioFeed {
+                        actor,
+                        build_scope: PipelineBuildScope::current(),
+                        stopped: false,
+                    },
+                    ends_take_when_lost: true,
+                })
+                .build::<CaptureMuxer>(frames)
+                .await
+                .unwrap();
+            let mic_info = AudioInfo::new_raw(
+                cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+                48_000,
+                1,
+            );
+            let (mic_tx, mic_rx) = futures::channel::mpsc::channel(4);
+            let microphone = OutputPipeline::builder(temp.path().join("mic.ogg"))
+                .with_audio_source::<ChannelAudioSource>(ChannelAudioSourceConfig::new(
+                    mic_info, mic_rx,
+                ))
+                .build::<CaptureMuxer>(mic_frames)
+                .await
+                .unwrap();
+            (pipeline, microphone.cancel_token(), microphone, mic_tx)
+        })
+        .await;
+    let (pipeline, microphone_cancel, microphone, mut mic_tx) = built;
+    let _microphone = microphone;
+    input
+        .push(
+            &[0.25, -0.25],
+            cap_timestamp::Timestamp::Instant(std::time::Instant::now()),
+        )
+        .await;
+    tokio::time::timeout(Duration::from_secs(2), received.recv_async())
+        .await
+        .expect("system audio reached the muxer")
+        .unwrap();
+    health.fail("speakers.monitor removed".into());
+    tokio::time::timeout(Duration::from_secs(3), pipeline.done_fut())
+        .await
+        .expect("terminal system audio loss left the pipeline running")
+        .expect("terminal system audio loss failed the pipeline");
+    assert!(
+        !microphone_cancel.is_cancelled(),
+        "an active mic was cancelled with system audio"
+    );
+    let mic_info = AudioInfo::new_raw(
+        cap_media_info::Sample::F32(cap_media_info::Type::Packed),
+        48_000,
+        1,
+    );
+    mic_tx
+        .try_send(AudioFrame::new(
+            mic_info.wrap_frame(&0.5f32.to_ne_bytes()),
+            cap_timestamp::Timestamp::Instant(std::time::Instant::now()),
+        ))
+        .expect("mic sender closed after system audio ended");
+    tokio::time::timeout(Duration::from_secs(2), mic_received.recv_async())
+        .await
+        .expect("mic audio did not reach its muxer after system audio ended")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn transient_system_audio_failure_keeps_the_pipeline_and_later_samples() {
+    let scope = PipelineBuildScope::new_studio_lifetime();
+    let input = SyntheticMicrophone::spawn("speakers.monitor", 48_000, 2);
+    let lock = input.lock().await.unwrap();
+    let health = lock.source_health();
+    let actor = lock.deref().clone();
+    let (frames, received) = flume::unbounded();
+    let temp = tempfile::tempdir().unwrap();
+    let pipeline = scope
+        .run(async {
+            OutputPipeline::builder(temp.path().join("system.ogg"))
+                .with_audio_source::<SystemAudioSource>(SystemAudioSourceConfig {
+                    feed_lock: Arc::new(lock),
+                    device_name: "speakers.monitor".into(),
+                    monitor_route: None,
+                    feed: OwnedSystemAudioFeed {
+                        actor,
+                        build_scope: PipelineBuildScope::current(),
+                        stopped: false,
+                    },
+                    ends_take_when_lost: true,
+                })
+                .build::<CaptureMuxer>(frames)
+                .await
+                .unwrap()
+        })
+        .await;
+    input
+        .push(
+            &[0.25, -0.25],
+            cap_timestamp::Timestamp::Instant(std::time::Instant::now()),
+        )
+        .await;
+    tokio::time::timeout(Duration::from_secs(2), received.recv_async())
+        .await
+        .expect("system audio reached the muxer")
+        .unwrap();
+    health.test_backend_failure();
+    input
+        .push(
+            &[0.5, -0.5],
+            cap_timestamp::Timestamp::Instant(std::time::Instant::now()),
+        )
+        .await;
+    let still_running = tokio::time::timeout(Duration::from_millis(400), pipeline.done_fut()).await;
+    assert!(
+        still_running.is_err(),
+        "a transient system audio error ended the pipeline"
+    );
+    health.test_recover_backend();
+    input
+        .push(
+            &[0.25, -0.25],
+            cap_timestamp::Timestamp::Instant(std::time::Instant::now()),
+        )
+        .await;
+    tokio::time::timeout(Duration::from_secs(2), received.recv_async())
+        .await
+        .expect("system audio did not recover")
+        .unwrap();
+    let still_running = tokio::time::timeout(Duration::from_millis(200), pipeline.done_fut()).await;
+    assert!(still_running.is_err(), "recovered system audio ended");
 }
