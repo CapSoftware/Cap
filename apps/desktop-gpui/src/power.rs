@@ -14,8 +14,162 @@ pub(crate) fn holds_off_idle_sleep(phase: Phase) -> bool {
 pub fn install(cx: &mut App) {
     #[cfg(target_os = "macos")]
     macos::install(cx);
-    #[cfg(not(target_os = "macos"))]
-    let _ = cx;
+    #[cfg(windows)]
+    windows::install(cx);
+    #[cfg(target_os = "linux")]
+    linux::install(cx);
+}
+
+/// Windows and Linux: a meeting stops for sleep and is offered back on
+/// wake, as on macOS. Screen recordings keep their own handling there.
+#[cfg(not(target_os = "macos"))]
+fn forward_sleep(sleeping: flume::Receiver<bool>, cx: &mut App) {
+    cx.spawn(async move |cx| {
+        while let Ok(sleeping) = sleeping.recv_async().await {
+            cx.update(|cx| {
+                if sleeping {
+                    tracing::info!("system going to sleep");
+                    crate::meetings::Meetings::system_will_sleep(cx);
+                } else {
+                    tracing::info!("system woke from sleep");
+                    crate::meetings::Meetings::system_did_wake(cx);
+                }
+            });
+        }
+    })
+    .detach();
+}
+
+#[cfg(windows)]
+mod windows {
+    use std::{ffi::c_void, sync::OnceLock};
+
+    use gpui::App;
+    use windows_sys::Win32::{
+        System::Power::{
+            DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS, PowerRegisterSuspendResumeNotification,
+        },
+        UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND},
+    };
+
+    static EVENTS: OnceLock<flume::Sender<bool>> = OnceLock::new();
+
+    /// Runs on a system thread; Windows waits for it, so it only forwards.
+    unsafe extern "system" fn on_power(_: *const c_void, kind: u32, _: *const c_void) -> u32 {
+        let sleeping = match kind {
+            PBT_APMSUSPEND => true,
+            PBT_APMRESUMEAUTOMATIC => false,
+            _ => return 0,
+        };
+        if let Some(events) = EVENTS.get() {
+            let _ = events.send(sleeping);
+        }
+        0
+    }
+
+    pub(super) fn install(cx: &mut App) {
+        let (tx, rx) = flume::unbounded();
+        if EVENTS.set(tx).is_err() {
+            return;
+        }
+        // Windows keeps the pointer for as long as the registration lives,
+        // which is as long as the app does.
+        let params = Box::leak(Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+            Callback: Some(on_power),
+            Context: std::ptr::null_mut(),
+        }));
+        let mut registration = std::ptr::null_mut();
+        let result = unsafe {
+            PowerRegisterSuspendResumeNotification(
+                DEVICE_NOTIFY_CALLBACK,
+                std::ptr::from_mut(params).cast(),
+                &mut registration,
+            )
+        };
+        if result != 0 {
+            tracing::warn!(result, "no sleep notifications");
+            return;
+        }
+        super::forward_sleep(rx, cx);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn suspend_and_resume_are_forwarded_and_nothing_else() {
+            let (tx, rx) = flume::unbounded();
+            assert!(EVENTS.set(tx).is_ok());
+            for kind in [PBT_APMSUSPEND, 7, PBT_APMRESUMEAUTOMATIC, 10] {
+                assert_eq!(
+                    unsafe { on_power(std::ptr::null(), kind, std::ptr::null()) },
+                    0
+                );
+            }
+            assert_eq!(rx.try_iter().collect::<Vec<_>>(), vec![true, false]);
+        }
+
+        #[test]
+        fn windows_takes_the_registration() {
+            let params = Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+                Callback: Some(on_power),
+                Context: std::ptr::null_mut(),
+            });
+            let mut registration = std::ptr::null_mut();
+            let result = unsafe {
+                PowerRegisterSuspendResumeNotification(
+                    DEVICE_NOTIFY_CALLBACK,
+                    std::ptr::from_ref(params.as_ref()).cast_mut().cast(),
+                    &mut registration,
+                )
+            };
+            assert_eq!(result, 0);
+            assert!(!registration.is_null());
+            unsafe {
+                windows_sys::Win32::System::Power::PowerUnregisterSuspendResumeNotification(
+                    registration as isize,
+                )
+            };
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use ashpd::zbus;
+    use futures_util::StreamExt;
+    use gpui::App;
+
+    pub(super) fn install(cx: &mut App) {
+        let (tx, rx) = flume::unbounded();
+        gpui_tokio::Tokio::spawn(cx, async move {
+            let listen = async {
+                let connection = zbus::Connection::system().await?;
+                let manager = zbus::Proxy::new(
+                    &connection,
+                    "org.freedesktop.login1",
+                    "/org/freedesktop/login1",
+                    "org.freedesktop.login1.Manager",
+                )
+                .await?;
+                let mut signals = manager.receive_signal("PrepareForSleep").await?;
+                while let Some(signal) = signals.next().await {
+                    if let Ok(sleeping) = signal.body().deserialize::<bool>()
+                        && tx.send(sleeping).is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok::<(), zbus::Error>(())
+            };
+            if let Err(error) = listen.await {
+                tracing::info!(%error, "no sleep notifications from logind");
+            }
+        })
+        .detach();
+        super::forward_sleep(rx, cx);
+    }
 }
 
 #[cfg(target_os = "macos")]
