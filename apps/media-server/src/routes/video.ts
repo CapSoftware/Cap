@@ -163,6 +163,16 @@ const probeSchema = z.object({
 	videoUrl: z.string().url(),
 });
 
+const previewAssetsSchema = z
+	.object({
+		videoUrl: z.string().url(),
+		thumbnailPresignedUrl: z.string().url().optional(),
+		previewGifPresignedUrl: z.string().url().optional(),
+	})
+	.refine((body) => body.thumbnailPresignedUrl || body.previewGifPresignedUrl, {
+		message: "No preview asset requested",
+	});
+
 const thumbnailSchema = z.object({
 	videoUrl: z.string().url(),
 	timestamp: z.number().optional(),
@@ -761,6 +771,125 @@ video.post("/thumbnail", async (c) => {
 			},
 			500,
 		);
+	}
+});
+
+video.post("/preview-assets", async (c) => {
+	if (!validateMediaServerSecret(c)) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
+	const result = previewAssetsSchema.safeParse(
+		await c.req.json().catch(() => null),
+	);
+	if (!result.success) {
+		return c.json(
+			{
+				error: "Invalid request",
+				code: "INVALID_REQUEST",
+				details: result.error.message,
+			},
+			400,
+		);
+	}
+
+	if (isDraining()) {
+		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		return c.json(DRAINING_RESPONSE_BODY, 503);
+	}
+
+	const slot = tryAcquireDirectVideoProcessSlot(canAcceptNewVideoProcess);
+	if (!slot) {
+		c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+		return c.json(getBusyResponseBody(getVideoCapacitySnapshot()), 503);
+	}
+
+	const { videoUrl, thumbnailPresignedUrl, previewGifPresignedUrl } =
+		result.data;
+	const signal = c.req.raw.signal;
+	try {
+		const metadata = await probeVideo(videoUrl);
+		if (thumbnailPresignedUrl) {
+			const thumbnail = await generateThumbnail(
+				videoUrl,
+				metadata.duration,
+				{},
+				signal,
+			);
+			await uploadToS3(thumbnail, thumbnailPresignedUrl, "image/jpeg", signal);
+		}
+		if (previewGifPresignedUrl) {
+			const previewGif = await generatePreviewGif(
+				videoUrl,
+				metadata.duration,
+				{},
+				signal,
+			);
+			try {
+				await uploadFileToS3(
+					previewGif.path,
+					previewGifPresignedUrl,
+					"image/gif",
+					signal,
+				);
+			} finally {
+				await previewGif.cleanup();
+			}
+		}
+		return c.json({ success: true });
+	} catch (err) {
+		const details = err instanceof Error ? err.message : String(err);
+		if (isUnreadableMediaInput(err) || err instanceof MediaAddressError) {
+			console.warn("[video/preview-assets] Unusable input:", details);
+			return c.json(
+				{
+					error: "Media input cannot be used",
+					code:
+						err instanceof MediaInputPolicyError ||
+						err instanceof MediaAddressError
+							? INPUT_POLICY_VIOLATION
+							: UNREADABLE_INPUT_CODE,
+					details,
+				},
+				422,
+			);
+		}
+
+		console.error("[video/preview-assets] Error:", err);
+
+		if (isBusyError(err)) {
+			c.header("Retry-After", VIDEO_BUSY_RETRY_AFTER_SECONDS.toString());
+			return c.json(
+				{
+					error: "Server is busy",
+					code: "SERVER_BUSY",
+					details: "Too many concurrent requests, please retry later",
+				},
+				503,
+			);
+		}
+
+		if (isTimeoutError(err)) {
+			return c.json(
+				{
+					error: "Request timed out",
+					code: "TIMEOUT",
+					details,
+				},
+				504,
+			);
+		}
+
+		return c.json(
+			{
+				error: "Failed to generate preview assets",
+				code: MEDIA_ENGINE_ERROR_CODE,
+				details,
+			},
+			500,
+		);
+	} finally {
+		slot.release();
 	}
 });
 
