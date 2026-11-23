@@ -3,6 +3,7 @@ import {
 	type EditTranscriptWord,
 	findActiveTranscriptWordIndex,
 } from "@/lib/edit-transcript";
+import { displayedMediaTime } from "../_components/media-source-refresh";
 
 export function useActiveTranscriptWordIndex(
 	videoRef: RefObject<HTMLVideoElement | null>,
@@ -34,7 +35,7 @@ export function useActiveTranscriptWordIndex(
 
 			let animationFrameId = 0;
 			let videoFrameId = 0;
-			const updateActiveWord = (timeSeconds = video.currentTime) => {
+			const updateActiveWord = (timeSeconds = displayedMediaTime(video)) => {
 				const nextIndex = findActiveTranscriptWordIndex(
 					words,
 					timeSeconds * 1000,

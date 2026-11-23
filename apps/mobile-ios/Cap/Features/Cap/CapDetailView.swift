@@ -20,6 +20,8 @@ struct CapDetailView: View {
     @State private var editor: EditorModel?
     @State private var showingProRequired = false
     @State private var openingEditor = false
+    @State private var columnSize: CGSize = .zero
+    @State private var headerVisible = true
     private let upgrade = WebUpgrade.shared
 
     init(model: CapDetailModel) {
@@ -144,6 +146,17 @@ struct CapDetailView: View {
         editor != nil || showingFullscreen
     }
 
+    /// With the keyboard up on a small phone (iPhone SE, mini), the video and timeline would leave the comments or
+    /// transcript only a sliver, and the video squeezes into a strip its controls overflow. Composing pauses playback,
+    /// so the video steps aside until the keyboard goes. Larger phones keep it.
+    private var videoStepsAside: Bool {
+        guard layout == .stack, !model.isPictureInPictureActive, columnSize.height > 0 else { return false }
+        let video = (columnSize.width - CapTheme.spacing * 2) * 9 / 16
+        // 375 pt phones also need room for the transcript's search field and a few matches.
+        let room: CGFloat = columnSize.width < 390 ? 200 : 150
+        return columnSize.height < video + room
+    }
+
     /// Beside the library the Cap is the detail column's root, which dismiss can't pop.
     private func close() {
         if let selection, selection.selected == model.id {
@@ -225,14 +238,18 @@ struct CapDetailView: View {
         let owned = detail.cap.isOwned(by: session.credentials.userId)
         let available = sections(detail)
         let current = available.contains(section) ? section : available.first
+        let showsVideo = !videoStepsAside
         return VStack(spacing: 0) {
-            PlayerStage(model: model, detail: detail)
-                .padding(.horizontal, CapTheme.spacing)
-                .padding(.top, 4)
-                // A wide, short column would otherwise give the height to the scroll view and shrink the video.
-                .layoutPriority(layout == .split ? 1 : 0)
+            if showsVideo {
+                PlayerStage(model: model, detail: detail)
+                    .padding(.horizontal, CapTheme.spacing)
+                    .padding(.top, 4)
+                    // A wide, short column would otherwise give the height to the scroll view and shrink the video.
+                    .layoutPriority(layout == .split ? 1 : 0)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
-            if model.player != nil, !model.playbackFailed, !detail.viewer.isScreenshot, (model.duration ?? 0) > 0 {
+            if showsVideo, model.player != nil, !model.playbackFailed, !detail.viewer.isScreenshot, (model.duration ?? 0) > 0 {
                 PlayerTimeline(model: model, comments: detail.comments, chapters: detail.viewer.settings.disableChapters ? [] : detail.chapters) { marker in
                     model.seek(to: marker.time)
                     if model.commentsEnabled, let first = detail.comments.first(where: { marker.commentIds.contains($0.id) && $0.type == .text }) {
@@ -242,6 +259,7 @@ struct CapDetailView: View {
                 }
                 .padding(.horizontal, CapTheme.spacing)
                 .padding(.top, 2)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
 
             ScrollViewReader { proxy in
@@ -249,6 +267,7 @@ struct CapDetailView: View {
                     LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
                         CapHeader(detail: detail, owned: owned)
                             .padding(.horizontal, CapTheme.spacing)
+                            .onScrollVisibilityChange(threshold: 0.01) { headerVisible = $0 }
 
                         if model.reactionsEnabled {
                             ReactionBar(model: model)
@@ -269,6 +288,8 @@ struct CapDetailView: View {
                                 }
                             }
                             .padding(.horizontal, CapTheme.spacing)
+                            // With a single section there's no picker to carry the scroll target.
+                            .id(available.count > 1 ? "section-content" : "sections")
                         } header: {
                             if available.count > 1, let current {
                                 Picker("Section", selection: Binding(get: { current }, set: { section = $0 })) {
@@ -289,6 +310,30 @@ struct CapDetailView: View {
                     .animation(.snappy(duration: 0.25), value: section)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // With the video aside the list meets the navigation bar; keep text from showing through under it.
+                .scrollEdgeEffectStyle(showsVideo ? nil : .hard, for: .top)
+                .onChange(of: showsVideo) { _, shows in
+                    guard !shows else { return }
+                    // A list someone has already scrolled into stays where it is.
+                    let reply = model.replyingTo?.id
+                    guard reply != nil || headerVisible else { return }
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(60))
+                        withAnimation(.snappy) {
+                            if let reply {
+                                proxy.scrollTo(reply, anchor: .bottom)
+                            } else {
+                                proxy.scrollTo("sections", anchor: .top)
+                            }
+                        }
+                    }
+                }
+                .onChange(of: model.sectionRevealRequests) {
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        withAnimation(.snappy) { proxy.scrollTo("sections", anchor: .top) }
+                    }
+                }
                 .refreshable { await model.refreshDetail() }
                 .onChange(of: model.highlightedCommentID, initial: true) { _, id in
                     guard let id else { return }
@@ -300,6 +345,8 @@ struct CapDetailView: View {
                 }
             }
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { columnSize = $0 }
+        .animation(.snappy(duration: 0.25), value: showsVideo)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if current == .comments, model.commentsEnabled {
                 CommentComposer(model: model, ownerName: owned ? nil : detail.cap.ownerName)

@@ -1,0 +1,266 @@
+name: Meetings reliability (real app)
+# Runs a scripted two minute meeting (apps/desktop-gpui/tests/fixtures/meetings) through the real
+# app on Linux and Windows and checks what it made: both sides recorded through the OS audio stack,
+# the transcript against the script, one voice per person with the user as You, notes written, a
+# question answered through the Ask bar, a Cloud meeting's clips, and the live indicator's banner
+# staying on screen. The account is a Pro account against a local stub of the meeting endpoints
+# (scripts/ci/meetings/stub_server.py); nothing reaches a Cap server or an AI provider. On Windows
+# the call's voices must also be named after the call page's tiles, read through UI Automation.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/desktop-gpui/src/meetings.rs"
+      - "apps/desktop-gpui/src/meetings/**"
+      - "apps/desktop-gpui/src/meetings_ui/**"
+      - "apps/desktop-gpui/src/transcription.rs"
+      - "apps/desktop-gpui/src/transcription/**"
+      - "apps/desktop-gpui/meetings/**"
+      - "apps/desktop-gpui/meeting-platform/**"
+      - "apps/desktop-gpui/diarize/**"
+      - "apps/desktop-gpui/tests/fixtures/meetings/**"
+      - "scripts/ci/meetings/**"
+      - ".github/workflows/meetings-reliability.yml"
+  schedule:
+    - cron: "10 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meetings-reliability-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Release speed for live transcription, with the debug assertions the scripted-meeting hooks need.
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+
+jobs:
+  linux:
+    name: Meetings on Linux (real app)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux desktop dependencies
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Install the meeting harness tools
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xdotool imagemagick dbus \
+            pulseaudio pulseaudio-utils libasound2-plugins ffmpeg openssl openbox > /dev/null
+          if ! command -v google-chrome > /dev/null; then
+            curl -fsSL -o "$RUNNER_TEMP/chrome.deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y -qq "$RUNNER_TEMP/chrome.deb" > /dev/null
+          fi
+          google-chrome --version
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-meetings
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+
+      - name: Prepare GPUI dependency
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build the app
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
+
+      - name: Restore the meeting models
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/meeting-models
+          key: meeting-models-v1-${{ hashFiles('scripts/ci/meetings/models.sh') }}
+
+      - name: Download the meeting models
+        run: bash scripts/ci/meetings/models.sh "$RUNNER_TEMP/meeting-models"
+
+      - name: Scripted meetings on Xvfb
+        run: |
+          env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 \
+            LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib" \
+            ORT_DYLIB_PATH="$GITHUB_WORKSPACE/target/native-deps/onnxruntime/lib/libonnxruntime.so" \
+            CAP_MEETINGS_MODELS="$RUNNER_TEMP/meeting-models" \
+            dbus-run-session -- bash scripts/ci/meetings/linux.sh \
+            "$GITHUB_WORKSPACE/apps/desktop-gpui/target/release/cap-gpui" "$RUNNER_TEMP/meetings"
+
+      - name: Upload the runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meetings-reliability-linux
+          path: |
+            ${{ runner.temp }}/meetings/*/check.txt
+            ${{ runner.temp }}/meetings/*/score.json
+            ${{ runner.temp }}/meetings/*/stub.jsonl
+            ${{ runner.temp }}/meetings/*/page_started.log
+            ${{ runner.temp }}/meetings/*/app.log
+            ${{ runner.temp }}/meetings/*/shots/*.png
+            ${{ runner.temp }}/meetings/indicator/indicator.png
+          retention-days: 7
+
+  build-windows:
+    name: Build for Windows meetings
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-pc-windows-msvc
+          prefix-key: v1-rust-meetings
+          workspaces: apps/desktop-gpui -> target
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+
+      - name: Prepare GPUI dependency
+        shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build the app
+        shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --bin cap-gpui
+
+      # The build compiles GPUI's shaders at startup from its source tree in ../zed-cap, by
+      # absolute path: the run job puts them back there (as picker-smoke.yml does).
+      - name: Stage the app
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/gpui-windows-shaders"
+          cp apps/desktop-gpui/target/release/cap-gpui.exe "$stage/"
+          cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
+          printf '%s' "$GITHUB_WORKSPACE" > "$stage/build-workspace.txt"
+          printf '%s' "$(cd ../zed-cap && pwd -W)" > "$stage/build-zed.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meetings-windows-app
+          path: ${{ runner.temp }}/stage
+          retention-days: 1
+
+  windows:
+    name: Meetings on Windows (real app)
+    needs: build-windows
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: meetings-windows-app
+          path: ${{ runner.temp }}/app
+
+      - name: Put the build's source files back at its paths
+        shell: pwsh
+        run: |
+          $app = "$env:RUNNER_TEMP\app"
+          $workspace = (Get-Content "$app\build-workspace.txt" -Raw).Trim()
+          if ($workspace -ne $env:GITHUB_WORKSPACE) {
+            New-Item -ItemType Directory -Force (Split-Path $workspace) | Out-Null
+            cmd /c mklink /J "$workspace" "$env:GITHUB_WORKSPACE"
+            if ($LASTEXITCODE -ne 0) { throw "mklink failed" }
+          }
+          $shaders = Join-Path (Get-Content "$app\build-zed.txt" -Raw).Trim() "crates\gpui_windows\src"
+          New-Item -ItemType Directory -Force $shaders | Out-Null
+          Copy-Item "$app\gpui-windows-shaders\*.hlsl" $shaders
+
+      - name: Run setup
+        shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+
+      - name: Virtual sound card
+        shell: pwsh
+        run: scripts/ci/meetings/setup_audio.ps1
+
+      - name: Harness tools
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              $out = choco install ffmpeg -y --no-progress 2>&1 | Out-String
+              if ($LASTEXITCODE -in 0, 1641, 3010) { break }
+              Write-Host "choco install ffmpeg failed (attempt $attempt, exit $LASTEXITCODE)"
+              Write-Host $out
+              if ($attempt -eq 3) { exit 1 }
+              Start-Sleep -Seconds (30 * $attempt)
+            }
+            $choco = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { 'C:\ProgramData\chocolatey' }
+            if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -and (Test-Path "$choco\bin\ffmpeg.exe")) {
+              $env:Path = "$choco\bin;$env:Path"
+              Add-Content $env:GITHUB_PATH "$choco\bin"
+            }
+          }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { Write-Host 'ffmpeg is not on PATH after the install'; exit 1 }
+          ffmpeg -version | Select-Object -First 1
+
+      - name: Restore the meeting models
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/meeting-models
+          key: meeting-models-v1-${{ hashFiles('scripts/ci/meetings/models.sh') }}
+
+      - name: Download the meeting models
+        shell: bash
+        run: bash scripts/ci/meetings/models.sh "$RUNNER_TEMP/meeting-models"
+
+      - name: Scripted meetings
+        shell: pwsh
+        run: |
+          $bin = "$env:RUNNER_TEMP\app\cap-gpui.exe"
+          Copy-Item "$env:GITHUB_WORKSPACE\target\release\*.dll" "$env:RUNNER_TEMP\app\"
+          $env:CAP_MEETINGS_MODELS = "$env:RUNNER_TEMP\meeting-models"
+          & scripts/ci/meetings/windows.ps1 -Bin $bin -Work "$env:RUNNER_TEMP\meetings"
+          exit $LASTEXITCODE
+
+      - name: Upload the runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meetings-reliability-windows
+          path: |
+            ${{ runner.temp }}/meetings/*/check.txt
+            ${{ runner.temp }}/meetings/*/score.json
+            ${{ runner.temp }}/meetings/*/stub.jsonl
+            ${{ runner.temp }}/meetings/*/page_started.log
+            ${{ runner.temp }}/meetings/*/app.log
+            ${{ runner.temp }}/meetings/*/shots/*.png
+            ${{ runner.temp }}/meetings/indicator/indicator.png
+          retention-days: 7

@@ -17,8 +17,9 @@ runs:
       # setup.js stages -> soname mismatch and the loader fails at launch. Keeping
       # them absent forces the binary to link the same FFmpeg 7 that gets bundled.
       run: |
-        sudo apt update
-        sudo apt install -y --no-install-recommends \
+        # apt-install.sh puts the fastest Ubuntu mirror first and moves off one
+        # that stalls, so a slow mirror cannot eat the job's time limit.
+        bash "$GITHUB_ACTION_PATH/apt-install.sh" \
           libwebkit2gtk-4.1-dev \
           build-essential \
           pkg-config \
@@ -36,6 +37,7 @@ runs:
           libasound2-dev \
           libasound2-plugins \
           pulseaudio-utils \
+          dbus-daemon \
           libdbus-1-dev \
           libudev-dev \
           libx11-dev \
@@ -54,5 +56,6 @@ runs:
           rpm \
           cpio \
           libarchive-tools \
+          unzip \
           zstd \
           patchelf

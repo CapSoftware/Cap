@@ -83,11 +83,15 @@ const app = new Hono()
 	.use(corsMiddleware)
 	.route("/", root.app);
 
-const subscribe = () =>
+const subscribe = (
+	body: Record<string, unknown> = {
+		priceId: STRIPE_PLAN_IDS.development.monthly,
+	},
+) =>
 	app.request("https://cap.so/api/desktop/subscribe", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ priceId: STRIPE_PLAN_IDS.development.monthly }),
+		body: JSON.stringify(body),
 	});
 
 describe("POST /api/desktop/subscribe", () => {
@@ -149,5 +153,25 @@ describe("POST /api/desktop/subscribe", () => {
 				metadata: expect.objectContaining({ dubCustomerId: "user-1" }),
 			}),
 		);
+	});
+
+	it("defaults to the monthly plan when the app sends no price", async () => {
+		const response = await subscribe({});
+
+		expect(response.status).toBe(200);
+		expect(mocks.createSession).toHaveBeenCalledWith(
+			expect.objectContaining({
+				line_items: [
+					{ price: STRIPE_PLAN_IDS.development.monthly, quantity: 1 },
+				],
+			}),
+		);
+	});
+
+	it("still rejects a price that is not a Cap plan", async () => {
+		const response = await subscribe({ priceId: "price_not_cap" });
+
+		expect(response.status).toBe(400);
+		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
 });

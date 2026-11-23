@@ -96,6 +96,7 @@ export interface VideoMetadata {
 	 * Title of the captured monitor or window
 	 */
 	sourceName?: string;
+	desktopClient?: { version: string; gpui: boolean };
 	/**
 	 * AI generated title for the video
 	 */
@@ -132,6 +133,16 @@ export interface VideoMetadata {
 		state: "pending" | "accepted" | "rejected";
 		rawFileKey?: string;
 	};
+	/**
+	 * Thumbnail the owner picked. `file` lives under
+	 * `<ownerId>/<videoId>/thumbnail/` and changes with every pick.
+	 */
+	customThumbnail?: {
+		file: string;
+		source: "upload" | "frame";
+		time?: number;
+		updatedAt: string;
+	};
 }
 
 export interface VideoCallToAction {
@@ -140,6 +151,11 @@ export interface VideoCallToAction {
 	headline?: string;
 	color?: string;
 	showWhilePlaying?: boolean;
+}
+
+export interface OrganizationDefaultCallToAction extends VideoCallToAction {
+	enabledAt: string;
+	includeExisting?: boolean;
 }
 
 export type VideoEditRange = {

@@ -10,7 +10,13 @@ import {
 } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
+import { getCustomThumbnailMetadata } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faArrowRight } from "@fortawesome/free-solid-svg-icons/faArrowRight";
+import { faBackwardStep } from "@fortawesome/free-solid-svg-icons/faBackwardStep";
+import { faBoxArchive } from "@fortawesome/free-solid-svg-icons/faBoxArchive";
+import { faBoxOpen } from "@fortawesome/free-solid-svg-icons/faBoxOpen";
 import { faChartSimple } from "@fortawesome/free-solid-svg-icons/faChartSimple";
 import { faCheck } from "@fortawesome/free-solid-svg-icons/faCheck";
 import { faCopy } from "@fortawesome/free-solid-svg-icons/faCopy";
@@ -29,6 +35,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { FolderInput } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useEffect, useRef, useState } from "react";
@@ -46,6 +53,7 @@ import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import { rejectOnFailure } from "@/lib/effect-react-query";
 import {
 	CAP_DRAG_TYPE,
+	MAX_MOVE_ITEMS,
 	type MoveLocation,
 	serializeCapDrag,
 } from "@/lib/move-items";
@@ -65,6 +73,11 @@ import { CapCardAnalytics, capAnalyticsHref } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
 
+const CustomThumbnailDialog = dynamic(
+	() => import("@/components/custom-thumbnail/CustomThumbnailDialog"),
+	{ ssr: false },
+);
+
 const { circumference } = getProgressCircleConfig();
 
 function getProgressStatusText(
@@ -79,6 +92,11 @@ function getProgressStatusText(
 			return "Uploading";
 	}
 }
+
+const altKeyLabel = () =>
+	typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform)
+		? "⌥"
+		: "Alt+";
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
@@ -131,7 +149,7 @@ export interface CapCardProps extends PropsWithChildren {
 	userId?: string;
 	sharedCapCard?: boolean;
 	isSelected?: boolean;
-	onSelectToggle?: () => void;
+	onSelectToggle?: (options?: { shiftKey?: boolean }) => void;
 	selectedIds?: Video.VideoId[];
 	hideSharedStatus?: boolean;
 	anyCapSelected?: boolean;
@@ -142,7 +160,17 @@ export interface CapCardProps extends PropsWithChildren {
 	moveLocation?: MoveLocation;
 	moveRootLabel?: string;
 	currentFolderId?: Folder.FolderId | null;
+	href?: string;
+	isArchived?: boolean;
+	onArchiveToggle?: () => void;
+	reorder?: CapCardReorderActions;
 }
+
+export type CapCardReorderActions = {
+	onMoveToStart?: () => void;
+	onMoveEarlier?: () => void;
+	onMoveLater?: () => void;
+};
 
 export const CapCard = ({
 	cap,
@@ -162,6 +190,10 @@ export const CapCard = ({
 	moveLocation,
 	moveRootLabel,
 	currentFolderId = null,
+	href,
+	isArchived = false,
+	onArchiveToggle,
+	reorder,
 }: CapCardProps) => {
 	const { activeOrganization } = useDashboardContext();
 
@@ -179,6 +211,8 @@ export const CapCard = ({
 	const [isDragging, setIsDragging] = useState(false);
 	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 	const [isMoveDialogOpen, setIsMoveDialogOpen] = useState(false);
+	const [thumbnailDialogMounted, setThumbnailDialogMounted] = useState(false);
+	const [isThumbnailDialogOpen, setIsThumbnailDialogOpen] = useState(false);
 	const { user, setUpgradeModalOpen } = useDashboardContext();
 	const [editUpgradeModalOpen, setEditUpgradeModalOpen] = useState(false);
 
@@ -231,8 +265,14 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+	const customThumbnail = getCustomThumbnailMetadata(cap.metadata);
 	const moveEnabled = Boolean(canMove && moveLocation && moveRootLabel);
-	const dragEnabled = moveEnabled && (!anyCapSelected || isSelected);
+	// A drag carries at most MAX_MOVE_ITEMS ids; larger selections ("Select
+	// all") go through the Move button, which sends them in batches.
+	const dragEnabled =
+		moveEnabled &&
+		(!anyCapSelected || isSelected) &&
+		(!isSelected || (selectedIds?.length ?? 0) <= MAX_MOVE_ITEMS);
 
 	const queryClient = useQueryClient();
 	const uploadProgress = useUploadProgress(
@@ -335,7 +375,7 @@ export const CapCard = ({
 		e.preventDefault();
 		e.stopPropagation();
 		if (onSelectToggle) {
-			onSelectToggle();
+			onSelectToggle({ shiftKey: e.shiftKey });
 		}
 	};
 
@@ -413,12 +453,12 @@ export const CapCard = ({
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
-					"flex relative overflow-hidden transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group z-10",
+					"flex relative overflow-hidden flex-col w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group z-10 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-[border-color,box-shadow] duration-200",
 					isSelected
-						? "!border-blue-10"
+						? "!border-blue-9 ring-1 ring-blue-9"
 						: anyCapSelected
-							? "border-blue-10 hover:border-blue-10"
-							: "hover:border-blue-10",
+							? "hover:border-blue-9"
+							: "hover:border-gray-5 hover:shadow-[0_6px_20px_-8px_rgba(0,0,0,0.12)]",
 					isDragging && "opacity-50",
 					dragEnabled && "cursor-grab active:cursor-grabbing",
 				)}
@@ -426,7 +466,8 @@ export const CapCard = ({
 				{anyCapSelected && !sharedCapCard && (
 					<button
 						type="button"
-						aria-label={`Select ${cap.name}`}
+						tabIndex={-1}
+						aria-hidden="true"
 						className="absolute inset-0 z-10"
 						onClick={handleSelectClick}
 					/>
@@ -440,7 +481,7 @@ export const CapCard = ({
 							: isDropdownOpen
 								? "opacity-100"
 								: "opacity-0 group-hover:opacity-100",
-						"top-2 right-2 flex-col gap-2 z-[51]",
+						"top-2.5 right-2.5 flex-row gap-1.5 z-[51]",
 					)}
 				>
 					<CapCardButton
@@ -558,6 +599,48 @@ export const CapCard = ({
 									<p className="text-sm text-gray-12">Move</p>
 								</DropdownMenuItem>
 							)}
+							{reorder?.onMoveToStart && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										reorder.onMoveToStart?.();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faBackwardStep} />
+									<p className="text-sm text-gray-12">Move to start</p>
+								</DropdownMenuItem>
+							)}
+							{reorder?.onMoveEarlier && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										reorder.onMoveEarlier?.();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
+									<p className="flex-1 text-sm text-gray-12">Move earlier</p>
+									<kbd className="font-sans text-xs text-gray-9">
+										{altKeyLabel()}←
+									</kbd>
+								</DropdownMenuItem>
+							)}
+							{reorder?.onMoveLater && (
+								<DropdownMenuItem
+									onClick={(event) => {
+										event.stopPropagation();
+										reorder.onMoveLater?.();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faArrowRight} />
+									<p className="flex-1 text-sm text-gray-12">Move later</p>
+									<kbd className="font-sans text-xs text-gray-9">
+										{altKeyLabel()}→
+									</kbd>
+								</DropdownMenuItem>
+							)}
 							{isOwner && (
 								<>
 									<DropdownMenuItem
@@ -591,6 +674,19 @@ export const CapCard = ({
 											<p className="text-sm text-gray-12">Edit video</p>
 										</DropdownMenuItem>
 									)}
+									{cap.isScreenshot !== true && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												setThumbnailDialogMounted(true);
+												setIsThumbnailDialogOpen(true);
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon className="size-3" icon={faImage} />
+											<p className="text-sm text-gray-12">Thumbnail</p>
+										</DropdownMenuItem>
+									)}
 									<DropdownMenuItem
 										onClick={() => {
 											if (!user.isPro) setUpgradeModalOpen(true);
@@ -606,6 +702,23 @@ export const CapCard = ({
 											{passwordProtected ? "Edit password" : "Add password"}
 										</p>
 									</DropdownMenuItem>
+									{onArchiveToggle && (
+										<DropdownMenuItem
+											onClick={(e) => {
+												e.stopPropagation();
+												onArchiveToggle();
+											}}
+											className="flex gap-2 items-center rounded-lg"
+										>
+											<FontAwesomeIcon
+												className="size-3"
+												icon={isArchived ? faBoxOpen : faBoxArchive}
+											/>
+											<p className="text-sm text-gray-12">
+												{isArchived ? "Unarchive" : "Archive"}
+											</p>
+										</DropdownMenuItem>
+									)}
 									{onDelete && (
 										<DropdownMenuItem
 											onClick={(e) => {
@@ -623,6 +736,20 @@ export const CapCard = ({
 						</DropdownMenuContent>
 					</DropdownMenu>
 
+					{thumbnailDialogMounted && (
+						<CustomThumbnailDialog
+							open={isThumbnailDialogOpen}
+							onOpenChange={setIsThumbnailDialogOpen}
+							videoId={cap.id}
+							hasCustomThumbnail={customThumbnail !== null}
+							canPickFrame={
+								!cap.hasActiveUpload &&
+								(cap.source?.type === "desktopMP4" ||
+									cap.source?.type === "webMP4")
+							}
+							initialFrameTime={customThumbnail?.time ?? null}
+						/>
+					)}
 					<ConfirmationDialog
 						open={confirmOpen}
 						icon={<FontAwesomeIcon icon={faVideo} />}
@@ -639,9 +766,11 @@ export const CapCard = ({
 				{!sharedCapCard && onSelectToggle && (
 					<button
 						type="button"
-						aria-label={isSelected ? "Deselect cap" : "Select cap"}
+						aria-pressed={isSelected}
+						aria-label={`Select ${cap.name}`}
+						title="Shift-click to select a range"
 						className={clsx(
-							"absolute top-2 left-2 z-[49] duration-200",
+							"absolute top-2.5 left-2.5 z-[49] duration-200 rounded-md focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9",
 							isSelected || anyCapSelected || isDropdownOpen
 								? "opacity-100"
 								: "group-hover:opacity-100 opacity-0",
@@ -653,20 +782,24 @@ export const CapCard = ({
 					>
 						<div
 							className={clsx(
-								"flex justify-center items-center w-6 h-6 rounded-md border transition-colors cursor-pointer hover:bg-gray-3/60",
+								"flex justify-center items-center w-[22px] h-[22px] rounded-md border shadow-sm transition-[background-color,border-color,transform] duration-150 cursor-pointer active:scale-90",
 								isSelected
-									? "bg-blue-10 border-blue-10"
-									: "border-white-95 bg-gray-1/80",
+									? "bg-blue-9 border-blue-9"
+									: "border-gray-5 bg-gray-1 hover:border-gray-7",
 							)}
 						>
-							{isSelected && (
-								<FontAwesomeIcon icon={faCheck} className="text-white size-3" />
-							)}
+							<FontAwesomeIcon
+								icon={faCheck}
+								className={clsx(
+									"text-white size-3 transition-[opacity,transform] duration-150 ease-out",
+									isSelected ? "opacity-100 scale-100" : "opacity-0 scale-50",
+								)}
+							/>
 						</div>
 					</button>
 				)}
 
-				<div className="relative aspect-video w-full">
+				<div className="overflow-hidden relative w-full aspect-video">
 					<Link
 						className={clsx(
 							"relative block w-full h-full",
@@ -676,11 +809,11 @@ export const CapCard = ({
 						onClick={(e) => {
 							if (isDeleting) e.preventDefault();
 						}}
-						href={`/s/${cap.id}`}
+						href={href ?? `/s/${cap.id}`}
 					>
 						{hasVisibleUploadProgress && (
 							<>
-								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60 rounded-t-xl" />
+								<div className="absolute inset-0 z-20 transition-all duration-300 bg-black/60" />
 								<div className="flex absolute bottom-3 left-3 gap-2 items-center z-30">
 									{uploadProgress.status === "failed" ||
 									uploadProgress.status === "error" ? (
@@ -779,12 +912,8 @@ export const CapCard = ({
 									: cap.duration
 							}
 							imageClass={clsx(
-								anyCapSelected
-									? "opacity-50"
-									: isDropdownOpen
-										? "opacity-30"
-										: "group-hover:opacity-30",
-								"transition-opacity duration-200",
+								anyCapSelected && !isSelected && "opacity-60",
+								"transition-[opacity,transform] duration-300 ease-out group-hover:scale-[1.015]",
 							)}
 							containerClass="absolute inset-0"
 							videoId={cap.id}
@@ -799,6 +928,14 @@ export const CapCard = ({
 								uploadProgress.status !== "error"
 							}
 						/>
+						<div
+							aria-hidden
+							className={clsx(
+								"absolute inset-x-0 top-0 z-[11] h-16 bg-gradient-to-b to-transparent transition-opacity duration-200 pointer-events-none from-black/30",
+								isDropdownOpen && !anyCapSelected ? "opacity-100" : "opacity-0",
+								!anyCapSelected && "group-hover:opacity-100",
+							)}
+						/>
 						{cap.isScreenshot === true && !hasVisibleUploadProgress && (
 							<span
 								title="Screenshot"
@@ -810,7 +947,7 @@ export const CapCard = ({
 						)}
 						{effectivePasswordProtected && (
 							<div
-								className="absolute right-2 top-2 z-10 flex size-7 items-center justify-center rounded-full bg-black/70 text-white"
+								className="flex absolute right-2.5 bottom-2.5 z-10 justify-center items-center text-white rounded-full backdrop-blur-sm size-6 bg-black/60"
 								title={
 									cap.hasInheritedPassword
 										? "Password required by space"
@@ -824,7 +961,7 @@ export const CapCard = ({
 				</div>
 				<div
 					className={clsx(
-						"flex flex-col flex-grow gap-3 px-4 pb-4 w-full",
+						"flex flex-col flex-grow gap-3 px-3.5 pt-3 pb-3.5 w-full",
 						!sharedCapCard ? "cursor-pointer" : "cursor-default",
 					)}
 				>

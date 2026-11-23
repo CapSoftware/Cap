@@ -4,6 +4,9 @@ export const recordScreenMacContent = {
 		"How to Screen Record on a Mac With Audio (System Sound + Mic), Free in 2026",
 	description:
 		"The straightforward way to screen record on a Mac with audio — both internal system sound and your microphone — without BlackHole, Terminal commands, or paid software.",
+	seoTitle: "How to screen record on Mac with internal audio | Cap",
+	seoDescription:
+		"Record your Mac screen with sound. Capture internal system audio and your microphone together in Cap, the open source screen recorder with a free plan.",
 	publishedAt: "2025-04-22",
 	updatedAt: "2026-06-26",
 	category: "Tutorials",
