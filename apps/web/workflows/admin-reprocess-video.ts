@@ -458,7 +458,9 @@ async function invalidateResultCache(
 
 	const basePath = `/${ownerId}/${videoId}`;
 	const paths = [
-		`${basePath}/result.mp4`,
+		// The trailing * also clears download responses, which are cached per
+		// response-content-disposition.
+		`${basePath}/result.mp4*`,
 		`${basePath}/screenshot/screen-capture.jpg`,
 		`${basePath}/preview/animated-preview.gif`,
 	];
