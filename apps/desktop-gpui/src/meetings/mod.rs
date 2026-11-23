@@ -328,6 +328,9 @@ struct Recording {
     engine_pump: Task<()>,
     _capture_pump: Task<()>,
     transcript: Transcript,
+    /// This meeting's microphone has been heard repeating the call (a full
+    /// sentence of it was removed as echo): short echoes are judged too.
+    echo_heard: bool,
     mic_sender: Option<flume::Sender<MicrophoneSamples>>,
     /// The feed the sender is on, the meeting's own microphone, and the one
     /// the meeting moved to while its own was gone.
@@ -381,6 +384,7 @@ struct Finishing {
     engine: EngineHandle,
     _engine_pump: Task<()>,
     transcript: Transcript,
+    echo_heard: bool,
     generate_notes: bool,
     voices: LiveVoices,
     /// Ledger gaps still open, from the engine's status, and how many of
@@ -2326,6 +2330,7 @@ impl Meetings {
             engine_pump,
             _capture_pump: capture_pump,
             transcript,
+            echo_heard: false,
             mic_sender,
             mic_actor,
             mic_own,
@@ -2455,6 +2460,7 @@ impl Meetings {
             engine,
             engine_pump,
             transcript,
+            echo_heard,
             voices,
             ..
         } = recording;
@@ -2463,6 +2469,7 @@ impl Meetings {
             engine,
             _engine_pump: engine_pump,
             transcript,
+            echo_heard,
             generate_notes: false,
             voices,
             open_gaps: 0,
@@ -2732,11 +2739,11 @@ impl Meetings {
                 let source = utterance.source;
                 let end_ms = utterance.end_ms;
                 let id = utterance.id.clone();
-                let (transcript, engine) =
+                let (transcript, engine, echo_heard) =
                     if let Some(r) = self.recording.as_mut().filter(|r| r.doc_id == doc_id) {
-                        (&mut r.transcript, Some(&r.engine))
+                        (&mut r.transcript, Some(&r.engine), &mut r.echo_heard)
                     } else if let Some(f) = self.finishing.iter_mut().find(|f| f.doc_id == doc_id) {
-                        (&mut f.transcript, Some(&f.engine))
+                        (&mut f.transcript, Some(&f.engine), &mut f.echo_heard)
                     } else {
                         return;
                     };
@@ -2759,7 +2766,7 @@ impl Meetings {
                         .map(|u| u.id.clone())
                         .collect();
                     transcript.remove(&stale);
-                    let echoes = remove_echoes(transcript);
+                    let echoes = remove_echoes(transcript, echo_heard);
                     if !echoes.is_empty() {
                         let line = vec![LogLine::Delete { ids: echoes }];
                         if let Some(engine) = engine
@@ -2996,6 +3003,7 @@ impl Meetings {
             engine,
             _engine_pump: engine_pump,
             transcript,
+            echo_heard: false,
             generate_notes: false,
             voices: LiveVoices::default(),
             open_gaps,
@@ -4618,14 +4626,29 @@ pub(crate) fn respell(
 /// saved, and its id becomes its segment's final line: a Delete for the
 /// caption that reaches the file after that line would take the person's
 /// words with it.
-fn remove_echoes(transcript: &mut Transcript) -> Vec<String> {
+///
+/// Short lines ("Merci.", "Soft heart,") are judged only once this meeting's
+/// microphone has repeated a full sentence of the call (`echo_heard`): on a
+/// headset nothing comes back, and a quick "Yes." over the other side's
+/// "Yes" is the person's own.
+fn remove_echoes(transcript: &mut Transcript, echo_heard: &mut bool) -> Vec<String> {
     let live: HashSet<String> = transcript
         .utterances()
         .iter()
         .filter(|u| !u.is_final)
         .map(|u| u.id.clone())
         .collect();
-    let mut removed = transcript.suppress_echo(&EchoConfig::default());
+    let config = |short_echoes| EchoConfig {
+        short_echoes,
+        ..EchoConfig::default()
+    };
+    let mut removed = transcript.suppress_echo(&config(*echo_heard));
+    if !*echo_heard && !removed.is_empty() {
+        // A sentence of the call just came back through the speakers: the
+        // short pieces of it already on the microphone go too.
+        *echo_heard = true;
+        removed.extend(transcript.suppress_echo(&config(true)));
+    }
     removed.retain(|id| !live.contains(id));
     removed
 }

@@ -361,6 +361,48 @@ fn utterance(id: &str, source: Source, start_ms: u64, text: &str) -> Utterance {
     }
 }
 
+/// Short echoes are judged only once the meeting's microphone has repeated a
+/// full sentence of the call: before that (a headset, say) a short mic line
+/// over the same words is the person's; after it, the short pieces already
+/// on the microphone go with the sentence.
+#[test]
+fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
+    let timed = |id: &str, source: Source, start: u64, text: &str| {
+        let words: Vec<cap_meetings::transcript::Word> = text
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, w)| cap_meetings::transcript::Word {
+                text: w.into(),
+                start_ms: start + i as u64 * 300,
+                end_ms: start + (i as u64 + 1) * 300,
+            })
+            .collect();
+        Utterance {
+            words,
+            end_ms: start + text.split_whitespace().count() as u64 * 300,
+            ..utterance(id, source, start, text)
+        }
+    };
+    let mut transcript = Transcript::new();
+    let mut heard = false;
+    transcript.upsert(timed(
+        "s1",
+        Source::System,
+        10_000,
+        "Merci beaucoup a tous.",
+    ));
+    transcript.upsert(timed("m1", Source::Mic, 10_040, "Merci"));
+    assert!(super::remove_echoes(&mut transcript, &mut heard).is_empty());
+    assert!(!heard, "a short line alone is no evidence");
+    let call = "the squire was not pleased with the answer he got";
+    transcript.upsert(timed("s2", Source::System, 30_000, call));
+    transcript.upsert(timed("m2", Source::Mic, 30_060, call));
+    let mut saved = super::remove_echoes(&mut transcript, &mut heard);
+    saved.sort();
+    assert_eq!(saved, vec!["m1".to_string(), "m2".to_string()]);
+    assert!(heard);
+}
+
 #[test]
 fn a_live_captions_echo_is_dropped_without_a_saved_delete_for_its_final_line() {
     let call = "the squire was not pleased with the answer he got";
@@ -374,7 +416,7 @@ fn a_live_captions_echo_is_dropped_without_a_saved_delete_for_its_final_line() {
     });
     transcript.upsert(utterance("s2", Source::System, 30_000, call));
     transcript.upsert(utterance("m2", Source::Mic, 30_100, call));
-    let saved = super::remove_echoes(&mut transcript);
+    let saved = super::remove_echoes(&mut transcript, &mut false);
     assert_eq!(
         saved,
         vec!["m2".to_string()],

@@ -107,6 +107,11 @@ pub struct EchoConfig {
     pub min_containment: f64,
     pub max_mic_ratio: f64,
     pub max_words: usize,
+    /// Also judge 1-3 word microphone lines. Only once this meeting's
+    /// microphone is known to hear the call (a full sentence of it was
+    /// removed as echo): on a headset nothing comes back from the call, and
+    /// someone answering "Yes." just as the other side says "Yes" is them.
+    pub short_echoes: bool,
 }
 
 impl Default for EchoConfig {
@@ -116,6 +121,7 @@ impl Default for EchoConfig {
             min_containment: 0.7,
             max_mic_ratio: 1.3,
             max_words: 600,
+            short_echoes: false,
         }
     }
 }
@@ -693,7 +699,7 @@ impl Transcript {
         for mic in self.utterances.iter().filter(|u| u.source == Source::Mic) {
             let words = timed_words(mic);
             if words.len() < ECHO_MIN_WORDS {
-                if short_echo(&words, &far) {
+                if config.short_echoes && short_echo(&words, &far) {
                     echoes.push(mic.id.clone());
                 }
                 continue;

@@ -358,7 +358,11 @@ fn short_replies_inside_far_speech_survive() {
     let offsets = [
         13_500, 14_000, 14_100, 14_400, 15_000, 15_600, 15_900, 16_200,
     ];
-    for with_words in [false, true] {
+    for (heard, with_words) in [(false, false), (false, true), (true, false), (true, true)] {
+        let config = EchoConfig {
+            short_echoes: heard,
+            ..EchoConfig::default()
+        };
         for reply in replies {
             for offset in offsets {
                 let mut t = Transcript::new();
@@ -369,14 +373,15 @@ fn short_replies_inside_far_speech_survive() {
                     t.upsert(utt("far", Source::System, 14_000, 16_000, far_text, true));
                     t.upsert(utt("me", Source::Mic, offset, offset + 400, reply, true));
                 }
-                let removed = t.suppress_echo(&EchoConfig::default());
+                let removed = t.suppress_echo(&config);
                 // The call's own words at the moment it said them, within
-                // the echo delay: what the speakers play back, not a reply.
-                let copy = with_words && SHORT_COPIES.contains(&(reply, offset));
+                // the echo delay, in a meeting whose microphone is known to
+                // hear the call: what the speakers play back, not a reply.
+                let copy = heard && with_words && SHORT_COPIES.contains(&(reply, offset));
                 assert_eq!(
                     removed.is_empty(),
                     !copy,
-                    "{reply:?} at {offset} (words: {with_words})"
+                    "{reply:?} at {offset} (words: {with_words}, call heard: {heard})"
                 );
                 assert_eq!(t.get("me").is_some(), !copy);
             }
@@ -394,6 +399,32 @@ const SHORT_COPIES: [(&str, u64); 6] = [
     ("Yes, that's right", 14_100),
     ("Then we ship", 15_000),
 ];
+
+/// A headset: nothing of the call reaches the microphone, and the person
+/// answers "Yes." a tenth of a second after the other side's "Yes, good."
+/// Without evidence that the microphone hears the call, that stays theirs.
+#[test]
+fn a_headset_backchannel_over_the_same_word_is_kept() {
+    let mut t = Transcript::new();
+    t.upsert(timed(
+        "far",
+        Source::System,
+        14_000,
+        "Yes, good. Let's ship it.",
+        280,
+    ));
+    t.upsert(timed("me", Source::Mic, 14_100, "Yes.", 300));
+    t.upsert(timed(
+        "far2",
+        Source::System,
+        20_000,
+        "Right, thanks everyone.",
+        280,
+    ));
+    t.upsert(timed("me2", Source::Mic, 20_050, "Right, thanks.", 300));
+    assert!(t.suppress_echo(&EchoConfig::default()).is_empty());
+    assert!(t.get("me").is_some() && t.get("me2").is_some());
+}
 
 /// Short echoes from real meetings played through laptop speakers: the mic
 /// heard the call's words within 60 ms of the call track, as one to three
@@ -430,7 +461,11 @@ fn short_echoes_of_the_call_are_removed() {
     t.upsert(timed("reply1", Source::Mic, 26_000, "Okay.", 300));
     t.upsert(timed("reply2", Source::Mic, 27_400, "Gently.", 300));
     t.upsert(utt("reply3", Source::Mic, 37_200, 37_600, "Merci.", true));
-    let removed = t.suppress_echo(&EchoConfig::default());
+    let heard = EchoConfig {
+        short_echoes: true,
+        ..EchoConfig::default()
+    };
+    let removed = t.suppress_echo(&heard);
     assert_eq!(removed, vec!["echo1", "echo2", "echo3"]);
     for id in ["reply1", "reply2", "reply3"] {
         assert!(t.get(id).is_some(), "{id} was removed");
