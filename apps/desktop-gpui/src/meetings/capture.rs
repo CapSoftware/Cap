@@ -962,9 +962,10 @@ impl SourceWorker {
                 source: self.source,
                 ms: job.speech_ms,
             });
-            if let Err(
-                flume::SendTimeoutError::Timeout(job) | flume::SendTimeoutError::Disconnected(job),
-            ) = self.shared.segments.send_timeout(job, Duration::from_secs(2))
+            // Never waits: Stop joins this thread on the UI thread, and the
+            // ledger gets the segment transcribed from disk after Stop.
+            if let Err(flume::TrySendError::Full(job) | flume::TrySendError::Disconnected(job)) =
+                self.shared.segments.try_send(job)
             {
                 self.missed(&job);
             }
@@ -1467,5 +1468,75 @@ impl Drop for SystemPlatform {
             thread.thread().unpark();
             let _ = thread.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared(
+        segments: flume::Sender<SegmentJob>,
+        missed: flume::Sender<super::super::engine::Missed>,
+    ) -> Shared {
+        Shared {
+            origin: Timestamps::now(),
+            audio_dir: None,
+            suffix: String::new(),
+            offset: 0,
+            live_partials: false,
+            segments,
+            partials: flume::bounded(1).0,
+            missed,
+            engine_busy: Arc::new(AtomicBool::new(false)),
+            events: flume::unbounded().0,
+        }
+    }
+
+    /// Quiet noise, then loud noise: speech the segmenter keeps open.
+    fn open_speech() -> Vec<f32> {
+        let mut seed = 0x2545_f491_u32;
+        (0..RATE as usize * 3)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                noise * if i < RATE as usize { 0.002 } else { 0.5 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stop_with_a_full_queue_hands_the_last_segment_to_the_ledger_without_waiting() {
+        let (segments, queued) = flume::bounded(1);
+        segments
+            .try_send(SegmentJob {
+                source: Source::Mic,
+                start_sample: 0,
+                samples: vec![0.0; 16],
+                speech_ms: 0,
+            })
+            .unwrap();
+        let (missed_tx, missed) = flume::unbounded();
+        let mut worker = SourceWorker::new(
+            Source::Mic,
+            shared(segments, missed_tx),
+            Arc::new(SourceCounters::default()),
+        );
+        let closed = worker.segmenter.push(0, &open_speech());
+        assert!(closed.is_empty(), "the speech should still be open");
+
+        let started = Instant::now();
+        let summary = worker.finish();
+
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "finish waited {:?} for a full queue",
+            started.elapsed()
+        );
+        let ledger: Vec<_> = missed.try_iter().collect();
+        assert_eq!(ledger.len(), 1);
+        assert!(ledger[0].len > 0);
+        assert_eq!(summary.stats.dropped_segments, 1);
+        assert_eq!(queued.len(), 1);
     }
 }
