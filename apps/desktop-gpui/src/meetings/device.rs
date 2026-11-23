@@ -80,7 +80,9 @@ thread_local! {
 pub(crate) fn detected_class() -> Class {
     static CLASS: OnceLock<Class> = OnceLock::new();
     *CLASS.get_or_init(|| {
-        let intel = !crate::transcription::supports_parakeet();
+        // The chip, not whether Parakeet runs: an Apple silicon Mac whose macOS
+        // cannot load ONNX Runtime is still fast.
+        let intel = !crate::transcription::parakeet_built();
         let native = if intel {
             Class::IntelMac
         } else {

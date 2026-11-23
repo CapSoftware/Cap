@@ -137,9 +137,111 @@ pub const GPUI_STORE_SECTION: &str = "gpui";
 pub const SELECTED_MODEL_KEY: &str = "selectedTranscriptionModel";
 pub const SELECTED_LANGUAGE_KEY: &str = "selectedTranscriptionLanguage";
 
-/// `supportsParakeetTranscription` (`captions.ts:54-56`).
+/// `supportsParakeetTranscription` (`captions.ts:54-56`), on this computer:
+/// Parakeet, the speaker models and the word aligner run on ONNX Runtime, so
+/// they need its library to load here.
 pub fn supports_parakeet() -> bool {
+    parakeet_built() && onnx_runtime_loads()
+}
+
+/// Whether this build carries Parakeet at all (every build but Intel macOS).
+pub fn parakeet_built() -> bool {
     cfg!(not(all(target_os = "macos", target_arch = "x86_64")))
+}
+
+/// The ONNX Runtime dylib names the oldest macOS it runs on, and below that
+/// it does not load (1.30.0's arm64 build says 14.0 and binds libc++ symbols
+/// older macOS lacks, under Cap's own 12.3 minimum): there Cap uses Whisper,
+/// as on an Intel Mac. Read from the file's load commands, once, so nothing
+/// is loaded to find out. Elsewhere, and in tests, it loads.
+fn onnx_runtime_loads() -> bool {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        static LOADS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *LOADS.get_or_init(|| {
+            let path = cap_camera_effects::onnx_runtime_library_path();
+            let needs = path.as_deref().map(|path| {
+                let mut head = Vec::new();
+                File::open(path)
+                    .and_then(|file| file.take(64 * 1024).read_to_end(&mut head))
+                    .map_err(|_| ())
+                    .and_then(|_| macos_needed_by_dylib(&head))
+            });
+            let running = crate::permissions::macos::product_version()
+                .as_deref()
+                .and_then(parse_macos_version);
+            // Only a library that names a newer macOS than this one is left
+            // out: one Cap cannot find or read is tried as before.
+            let loads = match needs {
+                Some(Ok(Some(needs))) => running.is_none_or(|running| running >= needs),
+                Some(Ok(None) | Err(())) | None => true,
+            };
+            if loads {
+                tracing::info!(?needs, ?running, "ONNX Runtime runs on this macOS");
+            } else {
+                tracing::warn!(
+                    ?path,
+                    ?needs,
+                    ?running,
+                    "ONNX Runtime cannot load on this macOS: Whisper transcribes, without Parakeet or speaker labels"
+                );
+            }
+            loads
+        })
+    }
+    #[cfg(not(all(target_os = "macos", not(test))))]
+    {
+        true
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_macos_version(version: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = version
+        .trim()
+        .split('.')
+        .map(|part| part.parse::<u32>().ok());
+    let major = parts.next()??;
+    let minor = parts.next().unwrap_or(Some(0))?;
+    let patch = parts.next().unwrap_or(Some(0))?;
+    Some((major, minor, patch))
+}
+
+/// The minimum macOS a thin 64-bit Mach-O names (`LC_BUILD_VERSION`, or the
+/// older `LC_VERSION_MIN_MACOSX`). `Ok(None)`: a universal file or one that
+/// names none, taken as loadable. `Err`: not a Mach-O at all.
+#[cfg(any(target_os = "macos", test))]
+fn macos_needed_by_dylib(bytes: &[u8]) -> Result<Option<(u32, u32, u32)>, ()> {
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const FAT_MAGIC: u32 = 0xcafe_babe;
+    const LC_VERSION_MIN_MACOSX: u32 = 0x24;
+    const LC_BUILD_VERSION: u32 = 0x32;
+    let word = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+    };
+    match word(0) {
+        Some(MH_MAGIC_64) => {}
+        Some(magic) if magic.swap_bytes() == FAT_MAGIC => return Ok(None),
+        _ => return Err(()),
+    }
+    let commands = word(16).ok_or(())?;
+    let unpack = |v: u32| (v >> 16, (v >> 8) & 0xff, v & 0xff);
+    let mut at = 32;
+    for _ in 0..commands {
+        let (Some(cmd), Some(size)) = (word(at), word(at + 4)) else {
+            break;
+        };
+        match cmd {
+            LC_BUILD_VERSION => return Ok(word(at + 12).map(unpack)),
+            LC_VERSION_MIN_MACOSX => return Ok(word(at + 8).map(unpack)),
+            _ => {}
+        }
+        if size < 8 {
+            break;
+        }
+        at += size as usize;
+    }
+    Ok(None)
 }
 
 /// `PARAKEET_DIR_MODELS` (`captions.ts:26`).
@@ -3462,6 +3564,63 @@ mod tests {
             &mut untouched,
         );
         assert_eq!(flat(&untouched[0]), flat(&heard));
+    }
+
+    fn dylib(commands: &[(u32, Vec<u32>)]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for word in [
+            0xfeed_facf,
+            0x0100_000c,
+            0,
+            6,
+            commands.len() as u32,
+            0,
+            0,
+            0,
+        ] {
+            bytes.extend_from_slice(&u32::to_le_bytes(word));
+        }
+        for (cmd, body) in commands {
+            bytes.extend_from_slice(&cmd.to_le_bytes());
+            bytes.extend_from_slice(&((8 + 4 * body.len()) as u32).to_le_bytes());
+            for word in body {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn the_onnx_runtime_dylib_names_the_macos_it_needs() {
+        // LC_UUID first, then LC_BUILD_VERSION: platform macOS, minos 14.0, sdk 26.2.
+        let ort_1_30 = dylib(&[
+            (0x1b, vec![0; 4]),
+            (0x32, vec![1, 0x000e_0000, 0x001a_0200, 0]),
+        ]);
+        assert_eq!(macos_needed_by_dylib(&ort_1_30), Ok(Some((14, 0, 0))));
+        let older = dylib(&[(0x24, vec![0x000a_0f00, 0x000e_0000])]);
+        assert_eq!(macos_needed_by_dylib(&older), Ok(Some((10, 15, 0))));
+        assert_eq!(
+            macos_needed_by_dylib(&dylib(&[(0x1b, vec![0; 4])])),
+            Ok(None)
+        );
+        assert_eq!(
+            macos_needed_by_dylib(&[0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2]),
+            Ok(None)
+        );
+        assert_eq!(macos_needed_by_dylib(b""), Err(()));
+        assert_eq!(macos_needed_by_dylib(b"not a library at all"), Err(()));
+    }
+
+    #[test]
+    fn macos_versions_compare_as_numbers() {
+        assert_eq!(parse_macos_version("13.6.1"), Some((13, 6, 1)));
+        assert_eq!(parse_macos_version("14.0"), Some((14, 0, 0)));
+        assert_eq!(parse_macos_version("26"), Some((26, 0, 0)));
+        assert_eq!(parse_macos_version("x"), None);
+        assert!(parse_macos_version("13.6.1") < Some((14, 0, 0)));
+        assert!(parse_macos_version("14.2") >= Some((14, 0, 0)));
+        assert!(parse_macos_version("26.1") >= Some((14, 0, 0)));
     }
 
     #[test]

@@ -562,7 +562,7 @@ fn spawn_relaunch(
 mod screen_capture;
 
 #[cfg(target_os = "macos")]
-mod macos {
+pub(crate) mod macos {
     use super::{MediaAuthorization, OSPermission, RawPermissions};
 
     #[link(name = "ApplicationServices", kind = "framework")]
