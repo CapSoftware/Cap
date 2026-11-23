@@ -316,6 +316,11 @@ impl AskPanel {
             self.access = access;
             self.has_notes = has_notes;
             self.in_call = in_call;
+            if let Some(current) = self.lock() {
+                for exchange in self.thread.iter_mut().filter(|e| e.locked.is_some()) {
+                    exchange.locked = Some(current);
+                }
+            }
             cx.notify();
         }
     }

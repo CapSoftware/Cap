@@ -1573,6 +1573,65 @@ fn a_used_up_trial_is_still_offered_pro(cx: &mut TestAppContext) {
     assert!(ask.read_with(cx, |a, _| a.pro_tag()));
 }
 
+#[gpui::test]
+fn a_held_question_follows_the_access_it_is_shown_under(cx: &mut TestAppContext) {
+    use crate::{i18n::tr, meetings::AiAccess};
+    let (ask, cx) = ask_panel(cx);
+    let trial = AiAccess::Trial { remaining: 1 };
+    ask.update(cx, |a, cx| {
+        a.set_doc(Some("doc".into()), cx);
+        a.set_access(trial, false, false, cx);
+        a.refused_by_server("What did we decide?");
+    });
+    let notes_first = (tr::cap_ai::ask::locked_notes_first(), None);
+    let upgrade = (
+        tr::cap_ai::ask::locked_upgrade(),
+        Some(tr::cap_ai::card::get_pro()),
+    );
+    let sign_in = (
+        tr::cap_ai::ask::locked_sign_in(),
+        Some(tr::cap_ai::card::sign_in()),
+    );
+    assert_eq!(ask.read_with(cx, |a, _| a.held_copy()), vec![notes_first]);
+
+    ask.update(cx, |a, cx| {
+        a.set_access(AiAccess::NeedsUpgrade, false, false, cx)
+    });
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![upgrade],
+        "last free meeting used elsewhere: offered Cap Pro"
+    );
+
+    ask.update(cx, |a, cx| a.set_access(trial, false, false, cx));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![notes_first],
+        "a free meeting back: waits for the notes again"
+    );
+
+    ask.update(cx, |a, cx| {
+        a.set_access(AiAccess::NeedsSignIn, false, false, cx)
+    });
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![sign_in],
+        "signed out: asked to sign in"
+    );
+
+    ask.update(cx, |a, cx| {
+        a.set_access(AiAccess::NeedsUpgrade, false, false, cx)
+    });
+    assert_eq!(ask.read_with(cx, |a, _| a.held_copy()), vec![upgrade]);
+
+    ask.update(cx, |a, cx| a.set_access(AiAccess::Ready, false, false, cx));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![(tr::cap_ai::ask::ready(), Some(tr::cap_ai::ask::send_now()))],
+        "upgraded: the question can be sent"
+    );
+}
+
 /// Voice choices on a finished meeting made while the documents writer is
 /// busy: the transcript shows them once the write lands, without reopening.
 #[gpui::test]
