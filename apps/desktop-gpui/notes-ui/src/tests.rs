@@ -1325,12 +1325,12 @@ fn marked_text_survives_a_summary_streaming_into_its_block(cx: &mut TestAppConte
         })
     });
     // Closing the bold drops two bytes ahead of the composition, which then
-    // pointed inside 本.
+    // pointed inside 本. The chunk now waits for the composition.
     editor.update(cx, |e, cx| {
         e.append_markdown_streaming("**", cap_notes::Origin::Generated, cx)
     });
     cx.run_until_parked();
-    assert_eq!(texts(&editor, cx), vec!["x 日本語"]);
+    assert_eq!(texts(&editor, cx), vec!["x **日本語"]);
     cx.update(|window, cx| {
         editor.update(cx, |e, cx| {
             let len = e.document().blocks[0].text.encode_utf16().count() + 4;
@@ -1339,6 +1339,69 @@ fn marked_text_survives_a_summary_streaming_into_its_block(cx: &mut TestAppConte
         })
     });
     cx.run_until_parked();
+    // Ending the composition commits it and lets the held chunk land.
+    cx.update(|window, cx| editor.update(cx, |e, cx| e.unmark_text(window, cx)));
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(texts(&editor, cx), vec!["x 日に本語"]);
+}
+
+#[gpui::test]
+fn a_word_being_composed_survives_the_summary_streaming_into_its_block(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, "");
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("x **日本語", cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    caret(&editor, cx, Pos::new(0, "x **日".len()));
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| {
+            e.replace_and_mark_text_in_range(None, "に", None, window, cx)
+        })
+    });
+    // The next chunk would re-parse the block being composed in: it waits.
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("**", cap_notes::Origin::Generated, cx)
+    });
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert_eq!(texts(&editor, cx), vec!["x **日本語"]);
+    let marked = cx.update(|window, cx| editor.update(cx, |e, cx| e.marked_text_range(window, cx)));
+    assert!(marked.is_some(), "the composition is still open");
+    // Committing keeps the composed word, and the held text follows it.
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| e.replace_text_in_range(None, "に", window, cx))
+    });
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    let after = texts(&editor, cx);
+    assert!(
+        after[0].contains("日に本"),
+        "the composed word survives: {after:?}"
+    );
+    assert!(
+        after.concat().ends_with("**"),
+        "the held chunk landed: {after:?}"
+    );
+    assert!(!editor.read_with(cx, |e, _| e.is_pacing()));
+}
+
+#[gpui::test]
+fn a_composition_before_the_streamed_tail_does_not_hold_it(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, "Notes from me");
+    caret(&editor, cx, Pos::new(0, "Notes".len()));
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| {
+            e.replace_and_mark_text_in_range(None, "に", None, window, cx)
+        })
+    });
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("Summary line", cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(texts(&editor, cx), vec!["Notes from me", "Summary line"]);
+    let marked = cx.update(|window, cx| editor.update(cx, |e, cx| e.marked_text_range(window, cx)));
+    assert!(marked.is_some());
 }
 
 #[test]

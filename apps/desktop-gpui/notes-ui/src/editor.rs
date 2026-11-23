@@ -590,8 +590,12 @@ impl NotesEditor {
             return;
         }
         // Pacing is part of showing someone write; without that (or with
-        // reduced motion) the text lands as it comes.
-        if cx.reduce_motion() || (!self.is_writing() && !self.pacer.is_active()) {
+        // reduced motion) the text lands as it comes, unless it would rewrite
+        // the block holding an IME composition: then it waits in the pacer
+        // until the composition is committed or cancelled.
+        if (cx.reduce_motion() || (!self.is_writing() && !self.pacer.is_active()))
+            && !self.composing_in_stream(origin)
+        {
             self.apply_stream_chunk(chunk, origin, cx);
             return;
         }
@@ -606,18 +610,46 @@ impl NotesEditor {
         if self.pacer.task.is_none() {
             // The first words show at once; the rest follow at the pace.
             self.release_words(cx);
-            self.pacer.task = Some(cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor().timer(PACE_TICK).await;
-                    let more = this
-                        .update(cx, |this, cx| this.release_words(cx))
-                        .unwrap_or(false);
-                    if !more {
-                        break;
-                    }
-                }
-            }));
+            self.tick_pacer(cx);
         }
+    }
+
+    fn tick_pacer(&mut self, cx: &mut Context<Self>) {
+        self.pacer.task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(PACE_TICK).await;
+                let more = this
+                    .update(cx, |this, cx| this.release_words(cx))
+                    .unwrap_or(false);
+                if !more {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// The first block a chunk of `origin` would re-parse.
+    fn stream_start(&self, origin: Origin) -> usize {
+        let doc = self.editor.document();
+        let len = doc.blocks.len();
+        match self.stream.as_ref() {
+            Some(tail) if tail.len_after == len && tail.origin == origin => tail.start,
+            _ if len == 1
+                && doc.blocks[0].kind.is_paragraph_like()
+                && doc.blocks[0].text.is_empty() =>
+            {
+                0
+            }
+            _ => len,
+        }
+    }
+
+    /// An IME composition sits in the blocks the next chunk re-parses, where
+    /// applying it would throw the composed text away.
+    fn composing_in_stream(&self, origin: Origin) -> bool {
+        self.composition
+            .as_ref()
+            .is_some_and(|c| c.block >= self.stream_start(origin))
     }
 
     /// Lay the page out at its full height so a host can scroll it with
@@ -680,18 +712,30 @@ impl NotesEditor {
 
     /// One tick of the pacer. False once everything is shown.
     fn release_words(&mut self, cx: &mut Context<Self>) -> bool {
+        let origin = self.pacer.origin.unwrap_or(Origin::Generated);
+        if !self.pacer.pending.is_empty() && self.composing_in_stream(origin) {
+            // Held for the composition; the next tick after it ends shows it.
+            if self.pacer.task.is_none() {
+                self.tick_pacer(cx);
+            }
+            return true;
+        }
         let pending = &self.pacer.pending;
         let words = pending.split_whitespace().count();
         let finishing = self.pacer.finishing || !self.is_writing();
         let count = ((words as f32) * PACE_TICK.as_secs_f32() / PACE_DRAIN)
             .ceil()
             .clamp(1., PACE_MAX_WORDS as f32) as usize;
-        let end = release_end(pending, count, self.pacer.at_line_start, finishing)
-            .unwrap_or(if finishing { pending.len() } else { 0 });
+        // Reduced motion never paces; text held for a composition lands whole.
+        let end = if cx.reduce_motion() {
+            pending.len()
+        } else {
+            release_end(pending, count, self.pacer.at_line_start, finishing)
+                .unwrap_or(if finishing { pending.len() } else { 0 })
+        };
         if end > 0 {
             let chunk: String = self.pacer.pending.drain(..end).collect();
             self.pacer.at_line_start = chunk.ends_with('\n');
-            let origin = self.pacer.origin.unwrap_or(Origin::Generated);
             self.apply_stream_chunk(&chunk, origin, cx);
         }
         if self.pacer.pending.is_empty() && (finishing || end == 0) {
