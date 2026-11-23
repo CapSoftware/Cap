@@ -1,0 +1,81 @@
+name: Scratch library tab relaunch check (temporary)
+
+on:
+  push:
+    branches: [ci/bm-f1app]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-f1app
+  cancel-in-progress: true
+
+env:
+  ROUND1_RUN: "45167422846"
+  FIX_RUN: "45179676975"
+
+jobs:
+  f1:
+    name: Library reopens on the last tab (real Linux app)
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xdotool imagemagick dbus pulseaudio pulseaudio-utils \
+            ffmpeg python3-psutil openbox at-spi2-core gir1.2-atspi-2.0 python3-gi > /dev/null
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-linux-fix
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.FIX_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-linux-base
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.ROUND1_RUN }}
+          github-token: ${{ github.token }}
+      - name: Relaunch check
+        run: |
+          export A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          cat "$A"/*/sha.txt
+          cat > "$RUNNER_TEMP/run.sh" <<'EOF'
+          export DISPLAY=:79 XDG_SESSION_TYPE=x11 NO_AT_BRIDGE=0
+          unset WAYLAND_DISPLAY
+          Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          pulse_dir=$(mktemp -d)
+          export PULSE_SERVER=unix:$pulse_dir/native
+          pulseaudio -n --daemonize=no --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=bm_out" >/dev/null 2>&1 &
+          launcher=$(ls /usr/libexec/at-spi-bus-launcher /usr/lib/at-spi2-core/at-spi-bus-launcher 2>/dev/null | head -1)
+          "$launcher" --launch-immediately >/dev/null 2>&1 &
+          sleep 2
+          dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
+            string:org.a11y.Status string:IsEnabled variant:boolean:true >/dev/null || true
+          dbus-send --session --print-reply --dest=org.a11y.Bus /org/a11y/bus org.freedesktop.DBus.Properties.Set \
+            string:org.a11y.Status string:ScreenReaderEnabled variant:boolean:true >/dev/null || true
+          python3 .bm/bm.py --mode f1 --base "$A/base/cap-gpui" --base-libs "$A/base/libs" \
+            --fix "$A/fix/cap-gpui" --fix-libs "$A/fix/libs" --out "$RUNNER_TEMP/f1"
+          EOF
+          dbus-run-session -- bash "$RUNNER_TEMP/run.sh"
+          python3 -c "import json;s=json.load(open('$RUNNER_TEMP/f1/summary.json'))['steps'];print(json.dumps({k:v for k,v in s.items() if k.startswith('f1.')},indent=1))"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-f1
+          path: |
+            ${{ runner.temp }}/f1/summary.*
+            ${{ runner.temp }}/f1/runs/**/*.png
+            ${{ runner.temp }}/f1/runs/**/tree.txt
+            ${{ runner.temp }}/f1/runs/**/app.log
+          retention-days: 7

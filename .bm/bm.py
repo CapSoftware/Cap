@@ -113,7 +113,8 @@ class App:
                     cpu += c.user + c.system
                     rss += p.memory_info().rss
                     threads += p.num_threads()
-                    for conn in p.net_connections(kind="inet"):
+                    conns = p.net_connections(kind="inet") if hasattr(p, "net_connections") else p.connections(kind="inet")
+                    for conn in conns:
                         if conn.raddr:
                             self.remotes.add(f"{conn.raddr.ip}:{conn.raddr.port}")
                 except psutil.Error:
@@ -209,6 +210,8 @@ class App:
             "panics": text.count("panicked at"),
             "errors": len([l for l in text.splitlines() if " ERROR " in l or "ERROR " in l[:40]]),
             "remotes": sorted(self.remotes),
+            "launch_error": [l for l in text.splitlines()
+                             if re.search(r"Library not loaded|error while loading shared|cannot open shared object|was not found|0xc0000135", l)][:3],
         }
         with open(os.path.join(self.dir, "result.json"), "w") as f:
             json.dump(res, f, indent=1)
@@ -344,6 +347,15 @@ class Flow:
         self.bins = {"old": args.old, "base": args.base, "head": args.head, "fix": args.fix}
         self.libs = {"old": args.old_libs, "base": args.base_libs, "head": args.head_libs, "fix": args.fix_libs}
 
+    def ensure_target_window(self):
+        if getattr(self, "_target", None) and self._target.poll() is None:
+            return
+        self._target = subprocess.Popen(
+            ["xmessage", "-geometry", "480x270+700+300", "-title", "BM window to record",
+             "A window to record, with some text in it."],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+
     def profile(self, name):
         p = os.path.join(self.out, "profiles", name)
         os.makedirs(p, exist_ok=True)
@@ -351,6 +363,9 @@ class Flow:
 
     def app(self, tag, profile, name, env=None):
         base_env = {"CAP_GPUI_AUTO_NO_MIC": "1"}
+        if OS == "linux" and env and "CAP_GPUI_AUTO_RECORD" in env and env["CAP_GPUI_AUTO_RECORD"] != "screenshot":
+            self.ensure_target_window()
+            base_env.update({"CAP_GPUI_AUTO_OVERLAY": "window", "CAP_GPUI_AUTO_WINDOW": "BM window to record"})
         base_env.update(env or {})
         return App(self.bins[tag], profile, self.out, name, base_env, self.libs[tag]).start()
 
@@ -696,6 +711,171 @@ class Flow:
                 cmp[f"{theme}.{surface}"] = {"pixels_over_8": px, "of": w * h, "bbox": box}
         self.record("pixels", cmp)
 
+    def header(self):
+        """Linux: press header controls by accessibility name in the real app,
+        count presses to each destination, and record what opened."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        a11y = os.path.join(here, "bm_a11y.py")
+        seed = self.profile("hdr-seed")
+        self.seed_store(seed)
+        r, _ = self.shot("base", seed, "hdr-seed-shot")
+        r2, _ = self.studio("base", seed, "hdr-seed-studio", secs=4)
+        self.record("header.seed", {"screenshot": r.get("png"), "studio": r2.get("finished")})
+        plans = {
+            "base": (False, [["Recordings"], ["Screenshots"], ["Teleprompter"], ["Changelog"], ["Settings"]]),
+            "head": (False, [["Library"], ["Library", "Screenshots"], ["Teleprompter"], ["Settings", "Changelog"], ["Notes"]]),
+            "head-libwindow": (True, [["Library"], ["Library", "Screenshots"], ["Notes"], ["Teleprompter"]]),
+        }
+        results = {}
+        for config, (libwin, seqs) in plans.items():
+            tag = "base" if config == "base" else "head"
+            for seq in seqs:
+                key = f"{config}:" + ">".join(seq)
+                name = "hdr-" + config + "-" + "-".join(s.lower() for s in seq)
+                p = os.path.join(self.out, "profiles", name)
+                shutil.copytree(seed, p)
+                if libwin:
+                    st = json.load(open(os.path.join(p, "store")))
+                    st["general_settings"]["libraryWindow"] = True
+                    json.dump(st, open(os.path.join(p, "store"), "w"))
+                before = snapshot(p)
+                app = self.app(tag, p, name)
+                app.wait_log(r"main window opened", 60)
+                time.sleep(3)
+                if not results.get(f"{config}:tree"):
+                    d = subprocess.run([sys.executable, a11y, "dump", str(app.proc.pid)], capture_output=True, text=True, timeout=60)
+                    open(os.path.join(app.dir, "tree.txt"), "w").write(d.stdout + d.stderr)
+                    results[f"{config}:tree"] = len(d.stdout.splitlines())
+                presses = []
+                for target in seq:
+                    pr = subprocess.run([sys.executable, a11y, "press", str(app.proc.pid), f"^{re.escape(target)}$"],
+                                        capture_output=True, text=True, timeout=60)
+                    presses.append((pr.stdout + pr.stderr).strip().splitlines()[-1:] or ["?"])
+                    time.sleep(3)
+                screenshot(os.path.join(app.dir, "after.png"))
+                wins = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.proc.pid)],
+                                      capture_output=True, text=True).stdout.split()
+                titles = []
+                for w in wins:
+                    t = subprocess.run(["xdotool", "getwindowname", w], capture_output=True, text=True).stdout.strip()
+                    titles.append(t)
+                res = app.stop()
+                diff = diff_snap(before, snapshot(p))
+                notes_files = [f for f in diff["files_added"] if re.match(r"(meetings|documents|models|transcription_models)/", f)]
+                results[key] = {
+                    "presses": [x[0] for x in presses],
+                    "clicks": len(seq),
+                    "windows": titles,
+                    "panics": res["panics"],
+                    "remotes": res["remotes"],
+                    "notes_or_model_files": notes_files,
+                    "store_changed": diff["store_added"] | diff["store_changed"],
+                    "log": [l for l in app.text().splitlines()
+                            if re.search(r"(?i)notes window|library|teleprompter|settings|changelog|download|permission|model", l)][-8:],
+                }
+                self.record(f"header.{key}", results[key])
+        self.record("header.trees", {k: v for k, v in results.items() if k.endswith(":tree")})
+
+    def mem(self):
+        """Linux: idle RSS by mapping (binary, heap, anonymous, libraries),
+        base vs head, alternating."""
+        seed = self.profile("mem-seed")
+        self.seed_store(seed)
+
+        def smaps(pid):
+            groups = {}
+            current = None
+            for line in open(f"/proc/{pid}/smaps"):
+                parts = line.split()
+                if re.match(r"^[0-9a-f]+-[0-9a-f]+ ", line):
+                    path = parts[5] if len(parts) > 5 else "[anon]"
+                    perms = parts[1]
+                    base = os.path.basename(path)
+                    if "cap-gpui" in base:
+                        key = f"binary {perms}"
+                    elif path.startswith("["):
+                        key = path
+                    elif path == "[anon]":
+                        key = "[anon]"
+                    else:
+                        key = "lib " + (base if base.startswith(("libLLVM", "libgallium", "libav", "libonnx")) else "other")
+                    current = groups.setdefault(key, {"rss": 0, "dirty": 0})
+                elif current is not None and parts[0] == "Rss:":
+                    current["rss"] += int(parts[1])
+                elif current is not None and parts[0] in ("Private_Dirty:",):
+                    current["dirty"] += int(parts[1])
+            return groups
+
+        rows = []
+        for i in range(3):
+            for tag in (("base", "head") if i % 2 == 0 else ("head", "base")):
+                p = os.path.join(self.out, "profiles", f"mem-{tag}-{i}")
+                shutil.copytree(seed, p)
+                app = self.app(tag, p, f"mem-{tag}-{i}")
+                app.wait_log(r"main window opened", 60)
+                time.sleep(25)
+                g = smaps(app.proc.pid)
+                app.stop()
+                rows.append({"tag": tag, "round": i, "groups": g,
+                             "total_rss_mb": round(sum(v["rss"] for v in g.values()) / 1024, 1)})
+        avg = {}
+        for tag in ("base", "head"):
+            mine = [r for r in rows if r["tag"] == tag]
+            keys = set().union(*(r["groups"].keys() for r in mine))
+            avg[tag] = {k: round(sum(r["groups"].get(k, {"rss": 0})["rss"] for r in mine) / len(mine) / 1024, 2) for k in keys}
+            avg[tag]["TOTAL"] = round(sum(r["total_rss_mb"] for r in mine) / len(mine), 1)
+        delta = {k: round(avg["head"].get(k, 0) - avg["base"].get(k, 0), 2) for k in set(avg["base"]) | set(avg["head"])}
+        self.record("mem.rows", rows)
+        self.record("mem.avg_mb", avg)
+        self.record("mem.delta_mb", dict(sorted(delta.items(), key=lambda kv: -abs(kv[1]))))
+
+    def f1(self):
+        """Linux: switch the library to Screenshots, quit, relaunch, press
+        Library once, and see which tab it opened on."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        a11y = os.path.join(here, "bm_a11y.py")
+        seed = self.profile("f1-seed")
+        self.seed_store(seed)
+        self.shot("base", seed, "f1-seed-shot")
+        self.studio("base", seed, "f1-seed-studio", secs=4)
+
+        def press(app, *names):
+            out = []
+            for n in names:
+                r = subprocess.run([sys.executable, a11y, "press", str(app.proc.pid), f"^{re.escape(n)}$"],
+                                   capture_output=True, text=True, timeout=60)
+                out.append("PRESSED" in r.stdout)
+                time.sleep(3)
+            return out
+
+        for tag, first in (("base", ["Screenshots"]), ("fix", ["Library", "Screenshots"])):
+            p = os.path.join(self.out, "profiles", f"f1-{tag}")
+            shutil.copytree(seed, p)
+            app = self.app(tag, p, f"f1-{tag}-a")
+            app.wait_log(r"main window opened", 60)
+            time.sleep(3)
+            pressed_a = press(app, *first)
+            screenshot(os.path.join(app.dir, "switched.png"))
+            app.stop()
+            time.sleep(2)
+            state = {}
+            try:
+                state = json.load(open(os.path.join(p, "gpui-state.json")))
+            except Exception:
+                pass
+            app = self.app(tag, p, f"f1-{tag}-b")
+            app.wait_log(r"main window opened", 60)
+            time.sleep(3)
+            open_button = "Screenshots" if tag == "base" else "Library"
+            pressed_b = press(app, open_button)
+            shot = os.path.join(app.dir, "reopened.png")
+            screenshot(shot)
+            d = subprocess.run([sys.executable, a11y, "dump", str(app.proc.pid)], capture_output=True, text=True, timeout=60)
+            open(os.path.join(app.dir, "tree.txt"), "w").write(d.stdout)
+            res = app.stop()
+            self.record(f"f1.{tag}", {"first_presses": pressed_a, "saved_library_tab": state.get("library_tab"),
+                                     "reopen_press": pressed_b, "panics": res["panics"], "shot": shot})
+
     def captions(self):
         """Linux: one Studio project with a known spoken track, captions
         generated in the real editor by each build, words compared."""
@@ -707,11 +887,19 @@ class Flow:
         store = json.load(open(store_path))
         store["gpui"] = {"selectedTranscriptionModel": "small", "selectedTranscriptionLanguage": "en"}
         json.dump(store, open(store_path, "w"))
-        r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
-        self.record("captions.record", r)
-        if not proj:
-            return
-        mics = glob.glob(os.path.join(proj, "**", "audio-input.*"), recursive=True)
+        if self.a.fixture:
+            proj = os.path.join(p0, "recordings", "fixture.cap")
+            shutil.copytree(self.a.fixture, proj)
+            self.record("captions.fixture_files", sorted(
+                os.path.relpath(f, proj) for f in glob.glob(os.path.join(proj, "**", "*"), recursive=True)
+                if os.path.isfile(f))[:60])
+        else:
+            r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
+            self.record("captions.record", r)
+            if not proj:
+                return
+        mics = [f for f in glob.glob(os.path.join(proj, "**", "*"), recursive=True)
+                if re.search(r"(audio-input|system_audio|mic)[^/\\]*\.(m4a|ogg|mp3|wav|aac|opus|flac)$", f)]
         self.record("captions.mic_files", mics)
         wav = os.path.join(self.out, "speech.wav")
         subprocess.run(["espeak-ng", "-s", "150", "-w", wav, text], check=True)
@@ -719,8 +907,13 @@ class Flow:
             info = mp4_info(mic)
             dur = float(info.get("format", {}).get("duration", 12))
             tmp = mic + ".new" + os.path.splitext(mic)[1]
+            ext = os.path.splitext(mic)[1].lower()
+            codec = {".m4a": "aac", ".aac": "aac", ".ogg": "libopus", ".opus": "libopus",
+                     ".mp3": "libmp3lame", ".wav": "pcm_s16le", ".flac": "flac"}[ext]
+            streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]
             subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", wav, "-af", f"apad,atrim=0:{dur}",
-                            "-ar", "48000", "-ac", "1", "-c:a", "aac", "-b:a", "128k", tmp], check=True)
+                            "-ar", "48000", "-ac", "1", "-c:a", codec, tmp], check=True)
+            self.record(f"captions.replaced.{os.path.basename(mic)}", {"duration": dur, "codec": codec, "orig_streams": streams})
             os.replace(tmp, mic)
         dumps = {}
         for tag in ("base", "head", "fix"):
@@ -783,6 +976,7 @@ def main():
     ap.add_argument("--base-libs")
     ap.add_argument("--head-libs")
     ap.add_argument("--fix")
+    ap.add_argument("--fixture")
     ap.add_argument("--fix-libs")
     ap.add_argument("--out", required=True)
     ap.add_argument("--rounds", type=int, default=3)
@@ -795,6 +989,24 @@ def main():
     ap.add_argument("--name")
     args = ap.parse_args()
     flow = Flow(args)
+    if args.mode == "mem":
+        try:
+            flow.mem()
+        finally:
+            flow.save()
+        return
+    if args.mode == "f1":
+        try:
+            flow.f1()
+        finally:
+            flow.save()
+        return
+    if args.mode == "header":
+        try:
+            flow.header()
+        finally:
+            flow.save()
+        return
     if args.mode == "captions":
         try:
             flow.captions()
