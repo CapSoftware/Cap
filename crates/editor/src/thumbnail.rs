@@ -107,6 +107,11 @@ impl EditorInstance {
             duration,
             &zoom,
             &cursor_timeline,
+        )
+        .with_redaction(
+            &self.render_constants,
+            segment.recording_clip,
+            frames.segment_time,
         );
         let frame = self
             .renderer

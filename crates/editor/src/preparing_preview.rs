@@ -690,7 +690,12 @@ async fn run_preview(
                     zoom,
                     cursor_cache.event_order(&cursor),
                 )
-            };
+            }
+            .with_redaction(
+                &constants,
+                timeline_segment.recording_clip,
+                frames.segment_time,
+            );
             let mut layout = uniforms.frame_layout();
             let output = match options.frame_format {
                 EditorFrameFormat::Rgba => renderer

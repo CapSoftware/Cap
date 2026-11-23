@@ -38,6 +38,11 @@ pub struct DisplayLayer {
     pending_enhancement: Option<PendingEnhancement>,
     enhanced_bind_group: Option<wgpu::BindGroup>,
     frame_id: u64,
+    redaction: Option<crate::redaction::RedactionFrame>,
+    redaction_key: u64,
+    applied_redaction_key: u64,
+    redaction_due: bool,
+    redactor: Option<crate::redaction::Redactor>,
 }
 
 #[derive(Clone, Copy)]
@@ -111,6 +116,11 @@ impl DisplayLayer {
             enhancer: None,
             pending_enhancement: None,
             enhanced_bind_group: None,
+            redaction: None,
+            redaction_key: 0,
+            applied_redaction_key: 0,
+            redaction_due: false,
+            redactor: None,
             frame_id: 0,
         }
     }
@@ -154,6 +164,41 @@ impl DisplayLayer {
             uniforms.enhance_params = pending.frame.shader_params(pending.frame.upscale_strength);
         }
         uniforms
+    }
+
+    /// The auto redact regions the next prepared frame hides. A reused
+    /// source frame is uploaded again when they change, because the regions
+    /// are drawn into the frame texture itself.
+    pub fn set_redaction(&mut self, frame: Option<crate::redaction::RedactionFrame>) {
+        self.redaction_key = frame
+            .as_ref()
+            .map_or(0, crate::redaction::RedactionFrame::key);
+        self.redaction = frame;
+    }
+
+    /// Hides the prepared frame's redaction regions in place. Runs right
+    /// after [`Self::copy_to_texture`], before enhancement reads the frame.
+    pub fn encode_redaction(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        if !std::mem::take(&mut self.redaction_due) || !self.has_valid_frame {
+            return;
+        }
+        let Some(frame) = self.redaction.as_ref() else {
+            return;
+        };
+        self.redactor
+            .get_or_insert_with(|| crate::redaction::Redactor::new(device))
+            .encode(
+                device,
+                queue,
+                encoder,
+                &self.frame_textures[self.current_texture],
+                frame,
+            );
     }
 
     /// Records the enhancement passes for the prepared frame. Runs after
@@ -293,13 +338,14 @@ impl DisplayLayer {
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
-        let skipped = self
+        let skipped = (self
             .last_frame_storage
             .as_ref()
             .is_some_and(|last| last.matches(&frame_storage))
             || self
                 .last_recording_time
-                .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+                .is_some_and(|last| (last - current_recording_time).abs() < 0.001))
+            && self.redaction_key == self.applied_redaction_key;
 
         let mut frame_uploaded = false;
 
@@ -666,6 +712,8 @@ impl DisplayLayer {
                 self.current_texture = next_texture;
                 self.has_valid_frame = true;
                 self.frame_id = self.frame_id.wrapping_add(1);
+                self.applied_redaction_key = self.redaction_key;
+                self.redaction_due = self.redaction_key != 0;
             } else {
                 tracing::warn!(
                     recording_time = current_recording_time,
@@ -713,13 +761,14 @@ impl DisplayLayer {
         let current_recording_time = segment_frames.recording_time;
         let frame_storage = screen_frame.storage_identity();
 
-        let skipped = self
+        let skipped = (self
             .last_frame_storage
             .as_ref()
             .is_some_and(|last| last.matches(&frame_storage))
             || self
                 .last_recording_time
-                .is_some_and(|last| (last - current_recording_time).abs() < 0.001);
+                .is_some_and(|last| (last - current_recording_time).abs() < 0.001))
+            && self.redaction_key == self.applied_redaction_key;
 
         let mut frame_uploaded = false;
 
@@ -1081,6 +1130,8 @@ impl DisplayLayer {
                 self.current_texture = next_texture;
                 self.has_valid_frame = true;
                 self.frame_id = self.frame_id.wrapping_add(1);
+                self.applied_redaction_key = self.redaction_key;
+                self.redaction_due = self.redaction_key != 0;
             } else {
                 tracing::warn!(
                     recording_time = current_recording_time,

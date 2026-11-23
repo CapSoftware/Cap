@@ -1644,7 +1644,12 @@ impl EditorInstance {
                                             cursor_cache.event_order(&outgoing_media.cursor),
                                         )
                                     }
-                                    .with_quality(RenderQuality::PausedPreview);
+                                    .with_quality(RenderQuality::PausedPreview)
+                                    .with_redaction(
+                                        &self.render_constants,
+                                        outgoing.segment.recording_clip,
+                                        outgoing_frames.segment_time,
+                                    );
                                     Some((
                                         outgoing_frames,
                                         outgoing_uniforms,
@@ -1708,7 +1713,12 @@ impl EditorInstance {
                                         cursor_cache.event_order(&segment_medias.cursor),
                                     )
                                 }
-                                .with_quality(RenderQuality::PausedPreview);
+                                .with_quality(RenderQuality::PausedPreview)
+                                .with_redaction(
+                                    &self.render_constants,
+                                    segment.recording_clip,
+                                    segment_frames.segment_time,
+                                );
 
                                 if still_now {
                                     self.renderer.forget_last_frame().await;
