@@ -384,7 +384,7 @@ fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
         }
     };
     let mut transcript = Transcript::new();
-    let mut heard = false;
+    let mut heard = super::echo_periods::EchoPeriods::default();
     transcript.upsert(timed(
         "s1",
         Source::System,
@@ -393,7 +393,10 @@ fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
     ));
     transcript.upsert(timed("m1", Source::Mic, 10_040, "Merci"));
     assert!(super::remove_echoes(&mut transcript, &mut heard).is_empty());
-    assert!(!heard, "a short line alone is no evidence");
+    assert!(
+        heard.heard_spans().is_empty(),
+        "a short line alone is no evidence"
+    );
     // Reading back what the other side just said, after they finish.
     transcript.upsert(timed(
         "s3",
@@ -403,7 +406,7 @@ fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
     ));
     transcript.upsert(timed("m3", Source::Mic, 21_600, "four one five two nine"));
     assert!(super::remove_echoes(&mut transcript, &mut heard).is_empty());
-    assert!(!heard, "a read-back is no evidence");
+    assert!(heard.heard_spans().is_empty(), "a read-back is no evidence");
     assert!(transcript.get("m1").is_some() && transcript.get("m3").is_some());
     let call = "the squire was not pleased with the answer he got";
     transcript.upsert(timed("s2", Source::System, 30_000, call));
@@ -411,7 +414,68 @@ fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
     let mut saved = super::remove_echoes(&mut transcript, &mut heard);
     saved.sort();
     assert_eq!(saved, vec!["m1".to_string(), "m2".to_string()]);
-    assert!(heard);
+    assert_eq!(heard.heard_spans(), vec![(0, u64::MAX)]);
+}
+
+fn timed_line(id: &str, source: Source, start: u64, text: &str) -> Utterance {
+    let words: Vec<cap_meetings::transcript::Word> = text
+        .split_whitespace()
+        .enumerate()
+        .map(|(i, w)| cap_meetings::transcript::Word {
+            text: w.into(),
+            start_ms: start + i as u64 * 300,
+            end_ms: start + (i as u64 + 1) * 300,
+        })
+        .collect();
+    Utterance {
+        words,
+        end_ms: start + text.split_whitespace().count() as u64 * 300,
+        ..utterance(id, source, start, text)
+    }
+}
+
+/// On the speakers the call comes back on the microphone, so a short echo
+/// of it goes. After a move to a headset nothing comes back: a quick "Yes."
+/// over the other side's "Yes" is the person's and stays, and stays even
+/// when the meeting goes back to the speakers and they are heard again.
+#[test]
+fn short_lines_on_a_headset_are_kept_after_the_speakers_were_heard() {
+    let mut transcript = Transcript::new();
+    let mut echo = super::echo_periods::EchoPeriods::default();
+    let call = "the squire was not pleased with the answer he got";
+    // Speakers: a sentence and a short piece of the call come back.
+    transcript.upsert(timed_line("s1", Source::System, 10_000, call));
+    transcript.upsert(timed_line("m1", Source::Mic, 10_060, call));
+    transcript.upsert(timed_line("s2", Source::System, 14_000, "Yes indeed."));
+    transcript.upsert(timed_line("m2", Source::Mic, 14_040, "Yes"));
+    let mut removed = super::remove_echoes(&mut transcript, &mut echo);
+    removed.sort();
+    assert_eq!(removed, vec!["m1".to_string(), "m2".to_string()]);
+    // A headset from 20 s: the person answers "Yes." over the other side.
+    echo.devices_changed(20_000);
+    transcript.upsert(timed_line("s3", Source::System, 25_000, "Yes, right."));
+    transcript.upsert(timed_line("m3", Source::Mic, 25_040, "Yes."));
+    assert!(super::remove_echoes(&mut transcript, &mut echo).is_empty());
+    // A short echo from the speakers that finishes after the switch still
+    // goes: it began while the speakers played into the microphone.
+    transcript.upsert(timed_line("s4", Source::System, 19_000, "Okay then."));
+    transcript.upsert(timed_line("m4", Source::Mic, 19_050, "Okay"));
+    assert_eq!(
+        super::remove_echoes(&mut transcript, &mut echo),
+        vec!["m4".to_string()]
+    );
+    // Back on the speakers from 40 s, heard again: the headset's "Yes."
+    // keeps the judgement it had.
+    echo.devices_changed(40_000);
+    let later = "and so the matter rested for a while after that";
+    transcript.upsert(timed_line("s5", Source::System, 45_000, later));
+    transcript.upsert(timed_line("m5", Source::Mic, 45_060, later));
+    transcript.upsert(timed_line("s6", Source::System, 50_000, "Sure thing."));
+    transcript.upsert(timed_line("m6", Source::Mic, 50_040, "Sure"));
+    let mut removed = super::remove_echoes(&mut transcript, &mut echo);
+    removed.sort();
+    assert_eq!(removed, vec!["m5".to_string(), "m6".to_string()]);
+    assert!(transcript.get("m3").is_some(), "the headset's Yes stays");
 }
 
 #[test]
@@ -427,7 +491,7 @@ fn a_live_captions_echo_is_dropped_without_a_saved_delete_for_its_final_line() {
     });
     transcript.upsert(utterance("s2", Source::System, 30_000, call));
     transcript.upsert(utterance("m2", Source::Mic, 30_100, call));
-    let saved = super::remove_echoes(&mut transcript, &mut false);
+    let saved = super::remove_echoes(&mut transcript, &mut Default::default());
     assert_eq!(
         saved,
         vec!["m2".to_string()],

@@ -120,6 +120,8 @@ pub struct EchoReport {
     /// A sentence of the call was removed: the speakers are playing into
     /// the microphone.
     pub heard: bool,
+    /// Where each removed sentence of the call began on the microphone.
+    pub heard_at_ms: Vec<u64>,
 }
 
 impl Default for EchoConfig {
@@ -700,7 +702,25 @@ impl Transcript {
     }
 
     pub fn suppress_echo_report(&mut self, config: &EchoConfig) -> EchoReport {
-        let mut heard = false;
+        let everywhere = [(0, u64::MAX)];
+        let spans: &[(u64, u64)] = if config.short_echoes {
+            &everywhere
+        } else {
+            &[]
+        };
+        self.suppress_echo_in(config, spans)
+    }
+
+    /// As [`Self::suppress_echo_report`], with 1-3 word microphone lines
+    /// judged only when they start inside one of `short_spans` (ms, end
+    /// excluded): the stretches of the meeting where the microphone was
+    /// known to hear the call. `config.short_echoes` is not read.
+    pub fn suppress_echo_in(
+        &mut self,
+        config: &EchoConfig,
+        short_spans: &[(u64, u64)],
+    ) -> EchoReport {
+        let mut heard_at_ms = Vec::new();
         let mut far: Vec<TimedWord> = self
             .utterances
             .iter()
@@ -712,7 +732,10 @@ impl Transcript {
         for mic in self.utterances.iter().filter(|u| u.source == Source::Mic) {
             let words = timed_words(mic);
             if words.len() < ECHO_MIN_WORDS {
-                if config.short_echoes && short_echo(&words, &far) {
+                let judged = short_spans
+                    .iter()
+                    .any(|&(from, until)| (from..until).contains(&mic.start_ms));
+                if judged && short_echo(&words, &far) {
                     echoes.push(mic.id.clone());
                 }
                 continue;
@@ -744,14 +767,15 @@ impl Transcript {
             // the end.
             let during = start < overlapping[far_last].start_ms;
             if lags && during && common as f64 >= config.min_containment * words.len() as f64 {
-                heard = true;
+                heard_at_ms.push(mic.start_ms);
                 echoes.push(mic.id.clone());
             }
         }
         self.remove(&echoes);
         EchoReport {
             removed: echoes,
-            heard,
+            heard: !heard_at_ms.is_empty(),
+            heard_at_ms,
         }
     }
 

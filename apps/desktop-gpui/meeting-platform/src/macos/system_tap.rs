@@ -144,6 +144,7 @@ struct Counters {
     /// Asked from outside: the tap went quiet while a call was on.
     rebuild: AtomicBool,
     gave_up: AtomicBool,
+    output_changes: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,6 +156,8 @@ pub struct TapStats {
     pub restarts: u64,
     /// Every rebuild attempt failed; the tap is down until the next start.
     pub gave_up: bool,
+    /// How many times the audio system said the default output changed.
+    pub output_changes: u64,
 }
 
 struct IoContext {
@@ -389,15 +392,31 @@ impl Drop for TapGuard {
 
 struct OutputChanged {
     tx: flume::Sender<()>,
+    counters: Arc<Counters>,
 }
 
 extern "C-unwind" fn on_output_changed(
     _obj: Obj,
-    _count: u32,
-    _addresses: *const PropAddr,
+    count: u32,
+    addresses: *const PropAddr,
     signal: *mut OutputChanged,
 ) -> os::Status {
     if let Some(signal) = unsafe { signal.as_ref() } {
+        let addresses = if addresses.is_null() {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(addresses, count as usize) }
+        };
+        let output = PropSelector::HW_DEFAULT_OUTPUT_DEVICE;
+        if addresses
+            .iter()
+            .any(|address| address.selector.0 == output.0)
+        {
+            signal
+                .counters
+                .output_changes
+                .fetch_add(1, Ordering::Relaxed);
+        }
         let _ = signal.tx.try_send(());
     }
     os::Status::NO_ERR
@@ -472,7 +491,10 @@ impl SystemAudioTap {
                     };
 
                     let (changed_tx, changed_rx) = flume::bounded::<()>(1);
-                    let signal = Box::into_raw(Box::new(OutputChanged { tx: changed_tx }));
+                    let signal = Box::into_raw(Box::new(OutputChanged {
+                        tx: changed_tx,
+                        counters: counters.clone(),
+                    }));
                     let address = PropSelector::HW_DEFAULT_OUTPUT_DEVICE.global_addr();
                     let listening = System::OBJ
                         .add_prop_listener(&address, on_output_changed, signal)
@@ -638,6 +660,7 @@ impl SystemAudioTap {
             dropped: self.counters.dropped.load(Ordering::Relaxed),
             restarts: self.counters.restarts.load(Ordering::Relaxed),
             gave_up: self.counters.gave_up.load(Ordering::Relaxed),
+            output_changes: self.counters.output_changes.load(Ordering::Relaxed),
         }
     }
 

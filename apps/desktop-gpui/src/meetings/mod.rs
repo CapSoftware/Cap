@@ -11,6 +11,7 @@ pub mod cloud;
 #[cfg(debug_assertions)]
 pub mod dev;
 pub mod device;
+mod echo_periods;
 pub mod engine;
 pub mod generate;
 pub mod health;
@@ -328,9 +329,12 @@ struct Recording {
     engine_pump: Task<()>,
     _capture_pump: Task<()>,
     transcript: Transcript,
-    /// This meeting's microphone has been heard repeating the call (a full
-    /// sentence of it was removed as echo): short echoes are judged too.
-    echo_heard: bool,
+    /// Where this meeting's microphone has been heard repeating the call (a
+    /// full sentence of it removed as echo), stretch by stretch between
+    /// device changes: short echoes are judged there too.
+    echo: echo_periods::EchoPeriods,
+    /// The outputs the computer played through at the last look.
+    output_watch: OutputWatch,
     mic_sender: Option<flume::Sender<MicrophoneSamples>>,
     /// The feed the sender is on, the meeting's own microphone, and the one
     /// the meeting moved to while its own was gone.
@@ -379,12 +383,22 @@ struct LiveVoices {
     app_self: Option<String>,
 }
 
+/// How often a meeting looks at which outputs the computer plays through.
+const OUTPUT_CHECK_EVERY: Duration = Duration::from_secs(2);
+
+#[derive(Default)]
+struct OutputWatch {
+    last: Option<String>,
+    busy: bool,
+    next_at: Option<Instant>,
+}
+
 struct Finishing {
     doc_id: String,
     engine: EngineHandle,
     _engine_pump: Task<()>,
     transcript: Transcript,
-    echo_heard: bool,
+    echo: echo_periods::EchoPeriods,
     generate_notes: bool,
     voices: LiveVoices,
     /// Ledger gaps still open, from the engine's status, and how many of
@@ -1841,6 +1855,69 @@ impl Meetings {
         .detach();
     }
 
+    /// Every couple of seconds: which outputs the computer plays through
+    /// (what the capture already tracks; on Windows a look off this
+    /// thread). A change (speakers to a headset, a call followed to another
+    /// output) starts a new echo stretch, which has to hear the call again
+    /// before its short lines are judged as echoes.
+    fn watch_output(&mut self, cx: &mut Context<Self>) {
+        let Some(recording) = self.recording.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        let watch = &mut recording.output_watch;
+        if watch.busy || watch.next_at.is_some_and(|at| now < at) {
+            return;
+        }
+        watch.next_at = Some(now + OUTPUT_CHECK_EVERY);
+        let seen = recording.capture.as_ref().and_then(|c| c.outputs_seen());
+        if !capture::OUTPUT_IDENTITY_ASKS {
+            let identity = capture::output_identity(seen);
+            Self::outputs_now(recording, identity);
+            return;
+        }
+        recording.output_watch.busy = true;
+        let doc_id = recording.doc_id.clone();
+        let (found_tx, found_rx) = flume::bounded(1);
+        let looked = std::thread::Builder::new()
+            .name("cap-meeting-output-watch".into())
+            .spawn(move || {
+                let _ = found_tx.send(capture::output_identity(seen));
+            });
+        if looked.is_err() {
+            recording.output_watch.busy = false;
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let identity = found_rx.recv_async().await.ok().flatten();
+            this.update(cx, |this, _| {
+                let Some(recording) = this.recording.as_mut().filter(|r| r.doc_id == doc_id) else {
+                    return;
+                };
+                recording.output_watch.busy = false;
+                Self::outputs_now(recording, identity);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn outputs_now(recording: &mut Recording, identity: Option<String>) {
+        let Some(identity) = identity else {
+            return;
+        };
+        let previous = recording.output_watch.last.replace(identity.clone());
+        if previous.is_some_and(|previous| previous != identity) {
+            tracing::info!(
+                to = %identity,
+                "the meeting's output changed; short echoes wait for the call to be heard again"
+            );
+            let at_ms =
+                recording.timeline_offset_ms + recording.started.elapsed().as_millis() as u64;
+            recording.echo.devices_changed(at_ms);
+        }
+    }
+
     fn move_mic(
         &mut self,
         doc_id: &str,
@@ -1916,6 +1993,12 @@ impl Meetings {
                     }
                 }
                 if let Some(recording) = self.recording.as_mut() {
+                    if current.as_deref() != Some(name.as_str()) {
+                        // Another microphone hears the room its own way.
+                        let at_ms = recording.timeline_offset_ms
+                            + recording.started.elapsed().as_millis() as u64;
+                        recording.echo.devices_changed(at_ms);
+                    }
                     recording.mic_moved = (own.as_deref() != Some(name.as_str())).then_some(name);
                 }
             }
@@ -2315,7 +2398,8 @@ impl Meetings {
             engine_pump,
             _capture_pump: capture_pump,
             transcript,
-            echo_heard: false,
+            echo: echo_periods::EchoPeriods::from(offset_ms),
+            output_watch: OutputWatch::default(),
             mic_sender,
             mic_actor,
             mic_own,
@@ -2445,7 +2529,7 @@ impl Meetings {
             engine,
             engine_pump,
             transcript,
-            echo_heard,
+            echo,
             voices,
             ..
         } = recording;
@@ -2454,7 +2538,7 @@ impl Meetings {
             engine,
             _engine_pump: engine_pump,
             transcript,
-            echo_heard,
+            echo,
             generate_notes: false,
             voices,
             open_gaps: 0,
@@ -2570,6 +2654,7 @@ impl Meetings {
     /// a look at the disk now and then, and the one health line.
     fn health_tick(&mut self, cx: &mut Context<Self>) {
         self.watch_mic(cx);
+        self.watch_output(cx);
         // Debug builds: CAP_GPUI_MEETING_FAKE_CALL=1 acts as if a meeting app
         // held the microphone.
         let call = !self.active_calls().is_empty()
@@ -2724,11 +2809,11 @@ impl Meetings {
                 let source = utterance.source;
                 let end_ms = utterance.end_ms;
                 let id = utterance.id.clone();
-                let (transcript, engine, echo_heard) =
+                let (transcript, engine, echo) =
                     if let Some(r) = self.recording.as_mut().filter(|r| r.doc_id == doc_id) {
-                        (&mut r.transcript, Some(&r.engine), &mut r.echo_heard)
+                        (&mut r.transcript, Some(&r.engine), &mut r.echo)
                     } else if let Some(f) = self.finishing.iter_mut().find(|f| f.doc_id == doc_id) {
-                        (&mut f.transcript, Some(&f.engine), &mut f.echo_heard)
+                        (&mut f.transcript, Some(&f.engine), &mut f.echo)
                     } else {
                         return;
                     };
@@ -2751,7 +2836,7 @@ impl Meetings {
                         .map(|u| u.id.clone())
                         .collect();
                     transcript.remove(&stale);
-                    let echoes = remove_echoes(transcript, echo_heard);
+                    let echoes = remove_echoes(transcript, echo);
                     if !echoes.is_empty() {
                         let line = vec![LogLine::Delete { ids: echoes }];
                         if let Some(engine) = engine
@@ -2988,7 +3073,7 @@ impl Meetings {
             engine,
             _engine_pump: engine_pump,
             transcript,
-            echo_heard: false,
+            echo: echo_periods::EchoPeriods::default(),
             generate_notes: false,
             voices: LiveVoices::default(),
             open_gaps,
@@ -4612,28 +4697,34 @@ pub(crate) fn respell(
 /// caption that reaches the file after that line would take the person's
 /// words with it.
 ///
-/// Short lines ("Merci.", "Soft heart,") are judged only once this meeting's
+/// Short lines ("Merci.", "Soft heart,") are judged only where this meeting's
 /// microphone has repeated a sentence of the call while the call was still
-/// saying it (`echo_heard`): on a headset nothing comes back, and a quick
-/// "Yes." over the other side's "Yes" is the person's own.
-fn remove_echoes(transcript: &mut Transcript, echo_heard: &mut bool) -> Vec<String> {
+/// saying it, on the devices of that stretch (`echo`): on a headset nothing
+/// comes back, and a quick "Yes." over the other side's "Yes" is the
+/// person's own.
+fn remove_echoes(transcript: &mut Transcript, echo: &mut echo_periods::EchoPeriods) -> Vec<String> {
     let live: HashSet<String> = transcript
         .utterances()
         .iter()
         .filter(|u| !u.is_final)
         .map(|u| u.id.clone())
         .collect();
-    let config = |short_echoes| EchoConfig {
-        short_echoes,
-        ..EchoConfig::default()
-    };
-    let report = transcript.suppress_echo_report(&config(*echo_heard));
+    let config = EchoConfig::default();
+    let report = transcript.suppress_echo_in(&config, &echo.heard_spans());
     let mut removed = report.removed;
-    if !*echo_heard && report.heard {
+    let mut newly = false;
+    for at_ms in report.heard_at_ms {
+        newly |= echo.heard_at(at_ms);
+    }
+    if newly {
         // A sentence of the call just came back through the speakers: the
-        // short pieces of it already on the microphone go too.
-        *echo_heard = true;
-        removed.extend(transcript.suppress_echo(&config(true)));
+        // short pieces of it already on the microphone in that stretch go
+        // too.
+        removed.extend(
+            transcript
+                .suppress_echo_in(&config, &echo.heard_spans())
+                .removed,
+        );
     }
     removed.retain(|id| !live.contains(id));
     removed

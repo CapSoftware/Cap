@@ -403,6 +403,32 @@ impl MeetingCapture {
         }
     }
 
+    /// What the capture itself knows of the outputs the computer plays
+    /// through, as a value to compare between looks. Linux: the default
+    /// and the output a call was followed to, as the sink watch last saw
+    /// them. macOS: how many times the audio system said the default output
+    /// changed (the tap listens for it). Windows: nothing, see
+    /// [`output_identity`]. Cheap: no audio system call.
+    pub fn outputs_seen(&self) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            self.platform
+                .as_ref()
+                .and_then(|platform| platform.outputs.lock().ok()?.clone())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let platform = self.platform.as_ref()?;
+            let changes = platform.tap.lock().ok()?.stats().output_changes;
+            let replaced = platform.replaced.load(Ordering::Relaxed);
+            Some(format!("{replaced}:{changes}"))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
+    }
+
     /// Starts the computer-audio capture again (it stopped delivering).
     pub fn restart_system(&self) {
         if let Some(platform) = self.platform.as_ref() {
@@ -1296,6 +1322,8 @@ struct SystemPlatform {
     thread: Option<JoinHandle<()>>,
     /// Picks the output to read (`sink.rs`) and restarts the reader on a change.
     watch: Option<JoinHandle<()>>,
+    /// The default output and the one followed, as the watch last saw them.
+    outputs: Arc<std::sync::Mutex<Option<String>>>,
     dropped: Arc<AtomicU64>,
     callbacks: Arc<AtomicU64>,
     frames: Arc<AtomicU64>,
@@ -1328,10 +1356,10 @@ fn pactl(args: &[&str]) -> String {
 }
 
 #[cfg(target_os = "linux")]
-/// One look at the sound server: the output to read (`None`: the default)
-/// and whether the reader `reader` (a `parec` pid) sits on that output's
-/// monitor (`None` when pactl does not say).
-fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>) {
+/// One look at the sound server: the output to read (`None`: the default),
+/// whether the reader `reader` (a `parec` pid) sits on that output's
+/// monitor (`None` when pactl does not say), and the default output.
+fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option<String>) {
     let default = sink::parse_default_sink(&pactl(&["info"]));
     let recording = sink::parse_streams(&pactl(&["list", "source-outputs"]), "Source");
     let target = sink::choose(
@@ -1342,12 +1370,12 @@ fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>) {
         std::process::id(),
     );
     let placed = reader
-        .zip(target.clone().or(default))
+        .zip(target.clone().or(default.clone()))
         .and_then(|(pid, output)| {
             let sources = sink::parse_sinks(&pactl(&["list", "short", "sources"]));
             sink::reader_on_monitor(&sources, &recording, pid, &output)
         });
-    (target, placed)
+    (target, placed, default)
 }
 
 #[cfg(target_os = "linux")]
@@ -1371,6 +1399,28 @@ fn spawn_monitor_reader(sink: Option<&str>) -> std::io::Result<std::process::Chi
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
+}
+
+/// Whether [`output_identity`] has to ask the audio system (Windows), which
+/// can take a while while devices change: then it runs off the UI thread.
+pub const OUTPUT_IDENTITY_ASKS: bool = cfg!(windows);
+
+/// Which outputs the computer plays through, as a value to compare between
+/// looks: a change means the speakers may have given way to a headset.
+/// `seen` is [`MeetingCapture::outputs_seen`]. `None` when nothing says.
+pub fn output_identity(seen: Option<String>) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let _ = seen;
+        cpal::default_host()
+            .default_output_device()
+            .and_then(|device| device.name().ok())
+    }
+    #[cfg(not(windows))]
+    {
+        seen
+    }
 }
 
 /// Whether this Linux session can give Cap what the speakers play.
@@ -1414,12 +1464,14 @@ impl SystemPlatform {
                 move || run_monitor(&stop, &child, &tx, &counters, &target)
             })
             .map_err(|e| HealthIssue::Failed(e.to_string()))?;
+        let outputs = Arc::new(std::sync::Mutex::new(None));
         let watch = std::thread::Builder::new()
             .name("cap-meeting-sink-watch".into())
             .spawn({
                 let (stop, child, target) = (stop.clone(), child.clone(), target.clone());
+                let outputs = outputs.clone();
                 let monitor = thread.thread().clone();
-                move || watch_sink(&stop, &child, &target, &monitor)
+                move || watch_sink(&stop, &child, &target, &outputs, &monitor)
             })
             .ok();
         Ok((
@@ -1428,6 +1480,7 @@ impl SystemPlatform {
                 child,
                 thread: Some(thread),
                 watch,
+                outputs,
                 dropped: counters.dropped,
                 callbacks: counters.callbacks,
                 frames: counters.frames,
@@ -1473,6 +1526,7 @@ fn watch_sink(
     stop: &AtomicBool,
     child: &std::sync::Mutex<Option<std::process::Child>>,
     target: &SinkTarget,
+    outputs: &std::sync::Mutex<Option<String>>,
     monitor: &std::thread::Thread,
 ) {
     loop {
@@ -1483,7 +1537,13 @@ fn watch_sink(
             .lock()
             .ok()
             .and_then(|slot| slot.as_ref().map(|c| c.id()));
-        let (next, placed) = look_at_outputs(reader);
+        let (next, placed, default) = look_at_outputs(reader);
+        if let Ok(mut seen) = outputs.lock() {
+            *seen = default.map(|default| match &next {
+                Some(followed) => format!("{default} > {followed}"),
+                None => default,
+            });
+        }
         let Ok(mut current) = target.lock() else {
             return;
         };
