@@ -1573,6 +1573,48 @@ fn a_used_up_trial_is_still_offered_pro(cx: &mut TestAppContext) {
     assert!(ask.read_with(cx, |a, _| a.pro_tag()));
 }
 
+/// Voice choices on a finished meeting made while the documents writer is
+/// busy: the transcript shows them once the write lands, without reopening.
+#[gpui::test]
+fn the_transcript_shows_voice_choices_saved_by_a_busy_writer(cx: &mut TestAppContext) {
+    use crate::meetings::SpeakerRef;
+    let (meetings, doc, _dir) = crate::meetings::tests::voice_choice_meeting(cx);
+    let meta = cx
+        .update(|cx| super::store::library(cx))
+        .and_then(|library| library.load(&doc).ok())
+        .expect("the meeting is saved");
+    let palette = Palette::new(&Theme::light());
+    let cx = cx.add_empty_window();
+    let view = cx.update(|_, cx| {
+        cx.new(|cx| {
+            super::transcript::TranscriptView::new(gpui::WeakEntity::new_invalid(), palette, cx)
+        })
+    });
+    view.update(cx, |t, cx| t.set_doc(Some(meta), cx));
+    cx.run_until_parked();
+    let shown = |cx: &mut VisualTestContext| view.read_with(cx, |t, _| t.voice_choices_shown());
+    assert_eq!(shown(cx), (vec![], vec![]));
+
+    super::hold_writer();
+    meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, SpeakerRef::Id(2), true, cx)
+        })
+        .expect("voice 2 was in the notes");
+    meetings
+        .update(cx, |m, cx| m.set_not_me(&doc, 1, true, cx))
+        .expect("voice 1 was the user");
+    cx.run_until_parked();
+    super::release_writer();
+    cx.run_until_parked();
+
+    assert_eq!(
+        shown(cx),
+        (vec!["m2".to_string()], vec!["m1".to_string()]),
+        "both choices show once they are saved"
+    );
+}
+
 struct PageHost {
     transcript: Entity<super::transcript::TranscriptView>,
 }

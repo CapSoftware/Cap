@@ -1914,7 +1914,7 @@ fn the_listening_cue_shows_only_on_a_slow_computer_while_someone_speaks_unanswer
 
 /// A finished meeting with two told-apart voices on the microphone (1 the
 /// user, 2 someone in the room) and one unidentified line on the call.
-fn voice_choice_meeting(
+pub(crate) fn voice_choice_meeting(
     cx: &mut gpui::TestAppContext,
 ) -> (gpui::Entity<super::Meetings>, String, tempfile::TempDir) {
     use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};

@@ -861,6 +861,22 @@ impl TranscriptView {
         self.apply(rows, cx);
     }
 
+    /// Tests: the first line of each turn left out of the notes, and of
+    /// each turn the user said was not them.
+    #[cfg(test)]
+    pub(super) fn voice_choices_shown(&self) -> (Vec<String>, Vec<String>) {
+        let first = |pick: fn(&TurnRow) -> bool| {
+            self.rows
+                .iter()
+                .filter_map(|row| match row {
+                    TRow::Turn(turn) if pick(turn) => turn.ids.first().cloned(),
+                    _ => None,
+                })
+                .collect()
+        };
+        (first(|t| t.left_out), first(|t| t.disowned))
+    }
+
     /// Changes whenever the lines do.
     pub fn rows_revision(&self) -> usize {
         Rc::as_ptr(&self.rows) as usize

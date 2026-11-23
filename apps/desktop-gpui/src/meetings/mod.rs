@@ -19,7 +19,7 @@ mod mic_watch;
 pub(crate) mod persist;
 pub mod speakers;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 pub(crate) mod timeline;
 pub mod voices;
 
@@ -3634,25 +3634,36 @@ impl Meetings {
             return;
         };
         let doc = doc_id.to_string();
-        let (changed, note) = flume::bounded(1);
+        let (written, done) = flume::bounded(1);
         crate::meetings_ui::documents::queue_after_saves(move || {
-            let mut transcript = Transcript::load_jsonl(&path)
-                .map(|(t, _)| t)
-                .unwrap_or_default();
-            let Some(line) = change(&transcript) else {
-                return;
-            };
-            if let Err(error) = append_jsonl(&path, std::slice::from_ref(&line)) {
-                tracing::warn!(%error, "could not edit the meeting transcript");
-                return;
-            }
-            transcript.apply(line);
-            let _ = changed.send(persist::follow_left_out(&library, &doc, &transcript));
+            let notes_changed = (|| {
+                let mut transcript = Transcript::load_jsonl(&path)
+                    .map(|(t, _)| t)
+                    .unwrap_or_default();
+                let line = change(&transcript)?;
+                if let Err(error) = append_jsonl(&path, std::slice::from_ref(&line)) {
+                    tracing::warn!(%error, "could not edit the meeting transcript");
+                    return None;
+                }
+                transcript.apply(line);
+                Some(persist::follow_left_out(&library, &doc, &transcript))
+            })();
+            let _ = written.send(notes_changed.unwrap_or(false));
         });
-        Self::library_changed_when(note, cx);
-        cx.emit(MeetingEvent::TranscriptChanged {
-            doc_id: doc_id.to_string(),
-        });
+        // Announced once the queued write is on disk, so a view that reloads
+        // the file sees the change.
+        let doc_id = doc_id.to_string();
+        cx.spawn(async move |this, cx| {
+            let notes_changed = done.recv_async().await.unwrap_or(false);
+            this.update(cx, |_, cx| {
+                cx.emit(MeetingEvent::TranscriptChanged { doc_id });
+                if notes_changed {
+                    cx.emit(MeetingEvent::LibraryChanged);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Tells the windows a note changed once a job on the documents writer
