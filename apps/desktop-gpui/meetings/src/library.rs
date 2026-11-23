@@ -25,6 +25,14 @@ pub const AUDIO_DIR: &str = "audio";
 pub const ATTACHMENTS_DIR: &str = "attachments";
 pub const FOLDERS_FILE: &str = "folders.json";
 pub const TRASH_RETENTION_DAYS: i64 = 30;
+
+/// What a cleanup removed, and the documents it could not touch (a file in
+/// use, a folder it may not write), which never stop the rest.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Cleaned {
+    pub done: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
 pub const MAX_ATTACHMENTS: usize = 50;
 pub const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 pub const IMAGE_EXTENSIONS: &[&str] =
@@ -497,12 +505,12 @@ impl Library {
         &self,
         now: DateTime<Utc>,
         keep: impl Fn(&DocMeta) -> bool,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Cleaned> {
         let listing = self.list(&ListFilter {
             trash: TrashFilter::Only,
             ..ListFilter::default()
         })?;
-        let mut purged = Vec::new();
+        let mut purged = Cleaned::default();
         for meta in listing.docs {
             if keep(&meta) {
                 continue;
@@ -511,8 +519,10 @@ impl Library {
                 .trashed_at
                 .is_some_and(|t| (now - t).num_days() >= TRASH_RETENTION_DAYS);
             if expired {
-                self.delete_permanently(&meta.id)?;
-                purged.push(meta.id);
+                match self.delete_permanently(&meta.id) {
+                    Ok(()) => purged.done.push(meta.id),
+                    Err(error) => purged.failed.push((meta.id, error.to_string())),
+                }
             }
         }
         Ok(purged)
@@ -602,13 +612,13 @@ impl Library {
         now: DateTime<Utc>,
         retention_days: u32,
         keep: impl Fn(&DocMeta) -> bool,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Cleaned> {
         let listing = self.list(&ListFilter {
             kind: Some(DocKind::Meeting),
             trash: TrashFilter::Include,
             folder_id: None,
         })?;
-        let mut swept = Vec::new();
+        let mut swept = Cleaned::default();
         for mut meta in listing.docs {
             if keep(&meta) {
                 continue;
@@ -622,17 +632,26 @@ impl Library {
             if (now - ended_at).num_days() < i64::from(retention_days) {
                 continue;
             }
-            let audio_dir = self.audio_dir(&meta.id)?;
+            let audio_dir = match self.audio_dir(&meta.id) {
+                Ok(dir) => dir,
+                Err(error) => {
+                    swept.failed.push((meta.id, error.to_string()));
+                    continue;
+                }
+            };
             let had_dir = audio_dir.exists();
             if !had_dir && meeting.audio.is_empty() {
                 continue;
             }
-            if had_dir {
-                fs::remove_dir_all(&audio_dir)?;
+            if had_dir && let Err(error) = fs::remove_dir_all(&audio_dir) {
+                swept.failed.push((meta.id, error.to_string()));
+                continue;
             }
             meeting.audio.clear();
-            self.save(&meta)?;
-            swept.push(meta.id);
+            match self.save(&meta) {
+                Ok(()) => swept.done.push(meta.id),
+                Err(error) => swept.failed.push((meta.id, error.to_string())),
+            }
         }
         Ok(swept)
     }

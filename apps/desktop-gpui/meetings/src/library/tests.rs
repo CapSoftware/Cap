@@ -190,18 +190,25 @@ fn trash_lifecycle_and_purge() {
     library.restore(&b.id).unwrap();
     assert!(library.load(&b.id).unwrap().trashed_at.is_none());
     library.trash(&b.id, t(20, 10)).unwrap();
-    assert!(library.purge_trash(t(30, 9), |_| false).unwrap().is_empty());
+    assert!(
+        library
+            .purge_trash(t(30, 9), |_| false)
+            .unwrap()
+            .done
+            .is_empty()
+    );
     assert!(
         library
             .purge_trash(t(1, 10) + Duration::days(30), |_| true)
             .unwrap()
+            .done
             .is_empty(),
         "an item the caller keeps stays in the trash"
     );
     let purged = library
         .purge_trash(t(1, 10) + Duration::days(30), |_| false)
         .unwrap();
-    assert_eq!(purged, vec![a.id.clone()]);
+    assert_eq!(purged.done, vec![a.id.clone()]);
     assert!(!library.doc_dir(&a.id).unwrap().exists());
     assert!(library.load(&b.id).is_ok());
     library.delete_permanently(&b.id).unwrap();
@@ -372,7 +379,7 @@ fn audio_retention_sweep() {
     let swept = library
         .sweep_audio(t(10, 9), 7, |m| m.id == held.id)
         .unwrap();
-    assert_eq!(swept, vec![old.id.clone()]);
+    assert_eq!(swept.done, vec![old.id.clone()]);
     assert!(
         unfinished_audio.exists(),
         "a meeting that never ended keeps its audio"
@@ -396,8 +403,63 @@ fn audio_retention_sweep() {
         library
             .sweep_audio(t(10, 9), 7, |m| m.id == held.id)
             .unwrap()
+            .done
             .is_empty()
     );
+}
+
+/// Makes `dir` read-only so nothing in it can be deleted. False when the
+/// test runs as a user that permissions do not stop (root).
+#[cfg(unix)]
+fn lock(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    std::fs::write(dir.join("probe"), b"").is_err()
+}
+
+#[cfg(unix)]
+fn unlock(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn one_document_that_cannot_be_cleaned_never_stops_the_rest() {
+    let (_dir, library) = lib();
+    let ended = |entropy: u64| {
+        let mut meta = library.create(DocKind::Meeting, t(1, 9), entropy).unwrap();
+        meta.meeting.as_mut().unwrap().ended_at = Some(t(1, 10));
+        library.save(&meta).unwrap();
+        let audio = library.audio_dir(&meta.id).unwrap();
+        std::fs::create_dir_all(&audio).unwrap();
+        std::fs::write(audio.join("you.ogg"), b"ogg").unwrap();
+        (meta.id, audio)
+    };
+    let (stuck, stuck_audio) = ended(1);
+    let (free, free_audio) = ended(2);
+    if !lock(&stuck_audio) {
+        unlock(&stuck_audio);
+        return;
+    }
+
+    let swept = library.sweep_audio(t(20, 9), 7, |_| false).unwrap();
+    assert_eq!(swept.done, vec![free.clone()]);
+    assert_eq!(swept.failed.len(), 1);
+    assert_eq!(swept.failed[0].0, stuck);
+    assert!(!free_audio.exists());
+    assert!(stuck_audio.join("you.ogg").exists());
+
+    library.trash(&stuck, t(1, 11)).unwrap();
+    library.trash(&free, t(1, 11)).unwrap();
+    let purged = library
+        .purge_trash(t(1, 11) + Duration::days(31), |_| false)
+        .unwrap();
+    assert_eq!(purged.done, vec![free.clone()]);
+    assert_eq!(purged.failed.len(), 1);
+    assert_eq!(purged.failed[0].0, stuck);
+    assert!(library.load(&free).is_err());
+    unlock(&stuck_audio);
 }
 
 #[test]

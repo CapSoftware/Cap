@@ -471,14 +471,15 @@ pub fn sweep_old_audio(
     days: u32,
     busy: &[String],
 ) -> Vec<String> {
-    library
-        .sweep_audio(now, days, |meta| {
-            busy.iter().any(|id| *id == meta.id) || flag(meta, REPAIR_KEY)
-        })
-        .unwrap_or_else(|error| {
+    match library.sweep_audio(now, days, |meta| {
+        busy.iter().any(|id| *id == meta.id) || flag(meta, REPAIR_KEY)
+    }) {
+        Ok(swept) => cleaned(swept, "could not delete a meeting's old audio"),
+        Err(error) => {
             tracing::warn!(%error, "could not delete old meeting audio");
             Vec::new()
-        })
+        }
+    }
 }
 
 /// Empties trash older than the 30 days the trash promises, except items in
@@ -488,12 +489,20 @@ pub fn purge_old_trash(
     now: chrono::DateTime<Utc>,
     busy: &[String],
 ) -> Vec<String> {
-    library
-        .purge_trash(now, |meta| busy.iter().any(|id| *id == meta.id))
-        .unwrap_or_else(|error| {
+    match library.purge_trash(now, |meta| busy.iter().any(|id| *id == meta.id)) {
+        Ok(purged) => cleaned(purged, "could not delete an old item in the trash"),
+        Err(error) => {
             tracing::warn!(%error, "could not empty old trash");
             Vec::new()
-        })
+        }
+    }
+}
+
+fn cleaned(result: cap_meetings::library::Cleaned, message: &str) -> Vec<String> {
+    for (doc_id, error) in &result.failed {
+        tracing::warn!(%doc_id, %error, "{message}");
+    }
+    result.done
 }
 
 pub fn flag(meta: &DocMeta, key: &str) -> bool {

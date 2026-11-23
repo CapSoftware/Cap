@@ -1328,11 +1328,21 @@ fn library_cleanup_waits_for_recovery_and_spares_what_is_in_use() {
     let mut meetings = super::Meetings::new(settings);
     meetings.repair_queue.push_back("repairing".into());
     meetings.resume_doc = Some("resuming".into());
+    meetings.notes.insert(
+        "writing notes".into(),
+        super::NotesState { waiting: true, ..super::NotesState::default() },
+    );
+    meetings.notes.insert("notes done".into(), super::NotesState::default());
     assert_eq!(
         meetings.cleanup_plan(vec!["open".into()]),
         CleanupPlan::Run {
             audio_days: Some(7),
-            busy: vec!["repairing".into(), "resuming".into(), "open".into()],
+            busy: vec![
+                "repairing".into(),
+                "resuming".into(),
+                "writing notes".into(),
+                "open".into(),
+            ],
         }
     );
     meetings.recovery = Some(gpui::Task::ready(()));

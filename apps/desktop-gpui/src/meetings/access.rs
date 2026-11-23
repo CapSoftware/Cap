@@ -141,6 +141,10 @@ impl AiState {
         AutoDecision::Skip
     }
 
+    pub fn waiting_ids(&self) -> &[String] {
+        &self.waiting
+    }
+
     pub fn has_waiting(&self) -> bool {
         !self.waiting.is_empty()
     }
@@ -369,6 +373,11 @@ impl Meetings {
         })
         .detach();
     }
+}
+
+/// Meetings whose notes were left to write after Cap last quit.
+pub(super) fn unwritten_ids() -> Vec<String> {
+    read_unwritten(&persist::meetings_dir().join(UNWRITTEN_FILE))
 }
 
 fn read_unwritten(path: &std::path::Path) -> Vec<String> {

@@ -447,8 +447,8 @@ enum CleanupPlan {
     Later,
     Run {
         audio_days: Option<u32>,
-        /// Documents in use (recording, finishing, repairing, open), which
-        /// keep their audio and stay in the trash.
+        /// Documents in use (recording, finishing, repairing, waiting for
+        /// notes, open), which keep their audio and stay in the trash.
         busy: Vec<String>,
     },
 }
@@ -3485,6 +3485,8 @@ impl Meetings {
                                 return (Vec::new(), Vec::new());
                             };
                             let now = Utc::now();
+                            let mut busy = busy;
+                            busy.extend(access::unwritten_ids());
                             let purged = persist::purge_old_trash(&library, now, &busy);
                             let swept = audio_days
                                 .map(|days| persist::sweep_old_audio(&library, now, days, &busy))
@@ -3531,6 +3533,14 @@ impl Meetings {
             .chain(self.repair_queue.iter().cloned())
             .chain(self.session_doc.iter().cloned())
             .chain(self.resume_doc.iter().cloned())
+            .chain(
+                self.notes
+                    .iter()
+                    .filter(|(_, state)| state.running || state.waiting)
+                    .map(|(id, _)| id.clone()),
+            )
+            .chain(self.auto_notes.keys().cloned())
+            .chain(self.ai.waiting_ids().iter().cloned())
             .chain(open)
             .collect();
         CleanupPlan::Run {
