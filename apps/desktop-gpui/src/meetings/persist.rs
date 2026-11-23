@@ -179,6 +179,25 @@ pub(crate) fn mode(path: &Path) -> u32 {
         .unwrap_or(0)
 }
 
+/// Reads a JSON store file. One that exists but cannot be read as `T` (cut
+/// short, or written by a later version) is moved aside first, so the next
+/// save starts a new file instead of overwriting what it held.
+pub fn read_store<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let bytes = fs::read(path).ok()?;
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            let mut aside = path.as_os_str().to_owned();
+            aside.push(".unreadable");
+            tracing::warn!(%error, "a meetings store file is unreadable; keeping it aside");
+            if let Err(error) = fs::rename(path, &aside) {
+                tracing::warn!(%error, "could not move the unreadable store file aside");
+            }
+            None
+        }
+    }
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomically(path, bytes, false)
 }

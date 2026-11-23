@@ -372,10 +372,7 @@ fn accounts_path(dir: &Path) -> PathBuf {
 }
 
 fn read_accounts(dir: &Path) -> AccountsFile {
-    fs::read(accounts_path(dir))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    persist::read_store(&accounts_path(dir)).unwrap_or_default()
 }
 
 fn write_accounts(dir: &Path, file: &AccountsFile) -> std::io::Result<()> {

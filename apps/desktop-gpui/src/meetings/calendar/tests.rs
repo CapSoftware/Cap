@@ -551,3 +551,25 @@ fn feed_addresses_are_written_owner_only_from_the_start() {
     assert_eq!(mode(&dir.join(CALENDARS_FILE)), 0o600);
     assert_eq!(mode(&dir), 0o700);
 }
+
+#[test]
+fn an_unreadable_sources_file_is_kept_aside_not_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(CALENDARS_FILE);
+    let later = r#"{"sources":[{"id":"x","name":"","config":{"kind":"caldav"}}]}"#;
+    std::fs::write(&path, later).unwrap();
+    let mut state = CalendarState::in_dir(dir.path().to_path_buf());
+    state.ensure_loaded();
+    assert!(state.sources.is_empty());
+    state
+        .add_ics("https://calendar.example.com/a.ics", None)
+        .unwrap();
+    let aside = dir.path().join(format!("{CALENDARS_FILE}.unreadable"));
+    assert_eq!(
+        std::fs::read_to_string(aside).unwrap(),
+        later,
+        "what the file held is kept"
+    );
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["sources"].as_array().map(Vec::len), Some(1));
+}

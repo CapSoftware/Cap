@@ -309,9 +309,7 @@ impl CalendarState {
         }
         self.loaded = true;
         let dir = self.dir();
-        if let Ok(bytes) = fs::read(dir.join(CALENDARS_FILE))
-            && let Ok(file) = serde_json::from_slice::<SourcesFile>(&bytes)
-        {
+        if let Some(file) = persist::read_store::<SourcesFile>(&dir.join(CALENDARS_FILE)) {
             self.sources = file.sources;
         }
         if let Ok(bytes) = fs::read(dir.join(CALENDAR_CACHE_FILE))
