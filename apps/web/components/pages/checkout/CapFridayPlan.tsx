@@ -227,7 +227,7 @@ export function CapFridayCard({
 				{brandName(quote.card.brand)} ending {quote.card.last4}
 			</p>
 
-			{quote.kind === "monthly" ? <Breakdown quote={quote} /> : null}
+			<Breakdown quote={quote} />
 
 			<Timeline steps={steps(quote)} />
 
@@ -354,11 +354,24 @@ function steps(quote: CapFridayQuote): Step[] {
 	];
 }
 
-function Breakdown({
-	quote,
-}: {
-	quote: Extract<CapFridayQuote, { kind: "monthly" }>;
-}) {
+export function capFridaySeatPrice(quote: CapFridayQuote) {
+	const full =
+		quote.kind === "yearly" ? quote.renewalAmount : quote.yearlyAmount;
+	const discount =
+		quote.kind === "yearly"
+			? quote.renewalAmount - quote.dueToday
+			: quote.discount;
+	return {
+		full: full / quote.seats,
+		discounted: (full - discount) / quote.seats,
+		discount,
+		total: full,
+	};
+}
+
+function Breakdown({ quote }: { quote: CapFridayQuote }) {
+	const seats = `${quote.seats} ${quote.seats === 1 ? "seat" : "seats"}`;
+	const { discount, total } = capFridaySeatPrice(quote);
 	return (
 		<dl
 			className={classNames(
@@ -368,15 +381,19 @@ function Breakdown({
 			style={rise(0.1)}
 		>
 			<Row
-				label={`Cap Pro yearly, ${quote.seats} ${quote.seats === 1 ? "seat" : "seats"}`}
-				value={money(quote.yearlyAmount, quote.currency)}
+				label={
+					quote.kind === "yearly"
+						? `Your next year of Cap Pro, ${seats}`
+						: `Cap Pro yearly, ${seats}`
+				}
+				value={money(total, quote.currency)}
 			/>
 			<Row
 				label="Cap Friday, 50% off"
-				value={`-${money(quote.discount, quote.currency)}`}
+				value={`-${money(discount, quote.currency)}`}
 				accent
 			/>
-			{quote.unusedCredit > 0 ? (
+			{quote.kind === "monthly" && quote.unusedCredit > 0 ? (
 				<Row
 					label="Unused time this month"
 					value={`-${money(quote.unusedCredit, quote.currency)}`}

@@ -19,6 +19,7 @@ import { useEnded } from "@/components/pages/blackfriday/Claim";
 import { CODE } from "@/components/pages/blackfriday/content";
 import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
 import type {
+	CapFridayQuote,
 	CapFridayRedeemResult,
 	CapFridayState,
 } from "@/lib/checkout/cap-friday";
@@ -28,6 +29,7 @@ import {
 	CapFridayCard,
 	type CapFridayView,
 	capFridayHeading,
+	capFridaySeatPrice,
 } from "./CapFridayPlan";
 import { PlanFeatures, PlanHeading } from "./CheckoutForm";
 import { CARD, CheckoutShell } from "./CheckoutShell";
@@ -290,19 +292,23 @@ function AddSeats({
 				tag={dark ? "Cap Friday" : pastDue ? "Payment due" : "Your plan"}
 				dark={dark}
 			/>
-			<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
-				<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
-					{formatAmount(perSeatPerPeriod, details.currency)}
-				</span>
-				<span
-					className={classNames(
-						"text-[14px] transition-colors duration-700",
-						dark ? "text-[rgba(245,241,234,0.5)]" : "text-[rgba(17,17,17,0.5)]",
-					)}
-				>
-					per user, per {yearly ? "year" : "month"}
-				</span>
-			</div>
+			{dark ? (
+				<FridayPrice
+					quote={friday?.type === "quote" ? friday.quote : null}
+					fallback={perSeatPerPeriod}
+					currency={details.currency}
+					yearly={yearly}
+				/>
+			) : (
+				<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
+					<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
+						{formatAmount(perSeatPerPeriod, details.currency)}
+					</span>
+					<span className="text-[14px] text-[rgba(17,17,17,0.5)] transition-colors duration-700">
+						per user, per {yearly ? "year" : "month"}
+					</span>
+				</div>
+			)}
 			<dl
 				className={classNames(
 					"mt-6 flex flex-col gap-2.5 border-t pt-5 text-[14px] transition-colors duration-700",
@@ -754,5 +760,42 @@ function CodeEntry({
 				</p>
 			) : null}
 		</form>
+	);
+}
+
+function FridayPrice({
+	quote,
+	fallback,
+	currency,
+	yearly,
+}: {
+	quote: CapFridayQuote | null;
+	fallback: number;
+	currency: string;
+	yearly: boolean;
+}) {
+	const price = quote ? capFridaySeatPrice(quote) : null;
+	return (
+		<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
+			<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
+				<NumberFlow
+					value={price ? price.discounted / 100 : fallback}
+					format={{ style: "currency", currency: currency.toUpperCase() }}
+					locales="en-US"
+				/>
+			</span>
+			{price ? (
+				<span className="animate-bf-rise text-[18px] tabular-nums text-[rgba(245,241,234,0.45)] line-through decoration-[#FF4D8D] decoration-2 motion-reduce:animate-none">
+					{formatAmount(price.full / 100, currency)}
+				</span>
+			) : null}
+			<span className="text-[14px] text-[rgba(245,241,234,0.5)]">
+				{price
+					? quote?.kind === "yearly"
+						? "per user, for your next year"
+						: "per user, for your first year"
+					: `per user, per ${yearly ? "year" : "month"}`}
+			</span>
+		</div>
 	);
 }
