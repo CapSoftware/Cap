@@ -214,7 +214,22 @@ jobs:
       - name: Harness tools
         shell: pwsh
         run: |
-          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              $out = choco install ffmpeg -y --no-progress 2>&1 | Out-String
+              if ($LASTEXITCODE -in 0, 1641, 3010) { break }
+              Write-Host "choco install ffmpeg failed (attempt $attempt, exit $LASTEXITCODE)"
+              Write-Host $out
+              if ($attempt -eq 3) { exit 1 }
+              Start-Sleep -Seconds (30 * $attempt)
+            }
+            $choco = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { 'C:\ProgramData\chocolatey' }
+            if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -and (Test-Path "$choco\bin\ffmpeg.exe")) {
+              $env:Path = "$choco\bin;$env:Path"
+              Add-Content $env:GITHUB_PATH "$choco\bin"
+            }
+          }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { Write-Host 'ffmpeg is not on PATH after the install'; exit 1 }
           ffmpeg -version | Select-Object -First 1
 
       - name: Restore the meeting models
