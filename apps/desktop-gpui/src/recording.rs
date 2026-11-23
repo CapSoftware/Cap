@@ -1856,7 +1856,6 @@ pub(crate) fn preparing_presentation(
 /// and finalize both find it.
 pub(crate) const STUDIO_CAMERA_PICTURE: &str = "content/images/camera-picture.jpg";
 
-/// The picture a Studio recording was made with, when it recorded no camera.
 pub(crate) fn studio_camera_picture(
     project: &std::path::Path,
     camera_recorded: bool,

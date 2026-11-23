@@ -1517,8 +1517,6 @@ impl EditorWindow {
     // -- Camera --------------------------------------------------------------
 
     /// `CameraConfig` (`ConfigSidebar.tsx:2978-3330`).
-    /// The picture shown where a camera would be, for a recording made
-    /// without one: add, replace or remove it.
     fn render_camera_picture(&self, picture: Option<String>, cx: &mut Context<Self>) -> AnyElement {
         use gpui::StyledImage as _;
         let theme = self.theme;
@@ -1615,8 +1613,6 @@ impl EditorWindow {
             .into_any_element()
     }
 
-    /// Asks for a picture, normalizes it into the project and shows it where
-    /// the camera would be.
     pub(crate) fn pick_camera_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sidebar.picking_image {
             return;

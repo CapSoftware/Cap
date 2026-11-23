@@ -6167,9 +6167,6 @@ impl MainWindow {
             .on_click(cx.listener(move |this, _, _, cx| this.choose_device_format(format, cx)))
     }
 
-    /// The camera menu's picture row: a still picture in place of a camera.
-    /// With a picture remembered, the row picks it and a trailing button
-    /// swaps it; without one the row asks for a file.
     fn render_camera_picture_row(&self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let selected = self.camera_picture_selected(cx);
