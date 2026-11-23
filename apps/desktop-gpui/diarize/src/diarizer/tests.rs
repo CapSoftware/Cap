@@ -1409,3 +1409,153 @@ fn two_remotes_trading_turns_without_a_pause_on_the_call_are_told_apart() {
     let again = only(&push(&mut d, Track::System, 24_000, &[(3, 4_000)]));
     assert_eq!(again, ids[1]);
 }
+
+#[test]
+fn a_one_word_reply_over_the_same_word_on_a_headset_is_kept() {
+    // A headset: nothing of the call reaches the microphone. The user says
+    // "Right." a beat after the other side's "Right, ..."; the short clip
+    // sounds closer to the remote than to the user's long speech.
+    let mut table = speakers(4);
+    table.push(near(2, 1, 0.8));
+    let mut d = diarizer(table);
+    for i in 0..4u64 {
+        let t = i * 12_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(1, t, 5_000, 3 + i, 0, 1.0));
+        // The reply closes long before the other side's sentence does.
+        push_samples(
+            &mut d,
+            Track::Mic,
+            t + 6_100,
+            &spoken(4, t + 6_100, 600, 20 + i, 5, 1.0),
+        );
+        push_samples(
+            &mut d,
+            Track::System,
+            t + 6_000,
+            &spoken(2, t + 6_000, 5_000, 20 + i, 0, 1.0),
+        );
+    }
+    let pass = d.finish();
+    let user = pass.user.expect("a user");
+    for seg in pass
+        .segments
+        .iter()
+        .filter(|s| s.track == Track::Mic && s.key % 12_000 == 6_100)
+    {
+        assert!(
+            seg.spans.iter().all(|s| !s.echo && s.speaker == user),
+            "{seg:?}"
+        );
+    }
+}
+
+#[test]
+fn a_short_copy_of_the_call_is_still_echo_when_the_speakers_play_it() {
+    // Laptop speakers: the microphone repeats the call's sentences (voice 3,
+    // in the call's rhythm), so its short copies of the call are echo too.
+    let mut d = diarizer(speakers(4));
+    push_samples(&mut d, Track::Mic, 0, &spoken(1, 0, 6_000, 3, 0, 1.0));
+    for i in 0..4u64 {
+        let t = 8_000 + i * 8_000;
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 4_000, 10 + i, 0, 1.0),
+        );
+        push_samples(&mut d, Track::Mic, t, &spoken(3, t, 4_000, 10 + i, 2, 1.0));
+        let w = t + 5_000;
+        push_samples(
+            &mut d,
+            Track::Mic,
+            w + 40,
+            &spoken(3, w + 40, 600, 30 + i, 2, 1.0),
+        );
+        push_samples(
+            &mut d,
+            Track::System,
+            w,
+            &spoken(2, w, 1_000, 30 + i, 0, 1.0),
+        );
+    }
+    let pass = d.finish();
+    let copies: Vec<&SegmentLabels> = pass
+        .segments
+        .iter()
+        .filter(|s| s.track == Track::Mic && s.key % 8_000 == 5_040)
+        .collect();
+    assert_eq!(copies.len(), 4);
+    for seg in copies {
+        assert!(seg.spans.iter().all(|s| s.echo), "{seg:?}");
+    }
+}
+
+#[test]
+fn a_headset_after_the_speakers_keeps_its_short_replies() {
+    // The meeting starts on the laptop speakers (the microphone repeats the
+    // call, voice 3), then moves to a headset at 40 s. The short copies on
+    // the speakers stay echo; the user's one-word replies on the headset,
+    // a beat after the same word on the call, stay the user's.
+    let mut table = speakers(4);
+    table.push(near(2, 1, 0.8));
+    let mut d = diarizer(table);
+    push_samples(&mut d, Track::Mic, 0, &spoken(1, 0, 6_000, 3, 0, 1.0));
+    for i in 0..3u64 {
+        let t = 8_000 + i * 10_000;
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(2, t, 4_000, 10 + i, 0, 1.0),
+        );
+        push_samples(&mut d, Track::Mic, t, &spoken(3, t, 4_000, 10 + i, 2, 1.0));
+        let w = t + 5_000;
+        push_samples(
+            &mut d,
+            Track::Mic,
+            w + 40,
+            &spoken(3, w + 40, 600, 30 + i, 2, 1.0),
+        );
+        push_samples(
+            &mut d,
+            Track::System,
+            w,
+            &spoken(2, w, 1_000, 30 + i, 0, 1.0),
+        );
+    }
+    for i in 0..4u64 {
+        let t = 40_000 + i * 12_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(1, t, 5_000, 50 + i, 0, 1.0));
+        push_samples(
+            &mut d,
+            Track::Mic,
+            t + 6_100,
+            &spoken(4, t + 6_100, 600, 60 + i, 5, 1.0),
+        );
+        push_samples(
+            &mut d,
+            Track::System,
+            t + 6_000,
+            &spoken(2, t + 6_000, 5_000, 60 + i, 0, 1.0),
+        );
+    }
+    d.set_echo_stretches(&[(0, false), (40_000, false)]);
+    let pass = d.finish();
+    let user = pass.user.expect("a user");
+    let mic = |key: u64| {
+        pass.segments
+            .iter()
+            .find(|s| s.track == Track::Mic && s.key == key)
+    };
+    for i in 0..3u64 {
+        let copy = mic(8_000 + i * 10_000 + 5_040).expect("a copy");
+        assert!(copy.spans.iter().all(|s| s.echo), "{copy:?}");
+    }
+    for i in 0..4u64 {
+        let reply = mic(40_000 + i * 12_000 + 6_100).expect("a reply");
+        assert!(
+            reply.spans.iter().all(|s| !s.echo && s.speaker == user),
+            "{reply:?}"
+        );
+    }
+}

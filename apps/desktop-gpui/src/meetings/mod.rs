@@ -2487,6 +2487,9 @@ impl Meetings {
         if let Some((previous, ours)) = recording.restore_mic.take() {
             self.restore_microphone(previous, ours, cx);
         }
+        let _ = recording
+            .engine
+            .send(EngineCommand::EchoStretches(recording.echo.stretches().to_vec()));
         let _ = recording.engine.send(EngineCommand::Finish);
 
         let duration_ms = recording.timeline_offset_ms

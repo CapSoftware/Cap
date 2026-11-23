@@ -39,6 +39,9 @@ const LEVELS_MAX: usize = 1_000_000;
 /// it is a person.
 const LEAK_REVIEW_MS: u64 = 120_000;
 const LEAK_DECIDE_MS: u64 = 4_000;
+/// At the end, a microphone that followed the call through a stretch this
+/// long (a sentence, not a word said back) hears the call.
+const ECHO_HEARD_MS: u64 = 2_000;
 const LEAK_VOICE_SHARE: f64 = 0.8;
 const PERSON_DECIDE_MS: u64 = 8_000;
 /// A microphone voice heard this long and this share of its reviewed speech
@@ -313,6 +316,9 @@ pub struct MeetingDiarizer {
     nemotron_voices: Option<[crate::nemotron::TrackVoices; 2]>,
     /// The after-Stop Nemotron pass this meeting's final pass left running.
     late: Option<LateNemotron>,
+    /// Where each stretch between device changes starts (ms) and whether the
+    /// microphone was already known to repeat the call in it.
+    echo_stretches: Vec<(u64, bool)>,
 }
 
 /// Nemotron hearing a finished meeting after Stop (`Schedule::AfterStop`): the
@@ -357,6 +363,7 @@ impl MeetingDiarizer {
             nemotron_error: None,
             nemotron_voices: None,
             late: None,
+            echo_stretches: Vec::new(),
         }
     }
 
@@ -379,6 +386,14 @@ impl MeetingDiarizer {
 
     /// Stops an `AfterStop` Nemotron before the final pass, when another
     /// source of its voices (the farm) stands in.
+    /// The stretches between the meeting's device changes, each with whether
+    /// the call was already heard on the microphone there. At the end the
+    /// microphone is judged to hear the call stretch by stretch: speakers then
+    /// a headset is two different rooms.
+    pub fn set_echo_stretches(&mut self, stretches: &[(u64, bool)]) {
+        self.echo_stretches = stretches.to_vec();
+    }
+
     pub fn cancel_after_stop_nemotron(&mut self) {
         if self.nemotron.as_ref().is_some_and(|n| n.schedule() == crate::nemotron::Schedule::AfterStop) {
             self.nemotron = None;
@@ -1396,7 +1411,7 @@ impl MeetingDiarizer {
         let started = Instant::now();
         let mut finals: Vec<FinalCluster> = Vec::new();
         let mut assignment: Vec<Option<usize>> = vec![None; self.pieces.len()];
-        let scores: Vec<Option<f32>> = self
+        let mut scores: Vec<Option<f32>> = self
             .pieces
             .iter()
             .map(|p| match p.track {
@@ -1404,6 +1419,35 @@ impl MeetingDiarizer {
                 Track::System => None,
             })
             .collect();
+        // A word said a beat after the same word on the call rises and falls
+        // with it too. Only a microphone that repeated a sentence of the call
+        // (or was already known to) hears it at all, stretch by stretch
+        // between device changes; on a headset every such stretch is the
+        // user's.
+        let stretch = |ms: u64| {
+            self.echo_stretches
+                .partition_point(|&(start, _)| start <= ms)
+                .saturating_sub(1)
+        };
+        let mut stretch_hears: Vec<bool> = self.echo_stretches.iter().map(|s| s.1).collect();
+        if stretch_hears.is_empty() {
+            stretch_hears.push(false);
+        }
+        for (p, s) in self.pieces.iter().zip(&scores) {
+            if *s >= Some(self.config.leak) && p.ms() >= ECHO_HEARD_MS {
+                stretch_hears[stretch(p.start_ms)] = true;
+            }
+        }
+        let hears: Vec<bool> = self
+            .pieces
+            .iter()
+            .map(|p| stretch_hears[stretch(p.start_ms)])
+            .collect();
+        for (s, &hears) in scores.iter_mut().zip(&hears) {
+            if !hears {
+                *s = None;
+            }
+        }
         let mut leaked: Vec<bool> = scores
             .iter()
             .map(|s| *s >= Some(self.config.leak))
@@ -1420,6 +1464,7 @@ impl MeetingDiarizer {
             user,
             &call_voices,
             &folded,
+            &hears,
             &mut leaked,
             &mut assignment,
         );
@@ -1903,6 +1948,7 @@ impl MeetingDiarizer {
         user: Option<usize>,
         call_voices: &[bool],
         folded: &[Option<usize>],
+        hears: &[bool],
         leaked: &mut [bool],
         assignment: &mut [Option<usize>],
     ) {
@@ -1918,10 +1964,16 @@ impl MeetingDiarizer {
         }
         let max_len = |s: &[(u64, u64, usize)]| s.iter().map(|(a, b, _)| b - a).max().unwrap_or(0);
         let longest = [max_len(&spans[0]), max_len(&spans[1])];
+        // Only a microphone that hears the call can hold it: on a headset a
+        // short reply over the same word stays the user's, however much it
+        // sounds like the call.
         for (i, piece) in self.pieces.iter().enumerate() {
             let Some(e) = piece.embedding.as_deref() else {
                 continue;
             };
+            if piece.track == Track::Mic && !hears[i] && !piece.echo {
+                continue;
+            }
             if leaked[i] && assignment[i].is_some() {
                 continue;
             }

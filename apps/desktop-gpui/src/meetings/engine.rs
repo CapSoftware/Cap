@@ -146,6 +146,9 @@ pub enum EngineCommand {
     Append(Vec<LogLine>),
     /// Capture opened another file for a track (after a failed write).
     AudioPart(AudioPart),
+    /// The meeting's echo stretches (start ms, call heard on the microphone),
+    /// sent before `Finish` for the end-of-meeting echo check.
+    EchoStretches(Vec<(u64, bool)>),
     Finish,
 }
 
@@ -918,6 +921,11 @@ impl Worker {
                 if !self.config.audio.contains(&part) {
                     self.config.audio.push(part);
                     self.publish_status();
+                }
+            }
+            EngineCommand::EchoStretches(stretches) => {
+                if let Some(voices) = self.voices.as_mut() {
+                    voices.set_echo_stretches(stretches);
                 }
             }
             EngineCommand::Finish => self.finishing = true,

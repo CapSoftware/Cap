@@ -53,6 +53,11 @@ impl EchoPeriods {
         !std::mem::replace(&mut stretch.1, true)
     }
 
+    /// Each stretch's start (ms) and whether the call was heard in it.
+    pub fn stretches(&self) -> &[(u64, bool)] {
+        &self.stretches
+    }
+
     /// The stretches whose short lines are judged, as `[from, until)` ms.
     pub fn heard_spans(&self) -> Vec<(u64, u64)> {
         self.stretches

@@ -165,6 +165,9 @@ pub struct Voices {
     farm_voices: [Vec<HashMap<u32, u64>>; 2],
     farm_letters: [HashMap<usize, usize>; 2],
     late: Option<LateVoices>,
+    /// The meeting's stretches between device changes and whether the call
+    /// was heard on the microphone in each (see `echo_periods`).
+    echo_stretches: Vec<(u64, bool)>,
     #[cfg(test)]
     test_nemotron: Option<(Box<dyn cap_diarize::nemotron::NemoModel>, cap_diarize::nemotron::Schedule)>,
 }
@@ -202,6 +205,7 @@ impl Voices {
             farm_voices: [Vec::new(), Vec::new()],
             farm_letters: [HashMap::new(), HashMap::new()],
             late: None,
+            echo_stretches: Vec::new(),
             #[cfg(test)]
             test_nemotron: None,
         }
@@ -563,6 +567,7 @@ impl Voices {
         let State::Ready(diarizer) = &mut self.state else {
             return None;
         };
+        diarizer.set_echo_stretches(&self.echo_stretches);
         let farm = self.farm.iter().any(|t| !t.is_empty());
         if farm {
             // the farm already heard this meeting with the same model
@@ -628,6 +633,12 @@ impl Voices {
 
     /// The microphone lines the last `finish` found to be the call heard
     /// through the speakers, to remove from the transcript.
+    /// Where the meeting's devices changed and whether each stretch was
+    /// heard repeating the call, for the end-of-meeting echo check.
+    pub fn set_echo_stretches(&mut self, stretches: Vec<(u64, bool)>) {
+        self.echo_stretches = stretches;
+    }
+
     pub fn take_echoes(&mut self) -> Vec<String> {
         std::mem::take(&mut self.echoes)
     }
