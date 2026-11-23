@@ -199,6 +199,8 @@ pub fn file_name(meta: &DocMeta) -> String {
         })
         .collect();
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A name that starts with a dot is a hidden file (".NET migration").
+    let cleaned = cleaned.trim_start_matches(['.', ' ']);
     let cleaned: String = cleaned.chars().take(100).collect();
     format!(
         "{}.md",
@@ -302,6 +304,10 @@ mod tests {
         meta.title = "Q3: plan / review?".into();
         assert_eq!(file_name(&meta), "Q3 plan review.md");
         meta.title = "  ".into();
+        assert_eq!(file_name(&meta), "Untitled.md");
+        meta.title = ".NET migration".into();
+        assert_eq!(file_name(&meta), "NET migration.md");
+        meta.title = "...".into();
         assert_eq!(file_name(&meta), "Untitled.md");
     }
 }
