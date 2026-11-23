@@ -111,6 +111,9 @@ fn run_project(
                             fps,
                             matches!(format, Format::Mp4 | Format::Mp4Turbo { .. }),
                         );
+                        if matches!(format, Format::Mp4 | Format::Mp4Turbo { .. }) {
+                            common::check_faststart(&mut case, &path);
+                        }
                         if determinism {
                             let second = dir.path().join(format!("b.{ext}"));
                             match rt.block_on(common::export(&project, config, &run, &second)) {
