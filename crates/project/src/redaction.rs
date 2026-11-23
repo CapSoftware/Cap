@@ -283,6 +283,21 @@ impl Redactions {
     }
 }
 
+/// Why a rendered export of a project must wait: auto redact is on and the
+/// saved scan is missing or unfinished, so the renderer has nothing to hide
+/// with.
+pub fn export_blocker(
+    project_path: &Path,
+    config: &AutoRedactConfiguration,
+) -> Option<&'static str> {
+    if !config.enabled || Redactions::load(project_path).is_some_and(|r| r.is_complete()) {
+        return None;
+    }
+    Some(
+        "Auto redact is on but this recording has not been fully scanned yet. Open it in Cap and let the scan finish, then export.",
+    )
+}
+
 const BUCKET_SECONDS: f64 = 0.5;
 
 /// Regions of the enabled categories, bucketed by source time so a frame
@@ -498,6 +513,33 @@ mod tests {
             loaded.auto_redact.categories,
             RedactCategory::DEFAULTS.to_vec()
         );
+    }
+
+    #[test]
+    fn exports_wait_for_a_finished_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = AutoRedactConfiguration::default();
+        assert!(export_blocker(dir.path(), &config).is_none());
+        config.enabled = true;
+        assert!(export_blocker(dir.path(), &config).is_some());
+        let mut redactions = Redactions {
+            version: REDACTIONS_VERSION,
+            segments: vec![RedactionSegment {
+                index: 0,
+                source_frames: 1,
+                fps: 30.0,
+                width: 1,
+                height: 1,
+                fingerprint: "f".into(),
+                complete: false,
+            }],
+            ..Default::default()
+        };
+        redactions.save(dir.path()).unwrap();
+        assert!(export_blocker(dir.path(), &config).is_some());
+        redactions.segments[0].complete = true;
+        redactions.save(dir.path()).unwrap();
+        assert!(export_blocker(dir.path(), &config).is_none());
     }
 
     #[test]
