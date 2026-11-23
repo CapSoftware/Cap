@@ -2401,7 +2401,9 @@ impl Meetings {
             chars_before: 0,
         });
         self.notes_doc = Some(doc_id.clone());
-        if reason == StopReason::Inactivity {
+        // Both offer Resume (sleep once the computer wakes): the indicator
+        // stays for it.
+        if matches!(reason, StopReason::Inactivity | StopReason::Sleep) {
             if let Some(active) = self.active.as_mut() {
                 active.state = ActiveState::Stopping;
                 active.warning = None;

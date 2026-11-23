@@ -135,6 +135,9 @@ pub struct Session {
     resume_queued: bool,
     has_meeting: bool,
     asleep: bool,
+    /// Sleep stopped a meeting (or came while its Resume was offered): wake
+    /// offers Resume, as inactivity does, before the notes are written.
+    offer_on_wake: bool,
     pending_notes: Option<PendingNotes>,
     last_stop: Option<StopReason>,
     starting_since: Option<Millis>,
@@ -162,6 +165,7 @@ impl Session {
             resume_queued: false,
             has_meeting: false,
             asleep: false,
+            offer_on_wake: false,
             pending_notes: None,
             last_stop: None,
             starting_since: None,
@@ -231,6 +235,7 @@ impl Session {
             return out;
         }
         self.resume_offer_until = None;
+        self.offer_on_wake = false;
         self.flush_notes(&mut out);
         self.pending_notes = None;
         self.app_id = app_id;
@@ -281,6 +286,7 @@ impl Session {
         let mut out = self.advance(now);
         if reason == StopReason::Deleted {
             self.resume_offer_until = None;
+            self.offer_on_wake = false;
             self.resume_queued = false;
             self.pending_notes = None;
             self.has_meeting = false;
@@ -480,6 +486,9 @@ impl Session {
             return out;
         }
         self.asleep = true;
+        let recording = matches!(self.state, SessionState::Starting | SessionState::Recording);
+        let offered = self.resume_offer_until.is_some() || self.resume_queued;
+        self.offer_on_wake = self.has_meeting && (recording || offered || self.offer_on_wake);
         self.resume_queued = false;
         self.resume_offer_until = None;
         self.halt(now, StopReason::Sleep, &mut out);
@@ -494,6 +503,11 @@ impl Session {
         }
         self.asleep = false;
         self.last_activity = now;
+        if std::mem::take(&mut self.offer_on_wake) {
+            let until = now.plus(self.config.resume_offer_ms);
+            self.resume_offer_until = Some(until);
+            out.push(SessionAction::OfferResume { until });
+        }
         self.flush_notes(&mut out);
         out
     }

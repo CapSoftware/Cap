@@ -463,16 +463,48 @@ fn keep_recording_on_inactivity_warning_resets_timer() {
 }
 
 #[test]
-fn sleep_stops_and_wake_generates_notes() {
+fn sleep_stops_and_wake_offers_resume_before_the_notes() {
     let mut s = Sim::new();
     s.recording(Some("zoom"));
     s.at(5 * MIN).sleep().expect(&[(300_000, "stop Sleep")]);
     s.stopped(5_000).quiet();
     s.sleep().quiet();
     assert_eq!(s.session.next_deadline(), None);
-    s.at(60 * MIN).wake().expect(&[(3_600_000, "notes")]);
+    s.at(60 * MIN)
+        .wake()
+        .expect(&[(3_600_000, "offer 3630000")]);
     s.wake().quiet();
-    s.resume().expect(&[(3_600_000, "resume")]);
+    s.at(60 * MIN + 30_000).expect(&[(3_630_000, "notes")]);
+    s.resume().expect(&[(3_630_000, "resume")]);
+}
+
+#[test]
+fn resume_after_wake_continues_the_same_meeting() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(30 * MIN)
+        .wake()
+        .expect(&[(1_800_000, "offer 1830000")]);
+    s.at(30 * MIN + 5_000)
+        .resume()
+        .expect(&[(1_805_000, "resume")]);
+    s.captured();
+    s.at(31 * MIN).stop(StopReason::User).stopped(6_000);
+    s.expect(&[(1_860_000, "stop User"), (1_860_000, "notes")]);
+}
+
+#[test]
+fn declining_resume_after_wake_writes_the_notes_now() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(30 * MIN).wake().take();
+    let a = s.session.decline_resume(Millis(30 * MIN + 2_000));
+    assert_eq!(a, vec![SessionAction::GenerateNotes]);
+    assert_eq!(s.session.next_deadline(), None);
 }
 
 #[test]
@@ -480,8 +512,64 @@ fn sleep_before_stop_confirmed_defers_until_both() {
     let mut s = Sim::new();
     s.recording(None);
     s.at(MIN).sleep().take();
-    s.at(30 * MIN).wake().quiet();
-    s.stopped(5_000).expect(&[(1_800_000, "notes")]);
+    s.at(30 * MIN)
+        .wake()
+        .expect(&[(1_800_000, "offer 1830000")]);
+    s.stopped(5_000).quiet();
+    s.at(30 * MIN + 30_000).expect(&[(1_830_000, "notes")]);
+}
+
+#[test]
+fn lid_closed_past_the_meetings_end_still_offers_then_writes_notes() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.session.set_linked_event_end(Some(Millis(20 * MIN)));
+    s.at(10 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(90 * MIN)
+        .wake()
+        .expect(&[(5_400_000, "offer 5430000")]);
+    s.at(91 * MIN).expect(&[(5_430_000, "notes")]);
+}
+
+#[test]
+fn sleep_during_the_after_stop_pass_writes_notes_on_wake_as_before() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(5 * MIN)
+        .stop(StopReason::User)
+        .expect(&[(300_000, "stop User")]);
+    s.sleep().quiet();
+    s.stopped(5_000).quiet();
+    s.at(40 * MIN).wake().expect(&[(2_400_000, "notes")]);
+}
+
+#[test]
+fn a_second_sleep_while_resume_is_offered_offers_it_again() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(10 * MIN).wake().expect(&[(600_000, "offer 630000")]);
+    s.at(10 * MIN + 10_000).sleep().quiet();
+    assert_eq!(s.session.next_deadline(), None);
+    s.at(50 * MIN)
+        .wake()
+        .expect(&[(3_000_000, "offer 3030000")]);
+    s.at(50 * MIN + 30_000).expect(&[(3_030_000, "notes")]);
+}
+
+#[test]
+fn sleep_during_an_inactivity_offer_offers_it_again_on_wake() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(12 * MIN).take();
+    s.stopped(2_000).quiet();
+    s.at(12 * MIN + 5_000).sleep().quiet();
+    s.at(40 * MIN)
+        .wake()
+        .expect(&[(2_400_000, "offer 2430000")]);
+    s.at(41 * MIN).expect(&[(2_430_000, "notes")]);
 }
 
 #[test]
