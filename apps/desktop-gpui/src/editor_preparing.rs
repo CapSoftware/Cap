@@ -670,6 +670,10 @@ fn adapt(
         live.configuration().ok_or_else(ended)?,
         control.finalization.camera_snapshot(),
         studio.camera_path().is_some(),
+        crate::recording::studio_camera_picture(
+            &recording_meta.project_path,
+            studio.camera_path().is_some(),
+        ),
     )?;
     if project.clips.is_empty() {
         project.clips =

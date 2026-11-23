@@ -877,6 +877,95 @@ describe("GET /create", () => {
 		});
 	});
 
+	it.each<{
+		label: string;
+		headers: Record<string, string>;
+		expected: Record<string, unknown>;
+	}>([
+		{
+			label: "a GPUI release",
+			headers: {
+				"X-Cap-Desktop-Version": "0.6.3",
+				"X-Cap-Desktop-Features": "gpui",
+			},
+			expected: {
+				sourceName: "Display 1",
+				desktopClient: { version: "0.6.3", gpui: true },
+			},
+		},
+		{
+			label: "an older prerelease",
+			headers: { "X-Cap-Desktop-Version": "0.5.0-beta.2" },
+			expected: {
+				sourceName: "Display 1",
+				desktopClient: { version: "0.5.0-beta.2", gpui: false },
+			},
+		},
+		{
+			label: "a malformed header",
+			headers: { "X-Cap-Desktop-Version": "<script>" },
+			expected: { sourceName: "Display 1" },
+		},
+	])(
+		"records the desktop app version for $label",
+		async ({ headers, expected }) => {
+			mockGetCurrentUser.mockResolvedValue({
+				id: "fixture-user",
+				email: "fixture@example.com",
+				defaultOrgId: "fixture-org",
+				activeOrganizationId: "fixture-org",
+			});
+			mockDb.where
+				.mockResolvedValueOnce([
+					{
+						id: "fixture-org",
+						name: "Fixture organization",
+						createdAt: new Date("2026-01-01T00:00:00.000Z"),
+					},
+				])
+				.mockResolvedValueOnce([]);
+			const fixture = recordingTransactionFixture(false);
+
+			const response = await app.request(
+				"https://cap.test/create?recordingMode=desktopMP4&name=Display%201",
+				{ headers },
+			);
+
+			expect(response.status).toBe(200);
+			const body = await response.json();
+			expect(fixture.committed.videos.get(body.id)?.metadata).toEqual(expected);
+		},
+	);
+
+	it("stores no metadata for a request without a name or desktop version", async () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "fixture-user",
+			email: "fixture@example.com",
+			defaultOrgId: "fixture-org",
+			activeOrganizationId: "fixture-org",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{
+					id: "fixture-org",
+					name: "Fixture organization",
+					createdAt: new Date("2026-01-01T00:00:00.000Z"),
+				},
+			])
+			.mockResolvedValueOnce([]);
+		const fixture = recordingTransactionFixture(false);
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopMP4",
+		);
+
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(fixture.committed.videos.get(body.id)).not.toHaveProperty(
+			"metadata",
+		);
+	});
+
 	it("rolls back a recording and skips transcription when its upload insert fails", async () => {
 		mockGetCurrentUser.mockResolvedValue({
 			id: "fixture-user",

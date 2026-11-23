@@ -226,6 +226,12 @@ const CURSOR_FLUSH_INTERVAL_SECS: u64 = 5;
 /// state, a text field gaining focus); without a check the recording keeps
 /// the old shape until the pointer next moves.
 const STATIONARY_SHAPE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
+/// Each check asks the window server for the current cursor (~0.2 ms), so a
+/// pointer left resting for long keeps checking at a slower pace. Shape
+/// changes under a still pointer mostly land right after it stops or right
+/// after another shape change, and both restart the fast interval.
+const STATIONARY_SHAPE_SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+const SETTLED_SHAPE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[cfg(target_os = "linux")]
 fn prefers_wayland_portal_cursor() -> bool {
@@ -761,6 +767,7 @@ pub fn spawn_cursor_recorder(
         let mut last_cursor_image = None;
         let mut last_cursor_fingerprint: Option<CursorFingerprint> = None;
         let mut last_shape_check = Instant::now();
+        let mut last_cursor_activity = Instant::now();
         let mut awaiting_start = start_gate.is_some();
 
         loop {
@@ -840,8 +847,12 @@ pub fn spawn_cursor_recorder(
                 position_changed,
                 buttons_changed,
                 previous_cursor_id.is_some(),
-                last_shape_check.elapsed() >= STATIONARY_SHAPE_CHECK_INTERVAL,
+                last_shape_check.elapsed()
+                    >= stationary_shape_check_interval(last_cursor_activity.elapsed()),
             );
+            if position_changed || buttons_changed {
+                last_cursor_activity = Instant::now();
+            }
             if sample_image {
                 last_shape_check = Instant::now();
             }
@@ -880,6 +891,12 @@ pub fn spawn_cursor_recorder(
             let Some(cursor_id) = cursor_id else {
                 continue;
             };
+            if previous_cursor_id
+                .as_deref()
+                .is_some_and(|previous| previous != cursor_id)
+            {
+                last_cursor_activity = Instant::now();
+            }
 
             // Playback takes the drawn shape from move events only, so a shape
             // change under a still pointer is written as a move to the same
@@ -981,6 +998,14 @@ pub fn spawn_cursor_recorder(
         stop_wakeup: Some(stop_wakeup_tx),
         thread: Some(thread),
         rx: rx.shared(),
+    }
+}
+
+fn stationary_shape_check_interval(since_activity: std::time::Duration) -> std::time::Duration {
+    if since_activity < STATIONARY_SHAPE_SETTLE {
+        STATIONARY_SHAPE_CHECK_INTERVAL
+    } else {
+        SETTLED_SHAPE_CHECK_INTERVAL
     }
 }
 
@@ -1905,6 +1930,29 @@ mod stationary_shape_tests {
         ];
         assert!(still_shape_confirmation(&shape_only, 500.0).is_none());
         assert!(still_shape_confirmation(&shape_only[..1], 10_000.0).is_none());
+    }
+
+    #[test]
+    fn a_resting_pointer_slows_its_shape_checks_after_settling() {
+        use super::{
+            SETTLED_SHAPE_CHECK_INTERVAL, STATIONARY_SHAPE_CHECK_INTERVAL, STATIONARY_SHAPE_SETTLE,
+            stationary_shape_check_interval,
+        };
+        use std::time::Duration;
+        assert_eq!(
+            stationary_shape_check_interval(Duration::ZERO),
+            STATIONARY_SHAPE_CHECK_INTERVAL
+        );
+        assert_eq!(
+            stationary_shape_check_interval(
+                STATIONARY_SHAPE_SETTLE.saturating_sub(Duration::from_millis(1))
+            ),
+            STATIONARY_SHAPE_CHECK_INTERVAL
+        );
+        assert_eq!(
+            stationary_shape_check_interval(STATIONARY_SHAPE_SETTLE),
+            SETTLED_SHAPE_CHECK_INTERVAL
+        );
     }
 
     #[test]
