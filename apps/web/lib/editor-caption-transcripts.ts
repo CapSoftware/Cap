@@ -1,22 +1,23 @@
+import type { VideoMetadata } from "@cap/database/types";
 import type { EditTranscript } from "./edit-transcript";
 import type { EditorCaptionSourcePlan } from "./editor-caption-sources";
+import { getReplacementOutputKey } from "./published-output";
 
+// Saves publish an edited render whose timing no longer matches the source.
+// A farm render of the untouched recording keeps it.
 export function isEditorReplacementOutput(video: {
 	id: string;
 	ownerId: string;
 	source: { type: string; outputKey?: string };
+	metadata?: Pick<VideoMetadata, "renderFarmSave"> | null;
 }) {
-	if (video.source.type !== "desktopMP4" && video.source.type !== "webMP4") {
-		return false;
-	}
-	const key = video.source.outputKey;
-	const prefix = `${video.ownerId}/${video.id}/.recording/outputs/reupload-`;
-	return (
-		typeof key === "string" &&
-		key.startsWith(prefix) &&
-		/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/result\.mp4$/.test(
-			key.slice(prefix.length),
-		)
+	const key = getReplacementOutputKey(video);
+	if (!key) return false;
+	const render = video.metadata?.renderFarmSave;
+	return !(
+		render?.trigger === "recording" &&
+		render.status === "published" &&
+		render.outputKey === key
 	);
 }
 

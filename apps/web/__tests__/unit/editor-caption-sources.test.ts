@@ -263,3 +263,51 @@ test("a reuploaded output cannot be mistaken for the editor's raw source", () =>
 		}),
 	).toBe(false);
 });
+
+test("a farm-rendered Save is an edited output, a render of the recording is not", () => {
+	const outputKey =
+		"owner/video/.recording/outputs/render-00000000-0000-4000-8000-000000000002/result.mp4";
+	const renderFarmSave = {
+		version: 1 as const,
+		exportId: "00000000-0000-4000-8000-000000000002",
+		jobId: "job",
+		status: "published" as const,
+		startedAt: "2026-11-23T00:00:00.000Z",
+		outputKey,
+		hlsPrefix:
+			"owner/video/.recording/render/00000000-0000-4000-8000-000000000002/hls",
+	};
+	const video = {
+		id: "video",
+		ownerId: "owner",
+		source: { type: "webMP4", outputKey },
+	};
+	expect(isEditorReplacementOutput(video)).toBe(true);
+	expect(
+		isEditorReplacementOutput({ ...video, metadata: { renderFarmSave } }),
+	).toBe(true);
+	expect(
+		isEditorReplacementOutput({
+			...video,
+			metadata: { renderFarmSave: { ...renderFarmSave, trigger: "recording" } },
+		}),
+	).toBe(false);
+	expect(
+		isEditorReplacementOutput({
+			...video,
+			metadata: {
+				renderFarmSave: {
+					...renderFarmSave,
+					trigger: "recording",
+					outputKey: outputKey.replace("0002", "0003"),
+				},
+			},
+		}),
+	).toBe(true);
+	expect(
+		isEditorReplacementOutput({
+			...video,
+			id: "other",
+		}),
+	).toBe(false);
+});

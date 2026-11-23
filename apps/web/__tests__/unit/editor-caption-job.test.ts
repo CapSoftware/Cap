@@ -25,6 +25,12 @@ vi.mock("../../lib/video-storage", () => ({
 	decodeStorageVideo: (value: unknown) => value,
 }));
 vi.mock("workflow/api", () => ({ start: vi.fn() }));
+vi.mock("@/actions/videos/get-edit-transcript", () => ({
+	requestEditTranscript: vi.fn(),
+}));
+vi.mock("../../lib/queue-video-transcription", () => ({
+	queueVideoTranscription: vi.fn(),
+}));
 
 function metadata(): VideoMetadata {
 	const path = "content/videos/00000000-0000-4000-8000-000000000001.webm";
@@ -219,4 +225,38 @@ test("a migrated edit caption job measures the preserved MP4 before using its ca
 		{ resolvePublishedOutput: false },
 		{ resolvePublishedOutput: false },
 	]);
+});
+
+test("a farm-saved Studio recording transcribes its retained source, not the share transcript", async () => {
+	const { usesEditorCaptionJob } = await import(
+		"../../lib/editor-caption-snapshot"
+	);
+	const outputKey =
+		"owner/video/.recording/outputs/render-00000000-0000-4000-8000-000000000002/result.mp4";
+	const saved = {
+		...editorVideo({}),
+		source: { type: "webMP4", outputKey },
+	} as typeof videos.$inferSelect;
+	expect(usesEditorCaptionJob(editorVideo({}), "auto")).toBe(false);
+	expect(usesEditorCaptionJob(saved, "auto")).toBe(true);
+	expect(
+		usesEditorCaptionJob(
+			{
+				...saved,
+				metadata: {
+					renderFarmSave: {
+						version: 1,
+						exportId: "00000000-0000-4000-8000-000000000002",
+						jobId: "job",
+						status: "published",
+						trigger: "recording",
+						startedAt: "2026-11-23T00:00:00.000Z",
+						outputKey,
+						hlsPrefix: "owner/video/.recording/render/hls",
+					},
+				},
+			},
+			"auto",
+		),
+	).toBe(false);
 });
