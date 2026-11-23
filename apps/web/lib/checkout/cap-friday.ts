@@ -196,7 +196,9 @@ async function quoteYearly(
 		return null;
 	}
 	const renewalAmount = lines.reduce((total, line) => total + line.amount, 0);
-	if (renewalAmount <= 0) return null;
+	// Half of an odd amount could round differently from Stripe's coupon, and
+	// the claim refuses any total that differs from the quote.
+	if (renewalAmount <= 0 || renewalAmount % 2 !== 0) return null;
 	return {
 		kind: "yearly",
 		seats: subscription.items.data[0]?.quantity ?? 1,

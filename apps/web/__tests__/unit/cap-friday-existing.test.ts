@@ -121,6 +121,20 @@ describe("Cap Friday for existing subscribers", () => {
 		});
 	});
 
+	it("sends odd-cent renewals to a person instead of rounding", async () => {
+		mockStripe.invoices.retrieveUpcoming.mockResolvedValue({
+			...renewalPreview,
+			lines: {
+				has_more: false,
+				data: [{ type: "subscription", proration: false, amount: 9801 }],
+			},
+		});
+		expect(await getCapFridayState(owner)).toEqual({
+			type: "unavailable",
+			reason: "custom",
+		});
+	});
+
 	it("is closed once the offer ends", async () => {
 		vi.useFakeTimers({ now: ENDS_AT + 1, toFake: ["Date"] });
 		expect(await getCapFridayState(owner)).toEqual({
