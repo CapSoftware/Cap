@@ -6483,6 +6483,21 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
             .ok();
     }
 
+    // The editor refuses edits until its engine is up, which a software GPU
+    // can take a minute or more to bring up.
+    if auto_wallpaper.is_some() || auto_music.is_some() {
+        let started = std::time::Instant::now();
+        while !handle
+            .update(cx, |view, _, _| view.project_ready())
+            .unwrap_or(true)
+            && started.elapsed() < std::time::Duration::from_secs(300)
+        {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(100))
+                .await;
+        }
+    }
+
     if let Some(spec) = auto_wallpaper {
         handle
             .update(cx, |view, window, cx| {
