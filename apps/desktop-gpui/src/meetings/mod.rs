@@ -2832,10 +2832,13 @@ impl Meetings {
             self.notes_after_repair(&doc_id, cx);
         }
         self.drop_scratch_when_done(&doc_id);
+        // A meeting sleep stopped keeps its indicator for the Resume that
+        // wake offers.
         if self
             .active
             .as_ref()
             .is_some_and(|a| a.doc_id == doc_id && a.state == ActiveState::Stopping)
+            && !self.session.offers_resume_on_wake()
         {
             self.active = None;
         }

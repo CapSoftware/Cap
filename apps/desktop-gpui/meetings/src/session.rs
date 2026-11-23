@@ -202,6 +202,11 @@ impl Session {
         self.resume_offer_until
     }
 
+    /// Sleep stopped the meeting and wake will offer to resume it.
+    pub fn offers_resume_on_wake(&self) -> bool {
+        self.offer_on_wake
+    }
+
     pub fn speech_ms(&self, source: Source) -> u64 {
         match source {
             Source::Mic => self.mic_speech_ms,
