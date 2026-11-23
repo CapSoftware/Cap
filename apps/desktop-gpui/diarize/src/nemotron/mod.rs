@@ -28,6 +28,9 @@ pub const RIGHT: usize = 40;
 /// hour). The model separates voices far better on the meeting's own timeline:
 /// with pauses shortened to 3 s it heard two remote people as one.
 pub const MIN_GAP: usize = 3_200;
+/// A pause is fed as silence one model step's worth at a time, so an hour of
+/// it never sits in memory as samples and features at once.
+const GAP_PIECE: usize = CHUNK * SUB * mel::HOP;
 pub const MAX_GAP_MS: u64 = 3_600_000;
 
 fn max_gap_ms() -> u64 {
@@ -287,6 +290,7 @@ struct TrackStream {
     /// Source end of the last segment.
     last_end_ms: Option<u64>,
     max_gap_ms: u64,
+    gap_piece: usize,
 }
 
 impl TrackStream {
@@ -301,6 +305,7 @@ impl TrackStream {
             joined: 0,
             last_end_ms: None,
             max_gap_ms: max_gap_ms(),
+            gap_piece: GAP_PIECE,
         }
     }
 
@@ -308,13 +313,26 @@ impl TrackStream {
         if let Some(last) = self.last_end_ms {
             let pause_ms = start_ms.saturating_sub(last).min(self.max_gap_ms);
             let gap = ((pause_ms * 16) as usize).max(MIN_GAP);
-            self.mel.push(&vec![0.0; gap], &mut self.feats);
-            self.joined += gap;
+            let zeros = vec![0.0; gap.min(self.gap_piece)];
+            let mut left = gap;
+            while left > 0 {
+                let n = left.min(zeros.len());
+                self.mel.push(&zeros[..n], &mut self.feats);
+                self.joined += n;
+                left -= n;
+                self.step_ready(model)?;
+            }
         }
         self.last_end_ms = Some(start_ms + samples.len() as u64 / 16);
         self.voices.parts.push(Part { joined: self.joined, source_ms: start_ms, samples: samples.len() });
         self.mel.push(samples, &mut self.feats);
         self.joined += samples.len();
+        self.step_ready(model)
+    }
+
+    /// Every full step the features so far allow; a step only reads up to
+    /// its look-ahead, so when it runs never changes what it hears.
+    fn step_ready(&mut self, model: &mut dyn NemoModel) -> Result<(), Error> {
         while self.mel.frames() >= (self.done + CHUNK + RIGHT) * SUB {
             self.step(model, self.done + CHUNK, self.done + CHUNK + RIGHT, None)?;
         }

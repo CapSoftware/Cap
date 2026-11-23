@@ -233,3 +233,44 @@ fn a_spool_never_follows_a_link_left_at_its_path() {
     assert!(open_private(&link).is_err());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
 }
+
+/// Tones, keeping a fingerprint of everything each step was given.
+struct Heard {
+    tones: Tones,
+    inputs: Vec<u64>,
+}
+
+impl NemoModel for Heard {
+    fn step(&mut self, feats: &[f32], cached: &[f32], mask: &[i64]) -> Result<StepOut, Error> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for x in feats.iter().chain(cached) {
+            x.to_bits().hash(&mut h);
+        }
+        mask.hash(&mut h);
+        self.inputs.push(h.finish());
+        self.tones.step(feats, cached, mask)
+    }
+}
+
+#[test]
+fn a_long_pause_is_fed_in_pieces_and_heard_exactly_as_in_one() {
+    let run = |gap_piece| {
+        let mut model = Heard { tones: Tones { steps: 0, fail_after: None }, inputs: Vec::new() };
+        let mut s = TrackStream::new();
+        s.gap_piece = gap_piece;
+        s.push(&mut model, 0, &tone(300.0, 10.0)).unwrap();
+        // four minutes of nobody, then the other voice
+        s.push(&mut model, 250_000, &tone(3_000.0, 10.0)).unwrap();
+        let peak = s.feats.capacity();
+        s.finish(&mut model).unwrap();
+        (model.inputs, s.voices.probs, peak)
+    };
+    let (whole_inputs, whole_probs, whole_peak) = run(usize::MAX);
+    let (piece_inputs, piece_probs, piece_peak) = run(GAP_PIECE);
+    assert_eq!(piece_inputs, whole_inputs, "the model was given something else");
+    assert_eq!(piece_probs, whole_probs);
+    // four minutes of features is 24k frames; in pieces, two steps' worth
+    assert!(whole_peak >= 24_000 * N_MELS, "{whole_peak}");
+    assert!(piece_peak < whole_peak / 2, "{piece_peak} vs {whole_peak}");
+}
