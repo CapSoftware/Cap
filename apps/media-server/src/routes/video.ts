@@ -50,6 +50,8 @@ import { logReason } from "../lib/log-redaction";
 import { MediaAddressError } from "../lib/media-address-guard";
 import {
 	createGuardedMediaFetch,
+	exceedsRequestedLength,
+	LENGTH_LIMIT_ERROR_PREFIX,
 	PROCESS_TIMEOUT_MS,
 	UPLOAD_TIMEOUT_MS,
 } from "../lib/media-common";
@@ -232,6 +234,7 @@ const processSchema = z.object({
 	normalizeH264Level: z.boolean().optional(),
 	importedOriginal: z.boolean().optional(),
 	infra: z.boolean().optional(),
+	maxOutputSeconds: z.number().positive().optional(),
 });
 
 const ladderSchema = z.object({
@@ -1293,6 +1296,7 @@ async function processWithResilientRetry(
 		preset: options.preset,
 		remuxOnly: options.remuxOnly,
 		normalizeH264Level: options.normalizeH264Level,
+		maxOutputSeconds: options.maxOutputSeconds,
 	};
 
 	const onProgress = (progress: number, message: string) => {
@@ -1993,6 +1997,11 @@ async function processVideoAsync(
 		repairedTempFile = repairedFile;
 		signal.throwIfAborted();
 		updateJob(jobId, { metadata });
+		if (exceedsRequestedLength(metadata, options.maxOutputSeconds)) {
+			throw new Error(
+				`${LENGTH_LIMIT_ERROR_PREFIX}: the source runs longer than ${options.maxOutputSeconds} seconds`,
+			);
+		}
 		extendJobLifetimeForWork(
 			jobId,
 			getProcessTimeoutMs(metadata.duration, PROCESS_TIMEOUT_MS),
