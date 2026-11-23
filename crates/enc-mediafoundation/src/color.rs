@@ -22,9 +22,116 @@ pub(crate) fn bt709_processor_color_words(input_full_range: bool) -> ProcessorCo
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColorTag {
+    YuvMatrix,
+    Primaries,
+    TransferFunction,
+    NominalRange,
+}
+
+impl ColorTag {
+    pub(crate) const ALL: [ColorTag; 4] = [
+        ColorTag::YuvMatrix,
+        ColorTag::Primaries,
+        ColorTag::TransferFunction,
+        ColorTag::NominalRange,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            ColorTag::YuvMatrix => "yuv_matrix",
+            ColorTag::Primaries => "primaries",
+            ColorTag::TransferFunction => "transfer_function",
+            ColorTag::NominalRange => "nominal_range",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TagProbe {
+    committed: Vec<ColorTag>,
+    cursor: usize,
+}
+
+impl TagProbe {
+    pub(crate) fn new() -> Self {
+        Self {
+            committed: Vec::new(),
+            cursor: 0,
+        }
+    }
+
+    pub(crate) fn next_attempt(&self) -> Option<Vec<ColorTag>> {
+        let tag = ColorTag::ALL.get(self.cursor).copied()?;
+        let mut attempt = self.committed.clone();
+        attempt.push(tag);
+        Some(attempt)
+    }
+
+    pub(crate) fn observe(&mut self, accepted: bool) {
+        let Some(tag) = ColorTag::ALL.get(self.cursor).copied() else {
+            return;
+        };
+        if accepted {
+            self.committed.push(tag);
+        }
+        self.cursor += 1;
+    }
+
+    pub(crate) fn accepted(&self) -> &[ColorTag] {
+        &self.committed
+    }
+
+    pub(crate) fn rejected(&self) -> Vec<ColorTag> {
+        ColorTag::ALL
+            .into_iter()
+            .take(self.cursor)
+            .filter(|tag| !self.committed.contains(tag))
+            .collect()
+    }
+}
+
+pub(crate) fn format_tag_list(tags: &[ColorTag]) -> String {
+    if tags.is_empty() {
+        "none".to_owned()
+    } else {
+        tags.iter()
+            .map(|tag| tag.name())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+pub(crate) fn color_tag_report(output: &TagProbe, input: &TagProbe) -> String {
+    format!(
+        "output_accepted={} output_rejected={} input_accepted={} input_rejected={}",
+        format_tag_list(output.accepted()),
+        format_tag_list(&output.rejected()),
+        format_tag_list(input.accepted()),
+        format_tag_list(&input.rejected()),
+    )
+}
+
+pub(crate) fn accepted_after_two_passes<'a>(
+    results: &'a [(&'a str, bool, bool)],
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let mut set = Vec::new();
+    let mut rejected = Vec::new();
+    for (name, early, late) in results {
+        if *early || *late {
+            set.push(*name);
+        } else {
+            rejected.push(*name);
+        }
+    }
+    (set, rejected)
+}
+
 #[cfg(windows)]
-pub(crate) fn set_bt709_limited(
+pub(crate) fn apply_color_tags(
     media_type: &windows::Win32::Media::MediaFoundation::IMFMediaType,
+    tags: &[ColorTag],
 ) -> windows::core::Result<()> {
     use windows::Win32::Media::MediaFoundation::{
         MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
@@ -32,10 +139,153 @@ pub(crate) fn set_bt709_limited(
         MFVideoTransferMatrix_BT709,
     };
     unsafe {
-        media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
-        media_type.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
-        media_type.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
-        media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+        for tag in tags {
+            match tag {
+                ColorTag::YuvMatrix => {
+                    media_type
+                        .SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+                }
+                ColorTag::Primaries => {
+                    media_type
+                        .SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+                }
+                ColorTag::TransferFunction => {
+                    media_type
+                        .SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
+                }
+                ColorTag::NominalRange => {
+                    media_type
+                        .SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(crate) fn probe_color_tags(
+    mut try_set: impl FnMut(&[ColorTag]) -> windows::core::Result<()>,
+) -> windows::core::Result<TagProbe> {
+    use windows::Win32::Media::MediaFoundation::MF_E_INVALIDMEDIATYPE;
+    let mut probe = TagProbe::new();
+    while let Some(attempt) = probe.next_attempt() {
+        match try_set(&attempt) {
+            Ok(()) => probe.observe(true),
+            Err(error) if error.code() == MF_E_INVALIDMEDIATYPE => probe.observe(false),
+            Err(error) => return Err(error),
+        }
+    }
+    if let Err(error) = try_set(probe.accepted())
+        && error.code() != MF_E_INVALIDMEDIATYPE
+    {
+        return Err(error);
+    }
+    Ok(probe)
+}
+
+#[cfg(windows)]
+pub(crate) fn codec_color_passes(
+    transform: &windows::Win32::Media::MediaFoundation::IMFTransform,
+) -> Vec<(&'static str, bool)> {
+    use windows::Win32::{
+        Media::MediaFoundation::{
+            CODECAPI_AVEncVideoInputColorNominalRange, CODECAPI_AVEncVideoInputColorPrimaries,
+            CODECAPI_AVEncVideoInputColorTransferFunction,
+            CODECAPI_AVEncVideoInputColorTransferMatrix,
+            CODECAPI_AVEncVideoOutputColorNominalRange, CODECAPI_AVEncVideoOutputColorPrimaries,
+            CODECAPI_AVEncVideoOutputColorTransferFunction,
+            CODECAPI_AVEncVideoOutputColorTransferMatrix, ICodecAPI,
+            eAVEncVideoColorNominalRange_16_235, eAVEncVideoColorPrimaries_BT709,
+            eAVEncVideoColorTransferFunction_22_709, eAVEncVideoColorTransferMatrix_BT709,
+        },
+        System::Variant::{VARIANT, VARIANT_0_0, VT_UI4},
+    };
+    use windows::core::Interface;
+    const PROPERTIES: &[(&str, windows_core::GUID, i32)] = &[
+        (
+            "output_primaries",
+            CODECAPI_AVEncVideoOutputColorPrimaries,
+            eAVEncVideoColorPrimaries_BT709.0,
+        ),
+        (
+            "output_transfer",
+            CODECAPI_AVEncVideoOutputColorTransferFunction,
+            eAVEncVideoColorTransferFunction_22_709.0,
+        ),
+        (
+            "output_matrix",
+            CODECAPI_AVEncVideoOutputColorTransferMatrix,
+            eAVEncVideoColorTransferMatrix_BT709.0,
+        ),
+        (
+            "output_nominal_range",
+            CODECAPI_AVEncVideoOutputColorNominalRange,
+            eAVEncVideoColorNominalRange_16_235.0,
+        ),
+        (
+            "input_primaries",
+            CODECAPI_AVEncVideoInputColorPrimaries,
+            eAVEncVideoColorPrimaries_BT709.0,
+        ),
+        (
+            "input_transfer",
+            CODECAPI_AVEncVideoInputColorTransferFunction,
+            eAVEncVideoColorTransferFunction_22_709.0,
+        ),
+        (
+            "input_matrix",
+            CODECAPI_AVEncVideoInputColorTransferMatrix,
+            eAVEncVideoColorTransferMatrix_BT709.0,
+        ),
+        (
+            "input_nominal_range",
+            CODECAPI_AVEncVideoInputColorNominalRange,
+            eAVEncVideoColorNominalRange_16_235.0,
+        ),
+    ];
+    let Ok(codec) = transform.cast::<ICodecAPI>() else {
+        return PROPERTIES
+            .iter()
+            .map(|(name, _, _)| (*name, false))
+            .collect();
+    };
+    PROPERTIES
+        .iter()
+        .map(|(name, guid, value)| {
+            let mut variant = VARIANT::default();
+            unsafe {
+                let header =
+                    std::ptr::addr_of_mut!(variant.Anonymous.Anonymous).cast::<VARIANT_0_0>();
+                (*header).vt = VT_UI4;
+                (*header).Anonymous.ulVal = *value as u32;
+                (*name, codec.SetValue(guid, &variant).is_ok())
+            }
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+pub(crate) fn codec_color_report(early: &[(&str, bool)], late: &[(&str, bool)]) -> String {
+    let results = early
+        .iter()
+        .zip(late)
+        .map(|((name, early_ok), (_, late_ok))| (*name, *early_ok, *late_ok))
+        .collect::<Vec<_>>();
+    let (set, rejected) = accepted_after_two_passes(&results);
+    format!(
+        "codec_api_set={} codec_api_rejected={}",
+        join_names(&set),
+        join_names(&rejected),
+    )
+}
+
+#[cfg(windows)]
+fn join_names(names: &[&str]) -> String {
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(",")
     }
 }
 
@@ -58,7 +308,10 @@ fn fixed_16(row: [i32; 3], r: i32, g: i32, b: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessorColorWords, bt709_limited_yuv, bt709_processor_color_words};
+    use super::{
+        ColorTag, ProcessorColorWords, TagProbe, accepted_after_two_passes, bt709_limited_yuv,
+        bt709_processor_color_words, color_tag_report, format_tag_list,
+    };
 
     fn fields(word: u32) -> (u32, u32, u32, u32) {
         (
@@ -102,5 +355,62 @@ mod tests {
         assert_eq!(bt709_limited_yuv([0, 0, 255]), [32, 240, 118]);
         assert_eq!(bt709_limited_yuv([220, 40, 40]), [83, 110, 207]);
         assert_eq!(bt709_limited_yuv([125, 62, 93]), [83, 135, 154]);
+    }
+
+    fn drive(results: &[bool]) -> TagProbe {
+        let mut probe = TagProbe::new();
+        for accepted in results {
+            assert!(probe.next_attempt().is_some());
+            probe.observe(*accepted);
+        }
+        assert!(probe.next_attempt().is_none());
+        probe
+    }
+
+    #[test]
+    fn tag_probe_keeps_every_accepted_attribute() {
+        let probe = drive(&[true, true, true, true]);
+        assert_eq!(probe.accepted(), ColorTag::ALL.as_slice());
+        assert!(probe.rejected().is_empty());
+        assert_eq!(
+            format_tag_list(probe.accepted()),
+            "yuv_matrix,primaries,transfer_function,nominal_range"
+        );
+    }
+
+    #[test]
+    fn tag_probe_drops_a_rejected_attribute_and_keeps_the_rest() {
+        let probe = drive(&[true, false, true, false]);
+        assert_eq!(
+            probe.accepted(),
+            [ColorTag::YuvMatrix, ColorTag::TransferFunction].as_slice()
+        );
+        assert_eq!(probe.next_attempt(), None);
+        let mut partial = TagProbe::new();
+        partial.observe(true);
+        assert_eq!(
+            partial.next_attempt().as_deref(),
+            Some([ColorTag::YuvMatrix, ColorTag::Primaries].as_slice())
+        );
+        partial.observe(false);
+        assert_eq!(
+            partial.next_attempt().as_deref(),
+            Some([ColorTag::YuvMatrix, ColorTag::TransferFunction].as_slice())
+        );
+        assert_eq!(
+            color_tag_report(&probe, &partial),
+            "output_accepted=yuv_matrix,transfer_function output_rejected=primaries,nominal_range input_accepted=yuv_matrix input_rejected=primaries"
+        );
+    }
+
+    #[test]
+    fn codec_api_keeps_a_property_that_succeeds_on_either_pass() {
+        let (set, rejected) = accepted_after_two_passes(&[
+            ("output_primaries", false, true),
+            ("output_transfer", true, false),
+            ("output_matrix", false, false),
+        ]);
+        assert_eq!(set, ["output_primaries", "output_transfer"]);
+        assert_eq!(rejected, ["output_matrix"]);
     }
 }

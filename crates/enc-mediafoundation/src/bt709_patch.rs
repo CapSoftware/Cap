@@ -50,11 +50,11 @@ fn color_patch_decodes_as_limited_bt709() {
         MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
     )
     .expect("enumerate hardware H.264 encoders");
-    let (mut encoder, mft_name) = if let Some(found) = hardware.first() {
+    let mut encoder = if let Some(found) = hardware.first() {
         let name = found.display_name().to_owned();
-        let encoder = H264Encoder::new(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
-            .expect("Media Foundation H.264 encoder");
-        (encoder, name)
+        eprintln!("mft_name={name}");
+        H264Encoder::new(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
+            .expect("Media Foundation H.264 encoder")
     } else {
         let software = EncoderDevice::enumerate_with_flags(
             MFMediaType_Video,
@@ -66,12 +66,11 @@ fn color_patch_decodes_as_limited_bt709() {
             .first()
             .map(|found| found.display_name().to_owned())
             .unwrap_or_else(|| "none".to_owned());
-        let encoder =
-            H264Encoder::new_software(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
-                .expect("Media Foundation software H.264 encoder");
-        (encoder, name)
+        eprintln!("mft_name={name}");
+        H264Encoder::new_software(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
+            .expect("Media Foundation software H.264 encoder")
     };
-    eprintln!("mft_name={mft_name}");
+    eprintln!("color_tags={}", encoder.color_tags());
 
     let mut frames_left = FRAMES;
     let mut tick = 0i64;
