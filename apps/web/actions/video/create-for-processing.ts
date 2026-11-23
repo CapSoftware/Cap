@@ -46,12 +46,9 @@ export async function createVideoForServerProcessing({
 
 	if (!user) throw new Error("Unauthorized");
 
-	// Free-tier length cap. `duration` here is client-supplied metadata sent at
-	// upload-start, so it is only authoritative when a positive value is given
-	// (instant recordings legitimately start with 0/unknown duration). A
-	// positive declared duration over the cap is rejected up-front; the real
-	// duration is only known at finalize, which is where the cap must ultimately
-	// be enforced.
+	// `duration` is client-supplied, so a declared duration over the cap is only
+	// refused early. Processing measures the uploaded file and enforces the cap
+	// (see lib/free-plan-duration.ts).
 	if (
 		!userIsPro(user) &&
 		typeof duration === "number" &&

@@ -3,6 +3,7 @@ import { videos, videoUploads } from "@cap/database/schema";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { FatalError, sleep } from "workflow";
+import { isFreePlanDurationError } from "@/lib/free-plan-duration";
 import { isMediaPolicyProcessingError } from "@/lib/media-processing-policy";
 
 export interface ProcessedVideoMetadata {
@@ -70,7 +71,10 @@ export async function readVideoProcessingStatus(
 			},
 		};
 	}
-	if (isMediaPolicyProcessingError(upload.processingError)) {
+	if (
+		isMediaPolicyProcessingError(upload.processingError) ||
+		isFreePlanDurationError(upload.processingError)
+	) {
 		return { status: "error", message: upload.processingError };
 	}
 	if (upload.processingError || upload.phase === "error") {

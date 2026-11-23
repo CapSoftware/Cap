@@ -1,0 +1,171 @@
+import type { Organisation, User, Video } from "@cap/web-domain";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" as string | undefined },
+	rows: [] as unknown[][],
+	queries: 0,
+}));
+
+vi.mock("@cap/env", () => ({ buildEnv: mocks.buildEnv }));
+vi.mock("@cap/database", () => {
+	const query = {
+		from: () => query,
+		innerJoin: () => query,
+		where: () => query,
+		limit: async () => {
+			mocks.queries += 1;
+			return mocks.rows.shift() ?? [];
+		},
+	};
+	return { db: () => ({ select: () => query }) };
+});
+
+import {
+	exceedsFreePlanMeasuredDuration,
+	FREE_PLAN_MAX_MEASURED_SECONDS,
+	FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM,
+	getFreePlanDurationLimit,
+	hasProPlan,
+	isFreePlanDurationError,
+	measuredMediaSeconds,
+} from "@/lib/free-plan-duration";
+
+const free = {
+	stripeSubscriptionStatus: null,
+	thirdPartyStripeSubscriptionId: null,
+};
+const pro = {
+	stripeSubscriptionStatus: "active",
+	thirdPartyStripeSubscriptionId: null,
+};
+
+const video = (overrides: Record<string, unknown> = {}) => ({
+	id: "video-1" as Video.VideoId,
+	ownerId: "owner-1" as User.UserId,
+	orgId: "org-1" as Organisation.OrganisationId,
+	source: { type: "webMP4" },
+	createdAt: new Date(FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM.getTime() + 1),
+	metadata: null,
+	...overrides,
+});
+
+describe("free plan measured duration", () => {
+	beforeEach(() => {
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		mocks.rows = [];
+		mocks.queries = 0;
+	});
+
+	it("allows five minutes plus the finalize grace", () => {
+		expect(FREE_PLAN_MAX_MEASURED_SECONDS).toBe(330);
+		expect(exceedsFreePlanMeasuredDuration(300)).toBe(false);
+		expect(exceedsFreePlanMeasuredDuration(330)).toBe(false);
+		expect(exceedsFreePlanMeasuredDuration(330.001)).toBe(true);
+		expect(exceedsFreePlanMeasuredDuration(null)).toBe(false);
+	});
+
+	it("counts the longer of the header and the measured timestamps", () => {
+		expect(measuredMediaSeconds({ duration: 200, timestampSpan: 400 })).toBe(
+			400,
+		);
+		expect(measuredMediaSeconds({ duration: 400, timestampSpan: 200 })).toBe(
+			400,
+		);
+		expect(measuredMediaSeconds({ duration: 0, timestampSpan: 360 })).toBe(360);
+		expect(measuredMediaSeconds({ duration: 299, timestampSpan: null })).toBe(
+			299,
+		);
+		expect(
+			measuredMediaSeconds({ duration: Number.NaN, timestampSpan: -1 }),
+		).toBeNull();
+		expect(measuredMediaSeconds(undefined)).toBeNull();
+	});
+
+	it("recognises only its own processing error", () => {
+		expect(
+			isFreePlanDurationError("free-plan-duration-exceeded: Recording exceeds"),
+		).toBe(true);
+		expect(isFreePlanDurationError("media-input-rejected: not media")).toBe(
+			false,
+		);
+		expect(isFreePlanDurationError(null)).toBe(false);
+	});
+
+	it("matches userIsPro for every plan state", async () => {
+		const { userIsPro } = await import("@cap/utils");
+		for (const user of [
+			null,
+			free,
+			pro,
+			{ stripeSubscriptionStatus: "trialing" },
+			{ stripeSubscriptionStatus: "past_due" },
+			{ stripeSubscriptionStatus: "complete" },
+			{ stripeSubscriptionStatus: "paid" },
+			{ stripeSubscriptionStatus: "canceled" },
+			{ stripeSubscriptionStatus: "unpaid" },
+			{ thirdPartyStripeSubscriptionId: "sub_seat" },
+		]) {
+			expect(hasProPlan(user)).toBe(userIsPro(user));
+		}
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
+		expect(hasProPlan(free)).toBe(true);
+		expect(userIsPro(free)).toBe(true);
+	});
+
+	it("limits a free plan upload whose owner and organization owner are free", async () => {
+		mocks.rows = [[free], [free], []];
+		await expect(getFreePlanDurationLimit(video())).resolves.toBe(330);
+		expect(mocks.queries).toBe(3);
+	});
+
+	it("never limits a Pro owner and asks nothing more", async () => {
+		mocks.rows = [[pro]];
+		await expect(getFreePlanDurationLimit(video())).resolves.toBeNull();
+		expect(mocks.queries).toBe(1);
+	});
+
+	it("never limits an organization pro seat", async () => {
+		mocks.rows = [[{ ...free, thirdPartyStripeSubscriptionId: "sub_seat" }]];
+		await expect(getFreePlanDurationLimit(video())).resolves.toBeNull();
+	});
+
+	it("never limits videos in an organization whose owner is Pro", async () => {
+		mocks.rows = [[free], [pro]];
+		await expect(getFreePlanDurationLimit(video())).resolves.toBeNull();
+	});
+
+	it("never limits imported videos", async () => {
+		mocks.rows = [[free], [free], [{ id: "video-1" }]];
+		await expect(getFreePlanDurationLimit(video())).resolves.toBeNull();
+	});
+
+	it.each([
+		["self-hosted deployments", {}, undefined],
+		[
+			"videos created before the limit was measured",
+			{
+				createdAt: new Date(
+					FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM.getTime() - 1,
+				),
+			},
+			"true",
+		],
+		["desktop recordings", { source: { type: "desktopMP4" } }, "true"],
+		[
+			"Loom originals",
+			{
+				metadata: {
+					loomDeferredProcessing: { rawFileKey: "k", status: "started" },
+				},
+			},
+			"true",
+		],
+	])("never limits %s, without a query", async (_, overrides, isCap) => {
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = isCap;
+		await expect(
+			getFreePlanDurationLimit(video(overrides)),
+		).resolves.toBeNull();
+		expect(mocks.queries).toBe(0);
+	});
+});

@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "@cap/database";
 import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { Storage } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
@@ -15,6 +16,14 @@ import {
 } from "@/lib/desktop-recording-verification";
 import { queueDesktopSegmentsFinalization } from "@/lib/desktop-segments-finalization";
 import { applyDeveloperVideoProgress } from "@/lib/developer-video-processing";
+import {
+	exceedsFreePlanMeasuredDuration,
+	FREE_PLAN_DURATION_WEBHOOK_PARAM,
+	freePlanDurationExceededError,
+	freePlanDurationExceededMessage,
+	MEDIA_LENGTH_LIMIT_ERROR_PREFIX,
+	measuredMediaSeconds,
+} from "@/lib/free-plan-duration";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
 import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
@@ -27,8 +36,10 @@ import {
 	queueVideoTranscription,
 	shouldQueueTranscriptionAfterMediaComplete,
 } from "@/lib/queue-video-transcription";
+import { runPromise } from "@/lib/server";
 import { isEditSourceKey } from "@/lib/video-edit-processing";
 import { applyEditProgress } from "@/lib/video-edit-progress";
+import { decodeStorageVideo } from "@/lib/video-storage";
 
 interface ProgressWebhookPayload {
 	manifestSha256?: string;
@@ -64,12 +75,49 @@ interface ProgressWebhookPayload {
 		sampleRate: number | null;
 		bitrate: number;
 		fileSize: number;
+		timestampSpan?: number | null;
 	};
 	deferredSourceKey?: string;
 }
 
 function getValidDuration(duration: number) {
 	return Number.isFinite(duration) && duration > 0 ? duration : undefined;
+}
+
+// A free plan upload that measures over the limit is never published. The
+// upload is failed first, with the message multipart completion returns, so
+// processing stops; then its output, previews and raw upload are removed. A
+// cleanup failure answers 500 so the media server sends the callback again.
+async function rejectFreePlanOverLimitVideo(
+	video: typeof videos.$inferSelect,
+	rawFileKey: string | null | undefined,
+) {
+	await db()
+		.update(videoUploads)
+		.set({
+			phase: "error",
+			processingProgress: 0,
+			processingMessage: freePlanDurationExceededMessage,
+			processingError: freePlanDurationExceededError,
+			rawFileKey: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(videoUploads.videoId, video.id));
+	const prefix = `${video.ownerId}/${video.id}/`;
+	const keys = new Set([
+		`${prefix}result.mp4`,
+		`${prefix}screenshot/screen-capture.jpg`,
+		`${prefix}preview/animated-preview.gif`,
+		`${prefix}raw-upload.mp4`,
+		`${prefix}raw-upload.webm`,
+	]);
+	if (rawFileKey?.startsWith(prefix)) keys.add(rawFileKey);
+	const [bucket] = await Storage.getAccessForVideo(
+		decodeStorageVideo(video),
+	).pipe(runPromise);
+	await bucket
+		.deleteObjects([...keys].map((Key) => ({ Key })))
+		.pipe(runPromise);
 }
 
 function mapPhaseToDbPhase(
@@ -193,6 +241,30 @@ export async function POST(request: NextRequest) {
 		);
 
 		const dbPhase = mapPhaseToDbPhase(payload.phase);
+		const freePlanLimited =
+			request.nextUrl.searchParams.get(FREE_PLAN_DURATION_WEBHOOK_PARAM) ===
+			"1";
+
+		if (
+			freePlanLimited &&
+			payload.phase === "error" &&
+			payload.error?.startsWith(`${MEDIA_LENGTH_LIMIT_ERROR_PREFIX}:`)
+		) {
+			const [currentVideo] = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, payload.videoId as Video.VideoId));
+			const [currentUpload] = await db()
+				.select({ rawFileKey: videoUploads.rawFileKey })
+				.from(videoUploads)
+				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
+			if (currentVideo)
+				await rejectFreePlanOverLimitVideo(
+					currentVideo,
+					currentUpload?.rawFileKey,
+				);
+			return NextResponse.json({ success: true, status: "rejected" });
+		}
 
 		if (dbPhase === "complete") {
 			const [currentVideo] = await db()
@@ -232,6 +304,18 @@ export async function POST(request: NextRequest) {
 					success: true,
 					status: "queued-for-verification",
 				});
+			}
+			if (
+				currentVideo &&
+				!isEditUpload &&
+				freePlanLimited &&
+				exceedsFreePlanMeasuredDuration(measuredMediaSeconds(payload.metadata))
+			) {
+				await rejectFreePlanOverLimitVideo(
+					currentVideo,
+					currentUpload?.rawFileKey,
+				);
+				return NextResponse.json({ success: true, status: "rejected" });
 			}
 			const receipt = proof
 				? currentVideo && payload.metadata

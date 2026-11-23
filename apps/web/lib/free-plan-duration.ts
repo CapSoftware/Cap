@@ -1,0 +1,132 @@
+import { db } from "@cap/database";
+import { importedVideos, organizations, users } from "@cap/database/schema";
+import { buildEnv } from "@cap/env";
+import { type Organisation, type User, Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
+
+// Clients stop at the cap and then finalize, and encoders round, so honest
+// recordings can land slightly past the limit.
+export const FREE_PLAN_DURATION_GRACE_SECONDS = 30;
+
+export const FREE_PLAN_MAX_MEASURED_SECONDS =
+	Video.FREE_PLAN_MAX_RECORDING_SECONDS + FREE_PLAN_DURATION_GRACE_SECONDS;
+
+// Videos created before this date are never measured against the limit, so
+// reprocessing an older upload cannot remove it.
+export const FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM = new Date(
+	"2026-11-23T00:00:00.000Z",
+);
+
+export const FREE_PLAN_DURATION_ERROR_PREFIX =
+	Video.FREE_PLAN_DURATION_ERROR_PREFIX;
+
+export const freePlanDurationExceededMessage =
+	"Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings.";
+
+export const freePlanDurationExceededError = `${FREE_PLAN_DURATION_ERROR_PREFIX}: ${freePlanDurationExceededMessage}`;
+
+export const FREE_PLAN_DURATION_WEBHOOK_PARAM = "freePlanLimit";
+
+// The media server refuses a source longer than the requested output limit
+// with this prefix before encoding it.
+export const MEDIA_LENGTH_LIMIT_ERROR_PREFIX = "media-length-limit-exceeded";
+
+export function isFreePlanDurationError(
+	error: string | null | undefined,
+): error is string {
+	return Boolean(error?.startsWith(`${FREE_PLAN_DURATION_ERROR_PREFIX}:`));
+}
+
+type PlanUser = {
+	stripeSubscriptionStatus?: string | null;
+	thirdPartyStripeSubscriptionId?: string | null;
+};
+
+// Workflow bundles cannot import @cap/utils, so this mirrors its userIsPro.
+export function hasProPlan(user: PlanUser | null | undefined): boolean {
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
+	if (!user) return false;
+	if (user.thirdPartyStripeSubscriptionId) return true;
+	return (
+		user.stripeSubscriptionStatus === "active" ||
+		user.stripeSubscriptionStatus === "trialing" ||
+		user.stripeSubscriptionStatus === "complete" ||
+		user.stripeSubscriptionStatus === "paid" ||
+		user.stripeSubscriptionStatus === "past_due"
+	);
+}
+
+const positiveSeconds = (value: unknown): number | null =>
+	typeof value === "number" && Number.isFinite(value) && value > 0
+		? value
+		: null;
+
+// The probe reports the header length as `duration` and the length its
+// timestamps actually span as `timestampSpan`. A header can understate how
+// long a file plays, so the longer of the two is the measured length.
+export function measuredMediaSeconds(
+	metadata: { duration?: unknown; timestampSpan?: unknown } | null | undefined,
+): number | null {
+	const duration = positiveSeconds(metadata?.duration);
+	const span = positiveSeconds(metadata?.timestampSpan);
+	if (duration === null) return span;
+	if (span === null) return duration;
+	return Math.max(duration, span);
+}
+
+export function exceedsFreePlanMeasuredDuration(
+	seconds: number | null,
+): boolean {
+	return seconds !== null && seconds > FREE_PLAN_MAX_MEASURED_SECONDS;
+}
+
+// The longest output a processing job may write for this video, or null when
+// the free plan limit does not apply. Pro is decided like multipart uploads
+// and dashboard imports: the video owner or the organization owner being Pro
+// lifts the limit.
+export async function getFreePlanDurationLimit(video: {
+	id: Video.VideoId;
+	ownerId: User.UserId;
+	orgId: Organisation.OrganisationId;
+	source: { type: string };
+	createdAt: Date;
+	metadata?: { loomDeferredProcessing?: unknown } | null;
+}): Promise<number | null> {
+	if (
+		!buildEnv.NEXT_PUBLIC_IS_CAP ||
+		video.source.type !== "webMP4" ||
+		video.createdAt < FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM ||
+		video.metadata?.loomDeferredProcessing
+	)
+		return null;
+
+	const [owner] = await db()
+		.select({
+			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+		})
+		.from(users)
+		.where(eq(users.id, video.ownerId))
+		.limit(1);
+	if (hasProPlan(owner)) return null;
+
+	const [organizationOwner] = await db()
+		.select({
+			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+		})
+		.from(organizations)
+		.innerJoin(users, eq(organizations.ownerId, users.id))
+		.where(eq(organizations.id, video.orgId))
+		.limit(1);
+	if (hasProPlan(organizationOwner)) return null;
+
+	const [imported] = await db()
+		.select({ id: importedVideos.id })
+		.from(importedVideos)
+		.where(eq(importedVideos.id, video.id))
+		.limit(1);
+	if (imported) return null;
+
+	return FREE_PLAN_MAX_MEASURED_SECONDS;
+}
