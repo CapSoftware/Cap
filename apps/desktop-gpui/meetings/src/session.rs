@@ -58,8 +58,6 @@ pub enum SessionAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionConfig {
     pub stop_when_call_ends: bool,
-    pub min_far_speech_ms: u64,
-    pub min_session_ms_for_call_end: u64,
     pub near_event_end_ms: u64,
     pub ending_countdown_ms: u64,
     pub ending_countdown_far_ms: u64,
@@ -74,8 +72,6 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             stop_when_call_ends: true,
-            min_far_speech_ms: 180_000,
-            min_session_ms_for_call_end: 300_000,
             near_event_end_ms: 300_000,
             ending_countdown_ms: 10_000,
             ending_countdown_far_ms: 20_000,
@@ -381,11 +377,10 @@ impl Session {
         {
             return out;
         }
-        let meaningful = self.system_speech_ms >= self.config.min_far_speech_ms
-            || self.recorded_ms() >= self.config.min_session_ms_for_call_end;
-        if !meaningful {
-            return out;
-        }
+        // Every call that ends gets the countdown, however short: a three
+        // minute standup that ended is over too. A call app that drops the
+        // microphone for a moment takes it back within the countdown (which
+        // clears it), and "Keep recording" covers a false end.
         let near_end = self.event_end.is_some_and(|end| {
             let distance = if now >= end {
                 now.since(end)
@@ -413,7 +408,11 @@ impl Session {
         let mut out = self.advance(now);
         match self.warning.take() {
             Some(Warning::Ending { .. }) => {
+                // Asking to keep recording is the person being there, as
+                // for the inactivity warning: an ended call can replace that
+                // warning, and its deadline must not come back already due.
                 self.call_end_suppressed = true;
+                self.last_activity = now;
                 out.push(SessionAction::ClearWarning);
             }
             Some(Warning::Inactivity { .. }) => {

@@ -196,12 +196,55 @@ fn user_start_stop_and_notes_threshold() {
 }
 
 #[test]
-fn call_end_before_speech_floor_is_ignored() {
+fn a_short_call_that_ends_counts_down_like_a_long_one() {
     let mut s = Sim::new();
     s.recording(Some("zoom"));
     s.at(MIN).far_speech(60_000);
-    s.at(2 * MIN).call_ended("zoom").quiet();
-    assert_eq!(s.session.next_deadline(), Some(Millis(11 * MIN)));
+    s.at(2 * MIN)
+        .call_ended("zoom")
+        .expect(&[(120_000, "ending 140000")]);
+    s.at(139_999).quiet();
+    s.at(140_000)
+        .expect(&[(140_000, "clear"), (140_000, "stop CallEnded")]);
+    assert_eq!(s.session.last_stop_reason(), Some(StopReason::CallEnded));
+}
+
+#[test]
+fn a_short_call_dropping_the_microphone_for_a_moment_keeps_recording() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(MIN).call_ended("zoom").take();
+    s.at(MIN + 4_000)
+        .call_started("zoom")
+        .expect(&[(64_000, "clear")]);
+    s.at(3 * MIN).quiet();
+    assert_eq!(s.session.state(), SessionState::Recording);
+}
+
+#[test]
+fn keeping_a_call_end_that_replaced_the_inactivity_warning_counts_as_activity() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: Some(MIN),
+        ..SessionConfig::default()
+    });
+    s.recording(Some("zoom"));
+    s.at(MIN).expect(&[(60_000, "inactive 180000")]);
+    s.at(MIN + 10_000)
+        .call_ended("zoom")
+        .expect(&[(70_000, "ending 90000")]);
+    s.at(MIN + 15_000).keep().expect(&[(75_000, "clear")]);
+    assert_eq!(s.session.next_deadline(), Some(Millis(75_000 + MIN)));
+    s.at(75_000 + MIN).expect(&[(135_000, "inactive 255000")]);
+}
+
+#[test]
+fn a_false_end_of_a_short_call_is_kept_with_keep_recording() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(90_000).call_ended("zoom").take();
+    s.at(95_000).keep().expect(&[(95_000, "clear")]);
+    s.at(4 * MIN).quiet();
+    assert_eq!(s.session.state(), SessionState::Recording);
 }
 
 #[test]
@@ -221,8 +264,6 @@ fn call_end_after_far_speech_floor_counts_down() {
 fn call_end_after_five_minutes_without_far_speech() {
     let mut s = Sim::new();
     s.recording(Some("zoom"));
-    s.at(4 * MIN + 59_999).call_ended("zoom").quiet();
-    s.call_started("zoom");
     s.at(5 * MIN).call_ended("zoom");
     s.expect(&[(300_000, "ending 320000")]);
 }
