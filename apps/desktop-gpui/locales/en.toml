@@ -1616,10 +1616,10 @@ studio = { text = "Studio Mode — Record and edit locally", context = "Second l
 take_screenshot = "Take Screenshot"
 
 [overlay.window]
+size_needs_permission_body = "Click to see how to let Cap resize windows."
+size_needs_permission_title = "Resizing needs your OK"
 size_title = "Change window size"
 size_body = "Resize the window to a ratio or an exact size before you record."
-size_needs_accessibility_title = { text = "Resizing needs Accessibility", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
-size_needs_accessibility_body = { text = "Turn on Accessibility for Cap in System Settings to resize other apps' windows.", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
 size_unavailable_title = "Resizing isn't available"
 size_unavailable_body = "Wayland doesn't let apps resize other apps' windows."
 focus_title = { text = "Focus mode", context = "Card title above a switch in the window picker. Focus mode centres the picked window and records only it." }
@@ -1634,12 +1634,41 @@ center_description = { text = "Move the window to the middle when you pick it", 
 
 [permission.guide]
 accessibility_body = { text = "Drop it on the Accessibility list above, then make sure its switch is on.", context = "Accessibility is the name of the macOS System Settings pane; use the name macOS shows in this language." }
+input_monitoring_plus_body = { text = "Click + under the Input Monitoring list above, then choose Cap.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
+override_body = { text = "Click + above and choose Cap. Then pick Choose Apps and add the apps Cap should resize.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+override_title = "Add Cap, then choose apps"
+plus_title = "Add Cap with the + button"
 screen_body = { text = "Drop it on the Screen & System Audio Recording list above, then make sure its switch is on.", context = "Screen & System Audio Recording is the name of the macOS System Settings pane; use the name macOS shows in this language." }
+screen_plus_body = { text = "Click + under the Screen & System Audio Recording list above, then choose Cap.", context = "Screen & System Audio Recording is the name of the macOS System Settings pane; use the name macOS shows in this language." }
 title = "Drag Cap into the list"
+
+[permission.help]
+done = "Done"
+done_keystrokes = "Your next recording will include the keys you press."
+done_title = "You're all set"
+done_window = "Cap can resize windows now."
+keystrokes_body = "macOS needs your OK before Cap can see the keys you press while recording."
+keystrokes_title = "Show your keystrokes"
+not_now = "Not now"
+relaunch_keystrokes = "macOS turns on keystrokes once Cap restarts."
+step_accessibility = { text = "Find Cap under Accessibility and switch it on.", context = "Accessibility is the macOS System Settings pane; use the name macOS shows in this language." }
+step_choose_cap = "Choose Cap and enter your Mac password."
+step_input_monitoring = { text = "Click + under Input Monitoring.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
+step_open = "Click Open System Settings below."
+window_body = "macOS needs your OK before Cap can move or resize another app's window."
+window_step_add_app = { text = "Click + and add {app}.", context = "{app} is the name of the app whose window is being resized." }
+window_step_add_apps = "Click + and add the app you're recording."
+window_step_any_time = { text = "Set it to At Any Time so macOS doesn't ask again every day.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+window_step_choose_app = { text = "Pick Choose Apps, then add {app}.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language. {app} is the name of the app whose window is being resized." }
+window_step_choose_apps = { text = "Pick Choose Apps, then add the app you're recording.", context = "Choose Apps and At Any Time are macOS button and menu labels; use the names macOS shows in this language." }
+window_step_info = "Click ⓘ next to Cap."
+window_step_override = "Click + in the pane that opens and choose Cap."
+window_title = "Let Cap resize windows"
 
 [permission.name]
 accessibility = "Accessibility"
 camera = "Camera"
+input_monitoring = { text = "Input Monitoring", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
 microphone = "Microphone"
 screen_recording = "Screen Recording"
 
@@ -1674,11 +1703,20 @@ regained_title = "Cap needs a permission back"
 title = "Let's get Cap ready"
 
 [permission.onboarding.hint]
+add_with_plus = "Click + under the Screen & System Audio Recording list in System Settings, then choose Cap. Already listed? Just switch it on."
 drag_into_list = "Drag Cap from the panel under System Settings into the list. Already listed? Just switch it on."
 find_in_list = "Find Cap in the list and switch it on. If macOS asked first, choose Open System Settings."
+input_monitoring_plus = { text = "Click + under the Input Monitoring list in System Settings, then choose Cap. Already listed? Just switch it on.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
 no_prompt = "No prompt showed up? Switch Cap on in System Settings."
 open_settings = "Open System Settings, find Cap in the list and switch it on."
 turned_off = "It was turned off earlier, so switch Cap on in System Settings. Or skip it for now."
+
+[permission.onboarding.keystrokes]
+allow = "Set up keystrokes"
+body = { text = "Cap can show the keys you press in your recordings. macOS calls this Input Monitoring. Skip it if you don't need it.", context = "Input Monitoring is the macOS System Settings pane; use the name macOS shows in this language." }
+done_body = "Your recordings can show the keys you press."
+done_title = "Keystrokes are on"
+title = "Show your keystrokes"
 
 [permission.onboarding.microphone]
 allow = "Allow microphone"
@@ -1691,6 +1729,7 @@ title = "Let Cap hear you"
 body = "macOS turns on screen recording once Cap restarts. You'll pick up right here."
 button = { text = "Relaunch", context = "Small secondary button beside a hint." }
 hint = "Switched on but still waiting? Restart Cap to apply it."
+keystrokes_body = "macOS turns on keystrokes once Cap restarts. You'll pick up right here."
 later = "macOS applies it after Cap restarts. You can do that once you're done here."
 title = "One restart and you're set"
 
@@ -2892,6 +2931,9 @@ grouping_threshold = "Grouping Threshold"
 linger_duration = "Linger Duration"
 load_failed = "Failed to load recording data: {error}"
 no_presses = "No recorded keyboard presses were found."
+permission_action = "Show me how"
+permission_body = "Give Cap your OK so your next recordings include the keys you press."
+permission_title = "Keystrokes aren't being recorded"
 position = "Position"
 regenerate = "Regenerate Keyboard Segments"
 show_modifiers = "Show Modifiers"

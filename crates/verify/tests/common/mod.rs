@@ -672,6 +672,57 @@ pub const COLOUR_MATRIX_TOLERANCE: f64 = 2.0;
 /// when the project mirrors the camera; the screen never is), and camera
 /// placement (the camera's key region lies in the corner/edge the project
 /// asks for).
+/// MP4 exports are faststart: the moov box comes before the media, so a
+/// player streaming a shared link does not have to read the end of the file
+/// before the first frame.
+pub fn check_faststart(case: &mut Case, path: &Path) {
+    match top_level_boxes(path) {
+        Err(e) => case.problem("error", format!("mp4 boxes: {e}")),
+        Ok(boxes) => {
+            let moov = boxes.iter().position(|kind| kind == "moov");
+            let mdat = boxes.iter().position(|kind| kind == "mdat");
+            if !matches!((moov, mdat), (Some(moov), Some(mdat)) if moov < mdat) {
+                case.problem(
+                    "faststart",
+                    format!("moov is not before mdat (top-level boxes {boxes:?})"),
+                );
+            }
+        }
+    }
+}
+
+fn top_level_boxes(path: &Path) -> std::io::Result<Vec<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut boxes = Vec::new();
+    let mut offset = 0;
+    while offset + 8 <= len {
+        file.seek(SeekFrom::Start(offset))?;
+        let mut header = [0u8; 8];
+        file.read_exact(&mut header)?;
+        let size = match u32::from_be_bytes([header[0], header[1], header[2], header[3]]) {
+            0 => len - offset,
+            1 => {
+                let mut large = [0u8; 8];
+                file.read_exact(&mut large)?;
+                u64::from_be_bytes(large)
+            }
+            size => u64::from(size),
+        };
+        boxes.push(String::from_utf8_lossy(&header[4..]).into_owned());
+        if size < 8 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("box {boxes:?} at {offset} has size {size}"),
+            ));
+        }
+        offset += size;
+    }
+    Ok(boxes)
+}
+
 pub fn check_presentation(
     case: &mut Case,
     config: &ProjectConfiguration,

@@ -29,6 +29,9 @@ on:
       - "apps/web/app/api/messenger/**"
       - "packages/database/schema.ts"
       - "packages/database/migrations/**"
+      - "packages/database/auth/**"
+      - "apps/web/actions/auth/**"
+      - "apps/web/lib/passkey-prompt.ts"
       - ".github/workflows/infra-database.yml"
   push:
     branches: [main]
@@ -57,6 +60,9 @@ on:
       - "apps/web/app/api/messenger/**"
       - "packages/database/schema.ts"
       - "packages/database/migrations/**"
+      - "packages/database/auth/**"
+      - "apps/web/actions/auth/**"
+      - "apps/web/lib/passkey-prompt.ts"
       - ".github/workflows/infra-database.yml"
 
 permissions:
@@ -134,4 +140,5 @@ jobs:
         env:
           CAP_INFRA_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
           CAP_INFRA_ROUND_TRIPS_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
-        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts __tests__/integration/space-creator-membership-database.test.ts __tests__/integration/dashboard-library-database.test.ts __tests__/integration/messenger-poll-database.test.ts
+          CAP_PASSKEYS_TEST_DATABASE_URL: mysql://root@127.0.0.1:3306/cap_infra_tests
+        run: bun run vitest run __tests__/integration/infra-*-database.test.ts __tests__/integration/user-preferences-database.test.ts __tests__/integration/space-creator-membership-database.test.ts __tests__/integration/dashboard-library-database.test.ts __tests__/integration/messenger-poll-database.test.ts __tests__/integration/passkeys-database.test.ts __tests__/integration/email-change-database.test.ts

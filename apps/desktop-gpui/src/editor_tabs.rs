@@ -2763,8 +2763,65 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
+            .children(Self::keystroke_permission_callout(&theme))
             .child(body)
             .into_any_element()
+    }
+
+    /// From macOS 27.3 keystrokes need Input Monitoring (before, the
+    /// Accessibility grant onboarding asks for). Without it a recording has no
+    /// key presses to show, so the tab says why and walks through the fix.
+    fn keystroke_permission_callout(theme: &crate::theme::Theme) -> Option<AnyElement> {
+        if !crate::permission_help::keystrokes_missing() {
+            return None;
+        }
+        Some(
+            div()
+                .id("keyboard-permission")
+                .mb(px(4.))
+                .p(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(Hsla::from(theme.gray_5))
+                .bg(Hsla::from(theme.gray_3))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_12))
+                        .child(tr::editor::tabs::keyboard::permission_title()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::keyboard::permission_body()),
+                )
+                .child(
+                    div().pt(px(6.)).child(
+                        ui::Button::plain(
+                            theme,
+                            "keyboard-permission-help",
+                            ui::ButtonVariant::Dark,
+                            ui::ButtonSize::Sm,
+                        )
+                        .label(tr::editor::tabs::keyboard::permission_action())
+                        .on_click(|_, _, cx| {
+                            cx.defer(|cx| {
+                                crate::permission_help::show(
+                                    crate::permission_help::Need::Keystrokes,
+                                    cx,
+                                )
+                            })
+                        }),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// A slider with a `text-xs text-right` readout underneath -- the shape the

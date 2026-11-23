@@ -442,6 +442,27 @@
 			"when": 1794867892168,
 			"tag": "0062_dashboard_library_tools",
 			"breakpoints": true
+		},
+		{
+			"idx": 63,
+			"version": "5",
+			"when": 1795200696826,
+			"tag": "0063_passkeys",
+			"breakpoints": true
+		},
+		{
+			"idx": 64,
+			"version": "5",
+			"when": 1795202295715,
+			"tag": "0064_email_change_requests",
+			"breakpoints": true
+		},
+		{
+			"idx": 65,
+			"version": "5",
+			"when": 1795219397974,
+			"tag": "0065_passkey_confirms_identity",
+			"breakpoints": true
 		}
 	]
 }

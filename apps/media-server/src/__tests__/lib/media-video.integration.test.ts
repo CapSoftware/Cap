@@ -538,6 +538,67 @@ describe("generatePreviewGif integration tests", () => {
 			generatePreviewGif(TEST_VIDEO_WITH_AUDIO, 10, {}, controller.signal),
 		).rejects.toThrow("Preview GIF generation aborted");
 	});
+
+	test.each([
+		["untagged BT.709", "bt709", "unknown", "unknown"],
+		["tagged BT.709", "bt709", "bt709", "tv"],
+		["tagged BT.601", "bt601", "smpte170m", "tv"],
+	])(
+		"keeps colours accurate for %s video",
+		async (label, matrix, tag, range) => {
+			const orange = [224, 122, 48];
+			await ensureTempDir();
+			const input = join(
+				getTempDir(),
+				`gif-colour-${label.replace(/\W+/g, "-")}-${Date.now()}.mp4`,
+			);
+			tempFiles.push(input);
+			execFileSync("ffmpeg", [
+				"-hide_banner",
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"color=c=0xE07A30:s=320x180:r=10:d=3",
+				"-vf",
+				`scale=out_color_matrix=${matrix}:out_range=tv,format=yuv420p,setparams=colorspace=${tag}:color_primaries=${tag}:color_trc=${tag}:range=${range}`,
+				"-c:v",
+				"libx264",
+				"-qp",
+				"0",
+				"-y",
+				input,
+			]);
+
+			const preview = await generatePreviewGif(input, 3, { startTime: 0 });
+			try {
+				const pixel = execFileSync("ffmpeg", [
+					"-hide_banner",
+					"-v",
+					"error",
+					"-i",
+					preview.path,
+					"-frames:v",
+					"1",
+					"-vf",
+					"crop=1:1:80:45",
+					"-f",
+					"rawvideo",
+					"-pix_fmt",
+					"rgb24",
+					"-",
+				]);
+				for (const [index, channel] of orange.entries()) {
+					expect(Math.abs((pixel[index] ?? 0) - channel)).toBeLessThanOrEqual(
+						8,
+					);
+				}
+			} finally {
+				await preview.cleanup();
+			}
+		},
+	);
 });
 
 describe("processVideo integration tests", () => {

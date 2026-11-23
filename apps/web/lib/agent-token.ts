@@ -82,6 +82,14 @@ export const exchangeAgentAuthorizationCode = Effect.fn(
 			) {
 				return { state: "invalid" as const };
 			}
+			// Same row lock as "Sign out of all devices", so the two never interleave.
+			const [account] = await tx
+				.select({ id: Db.users.id })
+				.from(Db.users)
+				.where(eq(Db.users.id, grant.userId))
+				.limit(1)
+				.for("update");
+			if (!account) return { state: "invalid" as const };
 
 			const consumed = await tx
 				.update(Db.agentApiAuthorizationCodes)
