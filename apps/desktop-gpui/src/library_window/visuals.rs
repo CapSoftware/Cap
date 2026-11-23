@@ -583,23 +583,41 @@ fn fnv(bytes: &[u8]) -> u64 {
     hash
 }
 
-pub fn apply(items: &mut [Item], visuals: &HashMap<ItemKey, Visual>) -> bool {
+/// Puts worked-out facts onto the items. A field is filled when it is empty
+/// or still holds what `previous` (the visual applied before) put there, so a
+/// newer visual for a changed file replaces the older one; a value the item
+/// has from its own data is never touched.
+pub fn apply(
+    items: &mut [Item],
+    visuals: &HashMap<ItemKey, Visual>,
+    previous: &HashMap<ItemKey, Visual>,
+) -> bool {
+    fn take<T: Clone + PartialEq>(
+        field: &mut Option<T>,
+        old: Option<&Option<T>>,
+        new: &Option<T>,
+    ) -> bool {
+        let from_old = old.is_some_and(|old| old.is_some() && old == field);
+        if (field.is_none() || from_old) && field != new && (new.is_some() || from_old) {
+            *field = new.clone();
+            return true;
+        }
+        false
+    }
     let mut changed = false;
     for item in items {
         let Some(v) = visuals.get(&item.key) else {
             continue;
         };
-        if item.duration_ms.is_none() && v.duration_ms.is_some() {
-            item.duration_ms = v.duration_ms;
-            changed = true;
-        }
-        if item.excerpt.is_none() && v.excerpt.is_some() {
-            item.excerpt = v.excerpt.clone();
-            changed = true;
-        }
-        if item.thumbnail.is_none() && v.frame.is_some() && item.kind == ItemKind::Recording {
-            item.thumbnail = v.frame.clone();
-            changed = true;
+        let old = previous.get(&item.key);
+        changed |= take(
+            &mut item.duration_ms,
+            old.map(|o| &o.duration_ms),
+            &v.duration_ms,
+        );
+        changed |= take(&mut item.excerpt, old.map(|o| &o.excerpt), &v.excerpt);
+        if item.kind == ItemKind::Recording {
+            changed |= take(&mut item.thumbnail, old.map(|o| &o.frame), &v.frame);
         }
     }
     changed
@@ -794,6 +812,62 @@ mod tests {
             &images.get(&stranger, false, (52., 28.), ink),
             &kept_image
         ));
+    }
+
+    #[test]
+    fn an_edited_transcript_replaces_the_first_words_a_rescan_had_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("doc-1");
+        std::fs::create_dir_all(&doc).unwrap();
+        let line = |text: &str| {
+            format!(
+                "{{\"op\":\"upsert\",\"utterance\":{{\"id\":\"u1\",\"source\":\"mic\",\"speaker\":null,\"speakerId\":1,\"startMs\":0,\"endMs\":1000,\"text\":\"{text}\"}}}}\n"
+            )
+        };
+        let transcript = doc.join(cap_meetings::library::TRANSCRIPT_FILE);
+        std::fs::write(&transcript, line("We planned the launch")).unwrap();
+        let meeting: cap_meetings::library::MeetingDetails =
+            serde_json::from_value(serde_json::json!({ "transcriptChars": 20 })).unwrap();
+        let key = ItemKey::Doc("doc-1".into());
+        let frames = dir.path().join("frames");
+        let run = || {
+            let job = meeting_job(key.clone(), doc.clone(), &meeting, true).unwrap();
+            HashMap::from([(key.clone(), work(&job, &frames))])
+        };
+        let mut items = vec![Item::new(
+            key.clone(),
+            ItemKind::Meeting,
+            "Sync",
+            chrono::Utc::now(),
+            super::super::items::ItemFacts::default(),
+        )];
+        let first = run();
+        assert!(apply(&mut items, &first, &HashMap::new()));
+        assert_eq!(items[0].excerpt.as_deref(), Some("We planned the launch"));
+
+        // A rescan fills the new items from what is known, then the changed
+        // file is worked out again: its newer words replace the older ones.
+        std::fs::write(&transcript, line("We moved the launch to Friday")).unwrap();
+        let second = run();
+        assert!(apply(&mut items, &second, &first));
+        assert_eq!(
+            items[0].excerpt.as_deref(),
+            Some("We moved the launch to Friday")
+        );
+
+        // Words the item has from its own data (the summary line) stay.
+        let mut own = vec![Item::new(
+            key.clone(),
+            ItemKind::Meeting,
+            "Sync",
+            chrono::Utc::now(),
+            super::super::items::ItemFacts {
+                excerpt: Some("The summary line".into()),
+                ..Default::default()
+            },
+        )];
+        assert!(!apply(&mut own, &second, &first));
+        assert_eq!(own[0].excerpt.as_deref(), Some("The summary line"));
     }
 
     #[test]

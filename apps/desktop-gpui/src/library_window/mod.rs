@@ -538,7 +538,7 @@ impl LibraryWindow {
                 } else {
                     this.scan_print = Some(print);
                     this.visuals.extend(std::mem::take(&mut scan.seed_visuals));
-                    visuals::apply(&mut scan.items, &this.visuals);
+                    visuals::apply(&mut scan.items, &this.visuals, &HashMap::new());
                     this.scan = Rc::new(scan);
                     this.load_visuals(jobs, cx);
                     this.reevaluate(cx);
@@ -805,7 +805,7 @@ impl LibraryWindow {
             return;
         }
         let mut next = (*self.scan).clone();
-        let changed = visuals::apply(&mut next.items, &found);
+        let changed = visuals::apply(&mut next.items, &found, &self.visuals);
         self.visuals.extend(found);
         if changed {
             self.scan = Rc::new(next);
