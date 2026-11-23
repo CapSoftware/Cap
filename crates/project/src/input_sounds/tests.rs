@@ -972,3 +972,47 @@ fn keys_trimmed_off_a_hand_made_segment_stay_silent() {
     assert_times(&key_times(&events, true), &[2.11]);
     assert_eq!(key_times(&events, false).len(), 1);
 }
+
+#[test]
+fn the_segment_on_screen_matches_the_renderers_choice_on_a_long_track() {
+    // The renderer's rule, checked directly: the running segment that started
+    // last, the later one in the list on a tie.
+    fn brute(segments: &[KeyboardTrackSegment], time: f64) -> Option<usize> {
+        segments
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.start <= time && time < s.end)
+            .max_by(|(_, a), (_, b)| a.start.total_cmp(&b.start))
+            .map(|(index, _)| index)
+    }
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let segments = (0..5_000)
+        .map(|index| {
+            // Quarter-second steps so starts, ends and ties line up often.
+            let start = (next() * 4_000.0).floor() / 4.0;
+            let length = ((next() * 12.0).floor() + 1.0) / 4.0;
+            let mut segment = shown(start, start + length);
+            if index % 3 == 0 {
+                segment.id = format!("{}{index}", crate::keyboard::MANUAL_KEYBOARD_PREFIX);
+            }
+            segment
+        })
+        .collect::<Vec<_>>();
+    let began = std::time::Instant::now();
+    let spans = shown_keyboard_spans(&segments);
+    assert!(
+        began.elapsed() < std::time::Duration::from_millis(250),
+        "{:?}",
+        began.elapsed()
+    );
+    for step in 0..8_000 {
+        let time = step as f64 * 0.125 + if step % 2 == 0 { 0.0 } else { 0.01 };
+        assert_eq!(shown_at(&spans, time), brute(&segments, time), "at {time}");
+    }
+}

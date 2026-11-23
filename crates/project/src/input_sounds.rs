@@ -172,48 +172,86 @@ fn event_seed(kind: u64, recording_clip: u32, source_time_ms: f64, extra: u64) -
     )
 }
 
-/// The keyboard segment on screen at output `time`, chosen as the renderer
-/// chooses it: of the segments running then, the one that started last. A
-/// segment hidden under another, or a key trimmed off a segment's start,
+/// Which keyboard segment is on screen across the track, chosen as the
+/// renderer chooses it: of the segments running at a moment, the one that
+/// started last (the later one in the list on a tie). Sorted, disjoint
+/// `[start, end)` spans, each with that segment's index, built in one sweep.
+/// A segment hidden under another, or a key trimmed off a segment's start,
 /// makes no sound.
-fn shown_keyboard_segment(segments: &[crate::KeyboardTrackSegment], time: f64) -> Option<usize> {
-    segments
+fn shown_keyboard_spans(segments: &[crate::KeyboardTrackSegment]) -> Vec<(f64, f64, usize)> {
+    #[derive(PartialEq)]
+    struct Running(f64, usize, f64);
+    impl Eq for Running {}
+    impl PartialOrd for Running {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for Running {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&other.0).then(self.1.cmp(&other.1))
+        }
+    }
+
+    let mut order = segments
         .iter()
         .enumerate()
         .filter(|(_, segment)| {
-            segment.start.is_finite()
-                && segment.end.is_finite()
-                && segment.start <= time
-                && time < segment.end
+            segment.start.is_finite() && segment.end.is_finite() && segment.end > segment.start
         })
-        .max_by(|(_, a), (_, b)| a.start.total_cmp(&b.start))
-        .map(|(index, _)| index)
+        .map(|(index, segment)| (segment.start, segment.end, index))
+        .collect::<Vec<_>>();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut edges = order
+        .iter()
+        .flat_map(|&(start, end, _)| [start, end])
+        .collect::<Vec<_>>();
+    edges.sort_by(f64::total_cmp);
+    edges.dedup();
+
+    let mut running = std::collections::BinaryHeap::new();
+    let mut next = 0;
+    let mut spans: Vec<(f64, f64, usize)> = Vec::new();
+    for pair in edges.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        while let Some(&(segment_start, segment_end, index)) = order.get(next)
+            && segment_start <= start
+        {
+            running.push(Running(segment_start, index, segment_end));
+            next += 1;
+        }
+        while running.peek().is_some_and(|top| top.2 <= start) {
+            running.pop();
+        }
+        let Some(top) = running.peek() else {
+            continue;
+        };
+        match spans.last_mut() {
+            Some(last) if last.2 == top.1 && last.1 == start => last.1 = end,
+            _ => spans.push((start, end, top.1)),
+        }
+    }
+    spans
+}
+
+/// The index of the keyboard segment on screen at `time`, from
+/// [`shown_keyboard_spans`].
+fn shown_at(spans: &[(f64, f64, usize)], time: f64) -> Option<usize> {
+    let span = spans.get(spans.partition_point(|span| span.1 <= time))?;
+    (span.0 <= time).then_some(span.2)
 }
 
 /// Merged, sorted output ranges where a recorded keyboard segment is the one
 /// on screen. Key sounds follow the overlay: a press sounds only while its
 /// keys are on screen, so a recorded press under keys added by hand is
 /// silent.
-fn shown_key_ranges(project: &ProjectConfiguration) -> Vec<(f64, f64)> {
-    let Some(timeline) = &project.timeline else {
-        return Vec::new();
-    };
-    let segments = &timeline.keyboard_segments;
-    let mut edges = segments
-        .iter()
-        .filter(|segment| {
-            segment.start.is_finite() && segment.end.is_finite() && segment.end > segment.start
-        })
-        .flat_map(|segment| [segment.start, segment.end])
-        .collect::<Vec<_>>();
-    edges.sort_by(f64::total_cmp);
-    edges.dedup();
+fn shown_key_ranges(
+    segments: &[crate::KeyboardTrackSegment],
+    spans: &[(f64, f64, usize)],
+) -> Vec<(f64, f64)> {
     let mut merged: Vec<(f64, f64)> = Vec::new();
-    for pair in edges.windows(2) {
-        let (start, end) = (pair[0], pair[1]);
-        let recorded = shown_keyboard_segment(segments, (start + end) / 2.0)
-            .is_some_and(|index| !crate::keyboard::is_manual_keyboard_segment(&segments[index]));
-        if !recorded {
+    for &(start, end, index) in spans {
+        if crate::keyboard::is_manual_keyboard_segment(&segments[index]) {
             continue;
         }
         match merged.last_mut() {
@@ -448,11 +486,12 @@ pub fn input_sound_events(
     let Some(timeline) = project.timeline.as_ref().filter(|_| keys || clicks) else {
         return Vec::new();
     };
-    let shown = if keys {
-        shown_key_ranges(project)
+    let spans = if keys {
+        shown_keyboard_spans(&timeline.keyboard_segments)
     } else {
         Vec::new()
     };
+    let shown = shown_key_ranges(&timeline.keyboard_segments, &spans);
     let shortcuts = project
         .keyboard
         .as_ref()
@@ -629,9 +668,7 @@ pub fn input_sound_events(
                 .filter(|(_, sounds)| **sounds)
             {
                 let down = segment.start + key.time_offset / 1000.0;
-                if !down.is_finite()
-                    || shown_keyboard_segment(&timeline.keyboard_segments, down) != Some(index)
-                {
+                if !down.is_finite() || shown_at(&spans, down) != Some(index) {
                     continue;
                 }
                 let edited = down - crate::configuration::held_time_before(&holds, down);
