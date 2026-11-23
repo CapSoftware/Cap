@@ -88,7 +88,7 @@ const ensureAnalyticsSessionId = () => {
 			if (parsed?.value && parsed.expiry > now) return parsed.value;
 		}
 		const newId =
-			"randomUUID" in crypto
+			typeof crypto.randomUUID === "function"
 				? crypto.randomUUID()
 				: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
 						byte.toString(16).padStart(2, "0"),
