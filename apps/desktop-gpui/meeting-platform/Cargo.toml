@@ -1,0 +1,68 @@
+[package]
+name = "cap-meeting-platform"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[dependencies]
+flume = "0.11.0"
+thiserror = "2"
+tracing = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
+    "macos_12_7",
+    "cf",
+    "cat",
+    "at",
+    "ca",
+    "ax",
+    "core_audio",
+    "ns",
+    "app",
+    "blocks",
+    "dispatch",
+], default-features = false }
+libc = "0.2"
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", features = [
+    "NSArray",
+    "NSDate",
+    "NSError",
+    "NSNotification",
+    "NSOperation",
+    "NSPredicate",
+    "NSString",
+    "NSURL",
+    "block2",
+] }
+objc2-event-kit = { version = "0.3.2", features = [
+    "EKCalendar",
+    "EKCalendarItem",
+    "EKEvent",
+    "EKEventStore",
+    "EKObject",
+    "EKParticipant",
+    "EKTypes",
+    "block2",
+] }
+block2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# UI Automation (COM). The same 0.61 line GPUI builds on Windows.
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+] }
