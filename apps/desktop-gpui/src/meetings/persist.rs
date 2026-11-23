@@ -48,6 +48,18 @@ pub fn scratch_dir(doc_id: &str) -> PathBuf {
     scratch_dir_in(&scratch_root(), doc_id)
 }
 
+/// The file suffix for the next session of a resumed meeting. Kept and
+/// scratch parts both count, so a meeting that does not keep its audio never
+/// reuses (and truncates) a file an earlier session wrote.
+pub fn resume_suffix(meeting: &cap_meetings::library::MeetingDetails) -> String {
+    let parts: usize = [AUDIO_PARTS_KEY, SCRATCH_PARTS_KEY]
+        .iter()
+        .filter_map(|key| meeting.extra.get(*key).and_then(|v| v.as_array()))
+        .map(Vec::len)
+        .sum();
+    format!("-{}", parts.max(1) + 1)
+}
+
 /// Deletes a meeting's scratch copy and forgets it.
 pub fn drop_scratch_in(root: &Path, meta: &mut DocMeta) {
     let dir = scratch_dir_in(root, &meta.id);

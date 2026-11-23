@@ -1653,11 +1653,7 @@ impl Meetings {
             let previous_ms = meeting
                 .duration_ms
                 .max(transcript.stats().last_speech_end_ms.unwrap_or(0));
-            let parts = meeting
-                .extra
-                .get(persist::AUDIO_PARTS_KEY)
-                .and_then(|v| v.as_array())
-                .map_or(0, Vec::len);
+            let suffix = persist::resume_suffix(meeting);
             meeting.ended_at = None;
             meeting.stop_reason = None;
             if meeting.started_at.is_none() {
@@ -1668,7 +1664,7 @@ impl Meetings {
                 .save(&meta)
                 .map_err(|e| MeetingError::Library(e.to_string()))?;
             let offset = previous_ms + RESUME_GAP_MS;
-            return Ok((meta, transcript, offset, format!("-{}", parts.max(1) + 1)));
+            return Ok((meta, transcript, offset, suffix));
         }
         let now = Utc::now();
         let mut meta = library

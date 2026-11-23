@@ -1331,3 +1331,25 @@ fn keep_audio_for_waits_for_recovery_and_spares_the_meetings_in_use() {
     meetings.recovery = Some(gpui::Task::ready(()));
     assert_eq!(meetings.audio_retention_plan(), RetentionPlan::Later);
 }
+
+#[test]
+fn each_resume_of_a_meeting_without_kept_audio_gets_its_own_files() {
+    let mut meeting = MeetingDetails::default();
+    let mut seen = Vec::new();
+    for (key, sources) in [
+        (persist::SCRATCH_PARTS_KEY, 2),
+        (persist::SCRATCH_PARTS_KEY, 2),
+        (persist::SCRATCH_PARTS_KEY, 1),
+        (persist::AUDIO_PARTS_KEY, 2),
+        (persist::SCRATCH_PARTS_KEY, 2),
+    ] {
+        let suffix = persist::resume_suffix(&meeting);
+        assert!(!seen.contains(&suffix), "{suffix} reused after {seen:?}");
+        seen.push(suffix);
+        let parts = meeting.extra.entry(key.to_string()).or_insert_with(|| serde_json::json!([]));
+        for _ in 0..sources {
+            parts.as_array_mut().unwrap().push(serde_json::json!({ "file": "x.ogg" }));
+        }
+    }
+    assert_eq!(persist::resume_suffix(&MeetingDetails::default()), "-2");
+}
