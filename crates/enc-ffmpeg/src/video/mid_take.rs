@@ -82,15 +82,35 @@ fn injected_mid_take_failure_keeps_video_and_audio_on_one_timeline() {
         "decoded video has {} frames with errors",
         decoded.video_errors
     );
+    let video_pts = &decoded.video_timestamps;
     assert!(
-        decoded.last_video_secs > 1.5,
-        "video timestamps restart at the switch, last pts {:.3}s",
-        decoded.last_video_secs
+        video_pts.len() >= 55,
+        "video packets disappeared across the switch, got {}",
+        video_pts.len()
     );
+    let frame_secs = 1.0 / 30.0;
+    let mut max_video_gap_secs = 0.0_f64;
+    for pair in video_pts.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "video timestamp moved backwards: {:.6}s -> {:.6}s",
+            pair[0],
+            pair[1]
+        );
+        max_video_gap_secs = max_video_gap_secs.max(pair[1] - pair[0]);
+    }
     assert!(
-        decoded.last_audio_secs > 1.5,
-        "audio stops at the switch, last pts {:.3}s",
-        decoded.last_audio_secs
+        max_video_gap_secs < frame_secs * 2.0,
+        "video gap across the switch is {:.3}s",
+        max_video_gap_secs
+    );
+    let duration_delta = (decoded.last_audio_secs - decoded.last_video_secs).abs();
+    assert!(
+        duration_delta < 0.1,
+        "audio and video end {:.3}s apart (audio {:.3}s, video {:.3}s)",
+        duration_delta,
+        decoded.last_audio_secs,
+        decoded.last_video_secs
     );
     assert!(
         decoded.max_audio_gap_secs < 0.05,
@@ -196,6 +216,7 @@ struct DecodedTake {
     dark_frames: usize,
     bright_frames: usize,
     video_errors: usize,
+    video_timestamps: Vec<f64>,
     last_video_secs: f64,
     last_audio_secs: f64,
     max_audio_gap_secs: f64,
@@ -227,6 +248,7 @@ fn decode_take(path: &std::path::Path) -> DecodedTake {
         dark_frames: 0,
         bright_frames: 0,
         video_errors: 0,
+        video_timestamps: Vec::new(),
         last_video_secs: 0.0,
         last_audio_secs: 0.0,
         max_audio_gap_secs: 0.0,
@@ -252,15 +274,14 @@ fn decode_take(path: &std::path::Path) -> DecodedTake {
         if stream.index() != video_index {
             continue;
         }
+        let pts = packet.pts().expect("video packet has no timestamp");
+        let secs = pts as f64 * f64::from(video_tb.numerator()) / f64::from(video_tb.denominator());
+        decoded.video_timestamps.push(secs);
+        decoded.last_video_secs = secs;
         video_decoder.send_packet(&packet).unwrap();
         while video_decoder.receive_frame(&mut frame).is_ok() {
             if unsafe { (*frame.as_ptr()).decode_error_flags } != 0 {
                 decoded.video_errors += 1;
-            }
-            if let Some(pts) = frame.pts() {
-                let secs = pts as f64 * f64::from(video_tb.numerator())
-                    / f64::from(video_tb.denominator());
-                decoded.last_video_secs = decoded.last_video_secs.max(secs);
             }
             let data = frame.data(0);
             let y = data[data.len() / 2];

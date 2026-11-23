@@ -28,7 +28,6 @@ pub(crate) enum Paced<F> {
     End,
 }
 
-/// A repeat encodes the frame already carried. An empty carry drops it.
 pub(crate) enum PacedPixels<F> {
     New(F),
     Repeat,
