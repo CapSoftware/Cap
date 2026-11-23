@@ -342,6 +342,8 @@ struct Recording {
     health: health::Hysteresis,
     watchdog: health::Watchdog,
     disk_checked: Instant,
+    /// No idle sleep while the meeting records.
+    _awake: crate::power::StayAwake,
     /// Filled-in silence per track at the last tick (ms), and until when the
     /// line says words may be missing after a jump in it.
     padded_ms: [u64; 2],
@@ -2267,6 +2269,7 @@ impl Meetings {
             health: health::Hysteresis::default(),
             watchdog: health::Watchdog::default(),
             disk_checked: Instant::now(),
+            _awake: crate::power::StayAwake::hold("Cap is recording a meeting", cx),
             padded_ms: [0, 0],
             missed_ms: [0, 0],
             missed_until: None,

@@ -172,6 +172,82 @@ mod linux {
     }
 }
 
+/// Keeps the computer out of idle sleep while it lives, the display free to
+/// sleep: a meeting in a room has no one at the keyboard, and a call app's
+/// own hold ends with its call. Released when dropped.
+pub struct StayAwake {
+    #[cfg(target_os = "macos")]
+    assertion: Option<u32>,
+    #[cfg(windows)]
+    held: bool,
+    #[cfg(target_os = "linux")]
+    _release: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl StayAwake {
+    pub fn hold(reason: &str, cx: &App) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = cx;
+            let assertion = macos::hold_system_awake(reason);
+            Self { assertion }
+        }
+        #[cfg(windows)]
+        {
+            let _ = (cx, reason);
+            use windows_sys::Win32::System::Power::{
+                ES_CONTINUOUS, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+            };
+            // Per thread: made and dropped on the main thread with the meeting.
+            let held = unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) } != 0;
+            if !held {
+                tracing::warn!("could not hold off idle sleep");
+            }
+            Self { held }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let (release, released) = tokio::sync::oneshot::channel::<()>();
+            let reason = reason.to_string();
+            gpui_tokio::Tokio::spawn(cx, async move {
+                use ashpd::desktop::inhibit::{InhibitFlags, InhibitProxy};
+                let request = match InhibitProxy::new().await {
+                    Ok(proxy) => proxy
+                        .inhibit(None, InhibitFlags::Suspend | InhibitFlags::Idle, &reason)
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
+                let _ = released.await;
+                match request {
+                    Ok(request) => {
+                        let _ = request.close().await;
+                    }
+                    Err(error) => tracing::debug!(%error, "could not hold off idle sleep"),
+                }
+            })
+            .detach();
+            Self {
+                _release: Some(release),
+            }
+        }
+    }
+}
+
+impl Drop for StayAwake {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(id) = self.assertion.take() {
+            macos::release(id);
+        }
+        #[cfg(windows)]
+        if std::mem::take(&mut self.held) {
+            use windows_sys::Win32::System::Power::{ES_CONTINUOUS, SetThreadExecutionState};
+            unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use std::{
@@ -267,6 +343,34 @@ mod macos {
             }
             _ => {}
         }
+    }
+
+    /// A hold on idle system sleep (the display may still sleep), or none if
+    /// macOS refused it.
+    pub(super) fn hold_system_awake(reason: &str) -> Option<u32> {
+        let kind = CFString::new("PreventUserIdleSystemSleep");
+        let name = CFString::new(reason);
+        let mut id = 0;
+        let result = unsafe {
+            IOPMAssertionCreateWithName(
+                kind.as_concrete_TypeRef(),
+                ASSERTION_LEVEL_ON,
+                name.as_concrete_TypeRef(),
+                &mut id,
+            )
+        };
+        if result == 0 {
+            tracing::info!(reason, "holding off idle sleep");
+            Some(id)
+        } else {
+            tracing::warn!(result, reason, "could not hold off idle sleep");
+            None
+        }
+    }
+
+    pub(super) fn release(id: u32) {
+        unsafe { IOPMAssertionRelease(id) };
+        tracing::info!("released an idle sleep hold");
     }
 
     struct IdleSleepAssertion(Option<u32>);
@@ -392,6 +496,25 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_meeting_hold_keeps_the_mac_awake_until_released() {
+        let reason = format!("Cap test hold {}", std::process::id());
+        let listed = || {
+            let out = std::process::Command::new("pmset")
+                .args(["-g", "assertions"])
+                .output()
+                .expect("pmset runs");
+            String::from_utf8_lossy(&out.stdout).lines().any(|line| {
+                line.contains("PreventUserIdleSystemSleep") && line.contains(reason.as_str())
+            })
+        };
+        let hold = macos::hold_system_awake(&reason).expect("macOS grants the hold");
+        assert!(listed(), "the hold is listed");
+        macos::release(hold);
+        assert!(!listed(), "the hold is gone once released");
+    }
 
     #[test]
     fn idle_sleep_is_held_off_for_the_whole_recording_lifecycle() {
