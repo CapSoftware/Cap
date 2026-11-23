@@ -35,11 +35,9 @@
 //! Known deviations (also in the README): no 150ms opacity/translate
 //! transitions on the toolbar and resize brackets (no animation pass in this
 //! port), no `backdrop-blur-xs` behind the issue overlay (no per-element
-//! backdrop blur hook in this gpui rev), no "Camera disconnected" overlay on
-//! recording input loss (the Tauri `recordingEvent` InputLost seam has no
-//! counterpart in this app yet), no `cursor-move` on the drag surface (gpui
-//! has no 4-way move cursor; the resize handles do get their diagonal resize
-//! cursors), and chrome state persists to `gpui-state.json` rather than
+//! backdrop blur hook in this gpui rev), no `cursor-move` on the drag surface
+//! (gpui has no 4-way move cursor; the resize handles do get their diagonal
+//! resize cursors), and chrome state persists to `gpui-state.json` rather than
 //! `localStorage`.
 
 use std::sync::{
@@ -1093,8 +1091,12 @@ struct CameraPreviewView {
     camera_error: Option<String>,
     effect_issue: Option<EffectIssue>,
     awaiting_access: bool,
+    /// The recording's camera was unplugged (`InputLost` in the Tauri
+    /// bubble, `camera.tsx:162-172`); cleared when it is back.
+    camera_disconnected: bool,
     _feeds_subscription: Subscription,
     _access_subscription: Subscription,
+    _session_subscription: Option<Subscription>,
 }
 
 impl CameraPreviewView {
@@ -1147,6 +1149,19 @@ impl CameraPreviewView {
                 cx.notify();
             }
         });
+        let session = crate::session::RecordingSession::try_global(cx);
+        let camera_disconnected = session
+            .as_ref()
+            .is_some_and(|session| session.read(cx).disconnected_inputs().camera);
+        let session_subscription = session.map(|session| {
+            cx.observe(&session, |this: &mut Self, session, cx| {
+                let disconnected = session.read(cx).disconnected_inputs().camera;
+                if this.camera_disconnected != disconnected {
+                    this.camera_disconnected = disconnected;
+                    cx.notify();
+                }
+            })
+        });
         let feeds_subscription = cx.observe(&feeds, |this: &mut Self, feeds, cx| {
             let awaiting = awaiting_camera_access(cx);
             if this.awaiting_access != awaiting {
@@ -1194,8 +1209,10 @@ impl CameraPreviewView {
             camera_error,
             effect_issue: None,
             awaiting_access,
+            camera_disconnected,
             _feeds_subscription: feeds_subscription,
             _access_subscription: access_subscription,
+            _session_subscription: session_subscription,
         }
     }
 
@@ -1285,8 +1302,10 @@ impl Render for CameraPreviewView {
 
         let showing_frame = self.latest_frame.is_some() || self.retained.is_some();
         let awaiting_access = self.awaiting_access && !showing_frame && self.camera_error.is_none();
-        let has_issue =
-            self.camera_error.is_some() || self.effect_issue.is_some() || awaiting_access;
+        let has_issue = self.camera_disconnected
+            || self.camera_error.is_some()
+            || self.effect_issue.is_some()
+            || awaiting_access;
 
         let loading = if !showing_frame {
             self.loading_fade_started = None;
@@ -1424,9 +1443,14 @@ impl Render for CameraPreviewView {
             .as_deref()
             .is_some_and(|error| error.contains("access is unavailable"));
         if let Some((title, message)) = self
-            .camera_error
-            .as_deref()
-            .map(camera_issue)
+            .camera_disconnected
+            .then(|| {
+                (
+                    tr::camera::issue::disconnected_title(),
+                    tr::camera::issue::disconnected_message(),
+                )
+            })
+            .or(self.camera_error.as_deref().map(camera_issue))
             .or(self.effect_issue.map(EffectIssue::text))
             .or(awaiting_access.then(|| {
                 (
@@ -1676,6 +1700,7 @@ impl CameraWindow {
         })();
         crate::recording::StudioCameraSnapshot {
             blur: self.state.background_blur,
+            shape: self.state.shape,
             placement,
         }
     }
@@ -2392,6 +2417,7 @@ impl CameraWindow {
     fn queue_position_save(&mut self, window: &Window, cx: &mut Context<Self>) {
         let origin = window.bounds().origin;
         let (x, y) = (f32::from(origin.x), f32::from(origin.y));
+        let capture_scale = f64::from(crate::target_overlay::capture_scale_factor(window));
         if self
             .last_saved_position
             .is_some_and(|(sx, sy)| (sx - x).abs() < 1. && (sy - y).abs() < 1.)
@@ -2406,7 +2432,7 @@ impl CameraWindow {
             .spawn(async move {
                 executor.timer(Duration::from_millis(200)).await;
                 if generations.load(Ordering::Acquire) == generation {
-                    persist_camera_position(x as f64, y as f64);
+                    persist_camera_position(x as f64, y as f64, capture_scale);
                 }
             })
             .detach();
@@ -2930,34 +2956,52 @@ struct StoredWindowPosition {
     display_id: Option<scap_targets::DisplayId>,
 }
 
-fn display_contains(display: &scap_targets::Display, x: f64, y: f64) -> bool {
+/// Capture bounds in window coordinates. `capture_scale` is
+/// [`crate::target_overlay::capture_scale_factor`]: X11 capture bounds are
+/// physical pixels while window positions are logical.
+fn window_space(
+    bounds: scap_targets::bounds::LogicalBounds,
+    capture_scale: f64,
+) -> scap_targets::bounds::LogicalBounds {
+    use scap_targets::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+    LogicalBounds::new(
+        LogicalPosition::new(
+            bounds.position().x() / capture_scale,
+            bounds.position().y() / capture_scale,
+        ),
+        LogicalSize::new(
+            bounds.size().width() / capture_scale,
+            bounds.size().height() / capture_scale,
+        ),
+    )
+}
+
+fn display_contains(display: &scap_targets::Display, x: f64, y: f64, capture_scale: f64) -> bool {
     display.raw_handle().logical_bounds().is_some_and(|bounds| {
-        x >= bounds.position().x()
-            && x < bounds.position().x() + bounds.size().width()
-            && y >= bounds.position().y()
-            && y < bounds.position().y() + bounds.size().height()
+        window_space(bounds, capture_scale)
+            .contains_point(scap_targets::bounds::LogicalPosition::new(x, y))
     })
 }
 
 /// `display_for_position` (`lib.rs:1612-1625`).
-pub fn display_for_point(x: f64, y: f64) -> Option<scap_targets::Display> {
+pub fn display_for_point(x: f64, y: f64, capture_scale: f64) -> Option<scap_targets::Display> {
     scap_targets::Display::list()
         .into_iter()
-        .find(|display| display_contains(display, x, y))
+        .find(|display| display_contains(display, x, y, capture_scale))
 }
 
 /// `is_position_on_monitor_name` (`windows.rs:857-878`).
-fn position_on_monitor_name(name: &str, x: f64, y: f64) -> bool {
-    scap_targets::Display::list()
-        .into_iter()
-        .any(|display| display.name().as_deref() == Some(name) && display_contains(&display, x, y))
+fn position_on_monitor_name(name: &str, x: f64, y: f64, capture_scale: f64) -> bool {
+    scap_targets::Display::list().into_iter().any(|display| {
+        display.name().as_deref() == Some(name) && display_contains(&display, x, y, capture_scale)
+    })
 }
 
 /// `is_position_on_any_screen` (`windows.rs:880-896`).
-fn any_display_contains(x: f64, y: f64) -> bool {
+fn any_display_contains(x: f64, y: f64, capture_scale: f64) -> bool {
     scap_targets::Display::list()
         .into_iter()
-        .any(|display| display_contains(&display, x, y))
+        .any(|display| display_contains(&display, x, y, capture_scale))
 }
 
 /// The saved position that is still valid for `preferred` -- the Tauri
@@ -2966,7 +3010,7 @@ fn any_display_contains(x: f64, y: f64) -> bool {
 /// else the global `cameraWindowPosition` on the preferred monitor; with no
 /// monitor name, the global position validated against its recorded display
 /// (or any screen).
-fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
+fn saved_position(preferred: &scap_targets::Display, capture_scale: f64) -> Option<(f64, f64)> {
     let settings = store::store_section(store::GENERAL_SETTINGS);
     let parse = |value: &Value| serde_json::from_value::<StoredWindowPosition>(value.clone()).ok();
     let global = settings.get("cameraWindowPosition").and_then(parse);
@@ -2977,12 +3021,14 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
             .and_then(|value| value.as_object())
             .and_then(|map| map.get(&name))
             .and_then(parse)
-            .filter(|pos| position_on_monitor_name(&name, pos.x, pos.y))
-            .or_else(|| global.filter(|pos| position_on_monitor_name(&name, pos.x, pos.y))),
+            .filter(|pos| position_on_monitor_name(&name, pos.x, pos.y, capture_scale))
+            .or_else(|| {
+                global.filter(|pos| position_on_monitor_name(&name, pos.x, pos.y, capture_scale))
+            }),
         None => global.filter(|pos| match &pos.display_id {
             Some(id) => scap_targets::Display::from_id(id)
-                .is_some_and(|display| display_contains(&display, pos.x, pos.y)),
-            None => any_display_contains(pos.x, pos.y),
+                .is_some_and(|display| display_contains(&display, pos.x, pos.y, capture_scale)),
+            None => any_display_contains(pos.x, pos.y, capture_scale),
         }),
     };
     position.map(|pos| (pos.x, pos.y))
@@ -2993,12 +3039,17 @@ fn saved_position(preferred: &scap_targets::Display) -> Option<(f64, f64)> {
 /// `DEFAULT_WINDOW_SIZE = 230.0 * 2.0` (`windows.rs:2160, 2340-2344`; the
 /// constant, not the actual window size, is what the shipping app subtracts).
 /// Clamp against the actual size before the camera can deliver its first frame.
-pub fn opening_position(preferred: &scap_targets::Display, window_size: (f32, f32)) -> (f32, f32) {
-    let saved = saved_position(preferred);
+pub fn opening_position(
+    preferred: &scap_targets::Display,
+    window_size: (f32, f32),
+    capture_scale: f64,
+) -> (f32, f32) {
+    let saved = saved_position(preferred, capture_scale);
     let bounds = saved
-        .and_then(|(x, y)| display_for_point(x, y))
+        .and_then(|(x, y)| display_for_point(x, y, capture_scale))
         .and_then(|display| display.raw_handle().logical_bounds())
-        .or_else(|| preferred.raw_handle().logical_bounds());
+        .or_else(|| preferred.raw_handle().logical_bounds())
+        .map(|bounds| window_space(bounds, capture_scale));
     opening_position_in_bounds(saved, bounds, window_size)
 }
 
@@ -3083,6 +3134,24 @@ mod opening_position_tests {
     }
 
     #[test]
+    fn x11_display_at_2x_places_the_preview_in_window_coordinates() {
+        let left = display(0., 0., 2560., 1600.).map(|bounds| window_space(bounds, 2.));
+        assert_eq!(
+            opening_position_in_bounds(None, left, (230., 286.)),
+            (720., 240.),
+        );
+        assert_eq!(
+            opening_position_in_bounds(Some((2153., 974.)), left, (230., 286.)),
+            (1050., 514.),
+        );
+        let right = display(2560., 0., 2560., 1600.).map(|bounds| window_space(bounds, 2.));
+        assert_eq!(
+            opening_position_in_bounds(None, right, (230., 286.)),
+            (2000., 240.),
+        );
+    }
+
+    #[test]
     fn missing_display_geometry_preserves_the_existing_fallback() {
         assert_eq!(
             opening_position_in_bounds(None, None, (600., 656.)),
@@ -3098,8 +3167,8 @@ mod opening_position_tests {
 /// `update_camera_window_position_settings` (`lib.rs:1645-1666`): the global
 /// position plus the per-monitor-name map entry, both carrying the display
 /// id. Runs on the background executor -- two store read-modify-writes.
-fn persist_camera_position(x: f64, y: f64) {
-    let display = display_for_point(x, y);
+fn persist_camera_position(x: f64, y: f64, capture_scale: f64) {
+    let display = display_for_point(x, y, capture_scale);
     let position = StoredWindowPosition {
         x,
         y,

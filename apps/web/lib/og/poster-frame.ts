@@ -5,7 +5,11 @@
 
 import { spawn } from "node:child_process";
 import { buildEnv } from "@cap/env";
-import { getFfmpegPath } from "@/lib/audio-extract";
+import {
+	ffmpegChildEnv,
+	getFfmpegPath,
+	REMOTE_INPUT_ARGS,
+} from "@/lib/audio-extract";
 
 const OVERALL_DEADLINE_MS = 6500;
 const MIN_ATTEMPT_MS = 800;
@@ -20,11 +24,18 @@ const SOURCE_LADDER = [
 	{ videoType: "raw-preview", seek: "0" },
 ];
 
-const grabFrame = (
+const OG_FRAME_FILTER = "scale=1120:-2";
+const OG_FRAME_QUALITY = "4";
+
+export const grabFrame = (
 	ffmpeg: string,
 	url: string,
 	seek: string,
 	timeoutMs: number,
+	{
+		filter = OG_FRAME_FILTER,
+		quality = OG_FRAME_QUALITY,
+	}: { filter?: string; quality?: string } = {},
 ) =>
 	new Promise<Buffer>((resolve, reject) => {
 		const proc = spawn(
@@ -35,21 +46,22 @@ const grabFrame = (
 				"error",
 				"-ss",
 				seek,
+				...REMOTE_INPUT_ARGS,
 				"-i",
 				url,
 				"-frames:v",
 				"1",
 				"-vf",
-				"scale=1120:-2",
+				filter,
 				"-q:v",
-				"4",
+				quality,
 				"-f",
 				"image2pipe",
 				"-vcodec",
 				"mjpeg",
 				"pipe:1",
 			],
-			{ stdio: ["ignore", "pipe", "pipe"] },
+			{ stdio: ["ignore", "pipe", "pipe"], env: ffmpegChildEnv() },
 		);
 
 		const chunks: Buffer[] = [];

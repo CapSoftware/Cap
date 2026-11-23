@@ -11,10 +11,22 @@ let currencyRequest: Promise<SupportedCurrency> | null = null;
 
 function loadCurrency(): Promise<SupportedCurrency> {
 	currencyRequest ??= fetch("/api/currency")
-		.then((res) => res.json())
-		.then((data: { currency?: string }) =>
-			isSupportedCurrency(data.currency) ? data.currency : "usd",
-		)
+		.then((res) => {
+			if (!res.ok) throw new Error("Currency lookup failed");
+			return res.json();
+		})
+		.then((data: unknown) => {
+			if (
+				typeof data !== "object" ||
+				data === null ||
+				!("currency" in data) ||
+				typeof data.currency !== "string" ||
+				!isSupportedCurrency(data.currency)
+			) {
+				throw new Error("Invalid currency lookup response");
+			}
+			return data.currency;
+		})
 		.catch((): SupportedCurrency => {
 			currencyRequest = null;
 			return "usd";

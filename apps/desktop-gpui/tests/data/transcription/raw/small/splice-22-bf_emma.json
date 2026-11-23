@@ -1,0 +1,15 @@
+[
+	[
+		{ "text": "Right,", "start": 0.48, "end": 0.67 },
+		{ "text": "so", "start": 0.67, "end": 0.86 },
+		{ "text": "there,", "start": 0.86, "end": 1.53 },
+		{ "text": "there,", "start": 1.53, "end": 2.2 },
+		{ "text": "audio", "start": 2.2, "end": 2.68 },
+		{ "text": "ended.", "start": 2.68, "end": 3.19 },
+		{ "text": "There", "start": 3.79, "end": 3.82 },
+		{ "text": "video,", "start": 3.82, "end": 4.26 },
+		{ "text": "stay", "start": 4.4, "end": 4.56 },
+		{ "text": "in", "start": 4.56, "end": 4.69 },
+		{ "text": "sync.", "start": 4.69, "end": 5.19 }
+	]
+]

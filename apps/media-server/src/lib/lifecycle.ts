@@ -153,11 +153,20 @@ export async function waitForDrain(
 export function createShutdownHandler(
 	finalize: () => Promise<void>,
 	graceMs = getShutdownGraceMs,
+	exit: (code: number) => void = (code) => process.exit(code),
 ): (signal: string) => Promise<void> {
 	let shuttingDown = false;
+	let finalizing = false;
 	let forceDrain: AbortController | undefined;
 
 	return async (signal) => {
+		if (finalizing) {
+			console.error(
+				`[media-server] Received ${signal} while cleaning up, exiting now`,
+			);
+			exit(1);
+			return;
+		}
 		if (forceDrain) {
 			console.log(
 				`[media-server] Received ${signal} while draining, shutting down now`,
@@ -187,6 +196,14 @@ export function createShutdownHandler(
 			console.log("[media-server] Shutting down...");
 		}
 
-		await finalize();
+		finalizing = true;
+		try {
+			await finalize();
+		} catch (error) {
+			console.error("[media-server] Shutdown cleanup failed", error);
+			exit(1);
+		} finally {
+			finalizing = false;
+		}
 	};
 }

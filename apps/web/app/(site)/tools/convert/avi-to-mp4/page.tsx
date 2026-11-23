@@ -6,14 +6,14 @@ import { ogImageUrl } from "@/lib/og/url";
 import { createBreadcrumbSchema } from "@/utils/web-schema";
 
 const ogImage = ogImageUrl({
-	title: "Convert AVI to MP4 — free, in your browser",
+	title: "AVI to MP4 converter",
 	tag: "Tools",
 });
 
 export const metadata: Metadata = {
-	title: "AVI to MP4 Converter — Free Online Video Converter | Cap",
+	title: "AVI to MP4 converter | Cap",
 	description:
-		"Convert AVI videos to MP4 format directly in your browser. Free, private, no upload needed. Works with old camcorder footage, downloaded files, and any AVI video.",
+		"Convert an AVI file to MP4 with Cap. Cap is an open source screen recorder with instant share links, and it exports MP4 video at up to 4K and 60 fps.",
 	keywords: [
 		"avi to mp4 converter",
 		"convert avi to mp4 online",
@@ -24,9 +24,9 @@ export const metadata: Metadata = {
 		"convert avi video online",
 	],
 	openGraph: {
-		title: "AVI to MP4 Converter — Free Online Video Converter | Cap",
+		title: "AVI to MP4 converter | Cap",
 		description:
-			"Convert AVI videos to the universally compatible MP4 format directly in your browser. No uploads, no installs, 100% private. Works with camcorder footage and any AVI file.",
+			"Convert an AVI file to MP4 with Cap. Cap is an open source screen recorder with instant share links, and it exports MP4 video at up to 4K and 60 fps.",
 		url: "https://cap.so/tools/convert/avi-to-mp4",
 		siteName: "Cap",
 		images: [
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
 				url: ogImage,
 				width: 1200,
 				height: 630,
-				alt: "Convert AVI to MP4 — free, in your browser",
+				alt: "AVI to MP4 converter",
 			},
 		],
 		locale: "en_US",
@@ -42,9 +42,9 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "AVI to MP4 Converter — Free Online Video Converter | Cap",
+		title: "AVI to MP4 converter | Cap",
 		description:
-			"Convert AVI to MP4 directly in your browser. No uploads, no installs, 100% private.",
+			"Convert an AVI file to MP4 with Cap. Cap is an open source screen recorder with instant share links, and it exports MP4 video at up to 4K and 60 fps.",
 		images: [ogImage],
 	},
 	alternates: {

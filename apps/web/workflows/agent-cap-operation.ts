@@ -3,6 +3,10 @@ import * as Db from "@cap/database/schema";
 import { Organisations } from "@cap/web-backend/src/Organisations/index";
 import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
+	getDuplicateVideoMetadata,
+	planVideoDuplicate,
+} from "@cap/web-backend/src/Videos/duplicate";
+import {
 	CurrentUser,
 	Folder,
 	Organisation,
@@ -141,10 +145,11 @@ async function copyCapObjects(payload: OperationPayload) {
 		throw new FatalError("Duplicate destination missing");
 	const { bucket, keys, prefix } = await listOperationObjects(payload.snapshot);
 	const destinationPrefix = `${payload.snapshot.ownerId}/${payload.destinationId}/`;
+	const plan = planVideoDuplicate(payload.snapshot);
 	await Effect.forEach(
-		keys,
+		[...plan.publishedKeys, ...keys.filter(plan.copiesListedKey)],
 		(key) =>
-			bucket.copyObject(
+			bucket.copyObjectForRecording(
 				`${bucket.bucketName}/${key}`,
 				key.replace(prefix, destinationPrefix),
 			),
@@ -170,6 +175,19 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 			throw new FatalError("Duplicate destination conflicts with another Cap");
 		}
 		if (!existing) {
+			const [original] = await tx
+				.select({ password: Db.videos.password })
+				.from(Db.videos)
+				.where(
+					and(
+						eq(Db.videos.id, Video.VideoId.make(snapshot.id)),
+						eq(Db.videos.ownerId, User.UserId.make(snapshot.ownerId)),
+					),
+				)
+				.limit(1);
+			if (!original) {
+				throw new FatalError("The Cap to duplicate no longer exists");
+			}
 			await tx.insert(Db.videos).values({
 				id: destinationId,
 				ownerId: User.UserId.make(snapshot.ownerId),
@@ -187,8 +205,10 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 				width: snapshot.width,
 				height: snapshot.height,
 				fps: snapshot.fps,
-				metadata: snapshot.metadata,
+				metadata:
+					snapshot.metadata && getDuplicateVideoMetadata(snapshot.metadata),
 				public: snapshot.public,
+				password: original.password,
 				settings: snapshot.settings,
 				transcriptionStatus: snapshot.transcriptionStatus as
 					| "PROCESSING"
@@ -197,7 +217,7 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 					| "SKIPPED"
 					| "NO_AUDIO"
 					| null,
-				source: snapshot.source,
+				source: planVideoDuplicate(snapshot).source,
 				folderId: snapshot.folderId
 					? Folder.FolderId.make(snapshot.folderId)
 					: null,
@@ -219,10 +239,8 @@ async function createDuplicate(operationId: string, payload: OperationPayload) {
 	await enqueueVideoStorageNameSync(destinationId);
 }
 
-async function deleteCapObjects(payload: OperationPayload) {
-	"use step";
-
-	const { bucket, keys } = await listOperationObjects(payload.snapshot);
+async function deleteSnapshotObjects(snapshot: CapSnapshot) {
+	const { bucket, keys } = await listOperationObjects(snapshot);
 	for (let index = 0; index < keys.length; index += 1_000) {
 		await bucket
 			.deleteObjects(
@@ -230,6 +248,35 @@ async function deleteCapObjects(payload: OperationPayload) {
 			)
 			.pipe(runWorkflowPromise);
 	}
+}
+
+async function discardDuplicateObjects(payload: OperationPayload) {
+	"use step";
+
+	if (!payload.destinationId) return;
+	const [saved] = await db()
+		.select({ id: Db.videos.id })
+		.from(Db.videos)
+		.where(eq(Db.videos.id, Video.VideoId.make(payload.destinationId)))
+		.limit(1);
+	if (saved) return;
+	try {
+		await deleteSnapshotObjects({
+			...payload.snapshot,
+			id: payload.destinationId,
+		});
+	} catch (error) {
+		console.warn("Duplicate cleanup did not finish", {
+			videoId: payload.destinationId,
+			error,
+		});
+	}
+}
+
+async function deleteCapObjects(payload: OperationPayload) {
+	"use step";
+
+	await deleteSnapshotObjects(payload.snapshot);
 }
 
 async function deleteCapDatabase(
@@ -535,8 +582,13 @@ export async function agentCapOperationWorkflow(input: {
 		if (!operation) return;
 		if (operation.kind === "duplicate_cap") {
 			const payload = operation.payload as OperationPayload;
-			await copyCapObjects(payload);
-			await createDuplicate(input.operationId, payload);
+			try {
+				await copyCapObjects(payload);
+				await createDuplicate(input.operationId, payload);
+			} catch (error) {
+				await discardDuplicateObjects(payload);
+				throw error;
+			}
 			return;
 		}
 		if (operation.kind === "delete_cap") {

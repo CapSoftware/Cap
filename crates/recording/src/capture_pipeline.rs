@@ -481,22 +481,26 @@ pub fn target_to_display_and_crop(
 
             #[cfg(windows)]
             {
-                let raw_display_position = display
+                let raw_display_bounds = display
                     .raw_handle()
-                    .physical_position()
+                    .physical_bounds()
                     .ok_or_else(|| anyhow!("No display bounds"))?;
                 let raw_window_bounds = window
                     .raw_handle()
                     .physical_bounds()
                     .ok_or_else(|| anyhow!("No window bounds"))?;
 
-                Some(PhysicalBounds::new(
+                let relative = PhysicalBounds::new(
                     PhysicalPosition::new(
-                        raw_window_bounds.position().x() - raw_display_position.x(),
-                        raw_window_bounds.position().y() - raw_display_position.y(),
+                        raw_window_bounds.position().x() - raw_display_bounds.position().x(),
+                        raw_window_bounds.position().y() - raw_display_bounds.position().y(),
                     ),
                     raw_window_bounds.size(),
-                ))
+                );
+                Some(
+                    screen_capture::window_crop_on_display(relative, raw_display_bounds.size())
+                        .unwrap_or(relative),
+                )
             }
 
             #[cfg(target_os = "linux")]
@@ -564,8 +568,8 @@ pub fn target_to_display_and_crop(
                 )
             }
         }
-        ScreenCaptureTarget::CameraOnly => {
-            return Err(anyhow!("Camera-only target has no display"));
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => {
+            return Err(anyhow!("{} target has no display", target.kind_str()));
         }
     };
 
@@ -593,7 +597,9 @@ pub fn resolve_display_notch(target: &ScreenCaptureTarget) -> Option<cap_project
             let display_size = display.logical_size()?;
             resolve_area_display_notch(notch, display_size, *bounds)
         }
-        ScreenCaptureTarget::Window { .. } | ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::Window { .. }
+        | ScreenCaptureTarget::CameraOnly
+        | ScreenCaptureTarget::AudioOnly => None,
     }
 }
 

@@ -1,12 +1,12 @@
 "use client";
 
 import { Button } from "@cap/ui";
-import { faDownload } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faDownload } from "@fortawesome/free-solid-svg-icons/faDownload";
 import { ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useId, useRef, useState } from "react";
 import { ChromeRecorderButton } from "@/components/ChromeRecorderButton";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { CHROME_EXTENSION_BUTTON_CLASS } from "@/lib/chrome-extension";
 import { FREE_PLAN_MAX_RECORDING_MS } from "../components/web-recorder-dialog/web-recorder-constants";
 import { WebRecorderDialog } from "../components/web-recorder-dialog/web-recorder-dialog";

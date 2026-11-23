@@ -197,15 +197,7 @@ async fn estimate(
         return Err("An export clip is still preparing".into());
     }
     let total_frames = (duration * f64::from(settings.fps())).ceil() as u32;
-    let mut hasher = DefaultHasher::new();
-    editor.project_path.hash(&mut hasher);
-    serde_json::to_vec(&(&project, settings))
-        .map_err(|error| error.to_string())?
-        .hash(&mut hasher);
-    if turbo {
-        turbo.hash(&mut hasher);
-    }
-    let key = hasher.finish();
+    let key = estimate_key(&editor.project_path, &mut project, &settings, turbo)?;
     if let Ok(cache) = CACHE.lock()
         && let Some(cached) = cache
             .iter()
@@ -311,6 +303,7 @@ async fn estimate(
                 system_audio: segment.system_audio.clone(),
                 audio_timing_repair: segment.audio_timing_repair,
                 cursor: segment.cursor.clone(),
+                hover_changes: segment.hover_changes.clone(),
                 keyboard: segment.keyboard.clone(),
                 decoders: sample.decoders.clone(),
             })
@@ -821,9 +814,77 @@ fn summarize_pass(measurement: &PassMeasurement) -> Result<ExportEstimates, Stri
     })
 }
 
+/// Markers never change an export, so a marker edit keeps the cached estimate.
+/// Screen enhancement is never serialized, so it is hashed on its own.
+fn estimate_key(
+    project_path: &std::path::Path,
+    project: &mut ProjectConfiguration,
+    settings: &ExportSettings,
+    turbo: bool,
+) -> Result<u64, String> {
+    let markers = std::mem::take(&mut project.markers);
+    let serialized = serde_json::to_vec(&(&*project, settings));
+    project.markers = markers;
+    let mut hasher = DefaultHasher::new();
+    project_path.hash(&mut hasher);
+    serialized
+        .map_err(|error| error.to_string())?
+        .hash(&mut hasher);
+    if turbo {
+        turbo.hash(&mut hasher);
+    }
+    if project.screen_enhancement.enabled {
+        project
+            .screen_enhancement
+            .effective_strength()
+            .to_bits()
+            .hash(&mut hasher);
+    }
+    Ok(hasher.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn marker_edits_keep_the_cached_estimate_and_other_edits_do_not() {
+        let path = std::path::Path::new("/tmp/project.cap");
+        let settings = ExportSettings::Gif(crate::gif::GifExportSettings::default());
+        let mut project = ProjectConfiguration::default();
+        let base = estimate_key(path, &mut project, &settings, false).unwrap();
+        project
+            .markers
+            .push(cap_project::TimelineMarker::new(0, 1.0));
+        assert_eq!(
+            estimate_key(path, &mut project, &settings, false).unwrap(),
+            base
+        );
+        assert_eq!(project.markers.len(), 1);
+        project.background.padding = 12.0;
+        assert_ne!(
+            estimate_key(path, &mut project, &settings, false).unwrap(),
+            base
+        );
+    }
+
+    #[test]
+    fn screen_enhancement_changes_the_cached_estimate() {
+        let path = std::path::Path::new("/tmp/project.cap");
+        let settings = ExportSettings::Gif(crate::gif::GifExportSettings::default());
+        let mut project = ProjectConfiguration::default();
+        let off = estimate_key(path, &mut project, &settings, false).unwrap();
+        project.screen_enhancement = cap_project::ScreenEnhancement::on();
+        assert_ne!(
+            estimate_key(path, &mut project, &settings, false).unwrap(),
+            off
+        );
+        project.screen_enhancement = cap_project::ScreenEnhancement::default();
+        assert_eq!(
+            estimate_key(path, &mut project, &settings, false).unwrap(),
+            off
+        );
+    }
 
     fn packet(bytes: u64, key: bool) -> EncodedPacket {
         EncodedPacket { bytes, key }

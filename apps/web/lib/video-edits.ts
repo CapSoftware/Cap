@@ -248,10 +248,16 @@ export function mapOutputRangeToSourceRanges(
 	outputRange: VideoEditRange,
 	editSpec: VideoEditSpec,
 ) {
-	const normalized = normalizeKeepRanges(
-		editSpec.keepRanges,
-		editSpec.sourceDuration,
+	return mapOutputRangeToNormalizedSourceRanges(
+		outputRange,
+		normalizeKeepRanges(editSpec.keepRanges, editSpec.sourceDuration),
 	);
+}
+
+function mapOutputRangeToNormalizedSourceRanges(
+	outputRange: VideoEditRange,
+	normalized: VideoEditSpec,
+) {
 	const sourceRanges: VideoEditRange[] = [];
 	let outputCursor = 0;
 
@@ -290,7 +296,7 @@ export function composeEditSpecs(
 		previousOutputDuration,
 	);
 	const sourceRanges = next.keepRanges.flatMap((range) =>
-		mapOutputRangeToSourceRanges(range, previous),
+		mapOutputRangeToNormalizedSourceRanges(range, previous),
 	);
 
 	return normalizeKeepRanges(sourceRanges, previous.sourceDuration);

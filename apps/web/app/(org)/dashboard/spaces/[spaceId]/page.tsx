@@ -28,12 +28,22 @@ import {
 	type User,
 	Video,
 } from "@cap/web-domain";
-import { and, count, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, type SQL, sql } from "drizzle-orm";
 import { Effect } from "effect";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { resolveDashboardPageSize } from "@/lib/dashboard-page-size";
+import { parsePageParam } from "@/lib/page-param";
 import { seedThumbnailUrls } from "@/lib/seeded-thumbnails";
 import { runPromise } from "@/lib/server";
+import {
+	type SpaceVideoOrder,
+	spaceVideoOrderFromSettings,
+} from "@/lib/space-video-order";
+import {
+	spaceVideoOrderBy,
+	spaceVideoPositionSql,
+} from "@/lib/space-video-order-query";
 import { SharedCaps } from "./SharedCaps";
 
 export const metadata: Metadata = {
@@ -288,10 +298,13 @@ export default async function SharedCapsPage(props: {
 }) {
 	const searchParams = await props.searchParams;
 	const params = await props.params;
-	const page = Number(searchParams.page) || 1;
-	const limit = Number(searchParams.limit) || 15;
+	const page = parsePageParam(searchParams.page);
 	const user = await getCurrentUser();
 	if (!user) notFound();
+	const limit = resolveDashboardPageSize({
+		limitParam: searchParams.limit,
+		preferences: user.preferences,
+	});
 
 	const spaceOrOrg = await Effect.flatMap(Spaces, (s) =>
 		s.getSpaceOrOrg(Space.SpaceId.make(params.spaceId)),
@@ -305,13 +318,72 @@ export default async function SharedCapsPage(props: {
 
 	if (spaceOrOrg.variant === "space") {
 		const { space } = spaceOrOrg;
+		const videoOrder = spaceVideoOrderFromSettings(space.settings);
 
 		async function fetchSpaceVideos(
 			spaceId: Space.SpaceIdOrOrganisationId,
 			page: number,
 			limit: number,
+			order: SpaceVideoOrder,
 		) {
 			const offset = (page - 1) * limit;
+			const rootFilter = and(
+				eq(spaceVideos.spaceId, spaceId),
+				isNull(spaceVideos.folderId),
+				isNull(organizations.tombstoneAt),
+			);
+			// Custom order groups by video so a video added to the space twice
+			// still appears once, at its lowest stored position.
+			const spaceVideosPage =
+				order === "custom"
+					? db()
+							.select({
+								id: videos.id,
+								effectiveCreatedAt: videos.effectiveCreatedAt,
+								position: spaceVideoPositionSql.as("position"),
+							})
+							.from(spaceVideos)
+							.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
+							.leftJoin(organizations, eq(videos.orgId, organizations.id))
+							.where(rootFilter)
+							.groupBy(videos.id, videos.effectiveCreatedAt)
+							.orderBy(
+								...spaceVideoOrderBy(order, {
+									position: spaceVideoPositionSql,
+									effectiveCreatedAt: videos.effectiveCreatedAt,
+									id: videos.id,
+								}),
+							)
+							.limit(limit)
+							.offset(offset)
+							.as("space_videos_page")
+					: db()
+							.selectDistinct({
+								id: videos.id,
+								effectiveCreatedAt: videos.effectiveCreatedAt,
+								position: sql<null>`NULL`.as("position"),
+							})
+							.from(spaceVideos)
+							.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
+							.leftJoin(organizations, eq(videos.orgId, organizations.id))
+							.where(rootFilter)
+							.orderBy(
+								...spaceVideoOrderBy(order, {
+									position: sql`NULL`,
+									effectiveCreatedAt: videos.effectiveCreatedAt,
+									id: videos.id,
+								}),
+							)
+							.limit(limit)
+							.offset(offset)
+							.as("space_videos_page");
+			const pagePosition = sql.raw("`space_videos_page`.`position`");
+			const pageOrder: SQL[] = spaceVideoOrderBy(order, {
+				position: pagePosition,
+				effectiveCreatedAt: videos.effectiveCreatedAt,
+				id: videos.id,
+			});
+
 			const [videoRows, totalCountResult] = await Promise.all([
 				db()
 					.select({
@@ -334,19 +406,11 @@ export default async function SharedCapsPage(props: {
 								Boolean,
 							),
 					})
-					.from(spaceVideos)
-					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
+					.from(videos)
+					.innerJoin(spaceVideosPage, eq(videos.id, spaceVideosPage.id))
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-					.leftJoin(organizations, eq(videos.orgId, organizations.id))
-					.where(
-						and(
-							eq(spaceVideos.spaceId, spaceId),
-							isNull(spaceVideos.folderId),
-							isNull(organizations.tombstoneAt),
-						),
-					)
 					.groupBy(
 						videos.id,
 						videos.ownerId,
@@ -359,15 +423,22 @@ export default async function SharedCapsPage(props: {
 						videos.settings,
 						videos.password,
 						users.name,
+						pagePosition,
 					)
-					.orderBy(desc(videos.effectiveCreatedAt))
-					.limit(limit)
-					.offset(offset),
+					.orderBy(...pageOrder),
 				db()
-					.select({ count: count() })
+					.select({
+						count: sql<number>`COUNT(DISTINCT ${videos.id})`.mapWith(Number),
+					})
 					.from(spaceVideos)
+					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
+					.leftJoin(organizations, eq(videos.orgId, organizations.id))
 					.where(
-						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
+						and(
+							eq(spaceVideos.spaceId, spaceId),
+							isNull(spaceVideos.folderId),
+							isNull(organizations.tombstoneAt),
+						),
 					),
 			]);
 			return {
@@ -386,7 +457,7 @@ export default async function SharedCapsPage(props: {
 			fetchSpaceMembers(space.id).pipe(runPromise),
 			fetchOrganizationMembers(space.organizationId).pipe(runPromise),
 			fetchFolders(space.id, false),
-			fetchSpaceVideos(space.id, page, limit),
+			fetchSpaceVideos(space.id, page, limit, videoOrder),
 			fetchOrganizationSettings(space.organizationId),
 		]);
 		const thumbnails = seedThumbnailUrls(
@@ -447,6 +518,8 @@ export default async function SharedCapsPage(props: {
 				currentUserId={user.id}
 				folders={foldersData}
 				thumbnails={thumbnails}
+				pageSize={limit}
+				videoOrder={videoOrder}
 			/>
 		);
 	}
@@ -460,6 +533,24 @@ export default async function SharedCapsPage(props: {
 			limit: number,
 		) {
 			const offset = (page - 1) * limit;
+			const orgVideosPage = db()
+				.selectDistinct({
+					id: videos.id,
+					effectiveCreatedAt: videos.effectiveCreatedAt,
+				})
+				.from(sharedVideos)
+				.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
+				.where(
+					and(
+						eq(sharedVideos.organizationId, orgId),
+						isNull(sharedVideos.folderId),
+					),
+				)
+				.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id))
+				.limit(limit)
+				.offset(offset)
+				.as("org_videos_page");
+
 			const [videoRows, totalCountResult] = await Promise.all([
 				db()
 					.select({
@@ -482,17 +573,11 @@ export default async function SharedCapsPage(props: {
 								Boolean,
 							),
 					})
-					.from(sharedVideos)
-					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
+					.from(videos)
+					.innerJoin(orgVideosPage, eq(videos.id, orgVideosPage.id))
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
 					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-					.where(
-						and(
-							eq(sharedVideos.organizationId, orgId),
-							isNull(sharedVideos.folderId),
-						),
-					)
 					.groupBy(
 						videos.id,
 						videos.ownerId,
@@ -506,11 +591,11 @@ export default async function SharedCapsPage(props: {
 						videos.settings,
 						videos.password,
 					)
-					.orderBy(desc(videos.effectiveCreatedAt))
-					.limit(limit)
-					.offset(offset),
+					.orderBy(desc(videos.effectiveCreatedAt), desc(videos.id)),
 				db()
-					.select({ count: count() })
+					.select({
+						count: sql<number>`COUNT(DISTINCT ${videos.id})`.mapWith(Number),
+					})
 					.from(sharedVideos)
 					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
 					.where(
@@ -586,6 +671,7 @@ export default async function SharedCapsPage(props: {
 				currentUserId={user.id}
 				folders={foldersData}
 				thumbnails={thumbnails}
+				pageSize={limit}
 			/>
 		);
 	}

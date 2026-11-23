@@ -2,6 +2,14 @@ import {
 	authOptions,
 	decodeSessionToken,
 } from "@cap/database/auth/auth-options";
+import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
+import {
+	consumeGoogleOneTapNonce,
+	GOOGLE_ONE_TAP_PROVIDER_ID,
+	googleOneTapNonceCookieForWebUrl,
+	googleOneTapNonceSetCookie,
+	readCookie,
+} from "@cap/database/auth/google-one-tap";
 import { getWorkOS } from "@cap/database/auth/sso";
 import {
 	ssoIntentCookie,
@@ -9,16 +17,15 @@ import {
 	verifySsoLoginIntent,
 } from "@cap/database/auth/sso-state";
 import { serverEnv } from "@cap/env";
-import { type NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import NextAuth from "next-auth";
 import { getToken } from "next-auth/jwt";
 import { getSafeNextPath } from "@/app/(org)/safe-next";
 import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
-	normalizeSignInEmail,
 } from "@/lib/email-code-rate-limit";
-import { isRateLimited } from "@/lib/rate-limit";
+import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +85,33 @@ async function readSignInBody(request: NextRequest) {
 	return null;
 }
 
+async function readOneTapCredential(
+	request: NextRequest,
+): Promise<string | null | "duplicate"> {
+	if (request.method !== "POST") return null;
+	try {
+		const contentType = request.headers.get("content-type");
+		if (contentType?.includes("application/x-www-form-urlencoded")) {
+			const values = new URLSearchParams(await request.clone().text()).getAll(
+				"credential",
+			);
+			if (values.length > 1) return "duplicate";
+			return values[0] ?? null;
+		}
+		if (contentType?.includes("application/json")) {
+			const body: unknown = await request.clone().json();
+			const credential =
+				body && typeof body === "object"
+					? (body as Record<string, unknown>).credential
+					: null;
+			return typeof credential === "string" ? credential : null;
+		}
+	} catch {
+		return null;
+	}
+	return null;
+}
+
 function authErrorUrl(error: string) {
 	const url = new URL("/api/auth/error", serverEnv().WEB_URL);
 	url.searchParams.set("error", error);
@@ -102,7 +136,11 @@ async function emailCodeLimitResponse(
 	}
 	if (nextauth[0] === "callback") {
 		const query = request.nextUrl.searchParams;
-		const email = normalizeSignInEmail(query.get("email"));
+		const rawEmail = query.get("email");
+		const email = normalizeSignInEmail(rawEmail);
+		if (rawEmail && !email) {
+			return NextResponse.redirect(authErrorUrl("Verification"), 302);
+		}
 		if (
 			!email ||
 			!query.get("token") ||
@@ -115,6 +153,16 @@ async function emailCodeLimitResponse(
 	return null;
 }
 
+function withSignInEmailIdentifier(request: NextRequest, nextauth: string[]) {
+	if (nextauth[0] !== "callback" || nextauth[1] !== "email") return request;
+	const email = request.nextUrl.searchParams.get("email");
+	const identifier = normalizeSignInEmail(email);
+	if (!identifier || identifier === email) return request;
+	const url = request.nextUrl.clone();
+	url.searchParams.set("email", identifier);
+	return new NextRequest(url, request);
+}
+
 async function handler(
 	request: NextRequest,
 	context: { params: Promise<{ nextauth: string[] }> },
@@ -122,8 +170,60 @@ async function handler(
 	const { nextauth } = await context.params;
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
+	if (
+		nextauth[0] === "callback" &&
+		nextauth[1] === "passkey" &&
+		(await isRateLimited(RATE_LIMIT_IDS.AUTH_PASSKEY, {
+			headers: request.headers,
+		}))
+	) {
+		return NextResponse.json(
+			{ url: authErrorUrl("CredentialsSignin") },
+			{ status: 429 },
+		);
+	}
+	if (
+		nextauth[1] === GOOGLE_ONE_TAP_PROVIDER_ID &&
+		nextauth[0] === "callback"
+	) {
+		if (
+			await isRateLimited(RATE_LIMIT_IDS.AUTH_GOOGLE_ONE_TAP, {
+				headers: request.headers,
+			})
+		) {
+			return NextResponse.json(
+				{ url: authErrorUrl("CredentialsSignin") },
+				{ status: 429 },
+			);
+		}
+		const webUrl = serverEnv().WEB_URL;
+		const nonces = readCookie(
+			request.headers.get("cookie"),
+			googleOneTapNonceCookieForWebUrl(webUrl).name,
+		);
+		const credential = await readOneTapCredential(request);
+		if (credential === "duplicate") {
+			return NextResponse.json(
+				{ url: authErrorUrl("CredentialsSignin") },
+				{ status: 400 },
+			);
+		}
+		const response: Response = await NextAuth(request, context, authOptions());
+		response.headers.append(
+			"set-cookie",
+			googleOneTapNonceSetCookie(
+				webUrl,
+				consumeGoogleOneTapNonce(nonces, credential),
+			),
+		);
+		return response;
+	}
 	if (nextauth[1] !== "workos") {
-		return NextAuth(request, context, authOptions());
+		return NextAuth(
+			withSignInEmailIdentifier(request, nextauth),
+			context,
+			authOptions(),
+		);
 	}
 	const env = serverEnv();
 	const cookie = ssoIntentCookie(new URL(env.WEB_URL).protocol === "https:");

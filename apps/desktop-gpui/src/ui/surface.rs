@@ -23,15 +23,18 @@ impl Card {
     }
 
     pub fn settings_rows(theme: &Theme, children: Vec<AnyElement>) -> Div {
-        let border = theme.settings_border();
         let last = children.len().saturating_sub(1);
         Card::settings(theme, false).flex().flex_col().children(
             children.into_iter().enumerate().map(|(index, child)| {
                 div().child(child).when(index != last, |this| {
-                    this.child(div().mx(px(12.)).h(px(1.)).bg(border))
+                    this.child(Card::settings_divider(theme))
                 })
             }),
         )
+    }
+
+    pub fn settings_divider(theme: &Theme) -> Div {
+        div().mx(px(12.)).h(px(1.)).bg(theme.settings_border())
     }
 
     /// `LIQUID_GLASS_SURFACE_CLASS`: `rounded-2xl border border-gray-12/10

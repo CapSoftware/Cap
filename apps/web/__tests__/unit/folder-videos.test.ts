@@ -3,6 +3,7 @@ import { Folder, Organisation, Space } from "@cap/web-domain";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getVideosByFolderId } from "@/lib/folder";
+import { readDistinctVideoIds } from "../fixtures/distinct-video-ids";
 
 const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 
@@ -86,4 +87,33 @@ describe.each([
 			]);
 		},
 	);
+});
+
+describe.each([
+	{ variant: "user" } as const,
+	{ variant: "space", spaceId: Space.SpaceId.make("space-1") } as const,
+	{
+		variant: "org",
+		organizationId: Organisation.OrganisationId.make("org-1"),
+	} as const,
+])("$variant folder listing", (root) => {
+	it("lists every video in the folder and sorts only by selected columns", async () => {
+		await getVideosByFolderId(Folder.FolderId.make("folder-1"), root).pipe(
+			Effect.provide(Database.Default),
+			Effect.provide(ImageUploads.Default),
+			Effect.runPromise,
+		);
+		const queries = mocks.query.mock.calls.map(([query]) => String(query));
+		expect(queries).toHaveLength(1);
+		expect(queries[0]).not.toMatch(/ limit /);
+		const page = readDistinctVideoIds(queries);
+		if (root.variant === "user") {
+			expect(page).toBeNull();
+			return;
+		}
+		expect(page?.paged).toBe(false);
+		expect(page?.columns).toEqual(
+			expect.arrayContaining(page?.sortColumns ?? []),
+		);
+	});
 });

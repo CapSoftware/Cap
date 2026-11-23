@@ -24,26 +24,78 @@ pub(crate) fn open_headers(path: &Path) -> Option<ffmpeg::format::context::Input
 }
 
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn header_video_metadata(path: &Path) -> Option<(u32, u32, crate::cpu_yuv::YuvMatrix)> {
-    let input = open_headers(path)?;
+pub(crate) fn header_video_metadata(path: &Path) -> Option<HeaderVideoMetadata> {
+    let mut input = open_headers(path)?;
     let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+    let stream_index = stream.index();
     let parameters = stream.parameters();
     let raw_parameters = unsafe { &*parameters.as_ptr() };
     if raw_parameters.width <= 0 || raw_parameters.height <= 0 {
         return None;
     }
-    let video = ffmpeg::codec::Context::from_parameters(parameters)
+    let mut video = ffmpeg::codec::Context::from_parameters(parameters)
         .and_then(|context| context.decoder().video())
         .ok()?;
     if video.width() == 0 || video.height() == 0 {
         return None;
     }
 
-    Some((
-        video.width(),
-        video.height(),
-        crate::cpu_yuv::YuvMatrix::from_color_space(video.color_space()),
-    ))
+    let chroma_is_420 = cap_video_decode::ffmpeg::chroma_is_420(video.format(), raw_parameters);
+    let mut color_space = video.color_space();
+    if color_space == ffmpeg::util::color::Space::Unspecified
+        && matches!(
+            video.id(),
+            ffmpeg::codec::Id::H264 | ffmpeg::codec::Id::HEVC
+        )
+    {
+        color_space =
+            first_packet_color_space(&mut input, stream_index, &mut video).unwrap_or(color_space);
+    }
+
+    Some(HeaderVideoMetadata {
+        width: video.width(),
+        height: video.height(),
+        matrix: crate::cpu_yuv::YuvMatrix::from_color_space(color_space),
+        chroma_is_420,
+    })
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct HeaderVideoMetadata {
+    pub width: u32,
+    pub height: u32,
+    pub matrix: crate::cpu_yuv::YuvMatrix,
+    pub chroma_is_420: Option<bool>,
+}
+
+/// Without a `colr` atom the header leaves the matrix unspecified even when the
+/// SPS VUI names one, and the H.264 decoder only exports the VUI once it parses
+/// a slice. Decoding the first packet reads the same tag the FFmpeg decode path
+/// sees on its frames.
+#[cfg(any(target_os = "macos", test))]
+fn first_packet_color_space(
+    input: &mut ffmpeg::format::context::Input,
+    stream_index: usize,
+    decoder: &mut ffmpeg::decoder::Video,
+) -> Option<ffmpeg::util::color::Space> {
+    const MAX_PACKETS: usize = 64;
+
+    let packet = input
+        .packets()
+        .take(MAX_PACKETS)
+        .find_map(|(stream, packet)| (stream.index() == stream_index).then_some(packet))?;
+    decoder.send_packet(&packet).ok()?;
+    let space = decoder.color_space();
+    if space != ffmpeg::util::color::Space::Unspecified {
+        return Some(space);
+    }
+
+    decoder.send_eof().ok()?;
+    let mut frame = ffmpeg::frame::Video::empty();
+    decoder.receive_frame(&mut frame).ok()?;
+    let space = frame.color_space();
+    (space != ffmpeg::util::color::Space::Unspecified).then_some(space)
 }
 
 fn header_duration_secs(input: &ffmpeg::format::context::Input) -> Option<f64> {
@@ -110,7 +162,7 @@ impl Video {
                 return Ok(video);
             }
 
-            let input = ffmpeg::format::input(path)
+            let input = cap_enc_ffmpeg::decode_limit::open_input(path)
                 .map_err(|error| format!("Failed to open video: {error}"))?;
             Self::from_input(&input, start_time)
         }
@@ -230,8 +282,8 @@ impl Audio {
             return Ok(audio);
         }
 
-        let input =
-            ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {e}"))?;
+        let input = cap_enc_ffmpeg::decode_limit::open_input(path)
+            .map_err(|e| format!("Failed to open audio: {e}"))?;
         Self::from_input(&input, start_time)
     }
 
@@ -445,6 +497,20 @@ mod ordinary_media_access_tests {
     }
 
     fn write_test_video(path: &Path, codec_id: ffmpeg::codec::Id) {
+        write_test_video_with_color(
+            path,
+            codec_id,
+            ffmpeg::util::color::Space::Unspecified,
+            true,
+        );
+    }
+
+    fn write_test_video_with_color(
+        path: &Path,
+        codec_id: ffmpeg::codec::Id,
+        stream_space: ffmpeg::util::color::Space,
+        container_tag: bool,
+    ) {
         ffmpeg::init().unwrap();
         let codec = ffmpeg::encoder::find(codec_id).unwrap_or_else(|| {
             panic!("bundled FFmpeg has no encoder for video codec {codec_id:?}")
@@ -469,12 +535,39 @@ mod ordinary_media_access_tests {
             encoder.set_format(ffmpeg::format::Pixel::YUV420P);
             encoder.set_frame_rate(Some((30, 1)));
             encoder.set_time_base((1, 30));
+            if stream_space != ffmpeg::util::color::Space::Unspecified {
+                let (primaries, transfer) = match stream_space {
+                    ffmpeg::util::color::Space::BT709 => (
+                        ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709,
+                        ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709,
+                    ),
+                    _ => (
+                        ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_SMPTE170M,
+                        ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_SMPTE170M,
+                    ),
+                };
+                encoder.set_colorspace(stream_space);
+                unsafe {
+                    (*encoder.as_mut_ptr()).color_primaries = primaries;
+                    (*encoder.as_mut_ptr()).color_trc = transfer;
+                }
+            }
             if global_header {
                 encoder.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
             }
             stream.set_parameters(&encoder);
             let encoder = encoder.open_as(codec).unwrap();
             stream.set_parameters(&encoder);
+            if !container_tag {
+                unsafe {
+                    let parameters = (*stream.as_mut_ptr()).codecpar;
+                    (*parameters).color_space = ffmpeg::ffi::AVColorSpace::AVCOL_SPC_UNSPECIFIED;
+                    (*parameters).color_primaries =
+                        ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_UNSPECIFIED;
+                    (*parameters).color_trc =
+                        ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_UNSPECIFIED;
+                }
+            }
             (stream_index, encoder)
         };
         output.write_header().unwrap();
@@ -800,10 +893,77 @@ mod ordinary_media_access_tests {
         write_test_video(&mpeg4_path, ffmpeg::codec::Id::MPEG4);
 
         assert_eq!(
-            header_video_metadata(&h264_path).map(|(width, height, _)| (width, height)),
+            header_video_metadata(&h264_path).map(|video| (video.width, video.height)),
             Some((64, 48))
         );
         assert_eq!(header_video_metadata(&mpeg4_path), None);
+    }
+
+    fn container_color_space(path: &Path) -> ffmpeg::util::color::Space {
+        let input = open_headers(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+        ffmpeg::util::color::Space::from(unsafe { (*stream.parameters().as_ptr()).color_space })
+    }
+
+    #[test]
+    fn header_video_metadata_reads_stream_matrix_when_container_is_untagged() {
+        use crate::cpu_yuv::YuvMatrix;
+        use ffmpeg::util::color::Space;
+
+        let directory = tempfile::tempdir().unwrap();
+        let cases = [
+            ("vui709-colr.mp4", Space::BT709, true, YuvMatrix::Bt709),
+            ("vui709-no-colr.mp4", Space::BT709, false, YuvMatrix::Bt709),
+            ("vui601-colr.mp4", Space::SMPTE170M, true, YuvMatrix::Bt601),
+            (
+                "vui601-no-colr.mp4",
+                Space::SMPTE170M,
+                false,
+                YuvMatrix::Bt601,
+            ),
+            ("untagged.mp4", Space::Unspecified, false, YuvMatrix::Bt601),
+        ];
+
+        for (name, stream_space, container_tag, expected) in cases {
+            let path = directory.path().join(name);
+            write_test_video_with_color(
+                &path,
+                ffmpeg::codec::Id::H264,
+                stream_space,
+                container_tag,
+            );
+            let expected_container = if container_tag {
+                stream_space
+            } else {
+                Space::Unspecified
+            };
+            assert_eq!(container_color_space(&path), expected_container, "{name}");
+
+            let full_input = ffmpeg::format::input(&path).unwrap();
+            let stream = full_input
+                .streams()
+                .best(ffmpeg::media::Type::Video)
+                .unwrap();
+            let probed = ffmpeg::codec::Context::from_parameters(stream.parameters())
+                .unwrap()
+                .decoder()
+                .video()
+                .unwrap()
+                .color_space();
+            assert_eq!(
+                YuvMatrix::from_color_space(probed),
+                expected,
+                "{name} full probe"
+            );
+
+            let video = header_video_metadata(&path).unwrap();
+            assert_eq!(
+                (video.width, video.height, video.matrix),
+                (64, 48, expected),
+                "{name}"
+            );
+            assert_eq!(video.chroma_is_420, Some(true), "{name}");
+        }
     }
 
     #[test]

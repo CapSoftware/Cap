@@ -17,11 +17,13 @@ import {
 	type DbClient,
 } from "../../../../packages/web-backend/src/Database";
 
-const mocks = vi.hoisted(() => ({ notify: vi.fn(async () => undefined) }));
+const mocks = vi.hoisted(() => ({
+	notify: vi.fn(async () => undefined),
+	commentLimited: vi.fn(async (_userId: string) => false),
+}));
 vi.mock("server-only", () => ({}));
 vi.mock("@cap/database/auth/auth-options", () => ({ authOptions: () => ({}) }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: vi.fn() }));
-vi.mock("@/actions/loom", () => ({ downloadLoomVideo: vi.fn() }));
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({
 	getOrgAnalyticsData: vi.fn(),
 }));
@@ -30,6 +32,9 @@ vi.mock("@/lib/desktop-segments-finalization", () => ({}));
 vi.mock("@/lib/Notification", () => ({
 	createNotification: mocks.notify,
 	sendFirstViewEmail: vi.fn(),
+}));
+vi.mock("@/lib/comment-rate-limit", () => ({
+	isCommentRateLimited: mocks.commentLimited,
 }));
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoOverShareableLinkLimit: vi.fn(async () => false),
@@ -96,7 +101,12 @@ const database = {
 					return [{ id: user.activeOrganizationId }];
 				if (table === Db.videos)
 					return [{ ownerId: user.id, settings: videoSettings }];
-				if (table === Db.spaceVideos) return [];
+				if (
+					table === Db.spaceVideos ||
+					table === Db.sharedVideos ||
+					table === Db.spaceMembers
+				)
+					return [];
 				if (table !== Db.comments) throw new Error("Unexpected table");
 				if (
 					columns &&
@@ -193,6 +203,8 @@ beforeEach(() => {
 	inserted = [];
 	videoSettings = null;
 	mocks.notify.mockClear();
+	mocks.commentLimited.mockClear();
+	mocks.commentLimited.mockResolvedValue(false);
 });
 
 afterAll(async () => {
@@ -250,6 +262,15 @@ describe("mobile reply parent authorization", () => {
 		const response = await postComment(null);
 		expect(response.status).toBe(403);
 		expect(inserted).toEqual([]);
+	});
+
+	it("refuses comments past the author's comment limit before saving", async () => {
+		mocks.commentLimited.mockResolvedValue(true);
+		const response = await postComment(null);
+		expect(response.status).toBe(400);
+		expect(inserted).toEqual([]);
+		expect(mocks.notify).not.toHaveBeenCalled();
+		expect(mocks.commentLimited).toHaveBeenCalledWith(user.id);
 	});
 
 	it("preserves top-level comments", async () => {

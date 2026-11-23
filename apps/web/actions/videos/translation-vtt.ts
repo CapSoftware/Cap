@@ -120,8 +120,12 @@ export function joinTranslationChunks(
 	return isCompleteTranslation(source, result) ? result : null;
 }
 
+export function sourceDigest(source: string): string {
+	return createHash("sha256").update(source).digest("hex");
+}
+
 function sourceFingerprint(source: string): string {
-	return `${SOURCE_FINGERPRINT_PREFIX}${createHash("sha256").update(source).digest("hex")}`;
+	return `${SOURCE_FINGERPRINT_PREFIX}${sourceDigest(source)}`;
 }
 
 export function withSourceFingerprint(
