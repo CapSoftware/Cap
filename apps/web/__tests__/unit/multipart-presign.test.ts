@@ -2,7 +2,7 @@ import { S3Bucket, User, Video } from "@cap/web-domain";
 import type { SQL } from "drizzle-orm";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import { Effect, Option } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	getOwnedById: vi.fn(),
@@ -18,6 +18,15 @@ const mocks = vi.hoisted(() => ({
 	create: vi.fn(),
 	abort: vi.fn(),
 	copy: vi.fn(),
+	studio: vi.fn((_email: unknown) => false),
+	startProcessing: vi.fn(async () => "started"),
+	sourcesComplete: vi.fn(async (_input: unknown) => {}),
+}));
+vi.mock("@/lib/render-recording", () => ({
+	onStudioSourcesComplete: (input: unknown) => mocks.sourcesComplete(input),
+}));
+vi.mock("@/lib/web-studio-rollout", () => ({
+	isWebStudioEnabledForEmail: (email: unknown) => mocks.studio(email),
 }));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ NEXTAUTH_SECRET: "test-reupload-secret" }),
@@ -76,7 +85,7 @@ vi.mock("@/lib/queue-video-transcription", () => ({
 		mocks.shouldQueueTranscription,
 }));
 vi.mock("@/lib/video-processing", () => ({
-	startVideoProcessingWorkflow: vi.fn(async () => "started"),
+	startVideoProcessingWorkflow: mocks.startProcessing,
 }));
 
 import { app } from "@/app/api/upload/[...route]/multipart";
@@ -162,6 +171,424 @@ describe("multipart initiation source types", () => {
 			expect(mocks.storage).not.toHaveBeenCalled();
 		},
 	);
+});
+
+describe("recorder source upload", () => {
+	const cameraKey = "owner/video/camera-upload.webm";
+	const displayKey = "owner/video/raw-upload.webm";
+	const dialect = new MySqlDialect();
+	let updates: Record<string, unknown>[];
+	let uploadMutations: string[];
+	afterEach(() => {
+		mocks.studio.mockReturnValue(false);
+	});
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.studio.mockReturnValue(true);
+		updates = [];
+		uploadMutations = [];
+		mocks.getOwnedById.mockReturnValue(
+			Effect.succeed(
+				Option.some([
+					{
+						id: Video.VideoId.make("video"),
+						ownerId: User.UserId.make("owner"),
+						orgId: "org",
+						source: { type: "webMP4" },
+						metadata: Option.none(),
+						bucketId: Option.none(),
+						storageIntegrationId: Option.none(),
+					},
+				]),
+			),
+		);
+		mocks.database.mockReturnValue({
+			insert: () => ({
+				values: () => ({
+					onDuplicateKeyUpdate: async () => {
+						uploadMutations.push("insert");
+					},
+				}),
+			}),
+			update: () => ({
+				set: (values: Record<string, unknown>) => ({
+					where: async () => {
+						updates.push(values);
+					},
+				}),
+			}),
+			delete: () => ({
+				where: async () => {
+					uploadMutations.push("delete");
+				},
+			}),
+		});
+		mocks.create.mockReturnValue(
+			Effect.succeed({ UploadId: "camera-session" }),
+		);
+		mocks.complete.mockReturnValue(
+			Effect.succeed({ ETag: "camera-etag", Location: cameraKey }),
+		);
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ETag: "camera-etag", ContentLength: 100 }),
+		);
+		mocks.abort.mockReturnValue(Effect.succeed({}));
+		mocks.storage.mockReturnValue(
+			Effect.succeed([
+				{
+					provider: "s3",
+					bucketName: "bucket",
+					multipart: {
+						create: mocks.create,
+						complete: mocks.complete,
+						abort: mocks.abort,
+					},
+					headObject: mocks.head,
+				},
+			]),
+		);
+	});
+	const completeCamera = (body: Record<string, unknown> = {}) =>
+		app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				uploadId: "camera-session",
+				subpath: "camera-upload.webm",
+				screenSubpath: "raw-upload.webm",
+				cameraOffsetMs: 8,
+				durationInSecs: 5,
+				parts: [{ partNumber: 1, etag: "part-etag", size: 100 }],
+				...body,
+			}),
+		});
+	const sourcePatch = () => {
+		const metadata = updates[0]?.metadata;
+		if (!metadata) throw new Error("Missing editor source metadata update");
+		const params = dialect.sqlToQuery(metadata as SQL).params;
+		const json = params.find(
+			(value): value is string =>
+				typeof value === "string" &&
+				value.includes(JSON.stringify("editorSources")),
+		);
+		if (!json) throw new Error("Missing editor source JSON patch");
+		return JSON.parse(json) as Record<string, unknown>;
+	};
+
+	it("retains a verified screen source when no webcam was recorded", async () => {
+		mocks.complete.mockReturnValue(
+			Effect.succeed({ ETag: "display-etag", Location: displayKey }),
+		);
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ETag: "display-etag", ContentLength: 100 }),
+		);
+		mocks.startProcessing.mockResolvedValue("started");
+		const response = await app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				uploadId: "display-session",
+				subpath: "raw-upload.webm",
+				durationInSecs: 5,
+				parts: [{ partNumber: 1, etag: "part-etag", size: 100 }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(sourcePatch()).toEqual({
+			editorSources: {
+				version: 1,
+				display: {
+					key: displayKey,
+					contentType: "video/webm",
+					size: 100,
+					objectIdentity: "display-etag",
+				},
+			},
+		});
+		expect(mocks.startProcessing).toHaveBeenCalledWith(
+			expect.objectContaining({ rawFileKey: displayKey }),
+		);
+		expect(mocks.sourcesComplete).toHaveBeenCalledWith({
+			videoId: "video",
+			key: displayKey,
+			origin: "http://localhost",
+		});
+	});
+
+	it("completes the private camera asset without publishing or clearing the screen upload", async () => {
+		const initiated = await app.request("/initiate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				subpath: "camera-upload.webm",
+				contentType: "video/webm",
+			}),
+		});
+		expect(initiated.status).toBe(200);
+		expect(uploadMutations).toEqual([]);
+		const response = await completeCamera();
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			success: true,
+			fileKey: cameraKey,
+			processingStarted: false,
+		});
+		expect(mocks.complete).toHaveBeenCalledWith(
+			cameraKey,
+			"camera-session",
+			expect.anything(),
+		);
+		expect(updates).toHaveLength(1);
+		expect(sourcePatch()).toEqual({
+			editorSources: {
+				version: 1,
+				display: { key: displayKey, contentType: "video/webm" },
+				camera: {
+					key: cameraKey,
+					contentType: "video/webm",
+					size: 100,
+					objectIdentity: "camera-etag",
+					offsetMs: 8,
+				},
+			},
+		});
+		expect(uploadMutations).toEqual([]);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+		expect(mocks.sourcesComplete).toHaveBeenCalledOnce();
+		expect(mocks.sourcesComplete).toHaveBeenCalledWith({
+			videoId: "video",
+			key: cameraKey,
+			origin: "http://localhost",
+		});
+	});
+
+	it("rejects an invalid display path before completing camera bytes", async () => {
+		const response = await completeCamera({
+			screenSubpath: "../result.mp4",
+		});
+		expect(response.status).toBe(400);
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(updates).toEqual([]);
+	});
+
+	it("recovers a lost completion response from the verified camera object", async () => {
+		mocks.complete.mockReturnValueOnce(Effect.fail(new Error("NoSuchUpload")));
+		const response = await completeCamera();
+		expect(response.status).toBe(200);
+		expect(updates).toHaveLength(1);
+		expect(uploadMutations).toEqual([]);
+	});
+
+	it("requires verified display bytes before starting the composited output", async () => {
+		mocks.getOwnedById.mockReturnValue(
+			Effect.succeed(
+				Option.some([
+					{
+						id: Video.VideoId.make("video"),
+						ownerId: User.UserId.make("owner"),
+						orgId: "org",
+						source: { type: "webMP4" },
+						metadata: Option.some({
+							editorSources: {
+								version: 1,
+								display: { key: displayKey, contentType: "video/webm" },
+								camera: {
+									key: cameraKey,
+									contentType: "video/webm",
+									size: 100,
+									objectIdentity: "camera-etag",
+									offsetMs: 8,
+								},
+							},
+						}),
+						bucketId: Option.none(),
+						storageIntegrationId: Option.none(),
+					},
+				]),
+			),
+		);
+		mocks.startProcessing.mockResolvedValue("started");
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ETag: "display-etag", ContentLength: 99 }),
+		);
+		const response = await app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				uploadId: "display-session",
+				subpath: "raw-upload.webm",
+				durationInSecs: 5,
+				parts: [{ partNumber: 1, etag: "part-etag", size: 100 }],
+			}),
+		});
+		expect(response.status).toBe(500);
+		expect(mocks.startProcessing).not.toHaveBeenCalled();
+	});
+
+	it("refuses Studio tracks from an account outside the pilot", async () => {
+		mocks.studio.mockReturnValue(false);
+		const initiated = await app.request("/initiate", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				subpath: "mic-upload.webm",
+				contentType: "audio/webm",
+			}),
+		});
+		expect(initiated.status).toBe(403);
+		const completed = await completeCamera();
+		expect(completed.status).toBe(403);
+		expect(mocks.create).not.toHaveBeenCalled();
+		expect(mocks.complete).not.toHaveBeenCalled();
+		expect(updates).toEqual([]);
+	});
+
+	it("leaves an Instant recording's metadata alone outside the pilot", async () => {
+		mocks.studio.mockReturnValue(false);
+		mocks.complete.mockReturnValue(
+			Effect.succeed({ ETag: "display-etag", Location: displayKey }),
+		);
+		mocks.head.mockReturnValue(
+			Effect.succeed({ ETag: "display-etag", ContentLength: 100 }),
+		);
+		const response = await app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				uploadId: "display-session",
+				subpath: "raw-upload.webm",
+				durationInSecs: 5,
+				parts: [{ partNumber: 1, etag: "part-etag", size: 100 }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(updates).toHaveLength(1);
+		expect(updates[0]).not.toHaveProperty("metadata");
+		expect(mocks.startProcessing).toHaveBeenCalledWith(
+			expect.objectContaining({ rawFileKey: displayKey }),
+		);
+		expect(mocks.sourcesComplete).not.toHaveBeenCalled();
+	});
+
+	it("stores the recorder camera layout with the camera track", async () => {
+		const layout = {
+			version: 1,
+			position: { x: "left", y: "top" },
+			size: 30,
+			mirror: true,
+			shape: "round",
+		};
+		const response = await completeCamera({ recorderCamera: layout });
+		expect(response.status).toBe(200);
+		expect(sourcePatch()).toMatchObject({ recorderCamera: layout });
+	});
+
+	it("rejects a camera layout outside what the editor accepts", async () => {
+		const response = await completeCamera({
+			recorderCamera: {
+				version: 1,
+				position: { x: "left", y: "top" },
+				size: 400,
+				mirror: true,
+				shape: "round",
+			},
+		});
+		expect(response.status).toBe(400);
+		expect(mocks.complete).not.toHaveBeenCalled();
+	});
+
+	it("records a microphone track with its own offset", async () => {
+		const response = await app.request("/complete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				uploadId: "mic-session",
+				subpath: "mic-upload.webm",
+				screenSubpath: "raw-upload.webm",
+				audioOffsetMs: -4,
+				durationInSecs: 5,
+				parts: [{ partNumber: 1, etag: "part-etag", size: 100 }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(sourcePatch()).toEqual({
+			editorSources: {
+				version: 1,
+				display: { key: displayKey, contentType: "video/webm" },
+				mic: {
+					key: "owner/video/mic-upload.webm",
+					contentType: "audio/webm",
+					size: 100,
+					objectIdentity: "camera-etag",
+					offsetMs: -4,
+				},
+			},
+		});
+	});
+
+	it("aborts a microphone track without touching the screen upload row", async () => {
+		const response = await app.request("/abort", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				subpath: "mic-upload.webm",
+				uploadId: "mic-session",
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.abort).toHaveBeenCalledWith(
+			"owner/video/mic-upload.webm",
+			"mic-session",
+		);
+		expect(uploadMutations).toEqual([]);
+	});
+
+	it("aborts only the camera multipart session", async () => {
+		const response = await app.request("/abort", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				subpath: "camera-upload.webm",
+				uploadId: "camera-session",
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.abort).toHaveBeenCalledWith(cameraKey, "camera-session");
+		expect(uploadMutations).toEqual([]);
+	});
+
+	it("keeps an uncertain Drive camera mapping for retry", async () => {
+		mocks.storage.mockReturnValue(
+			Effect.succeed([
+				{
+					provider: "googleDrive",
+					bucketName: "drive",
+					multipart: { abort: mocks.abort },
+				},
+			]),
+		);
+		const response = await app.request("/abort", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				videoId: "video",
+				subpath: "camera-upload.webm",
+				uploadId: "camera-session",
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(mocks.abort).not.toHaveBeenCalled();
+		expect(uploadMutations).toEqual([]);
+	});
 });
 
 describe("desktop reupload completion", () => {

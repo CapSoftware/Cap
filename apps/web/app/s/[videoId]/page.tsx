@@ -5,8 +5,6 @@ import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
-	spaces,
-	spaceVideos,
 	users,
 	videoEdits,
 	videos,
@@ -51,6 +49,7 @@ import { getUser } from "@/app/utils/auth";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
+import { editorSourcesUploaded } from "@/lib/editor-sources-ready";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -99,7 +98,9 @@ import {
 	areEditSpecsEquivalent,
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
+import { getSharedSpacesForVideo as loadSharedSpacesForVideo } from "@/lib/video-shared-spaces";
 import { getVideoViewCount } from "@/lib/video-view-count";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
@@ -166,77 +167,7 @@ function resolveWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 	});
 }
 
-const getSharedSpacesForVideo = cache(async function getSharedSpacesForVideo(
-	videoId: Video.VideoId,
-) {
-	// Space-level and organization-level sharing are independent queries.
-	const [spaceSharing, orgSharing] = await Promise.all([
-		db()
-			.select({
-				id: spaces.id,
-				name: spaces.name,
-				organizationId: spaces.organizationId,
-				iconUrl: spaces.iconUrl,
-				settings: spaces.settings,
-				hasPassword: sql`${spaces.password} IS NOT NULL`.mapWith(Boolean),
-			})
-			.from(spaceVideos)
-			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-			.where(eq(spaceVideos.videoId, videoId)),
-		db()
-			.select({
-				id: organizations.id,
-				name: organizations.name,
-				organizationId: organizations.id,
-				iconUrl: organizations.iconUrl,
-			})
-			.from(sharedVideos)
-			.innerJoin(
-				organizations,
-				eq(sharedVideos.organizationId, organizations.id),
-			)
-			.where(eq(sharedVideos.videoId, videoId)),
-	]);
-
-	const sharedSpaces: Array<{
-		id: string;
-		name: string;
-		organizationId: string;
-		iconUrl?: string;
-		settings?: OrganizationSettings | null;
-		hasPassword?: boolean;
-	}> = [];
-
-	// Add space-level sharing
-	spaceSharing.forEach((space) => {
-		sharedSpaces.push({
-			id: space.id,
-			name: space.name,
-			organizationId: space.organizationId,
-			iconUrl: space.iconUrl || undefined,
-			settings: space.settings,
-			hasPassword: space.hasPassword,
-		});
-	});
-
-	// Add organization-level sharing
-	orgSharing.forEach((org) => {
-		sharedSpaces.push({
-			id: org.id,
-			name: org.name,
-			organizationId: org.organizationId,
-			iconUrl: org.iconUrl || undefined,
-			settings: null,
-			hasPassword: false,
-		});
-	});
-
-	return {
-		sharedSpaces,
-		sharedOrganizations: orgSharing.map(({ id, name }) => ({ id, name })),
-	};
-});
+const getSharedSpacesForVideo = cache(loadSharedSpacesForVideo);
 
 function PolicyDeniedView({
 	reason,
@@ -451,6 +382,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 							Boolean,
 						),
 					activeUploadRawFileKey: videoUploads.rawFileKey,
+					activeUploadPhase: videoUploads.phase,
 					owner: users,
 					ownerId: videos.ownerId,
 					password: videos.password,
@@ -526,6 +458,7 @@ async function AuthorizedContent({
 		hasPassword: boolean;
 		hasActiveUpload: boolean;
 		activeUploadRawFileKey: string | null;
+		activeUploadPhase?: string | null;
 		orgSettings?: OrganizationSettings | null;
 		allowedEmailDomain?: string | null;
 		videoSettings?: (typeof videos.$inferSelect)["settings"];
@@ -1083,6 +1016,27 @@ async function AuthorizedContent({
 			videoId,
 			rawFileKey: video.activeUploadRawFileKey,
 		}) && !video.isScreenshot;
+	const ownsStudioVideo =
+		!!user &&
+		viewerIsOwner &&
+		isWebStudioEnabledForEmail(user.email) &&
+		!video.isScreenshot &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4");
+	const studioEditable =
+		ownsStudioVideo &&
+		!isEditProcessing &&
+		(!hasActiveUpload ||
+			editorSourcesUploaded(video.metadata, video.activeUploadPhase ?? null));
+	const ownsStudioRecording =
+		ownsStudioVideo &&
+		video.source.type === "webMP4" &&
+		video.metadata?.editorSources?.version === 1;
+	const publishesRecording =
+		ownsStudioRecording &&
+		optionFromTOrFirst(searchParams.from).pipe(Option.getOrNull) ===
+			"recording" &&
+		!video.metadata?.renderFarmSave &&
+		!video.metadata?.webEditorBrowserSave;
 
 	const defaultPlaybackSpeed = resolveDefaultPlaybackSpeed(
 		video.videoSettings?.defaultPlaybackSpeed,
@@ -1110,6 +1064,10 @@ async function AuthorizedContent({
 			<Share
 				header={
 					<ShareHeader
+						studioEditor={studioEditable}
+						studioRecording={
+							ownsStudioRecording ? { publish: publishesRecording } : null
+						}
 						canMoveToFolder={
 							user?.id === video.owner.id && videoOrganizationRole !== null
 						}
@@ -1173,6 +1131,7 @@ async function AuthorizedContent({
 				captionsInitiallyOff={captionsInitiallyOff}
 				canRecordMedia={canRecordMedia}
 				isEditProcessing={isEditProcessing}
+				renderStarting={publishesRecording}
 				recordingStopped={recordingStopped}
 				earlySegmentPlayback={earlySegmentPlayback}
 				defaultPlaybackSpeed={defaultPlaybackSpeed}

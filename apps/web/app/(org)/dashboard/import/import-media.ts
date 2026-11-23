@@ -16,18 +16,31 @@ import {
 	isSupportedVideoFile,
 } from "./media-file-types";
 
-export { isSupportedMediaFile } from "./media-file-types";
+export {
+	isSupportedEditorFile,
+	isSupportedMediaFile,
+} from "./media-file-types";
 
 export async function importMediaFile({
 	file,
 	folderId,
 	orgId,
 	setUploadStatus,
+	onVideoCreated,
+	quiet = false,
+	name,
+	audioOnly = false,
+	openInEditor = false,
 }: {
 	file: File;
 	folderId?: Folder.FolderId;
 	orgId: Organisation.OrganisationId;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
+	onVideoCreated?: (videoId: string) => void;
+	quiet?: boolean;
+	name?: string;
+	audioOnly?: boolean;
+	openInEditor?: boolean;
 }) {
 	const imageContentType = getSupportedImageContentType(file);
 
@@ -47,6 +60,7 @@ export async function importMediaFile({
 			folderId,
 			orgId,
 			setUploadStatus,
+			{ onVideoCreated, quiet, name, audioOnly, openInEditor },
 		);
 	}
 
@@ -158,7 +172,25 @@ async function uploadVideoForServerProcessing(
 	folderId: Folder.FolderId | undefined,
 	orgId: Organisation.OrganisationId,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	{
+		onVideoCreated,
+		quiet = false,
+		name,
+		audioOnly = false,
+		openInEditor = false,
+	}: {
+		onVideoCreated?: (videoId: string) => void;
+		quiet?: boolean;
+		name?: string;
+		audioOnly?: boolean;
+		openInEditor?: boolean;
+	} = {},
 ) {
+	const editorSource = openInEditor
+		? import("@/lib/import-editor-probe")
+				.then(({ probeImportEditorSource }) => probeImportEditorSource(file))
+				.catch(() => null)
+		: Promise.resolve(null);
 	try {
 		setUploadStatus({ status: "parsing" });
 
@@ -194,9 +226,12 @@ async function uploadVideoForServerProcessing(
 			resolution,
 			folderId,
 			orgId,
+			name,
+			audioOnly,
 		});
 
 		const uploadId = videoData.id;
+		onVideoCreated?.(uploadId);
 
 		setUploadStatus({
 			status: "uploadingVideo",
@@ -296,6 +331,7 @@ async function uploadVideoForServerProcessing(
 				videoId: uploadId,
 				rawFileKey: videoData.rawFileKey,
 				bucketId: videoData.bucketId,
+				editorSource: await editorSource,
 			});
 		} catch (triggerError) {
 			console.error("Failed to trigger processing:", triggerError);
@@ -305,9 +341,11 @@ async function uploadVideoForServerProcessing(
 		}
 
 		setUploadStatus(undefined);
-		toast.success(
-			"Video uploaded! Processing will continue in the background.",
-		);
+		if (!quiet) {
+			toast.success(
+				"Video uploaded! Processing will continue in the background.",
+			);
+		}
 		return true;
 	} catch (err) {
 		console.error("Video upload failed", err);

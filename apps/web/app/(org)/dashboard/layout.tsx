@@ -7,9 +7,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { AuthContextProvider } from "@/app/Layout/AuthContext";
 import { resolveCurrentUser } from "@/app/Layout/current-user";
+import { EditorPrewarm } from "@/components/editor-shell/editor-prewarm";
 import { shouldOfferPasskey } from "@/lib/passkey-prompt";
 import { runPromise } from "@/lib/server";
 import { getShareableLinkUsage } from "@/lib/shareable-link-quota";
+import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import DashboardInner from "./_components/DashboardInner";
 import { DashboardPasteImport } from "./_components/DashboardPasteImport";
 import MobileTab from "./_components/MobileTab";
@@ -96,6 +98,7 @@ export default async function DashboardLayout({
 	}
 
 	const shareableLinkUsage = await shareableLinkUsagePromise;
+	const webStudioEnabled = isWebStudioEnabledForEmail(user.email);
 	const offerPasskey = await offerPasskeyPromise;
 
 	let activeOrganization = organizationSelect.find(
@@ -126,8 +129,10 @@ export default async function DashboardLayout({
 					userPreferences={userPreferences}
 					referClicked={referClicked === "true"}
 					shareableLinkUsage={shareableLinkUsage}
+					webStudioEnabled={webStudioEnabled}
 				>
 					<DashboardPasteImport />
+					<EditorPrewarm enabled={webStudioEnabled} />
 					{offerPasskey && <PasskeyPrompt />}
 					<div className="dashboard-chrome dashboard-grid">
 						<DesktopNav />
