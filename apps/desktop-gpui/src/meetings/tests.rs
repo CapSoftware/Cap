@@ -1315,21 +1315,52 @@ fn keep_audio_for_deletes_only_finished_meetings_nothing_still_needs() {
 }
 
 #[test]
-fn keep_audio_for_waits_for_recovery_and_spares_the_meetings_in_use() {
-    use super::RetentionPlan;
+fn library_cleanup_waits_for_recovery_and_spares_what_is_in_use() {
+    use super::CleanupPlan;
     let mut settings = cap_meetings::settings::MeetingSettings::default();
-    assert_eq!(super::Meetings::new(settings.clone()).audio_retention_plan(), RetentionPlan::Off);
+    assert_eq!(
+        super::Meetings::new(settings.clone()).cleanup_plan(Vec::new()),
+        CleanupPlan::Run { audio_days: None, busy: Vec::new() },
+        "the trash is emptied even when audio is kept forever"
+    );
 
     settings.recording.audio_retention_days = Some(7);
     let mut meetings = super::Meetings::new(settings);
     meetings.repair_queue.push_back("repairing".into());
     meetings.resume_doc = Some("resuming".into());
     assert_eq!(
-        meetings.audio_retention_plan(),
-        RetentionPlan::Sweep { days: 7, busy: vec!["repairing".into(), "resuming".into()] }
+        meetings.cleanup_plan(vec!["open".into()]),
+        CleanupPlan::Run {
+            audio_days: Some(7),
+            busy: vec!["repairing".into(), "resuming".into(), "open".into()],
+        }
     );
     meetings.recovery = Some(gpui::Task::ready(()));
-    assert_eq!(meetings.audio_retention_plan(), RetentionPlan::Later);
+    assert_eq!(meetings.cleanup_plan(Vec::new()), CleanupPlan::Later);
+}
+
+#[test]
+fn trash_older_than_thirty_days_goes_unless_it_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let day = |d: u32| Utc.with_ymd_and_hms(2026, 3, d, 9, 0, 0).unwrap();
+    let trashed = |entropy: u64, at: u32| {
+        let id = library.create(DocKind::Note, day(1), entropy).unwrap().id;
+        library.trash(&id, day(at)).unwrap();
+        id
+    };
+    let old = trashed(1, 1);
+    let recent = trashed(2, 20);
+    let open = trashed(3, 1);
+    let kept = library.create(DocKind::Note, day(1), 4).unwrap().id;
+
+    let later = day(1) + chrono::Duration::days(31);
+    let purged = persist::purge_old_trash(&library, later, std::slice::from_ref(&open));
+    assert_eq!(purged, vec![old.clone()]);
+    assert!(library.load(&old).is_err());
+    for id in [recent, open, kept] {
+        assert!(library.load(&id).is_ok(), "{id} stays");
+    }
 }
 
 #[test]

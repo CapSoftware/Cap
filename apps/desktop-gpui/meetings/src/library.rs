@@ -491,13 +491,22 @@ impl Library {
         }
     }
 
-    pub fn purge_trash(&self, now: DateTime<Utc>) -> Result<Vec<String>> {
+    /// Deletes items trashed at least [`TRASH_RETENTION_DAYS`] ago, except
+    /// any `keep` names.
+    pub fn purge_trash(
+        &self,
+        now: DateTime<Utc>,
+        keep: impl Fn(&DocMeta) -> bool,
+    ) -> Result<Vec<String>> {
         let listing = self.list(&ListFilter {
             trash: TrashFilter::Only,
             ..ListFilter::default()
         })?;
         let mut purged = Vec::new();
         for meta in listing.docs {
+            if keep(&meta) {
+                continue;
+            }
             let expired = meta
                 .trashed_at
                 .is_some_and(|t| (now - t).num_days() >= TRASH_RETENTION_DAYS);

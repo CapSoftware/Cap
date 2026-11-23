@@ -481,6 +481,21 @@ pub fn sweep_old_audio(
         })
 }
 
+/// Empties trash older than the 30 days the trash promises, except items in
+/// `busy` (open in a window).
+pub fn purge_old_trash(
+    library: &Library,
+    now: chrono::DateTime<Utc>,
+    busy: &[String],
+) -> Vec<String> {
+    library
+        .purge_trash(now, |meta| busy.iter().any(|id| *id == meta.id))
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not empty old trash");
+            Vec::new()
+        })
+}
+
 pub fn flag(meta: &DocMeta, key: &str) -> bool {
     meta.meeting
         .as_ref()

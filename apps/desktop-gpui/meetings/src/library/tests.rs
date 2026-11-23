@@ -190,8 +190,17 @@ fn trash_lifecycle_and_purge() {
     library.restore(&b.id).unwrap();
     assert!(library.load(&b.id).unwrap().trashed_at.is_none());
     library.trash(&b.id, t(20, 10)).unwrap();
-    assert!(library.purge_trash(t(30, 9)).unwrap().is_empty());
-    let purged = library.purge_trash(t(1, 10) + Duration::days(30)).unwrap();
+    assert!(library.purge_trash(t(30, 9), |_| false).unwrap().is_empty());
+    assert!(
+        library
+            .purge_trash(t(1, 10) + Duration::days(30), |_| true)
+            .unwrap()
+            .is_empty(),
+        "an item the caller keeps stays in the trash"
+    );
+    let purged = library
+        .purge_trash(t(1, 10) + Duration::days(30), |_| false)
+        .unwrap();
     assert_eq!(purged, vec![a.id.clone()]);
     assert!(!library.doc_dir(&a.id).unwrap().exists());
     assert!(library.load(&b.id).is_ok());

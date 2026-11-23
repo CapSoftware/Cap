@@ -426,7 +426,7 @@ pub struct Meetings {
     quit_subscription: Option<Subscription>,
     ignored_devices: Option<Vec<String>>,
     recovery: Option<Task<()>>,
-    audio_retention: Option<Task<()>>,
+    library_cleanup: Option<Task<()>>,
     /// Meetings whose saved audio still needs transcribing, finished one at
     /// a time while nothing records.
     repair_queue: VecDeque<String>,
@@ -438,15 +438,19 @@ pub struct Meetings {
 
 const CAPABILITIES_RETRY_FIRST: Duration = Duration::from_secs(30);
 const CAPABILITIES_RETRY_MAX: Duration = Duration::from_secs(5 * 60);
-const AUDIO_RETENTION_FIRST_SWEEP: Duration = Duration::from_secs(120);
-const AUDIO_RETENTION_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const CLEANUP_FIRST: Duration = Duration::from_secs(120);
+const CLEANUP_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Debug, PartialEq)]
-enum RetentionPlan {
+enum CleanupPlan {
     /// Recovery may still close or queue meetings for repair.
     Later,
-    Off,
-    Sweep { days: u32, busy: Vec<String> },
+    Run {
+        audio_days: Option<u32>,
+        /// Documents in use (recording, finishing, repairing, open), which
+        /// keep their audio and stay in the trash.
+        busy: Vec<String>,
+    },
 }
 
 struct MeetingsGlobal(Entity<Meetings>);
@@ -569,7 +573,7 @@ impl Meetings {
         let entity = cx.new(|cx| {
             let mut this = Self::new(settings);
             this.start_recovery(cx);
-            this.start_audio_retention(cx);
+            this.start_library_cleanup(cx);
             this.resume_unwritten(cx);
             this.apply_lifecycle(cx);
             this
@@ -646,7 +650,7 @@ impl Meetings {
             quit_subscription: None,
             ignored_devices,
             recovery: None,
-            audio_retention: None,
+            library_cleanup: None,
             repair_queue: VecDeque::new(),
             last_start_error: None,
             pending_restore_mic: None,
@@ -3456,58 +3460,69 @@ impl Meetings {
         self.remember_unwritten(unwritten);
     }
 
-    fn start_audio_retention(&mut self, cx: &mut Context<Self>) {
-        self.audio_retention = Some(cx.spawn(async move |this, cx| {
-            let mut wait = AUDIO_RETENTION_FIRST_SWEEP;
+    /// Empties trash older than 30 days and applies "Keep audio for", at
+    /// launch once recovery is done and every few hours after.
+    fn start_library_cleanup(&mut self, cx: &mut Context<Self>) {
+        self.library_cleanup = Some(cx.spawn(async move |this, cx| {
+            let mut wait = CLEANUP_FIRST;
             loop {
                 cx.background_executor().timer(wait).await;
-                let Ok(plan) = this.update(cx, |this, _| this.audio_retention_plan()) else {
+                let Ok(plan) = this.update(cx, |this, cx| {
+                    let open = crate::meetings_ui::documents::open_doc_ids(cx);
+                    this.cleanup_plan(open)
+                }) else {
                     return;
                 };
                 wait = match plan {
-                    RetentionPlan::Later => AUDIO_RETENTION_FIRST_SWEEP,
-                    RetentionPlan::Off => AUDIO_RETENTION_EVERY,
-                    RetentionPlan::Sweep { days, busy } => {
+                    CleanupPlan::Later => CLEANUP_FIRST,
+                    CleanupPlan::Run { audio_days, busy } => {
                         let dir = persist::documents_dir();
-                        let swept = cx
-                            .background_executor()
-                            .spawn(async move {
-                                if !dir.is_dir() {
-                                    return Vec::new();
-                                }
-                                Library::open(dir)
-                                    .map(|library| {
-                                        persist::sweep_old_audio(&library, Utc::now(), days, &busy)
-                                    })
-                                    .unwrap_or_default()
-                            })
-                            .await;
+                        let changed = crate::meetings_ui::documents::after_queued_saves(move || {
+                            if !dir.is_dir() {
+                                return (Vec::new(), Vec::new());
+                            }
+                            let Ok(library) = Library::open(dir) else {
+                                return (Vec::new(), Vec::new());
+                            };
+                            let now = Utc::now();
+                            let purged = persist::purge_old_trash(&library, now, &busy);
+                            let swept = audio_days
+                                .map(|days| persist::sweep_old_audio(&library, now, days, &busy))
+                                .unwrap_or_default();
+                            (purged, swept)
+                        })
+                        .await;
+                        let (purged, swept) = changed.unwrap_or_default();
+                        if !purged.is_empty() {
+                            tracing::info!(
+                                count = purged.len(),
+                                "emptied trash older than 30 days"
+                            );
+                        }
                         if !swept.is_empty() {
                             tracing::info!(
                                 count = swept.len(),
                                 "deleted meeting audio older than the keep setting"
                             );
-                            if this
+                        }
+                        if (!purged.is_empty() || !swept.is_empty())
+                            && this
                                 .update(cx, |_, cx| cx.emit(MeetingEvent::LibraryChanged))
                                 .is_err()
-                            {
-                                return;
-                            }
+                        {
+                            return;
                         }
-                        AUDIO_RETENTION_EVERY
+                        CLEANUP_EVERY
                     }
                 };
             }
         }));
     }
 
-    fn audio_retention_plan(&self) -> RetentionPlan {
+    fn cleanup_plan(&self, open: Vec<String>) -> CleanupPlan {
         if self.recovery.is_some() {
-            return RetentionPlan::Later;
+            return CleanupPlan::Later;
         }
-        let Some(days) = self.settings.recording.audio_retention_days else {
-            return RetentionPlan::Off;
-        };
         let busy = self
             .recording
             .iter()
@@ -3516,8 +3531,12 @@ impl Meetings {
             .chain(self.repair_queue.iter().cloned())
             .chain(self.session_doc.iter().cloned())
             .chain(self.resume_doc.iter().cloned())
+            .chain(open)
             .collect();
-        RetentionPlan::Sweep { days, busy }
+        CleanupPlan::Run {
+            audio_days: self.settings.recording.audio_retention_days,
+            busy,
+        }
     }
 
     fn start_recovery(&mut self, cx: &mut Context<Self>) {

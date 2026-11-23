@@ -31,6 +31,29 @@ mod writer;
 
 use gpui::{App, KeyBinding, actions};
 
+/// The note the documents window has open, which cleanup leaves alone.
+pub fn open_doc_ids(cx: &App) -> Vec<String> {
+    cx.try_global::<crate::meetings_ui::MeetingWindows>()
+        .and_then(|windows| windows.documents)
+        .and_then(|handle| handle.downcast::<window::DocumentsWindow>())
+        .and_then(|handle| {
+            handle
+                .read(cx)
+                .ok()
+                .and_then(|root| root.store.read(cx).open.clone())
+        })
+        .into_iter()
+        .collect()
+}
+
+/// Runs `job` on the documents writer, after every save already queued, so
+/// it never races an edit's write.
+pub async fn after_queued_saves<T: Send + 'static>(
+    job: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    writer::run(job).await
+}
+
 actions!(
     cap_documents,
     [
