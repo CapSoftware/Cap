@@ -110,7 +110,7 @@ fn bubble_dimensions(state: &CameraWindowState, aspect: BubbleAspect) -> (f32, f
     (base * aspect, base)
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(test)]
 pub fn window_size(state: &CameraWindowState, frame_aspect: Option<f32>) -> (f32, f32) {
     bubble_window_size(state, BubbleAspect::Camera(frame_aspect))
 }
@@ -336,10 +336,37 @@ fn recording_physical_extent(logical: f32, scale_factor: f32) -> anyhow::Result<
     Ok(physical as u32)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
 fn linux_camera_recording_snapshot(
     state: CameraWindowState,
     frame_dimensions: (usize, usize),
+    client_rect: LinuxCameraPhysicalRect,
+    viewport: (f32, f32),
+    scale_factor: f32,
+    picker_size: Option<(f32, f32)>,
+) -> anyhow::Result<LinuxCameraRecordingSnapshot> {
+    let (frame_width, frame_height) = frame_dimensions;
+    if frame_width == 0
+        || frame_height == 0
+        || u32::try_from(frame_width).is_err()
+        || u32::try_from(frame_height).is_err()
+    {
+        anyhow::bail!("Camera recording requires valid delivered frame dimensions");
+    }
+    linux_bubble_recording_snapshot(
+        state,
+        BubbleAspect::Camera(Some(frame_width as f32 / frame_height as f32)),
+        client_rect,
+        viewport,
+        scale_factor,
+        picker_size,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn linux_bubble_recording_snapshot(
+    state: CameraWindowState,
+    aspect: BubbleAspect,
     client_rect: LinuxCameraPhysicalRect,
     viewport: (f32, f32),
     scale_factor: f32,
@@ -351,14 +378,6 @@ fn linux_camera_recording_snapshot(
     if !state.size.is_finite() || state.size <= 0.0 {
         anyhow::bail!("Camera window has an invalid preview size");
     }
-    let (frame_width, frame_height) = frame_dimensions;
-    if frame_width == 0
-        || frame_height == 0
-        || u32::try_from(frame_width).is_err()
-        || u32::try_from(frame_height).is_err()
-    {
-        anyhow::bail!("Camera recording requires valid delivered frame dimensions");
-    }
     let physical_viewport = (
         recording_physical_extent(viewport.0, scale_factor)?,
         recording_physical_extent(viewport.1, scale_factor)?,
@@ -366,8 +385,7 @@ fn linux_camera_recording_snapshot(
     if physical_viewport != (client_rect.width, client_rect.height) {
         anyhow::bail!("Camera viewport and X11 client dimensions disagree; wait for resizing");
     }
-    let expected = picker_size
-        .unwrap_or_else(|| window_size(&state, Some(frame_width as f32 / frame_height as f32)));
+    let expected = picker_size.unwrap_or_else(|| bubble_window_size(&state, aspect));
     if (
         recording_physical_extent(expected.0, scale_factor)?,
         recording_physical_extent(expected.1, scale_factor)?,
@@ -1784,7 +1802,6 @@ pub struct CameraWindow {
     /// camera; it sizes the bubble like a frame would.
     picture_aspect: Option<f32>,
     _feeds_subscription: Subscription,
-    /// No recording is running, so the camera may change from the bubble.
     camera_changes_allowed: bool,
     _session_subscription: Option<Subscription>,
     frame_dims: Option<(usize, usize)>,
@@ -1857,9 +1874,18 @@ impl CameraWindow {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use x11rb::protocol::xproto::ConnectionExt as _;
 
-        let frame_dimensions = self
-            .frame_dims
-            .context("Camera recording requires a delivered preview frame")?;
+        let aspect = match self.picture_aspect {
+            Some(aspect) => BubbleAspect::Picture(aspect),
+            None => {
+                let (width, height) = self
+                    .frame_dims
+                    .context("Camera recording requires a delivered preview frame")?;
+                if width == 0 || height == 0 {
+                    anyhow::bail!("Camera recording requires valid delivered frame dimensions");
+                }
+                BubbleAspect::Camera(Some(width as f32 / height as f32))
+            }
+        };
         let window_id = match HasWindowHandle::window_handle(window)?.as_raw() {
             RawWindowHandle::Xlib(handle) => u32::try_from(handle.window)?,
             RawWindowHandle::Xcb(handle) => handle.window.get(),
@@ -1874,9 +1900,9 @@ impl CameraWindow {
             anyhow::bail!("Camera client and root window are on different X11 screens");
         }
         let viewport = window.viewport_size();
-        linux_camera_recording_snapshot(
+        linux_bubble_recording_snapshot(
             self.state,
-            frame_dimensions,
+            aspect,
             LinuxCameraPhysicalRect {
                 x: i32::from(origin.dst_x),
                 y: i32::from(origin.dst_y),
@@ -2448,8 +2474,6 @@ impl CameraWindow {
         }
     }
 
-    /// Up to `most` buttons at the size-driven scale, fewer and smaller when
-    /// the bubble is too narrow for them.
     fn toolbar_fit(&self, most: usize) -> (f32, usize) {
         let width = self.picker_size.map_or_else(
             || bubble_dimensions(&self.state, self.bubble_aspect()).0,
@@ -3623,6 +3647,52 @@ mod recording_snapshot_tests {
         assert_eq!(snapshot.content_rect.y, 104);
         assert_eq!(snapshot.corner_radius_pixels, 36.0);
         assert_eq!(snapshot.state, state);
+    }
+
+    #[test]
+    fn a_picture_snapshot_uses_the_picture_aspect_without_a_camera_frame() {
+        let state = CameraWindowState {
+            size: 230.0,
+            shape: CameraShape::Full,
+            ..Default::default()
+        };
+        let logical = bubble_window_size(&state, BubbleAspect::Picture(1.));
+        assert_eq!(logical, (230., 286.));
+        let client = LinuxCameraPhysicalRect {
+            x: 40,
+            y: 60,
+            width: 230,
+            height: 286,
+        };
+        let snapshot = linux_bubble_recording_snapshot(
+            state,
+            BubbleAspect::Picture(1.),
+            client,
+            logical,
+            1.0,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot.content_rect,
+            LinuxCameraPhysicalRect {
+                x: 40,
+                y: 116,
+                width: 230,
+                height: 230,
+            }
+        );
+        assert!(
+            linux_bubble_recording_snapshot(
+                state,
+                BubbleAspect::Camera(Some(1.)),
+                client,
+                logical,
+                1.0,
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]
