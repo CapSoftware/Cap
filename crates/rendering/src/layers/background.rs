@@ -26,9 +26,11 @@ pub fn clean_background_path(path: &str) -> Option<String> {
         .replace("asset://", "")
         .replace("localhost//", "/");
 
-    std::path::Path::new(&clean_path)
-        .exists()
-        .then_some(clean_path)
+    if std::path::Path::new(&clean_path).exists() {
+        return Some(clean_path);
+    }
+    crate::asset_paths::locate_catalogue_wallpaper(&clean_path)
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn decode_background_rgba(
@@ -337,9 +339,10 @@ impl Background {
 }
 
 /// The last image source path and what it resolved to on disk, so the path
-/// is only cleaned and checked again when the source changes.
+/// is only cleaned and checked again when the source changes, or, while it
+/// is missing, when an asset download lands.
 #[derive(Default)]
-struct ResolvedImagePath(Option<(String, Option<String>)>);
+struct ResolvedImagePath(Option<(String, u64, Option<String>)>);
 
 impl ResolvedImagePath {
     fn background(
@@ -356,11 +359,13 @@ impl ResolvedImagePath {
             return Background::from_source(source.clone(), transparent_when_empty);
         }
 
+        let generation = crate::asset_paths::asset_generation();
         let resolved = match &self.0 {
-            Some((cached, resolved)) if cached == path => resolved.clone(),
+            Some((cached, _, resolved @ Some(_))) if cached == path => resolved.clone(),
+            Some((cached, checked, None)) if cached == path && *checked == generation => None,
             _ => {
                 let resolved = clean_background_path(path);
-                self.0 = Some((path.clone(), resolved.clone()));
+                self.0 = Some((path.clone(), generation, resolved.clone()));
                 resolved
             }
         };

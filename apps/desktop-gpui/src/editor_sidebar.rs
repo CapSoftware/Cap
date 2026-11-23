@@ -53,6 +53,7 @@ use gpui::{
 };
 
 use crate::{
+    asset_library,
     editor_color::{GradeSlider, GradeTarget},
     editor_panels::PanelSlider,
     editor_tabs::{AudioSlider, CameraSlider, CaptionSlider, CursorSlider, KeyboardSlider},
@@ -149,7 +150,13 @@ pub fn background_theme_label(id: &str) -> &'static str {
         "cities" => tr::editor::sidebar::wallpaper_theme::cities(),
         "purple" => tr::editor::sidebar::wallpaper_theme::purple(),
         "orange" => tr::editor::sidebar::wallpaper_theme::orange(),
-        _ => "macOS",
+        "macOS" => "macOS",
+        _ => asset_library::catalog::current()
+            .extra_themes()
+            .iter()
+            .find(|(theme, _)| *theme == id)
+            .map(|(_, label)| *label)
+            .unwrap_or("macOS"),
     }
 }
 
@@ -501,78 +508,80 @@ pub fn color_to_hsla(rgb: Color) -> Hsla {
 }
 
 /// The wallpaper ids of one theme, in catalogue order -- `filteredWallpapers`
-/// is `wallpapers().filter(wp => wp.id.startsWith(currentTab))` (`:1975-1978`).
+/// is `wallpapers().filter(wp => wp.id.startsWith(currentTab))` (`:1975-1978`)
+/// -- with any the remote catalogue added at the end.
 pub fn wallpapers_for_theme(theme: &str) -> Vec<&'static str> {
-    WALLPAPER_NAMES
-        .iter()
-        .copied()
-        .filter(|id| id.starts_with(theme))
+    asset_library::catalog::current()
+        .items(asset_library::Kind::Wallpaper)
+        .filter(|item| item.theme == theme)
+        .map(|item| item.id)
         .collect()
 }
 
-/// The wallpaper the Wallpaper tab starts on when none is stored, so switching
-/// to it never leaves the frame on an empty background.
-pub fn default_wallpaper(theme: &str) -> Option<String> {
-    wallpapers_for_theme(theme)
-        .into_iter()
-        .find_map(wallpaper_path)
-        .map(|path| path.to_string_lossy().into_owned())
-}
-
-/// Where the bundled wallpapers live.
-///
-/// **They are not embedded, and cannot be**: selecting one writes an *absolute
-/// filesystem path* into `background.source.path`, which `cap-rendering` then
-/// opens (`layers/background.rs`) -- so the file has to exist on disk for the
-/// picture to render at all, in this app and in the shipping one. Embedding the
-/// 25 MB of JPEGs would add 25 MB to the binary *and* still need them written
-/// back out somewhere. So this resolves the same files
-/// `resolveResource("assets/backgrounds/<id>.jpg")` does, preferring an
-/// installed Cap.app (whose paths are byte-identical to what the shipping app
-/// would write) and falling back to the repository the dev build runs from.
-pub fn wallpaper_dir() -> Option<PathBuf> {
-    let override_dir = std::env::var_os("CAP_GPUI_WALLPAPERS_DIR").map(PathBuf::from);
-    wallpaper_dir_from(
-        &crate::store::bundled_resource_dirs(),
-        override_dir.as_deref(),
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-    )
-}
-
-fn wallpaper_dir_from(
-    resource_dirs: &[PathBuf],
-    override_dir: Option<&Path>,
-    manifest: &Path,
-) -> Option<PathBuf> {
-    if let Some(path) = override_dir
-        && path.is_dir()
-    {
-        return Some(path.to_path_buf());
-    }
-
-    let mut candidates = resource_dirs
+/// The theme tabs: the built-in six, then any the remote catalogue added.
+pub fn background_themes() -> Vec<&'static str> {
+    BACKGROUND_THEMES
         .iter()
-        .map(|directory| directory.join("assets/backgrounds"))
-        .collect::<Vec<_>>();
-    candidates.push(PathBuf::from(
-        "/Applications/Cap.app/Contents/Resources/assets/backgrounds",
-    ));
-    candidates.push(manifest.join("assets/backgrounds"));
-    candidates.into_iter().find(|path| path.is_dir())
+        .map(|(id, _)| *id)
+        .chain(
+            asset_library::catalog::current()
+                .extra_themes()
+                .iter()
+                .map(|(id, _)| *id),
+        )
+        .collect()
 }
 
+/// The theme at a tab index, falling back to the first tab when the index
+/// outlived a catalogue that shrank.
+pub fn background_theme_at(index: usize) -> &'static str {
+    background_themes()
+        .get(index)
+        .copied()
+        .unwrap_or(BACKGROUND_THEMES[0].0)
+}
+
+/// The wallpaper the Wallpaper tab starts on when none is stored, so switching
+/// to it never leaves the frame on an empty background: the first one already
+/// on disk, else the first one, which starts downloading.
+pub fn default_wallpaper(theme: &str) -> Option<String> {
+    let ids = wallpapers_for_theme(theme);
+    let id = ids
+        .iter()
+        .copied()
+        .find(|id| {
+            matches!(
+                asset_library::status(asset_library::Kind::Wallpaper, id),
+                asset_library::ItemStatus::Ready
+            )
+        })
+        .or_else(|| ids.first().copied())?;
+    wallpaper_path(id).map(|path| path.to_string_lossy().into_owned())
+}
+
+/// The path to store for a catalogue wallpaper: where it is now, or where it
+/// will land, in which case its download starts. The preview shows the
+/// thumbnail until it arrives and an export waits for it.
 pub fn wallpaper_path(id: &str) -> Option<PathBuf> {
-    if !WALLPAPER_NAMES.contains(&id) {
-        return None;
+    use asset_library::{Begin, Kind};
+    let item = asset_library::catalog::current().item(Kind::Wallpaper, id)?;
+    match asset_library::begin(Kind::Wallpaper, item.id) {
+        Begin::Ready(path) => Some(path),
+        Begin::Waiting(_) => Some(asset_library::downloaded_path(Kind::Wallpaper, item.id)),
+        Begin::Unknown => None,
     }
-    let path = wallpaper_dir()?.join(format!("{id}.jpg"));
-    path.is_file().then_some(path)
 }
 
 /// Which catalogue wallpaper a stored path is, if any. The stored value is an
 /// absolute path, and `selectedWallpaper` matches it by `path.includes(w.id)`
 /// (`:1885`).
 pub fn wallpaper_id_for_path(path: &str) -> Option<&'static str> {
+    let catalog = asset_library::catalog::current();
+    if let Some(item) = cap_rendering::asset_paths::catalogue_wallpaper_tail(path)
+        .and_then(|tail| catalog.item(asset_library::Kind::Wallpaper, tail.strip_suffix(".jpg")?))
+    {
+        return Some(item.id);
+    }
     WALLPAPER_NAMES.iter().copied().find(|id| path.contains(id))
 }
 
@@ -2147,8 +2156,15 @@ const WALLPAPER_TILE_MAX: u32 = 128;
 /// immutable in practice, so after the first-ever run every theme switch is
 /// eighteen ~3KB JPEG reads; the version (mtime plus length) in the key still
 /// invalidates if an app update ever replaces them.
+///
+/// The source is the 256px `-thumbnail.jpg` that
+/// `scripts/generate-background-thumbnails.mjs` writes beside each wallpaper,
+/// which ships with the app even though the wallpapers download. Decoding the
+/// full wallpaper instead allocates its progressive coefficients at full
+/// resolution (~20MB per 4000x2500 image), and macOS keeps those freed
+/// buffers resident for the life of the process.
 pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
-    let path = wallpaper_tile_source(wallpaper_path(id)?);
+    let path = asset_library::thumbnail_path(id)?;
     // Ids are catalogue paths ("macOS/tahoe-dusk-min"); flattened so the key
     // stays a file name rather than a subdirectory.
     let slot = library::CacheSlot::keyed(
@@ -2168,22 +2184,6 @@ pub(crate) fn decode_wallpaper_thumbnail(id: &str) -> Option<Arc<RenderImage>> {
         slot.store(&rgba);
     }
     Some(library::rgba_to_render_image(rgba))
-}
-
-/// The 256px `-thumbnail.jpg` that `scripts/generate-background-thumbnails.mjs`
-/// writes beside each wallpaper, which the Tauri editor's tiles also use.
-/// Decoding the full wallpaper instead allocates its progressive coefficients
-/// at full resolution (~20MB per 4000x2500 image), and macOS keeps those freed
-/// buffers resident for the life of the process.
-fn wallpaper_tile_source(wallpaper: PathBuf) -> PathBuf {
-    let thumbnail = wallpaper
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|stem| wallpaper.with_file_name(format!("{stem}-thumbnail.jpg")));
-    match thumbnail {
-        Some(thumbnail) if thumbnail.is_file() => thumbnail,
-        _ => wallpaper,
-    }
 }
 
 /// `write_desktop_background_snapshot` (`recording.rs:437-522`): `sips` first,
@@ -2347,8 +2347,8 @@ impl EditorWindow {
     /// decodes fan out through `library::spawn_decode_pool` (cache hits are
     /// near-free, and a cold theme batch takes one image's latency instead of
     /// eighteen), landing in batches of whatever has finished per notify.
-    fn ensure_wallpapers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0;
+    pub(crate) fn ensure_wallpapers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = background_theme_at(self.sidebar.wallpaper_theme);
         let wanted: Vec<&'static str> = wallpapers_for_theme(theme)
             .into_iter()
             .filter(|id| !self.sidebar.wallpapers.contains_key(id))
@@ -2494,6 +2494,53 @@ impl EditorWindow {
     }
 
     /// The source-tab row's `onChange` (`:2189-2263`), verbatim.
+    /// A wallpaper tile's click: it is selected straight away, and if its
+    /// file is not here yet the preview shows the thumbnail until it lands.
+    pub(crate) fn choose_wallpaper(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = wallpaper_path(id) else {
+            tracing::error!(id, "unknown wallpaper");
+            return;
+        };
+        self.set_wallpaper_source(path.to_string_lossy().into_owned(), window, cx);
+        if self.ensure_background_presentation(false) {
+            self.project_changed(window, cx);
+        }
+    }
+
+    /// `CAP_GPUI_AUTO_WALLPAPER`: `tab` switches the background to the
+    /// Wallpaper tab the way its tab click does; anything else is a
+    /// wallpaper id, clicked.
+    pub(crate) fn auto_wallpaper(
+        &mut self,
+        spec: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar.tab = SidebarTab::Background;
+        if spec == "tab" {
+            self.select_source_tab(SourceTab::Wallpaper, window, cx);
+        } else {
+            if self.sidebar.source_tab != SourceTab::Wallpaper {
+                self.select_source_tab(SourceTab::Wallpaper, window, cx);
+            }
+            if let Some(index) = background_themes()
+                .iter()
+                .position(|theme| spec.split('/').next() == Some(theme))
+            {
+                self.sidebar.wallpaper_theme = index;
+                self.ensure_wallpapers(window, cx);
+            }
+            self.choose_wallpaper(spec, window, cx);
+        }
+        self.invalidate_sidebar(cx);
+        cx.notify();
+    }
+
     fn select_source_tab(&mut self, tab: SourceTab, window: &mut Window, cx: &mut Context<Self>) {
         self.refresh_animated_gradient_library();
         self.close_color_picker(cx);
@@ -2530,7 +2577,7 @@ impl EditorWindow {
         // `batch()` around `ensureBackgroundPresentation` + `setProject` is.
         self.ensure_background_presentation(from_none);
         let fallback_wallpaper = (tab == SourceTab::Wallpaper)
-            .then(|| default_wallpaper(BACKGROUND_THEMES[self.sidebar.wallpaper_theme].0))
+            .then(|| default_wallpaper(background_theme_at(self.sidebar.wallpaper_theme)))
             .flatten();
         self.edit_background(
             "source",
@@ -3222,7 +3269,7 @@ impl EditorWindow {
             }
             _ => None,
         };
-        let ids = wallpapers_for_theme(BACKGROUND_THEMES[selected_theme].0);
+        let ids = wallpapers_for_theme(background_theme_at(selected_theme));
         // Floored, with a pixel to spare: a cell that divides the pane exactly
         // wraps the last tile onto its own row.
         let cell = ((CONTENT_WIDTH - WALLPAPER_GAP * (WALLPAPER_COLUMNS - 1.)) / WALLPAPER_COLUMNS)
@@ -3247,10 +3294,10 @@ impl EditorWindow {
                     .text_size(px(12.5))
                     .overflow_x_scroll()
                     .children(
-                        BACKGROUND_THEMES
-                            .iter()
+                        background_themes()
+                            .into_iter()
                             .enumerate()
-                            .map(|(index, (id, _))| {
+                            .map(|(index, id)| {
                                 let selected = index == selected_theme;
                                 div()
                                     .id(SharedString::from(format!("wallpaper-theme-{index}")))
@@ -3277,6 +3324,10 @@ impl EditorWindow {
                             }),
                     ),
             )
+            .children(
+                asset_library::ui::download_row(&theme, asset_library::Kind::Wallpaper)
+                    .map(|row| div().mb(px(10.)).child(row)),
+            )
             .child(
                 div()
                     .flex()
@@ -3286,6 +3337,7 @@ impl EditorWindow {
                     .children(ids.into_iter().map(|id| {
                         let selected = selected_id == Some(id);
                         let image = self.sidebar.wallpapers.get(id).cloned();
+                        let status = asset_library::status(asset_library::Kind::Wallpaper, id);
                         div()
                             .id(SharedString::from(format!("wallpaper-{id}")))
                             .w(px(cell))
@@ -3318,6 +3370,7 @@ impl EditorWindow {
                                             .object_fit(gpui::ObjectFit::Cover)
                                             .rounded(px(8.))
                                     }))
+                                    .children(asset_library::ui::tile_overlay(status, 8.))
                                     .child(
                                         div()
                                             .absolute()
@@ -3327,18 +3380,7 @@ impl EditorWindow {
                                     ),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                let Some(path) = wallpaper_path(id) else {
-                                    tracing::error!(id, "wallpaper file not found");
-                                    return;
-                                };
-                                this.set_wallpaper_source(
-                                    path.to_string_lossy().into_owned(),
-                                    window,
-                                    cx,
-                                );
-                                if this.ensure_background_presentation(false) {
-                                    this.project_changed(window, cx);
-                                }
+                                this.choose_wallpaper(id, window, cx);
                             }))
                     })),
             )
@@ -4608,8 +4650,11 @@ mod tests {
     fn every_wallpaper_tile_decodes_from_its_bundled_thumbnail() {
         for id in WALLPAPER_NAMES {
             let wallpaper = wallpaper_path(id).unwrap();
-            let source = wallpaper_tile_source(wallpaper.clone());
-            assert_ne!(source, wallpaper, "{id} has no -thumbnail.jpg");
+            let source = asset_library::thumbnail_path(id).unwrap();
+            assert!(
+                source.to_string_lossy().ends_with("-thumbnail.jpg"),
+                "{id} has no -thumbnail.jpg"
+            );
             let (width, height) = image::image_dimensions(&wallpaper).unwrap();
             let image = decode_scaled_rgba(&source, WALLPAPER_TILE_MAX).unwrap();
             assert_eq!(
@@ -4623,24 +4668,6 @@ mod tests {
                 "{id}"
             );
         }
-    }
-
-    #[test]
-    fn a_wallpaper_without_a_thumbnail_tiles_from_the_full_image() {
-        let root = std::env::temp_dir().join(format!(
-            "cap-gpui-wallpaper-tile-source-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let wallpaper = root.join("plain.jpg");
-        std::fs::write(&wallpaper, b"wallpaper").unwrap();
-        assert_eq!(wallpaper_tile_source(wallpaper.clone()), wallpaper);
-
-        let thumbnail = root.join("plain-thumbnail.jpg");
-        std::fs::write(&thumbnail, b"thumbnail").unwrap();
-        assert_eq!(wallpaper_tile_source(wallpaper), thumbnail);
-
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -4667,25 +4694,6 @@ mod tests {
         assert_eq!(wallpaper_path("unknown/wallpaper"), None);
         assert_eq!(wallpaper_path("../macOS/sequoia-dark"), None);
         assert_eq!(wallpaper_path("/macOS/sequoia-dark"), None);
-    }
-
-    #[test]
-    fn built_in_wallpapers_resolve_from_an_installed_bundle() {
-        let root = std::env::temp_dir().join(format!(
-            "cap-gpui-installed-wallpapers-{}",
-            std::process::id()
-        ));
-        let resources = root.join("Cap.app/Contents/Resources");
-        let backgrounds = resources.join("assets/backgrounds");
-        let wallpaper = backgrounds.join("macOS/sequoia-dark.jpg");
-        std::fs::create_dir_all(wallpaper.parent().unwrap()).unwrap();
-        std::fs::write(&wallpaper, b"test wallpaper").unwrap();
-
-        let found = wallpaper_dir_from(&[resources], None, &root.join("missing"));
-        assert_eq!(found, Some(backgrounds));
-        assert!(found.unwrap().join("macOS/sequoia-dark.jpg").is_file());
-
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -247,6 +247,9 @@ fn bundled_resource_dirs_for(
             && let Some(prefix) = parent.parent()
         {
             directories.push(prefix.join("lib").join("cap"));
+            // Where the Linux packages put bundled resources: `/usr/lib/` +
+            // the product name.
+            directories.push(prefix.join("lib").join("Cap"));
         }
         directories.push(parent.join("resources"));
         directories.push(parent.to_path_buf());
@@ -3493,6 +3496,7 @@ mod tests {
             super::bundled_resource_dirs_for(Some(executable), None),
             vec![
                 std::path::PathBuf::from("/usr/lib/cap"),
+                std::path::PathBuf::from("/usr/lib/Cap"),
                 std::path::PathBuf::from("/usr/bin/resources"),
                 std::path::PathBuf::from("/usr/bin"),
             ]

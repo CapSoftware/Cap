@@ -3651,3 +3651,23 @@ verification_failed = { text = "Recording verification failed: {status}", contex
 
 [message.cli]
 binary_missing = { text = "Bundled CLI binary not found at {path}", context = "{path} is a file path." }
+
+[assets]
+cancel = "Cancel"
+download_all_backgrounds = "Download all backgrounds"
+download_all_music = "Download all music"
+downloading_backgrounds = "Downloading backgrounds"
+downloading_music = "Downloading music"
+megabytes = { text = "{size} MB", context = "{size} is a number such as 26 or 1.2." }
+new_backgrounds = { one = "{count} new background", other = "{count} new backgrounds" }
+new_tracks = { one = "{count} new track", other = "{count} new tracks" }
+progress = { text = "{done} of {total}", context = "{done} and {total} are sizes such as 12 MB." }
+retry = "Retry"
+some_failed = { one = "{count} couldn't download", other = "{count} couldn't download" }
+
+[assets.error]
+background = "Couldn't download this video's background."
+disk = "Couldn't save the download."
+failed = "The download didn't finish. Try again."
+no_space = "There isn't enough free disk space."
+offline = "Couldn't connect. Check your internet connection and try again."

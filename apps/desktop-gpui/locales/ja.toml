@@ -3649,3 +3649,23 @@ verification_failed = "録画の確認に失敗しました：{status}"
 
 [message.cli]
 binary_missing = "{path}に同梱のCLIが見つかりません"
+
+[assets]
+cancel = "キャンセル"
+download_all_backgrounds = "すべての背景をダウンロード"
+download_all_music = "すべての音楽をダウンロード"
+downloading_backgrounds = "背景をダウンロード中"
+downloading_music = "音楽をダウンロード中"
+megabytes = "{size} MB"
+new_backgrounds = { other = "新しい背景{count}件" }
+new_tracks = { other = "新しいトラック{count}件" }
+progress = "{done}／{total}"
+retry = "再試行"
+some_failed = { other = "{count}件をダウンロードできませんでした" }
+
+[assets.error]
+background = "このビデオの背景をダウンロードできませんでした。"
+disk = "ダウンロードしたファイルを保存できませんでした。"
+failed = "ダウンロードが完了しませんでした。もう一度お試しください。"
+no_space = "ディスクの空き容量が足りません。"
+offline = "接続できませんでした。インターネット接続を確認して、もう一度お試しください。"

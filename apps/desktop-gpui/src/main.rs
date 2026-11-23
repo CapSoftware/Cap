@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app_sounds;
+mod asset_library;
 mod app_windows;
 mod assets;
 mod audio_project;
@@ -399,6 +400,7 @@ fn main() {
     let runtime_handle = runtime.handle().clone();
 
     app.run(move |cx: &mut App| {
+        crate::asset_library::init(runtime_handle.clone());
         gpui_tokio::init_from_handle(cx, runtime_handle);
         gpui_tokio::Tokio::spawn(cx, cap_utils::operation_diagnostics::run_checkpoints()).detach();
         // The dock icon: an unbundled dev binary shows the generic terminal
@@ -424,6 +426,7 @@ fn main() {
         platform::follow_system_reduce_motion(cx);
 
         let session = RecordingSession::init(cx);
+        crate::asset_library::start_restore(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::media_access::MediaAccess::init(cx);

@@ -8,6 +8,7 @@ pub(super) fn is_editor_panels_surface_key(key: &str) -> bool {
         "editor.audio.",
         "editor.crop.",
         "editor.shape.",
+        "assets.",
     ]
     .iter()
     .any(|prefix| key.starts_with(prefix))
@@ -42,6 +43,11 @@ const FORMATTED: &[&str] = &[
     "editor.panel.style_presets.style.apply_all",
     "editor.panel.style_presets.text_segment.applied_all",
     "editor.panel.style_presets.text_segment.apply_all",
+    "assets.megabytes",
+    "assets.new_backgrounds",
+    "assets.new_tracks",
+    "assets.progress",
+    "assets.some_failed",
 ];
 
 #[test]
@@ -1009,6 +1015,35 @@ fn editor_panels_match_the_literals_they_replaced() {
         (tr::editor::shape::animations::fade(), "Fade"),
         (tr::editor::shape::animations::scale(), "Scale"),
         (tr::editor::shape::animations::draw(), "Draw on"),
+        (tr::assets::cancel(), "Cancel"),
+        (
+            tr::assets::download_all_backgrounds(),
+            "Download all backgrounds",
+        ),
+        (tr::assets::download_all_music(), "Download all music"),
+        (
+            tr::assets::downloading_backgrounds(),
+            "Downloading backgrounds",
+        ),
+        (tr::assets::downloading_music(), "Downloading music"),
+        (tr::assets::retry(), "Retry"),
+        (
+            tr::assets::error::background(),
+            "Couldn't download this video's background.",
+        ),
+        (tr::assets::error::disk(), "Couldn't save the download."),
+        (
+            tr::assets::error::failed(),
+            "The download didn't finish. Try again.",
+        ),
+        (
+            tr::assets::error::no_space(),
+            "There isn't enough free disk space.",
+        ),
+        (
+            tr::assets::error::offline(),
+            "Couldn't connect. Check your internet connection and try again.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);
@@ -1070,6 +1105,17 @@ fn style_preset_messages_format_their_arguments() {
         tr::editor::panel::style_presets::shape::applied_all(5),
         "Applied to all shapes (5)"
     );
+}
+
+#[test]
+fn asset_download_messages_format_their_arguments() {
+    assert_eq!(tr::assets::megabytes("26"), "26 MB");
+    assert_eq!(tr::assets::progress("12 MB", "26 MB"), "12 MB of 26 MB");
+    assert_eq!(tr::assets::new_backgrounds(1), "1 new background");
+    assert_eq!(tr::assets::new_backgrounds(4), "4 new backgrounds");
+    assert_eq!(tr::assets::new_tracks(1), "1 new track");
+    assert_eq!(tr::assets::new_tracks(2), "2 new tracks");
+    assert_eq!(tr::assets::some_failed(3), "3 couldn't download");
 }
 
 #[test]

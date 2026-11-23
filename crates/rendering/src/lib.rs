@@ -35,6 +35,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+pub mod asset_paths;
 pub mod audio_visualizer;
 pub mod camera3d;
 pub mod camera_picture;

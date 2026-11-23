@@ -31,13 +31,12 @@
 			"icons/icon.ico"
 		],
 		"resources": {
-			"assets/backgrounds/macOS/*": "assets/backgrounds/macOS/",
-			"assets/backgrounds/blue/*": "assets/backgrounds/blue/",
-			"assets/backgrounds/cities/*": "assets/backgrounds/cities/",
-			"assets/backgrounds/dark/*": "assets/backgrounds/dark/",
-			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
-			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
-			"assets/music/*.mp3": "assets/music/"
+			"assets/backgrounds/macOS/*-thumbnail.jpg": "assets/backgrounds/macOS/",
+			"assets/backgrounds/blue/*-thumbnail.jpg": "assets/backgrounds/blue/",
+			"assets/backgrounds/cities/*-thumbnail.jpg": "assets/backgrounds/cities/",
+			"assets/backgrounds/dark/*-thumbnail.jpg": "assets/backgrounds/dark/",
+			"assets/backgrounds/orange/*-thumbnail.jpg": "assets/backgrounds/orange/",
+			"assets/backgrounds/purple/*-thumbnail.jpg": "assets/backgrounds/purple/"
 		},
 		"fileAssociations": [
 			{

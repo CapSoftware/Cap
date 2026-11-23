@@ -6420,6 +6420,12 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         std::env::var("CAP_GPUI_AUTO_PICK_BACKGROUND").is_ok_and(|value| value == "1");
     let desktop_background =
         std::env::var("CAP_GPUI_AUTO_DESKTOP_BACKGROUND").is_ok_and(|value| value == "1");
+    // `CAP_GPUI_AUTO_WALLPAPER=tab|<id>`, `CAP_GPUI_AUTO_DOWNLOAD_ALL=
+    // backgrounds|music` and `CAP_GPUI_AUTO_MUSIC=open|<id>` drive the
+    // asset downloads through the same calls their clicks make.
+    let auto_wallpaper = std::env::var("CAP_GPUI_AUTO_WALLPAPER").ok();
+    let auto_download_all = std::env::var("CAP_GPUI_AUTO_DOWNLOAD_ALL").ok();
+    let auto_music = std::env::var("CAP_GPUI_AUTO_MUSIC").ok();
     if panel.is_none()
         && tab.is_none()
         && select.is_none()
@@ -6432,6 +6438,9 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         && !generate_zoom
         && !pick_background
         && !desktop_background
+        && auto_wallpaper.is_none()
+        && auto_download_all.is_none()
+        && auto_music.is_none()
     {
         return;
     }
@@ -6496,6 +6505,50 @@ async fn drive_auto_sidebar(handle: WindowHandle<EditorWindow>, cx: &mut gpui::A
         handle
             .update(cx, |view, window, cx| {
                 view.pick_background_image(window, cx)
+            })
+            .ok();
+    }
+
+    // The editor refuses edits until its engine is up, which a software GPU
+    // can take a minute or more to bring up.
+    if auto_wallpaper.is_some() || auto_music.is_some() {
+        let started = std::time::Instant::now();
+        while !handle
+            .update(cx, |view, _, _| view.project_ready())
+            .unwrap_or(true)
+            && started.elapsed() < std::time::Duration::from_secs(300)
+        {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(100))
+                .await;
+        }
+    }
+
+    if let Some(spec) = auto_wallpaper {
+        handle
+            .update(cx, |view, window, cx| {
+                view.auto_wallpaper(&spec, window, cx)
+            })
+            .ok();
+    }
+
+    match auto_download_all.as_deref() {
+        Some("backgrounds") => {
+            crate::asset_library::download_all(crate::asset_library::Kind::Wallpaper)
+        }
+        Some("music") => crate::asset_library::download_all(crate::asset_library::Kind::Music),
+        _ => {}
+    }
+
+    if let Some(spec) = auto_music {
+        handle
+            .update(cx, |view, window, cx| {
+                view.open_audio_picker(0, cx);
+                let item = crate::asset_library::catalog::current()
+                    .item(crate::asset_library::Kind::Music, &spec);
+                if let Some(item) = item {
+                    view.add_library_track(item.id, item.name, window, cx);
+                }
             })
             .ok();
     }
