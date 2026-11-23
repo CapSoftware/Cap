@@ -1044,7 +1044,7 @@ impl Feeds {
             self.remembered_camera_picture = Some(picture.path.clone());
             let kept = picture.path.clone();
             cx.background_executor()
-                .spawn(async move { crate::camera_picture::retire_others(&kept) })
+                .spawn(async move { crate::camera_picture::retire_older(&kept) })
                 .detach();
         }
         let had_picture = self.camera_picture.is_some();

@@ -130,18 +130,32 @@ pub(crate) fn save_for_recording(source: &Path) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
-/// Deletes the camera menu's other saved pictures once `kept` is the one in
-/// use. Not done on import: an import that is turned away (a recording began
-/// meanwhile) must leave the picture in use on disk.
-pub(crate) fn retire_others(kept: &Path) {
+/// Deletes the camera menu's pictures saved before `kept`, once `kept` is in
+/// use. Never the newer ones: a later choice may already have replaced
+/// `kept` before this runs, and an import still in progress, or one turned
+/// away because a recording began, must leave the picture in use on disk.
+pub(crate) fn retire_older(kept: &Path) {
     let dir = crate::store::app_data_dir().join(RECORDING_DIR);
     if kept.parent() != Some(dir.as_path()) {
         return;
     }
-    if let Ok(entries) = std::fs::read_dir(&dir) {
+    retire_older_in(&dir, kept);
+}
+
+fn retire_older_in(dir: &Path, kept: &Path) {
+    let modified = |path: &Path| {
+        std::fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
+    let Some(kept_at) = modified(kept) else {
+        return;
+    };
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
-            if entry.path() != kept {
-                let _ = std::fs::remove_file(entry.path());
+            let path = entry.path();
+            if path != kept && modified(&path).is_some_and(|at| at < kept_at) {
+                let _ = std::fs::remove_file(path);
             }
         }
     }
@@ -309,6 +323,31 @@ mod tests {
         assert_eq!((loaded.width, loaded.height), (64, 48));
         let again = import_into_project(&project, &source).unwrap();
         assert_ne!(again, relative);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn only_pictures_older_than_the_kept_one_are_retired() {
+        let dir = temp_dir("retire");
+        let at = |secs: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let write = |name: &str, secs: u64| {
+            let path = dir.join(name);
+            std::fs::write(&path, b"jpeg").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at(secs))
+                .unwrap();
+            path
+        };
+        let older = write("a.jpg", 1_000);
+        let kept = write("b.jpg", 2_000);
+        let newer = write("c.jpg", 3_000);
+        retire_older_in(&dir, &kept);
+        assert!(!older.exists());
+        assert!(kept.exists());
+        assert!(newer.exists());
         std::fs::remove_dir_all(dir).ok();
     }
 
