@@ -5,7 +5,7 @@ import NumberFlow from "@number-flow/react";
 import { Check, Loader2, Minus, Plus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
 	type AddSeatsResult,
 	addSeats,
@@ -14,6 +14,10 @@ import {
 	type SeatPreviewResult,
 } from "@/actions/billing/current-plan";
 import { trackEvent } from "@/app/utils/analytics";
+import {
+	CapFridayWarp,
+	type WarpOrigin,
+} from "@/components/pages/blackfriday/CapFridayWarp";
 import { useEnded } from "@/components/pages/blackfriday/Claim";
 import { CODE, PLAN_PATH } from "@/components/pages/blackfriday/content";
 import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
@@ -517,6 +521,13 @@ function CodeEntry() {
 	const [open, setOpen] = useState(false);
 	const [code, setCode] = useState("");
 	const [invalid, setInvalid] = useState(false);
+	const [warp, setWarp] = useState<WarpOrigin | null>(null);
+	const form = useRef<HTMLFormElement>(null);
+	const apply = useRef<HTMLButtonElement>(null);
+
+	useEffect(() => {
+		if (open) router.prefetch(PLAN_PATH);
+	}, [open, router]);
 
 	if (ended) return null;
 
@@ -534,15 +545,32 @@ function CodeEntry() {
 
 	return (
 		<form
+			ref={form}
 			className="mt-4 flex flex-col gap-2"
 			onSubmit={(event) => {
 				event.preventDefault();
+				if (warp) return;
 				if (parsePromotionCode(code) !== CODE) {
 					setInvalid(true);
+					form.current?.animate(
+						[
+							{ transform: "translateX(0)" },
+							{ transform: "translateX(-6px)" },
+							{ transform: "translateX(5px)" },
+							{ transform: "translateX(-3px)" },
+							{ transform: "translateX(0)" },
+						],
+						{ duration: 320, easing: "ease-out" },
+					);
 					return;
 				}
 				trackEvent("cap_friday_code_entered", { location: "manage_plan" });
-				router.push(PLAN_PATH);
+				const rect = apply.current?.getBoundingClientRect();
+				setWarp(
+					rect
+						? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+						: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
+				);
 			}}
 		>
 			<div className="flex gap-2">
@@ -558,13 +586,20 @@ function CodeEntry() {
 					autoCapitalize="characters"
 					autoComplete="off"
 					spellCheck={false}
+					readOnly={warp !== null}
 					// biome-ignore lint/a11y/noAutofocus: opened by the user on purpose
 					autoFocus
 					className="h-10 min-w-0 flex-1 rounded-[10px] bg-white px-3 text-[14px] uppercase shadow-[inset_0_0_0_1px_rgba(17,17,17,0.14)] outline-none focus-visible:shadow-[inset_0_0_0_1.5px_#111111]"
 				/>
 				<button
+					ref={apply}
 					type="submit"
-					className="h-10 rounded-[10px] bg-[#111111] px-4 text-[14px] text-white transition-opacity hover:opacity-85"
+					className={classNames(
+						"h-10 rounded-[10px] px-4 text-[14px] transition-[background,color,box-shadow,opacity] duration-300 hover:opacity-85",
+						warp
+							? "bg-[linear-gradient(135deg,#FFD68C,#FF4D8D_55%,#B0369F)] text-[#141012] shadow-[0_0_24px_rgba(255,77,141,0.6)]"
+							: "bg-[#111111] text-white",
+					)}
 				>
 					Apply
 				</button>
@@ -573,6 +608,9 @@ function CodeEntry() {
 				<p role="alert" className="text-[13px] text-[#B4322E]">
 					That code doesn't work for your plan.
 				</p>
+			) : null}
+			{warp ? (
+				<CapFridayWarp origin={warp} onCovered={() => router.push(PLAN_PATH)} />
 			) : null}
 		</form>
 	);
