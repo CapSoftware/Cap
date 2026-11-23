@@ -240,6 +240,8 @@ pub struct LibraryWindow {
     /// [`load::fingerprint`] of the scan on screen, before visuals and
     /// speaker names were added to it.
     scan_print: Option<u64>,
+    /// The day smart folders were last evaluated for.
+    evaluated_on: Option<NaiveDate>,
     /// Main-thread time spent taking in scans and their visuals, for the
     /// `rescan` bench.
     bench_main_us: f64,
@@ -376,6 +378,25 @@ fn today() -> NaiveDate {
     Local::now().date_naive()
 }
 
+/// What a rescan redoes besides taking the new items.
+#[derive(Debug, PartialEq, Eq)]
+struct Rescan {
+    take_scan: bool,
+    /// Date rules ("Today", "Last 7 days") move with the clock, not the disk.
+    reevaluate: bool,
+    /// A folder's members can vanish from places no scan lists, so they are
+    /// checked every time; the check runs off the main thread.
+    check_members: bool,
+}
+
+fn rescan_plan(same_scan: bool, evaluated_on: Option<NaiveDate>, today: NaiveDate) -> Rescan {
+    Rescan {
+        take_scan: !same_scan,
+        reevaluate: !same_scan || evaluated_on != Some(today),
+        check_members: true,
+    }
+}
+
 impl LibraryWindow {
     fn new(opened_at: Instant, window: &mut Window, cx: &mut Context<Self>) -> Self {
         crate::theme::bind_window(window, cx);
@@ -468,6 +489,7 @@ impl LibraryWindow {
             reload_again: false,
             last_scan: None,
             scan_print: None,
+            evaluated_on: None,
             bench_main_us: 0.,
             people_task: None,
             thumbs: thumbs::Thumbs::default(),
@@ -529,22 +551,24 @@ impl LibraryWindow {
                 this.load_task = None;
                 this.last_scan = Some(Instant::now());
                 this.thumbs.forget_failures();
-                if this.scan_print == Some(print) {
-                    // Nothing changed on disk (the window came back, or a
-                    // meeting event touched nothing listed here): keep what
-                    // is on screen, with its visuals and speaker names.
-                    this.load_visuals(jobs, cx);
-                    this.index_people(library, cx);
-                } else {
+                let plan = rescan_plan(this.scan_print == Some(print), this.evaluated_on, today());
+                // Nothing changed on disk (the window came back, or a meeting
+                // event touched nothing listed here): keep what is on screen,
+                // with its visuals and speaker names.
+                if plan.take_scan {
                     this.scan_print = Some(print);
                     this.visuals.extend(std::mem::take(&mut scan.seed_visuals));
                     visuals::apply(&mut scan.items, &this.visuals, &HashMap::new());
                     this.scan = Rc::new(scan);
-                    this.load_visuals(jobs, cx);
-                    this.reevaluate(cx);
-                    this.check_members(cx);
-                    this.index_people(library, cx);
                 }
+                this.load_visuals(jobs, cx);
+                if plan.reevaluate {
+                    this.reevaluate(cx);
+                }
+                if plan.check_members {
+                    this.check_members(cx);
+                }
+                this.index_people(library, cx);
                 this.bench_main_us += applying.elapsed().as_secs_f64() * 1e6;
                 if std::mem::take(&mut this.reload_again) {
                     this.reload(cx);
@@ -898,6 +922,7 @@ impl LibraryWindow {
     /// 10k items x 20 folders measures in single milliseconds (see the rules
     /// benchmark test), well under a frame.
     fn reevaluate(&mut self, cx: &mut Context<Self>) {
+        self.evaluated_on = Some(today());
         self.membership = index::Membership::from_file(&self.file);
         let folders = self.file.smart_folders.clone();
         let members = {
@@ -3263,6 +3288,55 @@ mod save_tests {
             rules: vec![],
             extra: Default::default(),
         }
+    }
+
+    #[test]
+    fn an_unchanged_rescan_after_midnight_moves_today_items_out() {
+        let monday = NaiveDate::from_ymd_opt(2026, 11, 23).unwrap();
+        let tuesday = monday.succ_opt().unwrap();
+        // Nothing on disk changed and the folders were evaluated today: only
+        // the members are checked.
+        assert_eq!(
+            rescan_plan(true, Some(monday), monday),
+            Rescan {
+                take_scan: false,
+                reevaluate: false,
+                check_members: true
+            }
+        );
+        // The day turned: evaluated again, with nothing on disk changed.
+        assert!(rescan_plan(true, Some(monday), tuesday).reevaluate);
+        assert!(rescan_plan(true, None, monday).reevaluate);
+        assert!(rescan_plan(false, Some(monday), monday).take_scan);
+
+        let mut today_folder = folder("today");
+        today_folder.rules = vec![Rule::Date {
+            range: DateRange::Today,
+        }];
+        let item = Item::new(
+            items::ItemKey::Doc("standup".into()),
+            ItemKind::Meeting,
+            "Standup",
+            chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 11, 23, 9, 0, 0).unwrap(),
+            items::ItemFacts::default(),
+        );
+        let utc_day = |at: chrono::DateTime<Utc>| at.date_naive();
+        let none = |_: &str, _: &Item| false;
+        let members = |today| {
+            rules::evaluate_all(
+                std::slice::from_ref(&today_folder),
+                std::slice::from_ref(&item),
+                &EvalContext {
+                    today,
+                    local_day: &utc_day,
+                    in_folder: &none,
+                },
+            )
+            .remove("today")
+            .unwrap_or_default()
+        };
+        assert_eq!(members(monday), vec![0]);
+        assert!(members(tuesday).is_empty());
     }
 
     #[test]
