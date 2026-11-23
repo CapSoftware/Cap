@@ -118,7 +118,7 @@ fn explicit_lod_samples(source: &str) -> String {
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn browser_shader_source() -> String {
-    let mut source = include_str!("shaders/composite-video-frame.wgsl").to_string();
+    let mut source = include_str!("shaders/composite-video-frame.wgsl").replace("\r\n", "\n");
     for (from, to, _) in BROWSER_SHADER_EDITS {
         source = source.replace(from, to);
     }
@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn browser_shader_edits_each_apply_to_the_shader() {
-        let source = include_str!("shaders/composite-video-frame.wgsl");
+        let source = include_str!("shaders/composite-video-frame.wgsl").replace("\r\n", "\n");
         for (from, _, occurrences) in BROWSER_SHADER_EDITS {
             assert_eq!(source.matches(from).count(), *occurrences, "{from}");
         }
