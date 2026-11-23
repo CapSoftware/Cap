@@ -10,6 +10,7 @@ use gpui::{App, Context, EventEmitter, Subscription, Task};
 
 use super::{format, writer};
 use crate::i18n::tr;
+use crate::library_window::text::natural_cmp;
 use crate::meetings::{MeetingEvent, Meetings};
 
 const REFRESH_COALESCE: Duration = Duration::from_millis(120);
@@ -58,7 +59,7 @@ pub fn load_snapshot(library: &Library) -> Snapshot {
     let (trashed, docs): (Vec<DocMeta>, Vec<DocMeta>) =
         metas.into_iter().partition(DocMeta::is_trashed);
     let mut folders = library.folders().unwrap_or_default();
-    folders.sort_by_key(|f| f.name.to_lowercase());
+    folders.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     Snapshot {
         docs,
         trashed,
@@ -577,7 +578,7 @@ impl DocStore {
                     let id = folder.id.clone();
                     this.mutate_snapshot(|s| {
                         s.folders.push(folder);
-                        s.folders.sort_by_key(|f| f.name.to_lowercase());
+                        s.folders.sort_by(|a, b| natural_cmp(&a.name, &b.name));
                     });
                     if !then_move.is_empty() {
                         this.move_to_folder(then_move, Some(id), cx);
@@ -602,7 +603,7 @@ impl DocStore {
             if let Some(folder) = s.folders.iter_mut().find(|f| f.id == target) {
                 folder.name = local;
             }
-            s.folders.sort_by_key(|f| f.name.to_lowercase());
+            s.folders.sort_by(|a, b| natural_cmp(&a.name, &b.name));
         });
         if let Some(library) = self.library.clone() {
             let id = id.to_string();

@@ -31,6 +31,22 @@ fn meta(id: &str, kind: DocKind, at: chrono::DateTime<Utc>) -> DocMeta {
 }
 
 #[test]
+fn folders_are_listed_with_their_numbers_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path()).unwrap();
+    let at = Utc.with_ymd_and_hms(2026, 11, 20, 9, 0, 0).unwrap();
+    for (i, name) in ["Folder 10", "Folder 2", "folder 1", "Ébauche"]
+        .iter()
+        .enumerate()
+    {
+        library.create_folder(name, None, at, i as u64 + 1).unwrap();
+    }
+    let snapshot = super::store::load_snapshot(&library);
+    let names: Vec<&str> = snapshot.folders.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["Ébauche", "folder 1", "Folder 2", "Folder 10"]);
+}
+
+#[test]
 fn a_meeting_with_unreadable_details_stays_listed() {
     let dir = tempfile::tempdir().unwrap();
     let library = Library::open(dir.path()).unwrap();
