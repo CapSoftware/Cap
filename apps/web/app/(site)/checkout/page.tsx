@@ -9,8 +9,10 @@ import {
 	createProCheckout,
 } from "@/actions/billing/checkout";
 import { getCurrentPlan } from "@/actions/billing/current-plan";
+import { PLAN_PATH } from "@/components/pages/blackfriday/content";
 import { CheckoutView } from "@/components/pages/checkout/CheckoutView";
 import { ManagePlan } from "@/components/pages/checkout/ManagePlan";
+import { capFridayLive, isCapFridayCode } from "@/lib/checkout/cap-friday";
 import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import {
 	type CheckoutEnvironment,
@@ -48,6 +50,8 @@ export default async function CheckoutPage(props: {
 	const seats = parseCheckoutSeats(first(searchParams.seats));
 
 	if (user && userIsPro(user)) {
+		const promo = parsePromotionCode(first(searchParams.promo));
+		if (isCapFridayCode(promo) && capFridayLive()) redirect(PLAN_PATH);
 		return <ManagePlan plan={await getCurrentPlan()} requestedSeats={seats} />;
 	}
 

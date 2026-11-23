@@ -14,7 +14,10 @@ import {
 	type SeatPreviewResult,
 } from "@/actions/billing/current-plan";
 import { trackEvent } from "@/app/utils/analytics";
+import { useEnded } from "@/components/pages/blackfriday/Claim";
+import { CODE, PLAN_PATH } from "@/components/pages/blackfriday/content";
 import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
+import { parsePromotionCode } from "@/lib/checkout/plans";
 import { formatAmount } from "@/utils/currency";
 import { PlanFeatures, PlanHeading } from "./CheckoutForm";
 import { CARD, CheckoutShell } from "./CheckoutShell";
@@ -244,6 +247,7 @@ function AddSeats({
 			>
 				Manage billing and invoices
 			</Link>
+			<CodeEntry />
 			<PlanFeatures />
 		</>
 	);
@@ -502,5 +506,74 @@ function PlanUnavailable() {
 				</Link>
 			</div>
 		</CheckoutShell>
+	);
+}
+
+// Cap Pro subscribers never see the payment form, so the Cap Friday code is
+// entered here and opens the offer for their existing plan.
+function CodeEntry() {
+	const router = useRouter();
+	const ended = useEnded();
+	const [open, setOpen] = useState(false);
+	const [code, setCode] = useState("");
+	const [invalid, setInvalid] = useState(false);
+
+	if (ended) return null;
+
+	if (!open) {
+		return (
+			<button
+				type="button"
+				onClick={() => setOpen(true)}
+				className="mt-3 flex text-[14px] text-[rgba(17,17,17,0.6)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111]"
+			>
+				Have a code?
+			</button>
+		);
+	}
+
+	return (
+		<form
+			className="mt-4 flex flex-col gap-2"
+			onSubmit={(event) => {
+				event.preventDefault();
+				if (parsePromotionCode(code) !== CODE) {
+					setInvalid(true);
+					return;
+				}
+				trackEvent("cap_friday_code_entered", { location: "manage_plan" });
+				router.push(PLAN_PATH);
+			}}
+		>
+			<div className="flex gap-2">
+				<input
+					value={code}
+					onChange={(event) => {
+						setCode(event.target.value);
+						setInvalid(false);
+					}}
+					placeholder="Code"
+					aria-label="Code"
+					aria-invalid={invalid}
+					autoCapitalize="characters"
+					autoComplete="off"
+					spellCheck={false}
+					// biome-ignore lint/a11y/noAutofocus: opened by the user on purpose
+					autoFocus
+					className="h-10 min-w-0 flex-1 rounded-[10px] bg-white px-3 text-[14px] uppercase shadow-[inset_0_0_0_1px_rgba(17,17,17,0.14)] outline-none focus-visible:shadow-[inset_0_0_0_1.5px_#111111]"
+				/>
+				<button
+					type="submit"
+					className="h-10 rounded-[10px] bg-[#111111] px-4 text-[14px] text-white transition-opacity hover:opacity-85"
+				>
+					Apply
+				</button>
+			</div>
+			{invalid ? (
+				<p role="alert" className="text-[13px] text-[#B4322E]">
+					That code doesn't work for your plan.
+				</p>
+			) : null}
+		</form>
 	);
 }
