@@ -725,6 +725,8 @@ async function runAudio(task: AudioTask, engine: Engine, queuedMs: number) {
 }
 
 const TRANSCODE_ENCODER = process.env.RF_TRANSCODE_ENCODER ?? "h264_nvenc";
+const FFMPEG_BIN = process.env.RF_FFMPEG_BIN ?? "ffmpeg";
+const FFPROBE_BIN = process.env.RF_FFPROBE_BIN ?? "ffprobe";
 
 async function runTranscode(task: TranscodeTask, slot: number) {
 	const dir = join(WORK_DIR, `transcode-${randomUUID()}`);
@@ -751,7 +753,7 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 		});
 		entry.lastProgressAt = Date.now();
 		run.controller.signal.throwIfAborted();
-		const probe = Bun.spawn(["ffprobe", ...probeArgs(input)], {
+		const probe = Bun.spawn([FFPROBE_BIN, ...probeArgs(input)], {
 			stdout: "pipe",
 			stderr: "ignore",
 		});
@@ -772,7 +774,7 @@ async function runTranscode(task: TranscodeTask, slot: number) {
 		console.log(`${task.taskId}: ${remux ? "remuxing" : "transcoding"}`);
 		const ffmpeg = Bun.spawn(
 			[
-				"ffmpeg",
+				FFMPEG_BIN,
 				...(remux
 					? remuxArgs(input, output)
 					: transcodeArgs(

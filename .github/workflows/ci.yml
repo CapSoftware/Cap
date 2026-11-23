@@ -360,6 +360,9 @@ jobs:
       - name: Prepare recordings with the engine
         run: RF_ENGINE_BIN="$GITHUB_WORKSPACE/target/debug/cap-render-farm" bun test apps/render-farm/src/prepare.test.ts
 
+      - name: Transcode recordings with FFmpeg
+        run: bun test apps/render-farm/src/worker.test.ts
+
   build-gpui:
     name: Build GPUI Desktop
     needs: changes

@@ -81,6 +81,7 @@ expiry there is only a backstop.
 | `RF_CALLBACK_HOSTS` | none | Host suffixes a job's `callbackUrl` may use (e.g. `vercel.app,cap.so`) |
 | `RF_CALLBACK_SECRET` | `RF_TOKEN` | HMAC key for callback signatures |
 | `RF_TRANSCODE_ENCODER` | `h264_nvenc` | Encoder for source transcodes (`libx264` without a GPU) |
+| `RF_FFMPEG_BIN` / `RF_FFPROBE_BIN` | `ffmpeg` / `ffprobe` | Binaries source transcodes run |
 | `RF_COORDINATOR_URL` | `http://127.0.0.1:8080` | Coordinator address (workers) and its advertised URL |
 | `RF_SLOTS` / `RF_AUDIO_SLOTS` | `5` / `4` | Render slots and audio lanes per worker (tuned on one L4 with 8 vCPUs) |
 | `RF_LOCAL_AUDIO_SLOTS` | `2` | Audio lanes on the coordinator |

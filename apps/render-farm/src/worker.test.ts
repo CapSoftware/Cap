@@ -32,18 +32,33 @@ afterAll(() => {
 });
 
 const SOURCE = Uint8Array.from({ length: 12 }, (_, index) => index + 1);
-const ENCODED = new TextEncoder().encode("encoded mp4");
+const FFMPEG = Bun.which("ffmpeg") && Bun.which("ffprobe");
+
+function scratch(prefix: string) {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	workDirs.push(dir);
+	return dir;
+}
+
+function alive(pid: number) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function harness(
 	options: {
 		headGate?: Promise<void>;
-		probeStalls?: boolean;
+		piece?: number;
 		rangeGates?: Promise<void>[];
+		realTools?: boolean;
 		stashFails?: boolean;
 	} = {},
 ) {
-	const spawned: string[] = [];
-	const killed: string[] = [];
+	const spawned: { name: string; pid: number }[] = [];
 	const intervals: (() => void)[] = [];
 	const posts: { path: string; body: unknown }[] = [];
 	const signals = new Map<string, () => void>();
@@ -56,8 +71,8 @@ function harness(
 			condition.resolve();
 		}
 	};
-	const workDir = mkdtempSync(join(tmpdir(), "rf-worker-"));
-	workDirs.push(workDir);
+	const workDir = scratch("rf-worker-");
+	const piece = options.piece ?? 4;
 	const media = memoryBucket("media", {
 		before: async (request) => {
 			changed();
@@ -92,7 +107,32 @@ function harness(
 		changed();
 		return Response.json({ finished: [], cancel: [] });
 	});
+	const tools: Record<string, string> = {};
+	if (!options.realTools) {
+		const spawns = localServer(async (request) => {
+			spawned.push({
+				name: new URL(request.url).pathname.slice(1),
+				pid: Number(await request.text()),
+			});
+			changed();
+			return new Response(null);
+		});
+		const bin = scratch("rf-tools-");
+		const tool = (name: string, then: string) => {
+			const path = join(bin, name);
+			writeFileSync(
+				path,
+				`#!${process.execPath}\nawait fetch("${spawns}/${name}", { method: "POST", body: String(process.pid) });\n${then}\n`,
+				{ mode: 0o755 },
+			);
+			return path;
+		};
+		tools.RF_FFPROBE_BIN = tool("ffprobe", "setInterval(() => {}, 60_000);");
+		tools.RF_FFMPEG_BIN = tool("ffmpeg", "process.exit(1);");
+	}
 	const env = {
+		...tools,
+		RF_TRANSCODE_ENCODER: "libx264",
 		RF_SLOTS: "0",
 		RF_AUDIO_SLOTS: "0",
 		RF_WORK_DIR: workDir,
@@ -124,7 +164,7 @@ function harness(
 		) =>
 			transcode.downloadSource(s3, key, path, {
 				...options,
-				piece: 4,
+				piece,
 				concurrency: 1,
 				onProgress: (bytes) => {
 					options.onProgress?.(bytes);
@@ -151,44 +191,6 @@ function harness(
 		},
 		setInterval: (callback: () => void) => intervals.push(callback),
 		console: { log() {}, warn() {}, error() {} },
-		Bun: {
-			spawn: (args: string[]) => {
-				const name = args[0] ?? "";
-				spawned.push(name);
-				const stalls = name === "ffprobe" && options.probeStalls !== false;
-				if (name === "ffmpeg") writeFileSync(args.at(-1) ?? "", ENCODED);
-				const exit = Promise.withResolvers<number>();
-				let output: ReadableStreamDefaultController<Uint8Array>;
-				let exitCode: number | null = null;
-				const stdout = new ReadableStream<Uint8Array>({
-					start(controller) {
-						output = controller;
-						if (!stalls) {
-							controller.close();
-							exitCode = 0;
-							exit.resolve(0);
-						}
-					},
-				});
-				changed();
-				return {
-					stdout,
-					stderr: new Response("").body,
-					exited: exit.promise,
-					get exitCode() {
-						return exitCode;
-					},
-					kill(signal: string) {
-						killed.push(`${name}:${signal}`);
-						if (exitCode === null) {
-							exitCode = 137;
-							output.close();
-							exit.resolve(exitCode);
-						}
-					},
-				};
-			},
-		},
 	};
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const worker = new Function(
@@ -229,7 +231,7 @@ function harness(
 	return {
 		...worker,
 		spawned,
-		killed,
+		spawnedNames: () => spawned.map((spawn) => spawn.name),
 		intervals,
 		posts,
 		exits,
@@ -262,6 +264,50 @@ async function failure(promise: Promise<unknown>) {
 	throw new Error("expected a rejection");
 }
 
+function probeVideo(bytes: Uint8Array) {
+	const path = join(scratch("rf-probe-"), "video.mp4");
+	writeFileSync(path, bytes);
+	const probe = (args: string[]) => {
+		const result = Bun.spawnSync([
+			"ffprobe",
+			"-v",
+			"error",
+			...args,
+			"-of",
+			"json",
+			path,
+		]);
+		expect(result.exitCode, result.stderr.toString()).toBe(0);
+		return JSON.parse(result.stdout.toString());
+	};
+	const [stream] = probe([
+		"-count_frames",
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"stream=codec_name,pix_fmt,width,height,has_b_frames,nb_read_frames,duration",
+	]).streams;
+	const packets: { pts_time: string; size: string; flags: string }[] = probe([
+		"-select_streams",
+		"v:0",
+		"-show_entries",
+		"packet=pts_time,size,flags",
+	]).packets;
+	return {
+		stream,
+		audioStreams: probe([
+			"-select_streams",
+			"a",
+			"-show_entries",
+			"stream=index",
+		]).streams.length,
+		packetSizes: packets.map((packet) => Number(packet.size)),
+		keyframes: packets
+			.filter((packet) => packet.flags.startsWith("K"))
+			.map((packet) => Number(packet.pts_time)),
+	};
+}
+
 const task: TranscodeTask = {
 	kind: "transcode",
 	taskId: "tc:test",
@@ -276,15 +322,15 @@ describe("transcode cancellation", () => {
 		h.busy.set(0, task);
 		const pending = h.runTranscode(task, 0);
 		await h.when(() => h.spawned.length > 0);
-		expect(h.spawned).toEqual(["ffprobe"]);
+		expect(h.spawnedNames()).toEqual(["ffprobe"]);
 		const [dir] = h.transcodeDirs();
 		expect([...readFileSync(join(h.workDir, dir ?? "", "source"))]).toEqual([
 			1, 2, 3, 4,
 		]);
 		h.cancel([task.taskId]);
 		expect(await failure(pending)).toContain("transcode cancelled");
-		expect(h.killed).toEqual(["ffprobe:SIGKILL"]);
-		expect(h.spawned).toEqual(["ffprobe"]);
+		expect(alive(h.spawned[0]?.pid ?? 0)).toBe(false);
+		expect(h.spawnedNames()).toEqual(["ffprobe"]);
 		expect(h.transcoders.size).toBe(0);
 		expect(h.progress.size).toBe(0);
 		expect(h.transcodeDirs()).toEqual([]);
@@ -301,8 +347,8 @@ describe("transcode cancellation", () => {
 		progress.lastProgressAt = 0;
 		h.intervals[0]?.();
 		expect(await failure(pending)).toContain("transcode cancelled");
-		expect(h.killed).toEqual(["ffprobe:SIGKILL"]);
-		expect(h.spawned).toEqual(["ffprobe"]);
+		expect(alive(h.spawned[0]?.pid ?? 0)).toBe(false);
+		expect(h.spawnedNames()).toEqual(["ffprobe"]);
 		expect(h.transcoders.size).toBe(0);
 	});
 
@@ -323,7 +369,7 @@ describe("transcode cancellation", () => {
 		h.intervals[0]?.();
 		gates[2]?.resolve();
 		expect(await failure(pending)).toContain("transcode cancelled");
-		expect(h.spawned).toEqual([]);
+		expect(h.spawnedNames()).toEqual([]);
 		expect(h.transcoders.size).toBe(0);
 		expect(h.media.requests).toEqual([
 			"HEAD source.webm",
@@ -342,24 +388,94 @@ describe("transcode cancellation", () => {
 		h.cancel([task.taskId]);
 		gate.resolve();
 		expect(await failure(pending)).toContain("transcode cancelled");
-		expect(h.spawned).toEqual([]);
+		expect(h.spawnedNames()).toEqual([]);
 		expect(h.transcoders.size).toBe(0);
 		expect(h.media.requests).toEqual(["HEAD source.webm"]);
 	});
 
-	test("an uncancelled source still encodes, uploads and releases its process", async () => {
-		const h = harness({ probeStalls: false });
-		expect(await h.runTranscode(task, 0)).toBe(ENCODED.byteLength);
-		expect(h.spawned).toEqual(["ffprobe", "ffmpeg"]);
-		expect(h.killed).toEqual([]);
-		expect(h.media.objects.get("source.mp4")).toEqual({
-			body: ENCODED,
-			contentType: "video/mp4",
-		});
-		expect(h.transcoders.size).toBe(0);
-		expect(h.progress.size).toBe(0);
-		expect(h.transcodeDirs()).toEqual([]);
-	});
+	test.skipIf(!FFMPEG)(
+		"an uncancelled recording is transcoded by ffmpeg and uploaded",
+		async () => {
+			const recording = join(scratch("rf-recording-"), "recording.webm");
+			const generated = Bun.spawnSync([
+				"ffmpeg",
+				"-v",
+				"error",
+				"-f",
+				"lavfi",
+				"-i",
+				"testsrc=size=321x241:rate=10",
+				"-t",
+				"2",
+				"-pix_fmt",
+				"yuv420p",
+				"-c:v",
+				"libvpx",
+				"-deadline",
+				"realtime",
+				recording,
+			]);
+			expect(generated.exitCode, generated.stderr.toString()).toBe(0);
+			const h = harness({ piece: 1 << 16, realTools: true });
+			h.media.objects.set("source.webm", {
+				body: new Uint8Array(readFileSync(recording)),
+				contentType: "video/webm",
+			});
+			const uploaded = await h.runTranscode(task, 0);
+			const output = h.media.objects.get("source.mp4");
+			expect(output?.contentType).toBe("video/mp4");
+			expect(uploaded).toBe(output?.body.byteLength ?? -1);
+			const probed = probeVideo(output?.body ?? new Uint8Array());
+			expect(probed.stream).toEqual({
+				codec_name: "h264",
+				pix_fmt: "yuv420p",
+				width: 322,
+				height: 242,
+				has_b_frames: 0,
+				nb_read_frames: "20",
+				duration: "2.000000",
+			});
+			expect(probed.keyframes).toEqual([0, 1]);
+			expect(h.transcoders.size).toBe(0);
+			expect(h.progress.size).toBe(0);
+			expect(h.transcodeDirs()).toEqual([]);
+		},
+	);
+
+	test.skipIf(!FFMPEG)(
+		"an H.264 recording is remuxed without re-encoding",
+		async () => {
+			const source = new Uint8Array(
+				readFileSync(
+					new URL("./fixtures/recorder-indexed.mp4", import.meta.url),
+				),
+			);
+			const h = harness({ piece: 1 << 16, realTools: true });
+			h.media.objects.set("recording.mp4", {
+				body: source,
+				contentType: "video/mp4",
+			});
+			const uploaded = await h.runTranscode(
+				{ ...task, source: "recording.mp4", output: "remuxed.mp4" },
+				0,
+			);
+			const output = h.media.objects.get("remuxed.mp4");
+			expect(output?.contentType).toBe("video/mp4");
+			expect(uploaded).toBe(output?.body.byteLength ?? -1);
+			const original = probeVideo(source);
+			const remuxed = probeVideo(output?.body ?? new Uint8Array());
+			expect(remuxed.audioStreams).toBe(0);
+			expect(remuxed.stream).toEqual(original.stream);
+			expect(remuxed.stream).toMatchObject({
+				codec_name: "h264",
+				width: 320,
+				height: 240,
+			});
+			expect(remuxed.packetSizes).toEqual(original.packetSizes);
+			expect(remuxed.keyframes).toEqual(original.keyframes);
+			expect(h.transcodeDirs()).toEqual([]);
+		},
+	);
 });
 
 describe("engine environment", () => {
