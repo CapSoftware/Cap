@@ -9,7 +9,7 @@ use crate::{
     audio::{AudioSegment, AudioSegmentTrack, MUSIC_SILENCE_DB, MusicTracks},
 };
 
-fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
+pub(crate) fn resolve_music_path(project_path: &Path, path: &str) -> std::path::PathBuf {
     let candidate = Path::new(path);
     if candidate.is_absolute() {
         candidate.to_path_buf()

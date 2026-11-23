@@ -19,6 +19,15 @@ fn main() {
     let target = env::var("CARGO_CFG_TARGET_ENV").unwrap();
     let is_x86 = matches!(arch.as_str(), "x86_64" | "x86");
     let mut core = build();
+    if arch == "wasm32" {
+        // No libc on wasm32-unknown-unknown: compile freestanding against
+        // declaration-only headers; `src/wasm_libc.rs` supplies the symbols.
+        println!("cargo:rerun-if-changed=wasm-include");
+        core.flag("-ffreestanding")
+            .flag("-nostdlibinc")
+            .flag("-isystem")
+            .flag("wasm-include");
+    }
     for source in [
         "denoise",
         "rnn",

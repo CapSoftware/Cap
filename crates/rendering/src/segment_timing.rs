@@ -1,18 +1,15 @@
 use cap_project::{ClipOffsets, StudioRecordingMeta};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct SegmentVideoTiming {
-    pub(super) latest_start_time: Option<f64>,
-    pub(super) screen_fps: u32,
-    pub(super) camera_fps: Option<u32>,
-    pub(super) screen_offset: f64,
-    pub(super) camera_offset: f64,
+pub struct SegmentVideoTiming {
+    pub latest_start_time: Option<f64>,
+    pub screen_fps: u32,
+    pub camera_fps: Option<u32>,
+    pub screen_offset: f64,
+    pub camera_offset: f64,
 }
 
-pub(super) fn segment_video_timing(
-    meta: &StudioRecordingMeta,
-    segment_i: usize,
-) -> SegmentVideoTiming {
+pub fn segment_video_timing(meta: &StudioRecordingMeta, segment_i: usize) -> SegmentVideoTiming {
     let latest_start_time = match &meta {
         StudioRecordingMeta::SingleSegment { .. } => None,
         StudioRecordingMeta::MultipleSegments { inner, .. } => {
@@ -70,7 +67,7 @@ pub(super) fn segment_video_timing(
     }
 }
 
-pub(super) fn segment_frame_times(
+pub fn segment_frame_times(
     segment_time: f32,
     segment_offset: f64,
     offsets: ClipOffsets,

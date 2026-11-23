@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 serde = { workspace = true }
 specta.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [lints]

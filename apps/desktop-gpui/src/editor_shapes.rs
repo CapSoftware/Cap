@@ -941,7 +941,9 @@ impl EditorWindow {
                             && contains(CanvasSelection::Mask(index))
                     })
             }
-            cap_project::OverlayTrackKind::Shape => false,
+            cap_project::OverlayTrackKind::Shape | cap_project::OverlayTrackKind::Waveform => {
+                false
+            }
         })
     }
 

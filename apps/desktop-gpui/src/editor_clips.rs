@@ -2567,6 +2567,7 @@ fn ensure_project_timeline<'a>(
             keyboard_segments: Vec::new(),
             audio_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
             shape_segments: Vec::new(),

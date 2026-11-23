@@ -1,7 +1,7 @@
+use crate::platform::Instant;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use tokio::sync::oneshot;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
@@ -78,6 +78,7 @@ pub(crate) mod readback_delay {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn wait_for_submission(
     device: &wgpu::Device,
     submission: &wgpu::SubmissionIndex,
@@ -106,10 +107,43 @@ async fn wait_for_submission(
     }
 }
 
+// The browser reports a finished submission only through a buffer map.
+#[cfg(target_arch = "wasm32")]
+async fn wait_for_submission(
+    _device: &wgpu::Device,
+    _submission: &wgpu::SubmissionIndex,
+    started: Instant,
+    frame_number: u32,
+    timeout: std::time::Duration,
+) -> bool {
+    readback_waited(started, frame_number) <= timeout
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn mapped_result(
+    rx: &mut oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    started: Instant,
+    frame_number: u32,
+    timeout: std::time::Duration,
+) -> Option<Result<(), wgpu::BufferAsyncError>> {
+    loop {
+        match rx.try_recv() {
+            Ok(result) => return Some(result),
+            Err(oneshot::error::TryRecvError::Closed) => return None,
+            Err(oneshot::error::TryRecvError::Empty) => {}
+        }
+        if readback_waited(started, frame_number) > timeout {
+            return None;
+        }
+        crate::platform::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
 /// The result of a `map_async` whose submission has finished. wgpu runs map
 /// callbacks on whichever thread's poll collected them, so when several
 /// renderers share a device, another thread can still be about to run this
 /// buffer's callback after this thread's own wait returned.
+#[cfg(not(target_arch = "wasm32"))]
 async fn mapped_result(
     rx: &mut oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
     started: Instant,
@@ -326,7 +360,7 @@ async fn acquire_surface_buffer<T: Send>(
                 "Surface pool is unavailable: {error}"
             )));
         }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        crate::platform::sleep(std::time::Duration::from_millis(1)).await;
     }
 }
 
@@ -2233,7 +2267,7 @@ async fn drain_submitted_work(device: &wgpu::Device, queue: &wgpu::Queue) {
         if device.poll(wgpu::PollType::Poll).is_err() {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        crate::platform::sleep(std::time::Duration::from_millis(1)).await;
     }
 }
 

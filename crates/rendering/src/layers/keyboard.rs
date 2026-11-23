@@ -310,6 +310,9 @@ impl KeyboardLayer {
         self.has_content = false;
         self.background_scissor = None;
         self.output_size = (output_size.x, output_size.y);
+        if !super::sync_browser_fonts(&mut self.font_system) {
+            return;
+        }
 
         let Some(keyboard_data) = &uniforms.project.keyboard else {
             return;
@@ -981,6 +984,7 @@ mod gpu_tests {
             image_segments: vec![],
             shape_segments: Vec::new(),
             camera3d_segments: vec![],
+            waveform_segments: Vec::new(),
         });
         uniforms
     }

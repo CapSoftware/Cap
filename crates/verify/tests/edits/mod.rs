@@ -318,6 +318,7 @@ pub fn base_config(durations: &[f64]) -> ProjectConfiguration {
         keyboard_segments: Vec::new(),
         audio_segments: Vec::new(),
         camera3d_segments: Vec::new(),
+        waveform_segments: Vec::new(),
     });
     config.clips = (0..durations.len())
         .map(|i| ClipConfiguration {

@@ -1331,17 +1331,18 @@ pub struct TrackRow {
 }
 
 impl TrackRow {
-    pub fn from_overlay_track(track: OverlayTrack) -> Self {
+    pub fn from_overlay_track(track: OverlayTrack) -> Option<Self> {
         let kind = match track.kind {
             OverlayTrackKind::Mask => TrackKind::Mask,
             OverlayTrackKind::Image => TrackKind::Image,
             OverlayTrackKind::Text => TrackKind::Text,
             OverlayTrackKind::Shape => TrackKind::Shape,
+            OverlayTrackKind::Waveform => return None,
         };
-        Self {
+        Some(Self {
             kind,
             lane: track.track,
-        }
+        })
     }
 }
 
@@ -1708,7 +1709,7 @@ fn build_rows(
         config
             .resolved_overlay_order(&overlay_tracks)
             .into_iter()
-            .map(TrackRow::from_overlay_track),
+            .filter_map(TrackRow::from_overlay_track),
     );
     for lane in (0..lane_count(&model.audio).max(lanes.audio)).rev() {
         rows.push(TrackRow {

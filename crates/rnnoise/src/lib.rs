@@ -1,5 +1,8 @@
 use std::{ffi::c_void, ptr::NonNull};
 
+#[cfg(target_arch = "wasm32")]
+mod wasm_libc;
+
 pub const FRAME_SIZE: usize = 480;
 pub const DELAY_SAMPLES: usize = FRAME_SIZE * 2;
 

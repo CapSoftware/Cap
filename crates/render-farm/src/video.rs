@@ -231,6 +231,7 @@ pub async fn render(request: VideoRequest) -> Result<VideoResult> {
     .await
     .map_err(|error| anyhow!("decoders: {error}"))?;
     timings.decoders_ms = phase.elapsed().as_millis() as u64;
+    cap_editor::load_waveform_levels(&constants, &project.config, &segments).await;
 
     // A render that silently fell off the GPU (llvmpipe, software decode)
     // still produces correct frames, just several times slower, and would

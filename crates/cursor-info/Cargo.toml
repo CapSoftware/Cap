@@ -9,6 +9,8 @@ sha2 = "0.10"
 serde = { version = "1.0.219", features = ["derive"] }
 specta = { workspace = true, features = ["derive"] }
 strum = { version = "0.27.2", features = ["derive"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os= "windows")'.dependencies]

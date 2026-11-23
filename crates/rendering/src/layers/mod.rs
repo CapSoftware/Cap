@@ -15,6 +15,7 @@ mod mask;
 mod notch;
 mod shape;
 mod text;
+mod waveform;
 
 use std::sync::OnceLock;
 
@@ -28,6 +29,7 @@ use std::sync::OnceLock;
 /// Instead, scan the system fonts a single time per process, then cheaply clone the
 /// resulting font database (memory-mapped faces are reference counted) for each new
 /// `FontSystem`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn new_font_system() -> glyphon::FontSystem {
     static FONT_TEMPLATE: OnceLock<(String, glyphon::fontdb::Database)> = OnceLock::new();
 
@@ -125,6 +127,53 @@ impl SourceBindGroups {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn new_font_system() -> glyphon::FontSystem {
+    let db = browser_fonts()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    glyphon::FontSystem::new_with_locale_and_db("en-US".to_string(), db)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_fonts() -> &'static std::sync::Mutex<glyphon::fontdb::Database> {
+    static FONTS: OnceLock<std::sync::Mutex<glyphon::fontdb::Database>> = OnceLock::new();
+    FONTS.get_or_init(|| {
+        let mut db = glyphon::fontdb::Database::new();
+        db.set_sans_serif_family("DejaVu Sans");
+        db.set_serif_family("DejaVu Serif");
+        db.set_monospace_family("DejaVu Sans Mono");
+        std::sync::Mutex::new(db)
+    })
+}
+
+// Shaping with an empty font database panics.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn sync_browser_fonts(font_system: &mut glyphon::FontSystem) -> bool {
+    let registered = browser_fonts()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .len();
+    if font_system.db().len() != registered {
+        *font_system = new_font_system();
+    }
+    !font_system.db().is_empty()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn sync_browser_fonts(_font_system: &mut glyphon::FontSystem) -> bool {
+    true
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn register_browser_font(data: Vec<u8>) {
+    browser_fonts()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .load_font_data(data);
+}
+
 pub use animated_gradient::*;
 pub use background::*;
 pub use blur::*;
@@ -142,6 +191,7 @@ pub use mask::*;
 pub use notch::*;
 pub use shape::*;
 pub use text::*;
+pub use waveform::*;
 
 #[cfg(test)]
 mod font_tests {

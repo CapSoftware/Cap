@@ -73,6 +73,7 @@ async fn fixture_with(with_overlay: bool, with_mask: bool) -> Fixture {
         frozen_recorded_cursors: None,
         project_styles: ProjectStyleCache::default(),
         audio_levels: Default::default(),
+        waveform_levels: crate::AudioLevelStore::default(),
         background_textures: Arc::new(BackgroundTextureCache::default()),
         is_software_adapter: false,
     };

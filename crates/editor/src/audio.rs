@@ -2102,6 +2102,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
         timeline,
         overlay_order: _,
         overlay_order_with_shapes: _,
+        hide_display: _,
         captions: _,
         keyboard: _,
         clips,
@@ -2134,6 +2135,7 @@ fn audio_project_key(project: &ProjectConfiguration) -> Option<Vec<u8>> {
             image_segments: _,
             shape_segments: _,
             camera3d_segments: _,
+            waveform_segments: _,
         } = timeline;
         let segments = segments
             .iter()
@@ -3739,6 +3741,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             clips: vec![
                 ClipConfiguration {
@@ -3947,6 +3950,7 @@ mod tests {
                     keyboard_segments: Vec::new(),
                     audio_segments: Vec::new(),
                     camera3d_segments: Vec::new(),
+                    waveform_segments: Vec::new(),
                 }),
                 clips: vec![ClipConfiguration {
                     index: 0,
@@ -4236,6 +4240,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
@@ -4354,6 +4359,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             clips: vec![
                 ClipConfiguration {
@@ -4586,6 +4592,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
@@ -4629,6 +4636,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments: Vec::new(),
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
@@ -4773,6 +4781,7 @@ mod tests {
                 keyboard_segments: Vec::new(),
                 audio_segments,
                 camera3d_segments: Vec::new(),
+                waveform_segments: Vec::new(),
             }),
             clips: vec![ClipConfiguration {
                 index: 0,
@@ -5178,6 +5187,7 @@ mod tests {
                     keyboard_segments: Vec::new(),
                     audio_segments: vec![music_track_segment(&music_path, 0.5, 4.0, 0.3, 0.4)],
                     camera3d_segments: Vec::new(),
+                    waveform_segments: Vec::new(),
                 }),
                 clips: vec![ClipConfiguration {
                     index: 0,

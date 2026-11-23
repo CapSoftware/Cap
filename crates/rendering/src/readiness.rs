@@ -1,5 +1,5 @@
+use crate::platform::Instant;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 static NEXT_PHASE_ID: AtomicU64 = AtomicU64::new(1);
 

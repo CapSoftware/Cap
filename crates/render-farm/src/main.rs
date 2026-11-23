@@ -12,10 +12,12 @@
 //!   the global packet grid, with pre-roll so sections join seamlessly.
 
 mod audio;
+mod prepare;
 mod project;
 #[cfg(test)]
 mod source_limit_tests;
 mod video;
+mod web_project;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -72,6 +74,8 @@ enum Op {
     Probe(ProbeRequest),
     Video(video::VideoRequest),
     Audio(audio::AudioRequest),
+    Prepare(Box<prepare::PrepareRequest>),
+    DefaultConfig,
     Warm,
     Ping,
 }
@@ -120,6 +124,8 @@ async fn handle(op: Op) -> Result<Value> {
         Op::Probe(request) => probe(request).await?,
         Op::Video(request) => serde_json::to_value(video::render(request).await?)?,
         Op::Audio(request) => serde_json::to_value(audio::render(request).await?)?,
+        Op::Prepare(request) => prepare::prepare(*request)?,
+        Op::DefaultConfig => prepare::default_config()?,
         Op::Warm => video::warm().await?,
         Op::Ping => json!({ "pong": true }),
     })

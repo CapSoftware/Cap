@@ -12,6 +12,7 @@ pub mod keyboard;
 mod late_audio;
 mod meta;
 mod shapes;
+pub mod web_input;
 
 pub use animated_gradient::*;
 pub use audio_visuals::*;

@@ -819,6 +819,7 @@ mod tests {
             image_segments: Vec::new(),
             shape_segments: Vec::new(),
             camera3d_segments: Vec::new(),
+            waveform_segments: Vec::new(),
         });
         project
     }

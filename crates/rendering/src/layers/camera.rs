@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     CompositeVideoFrameUniforms, DecodedFrame, PixelFormat,
-    composite_frame::CompositeVideoFramePipeline,
+    composite_frame::{CompositeDraw, CompositeVideoFramePipeline, texture_holds_frame},
     decoder::DecodedFrameStorageIdentity,
     yuv_converter::{YuvConverterPipelines, YuvToRgbaConverter},
 };
@@ -28,6 +28,7 @@ pub struct CameraLayer {
     blur_bind_group: Option<wgpu::BindGroup>,
     blur_active: bool,
     blur_cache: Option<BlurCacheEntry>,
+    draw: CompositeDraw,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +98,7 @@ impl CameraLayer {
             blur_bind_group: None,
             blur_active: false,
             blur_cache: None,
+            draw: CompositeDraw::default(),
         }
     }
 
@@ -113,11 +115,16 @@ impl CameraLayer {
             self.hidden = true;
             return;
         };
+        let mut uniforms = uniforms;
+        if let Some((_, frame, _)) = &frame_data {
+            frame.apply_source_color_fix(&mut uniforms);
+        }
 
         let has_previous_frame = self.last_recording_time.is_some();
         self.hidden = frame_data.is_none() && !has_previous_frame;
 
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        self.draw = CompositeDraw::new(&uniforms);
 
         let Some((frame_size, camera_frame, recording_time)) = frame_data else {
             return;
@@ -125,15 +132,23 @@ impl CameraLayer {
 
         let format = camera_frame.format();
         self.yuv_converter.set_matrix(camera_frame.matrix());
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_browser_nv12(camera_frame.browser_nv12());
         let frame_storage = camera_frame.storage_identity();
 
-        let is_same_frame = self
+        let is_same_frame = (self
             .last_frame_storage
             .as_ref()
             .is_some_and(|last| last.matches(&frame_storage))
             || self
                 .last_recording_time
-                .is_some_and(|last| (last - recording_time).abs() < 0.001);
+                .is_some_and(|last| (last - recording_time).abs() < 0.001))
+            && texture_holds_frame(
+                &self.frame_textures[self.current_texture],
+                frame_size.x,
+                frame_size.y,
+            );
 
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
@@ -142,28 +157,31 @@ impl CameraLayer {
 
             match format {
                 PixelFormat::Rgba => {
-                    let frame_data_bytes = camera_frame.data();
-                    let src_bytes_per_row = frame_size.x * 4;
+                    if !camera_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data_bytes = camera_frame.data();
+                        let src_bytes_per_row = frame_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data_bytes,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(frame_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: frame_size.x,
-                            height: frame_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data_bytes,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(frame_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: frame_size.x,
+                                height: frame_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                 }
                 PixelFormat::Nv12 => {
                     if let Err(e) = self.yuv_converter.prepare_for_dimensions(
@@ -382,11 +400,16 @@ impl CameraLayer {
             self.hidden = true;
             return;
         };
+        let mut uniforms = uniforms;
+        if let Some((_, frame, _)) = &frame_data {
+            frame.apply_source_color_fix(&mut uniforms);
+        }
 
         let has_previous_frame = self.last_recording_time.is_some();
         self.hidden = frame_data.is_none() && !has_previous_frame;
 
         queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        self.draw = CompositeDraw::new(&uniforms);
 
         let Some((frame_size, camera_frame, recording_time)) = frame_data else {
             return;
@@ -394,15 +417,23 @@ impl CameraLayer {
 
         let format = camera_frame.format();
         self.yuv_converter.set_matrix(camera_frame.matrix());
+        #[cfg(target_arch = "wasm32")]
+        self.yuv_converter
+            .set_browser_nv12(camera_frame.browser_nv12());
         let frame_storage = camera_frame.storage_identity();
 
-        let is_same_frame = self
+        let is_same_frame = (self
             .last_frame_storage
             .as_ref()
             .is_some_and(|last| last.matches(&frame_storage))
             || self
                 .last_recording_time
-                .is_some_and(|last| (last - recording_time).abs() < 0.001);
+                .is_some_and(|last| (last - recording_time).abs() < 0.001))
+            && texture_holds_frame(
+                &self.frame_textures[self.current_texture],
+                frame_size.x,
+                frame_size.y,
+            );
 
         if !is_same_frame {
             let next_texture = 1 - self.current_texture;
@@ -414,28 +445,31 @@ impl CameraLayer {
 
             match format {
                 PixelFormat::Rgba => {
-                    let frame_data_bytes = camera_frame.data();
-                    let src_bytes_per_row = frame_size.x * 4;
+                    if !camera_frame.upload_browser_frame(queue, &self.frame_textures[next_texture])
+                    {
+                        let frame_data_bytes = camera_frame.data();
+                        let src_bytes_per_row = frame_size.x * 4;
 
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.frame_textures[next_texture],
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        frame_data_bytes,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(src_bytes_per_row),
-                            rows_per_image: Some(frame_size.y),
-                        },
-                        wgpu::Extent3d {
-                            width: frame_size.x,
-                            height: frame_size.y,
-                            depth_or_array_layers: 1,
-                        },
-                    );
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.frame_textures[next_texture],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            frame_data_bytes,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(src_bytes_per_row),
+                                rows_per_image: Some(frame_size.y),
+                            },
+                            wgpu::Extent3d {
+                                width: frame_size.x,
+                                height: frame_size.y,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
                 }
                 PixelFormat::Nv12 => {
                     #[cfg(target_os = "macos")]
@@ -622,9 +656,7 @@ impl CameraLayer {
         };
 
         if let Some(bind_group) = bind_group {
-            pass.set_pipeline(&self.pipeline.render_pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            self.draw.draw(&self.pipeline, bind_group, pass);
         }
     }
 

@@ -94,6 +94,15 @@ impl AnimatedGradientLayer {
         config: AnimatedGradientConfig,
         project: &ProjectUniforms,
     ) -> Self {
+        Self::new_for_format(device, config, project, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    pub fn new_for_format(
+        device: &wgpu::Device,
+        config: AnimatedGradientConfig,
+        project: &ProjectUniforms,
+        output_format: wgpu::TextureFormat,
+    ) -> Self {
         let normalized = config.normalized();
         let uniforms = AnimatedGradientUniforms::new(
             &normalized,
@@ -180,11 +189,7 @@ impl AnimatedGradientLayer {
             "fs_surface",
             wgpu::TextureFormat::Rgba16Float,
         );
-        let composite_pipeline = pipeline(
-            &composite_layout,
-            "fs_main",
-            wgpu::TextureFormat::Rgba8Unorm,
-        );
+        let composite_pipeline = pipeline(&composite_layout, "fs_main", output_format);
         let surface_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Animated gradient surface bind group"),
             layout: &surface_layout,

@@ -13,6 +13,7 @@ pub enum YuvMatrix {
 }
 
 impl YuvMatrix {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_color_space(space: ffmpeg::util::color::Space) -> Self {
         match space {
             ffmpeg::util::color::Space::BT709 => Self::Bt709,
@@ -669,6 +670,7 @@ pub fn yuv420p_to_rgba_with_matrix(
 /// Planar limited-range 4:4:4 to tightly packed RGBA, bands of rows in
 /// parallel. Full-resolution chroma needs no upsampling, so each pixel is the
 /// same fixed-point matrix the 4:2:0 paths use.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn yuv444p_to_rgba_with_matrix(
     planes: [(&[u8], usize); 3],
     width: usize,

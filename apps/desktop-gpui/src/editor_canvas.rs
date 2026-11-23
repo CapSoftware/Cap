@@ -1613,7 +1613,7 @@ impl EditorWindow {
                             }
                         }
                     }
-                    OverlayTrackKind::Shape => {}
+                    OverlayTrackKind::Shape | OverlayTrackKind::Waveform => {}
                     OverlayTrackKind::Text => {
                         for (index, segment) in timeline
                             .text_segments
