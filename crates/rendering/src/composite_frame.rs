@@ -236,6 +236,35 @@ mod shader_cache_tests {
         Some((adapter, device, queue))
     }
 
+    fn assert_saved_cache(path: &std::path::Path, rejected: &[u8]) {
+        let stored = std::fs::read(path).expect("shader cache file after recovery");
+        assert!(!stored.is_empty(), "shader cache file is empty");
+        assert_ne!(stored.as_slice(), rejected);
+    }
+
+    fn reload_saved_cache(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path: &std::path::Path,
+        rejected: &[u8],
+        logs: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        assert_saved_cache(path, rejected);
+        let mark = logs.lock().unwrap().len();
+        let pipeline = CompositeVideoFramePipeline::new(device);
+        assert_eq!(draw_red(device, queue, &pipeline), vec![255, 0, 0, 255]);
+        let text = {
+            let bytes = logs.lock().unwrap();
+            String::from_utf8_lossy(&bytes[mark..]).into_owned()
+        };
+        assert!(!text.contains("uncaptured wgpu error"), "{text}");
+        assert!(
+            !text.contains("shader cache rejected"),
+            "saved cache was rejected on reload: {text}"
+        );
+        assert_saved_cache(path, rejected);
+    }
+
     fn draw_red(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -377,15 +406,17 @@ mod shader_cache_tests {
         );
         crate::log_uncaptured_errors(&device, "shader-cache-test");
 
-        std::fs::write(&path, foreign_header()).unwrap();
+        let foreign = foreign_header();
+        std::fs::write(&path, &foreign).unwrap();
         let pipeline = CompositeVideoFramePipeline::new(&device);
-        let stored = std::fs::read(&path).unwrap_or_default();
-        assert_ne!(stored, foreign_header());
         assert_eq!(draw_red(&device, &queue, &pipeline), vec![255, 0, 0, 255]);
+        reload_saved_cache(&device, &queue, &path, &foreign, &logs);
 
-        std::fs::write(&path, b"not-a-cache").unwrap();
+        let corrupt = b"not-a-cache";
+        std::fs::write(&path, corrupt).unwrap();
         let pipeline = CompositeVideoFramePipeline::new(&device);
         assert_eq!(draw_red(&device, &queue, &pipeline), vec![255, 0, 0, 255]);
+        reload_saved_cache(&device, &queue, &path, corrupt, &logs);
 
         let text = String::from_utf8(logs.lock().unwrap().clone()).unwrap_or_default();
         assert!(!text.contains("uncaptured wgpu error"), "{text}");
