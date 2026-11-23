@@ -4,6 +4,9 @@ import {
 	buildPrefix,
 	type FragmentedInit,
 	FragmentSamples,
+	MAX_MFRA_BYTES,
+	MAX_MOOF_BYTES,
+	MAX_OTHER_SAMPLES,
 	mfraMoofs,
 	parseFragmentedInit,
 	prefixProvenance,
@@ -311,5 +314,144 @@ describe("fragment index", () => {
 	test("a moov with no mvex is not a fragmented recording", () => {
 		const moov = box("moov", fullBox("mvhd", 0, 0, new Uint8Array(96)));
 		expect(parseFragmentedInit(moov, 0)).toBeNull();
+	});
+	test("a crafted run in another track can't stall the walk", () => {
+		const recording = fragmentedRecording({ frames: 2, gop: 30, audio: true });
+		const init = initOf(recording.bytes);
+		const traf = (track: number, flags: number, run: Uint8Array) =>
+			box(
+				"traf",
+				fullBox(
+					"tfhd",
+					0,
+					0x20010,
+					build((writer) => {
+						writer.u32(track);
+						writer.u32(9);
+					}),
+				),
+				fullBox("trun", 0, flags, run),
+			);
+		// 2^32 - 1 audio samples with no per-sample fields: nothing bounds the
+		// count but the run is a product, so it's skipped rather than walked.
+		const moof = box(
+			"moof",
+			traf(
+				2,
+				0,
+				build((writer) => writer.u32(0xffffffff)),
+			),
+			traf(
+				1,
+				0x200,
+				build((writer) => {
+					writer.u32(2);
+					writer.u32(10);
+					writer.u32(20);
+				}),
+			),
+		);
+		const samples = new FragmentSamples();
+		readMoof(moof, 5000, init, samples);
+		expect(samples.otherSamples).toBe(0);
+		expect(samples.sizes).toEqual([10, 20]);
+		expect(samples.positions).toEqual([5000, 5010]);
+
+		// With per-sample fields the count is walked, so every track is capped.
+		const sized = box(
+			"moof",
+			traf(
+				2,
+				0x200,
+				build((writer) => {
+					writer.u32(2);
+					writer.u32(9);
+					writer.u32(9);
+				}),
+			),
+		);
+		const near = new FragmentSamples();
+		near.otherSamples = MAX_OTHER_SAMPLES - 1;
+		expect(() => readMoof(sized, 0, init, near)).toThrow(
+			`more than ${MAX_OTHER_SAMPLES} samples in other tracks`,
+		);
+		expect(() =>
+			readMoof(
+				box("moof", box("traf", fullBox("tfhd", 0, 0, new Uint8Array(0)))),
+				0,
+				init,
+				new FragmentSamples(),
+			),
+		).toThrow(UnsupportedSource);
+	});
+
+	test("an oversized mfra, moof or box count is refused without reading it", async () => {
+		const recording = fragmentedRecording({ frames: 60, gop: 30 });
+		const init = initOf(recording.bytes);
+		const mfro = fullBox(
+			"mfro",
+			0,
+			0,
+			build((writer) => writer.u32(0xfffffff0)),
+		);
+		const withMfro = new Uint8Array(recording.bytes.byteLength + 16);
+		withMfro.set(recording.bytes);
+		withMfro.set(mfro, recording.bytes.byteLength);
+		expect(MAX_MFRA_BYTES).toBeLessThan(0xfffffff0);
+		expect(mfraMoofs(withMfro.subarray(withMfro.byteLength - 4096), 1)).toBe(
+			null,
+		);
+		const { read, reads } = reader(withMfro);
+		const scan = await scanFragments(read, withMfro.byteLength, init, {
+			tailBytes: 4096,
+			piece: 4096,
+			windowPieces: 2,
+		});
+		expect(scan).toMatchObject({ usedMfra: false, fragments: 2 });
+		expect(
+			Math.max(...reads.map(([start, end]) => end - start + 1)),
+		).toBeLessThanOrEqual(4096);
+
+		// A moof header claiming more than any recording writes, in a file
+		// that is said to be that large: refused before it is fetched.
+		const huge = new Uint8Array(init.moovEnd + 8);
+		huge.set(recording.bytes.subarray(0, init.moovEnd));
+		new DataView(huge.buffer).setUint32(init.moovEnd, MAX_MOOF_BYTES + 8);
+		huge.set(new TextEncoder().encode("moof"), init.moovEnd + 4);
+		const claimed = init.moovEnd + MAX_MOOF_BYTES + 8;
+		const hugeReads: [number, number][] = [];
+		await expect(
+			scanFragments(
+				async (start, end) => {
+					hugeReads.push([start, end]);
+					const out = new Uint8Array(end + 1 - start);
+					out.set(huge.subarray(start, Math.min(end + 1, huge.byteLength)));
+					return out;
+				},
+				claimed,
+				init,
+				{ tailBytes: 16, piece: 4096, windowPieces: 2 },
+			),
+		).rejects.toThrow(`a ${MAX_MOOF_BYTES + 8} byte moof`);
+		expect(hugeReads.every(([start, end]) => end - start < 1 << 20)).toBe(true);
+
+		// A flood of empty boxes ends at the box cap, not the end of the file.
+		const flood = new Uint8Array(init.moovEnd + 8 * 100);
+		flood.set(recording.bytes.subarray(0, init.moovEnd));
+		for (let index = 0; index < 100; index++) {
+			const at = init.moovEnd + index * 8;
+			new DataView(flood.buffer).setUint32(at, 8);
+			flood.set(new TextEncoder().encode("free"), at + 4);
+		}
+		await expect(
+			scanFragments(reader(flood).read, flood.byteLength, init, {
+				maxBoxes: 50,
+			}),
+		).rejects.toThrow("more than 50 top-level boxes");
+		await expect(
+			scanFragments(reader(flood).read, flood.byteLength, init, {
+				maxBoxes: 100,
+			}),
+		).resolves.toMatchObject({ fragments: 0 });
 	});
 });

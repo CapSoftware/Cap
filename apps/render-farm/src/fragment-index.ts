@@ -141,9 +141,11 @@ export function parseFragmentedInit(
 			throw new UnsupportedSource("the video track has an edit list");
 		}
 		const tkhd = need(trakChildren, "tkhd");
+		requireBody(tkhd, 24);
 		const tkhdVersion = view.getUint8(tkhd.body);
 		const trackId = view.getUint32(tkhd.body + (tkhdVersion === 1 ? 20 : 12));
 		const mdhd = need(mdiaChildren, "mdhd");
+		requireBody(mdhd, 24);
 		const timescale = view.getUint32(
 			mdhd.body + (view.getUint8(mdhd.body) === 1 ? 20 : 12),
 		);
@@ -153,7 +155,9 @@ export function parseFragmentedInit(
 		const stbl = need(minfChildren, "stbl");
 		const stblChildren = childrenOf(view, stbl);
 		const stsd = need(stblChildren, "stsd");
+		requireBody(stsd, 8);
 		const stsz = only(stblChildren, "stsz");
+		if (stsz) requireBody(stsz, 12);
 		if (stsz && view.getUint32(stsz.body + 8) !== 0) {
 			throw new UnsupportedSource("samples in the moov as well as fragments");
 		}
@@ -208,6 +212,8 @@ export class FragmentSamples {
 	positions: number[] = [];
 	sync: boolean[] = [];
 	lastDuration = 0;
+	/** Other tracks' samples walked one by one for their per-sample fields. */
+	otherSamples = 0;
 	/** Decode time the next fragment starts at when it carries no tfdt. */
 	nextDts = 0;
 	firstDts: number | null = null;
@@ -234,6 +240,20 @@ const TRUN_COMPOSITION = 0x800;
 const SAMPLE_NON_SYNC = 0x10000;
 const SAMPLE_DEPENDS_YES = 0x1000000;
 
+// Uploads are untrusted: every count read from them bounds a loop or a read.
+// A browser writes a moof a second and its mfra lists one entry per moof, so
+// these sit far above any real recording.
+export const MAX_MOOF_BYTES = 64 << 20;
+export const MAX_MFRA_BYTES = 32 << 20;
+export const MAX_OTHER_SAMPLES = 4 * MAX_SAMPLES;
+export const MAX_TOP_LEVEL_BOXES = 4 * MAX_SAMPLES;
+
+function requireBody(found: Box, bytes: number) {
+	if (found.end - found.body < bytes) {
+		throw new UnsupportedSource(`${found.type} is too short`);
+	}
+}
+
 /**
  * Appends the video track's samples from one moof (`moof` = the whole box,
  * which starts at `position` in the file). Other tracks' runs are walked
@@ -253,11 +273,21 @@ export function readMoof(
 		if (traf.type !== "traf") continue;
 		const trafChildren = childrenOf(view, traf);
 		const tfhd = need(trafChildren, "tfhd");
+		requireBody(tfhd, 8);
 		const tfhdFlags = view.getUint32(tfhd.body) & 0xffffff;
 		const trackId = view.getUint32(tfhd.body + 4);
 		const trex = init.defaults.get(trackId);
 		if (!trex)
 			throw new UnsupportedSource(`fragment for unknown track ${trackId}`);
+		requireBody(
+			tfhd,
+			8 +
+				(tfhdFlags & TFHD_BASE_OFFSET ? 8 : 0) +
+				4 *
+					[TFHD_DESCRIPTION, TFHD_DURATION, TFHD_SIZE, TFHD_FLAGS].filter(
+						(bit) => tfhdFlags & bit,
+					).length,
+		);
 		let at = tfhd.body + 8;
 		let base = previousEnd;
 		if (tfhdFlags & TFHD_BASE_OFFSET) {
@@ -290,6 +320,8 @@ export function readMoof(
 		const tfdt = only(trafChildren, "tfdt");
 		let dts = samples.nextDts;
 		if (video && tfdt) {
+			requireBody(tfdt, 8);
+			requireBody(tfdt, view.getUint8(tfdt.body) === 1 ? 12 : 8);
 			dts =
 				view.getUint8(tfdt.body) === 1
 					? Number(view.getBigUint64(tfdt.body + 4))
@@ -302,6 +334,7 @@ export function readMoof(
 		}
 		for (const trun of trafChildren) {
 			if (trun.type !== "trun") continue;
+			requireBody(trun, 8);
 			const version = view.getUint8(trun.body);
 			const flags = view.getUint32(trun.body) & 0xffffff;
 			const count = view.getUint32(trun.body + 4);
@@ -325,6 +358,20 @@ export function readMoof(
 			}
 			if (video && samples.count + count > MAX_SAMPLES) {
 				throw new UnsupportedSource(`more than ${MAX_SAMPLES} video samples`);
+			}
+			if (!video && !(flags & TRUN_SIZE)) {
+				// Only the run's length matters here, and with one size for every
+				// sample that is a product: a count of 2^32 costs nothing.
+				dataAt += count * defaultSize;
+				continue;
+			}
+			if (!video) {
+				samples.otherSamples += count;
+				if (samples.otherSamples > MAX_OTHER_SAMPLES) {
+					throw new UnsupportedSource(
+						`more than ${MAX_OTHER_SAMPLES} samples in other tracks`,
+					);
+				}
 			}
 			for (let index = 0; index < count; index++) {
 				let duration = defaultDuration;
@@ -386,15 +433,16 @@ export function mfraMoofs(tail: Uint8Array, trackId: number) {
 		return null;
 	}
 	const size = view.getUint32(mfro + 12);
+	if (size > MAX_MFRA_BYTES) return null;
 	const start = tail.byteLength - size;
 	if (size < 24 || start < 0) return { size };
 	const mfra = boxAt(view, start, tail.byteLength);
 	if (!mfra || mfra.type !== "mfra") return null;
 	const moofs = new Set<number>();
 	for (const tfra of childrenOf(view, mfra)) {
-		if (tfra.type !== "tfra" || view.getUint32(tfra.body + 4) !== trackId) {
-			continue;
-		}
+		if (tfra.type !== "tfra") continue;
+		requireBody(tfra, 16);
+		if (view.getUint32(tfra.body + 4) !== trackId) continue;
 		const version = view.getUint8(tfra.body);
 		const lengths = view.getUint32(tfra.body + 8);
 		const skip =
@@ -571,8 +619,10 @@ export async function scanFragments(
 		piece?: number;
 		windowPieces?: number;
 		tailBytes?: number;
+		maxBoxes?: number;
 	} = {},
 ): Promise<FragmentScan> {
+	const maxBoxes = options.maxBoxes ?? MAX_TOP_LEVEL_BOXES;
 	// 128 small reads in flight index a 2 h recording's 3,600 moofs in under
 	// a second from the coordinator; 32 took 9 s, 64 about 1.5 s.
 	const prefetch = new Prefetch(read, size, {
@@ -618,7 +668,11 @@ export async function scanFragments(
 	const samples = new FragmentSamples();
 	let fragments = 0;
 	let offset = init.moovEnd;
+	let boxes = 0;
 	while (offset + 8 <= size) {
+		if (++boxes > maxBoxes) {
+			throw new UnsupportedSource(`more than ${maxBoxes} top-level boxes`);
+		}
 		const header = await prefetch.get(offset, Math.min(size, offset + 16));
 		const found = boxAt(
 			new DataView(header.buffer, header.byteOffset, header.byteLength),
@@ -630,6 +684,9 @@ export async function scanFragments(
 		if (view32(header, 0) === 0) length = size - offset;
 		if (found.type === "moof") {
 			if (offset + length > size) throw new UnsupportedSource("truncated moof");
+			if (length > MAX_MOOF_BYTES) {
+				throw new UnsupportedSource(`a ${length} byte moof`);
+			}
 			readMoof(
 				await prefetch.get(offset, offset + length),
 				offset,
