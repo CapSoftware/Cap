@@ -2,7 +2,6 @@ import { S3, type S3Config } from "./s3";
 
 const servers: ReturnType<typeof Bun.serve>[] = [];
 
-/** A real HTTP server on a free loopback port, stopped by `stopLocalS3`. */
 export function localServer(
 	handle: (request: Request) => Response | Promise<Response>,
 ) {
@@ -35,11 +34,6 @@ export type StoredObject = {
 	contentType: string | null;
 };
 
-/**
- * A path-style S3 bucket kept in memory: PUT, HEAD, GET with byte ranges and
- * multipart uploads. `before` sees every request first and may hold it or
- * answer it instead.
- */
 export function memoryBucket(
 	bucket = "bucket",
 	options: {
