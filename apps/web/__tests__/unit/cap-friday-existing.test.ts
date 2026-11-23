@@ -348,6 +348,10 @@ describe("Cap Friday for existing subscribers", () => {
 
 		beforeEach(() => {
 			mockStripe.charges.retrieve.mockResolvedValue({
+				...CHARGE,
+				disputed: false,
+			});
+			mockStripe.charges.retrieve.mockResolvedValue({
 				id: "ch_1",
 				invoice: "in_1",
 				amount: 7200,
@@ -415,7 +419,11 @@ describe("Cap Friday for existing subscribers", () => {
 			);
 		});
 
-		it("undoes a failed refund's slice so a dispute never takes more than the credit", async () => {
+		it("a dispute after a failed refund takes back only the rest of the credit", async () => {
+			mockStripe.charges.retrieve.mockResolvedValue({
+				...CHARGE,
+				disputed: true,
+			});
 			mockStripe.invoices.retrieve.mockResolvedValue(
 				prepay({ cfRev_re_1: "cbtxn_old:7200" }),
 			);
@@ -427,36 +435,36 @@ describe("Cap Friday for existing subscribers", () => {
 			await reverseCapFridayCredit({
 				object: "dispute",
 				id: "dp_1",
-				charge: CHARGE,
+				charge: "ch_1",
 			} as never);
 			const calls = mockStripe.customers.createBalanceTransaction.mock.calls;
-			const total = calls.reduce((sum, call) => sum + call[1].amount, 0);
 			expect(
 				calls.map((call) => [call[1].amount, call[2].idempotencyKey]),
-			).toEqual([
-				[-7200, "capfriday-reverse-re_1-undo"],
-				[14400, "capfriday-reverse-dp_1"],
-			]);
-			expect(7200 + total).toBe(14400);
+			).toEqual([[7200, "capfriday-reverse-dp_1"]]);
 		});
 
-		it("a dispute takes back whatever refunds have not", async () => {
+		it("never undoes a refund on a disputed charge, even with a zero dispute slice", async () => {
+			mockStripe.charges.retrieve.mockResolvedValue({
+				...CHARGE,
+				disputed: true,
+			});
 			mockStripe.invoices.retrieve.mockResolvedValue(
-				prepay({ cfRev_re_1: "cbtxn_old:7200" }),
+				prepay({ cfRev_re_1: "cbtxn_a:14400" }),
 			);
-			refundsOf(1800);
+			mockStripe.refunds.list.mockReturnValue({
+				autoPagingToArray: async () => [
+					{ id: "re_1", amount: 7200, created: 100, status: "failed" },
+				],
+			});
 			await reverseCapFridayCredit({
-				object: "dispute",
-				id: "dp_1",
+				object: "refund",
+				id: "re_1",
 				charge: "ch_1",
+				status: "failed",
 			} as never);
 			expect(
 				mockStripe.customers.createBalanceTransaction,
-			).toHaveBeenCalledWith(
-				"cus_1",
-				expect.objectContaining({ amount: 10800 }),
-				{ idempotencyKey: "capfriday-reverse-dp_1" },
-			);
+			).not.toHaveBeenCalled();
 		});
 
 		it("undoes a failed refund when its failure event arrives", async () => {
@@ -485,6 +493,10 @@ describe("Cap Friday for existing subscribers", () => {
 		});
 
 		it("keeps a dispute's recovery when a refund it counted fails later", async () => {
+			mockStripe.charges.retrieve.mockResolvedValue({
+				...CHARGE,
+				disputed: true,
+			});
 			mockStripe.invoices.retrieve.mockResolvedValue(
 				prepay({
 					cfRev_re_1: "cbtxn_a:7200",

@@ -575,10 +575,10 @@ async function withIdempotencyRetry<T>(request: () => Promise<T>): Promise<T> {
 		try {
 			return await request();
 		} catch (error) {
-			if (
-				(error as { type?: string }).type !== "StripeIdempotencyError" ||
-				attempt >= 4
-			) {
+			const conflict =
+				(error as { statusCode?: number }).statusCode === 409 ||
+				(error as { type?: string }).type === "StripeIdempotencyError";
+			if (!conflict || attempt >= 4) {
 				throw error;
 			}
 			await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
@@ -649,28 +649,36 @@ export async function reverseCapFridayCredit(
 		});
 	}
 	const counted = slices.reduce((total, slice) => total + slice.amount, 0);
-	// Once a dispute has taken back the rest of the credit, undoing a refund
-	// it counted would hand that part of the credit back.
-	const disputeSettled = Object.keys(invoice.metadata ?? {}).some((key) =>
-		key.startsWith("cfDisp_"),
-	);
-	for (const refund of disputeSettled
-		? []
-		: refunds.filter((refund) => !live(refund))) {
-		const posted = postedAmount(invoice, `cfRev_${refund.id}`);
-		if (posted > 0) {
-			slices.push({
-				id: `${refund.id}-undo`,
-				amount: -posted,
-				key: `cfUnrev_${refund.id}`,
-				label: "restored after a refund failed",
-			});
+	const failed = refunds.filter((refund) => !live(refund));
+	// The dispute state comes from Stripe, not from our own markers, so a
+	// zero-amount or concurrently posted dispute slice can't be missed. On a
+	// disputed charge the dispute owns whatever refunds don't, including slices
+	// already posted for refunds that later failed, so nothing is undone.
+	const { disputed } = await stripe().charges.retrieve(charge.id);
+	if (!disputed && source.object !== "dispute") {
+		for (const refund of failed) {
+			const posted = postedAmount(invoice, `cfRev_${refund.id}`);
+			if (posted > 0) {
+				slices.push({
+					id: `${refund.id}-undo`,
+					amount: -posted,
+					key: `cfUnrev_${refund.id}`,
+					label: "restored after a refund failed",
+				});
+			}
 		}
 	}
 	if (source.object === "dispute") {
+		const stranded = failed.reduce(
+			(total, refund) =>
+				invoice.metadata?.[`cfUnrev_${refund.id}`]
+					? total
+					: total + postedAmount(invoice, `cfRev_${refund.id}`),
+			0,
+		);
 		slices.push({
 			id: source.id,
-			amount: credit - counted,
+			amount: Math.max(0, credit - counted - stranded),
 			key: `cfDisp_${source.id}`,
 			label: "after a dispute",
 		});
