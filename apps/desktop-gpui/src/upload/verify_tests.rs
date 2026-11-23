@@ -38,6 +38,9 @@ const RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 const SETTLE: Duration = Duration::from_millis(50);
 const WORKED: Duration = Duration::from_micros(200);
+const MIN_IDLE_STEP: Duration = Duration::from_millis(1);
+// Caps how far virtual time can pass an app-side wake during a quiet step.
+const MAX_IDLE_STEP: Duration = Duration::from_millis(8);
 
 #[derive(Default)]
 struct Activity {
@@ -94,15 +97,24 @@ pub(super) fn virtual_time<F: Future>(future: F) -> F::Output {
         .unwrap()
         .block_on(async {
             let ticker = tokio::spawn(async move {
+                // A 1 ms tick costs ~35 us of real time on the macOS CI VMs
+                // (~1.3 us on Linux), so hour-long windows took minutes.
+                // Timers still fire at their exact deadlines; only quiet
+                // stretches advance in longer steps.
+                let mut idle_step = MIN_IDLE_STEP;
                 loop {
                     if activity.busy() {
+                        idle_step = MIN_IDLE_STEP;
                         std::thread::sleep(Duration::from_micros(50));
                         tokio::task::yield_now().await;
                     } else {
                         let step = std::time::Instant::now();
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(idle_step).await;
                         if step.elapsed() > WORKED {
                             activity.touch();
+                            idle_step = MIN_IDLE_STEP;
+                        } else {
+                            idle_step = (idle_step * 2).min(MAX_IDLE_STEP);
                         }
                     }
                 }
