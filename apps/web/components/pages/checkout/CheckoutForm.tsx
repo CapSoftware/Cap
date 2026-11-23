@@ -24,6 +24,11 @@ import {
 	setProCheckoutUsEin,
 } from "@/actions/billing/checkout";
 import { trackEvent } from "@/app/utils/analytics";
+import { useEnded } from "@/components/pages/blackfriday/Claim";
+import {
+	CODE as CAP_FRIDAY_CODE,
+	ENDS_LABEL,
+} from "@/components/pages/blackfriday/content";
 import {
 	BODY_TEXT,
 	BTN_PRIMARY,
@@ -103,6 +108,11 @@ const discountedPerUser = (
 	};
 };
 
+const CAP_FRIDAY_COPY = {
+	title: "50% off Cap Pro Yearly",
+	subtitle: `Your Cap Friday price is applied. The offer ends ${ENDS_LABEL}.`,
+};
+
 const INPUT =
 	"h-[44px] w-full rounded-[10px] border border-[#D3DCE6] bg-white px-3 text-[16px] text-[#111111] shadow-[0_1px_1px_rgba(17,17,17,0.03)] sm:text-[15px] outline-none transition-[border-color,box-shadow] placeholder:text-[rgba(17,17,17,0.38)] hover:border-[#B9C6D4] focus:border-[#55A0EA] focus:shadow-[0_0_0_3px_rgba(85,160,234,0.22)] aria-[invalid=true]:border-[#B4322E]";
 
@@ -127,6 +137,7 @@ export function CheckoutForm({
 }) {
 	const state = useCheckoutElements();
 	const copy = purchaseCopy(onboarding);
+	const offerEnded = useEnded();
 	const [seatsPending, setSeatsPending] = useState(false);
 
 	if (state.type === "loading") {
@@ -185,14 +196,24 @@ export function CheckoutForm({
 		);
 	}
 
+	const capFriday =
+		!offerEnded &&
+		(checkout.discountAmounts ?? []).some(
+			(discount) => discount.promotionCode?.toUpperCase() === CAP_FRIDAY_CODE,
+		);
+
 	return (
 		<CheckoutShell
 			{...copy}
+			{...(capFriday ? CAP_FRIDAY_COPY : {})}
+			capFriday={capFriday}
+			summaryTone="light"
 			summary={
 				<OrderSummary
 					checkout={checkout}
 					clientSecret={clientSecret}
 					onSeatsPendingChange={setSeatsPending}
+					capFriday={capFriday}
 				/>
 			}
 		>
@@ -210,10 +231,12 @@ function OrderSummary({
 	checkout,
 	clientSecret,
 	onSeatsPendingChange,
+	capFriday,
 }: {
 	checkout: Checkout;
 	clientSecret: Promise<string>;
 	onSeatsPendingChange: (pending: boolean) => void;
+	capFriday: boolean;
 }) {
 	const lineItem = checkout.lineItems[0];
 	const plan: CheckoutPlan =
@@ -249,7 +272,10 @@ function OrderSummary({
 
 	return (
 		<div className="flex flex-col">
-			<PlanHeading tag="Most popular" />
+			<PlanHeading
+				tag={capFriday ? "Cap Friday" : "Most popular"}
+				accent={capFriday}
+			/>
 
 			<div className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1.5 sm:mt-6">
 				<span className="whitespace-nowrap text-[38px] sm:text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
@@ -349,7 +375,20 @@ const FRIDAY_CHIP = {
 	color: "#FFB59A",
 } as const;
 
-export function PlanHeading({ tag, dark }: { tag: string; dark?: boolean }) {
+const FRIDAY_CHIP_LIGHT = {
+	background: "rgba(255,77,141,0.12)",
+	color: "#C4245E",
+} as const;
+
+export function PlanHeading({
+	tag,
+	dark,
+	accent,
+}: {
+	tag: string;
+	dark?: boolean;
+	accent?: boolean;
+}) {
 	const theme = MODE_THEME.instant;
 	return (
 		<>
@@ -360,7 +399,11 @@ export function PlanHeading({ tag, dark }: { tag: string; dark?: boolean }) {
 				<span
 					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em] transition-colors duration-700"
 					style={
-						dark ? FRIDAY_CHIP : { background: theme.chip, color: theme.glyph }
+						dark
+							? FRIDAY_CHIP
+							: accent
+								? FRIDAY_CHIP_LIGHT
+								: { background: theme.chip, color: theme.glyph }
 					}
 				>
 					{tag}
