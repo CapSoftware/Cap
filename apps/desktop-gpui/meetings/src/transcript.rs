@@ -692,7 +692,13 @@ impl Transcript {
         let mut echoes = Vec::new();
         for mic in self.utterances.iter().filter(|u| u.source == Source::Mic) {
             let words = timed_words(mic);
-            if words.len() < ECHO_MIN_WORDS || words.len() > config.max_words {
+            if words.len() < ECHO_MIN_WORDS {
+                if short_echo(&words, &far) {
+                    echoes.push(mic.id.clone());
+                }
+                continue;
+            }
+            if words.len() > config.max_words {
                 continue;
             }
             let from = mic.start_ms.saturating_sub(config.slack_ms);
@@ -844,10 +850,42 @@ fn tail_chars(line: &str, keep: usize) -> String {
 
 const ECHO_MIN_WORDS: usize = 4;
 const ECHO_EARLY_SLACK_MS: u64 = 250;
+/// How late a short echo may be heard after the call said it: laptop
+/// speakers measured within 60 ms, and a Bluetooth speaker adds a couple of
+/// hundred.
+const SHORT_ECHO_LAG_MS: u64 = 300;
 
 struct TimedWord {
     text: String,
     start_ms: u64,
+    /// The time is the word's own, not spread over its line.
+    exact: bool,
+}
+
+/// A line too short to compare as a sentence ("Merci.", "Soft heart,") is
+/// the call coming out of the speakers when every word of it, in order, is
+/// a word the call said at that same moment. Word times on both sides are
+/// required: spread over a line they are too rough to tell an echo from
+/// someone answering "Yes" while the other person talks.
+fn short_echo(mic: &[TimedWord], far: &[TimedWord]) -> bool {
+    if mic.is_empty() || mic.iter().any(|w| !w.exact) {
+        return false;
+    }
+    let mut next = 0;
+    for word in mic {
+        let from = word.start_ms.saturating_sub(SHORT_ECHO_LAG_MS);
+        let to = word.start_ms.saturating_add(ECHO_EARLY_SLACK_MS);
+        let first = next.max(far.partition_point(|w| w.start_ms < from));
+        let Some(found) = far[first..]
+            .iter()
+            .take_while(|w| w.start_ms <= to)
+            .position(|w| w.exact && w.text == word.text)
+        else {
+            return false;
+        };
+        next = first + found + 1;
+    }
+    true
 }
 
 fn timed_words(u: &Utterance) -> Vec<TimedWord> {
@@ -860,6 +898,7 @@ fn timed_words(u: &Utterance) -> Vec<TimedWord> {
                 .map(move |text| TimedWord {
                     text,
                     start_ms: w.start_ms,
+                    exact: true,
                 })
         })
         .collect();
@@ -877,6 +916,7 @@ fn timed_words(u: &Utterance) -> Vec<TimedWord> {
             start_ms: u
                 .start_ms
                 .saturating_add(span / count * i as u64 + span % count * i as u64 / count),
+            exact: false,
         })
         .collect()
 }

@@ -370,13 +370,70 @@ fn short_replies_inside_far_speech_survive() {
                     t.upsert(utt("me", Source::Mic, offset, offset + 400, reply, true));
                 }
                 let removed = t.suppress_echo(&EchoConfig::default());
-                assert!(
+                // The call's own words at the moment it said them, within
+                // the echo delay: what the speakers play back, not a reply.
+                let copy = with_words && SHORT_COPIES.contains(&(reply, offset));
+                assert_eq!(
                     removed.is_empty(),
-                    "{reply:?} at {offset} (words: {with_words}) was removed"
+                    !copy,
+                    "{reply:?} at {offset} (words: {with_words})"
                 );
-                assert!(t.get("me").is_some());
+                assert_eq!(t.get("me").is_some(), !copy);
             }
         }
+    }
+}
+
+/// In the sweep above, the replies whose every word the far line says
+/// within the short echo window (250 ms before to 300 ms after).
+const SHORT_COPIES: [(&str, u64); 6] = [
+    ("Yes.", 14_000),
+    ("Yes.", 14_100),
+    ("Right", 14_400),
+    ("Yes, that's right", 14_000),
+    ("Yes, that's right", 14_100),
+    ("Then we ship", 15_000),
+];
+
+/// Short echoes from real meetings played through laptop speakers: the mic
+/// heard the call's words within 60 ms of the call track, as one to three
+/// word lines the sentence check never compared.
+#[test]
+fn short_echoes_of_the_call_are_removed() {
+    let mut t = Transcript::new();
+    t.upsert(timed(
+        "far1",
+        Source::System,
+        25_640,
+        "Soft heart, he said gently to her.",
+        300,
+    ));
+    t.upsert(timed("echo1", Source::Mic, 25_620, "Soft heart,", 300));
+    t.upsert(timed(
+        "far2",
+        Source::System,
+        36_000,
+        "Je propose une décision. Merci.",
+        300,
+    ));
+    t.upsert(timed("echo2", Source::Mic, 37_260, "Merci.", 300));
+    t.upsert(timed(
+        "far3",
+        Source::System,
+        80_000,
+        "He has come over the ocean for rest, and change of scene.",
+        250,
+    ));
+    t.upsert(timed("echo3", Source::Mic, 82_710, "scene.", 250));
+    // The user's own short replies while the call talks: other words, the
+    // same word well after the call said it, or no word times to compare.
+    t.upsert(timed("reply1", Source::Mic, 26_000, "Okay.", 300));
+    t.upsert(timed("reply2", Source::Mic, 27_400, "Gently.", 300));
+    t.upsert(utt("reply3", Source::Mic, 37_200, 37_600, "Merci.", true));
+    let removed = t.suppress_echo(&EchoConfig::default());
+    assert_eq!(removed, vec!["echo1", "echo2", "echo3"]);
+    for id in ["reply1", "reply2", "reply3"] {
+        assert!(t.get(id).is_some(), "{id} was removed");
     }
 }
 
