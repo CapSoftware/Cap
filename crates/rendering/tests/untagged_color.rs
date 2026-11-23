@@ -58,10 +58,13 @@ async fn editor_and_export_decode_untagged_hd_as_bt709() {
         let decoder = spawn_decoder(clip.name, path, 30, 0.0, true)
             .await
             .unwrap_or_else(|error| panic!("{} decoder: {error}", clip.name));
-        assert_eq!(
-            decoder.decoder_type(),
-            DecoderType::FFmpegSoftware,
-            "{} should use the software decoder the editor and export share",
+        let decoder_type = decoder.decoder_type();
+        assert!(
+            matches!(
+                decoder_type,
+                DecoderType::FFmpegSoftware | DecoderType::FFmpegHardware
+            ),
+            "{} decoded with {decoder_type}, outside the FFmpeg path that applies the editor matrix",
             clip.name
         );
         let frame = decoder
