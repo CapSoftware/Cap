@@ -1615,6 +1615,43 @@ fn the_transcript_shows_voice_choices_saved_by_a_busy_writer(cx: &mut TestAppCon
     );
 }
 
+/// "That's not me" on a finished meeting while the documents writer is
+/// busy: the toast waits for the choice to be saved and names the voice as
+/// it is now, never the user it replaced.
+#[gpui::test]
+fn the_not_me_toast_names_the_voice_once_the_choice_is_saved(cx: &mut TestAppContext) {
+    use crate::i18n::tr;
+    use std::{cell::RefCell, rc::Rc};
+    let (meetings, doc, _dir) = crate::meetings::tests::voice_choice_meeting(cx);
+    super::hold_writer();
+    meetings
+        .update(cx, |m, cx| m.set_not_me(&doc, 1, true, cx))
+        .expect("voice 1 was the user");
+    let message = cx.update(|cx| super::transcript::not_me_message(doc.clone(), 1, true, cx));
+    let shown: Rc<RefCell<Option<String>>> = Rc::default();
+    {
+        let shown = shown.clone();
+        cx.spawn(|_| async move { *shown.borrow_mut() = Some(message.await.to_string()) })
+            .detach();
+    }
+    cx.run_until_parked();
+    assert_eq!(*shown.borrow(), None, "no toast while the choice is queued");
+    super::release_writer();
+    cx.run_until_parked();
+    let now = meetings
+        .update(cx, |m, _| {
+            m.transcript(&doc).map(|t| {
+                super::export::word_speaker(&t.speaker(Source::System, None, Some(1)), None)
+            })
+        })
+        .unwrap();
+    assert_ne!(now, tr::documents::transcript::you(), "no longer the user");
+    assert_eq!(
+        shown.borrow().as_deref(),
+        Some(tr::documents::toast::moved_line(&now).to_string().as_str())
+    );
+}
+
 struct PageHost {
     transcript: Entity<super::transcript::TranscriptView>,
 }

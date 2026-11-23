@@ -1727,31 +1727,29 @@ impl TranscriptView {
         let Some(undo) = meetings.update(cx, |m, cx| m.set_not_me(&doc, id, not_me, cx)) else {
             return;
         };
-        let name = meetings.update(cx, |m, _| {
-            m.transcript(&doc)
-                .map(|t| export::word_speaker(&t.speaker(Source::System, None, Some(id)), None))
-        });
-        let action: super::window::ToastAction = Rc::new(move |_, cx| {
-            let undo = undo.clone();
-            if let Some(meetings) = Meetings::try_global(cx) {
-                meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, undo, cx));
-            }
-        });
-        let message: SharedString = if not_me {
-            tr::documents::toast::moved_line(&name.unwrap_or_default()).into()
-        } else {
-            tr::documents::toast::now_you().into()
-        };
-        self.root
-            .update(cx, |root, cx| {
-                root.show_toast(
-                    message,
-                    Some((tr::documents::toast::undo().into(), action)),
-                    None,
-                    cx,
-                )
-            })
-            .ok();
+        let message = not_me_message(doc.clone(), id, not_me, cx);
+        let root = self.root.clone();
+        cx.spawn(async move |_, cx| {
+            let message = message.await;
+            cx.update(|cx| {
+                let action: super::window::ToastAction = Rc::new(move |_, cx| {
+                    let undo = undo.clone();
+                    if let Some(meetings) = Meetings::try_global(cx) {
+                        meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, undo, cx));
+                    }
+                });
+                root.update(cx, |root, cx| {
+                    root.show_toast(
+                        message,
+                        Some((tr::documents::toast::undo().into(), action)),
+                        None,
+                        cx,
+                    )
+                })
+                .ok();
+            });
+        })
+        .detach();
     }
 
     /// "Leave this voice out of the notes" (or back in). The lines stay
@@ -3072,6 +3070,34 @@ fn save_collapsed(collapsed: bool) {
 #[cfg(test)]
 pub(super) fn saved_collapsed_for_test() -> bool {
     saved_collapsed()
+}
+
+/// What the toast says after "That's not me" (or "That's me"), read once the
+/// choice is saved, so it names the voice as it is now and never the one it
+/// replaced.
+pub(super) fn not_me_message(
+    doc: String,
+    id: u32,
+    not_me: bool,
+    cx: &mut App,
+) -> Task<SharedString> {
+    let saved = super::writer::run(|| ());
+    cx.spawn(async move |cx| {
+        saved.await;
+        if !not_me {
+            return tr::documents::toast::now_you().into();
+        }
+        let name = cx.update(|cx| {
+            Meetings::try_global(cx).and_then(|meetings| {
+                meetings.update(cx, |m, _| {
+                    m.transcript(&doc).map(|t| {
+                        export::word_speaker(&t.speaker(Source::System, None, Some(id)), None)
+                    })
+                })
+            })
+        });
+        tr::documents::toast::moved_line(&name.unwrap_or_default()).into()
+    })
 }
 
 impl TranscriptView {
