@@ -1323,9 +1323,9 @@ impl EditorWindow {
         if ui.phase.is_busy() || ui.close_requested {
             return;
         }
-        let screen_track =
-            ui.format == ExportFormatKind::Tracks && ui.tracks.contains(&TrackKind::Screen);
-        let blocker = if ui.format == ExportFormatKind::Audio {
+        let tracks = ui.format == ExportFormatKind::Tracks;
+        let screen_track = tracks && ui.tracks.contains(&TrackKind::Screen);
+        let blocker = if ui.format == ExportFormatKind::Audio || (tracks && !screen_track) {
             None
         } else {
             self.redact_export_blocker(screen_track)
