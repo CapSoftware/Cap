@@ -1383,6 +1383,7 @@ const finalizeRecording = async (recording: ActiveRecording) => {
 			subpath: recording.subpath,
 		});
 		await recording.spool.dispose();
+		recording.memoryBackup = initialLocalRecordingState();
 		await removeFailedRecording(recording.spool.sessionId).catch(
 			() => undefined,
 		);

@@ -366,6 +366,11 @@ export class RecordingSpool {
 		return new Blob(chunks, { type: this.session.mimeType });
 	}
 
+	clearPendingChunks() {
+		this.pendingChunks = [];
+		this.pendingChunkBytes = 0;
+	}
+
 	async dispose() {
 		if (this.disposed) {
 			return;
