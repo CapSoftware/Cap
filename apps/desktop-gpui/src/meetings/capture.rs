@@ -22,6 +22,10 @@ use super::{
 };
 
 const SOURCE_CHANNEL: usize = 256;
+/// A capture clock that jumps further than this (a sleep the app was not
+/// told about, a device that stalled) leaves a hole between two files rather
+/// than that much silence written and encoded at once.
+const MAX_PAD_SAMPLES: u64 = RATE as u64 * 30;
 const STALL_AFTER: Duration = Duration::from_secs(3);
 /// A microphone sending nothing but digital silence this long is muted or
 /// broken; a quiet room is never this quiet.
@@ -732,12 +736,26 @@ impl SourceWorker {
         let out = std::mem::take(&mut self.out);
         let base = self.aligner.written();
         let placement = self.aligner.place(observed, out.len());
-        if placement.pad > 0 {
+        if placement.pad > MAX_PAD_SAMPLES {
+            self.jump();
+        } else if placement.pad > 0 {
             self.push_silence(base, placement.pad);
         }
         let kept = &out[placement.skip.min(out.len())..];
         self.push_samples(base + placement.pad, kept);
         self.out = out;
+    }
+
+    /// Ends the track's file; the next audio starts a new part where it
+    /// lands, and the segmenter closes what was open at the jump.
+    fn jump(&mut self) {
+        if let Some(mut writer) = self.writer.take() {
+            if let Err(error) = writer.finish() {
+                tracing::warn!(%error, "meeting audio did not finish cleanly");
+            }
+            self.writer_parts += 1;
+        }
+        tracing::info!(source = ?self.source, "meeting audio jumped ahead, continuing in a new file");
     }
 
     fn push_silence(&mut self, start: u64, samples: u64) {
@@ -1503,6 +1521,47 @@ mod tests {
                 noise * if i < RATE as usize { 0.002 } else { 0.5 }
             })
             .collect()
+    }
+
+    #[test]
+    fn a_clock_jump_starts_a_new_file_instead_of_writing_the_silence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (events_tx, events) = flume::unbounded();
+        let mut shared = shared(flume::unbounded().0, flume::unbounded().0);
+        shared.audio_dir = Some(dir.path().to_path_buf());
+        shared.events = events_tx;
+        let mut worker =
+            SourceWorker::new(Source::System, shared, Arc::new(SourceCounters::default()));
+        let second = RATE as usize;
+        worker.out = vec![0.1; second];
+        worker.place(0);
+        worker.out = vec![0.1; second];
+        worker.place(second as i64);
+        // The clock comes back ten minutes later.
+        let back = 2 * second as i64 + 600 * RATE as i64;
+        worker.out = vec![0.1; second];
+        worker.place(back);
+        let summary = worker.finish();
+
+        let parts: Vec<_> = events
+            .try_iter()
+            .filter_map(|e| match e {
+                CaptureEvent::AudioPart {
+                    path,
+                    offset_samples,
+                    ..
+                } => Some((path, offset_samples)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(parts.len(), 1, "one new file after the jump");
+        assert_eq!(parts[0].1, back as u64);
+        let first = dir.path().join(audio_file_name(Source::System, ""));
+        let first_ms = super::super::audio_file::probe_duration_ms(&first).unwrap();
+        assert!(first_ms < 2_500, "the first file holds no padding: {first_ms} ms");
+        let second_ms = super::super::audio_file::probe_duration_ms(&parts[0].0).unwrap();
+        assert!(second_ms < 1_500, "{second_ms} ms");
+        assert_eq!(summary.duration_ms, timeline::samples_to_ms(back as u64) + 1_000);
     }
 
     #[test]
