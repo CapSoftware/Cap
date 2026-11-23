@@ -277,6 +277,23 @@ pub fn load_settings() -> MeetingSettings {
     settings
 }
 
+/// Dictionary entries for Studio captions: only from a dictionary that was
+/// saved, and only the ones someone added (`user_entries`). Caption words
+/// saved before the dictionary existed keep steering the transcription
+/// prompt as they always did and correct nothing.
+pub fn caption_entries(dir: &Path) -> Vec<cap_meetings::dictionary::Entry> {
+    caption_entries_in(fs::read_to_string(dir.join(SETTINGS_FILE)).ok().as_deref())
+}
+
+pub fn caption_entries_in(json: Option<&str>) -> Vec<cap_meetings::dictionary::Entry> {
+    match json {
+        Some(json) if has_dictionary(Some(json)) => MeetingSettings::from_json(json)
+            .transcription
+            .user_entries(),
+        _ => Vec::new(),
+    }
+}
+
 /// Settings written before the dictionary existed (or none at all).
 fn has_dictionary(json: Option<&str>) -> bool {
     json.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
