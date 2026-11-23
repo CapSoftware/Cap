@@ -38,6 +38,10 @@ function fakeMedia() {
 		paused: { configurable: true, get: () => state.paused },
 		ended: { configurable: true, get: () => false },
 		error: { configurable: true, get: () => state.error },
+		currentSrc: {
+			configurable: true,
+			get: () => "https://cap.so/api/storage/object?key=clip.mp4",
+		},
 		load: { configurable: true, value: load },
 		play: { configurable: true, value: play },
 	});

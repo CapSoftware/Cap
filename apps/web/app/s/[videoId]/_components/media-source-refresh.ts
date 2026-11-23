@@ -100,6 +100,7 @@ export function whenSourceRefreshDue(
 	media: HTMLMediaElement,
 	dueAt: number,
 	onDue: () => boolean | Promise<boolean>,
+	{ poll = true }: { poll?: boolean } = {},
 ): () => void {
 	let done = false;
 	let pending = false;
@@ -118,14 +119,14 @@ export function whenSourceRefreshDue(
 				pending = false;
 			});
 	};
-	const interval = setInterval(check, DUE_CHECK_INTERVAL_MS);
+	const interval = poll ? setInterval(check, DUE_CHECK_INTERVAL_MS) : null;
+	if (poll) document.addEventListener("visibilitychange", check);
 	media.addEventListener("play", check);
 	media.addEventListener("seeking", check);
 	media.addEventListener("waiting", check);
-	document.addEventListener("visibilitychange", check);
 	return () => {
 		done = true;
-		clearInterval(interval);
+		if (interval) clearInterval(interval);
 		media.removeEventListener("play", check);
 		media.removeEventListener("seeking", check);
 		media.removeEventListener("waiting", check);
@@ -252,7 +253,9 @@ export function restorePlaybackOnLoad(
 }
 
 // For an element whose src is a Cap route that redirects to a signed URL:
-// loading the same src again asks the route for a fresh signature.
+// loading the same src again asks the route for a fresh signature. Comment
+// clips are short and buffered whole, so only playback activity is checked,
+// which leaves nothing running once the element is gone.
 const watchedMedia = new WeakMap<HTMLMediaElement, () => void>();
 
 export function watchExpiredMediaSource(media: HTMLMediaElement): () => void {
@@ -279,14 +282,20 @@ export function watchExpiredMediaSource(media: HTMLMediaElement): () => void {
 		stopDueCheck =
 			dueAt === null
 				? null
-				: whenSourceRefreshDue(media, dueAt, () => {
-						reload();
-						return true;
-					});
+				: whenSourceRefreshDue(
+						media,
+						dueAt,
+						() => {
+							reload();
+							return true;
+						},
+						{ poll: false },
+					);
 	};
 	const handleLoaded = () => refreshes.markLoaded();
 	const handleError = () => {
 		if (
+			!media.currentSrc ||
 			!isMediaLoadError(media.error) ||
 			!sourceMayHaveExpired(obtainedAt) ||
 			!refreshes.tryStart()
