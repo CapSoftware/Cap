@@ -248,26 +248,26 @@ fn seg_gloss() -> Vec<gpui::BoxShadow> {
 /// [`render_segment_glows`] under every row, so it spreads freely.
 fn seg_glow(color: Hsla, dark: bool, selected: bool) -> Vec<gpui::BoxShadow> {
     let alpha = match (dark, selected) {
-        (true, true) => 0.7,
-        (false, true) => 0.55,
-        (true, false) => 0.6,
-        (false, false) => 0.46,
+        (true, true) => 0.42,
+        (false, true) => 0.32,
+        (true, false) => 0.3,
+        (false, false) => 0.22,
     };
-    // A tight glow that hugs the segment, then a wide one that lights the
-    // lane around it.
+    // A tight glow that hugs the segment, then a faint wide one that lights
+    // the lane around it.
     vec![
         gpui::BoxShadow {
             color: color.opacity(alpha),
             offset: gpui::point(px(0.), px(2.)),
-            blur_radius: px(if selected { 16. } else { 14. }),
-            spread_radius: px(if selected { 0. } else { -1. }),
+            blur_radius: px(if selected { 12. } else { 10. }),
+            spread_radius: px(if selected { -1. } else { -2. }),
             inset: false,
         },
         gpui::BoxShadow {
-            color: color.opacity(alpha * 0.45),
-            offset: gpui::point(px(0.), px(4.)),
-            blur_radius: px(30.),
-            spread_radius: px(2.),
+            color: color.opacity(alpha * 0.35),
+            offset: gpui::point(px(0.), px(3.)),
+            blur_radius: px(22.),
+            spread_radius: px(0.),
             inset: false,
         },
     ]
