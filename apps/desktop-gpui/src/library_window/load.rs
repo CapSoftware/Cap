@@ -7,6 +7,7 @@ use cap_meetings::library::{DocKind, DocMeta, Folder, Library, MeetingDetails};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use super::items::{EventFacts, Item, ItemFacts, ItemKey, ItemKind, sort_newest_first};
+use super::visuals;
 
 #[derive(Clone, Debug, Default)]
 pub struct Scan {
@@ -15,6 +16,8 @@ pub struct Scan {
     /// The notes library opened and its folder list was read, so `folders`
     /// is the whole truth. False means "unknown", never "none".
     pub folders_loaded: bool,
+    pub visual_jobs: Vec<visuals::Job>,
+    pub seed_visuals: std::collections::HashMap<ItemKey, visuals::Visual>,
 }
 
 fn millis_to_utc(ms: f64) -> DateTime<Utc> {
@@ -192,8 +195,14 @@ pub fn read_folders_once<E>(read: impl FnOnce() -> Result<Vec<Folder>, E>) -> (V
 /// missing notes library, an unreadable recordings folder) leaves the others.
 pub fn scan(library: Option<Library>) -> Scan {
     let mut items = Vec::new();
+    let mut visual_jobs = Vec::new();
     for rec in crate::library::list_recordings() {
         let at = millis_to_utc(rec.sort_time_millis);
+        visual_jobs.push(visuals::recording_job(
+            ItemKey::Path(rec.path.clone()),
+            rec.path.clone(),
+            rec.thumbnail.is_some() || rec.audio_only,
+        ));
         items.push(Item::new(
             ItemKey::Path(rec.path.clone()),
             ItemKind::Recording,
@@ -222,15 +231,29 @@ pub fn scan(library: Option<Library>) -> Scan {
     if let Some(library) = library.as_ref() {
         let snapshot = crate::meetings_ui::documents::store::load_snapshot(library);
         for meta in snapshot.docs.iter().chain(snapshot.trashed.iter()) {
-            items.push(doc_item(Some(library), meta));
+            let item = doc_item(Some(library), meta);
+            if let Some(meeting) = meta.meeting.as_ref()
+                && let Ok(dir) = library.doc_dir(&meta.id)
+                && let Some(job) = visuals::meeting_job(
+                    item.key.clone(),
+                    dir,
+                    meeting,
+                    item.excerpt.is_none() && meeting.transcript_chars > 0,
+                )
+            {
+                visual_jobs.push(job);
+            }
+            items.push(item);
         }
         // One read of the folder list feeds both the list and whether it is
         // the whole truth. (`load_snapshot` reads it leniently: an error there
         // looks like "no folders", which must never drive pruning.)
         (folders, folders_loaded) = read_folders_once(|| library.folders());
     }
+    let mut seed_visuals = Default::default();
     if let Some(seed) = seed_from_env() {
         items.extend(seed.items);
+        seed_visuals = seed.seed_visuals;
         if folders.is_empty() {
             folders = seed.folders;
         }
@@ -240,6 +263,8 @@ pub fn scan(library: Option<Library>) -> Scan {
         items,
         folders,
         folders_loaded,
+        visual_jobs,
+        seed_visuals,
     }
 }
 
@@ -354,6 +379,7 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
         seed_folder("f-seed-personal", "Personal"),
     ];
     let mut items = Vec::with_capacity(count);
+    let mut seed_visuals = std::collections::HashMap::new();
     let mut image = 0usize;
     let mut next_image = |images: &[PathBuf]| {
         (!images.is_empty()).then(|| {
@@ -425,13 +451,15 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
                     // after a crash. Off (benchmarks, before/after shots),
                     // the seed is exactly what it always was, and the
                     // pictures stay in the same order either way.
-                    thumbnail: next_image(images).map(|image| {
-                        if gaps && i % 5 == 4 {
-                            PathBuf::from(format!("/seed/missing/{i}.png"))
-                        } else {
-                            image
-                        }
-                    }),
+                    thumbnail: next_image(images)
+                        .filter(|_| !(gaps && i % 4 == 1))
+                        .map(|image| {
+                            if gaps && i % 5 == 4 {
+                                PathBuf::from(format!("/seed/missing/{i}.png"))
+                            } else {
+                                image
+                            }
+                        }),
                     pinned: i == 1,
                     ..Default::default()
                 },
@@ -463,12 +491,30 @@ pub fn seed(count: usize, images: &[PathBuf], now: DateTime<Utc>) -> Scan {
                 )
             }
         };
+        // Every seeded meeting has its sound; with gaps on, every fourth
+        // recording is sound only, the way a voice memo is.
+        let wave = match item.kind {
+            ItemKind::Meeting => Some(visuals::seed_wave(i)),
+            ItemKind::Recording if gaps && i % 4 == 1 => Some(visuals::seed_wave(i)),
+            _ => None,
+        };
+        if let Some(wave) = wave {
+            seed_visuals.insert(
+                item.key.clone(),
+                visuals::Visual {
+                    wave: Some(wave),
+                    ..Default::default()
+                },
+            );
+        }
         items.push(item);
     }
     Scan {
         items,
         folders,
         folders_loaded: false,
+        visual_jobs: Vec::new(),
+        seed_visuals,
     }
 }
 

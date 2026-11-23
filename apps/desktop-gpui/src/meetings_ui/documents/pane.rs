@@ -354,7 +354,7 @@ const PREVIEW_CHARS: usize = 180;
 
 /// The first sentence-like line of a summary: its first paragraph, or its
 /// first point when it has no paragraph; cut on a word near 180 characters.
-pub(super) fn summary_preview(doc: &Document) -> Option<String> {
+pub(crate) fn summary_preview(doc: &Document) -> Option<String> {
     let generated = || {
         doc.blocks
             .iter()

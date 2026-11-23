@@ -15,6 +15,7 @@ pub mod store;
 pub mod style;
 pub mod text;
 pub mod thumbs;
+pub mod visuals;
 
 use std::{
     collections::HashMap,
