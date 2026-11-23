@@ -51,6 +51,10 @@ pub struct SpeakerNames {
     /// never in what the summary or Ask is given.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     left_out: BTreeSet<SpeakerId>,
+    /// Voices the person put back in the notes: kept even when their track
+    /// was left out. A voice in neither set has no choice of its own.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    kept_in: BTreeSet<SpeakerId>,
 }
 
 impl SpeakerNames {
@@ -117,25 +121,110 @@ impl SpeakerNames {
         self.not_user.iter().any(|&live| follow(live, merged) == id)
     }
 
-    /// Leaves the voice out of the notes (or takes it back in).
+    /// Leaves the voice out of the notes, or puts it back in: either way a
+    /// choice of its own, which its track's choice never overrides.
     pub fn set_left_out(&mut self, id: SpeakerId, out: bool) {
-        if out {
-            self.left_out.insert(id);
+        self.choose_left_out(id, Some(out));
+    }
+
+    /// Leaves the voice out of the notes (`Some(true)`), puts it back in
+    /// (`Some(false)`), or forgets the choice (`None`).
+    pub fn choose_left_out(&mut self, id: SpeakerId, out: Option<bool>) {
+        self.left_out.remove(&id);
+        self.kept_in.remove(&id);
+        match out {
+            Some(true) => self.left_out.insert(id),
+            Some(false) => self.kept_in.insert(id),
+            None => false,
+        };
+    }
+
+    /// The person's choice on this voice: left out, put back in, or none.
+    pub fn left_out(&self, id: SpeakerId) -> Option<bool> {
+        if self.left_out.contains(&id) {
+            Some(true)
+        } else if self.kept_in.contains(&id) {
+            Some(false)
         } else {
-            self.left_out.remove(&id);
+            None
         }
     }
 
     pub fn is_left_out(&self, id: SpeakerId) -> bool {
-        self.left_out.contains(&id)
+        self.left_out(id) == Some(true)
     }
 
     /// The person's choices about voices follow the voices merged into
-    /// others, as renames do.
+    /// others, as renames do. A merged voice that was both left out and
+    /// kept in stays left out.
     fn follow_choices(&mut self, merged: &[(SpeakerId, SpeakerId)]) {
-        for set in [&mut self.not_user, &mut self.left_out] {
+        for set in [&mut self.not_user, &mut self.left_out, &mut self.kept_in] {
             *set = set.iter().map(|&id| follow(id, merged)).collect();
         }
+        let left_out = &self.left_out;
+        self.kept_in.retain(|id| !left_out.contains(id));
+    }
+
+    /// Takes back the change from `before` to `after`, keeping whatever
+    /// else changed since: names still equal to `after` become `before`
+    /// exactly, and a choice made in between on another voice stays.
+    pub fn revert(&mut self, before: &SpeakerNames, after: &SpeakerNames) {
+        fn value<T: Clone + PartialEq>(now: &mut T, before: &T, after: &T) {
+            if before != after {
+                *now = before.clone();
+            }
+        }
+        fn map<V: Clone + PartialEq>(
+            now: &mut BTreeMap<SpeakerId, V>,
+            before: &BTreeMap<SpeakerId, V>,
+            after: &BTreeMap<SpeakerId, V>,
+        ) {
+            for id in before.keys().chain(after.keys()) {
+                if before.get(id) != after.get(id) {
+                    match before.get(id) {
+                        Some(v) => now.insert(*id, v.clone()),
+                        None => now.remove(id),
+                    };
+                }
+            }
+        }
+        fn set(
+            now: &mut BTreeSet<SpeakerId>,
+            before: &BTreeSet<SpeakerId>,
+            after: &BTreeSet<SpeakerId>,
+        ) {
+            for id in before.symmetric_difference(after) {
+                if before.contains(id) {
+                    now.insert(*id);
+                } else {
+                    now.remove(id);
+                }
+            }
+        }
+        value(&mut self.attendee, &before.attendee, &after.attendee);
+        value(
+            &mut self.attendee_voice,
+            &before.attendee_voice,
+            &after.attendee_voice,
+        );
+        value(&mut self.user, &before.user, &after.user);
+        map(&mut self.renames, &before.renames, &after.renames);
+        map(&mut self.numbers, &before.numbers, &after.numbers);
+        self.known
+            .retain(|id| before.known.contains(id) || !after.known.contains(id));
+        for id in &before.known {
+            if !self.known.contains(id) {
+                self.known.push(*id);
+            }
+        }
+        value(
+            &mut self.system_seen,
+            &before.system_seen,
+            &after.system_seen,
+        );
+        set(&mut self.not_user, &before.not_user, &after.not_user);
+        set(&mut self.left_out, &before.left_out, &after.left_out);
+        set(&mut self.kept_in, &before.kept_in, &after.kept_in);
     }
 
     /// Takes in the live speaker list. Speakers already seen keep their

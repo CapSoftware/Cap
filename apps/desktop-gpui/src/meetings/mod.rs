@@ -295,6 +295,106 @@ pub enum SpeakerRef {
     Id(u32),
 }
 
+/// A choice the person makes on a voice in the speaker popover.
+#[derive(Clone, Debug)]
+enum VoiceChoice {
+    /// Leave a told-apart voice out of the notes, or put it back in.
+    LeaveOutId(u32, bool),
+    /// "That's not me" (true) or "That's me" (false).
+    NotMe(u32, bool),
+    /// Leave a voice without a told-apart id out, or put it back in.
+    LeaveOut(cap_meetings::transcript::Voice, bool),
+}
+
+/// What a choice changed, so its undo takes back exactly that.
+#[derive(Clone, Debug, PartialEq)]
+enum ChoiceMade {
+    Names {
+        before: cap_diarize::SpeakerNames,
+        after: cap_diarize::SpeakerNames,
+    },
+    Voice {
+        voice: cap_meetings::transcript::Voice,
+        before: Option<bool>,
+    },
+}
+
+impl VoiceChoice {
+    /// The line that makes this choice on `transcript`, and what it changed;
+    /// None when it changes nothing.
+    fn apply(
+        &self,
+        transcript: &Transcript,
+        attendee: Option<String>,
+    ) -> Option<(LogLine, ChoiceMade)> {
+        let (id, flag) = match self {
+            VoiceChoice::LeaveOut(voice, out) => {
+                let before = transcript.voice_choice(voice);
+                return (before != Some(*out)).then(|| {
+                    (
+                        LogLine::leave_out(voice.clone(), Some(*out)),
+                        ChoiceMade::Voice {
+                            voice: voice.clone(),
+                            before,
+                        },
+                    )
+                });
+            }
+            VoiceChoice::LeaveOutId(id, flag) | VoiceChoice::NotMe(id, flag) => {
+                (cap_diarize::SpeakerId(*id), *flag)
+            }
+        };
+        let before = transcript
+            .names()
+            .cloned()
+            .unwrap_or_else(|| cap_diarize::SpeakerNames::new(attendee));
+        let mut after = before.clone();
+        match self {
+            VoiceChoice::LeaveOutId(..) => after.set_left_out(id, flag),
+            VoiceChoice::NotMe(..) if flag => after.not_user(id),
+            _ => after.claim_user(id),
+        }
+        (after != before).then(|| {
+            (
+                LogLine::SpeakerNames {
+                    names: after.clone(),
+                },
+                ChoiceMade::Names { before, after },
+            )
+        })
+    }
+}
+
+impl ChoiceMade {
+    /// The line that takes this change back on `transcript` as it is now.
+    fn undo(self, transcript: &Transcript) -> Option<LogLine> {
+        match self {
+            ChoiceMade::Voice { voice, before } => (transcript.voice_choice(&voice) != before)
+                .then(|| LogLine::leave_out(voice, before)),
+            ChoiceMade::Names { before, after } => {
+                let now = transcript.names().cloned().unwrap_or_else(|| after.clone());
+                let mut names = now.clone();
+                names.revert(&before, &after);
+                (names != now).then_some(LogLine::SpeakerNames { names })
+            }
+        }
+    }
+}
+
+/// The undo of a speaker choice. Filled in where the choice met the latest
+/// transcript (on the documents writer for a finished meeting), which is
+/// always before its undo runs there.
+#[derive(Clone, Debug, Default)]
+pub struct ChoiceUndo(std::sync::Arc<std::sync::Mutex<Option<ChoiceMade>>>);
+
+impl ChoiceUndo {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<ChoiceMade>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum MeetingEvent {
     SettingsChanged,
@@ -3451,95 +3551,122 @@ impl Meetings {
         }
     }
 
-    /// The meeting's names for its voices as saved, or fresh ones.
-    fn names_for_edit(&mut self, doc_id: &str) -> cap_diarize::SpeakerNames {
+    /// Applies a change to the meeting's latest transcript and keeps the line
+    /// it makes: in memory while the meeting records or finishes, else on
+    /// the documents writer after every edit already queued, so two quick
+    /// changes never undo each other.
+    fn rewrite_transcript(
+        &mut self,
+        doc_id: &str,
+        change: impl FnOnce(&Transcript) -> Option<LogLine> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let live = self
+            .recording
+            .as_ref()
+            .filter(|r| r.doc_id == doc_id)
+            .map(|r| &r.transcript)
+            .or_else(|| {
+                self.finishing
+                    .iter()
+                    .find(|f| f.doc_id == doc_id)
+                    .map(|f| &f.transcript)
+            });
+        if let Some(transcript) = live {
+            let Some(line) = change(transcript) else {
+                return;
+            };
+            self.edit_transcript(doc_id, line, cx);
+            return;
+        }
+        let Some(path) = self.library().and_then(|l| l.transcript_path(doc_id).ok()) else {
+            return;
+        };
+        crate::meetings_ui::documents::queue_after_saves(move || {
+            let transcript = Transcript::load_jsonl(&path)
+                .map(|(t, _)| t)
+                .unwrap_or_default();
+            let Some(line) = change(&transcript) else {
+                return;
+            };
+            if let Err(error) = append_jsonl(&path, &[line]) {
+                tracing::warn!(%error, "could not edit the meeting transcript");
+            }
+        });
+        cx.emit(MeetingEvent::TranscriptChanged {
+            doc_id: doc_id.to_string(),
+        });
+    }
+
+    /// Makes a choice on a voice, if it changes anything in what is known
+    /// now, and returns its undo.
+    fn choose_for_voice(
+        &mut self,
+        doc_id: &str,
+        choice: VoiceChoice,
+        cx: &mut Context<Self>,
+    ) -> Option<ChoiceUndo> {
         let attendee = self
             .library()
             .and_then(|l| l.load(doc_id).ok())
             .and_then(|meta| speakers::other_attendee(&meta));
-        self.transcript(doc_id)
-            .and_then(|t| t.names().cloned())
-            .unwrap_or_else(|| cap_diarize::SpeakerNames::new(attendee))
+        choice.apply(&*self.transcript(doc_id)?, attendee.clone())?;
+        let undo = ChoiceUndo::default();
+        let taken = undo.clone();
+        self.rewrite_transcript(
+            doc_id,
+            move |transcript| {
+                let (line, change) = choice.apply(transcript, attendee)?;
+                *taken.lock() = Some(change);
+                Some(line)
+            },
+            cx,
+        );
+        Some(undo)
     }
 
     /// "Leave this voice out of the notes" (or back in): the lines stay in
-    /// the transcript; the next summary and Ask leave them out. Returns the
-    /// line that undoes it.
+    /// the transcript; the next summary and Ask leave them out. Returns its
+    /// undo.
     pub fn leave_out_speaker(
         &mut self,
         doc_id: &str,
         speaker: SpeakerRef,
         out: bool,
         cx: &mut Context<Self>,
-    ) -> Option<LogLine> {
+    ) -> Option<ChoiceUndo> {
         use cap_meetings::transcript::Voice;
-        let (line, undo) = match speaker {
-            SpeakerRef::Id(id) => {
-                let before = self.names_for_edit(doc_id);
-                let mut names = before.clone();
-                names.set_left_out(cap_diarize::SpeakerId(id), out);
-                if names == before {
-                    return None;
-                }
-                (
-                    LogLine::SpeakerNames { names },
-                    LogLine::SpeakerNames { names: before },
-                )
-            }
-            SpeakerRef::Named(name) => (
-                LogLine::LeaveOut {
-                    voice: Voice::Named(name.clone()),
-                    out,
-                },
-                LogLine::LeaveOut {
-                    voice: Voice::Named(name),
-                    out: !out,
-                },
-            ),
-            SpeakerRef::Source(source) => (
-                LogLine::LeaveOut {
-                    voice: Voice::Source(source),
-                    out,
-                },
-                LogLine::LeaveOut {
-                    voice: Voice::Source(source),
-                    out: !out,
-                },
-            ),
+        let choice = match speaker {
+            SpeakerRef::Id(id) => VoiceChoice::LeaveOutId(id, out),
+            SpeakerRef::Named(name) => VoiceChoice::LeaveOut(Voice::Named(name), out),
+            SpeakerRef::Source(source) => VoiceChoice::LeaveOut(Voice::Source(source), out),
         };
-        self.edit_transcript(doc_id, line, cx);
-        Some(undo)
+        self.choose_for_voice(doc_id, choice, cx)
     }
 
     /// "That's not me" on the voice shown as the user: it becomes someone
     /// else (the next "Person n"), here only. The saved voice profile is
     /// never changed, and this meeting never teaches it this voice.
-    /// `me == true` is "That's me", which takes it back. Returns the line
-    /// that undoes it.
+    /// `not_me == false` is "That's me", which takes it back. Returns its
+    /// undo.
     pub fn set_not_me(
         &mut self,
         doc_id: &str,
         id: u32,
         not_me: bool,
         cx: &mut Context<Self>,
-    ) -> Option<LogLine> {
-        let before = self.names_for_edit(doc_id);
-        let mut names = before.clone();
-        if not_me {
-            names.not_user(cap_diarize::SpeakerId(id));
-        } else {
-            names.claim_user(cap_diarize::SpeakerId(id));
-        }
-        if names == before {
-            return None;
-        }
-        self.edit_transcript(doc_id, LogLine::SpeakerNames { names }, cx);
-        Some(LogLine::SpeakerNames { names: before })
+    ) -> Option<ChoiceUndo> {
+        self.choose_for_voice(doc_id, VoiceChoice::NotMe(id, not_me), cx)
     }
 
-    /// Puts back a line `leave_out_speaker` or `set_not_me` returned.
-    pub fn undo_speaker_choice(&mut self, doc_id: &str, undo: LogLine, cx: &mut Context<Self>) {
-        self.edit_transcript(doc_id, undo, cx);
+    /// Takes back a choice `leave_out_speaker` or `set_not_me` made, and
+    /// only that: a choice made since on another voice stays.
+    pub fn undo_speaker_choice(&mut self, doc_id: &str, undo: ChoiceUndo, cx: &mut Context<Self>) {
+        self.rewrite_transcript(
+            doc_id,
+            move |transcript| undo.lock().take()?.undo(transcript),
+            cx,
+        );
     }
 
     /// Put a rename back: the transcript's names as they were, and the

@@ -988,6 +988,7 @@ fn a_voice_left_out_of_the_notes_stays_in_the_transcript_only() {
     t.apply(LogLine::LeaveOut {
         voice: Voice::Named("Ana".into()),
         out: true,
+        forget: false,
     });
     let prompt = t.labelled_for_prompt(usize::MAX, Some("Richie")).text;
     assert!(prompt.contains("Let's start."), "{prompt}");
@@ -1014,6 +1015,7 @@ fn a_voice_left_out_of_the_notes_stays_in_the_transcript_only() {
     let line = serde_json::to_string(&LogLine::LeaveOut {
         voice: Voice::Source(Source::Mic),
         out: true,
+        forget: false,
     })
     .unwrap();
     assert_eq!(
@@ -1025,10 +1027,136 @@ fn a_voice_left_out_of_the_notes_stays_in_the_transcript_only() {
     t.apply(LogLine::LeaveOut {
         voice: Voice::Named("Ana Ruiz".into()),
         out: false,
+        forget: false,
     });
     assert!(
         t.labelled_for_prompt(usize::MAX, None)
             .text
             .contains("Budget")
     );
+}
+
+/// The most specific choice decides whether a line is left out: its own
+/// name, then its told-apart voice, then its track. A line moved to a name
+/// with "Just this line" keeps its voice's choice until the name has one,
+/// and a voice put back in stays in when its track was left out from an
+/// unidentified line. Forgetting a choice puts things back exactly.
+#[test]
+fn the_most_specific_voice_choice_decides_what_is_left_out() {
+    use cap_diarize::Track;
+    let mut t = Transcript::new();
+    let line = |id: &str, start: u64, text: &str, name: Option<&str>, voice: Option<u32>| {
+        let mut u = utt(id, Source::System, start, start + 1_000, text, true);
+        u.speaker = name.map(str::to_string);
+        u.speaker_id = voice;
+        u
+    };
+    t.upsert(line("s1", 0, "Moved to Bob.", Some("Bob"), Some(7)));
+    t.upsert(line("s2", 4_000, "Voice seven.", None, Some(7)));
+    t.upsert(line("s3", 8_000, "Voice eight.", None, Some(8)));
+    t.upsert(line("s4", 12_000, "Nobody knows me.", None, None));
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        cap_diarize::SpeakerInfo {
+            id: SpeakerId(7),
+            track: Track::System,
+            first_ms: 0,
+            speech_ms: 1_000,
+            is_user: false,
+        },
+        cap_diarize::SpeakerInfo {
+            id: SpeakerId(8),
+            track: Track::System,
+            first_ms: 8_000,
+            speech_ms: 1_000,
+            is_user: false,
+        },
+    ]);
+    names.set_left_out(SpeakerId(7), true);
+    t.set_names(names);
+    let prompt = |t: &Transcript| t.labelled_for_prompt(usize::MAX, None).text;
+    let all_in = |t: &Transcript, words: &[&str]| words.iter().all(|w| prompt(t).contains(w));
+    let none_in = |t: &Transcript, words: &[&str]| !words.iter().any(|w| prompt(t).contains(w));
+
+    // The moved line keeps its voice's choice.
+    assert!(t.is_left_out(Source::System, Some("Bob"), Some(7)));
+    assert!(
+        none_in(&t, &["Moved to Bob", "Voice seven"]),
+        "{}",
+        prompt(&t)
+    );
+    assert!(all_in(&t, &["Voice eight", "Nobody knows me"]));
+    assert!(!t.named_speakers(None).iter().any(|(name, _)| name == "Bob"));
+    // Its own name decides once it has a choice, and forgetting it undoes that.
+    t.apply(LogLine::leave_out(Voice::Named("Bob".into()), Some(false)));
+    assert!(all_in(&t, &["Moved to Bob"]) && none_in(&t, &["Voice seven"]));
+    t.apply(LogLine::leave_out(Voice::Named("Bob".into()), None));
+    assert_eq!(t.voice_choice(&Voice::Named("Bob".into())), None);
+    assert!(none_in(&t, &["Moved to Bob"]));
+
+    // A track left out from an unidentified line takes voices with no
+    // choice of their own along...
+    let before = t.clone();
+    t.apply(LogLine::leave_out(
+        Voice::Source(Source::System),
+        Some(true),
+    ));
+    assert!(
+        none_in(&t, &["Nobody knows me", "Voice eight"]),
+        "{}",
+        prompt(&t)
+    );
+    // ...but a voice put back in stays in.
+    let mut names = t.names().unwrap().clone();
+    names.set_left_out(SpeakerId(8), false);
+    t.set_names(names);
+    assert!(all_in(&t, &["Voice eight"]) && none_in(&t, &["Nobody knows me"]));
+    let mut names = t.names().unwrap().clone();
+    names.choose_left_out(SpeakerId(8), None);
+    t.set_names(names);
+    assert!(none_in(&t, &["Voice eight"]));
+    t.apply(LogLine::leave_out(Voice::Source(Source::System), None));
+    assert_eq!(t, before, "forgetting both choices puts it back exactly");
+
+    // Every choice survives a reload, a put-back-in one too.
+    t.apply(LogLine::leave_out(Voice::Named("Bob".into()), Some(false)));
+    t.apply(LogLine::leave_out(Voice::Source(Source::Mic), Some(true)));
+    let mut reloaded = Transcript::new();
+    for line in t.to_log_lines() {
+        let json = serde_json::to_string(&line).unwrap();
+        reloaded.apply(parse_line(&json).expect("a line this version reads"));
+    }
+    assert_eq!(reloaded, t);
+    // Versions before `forget` read it as put back in, as they always did.
+    let forget =
+        serde_json::to_string(&LogLine::leave_out(Voice::Source(Source::Mic), None)).unwrap();
+    assert_eq!(
+        forget,
+        r#"{"op":"leaveOut","voice":{"kind":"source","value":"mic"},"out":false,"forget":true}"#
+    );
+}
+
+/// The left-out stamp is empty until a line is left out, and follows what is
+/// left out, not how.
+#[test]
+fn the_left_out_basis_follows_the_lines_left_out() {
+    let mut t = Transcript::new();
+    t.upsert(utt("m1", Source::Mic, 0, 1_000, "Mine.", true));
+    t.upsert(utt("s1", Source::System, 2_000, 3_000, "Theirs.", true));
+    assert_eq!(t.left_out_basis(), "");
+    t.apply(LogLine::leave_out(
+        Voice::Source(Source::System),
+        Some(true),
+    ));
+    let system = t.left_out_basis();
+    assert_eq!(system.len(), 16);
+    t.apply(LogLine::leave_out(Voice::Source(Source::Mic), Some(true)));
+    assert_ne!(t.left_out_basis(), system);
+    t.apply(LogLine::leave_out(Voice::Source(Source::Mic), None));
+    assert_eq!(t.left_out_basis(), system, "stable for the same lines");
+    t.apply(LogLine::leave_out(
+        Voice::Source(Source::System),
+        Some(false),
+    ));
+    assert_eq!(t.left_out_basis(), "");
 }

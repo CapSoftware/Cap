@@ -367,3 +367,59 @@ fn a_voice_left_out_of_the_notes_follows_merges_and_round_trips() {
     names.set_left_out(SpeakerId(2), false);
     assert!(!names.is_left_out(SpeakerId(2)));
 }
+
+/// A voice put back in the notes is a choice of its own, kept through a
+/// reload and merges (left out wins when merged voices disagree), and
+/// forgetting it leaves no choice.
+#[test]
+fn a_voice_put_back_in_is_a_choice_of_its_own() {
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        info(2, Track::System, 500, 1, false),
+        info(3, Track::System, 900, 1, false),
+        info(4, Track::System, 1_200, 1, false),
+    ]);
+    assert_eq!(names.left_out(SpeakerId(2)), None);
+    names.set_left_out(SpeakerId(2), false);
+    names.set_left_out(SpeakerId(3), true);
+    assert_eq!(names.left_out(SpeakerId(2)), Some(false));
+    assert_eq!(names.left_out(SpeakerId(3)), Some(true));
+    let back: SpeakerNames = serde_json::from_str(&serde_json::to_string(&names).unwrap()).unwrap();
+    assert_eq!(back, names);
+    names.apply_late(&pass(
+        vec![
+            info(2, Track::System, 500, 1, false),
+            info(4, Track::System, 1_200, 1, false),
+        ],
+        vec![(3, 2)],
+    ));
+    assert_eq!(names.left_out(SpeakerId(2)), Some(true));
+    names.choose_left_out(SpeakerId(2), None);
+    assert_eq!(names.left_out(SpeakerId(2)), None);
+}
+
+/// `revert` takes back one change and keeps the rest: names still at
+/// `after` become `before` exactly, and a choice made since on another
+/// voice stays.
+#[test]
+fn reverting_one_choice_keeps_the_others() {
+    let mut start = SpeakerNames::new(None);
+    start.observe(&[
+        info(1, Track::Mic, 0, 1, true),
+        info(2, Track::System, 500, 1, false),
+        info(3, Track::System, 900, 1, false),
+    ]);
+    let mut not_me = start.clone();
+    not_me.not_user(SpeakerId(1));
+    let mut undone = not_me.clone();
+    undone.revert(&start, &not_me);
+    assert_eq!(undone, start);
+
+    let mut first = start.clone();
+    first.set_left_out(SpeakerId(2), true);
+    let mut both = first.clone();
+    both.set_left_out(SpeakerId(3), true);
+    both.revert(&start, &first);
+    assert_eq!(both.left_out(SpeakerId(2)), None);
+    assert_eq!(both.left_out(SpeakerId(3)), Some(true));
+}

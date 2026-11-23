@@ -1910,3 +1910,142 @@ fn the_listening_cue_shows_only_on_a_slow_computer_while_someone_speaks_unanswer
     // Never anyone speaking: no cue.
     assert!(!listening_cue(true, at(30.), started, None, None));
 }
+
+/// A finished meeting with two told-apart voices on the microphone (1 the
+/// user, 2 someone in the room) and one unidentified line on the call.
+fn voice_choice_meeting(
+    cx: &mut gpui::TestAppContext,
+) -> (gpui::Entity<super::Meetings>, String, tempfile::TempDir) {
+    use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = cap_meetings::settings::MeetingSettings::default();
+    settings.enabled = true;
+    let meetings = cx
+        .update(|cx| super::Meetings::install_for_tests(settings, dir.path().join("calendar"), cx));
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 5).unwrap();
+    meta.meeting = Some(MeetingDetails {
+        started_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    });
+    library.save(&meta).unwrap();
+    let voice = |id: u32, first_ms: u64, is_user: bool| SpeakerInfo {
+        id: SpeakerId(id),
+        track: Track::Mic,
+        first_ms,
+        speech_ms: 1_000,
+        is_user,
+    };
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[voice(1, 0, true), voice(2, 4_000, false)]);
+    append_jsonl(
+        &library.transcript_path(&meta.id).unwrap(),
+        &[
+            LogLine::SpeakerNames { names },
+            LogLine::Upsert {
+                utterance: Utterance {
+                    speaker_id: Some(1),
+                    ..utterance("m1", Source::Mic, 0, "Let's go over the budget.")
+                },
+            },
+            LogLine::Upsert {
+                utterance: Utterance {
+                    speaker_id: Some(2),
+                    ..utterance("m2", Source::Mic, 4_000, "Dinner is ready, come and eat!")
+                },
+            },
+            LogLine::Upsert {
+                utterance: utterance("s1", Source::System, 8_000, "The lift is broken again."),
+            },
+        ],
+    )
+    .unwrap();
+    let doc = meta.id.clone();
+    meetings.update(cx, |m, _| m.library = Some(library));
+    (meetings, doc, dir)
+}
+
+fn saved_transcript(
+    meetings: &gpui::Entity<super::Meetings>,
+    doc: &str,
+    cx: &mut gpui::TestAppContext,
+) -> Transcript {
+    assert!(crate::meetings_ui::documents::flush_writer(
+        Duration::from_secs(5)
+    ));
+    meetings.update(cx, |m, _| m.transcript(doc).unwrap().into_owned())
+}
+
+/// Two speaker choices made while the documents writer is still busy both
+/// stick (each is applied to the latest names, not the ones read before),
+/// and undoing the first takes back only the first.
+#[gpui::test]
+fn quick_speaker_choices_keep_each_other(cx: &mut gpui::TestAppContext) {
+    use cap_diarize::SpeakerId;
+    let (meetings, doc, _dir) = voice_choice_meeting(cx);
+    let prompt = |t: &Transcript| t.labelled_for_prompt(usize::MAX, None).text;
+
+    crate::meetings_ui::documents::hold_writer();
+    let first = meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Id(2), true, cx)
+        })
+        .expect("voice 2 was in the notes");
+    let second = meetings
+        .update(cx, |m, cx| m.set_not_me(&doc, 1, true, cx))
+        .expect("voice 1 was the user");
+    crate::meetings_ui::documents::release_writer();
+    let t = saved_transcript(&meetings, &doc, cx);
+    let names = t.names().unwrap();
+    assert!(names.is_left_out(SpeakerId(2)), "the first choice stuck");
+    assert!(names.is_not_user(SpeakerId(1)) && names.user().is_none());
+    assert!(!prompt(&t).contains("Dinner"), "{}", prompt(&t));
+
+    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, first, cx));
+    let t = saved_transcript(&meetings, &doc, cx);
+    let names = t.names().unwrap();
+    assert_eq!(names.left_out(SpeakerId(2)), None, "back to no choice");
+    assert!(names.is_not_user(SpeakerId(1)), "the second choice stays");
+    assert!(prompt(&t).contains("Dinner"));
+
+    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, second, cx));
+    let t = saved_transcript(&meetings, &doc, cx);
+    assert_eq!(t.names().unwrap().user(), Some(SpeakerId(1)));
+    assert!(!t.names().unwrap().is_not_user(SpeakerId(1)));
+}
+
+/// With the call's track left out from its unidentified line, a told-apart
+/// voice with no choice of its own follows the track, and "Put this voice
+/// back in the notes" on it works; undo puts back exactly what was there.
+#[gpui::test]
+fn a_voice_put_back_in_beats_its_tracks_choice(cx: &mut gpui::TestAppContext) {
+    use cap_diarize::SpeakerId;
+    let (meetings, doc, _dir) = voice_choice_meeting(cx);
+    let prompt = |t: &Transcript| t.labelled_for_prompt(usize::MAX, None).text;
+    let track = meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Source(Source::Mic), true, cx)
+        })
+        .expect("the track was in the notes");
+    let before = saved_transcript(&meetings, &doc, cx);
+    assert!(!prompt(&before).contains("Dinner") && !prompt(&before).contains("budget"));
+
+    let back = meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Id(2), false, cx)
+        })
+        .expect("putting the voice back changes something");
+    let t = saved_transcript(&meetings, &doc, cx);
+    assert!(prompt(&t).contains("Dinner") && !prompt(&t).contains("budget"));
+    assert_eq!(t.names().unwrap().left_out(SpeakerId(2)), Some(false));
+
+    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, back, cx));
+    assert_eq!(saved_transcript(&meetings, &doc, cx), before);
+    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, track, cx));
+    let t = saved_transcript(&meetings, &doc, cx);
+    assert_eq!(
+        t.voice_choice(&cap_meetings::transcript::Voice::Source(Source::Mic)),
+        None
+    );
+    assert!(prompt(&t).contains("Dinner") && prompt(&t).contains("budget"));
+}

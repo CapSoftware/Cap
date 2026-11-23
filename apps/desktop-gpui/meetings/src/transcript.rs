@@ -179,12 +179,17 @@ pub enum LogLine {
         #[serde(default)]
         ids: Vec<String>,
     },
-    /// A voice with no told-apart id left out of the notes (`out`), or taken
-    /// back in. Told-apart voices keep this choice in `SpeakerNames`.
+    /// A voice with no told-apart id left out of the notes (`out`), or put
+    /// back in. `forget` takes the choice away instead (an undo back to no
+    /// choice); `out` is then false, so versions before it put the voice
+    /// back in, as they did. Told-apart voices keep this choice in
+    /// `SpeakerNames`.
     LeaveOut {
         voice: Voice,
         #[serde(default)]
         out: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        forget: bool,
     },
 }
 
@@ -269,8 +274,21 @@ pub struct Transcript {
     system_label: Option<String>,
     names: Option<SpeakerNames>,
     gaps: Vec<Gap>,
-    /// Voices without a told-apart id left out of the notes.
-    left_out: Vec<Voice>,
+    /// The person's choices on voices without a told-apart id: left out of
+    /// the notes (true) or put back in (false). No entry: no choice.
+    left_out: Vec<(Voice, bool)>,
+}
+
+impl LogLine {
+    /// The line that records `choice` on a voice without a told-apart id:
+    /// left out, put back in, or (`None`) no choice.
+    pub fn leave_out(voice: Voice, choice: Option<bool>) -> Self {
+        LogLine::LeaveOut {
+            voice,
+            out: choice == Some(true),
+            forget: choice.is_none(),
+        }
+    }
 }
 
 fn order_key(u: &Utterance) -> (u64, Source, &str) {
@@ -348,15 +366,12 @@ impl Transcript {
 
     pub fn rename_speaker(&mut self, from: &str, to: &str) -> usize {
         let to = to.trim();
-        if let Some(voice) = self
-            .left_out
-            .iter_mut()
-            .find(|v| **v == Voice::Named(from.to_string()))
-        {
-            *voice = Voice::Named(to.to_string());
+        if let Some(choice) = self.voice_choice(&Voice::Named(from.to_string())) {
+            self.choose_voice(Voice::Named(from.to_string()), None);
+            if !to.is_empty() {
+                self.choose_voice(Voice::Named(to.to_string()), Some(choice));
+            }
         }
-        self.left_out.retain(|v| *v != Voice::Named(String::new()));
-        self.left_out.dedup();
         let mut changed = 0;
         for u in &mut self.utterances {
             if u.speaker.as_deref() == Some(from) {
@@ -388,31 +403,77 @@ impl Transcript {
         self.names.as_ref()
     }
 
-    pub fn set_left_out(&mut self, voice: Voice, out: bool) {
-        self.left_out.retain(|v| *v != voice);
-        if out {
-            self.left_out.push(voice);
+    /// Records the person's choice on a voice without a told-apart id: left
+    /// out (`Some(true)`), put back in (`Some(false)`), or none.
+    pub fn choose_voice(&mut self, voice: Voice, choice: Option<bool>) {
+        match (self.left_out.iter_mut().find(|(v, _)| *v == voice), choice) {
+            (Some(entry), Some(out)) => entry.1 = out,
+            (None, Some(out)) => self.left_out.push((voice, out)),
+            (_, None) => self.left_out.retain(|(v, _)| *v != voice),
         }
     }
 
-    /// Whether lines by this speaker are left out of the notes, by the same
-    /// precedence `speaker` names them: a name on the line, then the
-    /// told-apart voice, then the track.
+    /// The person's choice on a voice without a told-apart id, if any.
+    pub fn voice_choice(&self, voice: &Voice) -> Option<bool> {
+        self.left_out
+            .iter()
+            .find(|(v, _)| v == voice)
+            .map(|(_, out)| *out)
+    }
+
+    /// Whether lines by this speaker are left out of the notes. The most
+    /// specific choice decides: the line's own name, then its told-apart
+    /// voice, then its track. So a line moved to a name keeps its voice's
+    /// choice until the name has one, and a voice put back in stays in when
+    /// its track is left out.
     pub fn is_left_out(
         &self,
         source: Source,
         speaker: Option<&str>,
         speaker_id: Option<u32>,
     ) -> bool {
-        if let Some(name) = speaker.map(str::trim).filter(|s| !s.is_empty()) {
-            return self.left_out.contains(&Voice::Named(name.to_string()));
+        let named = speaker
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(|name| {
+                self.left_out.iter().find_map(|(v, out)| match v {
+                    Voice::Named(n) if n == name => Some(*out),
+                    _ => None,
+                })
+            });
+        named
+            .or_else(|| {
+                let names = self.names.as_ref()?;
+                names.left_out(SpeakerId(speaker_id?))
+            })
+            .or_else(|| self.voice_choice(&Voice::Source(source)))
+            .unwrap_or(false)
+    }
+
+    /// Which lines are left out of the notes, as a short stamp: empty when
+    /// none are. A summary or Ask answer made under another stamp may hold
+    /// words the person has since left out.
+    pub fn left_out_basis(&self) -> String {
+        let mut ids: Vec<&str> = self
+            .utterances
+            .iter()
+            .filter(|u| !u.text.trim().is_empty())
+            .filter(|u| self.is_left_out(u.source, u.speaker.as_deref(), u.speaker_id))
+            .map(|u| u.id.as_str())
+            .collect();
+        if ids.is_empty() {
+            return String::new();
         }
-        if let (Some(id), Some(names)) = (speaker_id, self.names.as_ref())
-            && names.is_left_out(SpeakerId(id))
-        {
-            return true;
+        ids.sort_unstable();
+        // FNV-1a: stable across builds, unlike the standard hasher.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for id in ids {
+            for byte in id.bytes().chain([0]) {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
         }
-        self.left_out.contains(&Voice::Source(source))
+        format!("{hash:016x}")
     }
 
     pub fn turn_left_out(&self, turn: &Turn) -> bool {
@@ -563,7 +624,9 @@ impl Transcript {
             LogLine::GapClosed { ids } => {
                 self.close_gaps(&ids);
             }
-            LogLine::LeaveOut { voice, out } => self.set_left_out(voice, out),
+            LogLine::LeaveOut { voice, out, forget } => {
+                self.choose_voice(voice, (!forget).then_some(out))
+            }
         }
     }
 
@@ -890,10 +953,11 @@ impl Transcript {
                 }),
         );
         lines.extend(self.gaps.iter().map(|gap| LogLine::Gap { gap: gap.clone() }));
-        lines.extend(self.left_out.iter().map(|voice| LogLine::LeaveOut {
-            voice: voice.clone(),
-            out: true,
-        }));
+        lines.extend(
+            self.left_out
+                .iter()
+                .map(|(voice, out)| LogLine::leave_out(voice.clone(), Some(*out))),
+        );
         lines
     }
 }
