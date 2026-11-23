@@ -29,6 +29,7 @@ const stopWorkflowEsbuild = async () => {
 
 const withWorkflowBuild = (config) => {
 	const resolveConfig = withWorkflow(config);
+	if (typeof resolveConfig !== "function") return resolveConfig;
 	return async (phase, context) => {
 		const resolved = await resolveConfig(phase, context);
 		if (phase === PHASE_PRODUCTION_BUILD) await stopWorkflowEsbuild();
