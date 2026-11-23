@@ -1,0 +1,17 @@
+diff --git a/apps/desktop-gpui/src/transcription.rs b/apps/desktop-gpui/src/transcription.rs
+index 5364050263..a0648e82cb 100644
+--- a/apps/desktop-gpui/src/transcription.rs
++++ b/apps/desktop-gpui/src/transcription.rs
+@@ -2590,7 +2590,11 @@ fn transcribe_project_first_pass(
+ /// Notes transcripts only, so with none added captions are exactly what the
+ /// engine heard.
+ pub(crate) fn caption_corrector() -> cap_meetings::dictionary::Corrector {
+-    cap_meetings::dictionary::Corrector::new(&crate::meetings::persist::caption_entries())
++    cap_meetings::dictionary::Corrector::new(
++        crate::meetings::persist::load_settings()
++            .transcription
++            .entries(),
++    )
+ }
+ 
+ /// Spell caption words with the dictionary. Words keep their own times
