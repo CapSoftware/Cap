@@ -37,7 +37,9 @@
 			"assets/backgrounds/dark/*": "assets/backgrounds/dark/",
 			"assets/backgrounds/orange/*": "assets/backgrounds/orange/",
 			"assets/backgrounds/purple/*": "assets/backgrounds/purple/",
-			"assets/music/*.mp3": "assets/music/"
+			"assets/music/*.mp3": "assets/music/",
+			"licenses/nemotron-3-diarization/*": "licenses/nemotron-3-diarization/",
+			"licenses/wespeaker-campplus/*": "licenses/wespeaker-campplus/"
 		},
 		"fileAssociations": [
 			{

@@ -37,6 +37,12 @@
 	<string>Cap uses your camera to record you in your Caps</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cap uses your microphone to record you in your Caps</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Cap records your computer's audio output during meetings so everyone in the call is transcribed</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Cap shows your upcoming meetings so it can offer to take notes</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Cap shows your upcoming meetings so it can offer to take notes</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Cap captures your screen as part of recording your Caps</string>
 	<key>NSCameraUseContinuityCameraDeviceType</key>
