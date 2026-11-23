@@ -41,6 +41,18 @@ fn english_matches_the_literals_it_replaced() {
         (tr::editor::redact::category_url(), "Links".into()),
         (tr::editor::redact::chip(), "Redact".into()),
         (tr::editor::redact::failed(), "Couldn't scan this recording".into()),
+        (
+            tr::editor::redact::export_failed(),
+            "Auto redact couldn't scan this recording. Turn it off or try again before exporting.".into(),
+        ),
+        (
+            tr::editor::redact::export_screen_track(),
+            "The screen track can't be exported on its own while Auto redact is on.".into(),
+        ),
+        (
+            tr::editor::redact::export_wait(),
+            "Auto redact is still scanning. Export when it finishes.".into(),
+        ),
         (tr::editor::redact::hide(), "Hide".into()),
         (tr::editor::redact::keep(), "Keep visible".into()),
         (tr::editor::redact::kept(), "Visible".into()),

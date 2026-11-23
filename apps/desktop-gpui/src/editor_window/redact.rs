@@ -669,6 +669,32 @@ impl EditorWindow {
         running
     }
 
+    /// Why a video export must wait: auto redact is on and its scan has not
+    /// finished and been saved (export renders from the saved detections),
+    /// or the export would write the screen track on its own, which is never
+    /// redacted.
+    pub(crate) fn redact_export_blocker(&self, screen_track: bool) -> Option<&'static str> {
+        if !self.project.auto_redact.enabled {
+            return None;
+        }
+        if screen_track {
+            return Some(tr::editor::redact::export_screen_track());
+        }
+        let saved =
+            Redactions::load(&self.project_path).is_some_and(|redactions| redactions.is_complete());
+        let running = matches!(
+            self.redact.phase,
+            Some(JobPhase::Preparing | JobPhase::Scanning)
+        );
+        if !saved || running {
+            return Some(match self.redact.phase {
+                Some(JobPhase::Failed(_)) => tr::editor::redact::export_failed(),
+                _ => tr::editor::redact::export_wait(),
+            });
+        }
+        None
+    }
+
     /// Detections active within `start..end` of the timeline, with their
     /// category, after the category settings (exclusions included).
     pub(crate) fn redact_regions_between(
@@ -877,7 +903,6 @@ impl EditorWindow {
     }
 }
 
-/// Source seconds as `m:ss.s`.
 fn format_redact_time(seconds: f64) -> String {
     let seconds = seconds.max(0.0);
     let minutes = (seconds / 60.0).floor();

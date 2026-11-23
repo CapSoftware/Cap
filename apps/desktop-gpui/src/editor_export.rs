@@ -1323,6 +1323,23 @@ impl EditorWindow {
         if ui.phase.is_busy() || ui.close_requested {
             return;
         }
+        let screen_track =
+            ui.format == ExportFormatKind::Tracks && ui.tracks.contains(&TrackKind::Screen);
+        let blocker = if ui.format == ExportFormatKind::Audio {
+            None
+        } else {
+            self.redact_export_blocker(screen_track)
+        };
+        if let Some(message) = blocker {
+            if let Some(ui) = self.export.as_mut() {
+                ui.error = Some(message.into());
+            }
+            cx.notify();
+            return;
+        }
+        let Some(ui) = self.export.as_mut() else {
+            return;
+        };
         if ui.format == ExportFormatKind::Tracks {
             self.start_tracks_export(pretty_name, window, cx);
             return;
