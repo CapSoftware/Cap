@@ -15,12 +15,15 @@ use windows::{
             },
             Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
         },
-        Media::MediaFoundation::{IMFSample, MFSTARTUP_FULL, MFStartup},
+        Media::MediaFoundation::{
+            IMFSample, MFMediaType_Video, MFSTARTUP_FULL, MFStartup, MFT_ENUM_FLAG_HARDWARE,
+            MFT_ENUM_FLAG_TRANSCODE_ONLY, MFVideoFormat_H264,
+        },
         System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
     },
 };
 
-use crate::{d3d::create_d3d_device, media::MF_VERSION, video::H264Encoder};
+use crate::{d3d::create_d3d_device, media::MF_VERSION, mft::EncoderDevice, video::H264Encoder};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 64;
@@ -37,17 +40,38 @@ fn color_patch_decodes_as_limited_bt709() {
 
     let device = create_d3d_device().expect("D3D11 device");
     let texture = solid_bgra(&device, RGB);
-    let mut encoder = H264Encoder::new(
-        &device,
-        DXGI_FORMAT_B8G8R8A8_UNORM,
-        SizeInt32 {
-            Width: WIDTH as i32,
-            Height: HEIGHT as i32,
-        },
-        FPS,
-        8.0,
+    let size = SizeInt32 {
+        Width: WIDTH as i32,
+        Height: HEIGHT as i32,
+    };
+    let hardware = EncoderDevice::enumerate_with_flags(
+        MFMediaType_Video,
+        MFVideoFormat_H264,
+        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
     )
-    .expect("Media Foundation H.264 encoder");
+    .expect("enumerate hardware H.264 encoders");
+    let (mut encoder, mft_name) = if let Some(found) = hardware.first() {
+        let name = found.display_name().to_owned();
+        let encoder = H264Encoder::new(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
+            .expect("Media Foundation H.264 encoder");
+        (encoder, name)
+    } else {
+        let software = EncoderDevice::enumerate_with_flags(
+            MFMediaType_Video,
+            MFVideoFormat_H264,
+            MFT_ENUM_FLAG_TRANSCODE_ONLY,
+        )
+        .expect("enumerate H.264 encoders");
+        let name = software
+            .first()
+            .map(|found| found.display_name().to_owned())
+            .unwrap_or_else(|| "none".to_owned());
+        let encoder =
+            H264Encoder::new_software(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
+                .expect("Media Foundation software H.264 encoder");
+        (encoder, name)
+    };
+    eprintln!("mft_name={mft_name}");
 
     let mut frames_left = FRAMES;
     let mut tick = 0i64;
@@ -75,7 +99,10 @@ fn color_patch_decodes_as_limited_bt709() {
         "encoder emitted no samples from {FRAMES} frames"
     );
 
-    let path = std::env::temp_dir().join(format!("cap-mf-bt709-{}.mp4", std::process::id()));
+    let path = std::env::var("CAP_MF_BT709_MP4").map_or_else(
+        |_| std::env::temp_dir().join(format!("cap-mf-bt709-{}.mp4", std::process::id())),
+        std::path::PathBuf::from,
+    );
     let _ = std::fs::remove_file(&path);
     write_mp4(&path, encoder.bitrate(), &samples);
     let frame = first_decoded_frame(&path);
@@ -91,12 +118,15 @@ fn color_patch_decodes_as_limited_bt709() {
             "component {index}: decoded {actual:?}, BT.709 limited {expected:?}"
         );
     }
-    let _ = std::fs::remove_file(&path);
+    eprintln!("mp4={}", path.display());
+    if std::env::var_os("CAP_MF_BT709_MP4").is_none() {
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 fn solid_bgra(device: &ID3D11Device, rgb: [u8; 3]) -> ID3D11Texture2D {
     let [r, g, b] = rgb;
-    let pixels = vec![b, g, r, 255].repeat((WIDTH * HEIGHT) as usize);
+    let pixels = [b, g, r, 255].repeat((WIDTH * HEIGHT) as usize);
     let desc = D3D11_TEXTURE2D_DESC {
         Width: WIDTH,
         Height: HEIGHT,
