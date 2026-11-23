@@ -62,6 +62,9 @@ pub struct Item {
     pub has_notes: bool,
     pub pinned: bool,
     pub trashed: bool,
+    /// The note's saved details could not be read; it was rebuilt from its
+    /// folder (see `Library::load_or_recover`).
+    pub damaged: bool,
     /// The notes library folder, for notes only.
     pub notes_folder: Option<String>,
     pub thumbnail: Option<PathBuf>,
@@ -162,6 +165,7 @@ pub struct ItemFacts {
     pub has_notes: bool,
     pub pinned: bool,
     pub trashed: bool,
+    pub damaged: bool,
     pub notes_folder: Option<String>,
     pub thumbnail: Option<PathBuf>,
     pub excerpt: Option<String>,
@@ -203,6 +207,7 @@ impl Item {
             has_notes: facts.has_notes,
             pinned: facts.pinned,
             trashed: facts.trashed,
+            damaged: facts.damaged,
             notes_folder: facts.notes_folder,
             thumbnail: facts.thumbnail,
             excerpt: facts.excerpt,

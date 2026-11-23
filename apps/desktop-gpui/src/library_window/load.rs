@@ -76,6 +76,7 @@ pub fn doc_item(library: Option<&Library>, meta: &DocMeta) -> Item {
             has_notes,
             pinned: meta.pinned,
             trashed: meta.is_trashed(),
+            damaged: meta.extra.contains_key(cap_meetings::library::DAMAGED_KEY),
             notes_folder: meta.folder_id.clone(),
             thumbnail: None,
             excerpt,
@@ -574,5 +575,27 @@ mod tests {
             folders.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
             ["Alpha", "beta"]
         );
+    }
+
+    #[test]
+    fn a_meeting_rebuilt_from_its_folder_is_a_damaged_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path()).unwrap();
+        let meta = library
+            .create(
+                DocKind::Meeting,
+                Utc.with_ymd_and_hms(2026, 11, 20, 9, 0, 0).unwrap(),
+                1,
+            )
+            .unwrap();
+        assert!(!doc_item(Some(&library), &meta).damaged);
+        std::fs::write(library.transcript_path(&meta.id).unwrap(), "{}\n").unwrap();
+        let doc_json = library.doc_dir(&meta.id).unwrap().join("doc.json");
+        std::fs::write(&doc_json, "{\"id\": \"cut").unwrap();
+        let recovered = library.load_or_recover(&meta.id).unwrap();
+        let item = doc_item(Some(&library), &recovered);
+        assert!(item.damaged);
+        assert_eq!(item.kind, ItemKind::Meeting);
+        assert!(item.has_transcript);
     }
 }
