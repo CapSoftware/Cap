@@ -3481,6 +3481,7 @@ impl Meetings {
     /// Empties trash older than 30 days and applies "Keep audio for", at
     /// launch once recovery is done and every few hours after.
     fn start_library_cleanup(&mut self, cx: &mut Context<Self>) {
+        let opened = self.opened_here.clone();
         self.library_cleanup = Some(cx.spawn(async move |this, cx| {
             let mut wait = CLEANUP_FIRST;
             loop {
@@ -3495,6 +3496,7 @@ impl Meetings {
                     CleanupPlan::Later => CLEANUP_FIRST,
                     CleanupPlan::Run { audio_days, busy } => {
                         let dir = persist::documents_dir();
+                        let opened = opened.clone();
                         let changed = crate::meetings_ui::documents::after_queued_saves(move || {
                             if !dir.is_dir() {
                                 return (Vec::new(), Vec::new());
@@ -3505,9 +3507,9 @@ impl Meetings {
                             let now = Utc::now();
                             let mut busy = busy;
                             busy.extend(access::unwritten_ids());
-                            let purged = persist::purge_old_trash(&library, now, &busy);
+                            let purged = persist::purge_old_trash(&library, now, &busy, &opened);
                             let swept = audio_days
-                                .map(|days| persist::sweep_old_audio(&library, now, days, &busy))
+                                .map(|days| persist::sweep_old_audio(&library, now, days, &busy, &opened))
                                 .unwrap_or_default();
                             (purged, swept)
                         })

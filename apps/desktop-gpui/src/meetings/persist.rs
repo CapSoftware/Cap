@@ -473,9 +473,10 @@ pub fn sweep_old_audio(
     now: chrono::DateTime<Utc>,
     days: u32,
     busy: &[String],
+    opened: &OpenedHere,
 ) -> Vec<String> {
-    match library.sweep_audio(now, days, |meta| {
-        busy.iter().any(|id| *id == meta.id) || flag(meta, REPAIR_KEY)
+    match library.sweep_audio_claimed(now, days, |meta| {
+        opened.claim(meta, busy, flag(meta, REPAIR_KEY))
     }) {
         Ok(swept) => cleaned(swept, "could not delete a meeting's old audio"),
         Err(error) => {
@@ -491,8 +492,9 @@ pub fn purge_old_trash(
     library: &Library,
     now: chrono::DateTime<Utc>,
     busy: &[String],
+    opened: &OpenedHere,
 ) -> Vec<String> {
-    match library.purge_trash(now, |meta| busy.iter().any(|id| *id == meta.id)) {
+    match library.purge_trash_claimed(now, |meta| opened.claim(meta, busy, false)) {
         Ok(purged) => cleaned(purged, "could not delete an old item in the trash"),
         Err(error) => {
             tracing::warn!(%error, "could not empty old trash");
@@ -621,6 +623,19 @@ impl OpenedHere {
 
     pub fn mark(&self, doc_id: &str) {
         self.lock().insert(doc_id.to_string());
+    }
+
+    /// For cleanup: None when the note is busy, held back or opened in this
+    /// run; else the lock, held through the note's delete and save so a
+    /// resume can't start in between.
+    fn claim(
+        &self,
+        meta: &DocMeta,
+        busy: &[String],
+        held: bool,
+    ) -> Option<MutexGuard<'_, std::collections::HashSet<String>>> {
+        let opened = self.lock();
+        (!held && !busy.contains(&meta.id) && !opened.contains(&meta.id)).then_some(opened)
     }
 }
 

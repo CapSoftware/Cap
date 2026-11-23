@@ -878,3 +878,56 @@ fn a_trash_waits_for_a_meta_update_in_progress_and_both_changes_stay() {
     assert_eq!(meta.title, "Weekly sync");
     assert_eq!(meta.trashed_at, Some(t(3, 10)));
 }
+
+/// Records, when the cleanup lets go of its claim on a note, whether that
+/// note's audio was already gone and saved as gone.
+struct Claim<'a> {
+    library: &'a Library,
+    id: String,
+    seen: &'a std::cell::RefCell<Vec<bool>>,
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        let gone = !self.library.audio_dir(&self.id).unwrap().exists()
+            && self
+                .library
+                .load(&self.id)
+                .unwrap()
+                .meeting
+                .unwrap()
+                .audio
+                .is_empty();
+        self.seen.borrow_mut().push(gone);
+    }
+}
+
+#[test]
+fn a_cleanup_claim_is_held_until_the_audio_is_gone_and_saved() {
+    let (_dir, library) = lib();
+    let mut old = library.create(DocKind::Meeting, t(1, 9), 1).unwrap();
+    old.meeting.as_mut().unwrap().ended_at = Some(t(1, 10));
+    old.meeting.as_mut().unwrap().audio = vec![AudioTrack {
+        source: Source::System,
+        file: "audio/system.ogg".into(),
+        codec: "opus".into(),
+        duration_ms: 1_000,
+    }];
+    library.save(&old).unwrap();
+    let audio = library.audio_dir(&old.id).unwrap();
+    std::fs::create_dir_all(&audio).unwrap();
+    std::fs::write(audio.join("system.ogg"), b"ogg").unwrap();
+
+    let seen = std::cell::RefCell::new(Vec::new());
+    let swept = library
+        .sweep_audio_claimed(t(10, 9), 7, |meta| {
+            Some(Claim {
+                library: &library,
+                id: meta.id.clone(),
+                seen: &seen,
+            })
+        })
+        .unwrap();
+    assert_eq!(swept.done, vec![old.id.clone()]);
+    assert_eq!(*seen.borrow(), vec![true]);
+}

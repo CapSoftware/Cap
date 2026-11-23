@@ -527,15 +527,25 @@ impl Library {
         now: DateTime<Utc>,
         keep: impl Fn(&DocMeta) -> bool,
     ) -> Result<Cleaned> {
+        self.purge_trash_claimed(now, |meta| (!keep(meta)).then_some(()))
+    }
+
+    /// [`Library::purge_trash`], where `claim` returns None to keep an item,
+    /// or a value held until that item is gone.
+    pub fn purge_trash_claimed<G>(
+        &self,
+        now: DateTime<Utc>,
+        claim: impl Fn(&DocMeta) -> Option<G>,
+    ) -> Result<Cleaned> {
         let listing = self.list(&ListFilter {
             trash: TrashFilter::Only,
             ..ListFilter::default()
         })?;
         let mut purged = Cleaned::default();
         for meta in listing.docs {
-            if keep(&meta) {
+            let Some(_claim) = claim(&meta) else {
                 continue;
-            }
+            };
             let expired = meta
                 .trashed_at
                 .is_some_and(|t| (now - t).num_days() >= TRASH_RETENTION_DAYS);
@@ -634,6 +644,17 @@ impl Library {
         retention_days: u32,
         keep: impl Fn(&DocMeta) -> bool,
     ) -> Result<Cleaned> {
+        self.sweep_audio_claimed(now, retention_days, |meta| (!keep(meta)).then_some(()))
+    }
+
+    /// [`Library::sweep_audio`], where `claim` returns None to keep a
+    /// meeting's audio, or a value held until its audio is gone and saved.
+    pub fn sweep_audio_claimed<G>(
+        &self,
+        now: DateTime<Utc>,
+        retention_days: u32,
+        claim: impl Fn(&DocMeta) -> Option<G>,
+    ) -> Result<Cleaned> {
         let listing = self.list(&ListFilter {
             kind: Some(DocKind::Meeting),
             trash: TrashFilter::Include,
@@ -641,9 +662,9 @@ impl Library {
         })?;
         let mut swept = Cleaned::default();
         for meta in listing.docs {
-            if keep(&meta) {
+            let Some(_claim) = claim(&meta) else {
                 continue;
-            }
+            };
             let Some(meeting) = meta.meeting.as_ref() else {
                 continue;
             };

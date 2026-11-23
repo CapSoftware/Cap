@@ -1345,7 +1345,13 @@ fn keep_audio_for_deletes_only_finished_meetings_nothing_still_needs() {
     let repairing = make(4, Some(1), true);
     let in_use = make(5, Some(1), false);
 
-    let swept = persist::sweep_old_audio(&library, day(10), 7, std::slice::from_ref(&in_use.0));
+    let resumed = make(6, Some(1), false);
+    // Resumed after the cleanup took its list of busy notes.
+    let opened = persist::OpenedHere::default();
+    opened.mark(&resumed.0);
+
+    let swept =
+        persist::sweep_old_audio(&library, day(10), 7, std::slice::from_ref(&in_use.0), &opened);
     assert_eq!(swept, vec![old.0]);
     assert!(!old.1.exists());
     for (what, kept) in [
@@ -1353,6 +1359,7 @@ fn keep_audio_for_deletes_only_finished_meetings_nothing_still_needs() {
         ("never ended", unfinished.1),
         ("waiting for a repair", repairing.1),
         ("in use", in_use.1),
+        ("was resumed", resumed.1),
     ] {
         assert!(kept.exists(), "a meeting that {what} keeps its audio");
     }
@@ -1406,13 +1413,16 @@ fn trash_older_than_thirty_days_goes_unless_it_is_open() {
     let old = trashed(1, 1);
     let recent = trashed(2, 20);
     let open = trashed(3, 1);
+    let resumed = trashed(5, 1);
     let kept = library.create(DocKind::Note, day(1), 4).unwrap().id;
+    let opened = persist::OpenedHere::default();
+    opened.mark(&resumed);
 
     let later = day(1) + chrono::Duration::days(31);
-    let purged = persist::purge_old_trash(&library, later, std::slice::from_ref(&open));
+    let purged = persist::purge_old_trash(&library, later, std::slice::from_ref(&open), &opened);
     assert_eq!(purged, vec![old.clone()]);
     assert!(library.load(&old).is_err());
-    for id in [recent, open, kept] {
+    for id in [recent, open, resumed, kept] {
         assert!(library.load(&id).is_ok(), "{id} stays");
     }
 }
