@@ -1275,3 +1275,124 @@ fn the_farm_standing_in_cancels_the_after_stop_pass() {
     live.finish();
     assert!(live.stats().nemotron_applied);
 }
+
+#[test]
+fn the_call_is_never_echo_of_its_own_copy_closed_first() {
+    // A remote who sounds like the user (voice 4) talks; the room microphone
+    // hears them through the speakers starting 20 ms after the call's own
+    // segment, a frame or two late, and that copy closes first (a slow
+    // machine transcribing in real time). The call's first words are the
+    // call, not the user sent back.
+    let mut table = speakers(4);
+    table.push(near(1, 2, 0.75));
+    let mut d = diarizer(table);
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    for (i, (late_start, short_end)) in [(20, 0), (20, 0), (40, 60), (20, 40)]
+        .into_iter()
+        .enumerate()
+    {
+        let t = 8_000 + i as u64 * 7_000;
+        let ms = 5_860;
+        push_samples(
+            &mut d,
+            Track::Mic,
+            t + late_start,
+            &spoken(
+                4,
+                t + late_start,
+                ms - late_start - short_end,
+                20 + i as u64,
+                2,
+                1.0,
+            ),
+        );
+        let call = push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(4, t, ms, 20 + i as u64, 0, 1.0),
+        );
+        assert!(
+            call.spans.iter().all(|s| !s.echo && s.speaker != user),
+            "call {i}: {call:?}"
+        );
+    }
+}
+
+#[test]
+fn the_users_voice_sent_back_late_stays_echo() {
+    // The far end returns the user's voice 160 ms later, so the
+    // call's copy starts and ends after the microphone's original.
+    let mut d = diarizer(speakers(4));
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 5_000, 3, 0, 1.0),
+    ));
+    for i in 0..4u64 {
+        let t = 6_000 + i * 6_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(1, t, 5_000, 20 + i, 0, 1.0));
+        let back = push_samples(
+            &mut d,
+            Track::System,
+            t + 160,
+            &spoken(1, t + 160, 5_000, 20 + i, 8, 1.0),
+        );
+        assert!(
+            back.spans.iter().all(|s| s.echo && s.speaker == user),
+            "{back:?}"
+        );
+    }
+}
+
+#[test]
+fn the_call_is_never_echo_of_a_level_copy_while_it_dips() {
+    // The speakers' copy goes through a limiter: it stays at the room's
+    // usual level while a new remote (voice 4, who sounds like the user) is
+    // quieter on the call than the call usually is. The copy closes first
+    // and joins the user; the call's words are still the call.
+    let mut table = speakers(7);
+    table[4] = near(1, 2, 0.75);
+    let mut d = diarizer(table);
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    for i in 0..3u64 {
+        let t = 7_000 + i * 5_000;
+        push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(6, t, 4_000, 10 + i, 0, 1.0),
+        );
+        push_samples(&mut d, Track::Mic, t, &spoken(3, t, 4_000, 10 + i, 2, 1.0));
+    }
+    for i in 0..3u64 {
+        let t = 23_000 + i * 7_000;
+        push_samples(
+            &mut d,
+            Track::Mic,
+            t + 20,
+            &spoken(4, t + 20, 5_840, 30 + i, 2, 1.0),
+        );
+        let call = push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(4, t, 5_860, 30 + i, 0, 1.0),
+        );
+        assert!(
+            call.spans.iter().all(|s| !s.echo && s.speaker != user),
+            "call {i}: {call:?}"
+        );
+    }
+}

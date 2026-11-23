@@ -804,8 +804,9 @@ impl MeetingDiarizer {
         // A stretch of the call whose copy the microphone is hearing through
         // the speakers is the call itself, never the user sent back: when
         // the call is louder than the user, its copy can sound like them.
-        let call_heard_in_the_room =
-            || track == Track::System && self.leak(start_ms, end_ms) >= Some(self.config.leak);
+        let call_heard_in_the_room = || {
+            track == Track::System && self.heard_leak(start_ms, end_ms) >= Some(self.config.leak)
+        };
         if let Some((id, sim)) = other
             && sim >= self.config.assign
             && own.is_none_or(|(_, own)| sim > own)
@@ -1250,6 +1251,13 @@ impl MeetingDiarizer {
     /// call's rhythm syllable by syllable; someone talking over the call
     /// does not.
     fn leak(&self, start_ms: u64, end_ms: u64) -> Option<f32> {
+        self.follows_call(start_ms, end_ms, true)
+    }
+
+    /// `leak`, optionally without the loudness test: a call stretch is the
+    /// original whenever the microphone follows it, however loud the copy
+    /// (a limiter or the room can keep it level while the call dips).
+    fn follows_call(&self, start_ms: u64, end_ms: u64, louder_is_a_person: bool) -> Option<f32> {
         let (from, to) = (start_ms.div_ceil(LEVEL_MS), end_ms / LEVEL_MS);
         if to < from + LEAK_MIN_FRAMES {
             return None;
@@ -1275,7 +1283,8 @@ impl MeetingDiarizer {
         };
         let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
         let heard: Vec<f32> = call[at..at + mic.len()].iter().flatten().copied().collect();
-        if let (Some(mic_usual), Some(call_usual)) = (usual(0), usual(1))
+        if louder_is_a_person
+            && let (Some(mic_usual), Some(call_usual)) = (usual(0), usual(1))
             && mean(&mic) - mic_usual > mean(&heard) - call_usual + LEAK_LOUDER_DB
         {
             return None;
@@ -1296,6 +1305,30 @@ impl MeetingDiarizer {
             .filter_map(at_lag)
             .max_by(f32::total_cmp);
         (leads.is_none_or(|leads| follows >= leads)).then_some(follows)
+    }
+
+    /// How closely the microphone follows a call stretch over the longest
+    /// run of it the microphone heard. The speakers' copy starts and stops a
+    /// little after the call, so a window of the call seldom lines up with
+    /// the microphone's speech.
+    fn heard_leak(&self, start_ms: u64, end_ms: u64) -> Option<f32> {
+        let from = start_ms.div_ceil(LEVEL_MS);
+        let mic = self.levels(Track::Mic, from, end_ms / LEVEL_MS);
+        let (mut best, mut run_start) = ((0, 0), None);
+        for (i, level) in mic.iter().chain([&None]).enumerate() {
+            match (level, run_start) {
+                (Some(_), None) => run_start = Some(i),
+                (None, Some(a)) => {
+                    if i - a > best.1 - best.0 {
+                        best = (a, i);
+                    }
+                    run_start = None;
+                }
+                _ => {}
+            }
+        }
+        let (a, b) = (from + best.0 as u64, from + best.1 as u64);
+        self.follows_call(a * LEVEL_MS, b * LEVEL_MS, false)
     }
 
     /// Whether the call says (almost) nothing through a stretch, counting the
