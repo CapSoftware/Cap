@@ -100,6 +100,7 @@ import {
 	createIdentityEditSpec,
 } from "@/lib/video-edits";
 import { getVideoViewCount } from "@/lib/video-view-count";
+import { withoutCreatorClient } from "@/lib/viewer-video-metadata";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import {
@@ -469,7 +470,9 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 		}
 
 		return Option.fromNullable(
-			row && row.organizationTombstoneAt === null ? toShareVideo(row) : null,
+			row && row.organizationTombstoneAt === null
+				? withoutCreatorClient(toShareVideo(row))
+				: null,
 		);
 	}).pipe(
 		Effect.flatten,
