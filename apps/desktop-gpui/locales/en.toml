@@ -4105,6 +4105,7 @@ captured = { text = "Everything Cap captured", context = "Heading above a meetin
 others = "Others"
 empty = "No transcript yet."
 listening = "Listening…"
+listening_slow = { text = "Listening. Lines appear after each sentence on this computer.", context = "Shown in the live transcript on a slow computer while someone speaks and no new words have appeared for a few seconds." }
 jump_to_latest = "Jump to latest"
 find = "Find in transcript"
 no_matches = "No matches"

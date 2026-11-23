@@ -5064,6 +5064,14 @@ impl Pane {
         self.show_consent(cx);
     }
 
+    /// A live page following its newest line, as the listening cue shows it.
+    pub fn debug_cue(&mut self, cx: &mut Context<Self>) {
+        self.transcript.update(cx, |t, cx| {
+            t.debug_set_live(cx);
+            t.debug_follow(cx);
+        });
+    }
+
     pub fn debug_find(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.set_panel(true, cx);
         self.transcript

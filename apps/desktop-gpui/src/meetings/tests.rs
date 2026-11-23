@@ -5,6 +5,7 @@ use cap_meetings::{
 };
 use chrono::{TimeZone, Utc};
 use cpal::SampleFormat;
+use std::time::{Duration, Instant};
 
 use super::{
     audio_file::{OpusOggWriter, probe_duration_ms},
@@ -13,7 +14,7 @@ use super::{
     cloud::{self, Batcher, CloudError, CloudWord},
     engine,
     generate::{self, NotesError, SseEvent, SseParser},
-    persist, speakers,
+    listening_cue, persist, speakers,
     timeline::{self, Aligner, RATE, decode_interleaved},
 };
 
@@ -1703,4 +1704,47 @@ fn speaker_suggestions_keep_a_rename_made_at_the_same_moment() {
             .contains_key(speakers::APP_NAMES_KEY),
         "and the suggestions are kept"
     );
+}
+
+#[test]
+fn the_listening_cue_shows_only_on_a_slow_computer_while_someone_speaks_unanswered() {
+    let started = Instant::now();
+    let at = |secs: f64| started + Duration::from_secs_f64(secs);
+    // Someone spoke just now, nothing has shown for 5 s: said on a slow
+    // computer, never on a capable one.
+    assert!(listening_cue(
+        true,
+        at(10.),
+        started,
+        Some(at(9.5)),
+        Some(at(5.))
+    ));
+    assert!(!listening_cue(
+        false,
+        at(10.),
+        started,
+        Some(at(9.5)),
+        Some(at(5.))
+    ));
+    // Words arrived 3 s ago: nothing to explain yet.
+    assert!(!listening_cue(
+        true,
+        at(10.),
+        started,
+        Some(at(9.5)),
+        Some(at(7.))
+    ));
+    // Silence for 2 s: nobody to wait for.
+    assert!(!listening_cue(
+        true,
+        at(10.),
+        started,
+        Some(at(8.)),
+        Some(at(2.))
+    ));
+    // Nothing shown yet counts from the start, so the first seconds stay calm.
+    assert!(!listening_cue(true, at(3.), started, Some(at(2.9)), None));
+    assert!(listening_cue(true, at(4.5), started, Some(at(4.4)), None));
+    // Never anyone speaking: no cue.
+    assert!(!listening_cue(true, at(30.), started, None, None));
 }

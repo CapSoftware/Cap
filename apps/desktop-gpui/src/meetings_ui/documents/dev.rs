@@ -777,6 +777,7 @@ async fn apply_state(state: &str, handle: WindowHandle<DocumentsWindow>, cx: &mu
                 },
                 "panel" => root.pane.update(cx, |p, cx| p.set_panel(true, cx)),
                 "live" => root.pane.update(cx, |p, cx| p.debug_live(cx)),
+                "cue" => root.pane.update(cx, |p, cx| p.debug_cue(cx)),
                 "rename" | "renamed" => {
                     let (label, text) = arg.split_once('=').unwrap_or((arg.as_str(), ""));
                     let transcript = root.pane.read(cx).transcript.clone();

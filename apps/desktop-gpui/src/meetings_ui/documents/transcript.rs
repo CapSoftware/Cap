@@ -284,7 +284,124 @@ pub struct TranscriptView {
     lit_serial: u64,
     #[cfg(debug_assertions)]
     debug_live: bool,
+    /// Under a live transcript on a computer too slow for live captions.
+    cue: Entity<ListeningCue>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// One calm line under a live transcript on a computer too slow for live
+/// captions, while someone speaks and nothing new has shown for a few
+/// seconds (`Meetings::listening_cue`). It repaints only when it shows,
+/// hides or its level step changes, never with every level reading, and
+/// the next words take it away.
+pub struct ListeningCue {
+    palette: Palette,
+    on: bool,
+    step: u8,
+    _subscription: Option<Subscription>,
+}
+
+impl ListeningCue {
+    fn new(palette: Palette, cx: &mut Context<Self>) -> Self {
+        let subscription = Meetings::try_global(cx).map(|meetings| {
+            cx.subscribe(&meetings, |this, meetings, event: &MeetingEvent, cx| {
+                if matches!(
+                    event,
+                    MeetingEvent::ActiveChanged
+                        | MeetingEvent::TranscriptChanged { .. }
+                        | MeetingEvent::RecordingStopped { .. }
+                ) {
+                    this.update(&meetings, cx);
+                }
+            })
+        });
+        let forced = Self::forced();
+        Self {
+            palette,
+            on: forced,
+            step: if forced { 2 } else { 0 },
+            _subscription: subscription,
+        }
+    }
+
+    /// Debug builds: `CAP_GPUI_DEBUG_LISTENING_CUE=1` shows it (screenshots).
+    fn forced() -> bool {
+        cfg!(debug_assertions)
+            && std::env::var("CAP_GPUI_DEBUG_LISTENING_CUE").is_ok_and(|v| v.trim() == "1")
+    }
+
+    fn update(&mut self, meetings: &Entity<Meetings>, cx: &mut Context<Self>) {
+        if Self::forced() {
+            return;
+        }
+        let meetings = meetings.read(cx);
+        let on = meetings.listening_cue();
+        let step = match (on, meetings.active()) {
+            (true, Some(active)) => crate::meetings_ui::live::model::meter_step(
+                active.mic.level.max(active.system.level),
+            ),
+            _ => 0,
+        };
+        if (on, step) != (self.on, self.step) {
+            self.on = on;
+            self.step = step;
+            cx.notify();
+        }
+    }
+
+    fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
+        self.palette = palette;
+        if self.on {
+            cx.notify();
+        }
+    }
+}
+
+impl Render for ListeningCue {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        if !self.on {
+            return div().into_any_element();
+        }
+        let palette = self.palette;
+        let bars = crate::meetings_ui::live::model::meter_bars(self.step.max(1));
+        let pill = div()
+            .id("listening-cue")
+            .h(px(28.))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .rounded_full()
+            .bg(palette.capsule)
+            .border_1()
+            .border_color(palette.capsule_border)
+            .text_size(px(12.))
+            .text_color(palette.muted)
+            .child(
+                div()
+                    .h(px(10.))
+                    .flex()
+                    .items_end()
+                    .gap(px(2.))
+                    .children(bars.map(|bar| {
+                        div()
+                            .w(px(2.))
+                            .h(px(10. * bar))
+                            .rounded_full()
+                            .bg(palette.faint)
+                    })),
+            )
+            .child(tr::documents::transcript::listening_slow());
+        div()
+            .w_full()
+            .flex_none()
+            .flex()
+            .justify_center()
+            .pt(px(4.))
+            .pb(px(10.))
+            .child(pill)
+            .into_any_element()
+    }
 }
 
 pub type LeadRender = Rc<dyn Fn(usize, &mut Window, &mut App) -> AnyElement>;
@@ -413,6 +530,7 @@ impl TranscriptView {
                 }),
             );
         }
+        let cue = cx.new(|cx| ListeningCue::new(palette, cx));
         let list = ListState::new(0, ListAlignment::Top, px(600.));
         let weak = cx.weak_entity();
         list.set_scroll_handler(move |_, _, cx| {
@@ -460,6 +578,7 @@ impl TranscriptView {
             lit_serial: 0,
             #[cfg(debug_assertions)]
             debug_live: false,
+            cue,
             _subscriptions: subscriptions,
         }
     }
@@ -473,6 +592,7 @@ impl TranscriptView {
 
     pub fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
         self.palette = palette;
+        self.cue.update(cx, |cue, cx| cue.set_palette(palette, cx));
         self.changed(cx);
     }
 
@@ -2620,6 +2740,9 @@ impl Render for TranscriptView {
                     .flatten(),
             )
             .child(body)
+            .when(self.is_live() && following && !self.collapsed(), |el| {
+                el.child(self.cue.clone())
+            })
             .children(self.render_player(cx))
             .children(self.render_selection_bar(cx))
             .children(self.render_find(cx))
@@ -2772,6 +2895,10 @@ impl TranscriptView {
         self.debug_live = true;
         self.shown_at = std::time::Instant::now();
         self.changed(cx);
+    }
+
+    pub fn debug_follow(&mut self, cx: &mut Context<Self>) {
+        self.jump_to_latest(cx);
     }
 
     pub fn debug_find(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {

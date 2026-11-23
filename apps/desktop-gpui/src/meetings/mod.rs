@@ -65,6 +65,28 @@ use engine::{
 };
 
 const NOTIFY_INTERVAL_MS: u64 = 125;
+
+/// Speech this recent counts as someone speaking now.
+const CUE_VOICE_HOLD: Duration = Duration::from_millis(1_500);
+/// Nothing new in the live view for this long, while someone speaks, is
+/// worth saying why.
+const CUE_AFTER: Duration = Duration::from_secs(4);
+
+/// Whether the live view says that lines come after each sentence on this
+/// computer: only a slow computer (where captions often wait for finished
+/// lines), only while someone is speaking, and only once the view has shown
+/// nothing new for `CUE_AFTER` (counted from the start when nothing has
+/// shown yet). The next words take it away.
+pub fn listening_cue(
+    slow: bool,
+    now: Instant,
+    started: Instant,
+    voice_at: Option<Instant>,
+    line_at: Option<Instant>,
+) -> bool {
+    slow && voice_at.is_some_and(|at| now.saturating_duration_since(at) <= CUE_VOICE_HOLD)
+        && now.saturating_duration_since(line_at.unwrap_or(started)) >= CUE_AFTER
+}
 const RESUME_GAP_MS: u64 = 1_000;
 /// Quitting waits this long for a stopped meeting's last words; what is left
 /// stays in its ledger and is finished at the next launch.
@@ -360,6 +382,11 @@ struct Recording {
     /// Audio missed per track this recording (the jumps above), kept on the
     /// note at Stop.
     missed_ms: [u64; 2],
+    /// When either side last sounded like someone speaking, and when the
+    /// transcript last took words (a caption or a line), for
+    /// [`Meetings::listening_cue`].
+    voice_at: Option<Instant>,
+    line_at: Option<Instant>,
     _health_tick: Task<()>,
 }
 
@@ -2423,6 +2450,8 @@ impl Meetings {
             padded_ms: [0, 0],
             missed_ms: [0, 0],
             missed_until: None,
+            voice_at: None,
+            line_at: None,
             _health_tick: health_tick,
         });
         self.resume_doc = Some(doc_id.clone());
@@ -2587,6 +2616,11 @@ impl Meetings {
             CaptureEvent::Level { source, level } => {
                 if let Some(active) = self.active.as_mut() {
                     active.source_mut(source).level = level;
+                }
+                if level >= crate::meetings_ui::live::model::METER_GATE
+                    && let Some(recording) = self.recording.as_mut()
+                {
+                    recording.voice_at = Some(Instant::now());
                 }
             }
             CaptureEvent::Health { source, health } => {
@@ -2867,6 +2901,9 @@ impl Meetings {
                 }
                 if unknown && is_final {
                     self.observe_voices(&doc_id, cx);
+                }
+                if let Some(recording) = self.recording.as_mut().filter(|r| r.doc_id == doc_id) {
+                    recording.line_at = Some(Instant::now());
                 }
                 self.dirty_transcripts.insert(doc_id);
                 self.schedule_notify(cx);
@@ -3746,6 +3783,21 @@ impl Meetings {
         }
         self.dirty_transcripts.insert(doc_id.to_string());
         self.schedule_notify(cx);
+    }
+
+    /// A computer too slow for live captions: someone is speaking and the
+    /// live view has shown nothing new for a while, so it says lines come
+    /// after each sentence here (see [`listening_cue`]).
+    pub fn listening_cue(&self) -> bool {
+        self.recording.as_ref().is_some_and(|r| {
+            listening_cue(
+                device::slow(),
+                Instant::now(),
+                r.started,
+                r.voice_at,
+                r.line_at,
+            )
+        })
     }
 
     fn mark_active(&mut self, cx: &mut Context<Self>) {
