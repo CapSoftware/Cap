@@ -19,7 +19,7 @@ const PREFIXES: &[&str] = &[
     "settings.shortcuts.",
     "settings.sidebar.",
     "settings.sign_in_required.",
-    "settings.transcription.",
+    "settings.dictionary.",
 ];
 
 const EFFECT_PREFIXES: &[&str] = &["settings.shortcuts.effect.", "settings.shortcuts.sentence."];
@@ -40,7 +40,7 @@ const FORMATTED: &[&str] = &[
     "settings.cli.load_failed",
     "settings.cli.installs_command",
     "settings.cli.path_missing",
-    "settings.transcription.count",
+    "settings.dictionary.count",
     "settings.feedback.diagnostic.confirm_body",
     "settings.feedback.diagnostic.duration_option",
     "settings.changelog.version",
@@ -557,33 +557,43 @@ fn settings_surfaces_match_the_literals_they_replaced() {
             "Added cap to your PATH. Restart your terminal to use it, or run this now:",
         ),
         (tr::settings::cli::copy(), "Copy"),
-        (tr::settings::transcription::title(), "Transcription"),
+        (tr::settings::dictionary::title(), "Dictionary"),
         (
-            tr::settings::transcription::description(),
-            "Add names, spellings, domains, and capitalization preferences that caption generation should keep in mind.",
+            tr::settings::dictionary::description(),
+            "How names and terms are spelled in meeting notes, transcripts, captions and Ask.",
         ),
         (
-            tr::settings::transcription::terms_title(),
-            "Remembered terms",
+            tr::settings::dictionary::placeholder(),
+            "Add a name or term, like Cap",
+        ),
+        (tr::settings::dictionary::sounds_like(), "+ Sounds like"),
+        (
+            tr::settings::dictionary::row_description(),
+            "Names and terms Cap spells right everywhere.",
         ),
         (
-            tr::settings::transcription::terms_description(),
-            "Add one term at a time to reduce typos and formatting mistakes.",
+            tr::settings::dictionary::sounds_placeholder(),
+            "Heard as, like Kap",
         ),
-        (tr::settings::transcription::clear(), "Clear"),
-        (tr::settings::transcription::saving(), "Saving..."),
-        (tr::settings::transcription::saved(), "Saved"),
-        (tr::settings::transcription::placeholder(), "Add a term"),
         (
-            tr::settings::transcription::applied_note(),
-            "These hints are applied when you generate captions in the editor.",
+            tr::settings::dictionary::how(),
+            "Type the right spelling. If a transcript keeps getting a word wrong, add what it writes under Sounds like, or right-click the word in a transcript.",
         ),
-        (tr::settings::transcription::active_title(), "Active hints"),
+        (tr::settings::dictionary::words(), "Words"),
+        (tr::settings::dictionary::edit(), "Edit"),
         (tr::settings::experimental::reliability(), "Reliability"),
         (tr::settings::experimental::muxer(), "Out-of-process muxer"),
         (
             tr::settings::experimental::muxer_description(),
             "Run the fragmented-MP4 muxer in an isolated subprocess so muxer crashes can't take down your recording. Requires the bundled cap-muxer binary.",
+        ),
+        (
+            tr::settings::experimental::library_window(),
+            "Library window",
+        ),
+        (
+            tr::settings::experimental::library_window_description(),
+            "Open the Library button in its own window, with a sidebar, smart folders and a list or magazine layout.",
         ),
         (tr::settings::feedback::title(), "Feedback"),
         (
@@ -1594,8 +1604,8 @@ fn settings_surface_messages_format_like_the_code_they_replaced() {
 
     for count in [0_usize, 1, 2, 5] {
         assert_eq!(
-            tr::settings::transcription::count(count),
-            format!("{} {}", count, if count == 1 { "item" } else { "items" })
+            tr::settings::dictionary::count(count),
+            format!("{} {}", count, if count == 1 { "word" } else { "words" })
         );
     }
 
