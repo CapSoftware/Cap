@@ -6,6 +6,18 @@ struct SignInView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
     @State private var model: SignInModel?
+    @State private var viewportHeight: CGFloat = 0
+    @State private var formHeight: CGFloat = 0
+    @State private var legalHeight: CGFloat = 0
+
+    private static let heroMinimum: CGFloat = 96
+
+    /// Whether everything fits at once with the hero at its smallest. It doesn't on an iPhone SE or mini once the
+    /// keyboard is up; the screen then scrolls from the top instead of pushing the hero under the status bar and
+    /// cutting the text short.
+    private var fits: Bool {
+        viewportHeight > 0 && Self.heroMinimum + formHeight + 16 + legalHeight + 8 <= viewportHeight
+    }
 
     var body: some View {
         ZStack {
@@ -13,7 +25,14 @@ struct SignInView: View {
                 .ignoresSafeArea()
 
             if let model {
-                content(model)
+                ScrollView {
+                    // When it fits, the screen is laid out at exactly the visible height, as it always was.
+                    content(model)
+                        .frame(height: fits ? viewportHeight : nil)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollDismissesKeyboard(.interactively)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
             }
         }
         .task {
@@ -27,7 +46,7 @@ struct SignInView: View {
     private func content(_ model: SignInModel) -> some View {
         VStack(spacing: 0) {
             SignInHero()
-                .frame(maxWidth: .infinity, minHeight: 96, maxHeight: 300)
+                .frame(maxWidth: .infinity, minHeight: Self.heroMinimum, maxHeight: 300)
 
             VStack(spacing: 28) {
                 header(model)
@@ -50,10 +69,12 @@ struct SignInView: View {
             }
             .padding(.horizontal, 24)
             .layoutPriority(1)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { formHeight = $0 }
 
             Spacer(minLength: 16)
 
             legal
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { legalHeight = $0 }
                 .padding(.bottom, 8)
                 .layoutPriority(1)
         }
@@ -74,6 +95,7 @@ struct SignInView: View {
                 .contentTransition(.opacity)
         }
         .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
@@ -83,6 +105,7 @@ struct SignInView: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 40)
             .tint(.primary)
     }
