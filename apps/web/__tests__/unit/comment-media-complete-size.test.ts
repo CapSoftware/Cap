@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 	abort: vi.fn(),
 	headObject: vi.fn(),
 	deleteObject: vi.fn(),
+	reserveBytes: vi.fn(),
 }));
 
 const video = { id: "video-1", ownerId: "owner-1" };
@@ -75,8 +76,10 @@ vi.mock("@/lib/media-comments", () => ({
 	canUseMediaComments: async () => true,
 }));
 vi.mock("@/lib/comment-media-quota", () => ({
+	MAX_MEDIA_OBJECT_BYTES: 2 * 1024 * 1024 * 1024,
 	MAX_MEDIA_OBJECTS_PER_VIDEO: 400,
 	reserveCommentMediaObjects: vi.fn(),
+	reserveCommentMediaBytes: mocks.reserveBytes,
 }));
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: { COMMENT_MEDIA_UPLOAD: "rl_comment_media_upload" },
@@ -105,6 +108,7 @@ beforeEach(() => {
 	mocks.complete.mockReturnValue(Effect.succeed({}));
 	mocks.abort.mockReturnValue(Effect.void);
 	mocks.deleteObject.mockReturnValue(Effect.void);
+	mocks.reserveBytes.mockResolvedValue(true);
 });
 
 describe("comment media complete size", () => {
@@ -121,10 +125,15 @@ describe("comment media complete size", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({ key, size: 12_000_000 });
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: 12_000_000,
+		});
 	});
 
 	it("refuses reported sizes over the limit before completing", async () => {
-		const response = await complete([{ partNumber: 1, size: 21 * GIB }]);
+		const response = await complete([{ partNumber: 1, size: 3 * GIB }]);
 
 		expect(response.status).toBe(413);
 		expect(mocks.complete).not.toHaveBeenCalled();
@@ -133,10 +142,23 @@ describe("comment media complete size", () => {
 
 	it("deletes a stored object over the limit even when the reported sizes are small", async () => {
 		mocks.headObject.mockReturnValue(
-			Effect.succeed({ ContentLength: 21 * GIB, ContentType: "video/webm" }),
+			Effect.succeed({ ContentLength: 3 * GIB, ContentType: "video/webm" }),
 		);
 
 		const response = await complete([{ partNumber: 1, size: 0 }]);
+
+		expect(response.status).toBe(413);
+		expect(mocks.deleteObject).toHaveBeenCalledExactlyOnceWith(key);
+		expect(mocks.reserveBytes).not.toHaveBeenCalled();
+	});
+
+	it("deletes the object when the viewer is out of byte budget for the video", async () => {
+		mocks.headObject.mockReturnValue(
+			Effect.succeed({ ContentLength: 12_000_000, ContentType: "video/webm" }),
+		);
+		mocks.reserveBytes.mockResolvedValue(false);
+
+		const response = await complete([{ partNumber: 1, size: 12_000_000 }]);
 
 		expect(response.status).toBe(413);
 		expect(mocks.deleteObject).toHaveBeenCalledExactlyOnceWith(key);

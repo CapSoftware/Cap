@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	COMMENT_MEDIA_RESERVATION_WINDOW_MS,
+	MAX_MEDIA_BYTES_PER_VIEWER,
 	MAX_MEDIA_OBJECTS_PER_VIDEO,
+	reserveCommentMediaBytes,
 	reserveCommentMediaObjects,
 } from "@/lib/comment-media-quota";
 
@@ -182,5 +184,48 @@ describe("comment media object quota", () => {
 			Array.from({ length: MAX_MEDIA_OBJECTS_PER_VIDEO }, () => reserve()),
 		);
 		await expect(reserve({ videoId: "video-2" })).resolves.toBe(true);
+	});
+});
+
+describe("comment media viewer byte budget", () => {
+	const GIB = 1024 * 1024 * 1024;
+	const reserveBytes = (
+		input: Partial<Parameters<typeof reserveCommentMediaBytes>[0]> = {},
+	) =>
+		reserveCommentMediaBytes({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: GIB,
+			now,
+			...input,
+		});
+
+	it("lets a viewer store up to the budget on one video", async () => {
+		for (let i = 0; i < MAX_MEDIA_BYTES_PER_VIEWER / GIB; i++)
+			await expect(reserveBytes()).resolves.toBe(true);
+		await expect(reserveBytes({ bytes: 1 })).resolves.toBe(false);
+	});
+
+	it("never lets concurrent completes pass the budget", async () => {
+		const results = await Promise.all(
+			Array.from({ length: 25 }, () => reserveBytes()),
+		);
+		expect(results.filter(Boolean)).toHaveLength(
+			MAX_MEDIA_BYTES_PER_VIEWER / GIB,
+		);
+	});
+
+	it("keeps budgets separate per viewer, per video, and from the object count", async () => {
+		await reserveBytes({ bytes: MAX_MEDIA_BYTES_PER_VIEWER });
+		await expect(reserveBytes({ userId: "viewer-2" })).resolves.toBe(true);
+		await expect(reserveBytes({ videoId: "video-2" })).resolves.toBe(true);
+		await expect(reserve()).resolves.toBe(true);
+	});
+
+	it("frees the budget once its windows pass", async () => {
+		const W = COMMENT_MEDIA_RESERVATION_WINDOW_MS;
+		await reserveBytes({ bytes: MAX_MEDIA_BYTES_PER_VIEWER, now: new Date(W) });
+		await expect(reserveBytes({ now: new Date(3 * W) })).resolves.toBe(false);
+		await expect(reserveBytes({ now: new Date(4 * W) })).resolves.toBe(true);
 	});
 });

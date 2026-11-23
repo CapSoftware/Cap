@@ -18,7 +18,9 @@ import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { commentMediaKeys } from "@/lib/comment-media";
 import {
+	MAX_MEDIA_OBJECT_BYTES,
 	MAX_MEDIA_OBJECTS_PER_VIDEO,
+	reserveCommentMediaBytes,
 	reserveCommentMediaObjects,
 } from "@/lib/comment-media-quota";
 import { canUseMediaComments } from "@/lib/media-comments";
@@ -35,10 +37,10 @@ const runPromiseAnyEnv = runPromise as <A, E>(
 
 // Storage-growth bounds. Uploads land in the video owner's (possibly BYO)
 // bucket, so an unbounded viewer must not be able to fill it unattended:
-// per-commenter comment-rate, per-video object count, and a per-object
-// multipart ceiling (single PUTs are capped at 5GB by S3 itself).
+// per-commenter comment-rate, per-video object count, a per-object multipart
+// ceiling (single PUTs are capped at 5GB by S3 itself), and a per-commenter
+// byte budget on each video.
 const MAX_MEDIA_COMMENTS_PER_HOUR = 30;
-const MAX_MEDIA_OBJECT_BYTES = 20 * 1024 * 1024 * 1024;
 
 app.post(
 	"/initiate",
@@ -360,13 +362,29 @@ app.post(
 				return c.json({ error: "Recording is too large" });
 			}
 
+			const size = head.ContentLength ?? totalSize;
+			const withinBudget = yield* Effect.tryPromise(() =>
+				reserveCommentMediaBytes({
+					videoId: claims.videoId,
+					userId: claims.userId,
+					bytes: size,
+				}),
+			);
+			if (!withinBudget) {
+				yield* bucket
+					.deleteObject(claims.key)
+					.pipe(Effect.catchAll(Effect.logError));
+				c.status(413);
+				return c.json({ error: "Recording is too large" });
+			}
+
 			// No videos-row update, no transcription queue, no videoUploads delete:
 			// comment media is a leaf object, not a Cap video.
 			return c.json({
 				success: true,
 				processingStarted: true,
 				key: claims.key,
-				size: head.ContentLength ?? totalSize,
+				size,
 				contentType: head.ContentType ?? claims.contentType,
 			});
 		}).pipe(
