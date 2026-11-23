@@ -3485,7 +3485,6 @@ stopped_metadata_unsaved = "कैप्चर रुक गया, लेकि
 discard_stop_unconfirmed = "Studio रिकॉर्डिंग हटाते समय कैप्चर रुकने की पुष्टि नहीं हुई; लोकल फ़ाइलें सुरक्षित हैं"
 discard_unconfirmed = "Studio हटाने की पुष्टि नहीं हुई; लोकल फ़ाइलें सुरक्षित हैं"
 crashed_before_capture = "इस रिकॉर्डिंग में कुछ भी कैप्चर होने से पहले Cap बंद हो गया।"
-picture_needs_studio = "Linux पर तस्वीरें Studio मोड में रिकॉर्ड होती हैं। Studio पर जाएँ या कोई कैमरा चुनें।"
 capture_state_failed = "कैप्चर की स्थिति की पुष्टि नहीं हो सकी: {error}"
 completion_task_failed = "रिकॉर्डिंग पूरी करने का काम विफल हुआ: {error}"
 stop_task_failed = "रोकने का काम विफल हुआ: {error}"

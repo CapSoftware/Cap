@@ -3485,7 +3485,6 @@ stopped_metadata_unsaved = "Die Aufnahme wurde gestoppt, aber ihre Metadaten kon
 discard_stop_unconfirmed = "Beim Verwerfen in Studio ist das Beenden der Aufnahme nicht bestätigt; lokale Dateien bleiben erhalten"
 discard_unconfirmed = "Das Verwerfen in Studio ist nicht bestätigt; lokale Dateien bleiben erhalten"
 crashed_before_capture = "Cap wurde beendet, bevor diese Aufnahme etwas aufgenommen hat."
-picture_needs_studio = "Unter Linux werden Bilder im Studio-Modus aufgenommen. Wechseln Sie zu Studio oder wählen Sie eine Kamera."
 capture_state_failed = "Der Aufnahmestatus konnte nicht bestätigt werden: {error}"
 completion_task_failed = "Die Abschlussaufgabe der Aufnahme ist fehlgeschlagen: {error}"
 stop_task_failed = "Die Stopp-Aufgabe ist fehlgeschlagen: {error}"

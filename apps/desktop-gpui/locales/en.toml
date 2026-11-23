@@ -3487,7 +3487,6 @@ stopped_metadata_unsaved = "Capture stopped, but stopped metadata could not be s
 discard_stop_unconfirmed = "Studio discard stop is unconfirmed; local files preserved"
 discard_unconfirmed = "Studio discard is unconfirmed; local files preserved"
 crashed_before_capture = "Cap closed before this recording captured anything."
-picture_needs_studio = "Pictures are recorded in Studio mode on Linux. Switch to Studio or choose a camera."
 capture_state_failed = { text = "Could not confirm capture state: {error}", context = "{error} is a technical error message, usually in English." }
 completion_task_failed = { text = "Recording completion task failed: {error}", context = "{error} is a technical error message, usually in English." }
 stop_task_failed = { text = "Stop task failed: {error}", context = "{error} is a technical error message, usually in English." }

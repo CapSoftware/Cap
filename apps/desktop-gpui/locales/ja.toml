@@ -3485,7 +3485,6 @@ stopped_metadata_unsaved = "キャプチャは停止しましたが、停止時�
 discard_stop_unconfirmed = "Studioの録画を破棄する際、キャプチャの停止を確認できません。ローカルファイルは保持されています"
 discard_unconfirmed = "Studioの破棄を確認できません。ローカルファイルは保持されています"
 crashed_before_capture = "この録画で何もキャプチャされないうちにCapが終了しました。"
-picture_needs_studio = "Linuxでは画像はStudioモードで録画されます。Studioに切り替えるか、カメラを選んでください。"
 capture_state_failed = "キャプチャの状態を確認できませんでした：{error}"
 completion_task_failed = "録画の完了処理が失敗しました：{error}"
 stop_task_failed = "停止タスクが失敗しました：{error}"

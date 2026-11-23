@@ -64,10 +64,6 @@ const EXACT: &[(&str, fn() -> &'static str)] = &[
         "Cap closed before this recording captured anything.",
         tr::message::recording::crashed_before_capture,
     ),
-    (
-        "Pictures are recorded in Studio mode on Linux. Switch to Studio or choose a camera.",
-        tr::message::recording::picture_needs_studio,
-    ),
     ("offline", tr::message::upload::offline),
     ("Authentication expired", tr::message::upload::authentication_expired),
     (

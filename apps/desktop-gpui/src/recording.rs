@@ -42,7 +42,8 @@ pub struct StartConfig {
     pub camera: Option<DeviceOrModelID>,
     /// A still picture standing in for the camera (never set with `camera`).
     /// Studio copies it into the project for the editor to draw; Instant
-    /// records the bubble showing it, as it does a camera.
+    /// records the bubble showing it, as it does a camera, and on Linux draws
+    /// it where the bubble was.
     pub camera_picture: Option<PathBuf>,
     pub device_settings: crate::store::RecordingDeviceSettings,
     pub input_readiness: crate::feeds::InputReadiness,
@@ -60,6 +61,8 @@ pub struct StartConfig {
     pub mic_meter: Option<flume::Sender<microphone::MicrophoneSamples>>,
     #[cfg(target_os = "linux")]
     pub linux_instant_camera: Option<LinuxInstantCameraRequest>,
+    #[cfg(target_os = "linux")]
+    pub linux_instant_picture: Option<LinuxInstantPictureRequest>,
     /// When set, the pipeline is primed behind this gate and records nothing
     /// until the session arms it at the end of the start cue.
     pub start_gate: Option<cap_recording::RecordingStartGate>,
@@ -72,6 +75,14 @@ pub struct LinuxInstantCameraRequest {
     pub reference_size: (u32, u32),
     pub effects: instant_recording::LinuxCameraProcessing,
     pub processing: crate::feeds::CameraProcessingFactory,
+}
+
+/// Where Linux Instant draws the picture: the bubble's place in the capture.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+pub struct LinuxInstantPictureRequest {
+    pub presentation: instant_recording::LinuxCameraPresentation,
+    pub reference_size: (u32, u32),
 }
 
 #[cfg_attr(target_os = "linux", derive(Clone))]
@@ -1856,6 +1867,21 @@ pub(crate) fn preparing_presentation(
 /// and finalize both find it.
 pub(crate) const STUDIO_CAMERA_PICTURE: &str = "content/images/camera-picture.jpg";
 
+#[cfg(target_os = "linux")]
+fn linux_camera_picture(
+    path: &std::path::Path,
+) -> anyhow::Result<instant_recording::LinuxCameraPicture> {
+    let image = image::open(path)
+        .with_context(|| format!("Could not open the camera picture {}", path.display()))?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    Ok(instant_recording::LinuxCameraPicture {
+        width,
+        height,
+        rgba: image.into_raw().into(),
+    })
+}
+
 pub(crate) fn studio_camera_picture(
     project: &std::path::Path,
     camera_recorded: bool,
@@ -2569,17 +2595,15 @@ async fn start_internal(
     if matches!(config.target, ScreenCaptureTarget::CameraOnly) && config.camera.is_none() {
         return Err(anyhow!("Camera-only recording requires a selected camera."));
     }
-    // Linux Instant draws the camera from its live feed; it has no way to
-    // draw a still picture yet, and recording without it would drop it
-    // silently.
     #[cfg(target_os = "linux")]
     if config.mode == RecordingMode::Instant
         && config.camera.is_none()
         && config.camera_picture.is_some()
         && !config.target.is_audio_only()
+        && config.linux_instant_picture.is_none()
     {
         return Err(anyhow!(
-            "Pictures are recorded in Studio mode on Linux. Switch to Studio or choose a camera."
+            "Requested Instant picture has not been prepared. Please choose the picture again."
         ));
     }
     if config.target.is_audio_only() && config.microphone.is_none() && !config.system_audio {
@@ -2922,6 +2946,20 @@ async fn start_attempt_with_upload(
             {
                 builder = builder.with_linux_processed_camera(
                     source,
+                    request.presentation,
+                    request.reference_size,
+                );
+            }
+            #[cfg(target_os = "linux")]
+            if config.camera.is_none()
+                && let (Some(request), Some(path)) =
+                    (config.linux_instant_picture, config.camera_picture.clone())
+            {
+                let picture = tokio::task::spawn_blocking(move || linux_camera_picture(&path))
+                    .await
+                    .context("camera picture decode")??;
+                builder = builder.with_linux_camera_picture(
+                    picture,
                     request.presentation,
                     request.reference_size,
                 );

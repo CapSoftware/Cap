@@ -3485,7 +3485,6 @@ stopped_metadata_unsaved = "捕获已停止，但无法保存停止信息；本�
 discard_stop_unconfirmed = "丢弃 Studio 录制时无法确认捕获已停止；本地文件已保留"
 discard_unconfirmed = "无法确认 Studio 丢弃已完成；本地文件已保留"
 crashed_before_capture = "Cap 在此录制捕获到任何内容之前就已关闭。"
-picture_needs_studio = "在 Linux 上，图片会在 Studio 模式中录制。请切换到 Studio 或选择一个摄像头。"
 capture_state_failed = "无法确认捕获状态：{error}"
 completion_task_failed = "录制收尾任务失败：{error}"
 stop_task_failed = "停止任务失败：{error}"

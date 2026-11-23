@@ -3485,7 +3485,6 @@ stopped_metadata_unsaved = "La captura se detuvo, pero no se pudieron guardar su
 discard_stop_unconfirmed = "Al descartar en Studio no se ha confirmado la detención de la captura; los archivos locales se conservan"
 discard_unconfirmed = "No se ha confirmado el descarte de Studio; los archivos locales se conservan"
 crashed_before_capture = "Cap se cerró antes de que esta grabación capturara nada."
-picture_needs_studio = "En Linux, las imágenes se graban en el modo Studio. Cambia a Studio o elige una cámara."
 capture_state_failed = "No se pudo confirmar el estado de la captura: {error}"
 completion_task_failed = "La tarea de finalización de la grabación ha fallado: {error}"
 stop_task_failed = "La tarea de detención ha fallado: {error}"

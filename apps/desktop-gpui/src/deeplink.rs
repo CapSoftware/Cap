@@ -438,6 +438,8 @@ impl DeepLinkAction {
                                     mic_meter,
                                     #[cfg(target_os = "linux")]
                                     linux_instant_camera: None,
+                                    #[cfg(target_os = "linux")]
+                                    linux_instant_picture: None,
                                     start_gate: None,
                                 },
                                 permit.clone(),
