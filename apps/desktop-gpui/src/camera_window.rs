@@ -57,6 +57,7 @@ use serde_json::Value;
 
 use crate::i18n::tr;
 use crate::theme::LocaleFont as _;
+use crate::ui::{Hint, HintSide};
 use crate::{
     camera_loading,
     feeds::Feeds,
@@ -1535,12 +1536,34 @@ impl CameraToolbarView {
 }
 
 impl Render for CameraToolbarView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(camera) = self.camera.upgrade() else {
             return div().into_any_element();
         };
         camera.update(cx, |camera, cx| {
-            camera.render_toolbar(cx).into_any_element()
+            camera.hints.begin_frame();
+            let reduce_motion = cx.reduce_motion();
+            let toolbar = camera.render_toolbar(cx).into_any_element();
+            // Deferred so the hint paints over the preview, which comes after
+            // the toolbar. Hints are placed in window coordinates, and the
+            // picker's Camera Only view draws this camera mid-overlay, so the
+            // hint is pinned to the window's origin, not to the toolbar.
+            let hint = camera
+                .hints
+                .render(window, &camera.theme, reduce_motion)
+                .map(|hint| {
+                    gpui::deferred(
+                        gpui::anchored()
+                            .position(gpui::point(px(0.), px(0.)))
+                            .child(hint),
+                    )
+                    .with_priority(1)
+                });
+            div()
+                .size_full()
+                .child(toolbar)
+                .children(hint)
+                .into_any_element()
         })
     }
 }
@@ -1627,6 +1650,7 @@ pub struct CameraWindow {
     chrome_visible: bool,
     resizing: Option<ResizeDrag>,
     hovered_handle: Option<ResizeCorner>,
+    hints: crate::ui::Hints,
     #[cfg(target_os = "macos")]
     convert: Option<ConvertBridge>,
     /// Bumped when the mirror toggle changes, so the conversion thread
@@ -1854,6 +1878,7 @@ impl CameraWindow {
             chrome_visible: false,
             resizing: None,
             hovered_handle: None,
+            hints: crate::ui::Hints::default(),
             #[cfg(target_os = "macos")]
             convert: None,
             #[cfg(target_os = "macos")]
@@ -1888,6 +1913,7 @@ impl CameraWindow {
         self.resizing = None;
         self.chrome_visible = false;
         self.hovered_handle = None;
+        self.hints.dismiss();
         if !inline {
             self.apply_window_size(window, cx);
         }
@@ -2456,12 +2482,17 @@ impl CameraWindow {
         pressed: bool,
         scale: f32,
         label: Option<&'static str>,
+        hint: Hint,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
         let theme = self.theme;
         div()
             .id(id)
+            .child(self.hints.anchor(id, hint))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                this.hints.hover(id, *hovered, cx, |this| &mut this.hints);
+            }))
             .p(px(8. * scale))
             .rounded(px(8. * scale))
             .when(pressed, |this| {
@@ -2528,6 +2559,7 @@ impl CameraWindow {
             CameraShape::Square => "icons/square.svg",
             CameraShape::Full => "icons/rectangle-horizontal.svg",
         };
+        let hints = toolbar_hints(&self.state, mirror_failed, blur_failed);
 
         div()
             .h(px(CAMERA_TOOLBAR_HEIGHT))
@@ -2557,17 +2589,25 @@ impl CameraWindow {
                         false,
                         scale,
                         None,
+                        hints.close,
                         cx,
-                        |this, _, cx| this.close(cx),
+                        |this, _, cx| {
+                            this.hints.dismiss();
+                            this.close(cx);
+                        },
                     ))
+                    // Size and shape resize the window under the pointer, so
+                    // their hints go on click, as a macOS tooltip does.
                     .child(self.toolbar_button(
                         "size",
                         "icons/enlarge.svg",
                         self.state.size >= CAMERA_PRESET_LARGE,
                         scale,
                         None,
+                        hints.size,
                         cx,
                         |this, window, cx| {
+                            this.hints.dismiss();
                             this.mutate_state(window, cx, |state| {
                                 state.size = if state.size < CAMERA_PRESET_LARGE {
                                     CAMERA_PRESET_LARGE
@@ -2583,8 +2623,10 @@ impl CameraWindow {
                         self.state.shape != CameraShape::Round,
                         scale,
                         None,
+                        hints.shape,
                         cx,
                         |this, window, cx| {
+                            this.hints.dismiss();
                             this.mutate_state(window, cx, |state| {
                                 state.shape = match state.shape {
                                     CameraShape::Round => CameraShape::Square,
@@ -2604,6 +2646,7 @@ impl CameraWindow {
                             self.state.mirrored && !mirror_failed,
                             scale,
                             mirror_failed.then_some("!"),
+                            hints.mirror,
                             cx,
                             |this, window, cx| {
                                 this.mutate_state(window, cx, |state| {
@@ -2623,6 +2666,7 @@ impl CameraWindow {
                             } else {
                                 self.state.background_blur.label()
                             },
+                            hints.blur,
                             cx,
                             |this, window, cx| {
                                 this.mutate_state(window, cx, |state| {
@@ -2782,6 +2826,7 @@ impl CameraWindow {
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                             window.prevent_default();
                             cx.stop_propagation();
+                            this.hints.dismiss();
                             let (start_size, start_picker_size) =
                                 resize_start(this.state.size, this.picker_size);
                             this.resizing = Some(ResizeDrag {
@@ -2852,6 +2897,61 @@ impl CameraWindow {
             self.persist(cx);
             cx.notify();
         }
+    }
+}
+
+struct ToolbarHints {
+    close: Hint,
+    size: Hint,
+    shape: Hint,
+    mirror: Hint,
+    blur: Hint,
+}
+
+fn toolbar_hints(
+    state: &CameraWindowState,
+    mirror_failed: bool,
+    blur_failed: bool,
+) -> ToolbarHints {
+    let hint = |title: &'static str| Hint::new(title).pinned(HintSide::Below);
+    let size = if state.size < CAMERA_PRESET_LARGE {
+        tr::camera::toolbar::larger()
+    } else {
+        tr::camera::toolbar::smaller()
+    };
+    let shape = match state.shape {
+        CameraShape::Round => tr::camera::toolbar::shape_to_square(),
+        CameraShape::Square => tr::camera::toolbar::shape_to_full(),
+        CameraShape::Full => tr::camera::toolbar::shape_to_round(),
+    };
+    let mirror = if mirror_failed {
+        hint(tr::camera::effects::mirror_title()).body(tr::camera::effects::mirror_message())
+    } else {
+        hint(tr::camera::toolbar::mirror()).body(if state.mirrored {
+            tr::camera::toolbar::mirror_on()
+        } else {
+            tr::camera::toolbar::mirror_off()
+        })
+    };
+    let blur = if blur_failed {
+        hint(tr::camera::effects::blur_title()).body(tr::camera::effects::blur_message())
+    } else {
+        hint(tr::camera::toolbar::blur()).body(match state.background_blur {
+            BlurMode::Off => tr::camera::toolbar::blur_off(),
+            BlurMode::Light => tr::camera::toolbar::blur_light(),
+            BlurMode::Heavy if state.background_blur.cycle() == BlurMode::Remove => {
+                tr::camera::toolbar::blur_heavy_then_cutout()
+            }
+            BlurMode::Heavy => tr::camera::toolbar::blur_heavy_then_off(),
+            BlurMode::Remove => tr::camera::toolbar::blur_cutout(),
+        })
+    };
+    ToolbarHints {
+        close: hint(tr::camera::toolbar::close()),
+        size: hint(size).body(tr::camera::toolbar::size_body()),
+        shape: hint(tr::camera::toolbar::shape()).body(shape),
+        mirror,
+        blur,
     }
 }
 
