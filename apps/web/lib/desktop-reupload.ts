@@ -19,6 +19,7 @@ import {
 	type DesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
 import { runPromise } from "@/lib/server";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 
 type ReuploadedVideo = Pick<
 	Video.Video,
@@ -90,6 +91,7 @@ export async function prepareDesktopReupload(
 }
 
 export async function invalidateReuploadedVideo(video: ReuploadedVideo) {
+	await discardShareLadderSafely(video.id, "Recording was uploaded again");
 	if (
 		Option.isSome(video.bucketId) ||
 		Option.isSome(video.storageIntegrationId)

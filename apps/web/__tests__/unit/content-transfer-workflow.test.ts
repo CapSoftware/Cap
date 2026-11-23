@@ -67,6 +67,9 @@ vi.mock("@cap/database", () => ({ db: () => fakeDb }));
 vi.mock("@cap/web-backend/src/Storage/index", () => ({
 	Storage: { getAccessForVideo: () => Effect.succeed([bucket]) },
 }));
+vi.mock("@/lib/share-ladder-discard", () => ({
+	discardShareLadderSafely: vi.fn(async () => {}),
+}));
 vi.mock("@/lib/workflow-runtime", () => ({
 	runWorkflowPromise: Effect.runPromise,
 }));
@@ -74,6 +77,7 @@ vi.mock("@/lib/sync-video-storage-names", () => ({
 	enqueueVideoStorageNameSync: vi.fn(),
 }));
 
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { transferOneVideo } from "@/workflows/transfer-organization-content";
 
 const sourceOwnerId = "owner";
@@ -171,6 +175,10 @@ beforeEach(() => {
 describe("content transfer workflow", () => {
 	it("keeps a transferred recording's published media and comment media reachable", async () => {
 		await transferOneVideo("operation", payload, item, progress);
+		expect(discardShareLadderSafely).toHaveBeenCalledWith(
+			videoId,
+			"Recording changed owner",
+		);
 
 		const videoUpdate = writes.find((write) => write.table === Db.videos)?.set;
 		const transferred = {

@@ -21,6 +21,7 @@ import { Storage as StorageService } from "../Storage/index.ts";
 import { getPublishedRecordingThumbnailKey } from "../Storage/recording-output.ts";
 import { Tinybird } from "../Tinybird/index.ts";
 import { getDuplicateVideoMetadata, planVideoDuplicate } from "./duplicate.ts";
+import { forgetShareLadders } from "./share-ladder-cleanup.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import type { CreateVideoInput as RepoCreateVideoInput } from "./VideosRepo.ts";
 import { VideosRepo } from "./VideosRepo.ts";
@@ -410,6 +411,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						);
 					}
 				} while (continuationToken);
+				yield* forgetShareLadders(db, [video.id]);
 				yield* repo.delete(video.id, video.ownerId);
 				yield* Effect.log(`Deleted video ${video.id}`);
 			}),

@@ -7,6 +7,7 @@ import { Database } from "../Database";
 import { ImageUploads } from "../ImageUploads";
 import { S3Buckets } from "../S3Buckets";
 import { Tinybird } from "../Tinybird";
+import { forgetShareLadders } from "../Videos/share-ladder-cleanup";
 import { OrganisationsPolicy } from "./OrganisationsPolicy";
 
 const analyticsDatasources = [
@@ -144,6 +145,10 @@ export class Organisations extends Effect.Service<Organisations>()(
 					{ concurrency: 3 },
 				);
 				yield* deleteS3Prefix(`organizations/${id}/`);
+				yield* forgetShareLadders(
+					db,
+					capManagedVideos.map((video) => video.id),
+				);
 
 				const deleteCondition = tenantDeleteCondition([
 					id,

@@ -24,6 +24,7 @@ import {
 	getDomainResponse,
 } from "@/actions/organization/domain-utils";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
@@ -277,6 +278,10 @@ async function deleteCapObjects(payload: OperationPayload) {
 	"use step";
 
 	await deleteSnapshotObjects(payload.snapshot);
+	await discardShareLadderSafely(
+		Video.VideoId.make(payload.snapshot.id),
+		"Recording was deleted",
+	);
 }
 
 async function deleteCapDatabase(

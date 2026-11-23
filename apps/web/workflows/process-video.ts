@@ -11,6 +11,7 @@ import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
 } from "@/lib/media-server-backpressure";
+import { discardShareLadderSafely } from "@/lib/share-ladder-discard";
 import { transcribeVideo } from "@/lib/transcribe";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -387,6 +388,11 @@ async function saveMetadataAndComplete(
 	await db()
 		.delete(videoUploads)
 		.where(eq(videoUploads.videoId, videoId as Video.VideoId));
+
+	await discardShareLadderSafely(
+		videoId as Video.VideoId,
+		"Recording was processed again",
+	);
 }
 
 async function cleanupRawUpload(

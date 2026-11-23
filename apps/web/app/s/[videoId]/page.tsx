@@ -71,6 +71,7 @@ import {
 	withoutWorkspaceCallToAction,
 } from "@/lib/share-call-to-action";
 import { getShareDashboardDestination } from "@/lib/share-dashboard-destination";
+import { recordShareLadderView } from "@/lib/share-ladder";
 import {
 	canStartPlaybackInHtml,
 	getCustomThumbnailUrl,
@@ -1007,6 +1008,39 @@ async function AuthorizedContent({
 				);
 			},
 		);
+	}
+
+	if (
+		initialPlaybackSourcePromise &&
+		canRegisterView &&
+		user?.id !== video.owner.id
+	) {
+		const playbackSource = initialPlaybackSourcePromise;
+		after(async () => {
+			const source = await playbackSource;
+			if (!source?.defaultStorage) return;
+			await recordShareLadderView(
+				{
+					id: video.id,
+					ownerId: video.owner.id,
+					orgId: video.orgId,
+					bucket: video.bucket,
+					storageIntegrationId: video.storageIntegrationId,
+					duration: video.duration,
+					width: video.width,
+					height: video.height,
+					sourceType: video.source.type,
+					isScreenshot: video.isScreenshot,
+					hasActiveUpload,
+				},
+				source.fileKey,
+			).catch((error) => {
+				console.error(
+					`[ShareVideoPage] Share ladder view not recorded for ${videoId}:`,
+					error,
+				);
+			});
+		});
 	}
 
 	const metadata = (video.metadata as VideoMetadata) || {};

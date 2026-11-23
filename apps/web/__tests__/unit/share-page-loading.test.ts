@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
 	restrictedRedirect: vi.fn(),
 	foreignRedirect: vi.fn(),
 	user: vi.fn(),
+	afterTasks: [] as Array<() => unknown>,
+	recordLadderView: vi.fn(async () => {}),
 	authenticated: false,
 	ownerIsPro: false,
 	sharedOrganizations: [] as {
@@ -107,8 +109,23 @@ vi.mock("@/lib/share-playback", async (importActual) => ({
 	).canStartPlaybackInHtml,
 	getSharePlaybackSource: async (video: unknown) => {
 		const url = (await mocks.playbackUrl(video)) as string | null;
-		return url ? { url, defaultStorage: mocks.defaultStorage } : null;
+		return url
+			? {
+					url,
+					fileKey: "owner/video/result.mp4",
+					defaultStorage: mocks.defaultStorage,
+				}
+			: null;
 	},
+}));
+vi.mock("next/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("next/server")>()),
+	after: (task: () => unknown) => {
+		mocks.afterTasks.push(task);
+	},
+}));
+vi.mock("@/lib/share-ladder", () => ({
+	recordShareLadderView: mocks.recordLadderView,
 }));
 vi.mock("@/lib/shareable-link-quota", () => ({
 	isVideoOverShareableLinkLimit: mocks.quota,
@@ -244,6 +261,8 @@ describe("share page loading", () => {
 		mocks.userAgent = "";
 		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
 		mocks.user.mockResolvedValue(null);
+		mocks.afterTasks = [];
+		mocks.recordLadderView.mockClear();
 		mocks.authenticated = false;
 		mocks.ownerIsPro = false;
 		mocks.sharedOrganizations = [];
@@ -337,6 +356,32 @@ describe("share page loading", () => {
 			}
 		},
 	);
+
+	it("records a share ladder view after the response, never for the owner", async () => {
+		await renderAuthorizedContent();
+		await Promise.all(mocks.afterTasks.map((task) => task()));
+		expect(mocks.recordLadderView).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "video", ownerId: "owner" }),
+			"owner/video/result.mp4",
+		);
+
+		mocks.afterTasks = [];
+		mocks.recordLadderView.mockClear();
+		mocks.user.mockResolvedValue({
+			id: "owner",
+			activeOrganizationId: "organization",
+		});
+		await renderAuthorizedContent();
+		await Promise.all(mocks.afterTasks.map((task) => task()));
+		expect(mocks.recordLadderView).not.toHaveBeenCalled();
+	});
+
+	it("does not record a ladder view for a video hidden by the share limit", async () => {
+		mocks.quota.mockResolvedValue(true);
+		await renderAuthorizedContent();
+		await Promise.all(mocks.afterTasks.map((task) => task()));
+		expect(mocks.recordLadderView).not.toHaveBeenCalled();
+	});
 
 	describe("workspace call to action", () => {
 		const workspaceDefault = {
