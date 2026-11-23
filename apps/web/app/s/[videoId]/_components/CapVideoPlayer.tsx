@@ -163,6 +163,8 @@ interface Props {
 	posterUrl?: string | null;
 }
 
+const FRAME_COVER_LEAD_MS = 100;
+
 type HeldTimeRef = { current: (() => void) | null };
 
 function replaceHeldTime(
@@ -438,12 +440,24 @@ export function CapVideoPlayer({
 				fresh.type !== currentSourceType ||
 				fresh.url === currentSourceUrl ||
 				videoRef.current !== video ||
-				initialPlaybackSourceRetryPending.current
+				initialPlaybackSourceRetryPending.current ||
+				playbackToRestore.current
 			)
 				return false;
+			// Safari can take a frame or two to show a newly drawn canvas, so the
+			// still goes up before the source is swapped out from under it.
+			replaceHeldTime(heldTime, video, video.currentTime);
+			await new Promise((resolve) => setTimeout(resolve, FRAME_COVER_LEAD_MS));
+			if (
+				videoRef.current !== video ||
+				initialPlaybackSourceRetryPending.current
+			) {
+				releaseHeldTime(heldTime);
+				return false;
+			}
+			replaceHeldTime(heldTime, video, video.currentTime);
 			const snapshot = capturePlayback(video, intent.isPlaying());
 			playbackToRestore.current = { ...snapshot, sourceUrl: currentSourceUrl };
-			replaceHeldTime(heldTime, video, snapshot.time);
 			if (!snapshot.wasPlaying) video.autoplay = false;
 			setIsRefreshingInitialPlaybackSource(true);
 			queryClient.setQueryData(

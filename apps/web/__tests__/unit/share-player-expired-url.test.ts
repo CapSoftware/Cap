@@ -807,8 +807,10 @@ describe("share MP4 playback after its initial signature expires", () => {
 						video.dispatchEvent(new Event("waiting"));
 					});
 					await settleFetch(fetchImpl, 2);
-					await vi.waitFor(() => {
-						expect(video.getAttribute("src")).toBe(second);
+					await act(async () => {
+						await vi.waitFor(() => {
+							expect(video.getAttribute("src")).toBe(second);
+						});
 					});
 					await act(async () => {
 						state.currentTime = 0;
@@ -859,8 +861,10 @@ describe("share MP4 playback after its initial signature expires", () => {
 						video.dispatchEvent(new Event("waiting"));
 					});
 					await settleFetch(fetchImpl, 2);
-					await vi.waitFor(() => {
-						expect(video.getAttribute("src")).toBe(second);
+					await act(async () => {
+						await vi.waitFor(() => {
+							expect(video.getAttribute("src")).toBe(second);
+						});
 					});
 					await act(async () => {
 						state.paused = true;
