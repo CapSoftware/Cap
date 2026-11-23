@@ -456,6 +456,7 @@ pub fn min_segment_duration(kind: TrackKind, secs_per_pixel: f64) -> f64 {
         TrackKind::Audio => (0.5, 60.),
         TrackKind::Caption => (0.5, 40.),
         TrackKind::Keyboard => (0.3, 30.),
+        TrackKind::Redact => (0., 0.),
     };
     seconds.max(secs_per_pixel * pixels)
 }
@@ -1071,7 +1072,8 @@ macro_rules! with_track {
                 let $segments = &mut $timeline.keyboard_segments;
                 $body
             }
-            TrackKind::Clip => Default::default(),
+            // Redact spans are read-only: nothing to move, split or delete.
+            TrackKind::Clip | TrackKind::Redact => Default::default(),
         }
     };
 }
@@ -1092,6 +1094,9 @@ pub fn segment_count(timeline: &TimelineConfiguration, kind: TrackKind) -> usize
         TrackKind::Audio => timeline.audio_segments.len(),
         TrackKind::Caption => timeline.caption_segments.len(),
         TrackKind::Keyboard => timeline.keyboard_segments.len(),
+        // Redact spans come from the analysis, not the config; the panel
+        // drops any index the current spans no longer have.
+        TrackKind::Redact => usize::MAX,
     }
 }
 

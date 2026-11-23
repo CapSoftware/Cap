@@ -86,6 +86,8 @@ cap-camera-effects = { path = "../../crates/camera-effects" }
 # it); gpui's own wgpu 29 is a separate tree and never touches these types.
 wgpu = "25.0.0"
 cap-editor = { path = "../../crates/editor" }
+# Auto redact: finds sensitive text in the recording (`src/redact.rs`).
+cap-redact = { path = "../../crates/redact" }
 # In-process export. Only the `ExporterBase` + settings surface is used; the
 # export *page* can also drive the `cap-exporter` subprocess protocol, so this
 # is the cheaper of the two options rather than the only one.

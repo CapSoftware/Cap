@@ -84,6 +84,7 @@ mod enhance;
 mod frame;
 mod loading;
 mod markers;
+mod redact;
 mod scenes;
 mod snap;
 mod style_preset_ui;
@@ -2173,6 +2174,8 @@ pub struct EditorWindow {
     enhance_hovered: bool,
     enhance_card: Option<Entity<enhance::EnhanceCard>>,
     enhance_card_task: Option<gpui::Task<()>>,
+    /// Auto redact: the toolbar chip, its card and the background scan.
+    pub(crate) redact: redact::RedactUi,
     pub(crate) tracks: TrackLanes,
     toolbar_menu: Option<OpenToolbarMenu>,
     text_menu: Option<OpenTextMenu>,
@@ -2898,6 +2901,7 @@ impl EditorWindow {
             enhance_hovered: false,
             enhance_card: None,
             enhance_card_task: None,
+            redact: Default::default(),
             tracks: TrackLanes::from_project(&ProjectConfiguration::default(), false),
             toolbar_menu: None,
             text_menu: None,
@@ -3062,6 +3066,7 @@ impl EditorWindow {
         self.flush_animated_gradient_selection();
         self.sidebar = crate::editor_sidebar::SidebarState::new(&self.project);
         self.sidebar_loaded(window, cx);
+        self.sync_redact(cx);
         cx.notify();
         window.refresh();
     }
@@ -3094,6 +3099,12 @@ impl EditorWindow {
         self.timeline.imported_waveforms = imported;
         self.timeline.waveform_paths = waveform_paths;
         self.imported_waveforms_stale = true;
+        let video_offsets = self.redact_video_offsets();
+        self.timeline.set_redact(
+            &self.project,
+            self.redact.redactions.as_deref(),
+            &video_offsets,
+        );
         self.refresh_markers();
         if self.timeline.total_duration > 0.0 {
             self.total = self.timeline.total_duration;
@@ -3740,6 +3751,7 @@ impl EditorWindow {
         let restored = TrackLanes::from_project(&self.project, self.has_camera);
         self.tracks.caption = restored.caption;
         self.tracks.keyboard = restored.keyboard;
+        self.tracks.redact = restored.redact;
         self.synchronize_caption_track(false);
         self.transcript.dirty = true;
         self.transcript.selection = None;
@@ -3755,6 +3767,7 @@ impl EditorWindow {
         if animated_background_changed {
             self.remember_animated_gradient_selection(previous_animated_gradient, window, cx);
         }
+        self.sync_redact(cx);
         // A segment the undo removed must not stay selected.
         if let Some(selection) = &self.selection
             && let Some(timeline) = self.project.timeline.as_ref()
@@ -5737,6 +5750,7 @@ impl EditorWindow {
             }
             self.selection = selection;
             self.refresh_image_asset_status();
+            self.refresh_redact_highlight();
             cx.notify();
         }
     }
@@ -12787,6 +12801,7 @@ impl EditorWindow {
                     .items_center()
                     .flex_none()
                     .gap(px(8.))
+                    .child(self.render_preview_redact(!narrow, cx))
                     .child(self.render_preview_enhance(!narrow, cx))
                     .child(self.header_divider())
                     // The quality picker and its name, one group with one
@@ -13896,7 +13911,7 @@ impl EditorWindow {
             // one lane, and zoom/3D/scene offer "Clear all" once they have
             // segments. The clip row has none.
             let delete_label = match kind {
-                TrackKind::Clip => None,
+                TrackKind::Clip | TrackKind::Redact => None,
                 TrackKind::Caption | TrackKind::Keyboard => {
                     Some(tr::editor::window::track::delete())
                 }
@@ -14302,7 +14317,7 @@ impl EditorWindow {
                                                 | TrackKind::Scene => {
                                                     this.clear_track_segments(kind, window, cx);
                                                 }
-                                                TrackKind::Clip => {}
+                                                TrackKind::Clip | TrackKind::Redact => {}
                                             }
                                         }),
                                     )
@@ -15161,6 +15176,7 @@ impl Render for EditorWindow {
             .children(self.render_preset_dialog(cx))
             .children(self.render_marker_overlays(window, cx))
             .children(self.render_enhance_card())
+            .children(self.render_redact_card(cx))
             // The clips overlays: import menu, record modal, and the card
             // drag's window-wide layer with its floating ghost.
             .children(self.render_clips_overlays(cx))
