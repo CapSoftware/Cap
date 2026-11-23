@@ -167,6 +167,9 @@ struct Opts {
     words_at_start: bool,
     /// `EngineConfig::slow_cloud_live`.
     slow_cloud_live: Option<bool>,
+    /// The segment closes right after its first live caption; with `true`
+    /// the local model hears no words in it after that caption.
+    close_after_caption: Option<(SegmentJob, bool)>,
 }
 
 impl Default for Opts {
@@ -187,6 +190,7 @@ impl Default for Opts {
             heard: None,
             words_at_start: false,
             slow_cloud_live: None,
+            close_after_caption: None,
         }
     }
 }
@@ -208,6 +212,7 @@ fn run_opts(opts: Opts) -> Ran {
         heard,
         words_at_start,
         slow_cloud_live,
+        close_after_caption,
     } = opts;
     let dictionary = dictionary.as_slice();
     let dir = tempfile::tempdir().unwrap();
@@ -229,6 +234,12 @@ fn run_opts(opts: Opts) -> Ran {
     for m in missed {
         missed_tx.send(m).unwrap();
     }
+    // Some(None) once the segment closed.
+    let silent_after_caption = close_after_caption
+        .as_ref()
+        .is_some_and(|(_, silent)| *silent);
+    let closes =
+        std::sync::Mutex::new(close_after_caption.map(|(job, _)| Some((job, segments_tx.clone()))));
     drop((segments_tx, partials_tx, commands_tx, missed_tx));
     let config = EngineConfig {
         doc_id: "doc".into(),
@@ -275,6 +286,14 @@ fn run_opts(opts: Opts) -> Ran {
         if disk_full_until.is_some_and(|until| n >= until) {
             disk_full.store(false, Ordering::SeqCst);
         }
+        let mut closes = closes.lock().unwrap();
+        if silent_after_caption && closes.as_ref().is_some_and(|c| c.is_none()) {
+            return Ok(Vec::new());
+        }
+        if let Some((job, tx)) = closes.as_mut().and_then(Option::take) {
+            tx.send(job).unwrap();
+        }
+        drop(closes);
         if words_at_start {
             return Ok(caption_words(local));
         }
@@ -617,6 +636,62 @@ fn live_captions_run_in_cloud_from_the_local_model() {
         ran.saved().is_empty(),
         "a live caption is never written down"
     );
+}
+
+/// A noise in a quiet room: the live pass took it for a word, the segment's
+/// final pass heard nothing. The caption goes instead of staying on screen
+/// under the user's name for the rest of the meeting, and nothing is saved.
+fn caption_then_silence(mode: EngineMode, cloud: Option<Answer>) -> Ran {
+    run_opts(Opts {
+        mode,
+        fallback: true,
+        local: &["yeah"],
+        cloud,
+        partials: vec![job()],
+        close_after_caption: Some((job(), true)),
+        budget: Duration::ZERO,
+        ..Opts::default()
+    })
+}
+
+#[test]
+fn a_caption_whose_segment_has_no_words_goes_local() {
+    let ran = caption_then_silence(EngineMode::Local(local_model()), None);
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(ran.lines(), vec![(id.clone(), "yeah".into(), false)]);
+    assert_eq!(ran.removed(), vec![id]);
+    assert!(ran.saved().is_empty());
+    assert!(ran.drained());
+}
+
+#[test]
+fn a_caption_whose_segment_has_no_words_goes_cloud() {
+    let ran = caption_then_silence(cloud_mode(), Some(Answer::Words(&[])));
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(ran.lines(), vec![(id.clone(), "yeah".into(), false)]);
+    assert_eq!(ran.removed(), vec![id]);
+    assert!(ran.saved().is_empty());
+    assert!(ran.drained());
+}
+
+#[test]
+fn a_caption_whose_segment_has_words_is_replaced_not_removed() {
+    let ran = run_opts(Opts {
+        mode: EngineMode::Local(local_model()),
+        partials: vec![job()],
+        close_after_caption: Some((job(), false)),
+        ..Opts::default()
+    });
+    let id = utterance_id(Source::Mic, START);
+    assert_eq!(
+        ran.lines(),
+        vec![
+            (id.clone(), "hello from here".into(), false),
+            (id.clone(), "hello from here".into(), true),
+        ]
+    );
+    assert!(ran.removed().is_empty());
+    assert_eq!(ran.saved(), vec![(id, "hello from here".into())]);
 }
 
 /// A slow computer in Cloud mode with live captions off: the local model

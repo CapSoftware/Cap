@@ -438,6 +438,9 @@ struct Worker {
     policy: RetryPolicy,
     /// Live captions per track.
     live: [Option<LiveSegment>; 2],
+    /// Segments with a live caption on screen, by (track, start sample),
+    /// until their final words come back.
+    captioned: HashSet<(usize, u64)>,
     /// Counts this meeting among those using the live model.
     live_meeting: crate::transcription::LiveMeeting,
     #[cfg(test)]
@@ -744,6 +747,7 @@ impl Worker {
             unwritten: Vec::new(),
             policy: RetryPolicy::default(),
             live: [None, None],
+            captioned: HashSet::new(),
             live_meeting: crate::transcription::LiveMeeting::start(),
             #[cfg(test)]
             hooks: TestHooks::default(),
@@ -1314,7 +1318,9 @@ impl Worker {
     fn local_final(&mut self, local: &LocalModel, job: SegmentJob) {
         match self.transcribe(local, &job) {
             Ok(words) => {
-                for utterance in self.utterances(job.source, job.start_sample, words, true) {
+                let lines = self.utterances(job.source, job.start_sample, words, true);
+                self.caption_answered(job.source, job.start_sample, lines.is_empty());
+                for utterance in lines {
                     self.emit_final(utterance);
                 }
                 if self.status.issue.is_some()
@@ -1383,6 +1389,7 @@ impl Worker {
             .map(|p| p.ids)
             .unwrap_or_default();
         let lines = self.utterances(source, start_sample, words, true);
+        self.caption_answered(source, start_sample, lines.is_empty());
         let kept: HashSet<&str> = lines.iter().map(|u| u.id.as_str()).collect();
         let stale: Vec<String> = shown
             .into_iter()
@@ -1463,9 +1470,25 @@ impl Worker {
             words
         };
         for utterance in self.utterances(job.source, job.start_sample, words, false) {
+            self.captioned
+                .insert((source_index(job.source), job.start_sample));
             let _ = self.config.events.send(EngineEvent::Utterance {
                 doc_id: self.config.doc_id.clone(),
                 utterance,
+            });
+        }
+    }
+
+    /// A segment's final words are in. When they are none (a cough or a
+    /// door the live pass took for "Yeah."), its live caption goes: a final
+    /// line would have replaced it, and nothing else on that track may come
+    /// for the rest of a quiet meeting. A caption is never saved, so nothing
+    /// is written.
+    fn caption_answered(&mut self, source: Source, start_sample: u64, empty: bool) {
+        if self.captioned.remove(&(source_index(source), start_sample)) && empty {
+            let _ = self.config.events.send(EngineEvent::Removed {
+                doc_id: self.config.doc_id.clone(),
+                ids: vec![utterance_id(source, start_sample)],
             });
         }
     }
