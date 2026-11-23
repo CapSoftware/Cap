@@ -186,6 +186,44 @@ pub fn run_from_env(cx: &mut App) {
                 let marks = std::env::var("CAP_GPUI_AUTO_MEETING_MARKS").ok();
                 std::thread::spawn(move || feed_mic_script(script, tx, marks));
             }
+            // CAP_GPUI_AUTO_MEETING_SLEEP=<at_s>:<secs>[:resume] runs the
+            // computer's sleep and wake handlers once, `secs` apart, and
+            // takes the Resume offer if asked.
+            if let Some((at, secs, take)) = std::env::var("CAP_GPUI_AUTO_MEETING_SLEEP")
+                .ok()
+                .filter(|_| cycle == 0)
+                .and_then(|v| {
+                    let mut parts = v.split(':');
+                    let at = parts.next()?.parse::<u64>().ok()?;
+                    let secs = parts.next()?.parse::<u64>().ok()?;
+                    Some((at, secs, parts.next() == Some("resume")))
+                })
+            {
+                cx.spawn(async move |cx| {
+                    sleep(cx, Duration::from_secs(at)).await;
+                    tracing::info!("CAP_GPUI_AUTO_MEETING: going to sleep");
+                    cx.update(Meetings::system_will_sleep);
+                    sleep(cx, Duration::from_secs(secs)).await;
+                    cx.update(Meetings::system_did_wake);
+                    let state = cx.update(|cx| {
+                        Meetings::try_global(cx)
+                            .and_then(|m| m.read(cx).active().map(|a| format!("{:?}", a.state)))
+                    });
+                    tracing::info!(?state, "CAP_GPUI_AUTO_MEETING: woke");
+                    if take {
+                        sleep(cx, Duration::from_secs(2)).await;
+                        cx.update(|cx| {
+                            if let Some(m) = Meetings::try_global(cx) {
+                                m.update(cx, |m, cx| m.resume(cx));
+                            }
+                        });
+                        let recording =
+                            cx.update(|cx| Meetings::try_global(cx).map(|m| m.read(cx).is_recording()));
+                        tracing::info!(?recording, "CAP_GPUI_AUTO_MEETING: resumed");
+                    }
+                })
+                .detach();
+            }
             sleep(cx, Duration::from_secs(seconds)).await;
             before_stop = cx.update(|cx| {
                 let m = meetings.read(cx);
