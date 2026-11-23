@@ -1,5 +1,7 @@
 mod async_camera;
 mod core;
+#[cfg(windows)]
+mod d3d11_texture_ring;
 pub mod ffmpeg;
 #[cfg(any(windows, test))]
 mod frame_pacing;
@@ -13,6 +15,8 @@ mod mjpeg;
 mod oop_fragmented_m4s;
 pub mod oop_muxer;
 mod start_gate;
+#[cfg(any(windows, test))]
+mod texture_slots;
 
 pub use async_camera::*;
 pub use core::*;

@@ -286,6 +286,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 false
             };
 
+            let d3d_device = screen_capture.d3d_device.clone();
             if oop_ok {
                 use crate::output_pipeline::{
                     WindowsOOPFragmentedM4SMuxer, WindowsOOPFragmentedM4SMuxerConfig,
@@ -320,6 +321,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         shared_pause_state,
                         disk_space_callback: None,
                         segment_tx: None,
+                        d3d_device: Some(d3d_device),
                     })
                     .await
             }
@@ -356,6 +358,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         start_gate: Option<RecordingStartGate>,
         segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     ) -> anyhow::Result<OutputPipeline> {
+        let d3d_device = screen_capture.d3d_device.clone();
         OutputPipeline::builder(segments_dir)
             .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
@@ -369,6 +372,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                 shared_pause_state: None,
                 disk_space_callback: None,
                 segment_tx,
+                d3d_device: Some(d3d_device),
             })
             .await
     }

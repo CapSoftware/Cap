@@ -1,6 +1,8 @@
 use ffmpeg::frame;
 
 pub mod colour;
+#[cfg(target_os = "windows")]
+mod d3d11_hw;
 pub mod h264;
 pub mod h264_packet;
 pub mod hardware_crash;
@@ -10,6 +12,8 @@ mod packed_yuv;
 pub mod prores;
 mod rgb_to_yuv;
 pub mod standin;
+#[cfg(target_os = "windows")]
+pub use d3d11_hw::D3d11TextureLifetime;
 #[cfg(target_os = "linux")]
 pub(crate) mod vaapi;
 #[cfg(target_os = "macos")]

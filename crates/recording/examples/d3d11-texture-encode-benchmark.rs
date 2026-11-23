@@ -1,0 +1,513 @@
+//! `cargo run -p cap-recording --example d3d11-texture-encode-benchmark --release`
+
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("Windows only. Run this on DESKTOP-MQ99RT1.");
+}
+
+#[cfg(windows)]
+fn main() {
+    windows::run();
+}
+
+#[cfg(windows)]
+mod windows {
+    use std::ffi::c_void;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{Duration, Instant};
+
+    use cap_enc_ffmpeg::D3d11TextureLifetime;
+    use cap_enc_ffmpeg::h264::H264Preset;
+    use cap_enc_ffmpeg::remux::concatenate_m4s_segments_with_init;
+    use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
+    use cap_media_info::{RawVideoFormat, VideoInfo};
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device,
+        ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
+    };
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::core::Interface;
+
+    const WARMUP: usize = 30;
+    const FRAMES: usize = 300;
+    const RUNS: usize = 5;
+    const RING: usize = 8;
+    const SOURCES: usize = 4;
+
+    #[repr(C)]
+    struct Filetime {
+        low: u32,
+        high: u32,
+    }
+
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn GetProcessTimes(
+            process: *mut c_void,
+            created: *mut Filetime,
+            exited: *mut Filetime,
+            kernel: *mut Filetime,
+            user: *mut Filetime,
+        ) -> i32;
+    }
+
+    fn process_cpu() -> Duration {
+        let mut created = Filetime { low: 0, high: 0 };
+        let mut exited = Filetime { low: 0, high: 0 };
+        let mut kernel = Filetime { low: 0, high: 0 };
+        let mut user = Filetime { low: 0, high: 0 };
+        let ok = unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        if ok == 0 {
+            return Duration::ZERO;
+        }
+        let ticks = (u64::from(kernel.high) << 32 | u64::from(kernel.low))
+            + (u64::from(user.high) << 32 | u64::from(user.low));
+        Duration::from_nanos(ticks.saturating_mul(100))
+    }
+
+    fn median(values: &mut [u128]) -> u128 {
+        values.sort_unstable();
+        let mid = values.len() / 2;
+        if values.len().is_multiple_of(2) {
+            values[mid - 1].midpoint(values[mid])
+        } else {
+            values[mid]
+        }
+    }
+
+    struct Device {
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+    }
+
+    fn open_device() -> Device {
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+            .expect("D3D11CreateDevice");
+        }
+        let device = device.expect("D3D11 device");
+        if let Ok(multithread) = device.cast::<ID3D11Multithread>() {
+            let _ = unsafe { multithread.SetMultithreadProtected(true) };
+        }
+        let context = unsafe { device.GetImmediateContext() }.expect("immediate context");
+        Device { device, context }
+    }
+
+    fn rgba_texture(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        cpu_read: bool,
+    ) -> ID3D11Texture2D {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: if cpu_read {
+                D3D11_USAGE_STAGING
+            } else {
+                D3D11_USAGE_DEFAULT
+            },
+            BindFlags: if cpu_read {
+                0
+            } else {
+                (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32
+            },
+            CPUAccessFlags: if cpu_read {
+                windows::Win32::Graphics::Direct3D11::D3D11_CPU_ACCESS_READ.0 as u32
+            } else {
+                0
+            },
+            MiscFlags: 0,
+        };
+        let mut texture = None;
+        unsafe {
+            device
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .expect("CreateTexture2D");
+        }
+        texture.expect("texture")
+    }
+
+    fn paint(device: &Device, texture: &ID3D11Texture2D, width: u32, height: u32, index: usize) {
+        let stride = width as usize * 4;
+        let mut bytes = vec![0u8; stride * height as usize];
+        let shift = index * 4;
+        for row in 0..height as usize {
+            for col in 0..width as usize {
+                let pixel = (row * stride) + col * 4;
+                bytes[pixel] = ((col + shift) % 251) as u8;
+                bytes[pixel + 1] = ((row + shift) % 251) as u8;
+                bytes[pixel + 2] = ((row + col + shift) % 251) as u8;
+                bytes[pixel + 3] = 255;
+            }
+        }
+        unsafe {
+            device.context.UpdateSubresource(
+                texture,
+                0,
+                None,
+                bytes.as_ptr() as *const c_void,
+                stride as u32,
+                0,
+            );
+        }
+    }
+
+    struct Holds {
+        counts: Arc<[AtomicU32; RING]>,
+        index: u32,
+    }
+
+    unsafe extern "C" fn release_hold(data: *mut c_void) {
+        let hold = unsafe { Box::from_raw(data as *mut Holds) };
+        hold.counts[hold.index as usize].fetch_sub(1, Ordering::AcqRel);
+    }
+
+    struct Ring {
+        textures: Vec<ID3D11Texture2D>,
+        counts: Arc<[AtomicU32; RING]>,
+        next: usize,
+    }
+
+    impl Ring {
+        fn new(device: &ID3D11Device, width: u32, height: u32) -> Self {
+            let textures = (0..RING)
+                .map(|_| rgba_texture(device, width, height, false))
+                .collect();
+            Self {
+                textures,
+                counts: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+                next: 0,
+            }
+        }
+
+        fn submit_source(
+            &mut self,
+            context: &ID3D11DeviceContext,
+            source: &ID3D11Texture2D,
+        ) -> (*mut c_void, D3d11TextureLifetime) {
+            let mut chosen = None;
+            for step in 0..RING {
+                let index = (self.next + step) % RING;
+                if self.counts[index].load(Ordering::Acquire) == 0 {
+                    chosen = Some(index);
+                    break;
+                }
+            }
+            let index = chosen.expect("texture ring full");
+            self.next = (index + 1) % RING;
+            let dest = &self.textures[index];
+            unsafe { context.CopyResource(dest, source) };
+            self.counts[index].fetch_add(1, Ordering::AcqRel);
+            let hold = Box::new(Holds {
+                counts: Arc::clone(&self.counts),
+                index: index as u32,
+            });
+            (
+                dest.as_raw(),
+                D3d11TextureLifetime {
+                    data: Box::into_raw(hold) as *mut c_void,
+                    free: release_hold,
+                },
+            )
+        }
+    }
+
+    fn readback(
+        context: &ID3D11DeviceContext,
+        source: &ID3D11Texture2D,
+        staging: &ID3D11Texture2D,
+        frame: &mut ffmpeg::frame::Video,
+        width: u32,
+        height: u32,
+    ) {
+        unsafe {
+            context.CopyResource(staging, source);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context
+                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .expect("Map");
+            let src_stride = mapped.RowPitch as usize;
+            let row_bytes = width as usize * 4;
+            let dest_stride = frame.stride(0);
+            let dest = frame.data_mut(0);
+            for row in 0..height as usize {
+                dest[row * dest_stride..row * dest_stride + row_bytes].copy_from_slice(
+                    std::slice::from_raw_parts(
+                        (mapped.pData as *const u8).add(row * src_stride),
+                        row_bytes,
+                    ),
+                );
+            }
+            context.Unmap(staging, 0);
+        }
+    }
+
+    struct Run {
+        wall: Duration,
+        cpu: Duration,
+        decoded: usize,
+    }
+
+    fn decode_count(path: &Path) -> usize {
+        let mut input = ffmpeg::format::input(path).expect("open assembled output");
+        let stream_index = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .expect("video stream")
+            .index();
+        let params = input.stream(stream_index).unwrap().parameters();
+        let context = ffmpeg::codec::context::Context::from_parameters(params).expect("context");
+        let mut decoder = context.decoder().video().expect("decoder");
+        let mut frame = ffmpeg::frame::Video::empty();
+        let mut count = 0usize;
+        for (stream, packet) in input.packets() {
+            if stream.index() != stream_index {
+                continue;
+            }
+            if decoder.send_packet(&packet).is_ok() {
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    count += 1;
+                }
+            }
+        }
+        if decoder.send_eof().is_ok() {
+            while decoder.receive_frame(&mut frame).is_ok() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    fn assemble(dir: &Path) -> PathBuf {
+        let mut segments: Vec<PathBuf> = std::fs::read_dir(dir)
+            .expect("read segment dir")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "m4s"))
+            .collect();
+        segments.sort();
+        assert!(!segments.is_empty(), "no media segments in {dir:?}");
+        let output = dir.join("assembled.mp4");
+        concatenate_m4s_segments_with_init(&dir.join("init.mp4"), &segments, &output)
+            .expect("assemble segments");
+        output
+    }
+
+    fn run_readback(
+        dir: &Path,
+        device: &Device,
+        sources: &[ID3D11Texture2D],
+        staging: &ID3D11Texture2D,
+        info: VideoInfo,
+    ) -> Run {
+        let mut encoder = SegmentedVideoEncoder::init(
+            dir.to_path_buf(),
+            info,
+            SegmentedVideoEncoderConfig {
+                preset: H264Preset::Ultrafast,
+                ..Default::default()
+            },
+        )
+        .expect("readback encoder");
+        let mut reusable =
+            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
+        for i in 0..WARMUP {
+            readback(
+                &device.context,
+                &sources[i % SOURCES],
+                staging,
+                &mut reusable,
+                info.width,
+                info.height,
+            );
+            let mut owned =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
+            std::mem::swap(&mut owned, &mut reusable);
+            encoder
+                .queue_frame(owned, Duration::from_millis(i as u64 * 33))
+                .expect("warmup readback");
+        }
+        let wall_start = Instant::now();
+        let cpu_start = process_cpu();
+        for i in 0..FRAMES {
+            let index = WARMUP + i;
+            readback(
+                &device.context,
+                &sources[index % SOURCES],
+                staging,
+                &mut reusable,
+                info.width,
+                info.height,
+            );
+            let mut owned =
+                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
+            std::mem::swap(&mut owned, &mut reusable);
+            encoder
+                .queue_frame(owned, Duration::from_millis(index as u64 * 33))
+                .expect("readback frame");
+        }
+        let wall = wall_start.elapsed();
+        let cpu = process_cpu().saturating_sub(cpu_start);
+        encoder.finish().expect("finish readback");
+        let decoded = decode_count(&assemble(dir));
+        Run { wall, cpu, decoded }
+    }
+
+    fn run_texture(
+        dir: &Path,
+        device: &Device,
+        sources: &[ID3D11Texture2D],
+        info: VideoInfo,
+    ) -> Option<Run> {
+        let mut encoder = SegmentedVideoEncoder::init(
+            dir.to_path_buf(),
+            info,
+            SegmentedVideoEncoderConfig {
+                preset: H264Preset::Ultrafast,
+                d3d11_device: Some(device.device.as_raw() as usize),
+                ..Default::default()
+            },
+        )
+        .expect("texture encoder");
+        if !encoder.is_d3d11_hw_input() {
+            return None;
+        }
+        let mut ring = Ring::new(&device.device, info.width, info.height);
+        for i in 0..WARMUP {
+            let (texture, lifetime) = ring.submit_source(&device.context, &sources[i % SOURCES]);
+            unsafe {
+                encoder
+                    .queue_d3d11_texture(
+                        texture,
+                        Duration::from_millis(i as u64 * 33),
+                        Some(lifetime),
+                    )
+                    .expect("warmup texture");
+            }
+        }
+        let wall_start = Instant::now();
+        let cpu_start = process_cpu();
+        for i in 0..FRAMES {
+            let index = WARMUP + i;
+            let (texture, lifetime) =
+                ring.submit_source(&device.context, &sources[index % SOURCES]);
+            unsafe {
+                encoder
+                    .queue_d3d11_texture(
+                        texture,
+                        Duration::from_millis(index as u64 * 33),
+                        Some(lifetime),
+                    )
+                    .expect("texture frame");
+            }
+        }
+        let wall = wall_start.elapsed();
+        let cpu = process_cpu().saturating_sub(cpu_start);
+        encoder.finish().expect("finish texture");
+        let decoded = decode_count(&assemble(dir));
+        Some(Run { wall, cpu, decoded })
+    }
+
+    fn report(label: &str, path: &str, runs: &[Run]) {
+        let mut wall: Vec<u128> = runs.iter().map(|run| run.wall.as_millis()).collect();
+        let mut cpu: Vec<u128> = runs.iter().map(|run| run.cpu.as_millis()).collect();
+        let wall_min = *wall.iter().min().unwrap_or(&0);
+        let wall_max = *wall.iter().max().unwrap_or(&0);
+        let cpu_min = *cpu.iter().min().unwrap_or(&0);
+        let cpu_max = *cpu.iter().max().unwrap_or(&0);
+        println!(
+            "{label} {path} wall median {} ms range {wall_min}-{wall_max} cpu median {} ms range {cpu_min}-{cpu_max} decoded {:?}",
+            median(&mut wall),
+            median(&mut cpu),
+            runs.iter().map(|run| run.decoded).collect::<Vec<_>>()
+        );
+    }
+
+    pub fn run() {
+        ffmpeg::init().ok();
+        let device = open_device();
+        let expected = WARMUP + FRAMES;
+        let mut failed = false;
+        println!("frames {FRAMES} warmup {WARMUP} runs {RUNS} expected decoded {expected}");
+        for (width, height) in [(1920u32, 1080u32), (3840, 2160)] {
+            let info = VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30);
+            let sources: Vec<_> = (0..SOURCES)
+                .map(|index| {
+                    let texture = rgba_texture(&device.device, width, height, false);
+                    paint(&device, &texture, width, height, index);
+                    texture
+                })
+                .collect();
+            let staging = rgba_texture(&device.device, width, height, true);
+            let base = std::env::temp_dir().join(format!("d3d11-texture-bench-{width}x{height}"));
+            let _ = std::fs::remove_dir_all(&base);
+            let mut readback_runs = Vec::new();
+            let mut texture_runs = Vec::new();
+            let mut texture_refused = false;
+            for run_index in 0..RUNS {
+                let readback_dir = base.join(format!("readback-{run_index}"));
+                std::fs::create_dir_all(&readback_dir).expect("readback dir");
+                let readback = run_readback(&readback_dir, &device, &sources, &staging, info);
+                if readback.decoded != expected {
+                    failed = true;
+                }
+                readback_runs.push(readback);
+
+                let texture_dir = base.join(format!("texture-{run_index}"));
+                std::fs::create_dir_all(&texture_dir).expect("texture dir");
+                match run_texture(&texture_dir, &device, &sources, info) {
+                    Some(texture) => {
+                        if texture.decoded != expected {
+                            failed = true;
+                        }
+                        texture_runs.push(texture);
+                    }
+                    None => texture_refused = true,
+                }
+            }
+            let label = format!("{width}x{height}");
+            report(&label, "readback", &readback_runs);
+            if texture_refused {
+                println!("{label} texture refused, CPU frame path stayed in use");
+            } else {
+                report(&label, "texture", &texture_runs);
+            }
+        }
+        if failed {
+            eprintln!("decoded frame count did not match frames submitted");
+            std::process::exit(1);
+        }
+    }
+}

@@ -690,6 +690,7 @@ impl SegmentedVideoMuxer {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            d3d11_device: None,
         };
 
         let slow_threshold_ms = frame_timing_log_threshold_ms(&self.video_config);
