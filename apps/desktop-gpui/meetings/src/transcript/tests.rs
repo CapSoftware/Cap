@@ -1160,3 +1160,60 @@ fn the_left_out_basis_follows_the_lines_left_out() {
     ));
     assert_eq!(t.left_out_basis(), "");
 }
+
+/// Renaming a name onto one with a choice of its own ("Same person as")
+/// merges the two choices as merged voices do: left out wins, either way.
+#[test]
+fn merging_names_keeps_a_left_out_choice() {
+    let named = |id: &str, start: u64, text: &str, name: &str| {
+        let mut u = utt(id, Source::System, start, start + 1_000, text, true);
+        u.speaker = Some(name.into());
+        u
+    };
+    let fresh = || {
+        let mut t = Transcript::new();
+        t.upsert(named("s1", 0, "Bob speaking.", "Bob"));
+        t.upsert(named("s2", 4_000, "Alice speaking.", "Alice"));
+        t.apply(LogLine::leave_out(
+            Voice::Source(Source::System),
+            Some(true),
+        ));
+        t
+    };
+    let prompt = |t: &Transcript| t.labelled_for_prompt(usize::MAX, None).text;
+    for (from, from_out, to, to_out) in
+        [("Alice", false, "Bob", true), ("Alice", true, "Bob", false)]
+    {
+        let mut t = fresh();
+        t.apply(LogLine::leave_out(
+            Voice::Named(from.into()),
+            Some(from_out),
+        ));
+        t.apply(LogLine::leave_out(Voice::Named(to.into()), Some(to_out)));
+        t.rename_speaker(from, to);
+        assert_eq!(t.voice_choice(&Voice::Named(to.into())), Some(true));
+        assert_eq!(t.voice_choice(&Voice::Named(from.into())), None);
+        assert!(
+            !prompt(&t).contains("Bob speaking") && !prompt(&t).contains("Alice speaking"),
+            "{}",
+            prompt(&t)
+        );
+    }
+    // Both put back in stay in; a name with no choice takes the moved one.
+    let mut t = fresh();
+    t.apply(LogLine::leave_out(
+        Voice::Named("Alice".into()),
+        Some(false),
+    ));
+    t.apply(LogLine::leave_out(Voice::Named("Bob".into()), Some(false)));
+    t.rename_speaker("Alice", "Bob");
+    assert_eq!(t.voice_choice(&Voice::Named("Bob".into())), Some(false));
+    assert!(prompt(&t).contains("Alice speaking") && prompt(&t).contains("Bob speaking"));
+    let mut t = fresh();
+    t.apply(LogLine::leave_out(
+        Voice::Named("Alice".into()),
+        Some(false),
+    ));
+    t.rename_speaker("Alice", "Carol");
+    assert_eq!(t.voice_choice(&Voice::Named("Carol".into())), Some(false));
+}

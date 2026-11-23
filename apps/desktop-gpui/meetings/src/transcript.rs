@@ -366,10 +366,14 @@ impl Transcript {
 
     pub fn rename_speaker(&mut self, from: &str, to: &str) -> usize {
         let to = to.trim();
+        // The name's choice goes with it; onto a name with a choice of its
+        // own, left out wins, as when voices merge.
         if let Some(choice) = self.voice_choice(&Voice::Named(from.to_string())) {
             self.choose_voice(Voice::Named(from.to_string()), None);
             if !to.is_empty() {
-                self.choose_voice(Voice::Named(to.to_string()), Some(choice));
+                let target = Voice::Named(to.to_string());
+                let merged = choice || self.voice_choice(&target).unwrap_or(false);
+                self.choose_voice(target, Some(merged));
             }
         }
         let mut changed = 0;
