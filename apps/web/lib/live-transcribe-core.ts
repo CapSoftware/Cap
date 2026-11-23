@@ -52,6 +52,11 @@ export const LIVE_TRANSCRIBE = {
 	 * window instead of one per chunk. Equal to MAX_POLL_MS_PER_STEP so a
 	 * step never runs longer than a single waiting step could. */
 	MAX_BATCH_MS_PER_STEP: 120_000,
+	/** AssemblyAI rejects very short audio ("Audio duration is too short"),
+	 * and a recording's last segment can be a few milliseconds. A chunk
+	 * shorter than this is sent with already transcribed audio in front of
+	 * it so the tail's words still land instead of leaving a gap. */
+	MIN_SENT_SECONDS: 3,
 } as const;
 
 export type LiveChunkResult =
@@ -209,9 +214,9 @@ export function planNextLiveChunk(options: {
 	targetSeconds: number;
 	maxTakeSeconds?: number;
 	contextSeconds?: number;
+	minSentSeconds?: number;
 }): LiveChunkDecision {
 	const { manifest, lastProcessedIndex, targetSeconds } = options;
-	const contextSeconds = options.contextSeconds ?? 0;
 	const maxTakeSeconds =
 		options.maxTakeSeconds ?? LIVE_TRANSCRIBE.MAX_CHUNK_TAKE_SECONDS;
 
@@ -262,6 +267,10 @@ export function planNextLiveChunk(options: {
 		return { action: "wait" };
 	}
 
+	const contextSeconds = Math.max(
+		options.contextSeconds ?? 0,
+		(options.minSentSeconds ?? 0) - takenSeconds,
+	);
 	const context: NormalizedSegmentEntry[] = [];
 	let contextTaken = 0;
 	for (let i = processed.length - 1; i >= 0; i--) {
@@ -409,23 +418,6 @@ export function isNoSpokenAudioError(transcript: {
 	return (
 		transcript.status === "error" &&
 		/no spoken audio/i.test(transcript.error ?? "")
-	);
-}
-
-/** AssemblyAI rejects very short audio outright. A recording's last
- * segment can be a few milliseconds, and when it is the only audio left the
- * chunk can't hold speech, so it is an empty chunk rather than a failure
- * that would leave a gap and decline promotion. */
-export const LIVE_MIN_TRANSCRIBABLE_MS = 1_000;
-
-export function isTooShortTailError(
-	transcript: { status: string; error?: string | null },
-	sentAudioMs: number,
-): boolean {
-	return (
-		transcript.status === "error" &&
-		sentAudioMs < LIVE_MIN_TRANSCRIBABLE_MS &&
-		/audio duration is too short/i.test(transcript.error ?? "")
 	);
 }
 
