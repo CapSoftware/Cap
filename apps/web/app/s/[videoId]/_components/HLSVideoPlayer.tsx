@@ -25,6 +25,8 @@ import { useEarlyPlayback } from "./early-playback";
 import {
 	capturePlayback,
 	createSourceRefreshBudget,
+	displayedMediaTime,
+	holdDisplayedTime,
 	isMediaLoadError,
 	restorePlaybackOnLoad,
 	sourceMayHaveExpired,
@@ -436,6 +438,7 @@ export function HLSVideoPlayer({
 			const maxNetworkRetries = isLiveSegments ? 30 : 6;
 			let reloadedForFragment: string | undefined | null = null;
 			let retryTimer: ReturnType<typeof setTimeout> | null = null;
+			let releaseHeldTime: (() => void) | null = null;
 
 			hls.on(Hls.Events.ERROR, (event, data) => {
 				console.error("HLSVideoPlayer: HLS error:", event, data);
@@ -465,7 +468,11 @@ export function HLSVideoPlayer({
 					);
 					// Reloading the same URL rebuilds the MediaSource, which resets the
 					// element to 0:00, paused, at normal speed.
-					const { currentTime, paused, playbackRate } = video;
+					const { paused, playbackRate } = video;
+					const currentTime = displayedMediaTime(video);
+					const previousHold = releaseHeldTime;
+					releaseHeldTime = holdDisplayedTime(video, currentTime);
+					previousHold?.();
 					hls.config.startPosition = currentTime;
 					hls.loadSource(playbackSrc);
 					video.playbackRate = playbackRate;
@@ -539,6 +546,7 @@ export function HLSVideoPlayer({
 
 			return () => {
 				if (retryTimer) clearTimeout(retryTimer);
+				releaseHeldTime?.();
 				if (hlsInstance.current) {
 					hlsInstance.current.destroy();
 					hlsInstance.current = null;
@@ -555,11 +563,12 @@ export function HLSVideoPlayer({
 			let cancelRestore: (() => void) | null = null;
 			let stopDueCheck: (() => void) | null = null;
 			const reloadPlaylist = () => {
-				cancelRestore?.();
+				const previousRestore = cancelRestore;
 				cancelRestore = restorePlaybackOnLoad(
 					video,
 					capturePlayback(video, intent.isPlaying()),
 				);
+				previousRestore?.();
 				obtainedAt = Date.now();
 				refreshCount += 1;
 				video.src = `${playbackSrc}${playbackSrc.includes("?") ? "&" : "?"}_r=${refreshCount}`;

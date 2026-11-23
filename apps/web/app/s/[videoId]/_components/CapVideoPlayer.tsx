@@ -22,6 +22,7 @@ import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
 	capturePlayback,
 	createSourceRefreshBudget,
+	holdDisplayedTime,
 	isMediaLoadError,
 	isSignedMediaUrl,
 	type PlaybackSnapshot,
@@ -162,6 +163,24 @@ interface Props {
 	posterUrl?: string | null;
 }
 
+type HeldTimeRef = { current: (() => void) | null };
+
+function replaceHeldTime(
+	ref: HeldTimeRef,
+	video: HTMLVideoElement,
+	time: number,
+) {
+	const previous = ref.current;
+	ref.current = holdDisplayedTime(video, time);
+	previous?.();
+}
+
+function releaseHeldTime(ref: HeldTimeRef) {
+	const release = ref.current;
+	ref.current = null;
+	release?.();
+}
+
 export function CapVideoPlayer({
 	videoSrc,
 	initialPlaybackUrl,
@@ -236,6 +255,7 @@ export function CapVideoPlayer({
 	>(null);
 	const signedSourceRefreshes = useRef(createSourceRefreshBudget());
 	const sourceObtainedAt = useRef(Date.now());
+	const heldTime = useRef<(() => void) | null>(null);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -327,6 +347,7 @@ export function CapVideoPlayer({
 		hasRetriedInitialPlaybackSource.current = false;
 		initialPlaybackSourceRetryPending.current = false;
 		playbackToRestore.current = null;
+		releaseHeldTime(heldTime);
 		signedSourceRefreshes.current = createSourceRefreshBudget();
 		setIsRefreshingInitialPlaybackSource(false);
 	}, [videoSrc, rawFallbackSrc]);
@@ -422,6 +443,7 @@ export function CapVideoPlayer({
 				return false;
 			const snapshot = capturePlayback(video, intent.isPlaying());
 			playbackToRestore.current = { ...snapshot, sourceUrl: currentSourceUrl };
+			replaceHeldTime(heldTime, video, snapshot.time);
 			if (!snapshot.wasPlaying) video.autoplay = false;
 			setIsRefreshingInitialPlaybackSource(true);
 			queryClient.setQueryData(
@@ -454,6 +476,7 @@ export function CapVideoPlayer({
 
 	useEffect(() => {
 		return () => {
+			releaseHeldTime(heldTime);
 			setIosLevelPatchedUrl((previous) => {
 				if (previous) URL.revokeObjectURL(previous);
 				return null;
@@ -585,6 +608,7 @@ export function CapVideoPlayer({
 			initialPlaybackSourceRetryPending.current = true;
 			const snapshot = capturePlayback(video, playbackIntent.isPlaying());
 			playbackToRestore.current = { ...snapshot, sourceUrl };
+			replaceHeldTime(heldTime, video, snapshot.time);
 			// A viewer who paused stays paused; the autoplay attribute would start
 			// the new source on its own.
 			if (keepPlayerVisible && !snapshot.wasPlaying) video.autoplay = false;
@@ -598,6 +622,7 @@ export function CapVideoPlayer({
 			// retry that changes nothing moves on to the raw upload.
 			const stopRetrying = () => {
 				playbackToRestore.current = null;
+				releaseHeldTime(heldTime);
 				setIsRefreshingInitialPlaybackSource(false);
 				if (
 					shouldFallbackToRawPlaybackSource(
@@ -677,6 +702,7 @@ export function CapVideoPlayer({
 			}
 
 			playbackToRestore.current = null;
+			releaseHeldTime(heldTime);
 			setIsRefreshingInitialPlaybackSource(false);
 			setHasError(true);
 		};
@@ -692,6 +718,7 @@ export function CapVideoPlayer({
 			setHasError(false);
 			video.playbackRate = restore.playbackRate;
 			if (restore.wasPlaying) void video.play().catch(() => undefined);
+			releaseHeldTime(heldTime);
 		};
 
 		const handleLoadedMetadataWithTracks = () => {

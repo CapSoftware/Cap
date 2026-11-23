@@ -151,12 +151,64 @@ export function sourceMayHaveExpired(
 	return now - obtainedAt >= MIN_EXPIRED_SOURCE_AGE_MS;
 }
 
+// Loading a new source puts the element back to 0:00 until it seeks to where
+// the viewer was, so controls read the viewer's time from here until then.
+// Restore logic and hls.js keep reading the element's own position.
+const heldTimes = new WeakMap<object, { time: number }>();
+
+export function displayedMediaTime(media: { currentTime?: number }): number {
+	return heldTimes.get(media)?.time ?? media.currentTime ?? 0;
+}
+
+export function isMediaTimeHeld(media: HTMLMediaElement) {
+	return heldTimes.has(media);
+}
+
+export function holdDisplayedTime(
+	media: HTMLMediaElement,
+	time: number,
+): () => void {
+	const hold = { time };
+	heldTimes.set(media, hold);
+	let loadStarted = false;
+	const handleLoadStart = () => {
+		loadStarted = true;
+	};
+	const handleSettled = () => {
+		if (loadStarted && !media.seeking) release();
+	};
+	const handleTimeUpdate = () => {
+		if (
+			loadStarted &&
+			!media.seeking &&
+			media.readyState >= 1 &&
+			Math.abs(media.currentTime - hold.time) < 0.5
+		)
+			release();
+	};
+	const release = () => {
+		media.removeEventListener("loadstart", handleLoadStart);
+		media.removeEventListener("seeked", handleSettled);
+		media.removeEventListener("error", handleSettled);
+		media.removeEventListener("timeupdate", handleTimeUpdate);
+		if (heldTimes.get(media) !== hold) return;
+		heldTimes.delete(media);
+		media.dispatchEvent(new Event("timeupdate"));
+	};
+	media.addEventListener("loadstart", handleLoadStart);
+	media.addEventListener("seeked", handleSettled);
+	media.addEventListener("error", handleSettled);
+	media.addEventListener("timeupdate", handleTimeUpdate);
+	return release;
+}
+
 export function capturePlayback(
 	media: HTMLMediaElement,
 	wasPlaying = !media.paused && !media.ended,
 ): PlaybackSnapshot {
+	const time = displayedMediaTime(media);
 	return {
-		time: Number.isFinite(media.currentTime) ? media.currentTime : 0,
+		time: Number.isFinite(time) ? time : 0,
 		wasPlaying,
 		playbackRate: media.playbackRate,
 	};
@@ -224,12 +276,14 @@ export function restorePlaybackOnLoad(
 	let resume = snapshot.wasPlaying;
 	let loadStarted = false;
 	if (!resume) media.autoplay = false;
+	const releaseTime = holdDisplayedTime(media, snapshot.time);
 	const finish = () => {
 		if (finished) return;
 		finished = true;
 		cleanup();
 		media.playbackRate = snapshot.playbackRate;
 		if (resume) void media.play().catch(() => undefined);
+		releaseTime();
 	};
 	const handleLoadStart = () => {
 		loadStarted = true;
@@ -265,6 +319,7 @@ export function restorePlaybackOnLoad(
 	return () => {
 		finished = true;
 		cleanup();
+		releaseTime();
 	};
 }
 
@@ -283,11 +338,12 @@ export function watchExpiredMediaSource(media: HTMLMediaElement): () => void {
 	let cancelRestore: (() => void) | null = null;
 	let stopDueCheck: (() => void) | null = null;
 	const reload = () => {
-		cancelRestore?.();
+		const previousRestore = cancelRestore;
 		cancelRestore = restorePlaybackOnLoad(
 			media,
 			capturePlayback(media, intent.isPlaying()),
 		);
+		previousRestore?.();
 		obtainedAt = Date.now();
 		media.load();
 		armDueCheck();

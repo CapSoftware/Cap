@@ -1,4 +1,5 @@
 import { seekLength } from "../early-length";
+import { displayedMediaTime } from "../media-source-refresh";
 
 /**
  * Framework-free subscription store around the share page's `<video>` element.
@@ -52,7 +53,7 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 		if (element && isFiniteDuration(element.duration)) {
 			duration = element.duration;
 		}
-		const next = element?.currentTime ?? time;
+		const next = element ? displayedMediaTime(element) : time;
 		if (next === time && duration === previousDuration && !force) return;
 		time = next;
 		emitTime();
@@ -167,7 +168,7 @@ export function createPlaybackStore(fallbackDuration: number | null = 0) {
 		};
 	};
 
-	const getCurrentTime = () => element?.currentTime ?? time;
+	const getCurrentTime = () => (element ? displayedMediaTime(element) : time);
 
 	const getDuration = () => {
 		if (element && isFiniteDuration(element.duration)) return element.duration;

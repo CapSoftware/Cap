@@ -2,8 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	capturePlayback,
 	createSourceRefreshBudget,
+	displayedMediaTime,
+	holdDisplayedTime,
 	isMediaLoadError,
+	isMediaTimeHeld,
 	isSignedMediaUrl,
 	refreshDueAt,
 	signedUrlExpiresAt,
@@ -123,6 +127,53 @@ describe("media source refresh", () => {
 		fail();
 		expect(load).toHaveBeenCalledOnce();
 		stop();
+	});
+
+	it("keeps showing the viewer's time until the fresh source has seeked back", () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(0);
+		const { media, state, fail } = fakeMedia();
+		const stop = watchExpiredMediaSource(media);
+		media.dispatchEvent(new Event("loadeddata"));
+		state.currentTime = 31.5;
+		now.mockReturnValue(30 * MINUTE);
+		const shown: number[] = [];
+		media.addEventListener("timeupdate", () =>
+			shown.push(displayedMediaTime(media)),
+		);
+
+		fail();
+		state.currentTime = 0;
+		media.dispatchEvent(new Event("loadstart"));
+		media.dispatchEvent(new Event("timeupdate"));
+		media.dispatchEvent(new Event("loadedmetadata"));
+		expect(isMediaTimeHeld(media)).toBe(true);
+		expect(displayedMediaTime(media)).toBe(31.5);
+		expect(capturePlayback(media).time).toBe(31.5);
+
+		media.dispatchEvent(new Event("seeked"));
+		expect(isMediaTimeHeld(media)).toBe(false);
+		expect(shown).toEqual([31.5, 31.5]);
+		stop();
+	});
+
+	it("holds the shown time only until the new load settles or fails", () => {
+		const { media, state } = fakeMedia();
+		state.currentTime = 20;
+		const release = holdDisplayedTime(media, 20);
+		media.dispatchEvent(new Event("seeked"));
+		expect(isMediaTimeHeld(media)).toBe(true);
+
+		state.currentTime = 0;
+		media.dispatchEvent(new Event("loadstart"));
+		media.dispatchEvent(new Event("error"));
+		expect(isMediaTimeHeld(media)).toBe(false);
+		expect(displayedMediaTime(media)).toBe(0);
+
+		const first = holdDisplayedTime(media, 5);
+		holdDisplayedTime(media, 7);
+		first();
+		expect(displayedMediaTime(media)).toBe(7);
+		release();
 	});
 
 	it("resumes a viewer the browser paused while reporting the failure", () => {
