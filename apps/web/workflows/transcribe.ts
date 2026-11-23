@@ -15,6 +15,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
+	sanitizeTranscriptionVocabulary,
 	Video,
 } from "@cap/web-domain";
 import { and, eq, isNull, sql } from "drizzle-orm";
@@ -69,6 +70,7 @@ interface VideoData {
 	video: typeof videos.$inferSelect;
 	transcriptionDisabled: boolean;
 	aiGenerationLanguage: AiGenerationLanguage;
+	transcriptionVocabulary: string[];
 }
 
 interface BackfillEditTranscriptPayload {
@@ -160,6 +162,7 @@ export async function transcribeVideoWorkflow(
 			audioUrl,
 			videoData.aiGenerationLanguage,
 			videoDurationMs,
+			videoData.transcriptionVocabulary,
 		);
 
 		await saveTranscription(videoId, userId, videoData.video, transcription);
@@ -219,6 +222,7 @@ export async function backfillEditTranscriptWorkflow(
 		}
 
 		const editTranscript = await transcribeEditTranscriptWithAssemblyAI(
+			videoId,
 			audioUrl,
 			videoEdit ? videoEdit.editSpec.sourceDuration : (video.duration ?? 0),
 		);
@@ -296,6 +300,9 @@ async function validateVideo(videoId: string): Promise<VideoData> {
 		transcriptionDisabled,
 		aiGenerationLanguage: parseAiGenerationLanguage(
 			result.orgSettings?.aiGenerationLanguage,
+		),
+		transcriptionVocabulary: sanitizeTranscriptionVocabulary(
+			result.orgSettings?.transcriptionVocabulary,
 		),
 	};
 }
@@ -774,6 +781,7 @@ async function transcribeWithAssemblyAI(
 	audioUrl: string,
 	language: AiGenerationLanguage,
 	videoDurationMs: number,
+	vocabulary: string[],
 ): Promise<TranscriptionArtifacts> {
 	"use step";
 
@@ -789,7 +797,7 @@ async function transcribeWithAssemblyAI(
 
 	const transcript = await client.transcripts.transcribe({
 		audio: audioBuffer,
-		...getAssemblyAITranscriptionOptions(language),
+		...getAssemblyAITranscriptionOptions(language, vocabulary),
 		disfluencies: true,
 	});
 
@@ -823,6 +831,7 @@ async function transcribeWithAssemblyAI(
 }
 
 async function transcribeEditTranscriptWithAssemblyAI(
+	videoId: string,
 	audioUrl: string,
 	videoDurationSeconds: number,
 ): Promise<string> {
@@ -835,11 +844,20 @@ async function transcribeEditTranscriptWithAssemblyAI(
 		);
 	}
 
+	const [orgRow] = await db()
+		.select({ orgSettings: organizations.settings })
+		.from(videos)
+		.leftJoin(organizations, eq(videos.orgId, organizations.id))
+		.where(eq(videos.id, videoId as Video.VideoId));
+	const vocabulary = sanitizeTranscriptionVocabulary(
+		orgRow?.orgSettings?.transcriptionVocabulary,
+	);
+
 	const audioBuffer = Buffer.from(await audioResponse.arrayBuffer());
 	const client = createAssemblyAIClient();
 	const transcript = await client.transcripts.transcribe({
 		audio: audioBuffer,
-		...getAssemblyAITranscriptionOptions("auto"),
+		...getAssemblyAITranscriptionOptions("auto", vocabulary),
 		disfluencies: true,
 	});
 

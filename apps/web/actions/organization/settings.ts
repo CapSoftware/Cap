@@ -8,6 +8,7 @@ import {
 	AI_GENERATION_LANGUAGE_AUTO,
 	type AiGenerationLanguage,
 	isAiGenerationLanguage,
+	sanitizeTranscriptionVocabulary,
 	type Organisation,
 } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -27,6 +28,7 @@ type OrganizationSettingsInput = {
 	hideShareableLinkCapLogo?: boolean;
 	shareableLinkUseOrganizationIcon?: boolean;
 	aiGenerationLanguage?: AiGenerationLanguage;
+	transcriptionVocabulary?: string[];
 	defaultPlaybackSpeed?: number;
 };
 
@@ -37,6 +39,7 @@ const proOrganizationSettingKeys = [
 	"hideShareableLinkCapLogo",
 	"shareableLinkUseOrganizationIcon",
 	"aiGenerationLanguage",
+	"transcriptionVocabulary",
 ] as const satisfies readonly (keyof OrganizationSettingsInput)[];
 
 const defaultProOrganizationSettings = {
@@ -46,6 +49,7 @@ const defaultProOrganizationSettings = {
 	hideShareableLinkCapLogo: false,
 	shareableLinkUseOrganizationIcon: false,
 	aiGenerationLanguage: AI_GENERATION_LANGUAGE_AUTO,
+	transcriptionVocabulary: [],
 } as const satisfies Pick<
 	Required<OrganizationSettingsInput>,
 	(typeof proOrganizationSettingKeys)[number]
@@ -103,15 +107,23 @@ export async function updateOrganizationSettings(
 
 	await requireOrganizationSettingsManager(user.id, organizationId);
 
-	const sanitizedSettings =
-		settings.defaultPlaybackSpeed !== undefined
+	const sanitizedSettings: OrganizationSettingsInput = {
+		...settings,
+		...(settings.defaultPlaybackSpeed !== undefined
 			? {
-					...settings,
 					defaultPlaybackSpeed: normalizePlaybackSpeed(
 						settings.defaultPlaybackSpeed,
 					),
 				}
-			: settings;
+			: {}),
+		...(settings.transcriptionVocabulary !== undefined
+			? {
+					transcriptionVocabulary: sanitizeTranscriptionVocabulary(
+						settings.transcriptionVocabulary,
+					),
+				}
+			: {}),
+	};
 
 	const nextSettings = userIsPro(user)
 		? sanitizedSettings

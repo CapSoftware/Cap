@@ -6,6 +6,7 @@ import { Storage } from "@cap/web-backend/src/Storage/index";
 import {
 	type AiGenerationLanguage,
 	parseAiGenerationLanguage,
+	sanitizeTranscriptionVocabulary,
 	Video,
 } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
@@ -171,7 +172,12 @@ export async function buildLiveSessionState(options: {
 	return {
 		lastAudioSegmentIndex,
 		transcribedDurationMs: artifact?.transcribedDurationMs ?? 0,
-		transcriptionOptions: getAssemblyAITranscriptionOptions(language),
+		transcriptionOptions: getAssemblyAITranscriptionOptions(
+			language,
+			sanitizeTranscriptionVocabulary(
+				options.orgSettings?.transcriptionVocabulary,
+			),
+		),
 		urls: { manifest: manifest ?? "", audioInit: audioInit ?? "", segments },
 	};
 }
