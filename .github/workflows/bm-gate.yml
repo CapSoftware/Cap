@@ -1,0 +1,208 @@
+name: Scratch caption fix gate (temporary)
+
+on:
+  push:
+    branches: [ci/bm-gate, ci/bm-gate2]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ROUND1_RUN: "45164191155"
+
+jobs:
+  full-tests:
+    name: Full desktop tests (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: blacksmith-6vcpu-macos-15, target: aarch64-apple-darwin }
+          - { runner: blacksmith-8vcpu-windows-2025, target: x86_64-pc-windows-msvc }
+          - { runner: blacksmith-8vcpu-ubuntu-2404, target: x86_64-unknown-linux-gnu }
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-gpui
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+      - shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          M="--manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }}"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            frameworks="$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.target }}/debug/Frameworks"
+            mkdir -p "$frameworks"
+            ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
+          else
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a --server-args="-screen 0 1920x1080x24 -noreset" cargo +1.95.0 test $M --bin cap-gpui 2>&1 | tee tests.log
+          else
+            cargo +1.95.0 test $M --bin cap-gpui 2>&1 | tee tests.log
+          fi
+          grep -E "studio_captions_use_only_words_the_user_added|caption_words_follow|test result" tests.log | tail -5
+          cargo +1.95.0 test $M -p cap-notes -p cap-calendar -p cap-meetings -p cap-meeting-platform -p cap-notes-ui -p cap-diarize 2>&1 | tee crates.log
+          grep -E "user_entries_leave_out|test result" crates.log | tail -12
+      - name: The caption test fails without the fix
+        shell: bash
+        run: |
+          set +e
+          git apply --verbose .bm/negative.patch || { echo "NEG patch did not apply"; exit 1; }
+          M="--manifest-path apps/desktop-gpui/Cargo.toml --locked --target ${{ matrix.target }}"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export PATH="$(cygpath "$GITHUB_WORKSPACE/target/debug"):$PATH"
+          elif [[ "$RUNNER_OS" == "Linux" ]]; then
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/native-deps/lib:$GITHUB_WORKSPACE/target/debug:$GITHUB_WORKSPACE/target/${{ matrix.target }}/debug${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          n=studio_captions_use_only_words_the_user_added
+          if [[ "$RUNNER_OS" == "Linux" ]]; then xvfb-run -a cargo +1.95.0 test $M --bin cap-gpui $n > neg.log 2>&1; else cargo +1.95.0 test $M --bin cap-gpui $n > neg.log 2>&1; fi
+          grep -E "^test |test result|panicked|left:|right:" neg.log | tail -n 8
+          if grep -q "test result: FAILED. 0 passed; 1 failed" neg.log; then echo "NEG OK $n fails without the fix"; else echo "NEG BAD"; tail -n 40 neg.log; exit 1; fi
+
+  test-lint:
+    name: test-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - run: bun install --frozen-lockfile --cwd scripts/test-lint && node scripts/test-lint/run.mjs
+
+  build-fix:
+    name: Build the fix (Linux release)
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 120
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: x86_64-unknown-linux-gnu
+          prefix-key: v1-rust-bm-release-head
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      - run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --target x86_64-unknown-linux-gnu --bin cap-gpui
+      - run: |
+          stage="$RUNNER_TEMP/stage/fix"
+          mkdir -p "$stage/libs" "$stage/resources/assets"
+          cp apps/desktop-gpui/target/x86_64-unknown-linux-gnu/release/cap-gpui "$stage/"
+          cp -a target/native-deps/lib/. "$stage/libs/"
+          cp -R apps/desktop-gpui/assets/backgrounds "$stage/resources/assets/"
+          git rev-parse HEAD > "$stage/sha.txt"
+          tar -C "$RUNNER_TEMP/stage" -cf "$RUNNER_TEMP/app-linux-fix.tar" fix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-linux-fix
+          path: ${{ runner.temp }}/app-linux-fix.tar
+          retention-days: 3
+
+  captions:
+    name: Studio captions in the real editor, base vs head vs fix (Linux)
+    needs: build-fix
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/install-desktop-deps
+      - run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils dbus pulseaudio pulseaudio-utils ffmpeg \
+            python3-psutil espeak-ng openbox > /dev/null
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-linux-fix
+          path: ${{ runner.temp }}/dl
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-linux-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.ROUND1_RUN }}
+          github-token: ${{ github.token }}
+      - name: Captions
+        run: |
+          set -uo pipefail
+          A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          cat "$A"/*/sha.txt
+          models="$HOME/.local/share/so.cap.desktop/transcription_models"
+          mkdir -p "$models"
+          curl -sSfL -o "$models/small.bin" https://github.com/CapSoftware/transcription-models/releases/download/whisper-v1/ggml-small.bin
+          ls -la "$models"
+          export DISPLAY=:79 XDG_SESSION_TYPE=x11
+          unset WAYLAND_DISPLAY
+          Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          pulse_dir=$(mktemp -d)
+          export PULSE_SERVER=unix:$pulse_dir/native
+          pulseaudio -n --daemonize=no --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=bm_out" \
+            -L "module-remap-source master=bm_out.monitor source_name=bm_mic" >/dev/null 2>&1 &
+          sleep 2
+          pactl set-default-source bm_mic || true
+          dbus-run-session -- python3 .bm/bm.py --mode captions \
+            --base "$A/base/cap-gpui" --base-libs "$A/base/libs" \
+            --head "$A/head/cap-gpui" --head-libs "$A/head/libs" \
+            --fix "$A/fix/cap-gpui" --fix-libs "$A/fix/libs" \
+            --out "$RUNNER_TEMP/cap"
+          python3 -c "import json;s=json.load(open('$RUNNER_TEMP/cap/summary.json'))['steps'];print(json.dumps({k:s.get(k) for k in ('captions.text','captions.compare')},indent=1))"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-captions
+          path: |
+            ${{ runner.temp }}/cap/summary.*
+            ${{ runner.temp }}/cap/captions-*.json
+            ${{ runner.temp }}/cap/runs/**/app.log
+            ${{ runner.temp }}/cap/speech.wav
+          retention-days: 7
