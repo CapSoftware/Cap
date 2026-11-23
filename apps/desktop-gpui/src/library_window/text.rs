@@ -89,6 +89,41 @@ pub fn contains(haystack: &str, needle: &str) -> bool {
     !needle.is_empty() && haystack.contains(needle)
 }
 
+/// Names compared the way people count: "Folder 2" before "Folder 10",
+/// case and accents ignored, ties broken by the raw text so the order is total.
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (fa, fb) = (fold(a), fold(b));
+    let (mut x, mut y) = (fa.as_str(), fb.as_str());
+    loop {
+        match (x.chars().next(), y.chars().next()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let nx = x.len() - x.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+                let ny = y.len() - y.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+                let (dx, dy) = (
+                    x[..nx].trim_start_matches('0'),
+                    y[..ny].trim_start_matches('0'),
+                );
+                let order = dx.len().cmp(&dy.len()).then_with(|| dx.cmp(dy));
+                if order != std::cmp::Ordering::Equal {
+                    return order;
+                }
+                x = &x[nx..];
+                y = &y[ny..];
+            }
+            (Some(c), Some(d)) => {
+                if c != d {
+                    return c.cmp(&d);
+                }
+                x = &x[c.len_utf8()..];
+                y = &y[d.len_utf8()..];
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +150,31 @@ mod tests {
     fn an_empty_needle_matches_nothing() {
         assert!(!contains("anything", ""));
         assert!(!contains("", ""));
+    }
+
+    #[test]
+    fn folder_names_sort_with_numbers_counted() {
+        let mut names = vec![
+            "Folder 10",
+            "folder 2",
+            "Folder 1",
+            "Folder 100",
+            "Álbum",
+            "Folder 02",
+            "alpha",
+        ];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(
+            names,
+            [
+                "Álbum",
+                "alpha",
+                "Folder 1",
+                "Folder 02",
+                "folder 2",
+                "Folder 10",
+                "Folder 100"
+            ]
+        );
     }
 }

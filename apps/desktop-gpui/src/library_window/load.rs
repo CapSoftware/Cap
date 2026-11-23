@@ -184,7 +184,7 @@ pub fn app_for_link(link: &str) -> Option<&'static AppInfo> {
 pub fn read_folders_once<E>(read: impl FnOnce() -> Result<Vec<Folder>, E>) -> (Vec<Folder>, bool) {
     match read() {
         Ok(mut folders) => {
-            folders.sort_by_key(|f| f.name.to_lowercase());
+            folders.sort_by(|a, b| super::text::natural_cmp(&a.name, &b.name));
             (folders, true)
         }
         Err(_) => (Vec::new(), false),

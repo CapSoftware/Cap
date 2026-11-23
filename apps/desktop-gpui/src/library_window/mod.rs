@@ -2120,6 +2120,7 @@ impl LibraryWindow {
         let leading = self.lead(item);
         div()
             .id(SharedString::from(format!("row-{index}")))
+            .w_full()
             .h(px(style::LIST_ROW_HEIGHT))
             .px(px(10.))
             .flex()
