@@ -1,6 +1,10 @@
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use cap_calendar::{Filter, Response, SourceKind};
@@ -397,6 +401,123 @@ fn a_feed_refresh_reports_success_and_each_failure_in_its_own_kind() {
     let fetched = results[0].outcome.as_ref().unwrap();
     assert_eq!(fetched.events.len(), 1);
     assert_eq!(fetched.name.as_deref(), Some("Team"));
+}
+
+/// Answers one request with a redirect to `location`.
+fn serve_redirect(location: String) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut buffer = [0u8; 4096];
+        let _ = stream.read(&mut buffer);
+        let reply = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = stream.write_all(reply.as_bytes());
+    });
+    format!("http://{address}/feed.ics")
+}
+
+/// A server that answers with a calendar and records whether it was asked.
+fn serve_recording(body: String) -> (std::net::SocketAddr, Arc<AtomicBool>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let asked = Arc::new(AtomicBool::new(false));
+    let flag = asked.clone();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            flag.store(true, Ordering::SeqCst);
+            let mut buffer = [0u8; 4096];
+            let _ = stream.read(&mut buffer);
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/calendar\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    (address, asked)
+}
+
+#[test]
+fn a_feed_that_redirects_to_this_machine_fails_without_asking_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let start = Utc::now() + Duration::hours(5);
+    let (plain, plain_asked) = serve_recording(ics("u1", "Planning", start));
+    let (secure, secure_asked) = serve_recording(ics("u2", "Review", start));
+    let to_http = serve_redirect(format!("http://{plain}/secret"));
+    let to_https = serve_redirect(format!("https://{secure}/secret"));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let results = runtime.block_on(refresh_in(
+        dir.path().to_path_buf(),
+        vec![source("to-http", to_http), source("to-https", to_https)],
+    ));
+    let kinds: Vec<Option<SyncErrorKind>> = results
+        .iter()
+        .map(|r| r.outcome.as_ref().err().map(|e| e.kind))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            Some(SyncErrorKind::NotCalendar),
+            Some(SyncErrorKind::NotCalendar)
+        ]
+    );
+    assert!(!plain_asked.load(Ordering::SeqCst));
+    assert!(!secure_asked.load(Ordering::SeqCst));
+    assert!(!raw_path(dir.path(), "to-http").exists());
+}
+
+#[test]
+fn each_redirect_of_a_feed_must_stay_on_public_https_within_five_hops() {
+    let url = |s: &str| reqwest::Url::parse(s).unwrap();
+    let public = url("https://calendar.example.com/feed.ics");
+    for hops in 1..=MAX_FEED_REDIRECTS {
+        assert_eq!(follow_feed_redirect(&public, hops), Ok(()), "{hops} hops");
+    }
+    assert!(follow_feed_redirect(&public, MAX_FEED_REDIRECTS + 1).is_err());
+    assert_eq!(MAX_FEED_REDIRECTS, 5);
+    for allowed in [
+        "https://calendar.google.com/calendar/ical/x/basic.ics",
+        "https://outlook.office365.com/owa/calendar/x/calendar.ics",
+        "https://8.8.8.8/feed.ics",
+        "https://[2606:4700:4700::1111]/feed.ics",
+        "https://localhost.example.com/feed.ics",
+    ] {
+        assert_eq!(follow_feed_redirect(&url(allowed), 1), Ok(()), "{allowed}");
+    }
+    for refused in [
+        "http://calendar.example.com/feed.ics",
+        "http://127.0.0.1:9/secret",
+        "ftp://calendar.example.com/feed.ics",
+        "https://localhost/feed.ics",
+        "https://LOCALHOST./feed.ics",
+        "https://app.localhost/feed.ics",
+        "https://127.0.0.1/feed.ics",
+        "https://127.1.2.3:8443/feed.ics",
+        "https://2130706433/feed.ics",
+        "https://0x7f000001/feed.ics",
+        "https://0.0.0.0/feed.ics",
+        "https://10.1.2.3/feed.ics",
+        "https://172.16.0.1/feed.ics",
+        "https://192.168.1.1/feed.ics",
+        "https://169.254.169.254/latest",
+        "https://[::1]/feed.ics",
+        "https://[::]/feed.ics",
+        "https://[fe80::1]/feed.ics",
+        "https://[fd00::1]/feed.ics",
+        "https://[::ffff:127.0.0.1]/feed.ics",
+        "https://[::ffff:10.0.0.1]/feed.ics",
+    ] {
+        assert!(follow_feed_redirect(&url(refused), 1).is_err(), "{refused}");
+    }
 }
 
 #[test]

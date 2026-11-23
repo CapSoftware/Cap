@@ -647,7 +647,71 @@ async fn refresh_account(
     })
 }
 
+/// The most redirects a calendar feed may take before it is given up.
+pub(crate) const MAX_FEED_REDIRECTS: usize = 5;
+
+/// Whether a feed may follow a redirect to `next`, `hops` being the number of
+/// redirects taken including this one. Every hop is held to https on a
+/// public host: a feed may move, but never to plain http or to this machine
+/// or its local network.
+pub(crate) fn follow_feed_redirect(next: &reqwest::Url, hops: usize) -> Result<(), &'static str> {
+    if hops > MAX_FEED_REDIRECTS {
+        return Err("the calendar link redirected too many times");
+    }
+    if next.scheme() != "https" {
+        return Err("the calendar link redirected away from https");
+    }
+    if !is_public_host(next) {
+        return Err("the calendar link redirected to a local address");
+    }
+    Ok(())
+}
+
+fn is_public_host(url: &reqwest::Url) -> bool {
+    let Some(host) = url.host_str().filter(|h| !h.is_empty()) else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => is_public_v4(ip),
+        Ok(std::net::IpAddr::V6(ip)) => match ip.to_ipv4_mapped() {
+            Some(v4) => is_public_v4(v4),
+            None => {
+                !(ip.is_loopback()
+                    || ip.is_unspecified()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local())
+            }
+        },
+        Err(_) => {
+            let name = host.trim_end_matches('.').to_ascii_lowercase();
+            name != "localhost" && !name.ends_with(".localhost")
+        }
+    }
+}
+
+fn is_public_v4(ip: std::net::Ipv4Addr) -> bool {
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.octets()[0] == 0)
+}
+
+fn feed_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        match follow_feed_redirect(attempt.url(), attempt.previous().len()) {
+            Ok(()) => attempt.follow(),
+            Err(reason) => attempt.error(reason),
+        }
+    })
+}
+
 fn request_error(error: reqwest::Error) -> SyncError {
+    if error.is_redirect() {
+        return SyncError::new(SyncErrorKind::NotCalendar, error.to_string());
+    }
     let kind = if error.is_timeout() || error.is_connect() || error.is_request() {
         SyncErrorKind::Offline
     } else {
@@ -664,6 +728,7 @@ async fn refresh_ics(
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(45))
+        .redirect(feed_redirect_policy())
         .build()
         .map_err(|e| SyncError::new(SyncErrorKind::Other, e.to_string()))?;
     let raw = raw_path(dir, &source.id);
