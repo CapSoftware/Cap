@@ -4774,11 +4774,11 @@ impl EditorWindow {
                     .px(px(8.))
                     .py(px(4.))
                     .bg(background)
-                    // The Soft card's shadow and lit top edge.
+                    // The Soft card's shadow and light rim.
                     .when(preset.id == "soft", |this| {
                         this.rounded(px(5.))
-                            .border_t_1()
-                            .border_color(gpui::hsla(0., 0., 1., 0.12))
+                            .border_1()
+                            .border_color(gpui::hsla(0., 0., 1., 0.14))
                             .shadow(vec![gpui::BoxShadow {
                                 color: gpui::hsla(0., 0., 0., 0.45),
                                 offset: gpui::point(px(0.), px(2.)),

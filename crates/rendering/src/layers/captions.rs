@@ -51,7 +51,7 @@ struct CaptionBackgroundUniforms {
     radius: f32,
     shadow: f32,
     edge: f32,
-    _padding: f32,
+    rim: f32,
     _padding2: [f32; 4],
 }
 
@@ -217,6 +217,9 @@ pub const SOFT_PRESET: &str = "soft";
 const SOFT_SHADOW: f32 = 0.5;
 /// The Soft card's lit top edge.
 const SOFT_EDGE: f32 = 0.16;
+/// The Soft card's light hairline all round, so a dark card still has an edge
+/// on a dark background.
+const SOFT_RIM: f32 = 0.3;
 const BOUNCE_OFFSET_PIXELS: f32 = 8.0;
 // Safety net for caption segments whose trailing word end was stretched across a
 // silence by transcription (e.g. a 16s "seconds."). Without this, such a segment
@@ -608,7 +611,7 @@ impl CaptionsLayer {
             radius: 0.0,
             shadow: 0.0,
             edge: 0.0,
-            _padding: 0.0,
+            rim: 0.0,
             _padding2: [0.0; 4],
         };
 
@@ -1154,7 +1157,11 @@ impl CaptionsLayer {
             } else {
                 0.0
             },
-            _padding: 0.0,
+            rim: if soft {
+                SOFT_RIM * background_alpha
+            } else {
+                0.0
+            },
             _padding2: [0.0; 4],
         };
 
@@ -1190,7 +1197,7 @@ impl CaptionsLayer {
                 radius: pill_radius,
                 shadow: 0.0,
                 edge: 0.0,
-                _padding: 0.0,
+                rim: 0.0,
                 _padding2: [0.0; 4],
             };
             queue.write_buffer(

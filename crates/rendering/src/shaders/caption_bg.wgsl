@@ -2,11 +2,12 @@ struct BackgroundUniforms {
     rect: vec4<f32>,
     color: vec4<f32>,
     radius: f32,
-    // How dark the soft shadow under the card is (0 draws none), and how
-    // bright the lit line along its top edge is.
+    // How dark the soft shadow under the card is (0 draws none), how bright
+    // the lit line along its top edge is, and how light the hairline all
+    // round it is.
     shadow: f32,
     edge: f32,
-    _padding: f32,
+    rim: f32,
     _padding2: vec4<f32>,
 };
 
@@ -69,6 +70,15 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         let line = (1.0 - smoothstep(0.0, 1.4, inside)) * alpha;
         let upper = 1.0 - smoothstep(0.0, rect_size.y * 0.5, position.y - rect_min.y);
         card = vec4<f32>(mix(card.rgb, vec3<f32>(1.0), line * upper * uniforms.edge), card.a);
+    }
+
+    if uniforms.rim > 0.0 {
+        // A light hairline just inside the whole rim, so a dark card keeps
+        // its edge on a dark background. It scales with the card, so it reads
+        // the same at every export size.
+        let width = max(rect_size.y * 0.02, 1.0);
+        let rim_line = (1.0 - smoothstep(0.0, width, -distance)) * alpha;
+        card = vec4<f32>(mix(card.rgb, vec3<f32>(1.0), rim_line * uniforms.rim), card.a);
     }
 
     if uniforms.shadow <= 0.0 {
