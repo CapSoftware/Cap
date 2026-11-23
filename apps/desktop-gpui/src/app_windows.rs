@@ -8640,6 +8640,22 @@ mod tests {
         });
     }
 
+    /// A start held for its shortcut already carries the picture, so the
+    /// picture cannot change under it.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn the_picture_cannot_change_while_a_clean_capture_holds_a_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            cx.set_global(test_app_windows(Vec::new()));
+            assert!(crate::camera_picture::can_change(cx));
+            cx.global_mut::<AppWindows>().clean_capture =
+                Some(pending_clean_capture(RecordingMode::Instant, false));
+            assert!(!crate::camera_picture::can_change(cx));
+        });
+    }
+
     /// A clean capture keeps the bubble closed until its lease is released.
     /// Asking to show the preview while the lease holds must keep it hidden,
     /// so the reopen after the lease is released still brings it back.

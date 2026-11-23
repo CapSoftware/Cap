@@ -1804,6 +1804,8 @@ pub struct CameraWindow {
     _feeds_subscription: Subscription,
     camera_changes_allowed: bool,
     _session_subscription: Option<Subscription>,
+    #[cfg(target_os = "linux")]
+    _clean_capture_subscription: Subscription,
     frame_dims: Option<(usize, usize)>,
     retained_aspect: Option<f32>,
     // Cadence instrumentation: proves the preview stays live (delivered) and
@@ -1915,6 +1917,15 @@ impl CameraWindow {
         )
     }
 
+    fn refresh_camera_changes_allowed(&mut self, cx: &mut Context<Self>) {
+        let allowed = crate::camera_picture::can_change(cx);
+        if self.camera_changes_allowed != allowed {
+            self.camera_changes_allowed = allowed;
+            self.hints.dismiss();
+            cx.notify();
+        }
+    }
+
     pub(crate) fn retain_preview(&self, cx: &mut Context<Self>) {
         let feeds = Feeds::global(cx);
         let Some(camera) = feeds.read(cx).camera.clone() else {
@@ -2015,13 +2026,13 @@ impl CameraWindow {
         let session_subscription =
             crate::session::RecordingSession::try_global(cx).map(|session| {
                 cx.observe(&session, |this: &mut Self, _, cx| {
-                    let allowed = crate::camera_picture::can_change(cx);
-                    if this.camera_changes_allowed != allowed {
-                        this.camera_changes_allowed = allowed;
-                        this.hints.dismiss();
-                        cx.notify();
-                    }
+                    this.refresh_camera_changes_allowed(cx)
                 })
+            });
+        #[cfg(target_os = "linux")]
+        let clean_capture_subscription =
+            cx.observe_global::<crate::app_windows::AppWindows>(|this: &mut Self, cx| {
+                this.refresh_camera_changes_allowed(cx)
             });
         let feeds_subscription = cx.observe_in(&feeds, window, |this, feeds, window, cx| {
             let aspect = feeds
@@ -2072,6 +2083,8 @@ impl CameraWindow {
             _feeds_subscription: feeds_subscription,
             camera_changes_allowed,
             _session_subscription: session_subscription,
+            #[cfg(target_os = "linux")]
+            _clean_capture_subscription: clean_capture_subscription,
             frame_dims: None,
             retained_aspect,
             frames_in_window: 0,

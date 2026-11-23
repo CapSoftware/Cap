@@ -168,9 +168,12 @@ pub(crate) fn import_into_project(project: &Path, source: &Path) -> Result<Strin
     Ok(relative)
 }
 
+/// Not while recording, nor while a Linux clean capture holds a start
+/// waiting for its shortcut: that start already carries the picture.
 pub(crate) fn can_change(cx: &gpui::App) -> bool {
     crate::session::RecordingSession::try_global(cx)
         .is_none_or(|session| session.read(cx).phase == crate::session::Phase::Idle)
+        && !crate::app_windows::clean_capture_owned(cx)
 }
 
 pub(crate) fn select(path: PathBuf, cx: &mut gpui::App) {
