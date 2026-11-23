@@ -200,7 +200,6 @@ jobs:
           New-Item -ItemType Directory -Force $shaders | Out-Null
           Copy-Item "$app\gpui-windows-shaders\*.hlsl" $shaders
 
-      # FFmpeg and ONNX Runtime DLLs, next to the app.
       - name: Run setup
         shell: bash
         run: node scripts/setup.js
