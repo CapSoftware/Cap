@@ -5,6 +5,11 @@ import { CODE, ENDS_AT } from "@/components/pages/blackfriday/content";
 
 export const CAP_FRIDAY_CODE = CODE;
 export const CAP_FRIDAY_COUPON_ID = "CAP_FRIDAY_2026_EXISTING";
+export const CAP_FRIDAY_SWITCH_COUPON_ID = "CAP_FRIDAY_2026_SWITCH";
+const CAP_FRIDAY_COUPONS = new Set([
+	CAP_FRIDAY_COUPON_ID,
+	CAP_FRIDAY_SWITCH_COUPON_ID,
+]);
 export const CAP_FRIDAY_INVOICE_KEY = "capFriday2026Invoice";
 export const CAP_FRIDAY_METADATA = "capFriday2026";
 const CREDIT_TXN_KEY = "capFridayCreditTxn";
@@ -129,12 +134,12 @@ function isPlainSubscription(subscription: Stripe.Subscription) {
 }
 
 const usesCapFridayCoupon = (invoice: Stripe.Invoice) =>
-	invoice.discount?.coupon?.id === CAP_FRIDAY_COUPON_ID ||
+	CAP_FRIDAY_COUPONS.has(invoice.discount?.coupon?.id ?? "") ||
 	(invoice.discounts ?? []).some(
 		(discount) =>
 			typeof discount !== "string" &&
 			!discount.deleted &&
-			discount.coupon?.id === CAP_FRIDAY_COUPON_ID,
+			CAP_FRIDAY_COUPONS.has(discount.coupon?.id ?? ""),
 	);
 
 async function previousRedemption(
@@ -217,7 +222,7 @@ function monthlyPreviewParams(
 		],
 		subscription_proration_behavior: "always_invoice" as const,
 		subscription_proration_date: prorationDate,
-		coupon: CAP_FRIDAY_COUPON_ID,
+		coupon: CAP_FRIDAY_SWITCH_COUPON_ID,
 	};
 }
 
@@ -266,20 +271,29 @@ function addYear(seconds: number) {
 	return Math.floor(date.getTime() / 1000);
 }
 
+// A switch keeps its discount for the whole first year: with a one-off
+// coupon, a seat added mid-year credits the discounted price but re-bills
+// every seat at full price for the rest of the year.
+const COUPONS = [
+	{ id: CAP_FRIDAY_COUPON_ID, duration: "once" as const },
+	{
+		id: CAP_FRIDAY_SWITCH_COUPON_ID,
+		duration: "repeating" as const,
+		duration_in_months: 12,
+	},
+];
+
 async function ensureCoupon() {
-	try {
-		await stripe().coupons.retrieve(CAP_FRIDAY_COUPON_ID);
-	} catch (error) {
-		if ((error as { code?: string }).code !== "resource_missing") throw error;
-		await stripe().coupons.create(
-			{
-				id: CAP_FRIDAY_COUPON_ID,
-				name: "Cap Friday, 50% off",
-				percent_off: 50,
-				duration: "once",
-			},
-			{ idempotencyKey: `coupon-${CAP_FRIDAY_COUPON_ID}` },
-		);
+	for (const coupon of COUPONS) {
+		try {
+			await stripe().coupons.retrieve(coupon.id);
+		} catch (error) {
+			if ((error as { code?: string }).code !== "resource_missing") throw error;
+			await stripe().coupons.create(
+				{ ...coupon, name: "Cap Friday, 50% off", percent_off: 50 },
+				{ idempotencyKey: `coupon-${coupon.id}` },
+			);
+		}
 	}
 }
 
@@ -493,7 +507,7 @@ async function switchMonthly(
 		proration_behavior: "always_invoice",
 		proration_date: quote.prorationDate,
 		payment_behavior: "pending_if_incomplete",
-		coupon: CAP_FRIDAY_COUPON_ID,
+		coupon: CAP_FRIDAY_SWITCH_COUPON_ID,
 		expand: ["latest_invoice"],
 	});
 	const invoice = updated.latest_invoice as Stripe.Invoice | null;
@@ -554,6 +568,24 @@ export async function grantCapFridayCredit(invoice: Stripe.Invoice) {
 	});
 }
 
+// Stripe rejects a request while another one with the same idempotency key is
+// still in flight; once that finishes, a retry returns its stored result.
+async function withIdempotencyRetry<T>(request: () => Promise<T>): Promise<T> {
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await request();
+		} catch (error) {
+			if (
+				(error as { type?: string }).type !== "StripeIdempotencyError" ||
+				attempt >= 4
+			) {
+				throw error;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+		}
+	}
+}
+
 export type CapFridayReversal = "none" | "reversed" | "awaiting_grant";
 
 export async function reverseCapFridayCredit(
@@ -609,19 +641,21 @@ export async function reverseCapFridayCredit(
 	for (const slice of slices) {
 		const key = `capFridayRev_${slice.id}`;
 		if (slice.amount <= 0 || invoice.metadata?.[key]) continue;
-		const transaction = await stripe().customers.createBalanceTransaction(
-			customerId,
-			{
-				amount: slice.amount,
-				currency: invoice.currency,
-				description: `Cap Friday: prepaid renewal credit reversed after a ${slice.id === source.id && source.object === "dispute" ? "dispute" : "refund"} (invoice ${invoice.number ?? invoice.id})`,
-				metadata: {
-					[CAP_FRIDAY_METADATA]: "reversal",
-					invoiceId: invoice.id,
-					sourceId: slice.id,
+		const transaction = await withIdempotencyRetry(() =>
+			stripe().customers.createBalanceTransaction(
+				customerId,
+				{
+					amount: slice.amount,
+					currency: invoice.currency,
+					description: `Cap Friday: prepaid renewal credit reversed after a ${slice.id === source.id && source.object === "dispute" ? "dispute" : "refund"} (invoice ${invoice.number ?? invoice.id})`,
+					metadata: {
+						[CAP_FRIDAY_METADATA]: "reversal",
+						invoiceId: invoice.id,
+						sourceId: slice.id,
+					},
 				},
-			},
-			{ idempotencyKey: `capfriday-reverse-${slice.id}` },
+				{ idempotencyKey: `capfriday-reverse-${slice.id}` },
+			),
 		);
 		await stripe().invoices.update(invoice.id, {
 			metadata: { [key]: transaction.id },
