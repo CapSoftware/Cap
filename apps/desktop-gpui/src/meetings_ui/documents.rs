@@ -54,6 +54,15 @@ pub async fn after_queued_saves<T: Send + 'static>(
     writer::run(job).await
 }
 
+/// Queues `job` on the documents writer, after every save already queued,
+/// without waiting for it.
+pub fn queue_after_saves(job: impl FnOnce() + Send + 'static) {
+    writer::submit(job);
+}
+
+#[cfg(test)]
+pub(crate) use writer::{hold as hold_writer, release as release_writer};
+
 actions!(
     cap_documents,
     [

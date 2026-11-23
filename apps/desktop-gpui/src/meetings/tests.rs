@@ -679,6 +679,24 @@ fn recovery_leaves_a_meeting_opened_in_this_run_alone() {
     assert!(!meeting.extra.contains_key(persist::REPAIR_KEY));
 }
 
+#[test]
+fn edits_to_a_finished_meeting_land_in_the_order_they_were_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("transcript.jsonl");
+    let said = |text| LogLine::Upsert {
+        utterance: utterance("m1", Source::Mic, 1_000, text),
+    };
+    append_jsonl(&path, &[said("first")]).unwrap();
+
+    crate::meetings_ui::documents::hold_writer();
+    persist::append_edits(path.clone(), vec![said("edited once")]);
+    persist::append_edits(path.clone(), vec![said("edited twice")]);
+    crate::meetings_ui::documents::release_writer();
+
+    let (transcript, _) = Transcript::load_jsonl(&path).unwrap();
+    assert_eq!(transcript.utterances()[0].text, "edited twice");
+}
+
 fn tone(seconds: f64) -> Vec<f32> {
     (0..(seconds * f64::from(RATE)) as usize)
         .map(|n| (0.3 * (n as f64 * 440.0 * std::f64::consts::TAU / f64::from(RATE)).sin()) as f32)

@@ -2444,7 +2444,7 @@ impl Meetings {
                             && let Err(EngineCommand::Append(lines)) =
                                 engine.send(EngineCommand::Append(line))
                         {
-                            self.append_direct(&doc_id, lines, cx);
+                            self.append_direct(&doc_id, lines);
                         }
                     }
                 }
@@ -2766,17 +2766,11 @@ impl Meetings {
         }
     }
 
-    fn append_direct(&mut self, doc_id: &str, lines: Vec<LogLine>, cx: &mut Context<Self>) {
+    fn append_direct(&mut self, doc_id: &str, lines: Vec<LogLine>) {
         let Some(path) = self.library().and_then(|l| l.transcript_path(doc_id).ok()) else {
             return;
         };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = append_jsonl(&path, &lines) {
-                    tracing::warn!(%error, "could not edit the meeting transcript");
-                }
-            })
-            .detach();
+        persist::append_edits(path, lines);
     }
 
     pub fn transcript(&mut self, doc_id: &str) -> Option<Cow<'_, Transcript>> {
@@ -2810,10 +2804,10 @@ impl Meetings {
                 if let Err(EngineCommand::Append(lines)) =
                     engine.send(EngineCommand::Append(vec![line]))
                 {
-                    self.append_direct(doc_id, lines, cx);
+                    self.append_direct(doc_id, lines);
                 }
             }
-            None => self.append_direct(doc_id, vec![line], cx),
+            None => self.append_direct(doc_id, vec![line]),
         }
         cx.emit(MeetingEvent::TranscriptChanged {
             doc_id: doc_id.to_string(),
@@ -3327,7 +3321,7 @@ impl Meetings {
             transcript.apply(line.clone());
         }
         if let Err(EngineCommand::Append(lines)) = engine.send(EngineCommand::Append(lines)) {
-            self.append_direct(doc_id, lines, cx);
+            self.append_direct(doc_id, lines);
         }
         self.dirty_transcripts.insert(doc_id.to_string());
         self.schedule_notify(cx);

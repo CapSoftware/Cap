@@ -598,6 +598,16 @@ pub fn after_repair(meta: &mut DocMeta, open: bool) -> (bool, bool) {
     (pending, open && give_up)
 }
 
+/// Appends edits to a meeting no engine is writing. They go through the
+/// documents writer, one thread, so they land in the order they were made.
+pub fn append_edits(path: PathBuf, lines: Vec<LogLine>) {
+    crate::meetings_ui::documents::queue_after_saves(move || {
+        if let Err(error) = append_jsonl(&path, &lines) {
+            tracing::warn!(%error, "could not edit the meeting transcript");
+        }
+    });
+}
+
 /// Meetings this run of the app opened for recording. They are live, not
 /// left over from a crash, so startup recovery leaves them alone: it checks
 /// and saves under the same lock that opening a meeting takes first.
