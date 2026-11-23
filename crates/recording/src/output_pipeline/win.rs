@@ -265,6 +265,7 @@ impl Muxer for WindowsMuxer {
                         output_size,
                         config.frame_rate,
                         config.bitrate_multiplier,
+                        cap_enc_mediafoundation::InputColorSpace::screen_rgb(),
                     ) {
                         Ok(encoder) => {
                             if let Err(e) = encoder.validate() {
@@ -625,6 +626,7 @@ pub struct NativeCameraFrame {
     pub width: u32,
     pub height: u32,
     pub is_bottom_up: bool,
+    pub color: cap_camera_windows::CapturedColor,
     pub timestamp: Timestamp,
 }
 
@@ -666,6 +668,7 @@ pub struct WindowsCameraMuxerConfig {
     pub frag_duration_us: i64,
     pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
     pub expected_pixel_format: Option<ffmpeg::format::Pixel>,
+    pub source_color: cap_camera_windows::CapturedColor,
 }
 
 impl Default for WindowsCameraMuxerConfig {
@@ -676,6 +679,7 @@ impl Default for WindowsCameraMuxerConfig {
             frag_duration_us: 2_000_000,
             encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
             expected_pixel_format: None,
+            source_color: cap_camera_windows::CapturedColor::default(),
         }
     }
 }
@@ -724,6 +728,10 @@ impl Muxer for WindowsCameraMuxer {
 
         let frame_rate = video_config.fps();
         let bitrate_multiplier = 0.2;
+        let source_color = cap_enc_mediafoundation::InputColorSpace::from_media_type(
+            config.source_color.yuv_matrix,
+            config.source_color.nominal_range,
+        );
         let fragmented = config.fragmented;
         let frag_duration_us = config.frag_duration_us;
 
@@ -820,6 +828,7 @@ impl Muxer for WindowsCameraMuxer {
                         output_size,
                         frame_rate,
                         bitrate_multiplier,
+                        source_color,
                     ) {
                         Ok(encoder) => {
                             if let Err(e) = encoder.validate() {

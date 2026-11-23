@@ -344,6 +344,7 @@ impl VideoDeviceInfo {
                                 height: format.height() as usize,
                                 is_bottom_up: format.is_bottom_up,
                                 pixel_format: format.pixel_format,
+                                color: format.captured_color(),
                                 timestamp: data.timestamp,
                                 perf_counter: data.perf_counter,
                             })
@@ -385,6 +386,7 @@ impl VideoDeviceInfo {
                             width: video_info.bmiHeader.biWidth as usize,
                             height,
                             is_bottom_up,
+                            color: CapturedColor::default(),
                             timestamp: data.timestamp,
                             perf_counter: data.perf_counter,
                         });
@@ -457,13 +459,17 @@ pub struct Frame {
     pub width: usize,
     pub height: usize,
     pub is_bottom_up: bool,
-    // pub reference_time: Instant,
     pub timestamp: Duration,
     pub perf_counter: i64,
+    color: CapturedColor,
     inner: FrameInner,
 }
 
 impl Frame {
+    pub fn captured_color(&self) -> CapturedColor {
+        self.color
+    }
+
     pub fn bytes<'a>(&'a self) -> windows_core::Result<FrameBytes<'a>> {
         match &self.inner {
             FrameInner::DirectShow(sample) => {
@@ -669,6 +675,12 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
     Ok(devices)
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CapturedColor {
+    pub yuv_matrix: Option<u32>,
+    pub nominal_range: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct VideoFormat {
     width: u32,
@@ -676,6 +688,7 @@ pub struct VideoFormat {
     frame_rate: f32,
     pixel_format: PixelFormat,
     is_bottom_up: bool,
+    color: CapturedColor,
     pub inner: VideoFormatInner,
 }
 
@@ -698,6 +711,10 @@ impl VideoFormat {
 
     pub fn is_bottom_up(&self) -> bool {
         self.is_bottom_up
+    }
+
+    pub fn captured_color(&self) -> CapturedColor {
+        self.color
     }
 }
 
@@ -753,6 +770,10 @@ impl VideoFormat {
         let is_bottom_up = unsafe { inner.GetUINT32(&MF_MT_DEFAULT_STRIDE) }
             .map(|stride| (stride as i32) < 0)
             .unwrap_or_else(|_| pixel_format.is_traditionally_bottom_up());
+        let color = CapturedColor {
+            yuv_matrix: unsafe { inner.GetUINT32(&MF_MT_YUV_MATRIX) }.ok(),
+            nominal_range: unsafe { inner.GetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE) }.ok(),
+        };
 
         Ok(Self {
             width,
@@ -760,6 +781,7 @@ impl VideoFormat {
             frame_rate,
             pixel_format,
             is_bottom_up,
+            color,
             inner: VideoFormatInner::MediaFoundation(inner),
         })
     }
@@ -784,6 +806,7 @@ impl VideoFormat {
                 / 100.0,
             pixel_format,
             is_bottom_up,
+            color: CapturedColor::default(),
             inner: VideoFormatInner::DirectShow(inner),
         })
     }

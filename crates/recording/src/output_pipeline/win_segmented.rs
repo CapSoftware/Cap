@@ -452,6 +452,7 @@ impl WindowsSegmentedMuxer {
                         output_size,
                         frame_rate,
                         bitrate_multiplier,
+                        cap_enc_mediafoundation::InputColorSpace::screen_rgb(),
                     ) {
                         Ok(encoder) => {
                             if let Err(e) = encoder.validate() {

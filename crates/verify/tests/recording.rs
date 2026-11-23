@@ -1191,6 +1191,7 @@ fn camera_frame(slot: u32, capture: u64) -> Option<NativeCameraFrame> {
         width: w as u32,
         height: h as u32,
         is_bottom_up: false,
+        color: cap_camera_windows::CapturedColor::default(),
         timestamp: host_timestamp(capture),
     })
 }

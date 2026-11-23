@@ -10,23 +10,74 @@ const NOMINAL_SHIFT: u32 = 4;
 const NOMINAL_STUDIO: u32 = 1;
 const NOMINAL_FULL: u32 = 2;
 const SD_SHORT_SIDE: u32 = 576;
+const MF_VIDEO_TRANSFER_MATRIX_BT709: u32 = 1;
+const MF_VIDEO_TRANSFER_MATRIX_BT601: u32 = 2;
+const MF_NOMINAL_RANGE_16_235: u32 = 1;
+const MF_NOMINAL_RANGE_0_255: u32 = 2;
+const MF_NOMINAL_RANGE_48_208: u32 = 3;
+const MF_NOMINAL_RANGE_64_127: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum YuvMatrix {
+pub enum YuvMatrix {
     Bt601,
     Bt709,
 }
 
-/// Camera frames carry a pixel format and a size, not a matrix. A frame whose
-/// shorter side is at most 576 is SD, and SD YUV defaults to BT.601. The
-/// processor then converts that input to the BT.709 output. RGB is already
-/// full-range and converts with BT.709 at every size. HD YUV stays BT.709.
-pub(crate) fn source_matrix(rgb: bool, width: u32, height: u32) -> YuvMatrix {
-    if rgb || width.min(height) > SD_SHORT_SIDE {
-        YuvMatrix::Bt709
-    } else {
-        YuvMatrix::Bt601
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputColorSpace {
+    pub matrix: Option<YuvMatrix>,
+    pub full_range: Option<bool>,
+}
+
+impl InputColorSpace {
+    pub const fn screen_rgb() -> Self {
+        Self {
+            matrix: Some(YuvMatrix::Bt709),
+            full_range: Some(true),
+        }
     }
+
+    pub fn from_media_type(matrix: Option<u32>, nominal_range: Option<u32>) -> Self {
+        Self {
+            matrix: matrix.and_then(yuv_matrix_from_mf),
+            full_range: nominal_range.and_then(full_range_from_mf),
+        }
+    }
+}
+
+fn yuv_matrix_from_mf(value: u32) -> Option<YuvMatrix> {
+    match value {
+        MF_VIDEO_TRANSFER_MATRIX_BT709 => Some(YuvMatrix::Bt709),
+        MF_VIDEO_TRANSFER_MATRIX_BT601 => Some(YuvMatrix::Bt601),
+        _ => None,
+    }
+}
+
+fn full_range_from_mf(value: u32) -> Option<bool> {
+    match value {
+        MF_NOMINAL_RANGE_0_255 => Some(true),
+        MF_NOMINAL_RANGE_16_235 | MF_NOMINAL_RANGE_48_208 | MF_NOMINAL_RANGE_64_127 => Some(false),
+        _ => None,
+    }
+}
+
+pub(crate) fn resolve_input_color(
+    rgb: bool,
+    width: u32,
+    height: u32,
+    source: InputColorSpace,
+) -> (YuvMatrix, bool) {
+    if rgb {
+        return (YuvMatrix::Bt709, source.full_range.unwrap_or(true));
+    }
+    let matrix = source
+        .matrix
+        .unwrap_or(if width.min(height) <= SD_SHORT_SIDE {
+            YuvMatrix::Bt601
+        } else {
+            YuvMatrix::Bt709
+        });
+    (matrix, source.full_range.unwrap_or(false))
 }
 
 pub(crate) fn processor_color_words(
@@ -48,8 +99,14 @@ pub(crate) fn processor_color_words(
     }
 }
 
-pub(crate) fn bt709_processor_color_words(input_full_range: bool) -> ProcessorColorWords {
-    processor_color_words(YuvMatrix::Bt709, input_full_range)
+pub(crate) fn resolved_processor_words(
+    rgb: bool,
+    width: u32,
+    height: u32,
+    source: InputColorSpace,
+) -> ProcessorColorWords {
+    let (matrix, full_range) = resolve_input_color(rgb, width, height, source);
+    processor_color_words(matrix, full_range)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,9 +400,9 @@ fn fixed_16(row: [i32; 3], r: i32, g: i32, b: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColorTag, ProcessorColorWords, TagProbe, YuvMatrix, accepted_after_two_passes,
-        bt709_limited_yuv, bt709_processor_color_words, color_tag_report, format_tag_list,
-        probe_color_tags, processor_color_words, source_matrix,
+        ColorTag, InputColorSpace, ProcessorColorWords, TagProbe, YuvMatrix,
+        accepted_after_two_passes, bt709_limited_yuv, color_tag_report, format_tag_list,
+        probe_color_tags, resolved_processor_words,
     };
 
     fn fields(word: u32) -> (u32, u32, u32, u32) {
@@ -357,52 +414,89 @@ mod tests {
         )
     }
 
-    #[test]
-    fn processor_words_are_bt709_limited_out_and_match_the_input_range() {
-        let ProcessorColorWords { output, stream } = bt709_processor_color_words(true);
-        assert_eq!(output, 21, "output {output:#x}");
-        assert_eq!(stream, 37, "full-range stream {stream:#x}");
-        assert_eq!(fields(output), (1, 0, 1, 1), "output {output:#x}");
-        assert_eq!(
-            fields(stream),
-            (1, 0, 1, 2),
-            "full-range stream {stream:#x}"
-        );
-        assert_eq!(output & !0b11_0111, 0, "output {output:#x}");
-        assert_eq!(stream & !0b11_0111, 0, "full-range stream {stream:#x}");
+    fn words(rgb: bool, width: u32, height: u32, source: InputColorSpace) -> (u32, u32) {
+        let ProcessorColorWords { output, stream } =
+            resolved_processor_words(rgb, width, height, source);
+        (output, stream)
+    }
 
-        let ProcessorColorWords {
-            output: limited_out,
-            stream: limited_stream,
-        } = bt709_processor_color_words(false);
-        assert_eq!(limited_out, 21, "output {limited_out:#x}");
-        assert_eq!(limited_stream, 21, "limited stream {limited_stream:#x}");
-        assert_eq!(fields(limited_out), (1, 0, 1, 1), "output {limited_out:#x}");
+    #[test]
+    fn rgb_screen_capture_stays_bt709_limited_from_full_range() {
+        let (output, stream) = words(true, 1280, 720, InputColorSpace::screen_rgb());
+        assert_eq!(output, 21);
+        assert_eq!(stream, 37);
+        assert_eq!(fields(output), (1, 0, 1, 1));
+        assert_eq!(fields(stream), (1, 0, 1, 2));
         assert_eq!(
-            fields(limited_stream),
-            (1, 0, 1, 1),
-            "limited stream {limited_stream:#x}"
+            words(true, 640, 480, InputColorSpace::screen_rgb()),
+            (21, 37)
         );
     }
 
     #[test]
-    fn sd_yuv_converts_from_bt601_while_rgb_and_hd_stay_bt709() {
-        assert_eq!(source_matrix(true, 1280, 720), YuvMatrix::Bt709);
-        assert_eq!(source_matrix(true, 640, 480), YuvMatrix::Bt709);
-        assert_eq!(source_matrix(false, 1280, 720), YuvMatrix::Bt709);
-        assert_eq!(source_matrix(false, 1920, 1080), YuvMatrix::Bt709);
-        assert_eq!(source_matrix(false, 1080, 1920), YuvMatrix::Bt709);
-        assert_eq!(source_matrix(false, 640, 480), YuvMatrix::Bt601);
-        assert_eq!(source_matrix(false, 720, 576), YuvMatrix::Bt601);
-        assert_eq!(source_matrix(false, 480, 640), YuvMatrix::Bt601);
-        assert_eq!(source_matrix(false, 854, 480), YuvMatrix::Bt601);
+    fn explicit_bt601_hd_yuv_converts_to_bt709() {
+        let source = InputColorSpace::from_media_type(Some(2), Some(1));
+        assert_eq!(source.matrix, Some(YuvMatrix::Bt601));
+        assert_eq!(source.full_range, Some(false));
+        assert_eq!(words(false, 1280, 720, source), (21, 17));
+        assert_eq!(words(false, 1920, 1080, source), (21, 17));
+    }
 
-        let ProcessorColorWords { output, stream } = processor_color_words(YuvMatrix::Bt601, false);
-        assert_eq!(output, 21, "converted output stays BT.709 limited");
-        assert_eq!(stream, 17, "SD YUV input stays BT.601 studio");
+    #[test]
+    fn explicit_bt709_yuv_stays_bt709() {
+        let source = InputColorSpace::from_media_type(Some(1), Some(1));
+        assert_eq!(source.matrix, Some(YuvMatrix::Bt709));
+        assert_eq!(words(false, 1280, 720, source), (21, 21));
+        assert_eq!(words(false, 1920, 1080, source), (21, 21));
+    }
+
+    #[test]
+    fn explicit_nominal_range_selects_full_or_studio() {
+        let full = InputColorSpace::from_media_type(Some(1), Some(2));
+        let studio = InputColorSpace::from_media_type(Some(1), Some(1));
+        assert_eq!(full.full_range, Some(true));
+        assert_eq!(studio.full_range, Some(false));
+        assert_eq!(words(false, 1920, 1080, full), (21, 37));
+        assert_eq!(words(false, 1920, 1080, studio), (21, 21));
+        let full_601 = InputColorSpace::from_media_type(Some(2), Some(2));
+        assert_eq!(words(false, 1280, 720, full_601), (21, 33));
+    }
+
+    #[test]
+    fn unset_matrix_uses_sd_bt601_and_hd_bt709() {
+        for reported in [None, Some(0)] {
+            let source = InputColorSpace::from_media_type(reported, reported);
+            assert_eq!(source, InputColorSpace::default());
+            assert_eq!(words(false, 640, 480, source), (21, 17));
+            assert_eq!(words(false, 720, 576, source), (21, 17));
+            assert_eq!(words(false, 854, 480, source), (21, 17));
+            assert_eq!(words(false, 1280, 720, source), (21, 21));
+            assert_eq!(words(false, 1920, 1080, source), (21, 21));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn media_foundation_enum_values_match_the_attribute_decoder() {
+        use windows::Win32::Media::MediaFoundation::{
+            MFNominalRange_0_255, MFNominalRange_16_235, MFVideoTransferMatrix_BT601,
+            MFVideoTransferMatrix_BT709,
+        };
         assert_eq!(
-            processor_color_words(source_matrix(true, 1280, 720), true),
-            bt709_processor_color_words(true)
+            InputColorSpace::from_media_type(
+                Some(MFVideoTransferMatrix_BT601.0 as u32),
+                Some(MFNominalRange_16_235.0 as u32),
+            )
+            .matrix,
+            Some(YuvMatrix::Bt601)
+        );
+        assert_eq!(
+            InputColorSpace::from_media_type(
+                Some(MFVideoTransferMatrix_BT709.0 as u32),
+                Some(MFNominalRange_0_255.0 as u32),
+            )
+            .full_range,
+            Some(true)
         );
     }
 

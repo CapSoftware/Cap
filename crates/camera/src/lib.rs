@@ -78,6 +78,8 @@ pub struct Format {
     /// expose it uniformly across platforms (DirectShow formats lose it once
     /// the owning `VideoFormat` is dropped).
     pixel_format: Option<String>,
+    #[cfg(windows)]
+    color: cap_camera_windows::CapturedColor,
 }
 
 impl Format {
@@ -90,6 +92,11 @@ impl Format {
     /// Windows. `None` where the platform does not report one.
     pub fn pixel_format_name(&self) -> Option<String> {
         self.pixel_format.clone()
+    }
+
+    #[cfg(windows)]
+    pub fn captured_color(&self) -> cap_camera_windows::CapturedColor {
+        self.color
     }
 }
 

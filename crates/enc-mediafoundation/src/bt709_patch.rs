@@ -135,6 +135,7 @@ fn open_encoder(device: &ID3D11Device, hardware: bool) -> H264Encoder {
             size,
             FPS,
             BITRATE_MULTIPLIER,
+            crate::color::InputColorSpace::screen_rgb(),
         )
     } else {
         H264Encoder::new_software(
@@ -143,6 +144,7 @@ fn open_encoder(device: &ID3D11Device, hardware: bool) -> H264Encoder {
             size,
             FPS,
             BITRATE_MULTIPLIER,
+            crate::color::InputColorSpace::screen_rgb(),
         )
     };
     match result {

@@ -249,6 +249,7 @@ impl H264Encoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
     ) -> Result<Self, NewVideoEncoderError> {
@@ -288,6 +289,7 @@ impl H264Encoder {
             DXGI_FORMAT_NV12,
             output_resolution,
             frame_rate,
+            source,
         )
         .map_err(NewVideoEncoderError::VideoProcessor)?;
 
@@ -505,6 +507,7 @@ impl H264Encoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewVideoEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
@@ -513,6 +516,7 @@ impl H264Encoder {
             output_resolution,
             frame_rate,
             bitrate_multipler,
+            source,
             MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
             true,
         )
@@ -525,6 +529,7 @@ impl H264Encoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewVideoEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
@@ -533,6 +538,7 @@ impl H264Encoder {
             output_resolution,
             frame_rate,
             bitrate_multipler,
+            source,
             MFT_ENUM_FLAG_TRANSCODE_ONLY,
             false,
         )
@@ -544,6 +550,7 @@ impl H264Encoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewVideoEncoderError> {
         Self::new_with_scaled_output(
             d3d_device,
@@ -552,6 +559,7 @@ impl H264Encoder {
             resolution,
             frame_rate,
             bitrate_multipler,
+            source,
         )
     }
 
@@ -561,6 +569,7 @@ impl H264Encoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewVideoEncoderError> {
         Self::new_with_scaled_output_software(
             d3d_device,
@@ -569,6 +578,7 @@ impl H264Encoder {
             resolution,
             frame_rate,
             bitrate_multipler,
+            source,
         )
     }
 

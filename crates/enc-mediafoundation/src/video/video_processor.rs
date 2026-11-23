@@ -63,6 +63,7 @@ impl VideoProcessor {
         output_format: DXGI_FORMAT,
         output_size: SizeInt32,
         frame_rate: u32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewVideoProcessorError> {
         let d3d_context = unsafe { d3d_device.GetImmediateContext() }
             .map_err(NewVideoProcessorError::GetDevice)?;
@@ -97,20 +98,12 @@ impl VideoProcessor {
         let video_processor = unsafe { video_device.CreateVideoProcessor(&video_enum, 0) }
             .map_err(NewVideoProcessorError::CreateVideoProcessor)?;
 
-        let full_range_rgb = input_is_full_range_rgb(input_format);
-        let source = crate::color::source_matrix(
-            full_range_rgb,
+        let words = crate::color::resolved_processor_words(
+            input_is_full_range_rgb(input_format),
             input_size.Width as u32,
             input_size.Height as u32,
+            source,
         );
-        let words = match source {
-            crate::color::YuvMatrix::Bt709 => {
-                crate::color::bt709_processor_color_words(full_range_rgb)
-            }
-            crate::color::YuvMatrix::Bt601 => {
-                crate::color::processor_color_words(source, full_range_rgb)
-            }
-        };
         let output_color = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
             _bitfield: words.output,
         };

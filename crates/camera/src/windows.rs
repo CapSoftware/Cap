@@ -30,8 +30,8 @@ impl CameraInfo {
         let mut ret = vec![];
 
         for format in device.into_formats() {
-            // Read before `inner` is moved out of `format`.
             let pixel_format = format!("{:?}", format.pixel_format());
+            let color = format.captured_color();
             ret.push(Format {
                 info: FormatInfo {
                     width: format.width(),
@@ -40,6 +40,7 @@ impl CameraInfo {
                 },
                 native: format.inner,
                 pixel_format: Some(pixel_format),
+                color,
             })
         }
 

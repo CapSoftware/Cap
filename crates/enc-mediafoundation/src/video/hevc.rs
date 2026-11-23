@@ -84,6 +84,7 @@ impl HevcEncoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
         flags: MFT_ENUM_FLAG,
         enable_hardware_transforms: bool,
     ) -> Result<Self, NewHevcEncoderError> {
@@ -110,6 +111,7 @@ impl HevcEncoder {
             DXGI_FORMAT_NV12,
             output_resolution,
             frame_rate,
+            source,
         )
         .map_err(NewHevcEncoderError::VideoProcessor)?;
 
@@ -327,6 +329,7 @@ impl HevcEncoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
@@ -335,6 +338,7 @@ impl HevcEncoder {
             output_resolution,
             frame_rate,
             bitrate_multipler,
+            source,
             MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
             true,
         )
@@ -347,6 +351,7 @@ impl HevcEncoder {
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_with_flags(
             d3d_device,
@@ -355,6 +360,7 @@ impl HevcEncoder {
             output_resolution,
             frame_rate,
             bitrate_multipler,
+            source,
             MFT_ENUM_FLAG_TRANSCODE_ONLY,
             false,
         )
@@ -366,6 +372,7 @@ impl HevcEncoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output(
             d3d_device,
@@ -374,6 +381,7 @@ impl HevcEncoder {
             resolution,
             frame_rate,
             bitrate_multipler,
+            source,
         )
     }
 
@@ -383,6 +391,7 @@ impl HevcEncoder {
         resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        source: crate::color::InputColorSpace,
     ) -> Result<Self, NewHevcEncoderError> {
         Self::new_with_scaled_output_software(
             d3d_device,
@@ -391,6 +400,7 @@ impl HevcEncoder {
             resolution,
             frame_rate,
             bitrate_multipler,
+            source,
         )
     }
 

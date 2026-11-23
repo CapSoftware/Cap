@@ -11,6 +11,8 @@ pub mod mft;
 pub mod video;
 
 #[cfg(windows)]
+pub use color::InputColorSpace;
+#[cfg(windows)]
 pub use video::H264Encoder;
 
 #[cfg(all(windows, test))]

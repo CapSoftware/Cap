@@ -1424,6 +1424,7 @@ async fn build_instant_recording_actor(
                         output_pipeline::WindowsCameraMuxerConfig {
                             encoder_preferences:
                                 crate::capture_pipeline::EncoderPreferences::default(),
+                            source_color: camera_feed.native_ingress().source_color(),
                             ..Default::default()
                         },
                     )
