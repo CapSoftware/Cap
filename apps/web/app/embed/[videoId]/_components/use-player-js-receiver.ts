@@ -1,6 +1,7 @@
 "use client";
 
 import { type RefObject, useEffect } from "react";
+import { displayedMediaTime } from "@/app/s/[videoId]/_components/media-source-refresh";
 
 const CONTEXT = "player.js";
 const VERSION = "0.0.11";
@@ -199,7 +200,7 @@ export const createPlayerJsReceiver = ({
 				}
 				break;
 			case "getCurrentTime":
-				send("getCurrentTime", video.currentTime, listener);
+				send("getCurrentTime", displayedMediaTime(video), listener);
 				break;
 			case "setLoop":
 				if (typeof message.value === "boolean") {
@@ -218,7 +219,7 @@ export const createPlayerJsReceiver = ({
 		ended: () => emit("ended"),
 		timeupdate: () =>
 			emit("timeupdate", {
-				seconds: video.currentTime,
+				seconds: displayedMediaTime(video),
 				duration: video.duration,
 			}),
 		progress: () => emit("progress", { percent: getProgress(video) }),

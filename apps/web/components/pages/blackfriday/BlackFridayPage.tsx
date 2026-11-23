@@ -9,12 +9,11 @@ import { CodeChip } from "./CodeChip";
 import { Countdown } from "./Countdown";
 import {
 	ANCHORS,
-	ENDS_LABEL,
 	FAQ,
 	FEATURES,
 	LOOM_MAIL,
+	PLAN_PATH,
 	PLATFORMS,
-	RENEWAL_MAIL,
 	TEAM_POINTS,
 	TESTIMONIAL_NAMES,
 } from "./content";
@@ -336,16 +335,16 @@ function Renewal() {
 	return (
 		<section className="py-12 sm:py-20">
 			<div className={`${WRAP} text-center`}>
-				<h2 className={H2}>Already on Cap Pro Yearly?</h2>
+				<h2 className={H2}>Already on Cap Pro?</h2>
 				<p
 					className={`mx-auto mt-4 max-w-[560px] text-balance text-[17px] leading-[1.55] ${DIM}`}
 				>
-					Lock in another year at the discounted price. Email us before{" "}
-					{ENDS_LABEL} and we'll add it to your account.
+					Lock in your next year at half price. On yearly, it's covered the day
+					you renew. On monthly, you move to yearly today.
 				</p>
-				<a href={RENEWAL_MAIL} className={`${GHOST} mt-8`}>
-					Email us to lock it in
-				</a>
+				<Link href={PLAN_PATH} className={`${GHOST} mt-8`}>
+					Lock in your next year
+				</Link>
 			</div>
 		</section>
 	);

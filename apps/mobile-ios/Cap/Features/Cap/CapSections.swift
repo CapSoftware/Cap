@@ -108,6 +108,7 @@ private struct ChapterList: View {
 struct TranscriptSection: View {
     let model: CapDetailModel
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
     @Environment(SessionModel.self) private var session
 
     var body: some View {
@@ -137,6 +138,11 @@ struct TranscriptSection: View {
                     TextField("Search transcript", text: $query)
                         .submitLabel(.search)
                         .autocorrectionDisabled()
+                        .focused($searchFocused)
+                        // Otherwise the field sits on the keyboard with every match below it.
+                        .onChange(of: searchFocused) { _, focused in
+                            if focused { model.sectionRevealRequests += 1 }
+                        }
                     if !query.isEmpty {
                         Button("Clear search", systemImage: "xmark.circle.fill") { query = "" }
                             .labelStyle(.iconOnly)
