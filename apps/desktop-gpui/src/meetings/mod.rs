@@ -14,6 +14,7 @@ pub mod device;
 pub mod engine;
 pub mod generate;
 pub mod health;
+mod mic_watch;
 pub(crate) mod persist;
 pub mod speakers;
 #[cfg(test)]
@@ -328,6 +329,12 @@ struct Recording {
     _capture_pump: Task<()>,
     transcript: Transcript,
     mic_sender: Option<flume::Sender<MicrophoneSamples>>,
+    /// The feed the sender is on, the meeting's own microphone, and the one
+    /// the meeting moved to while its own was gone.
+    mic_actor: Option<kameo::actor::ActorID>,
+    mic_own: Option<String>,
+    mic_moved: Option<String>,
+    mic_watch: mic_watch::MicWatch,
     restore_mic: Option<(Option<String>, Option<String>)>,
     awaiting_mode: bool,
     voices: LiveVoices,
@@ -343,6 +350,14 @@ struct Recording {
     /// note at Stop.
     missed_ms: [u64; 2],
     _health_tick: Task<()>,
+}
+
+/// The meeting's microphone as `acquire_mic` found it.
+struct AcquiredMic {
+    input: Result<MicInput, HealthIssue>,
+    sender: Option<flume::Sender<MicrophoneSamples>>,
+    actor: Option<kameo::actor::ActorID>,
+    own: Option<String>,
 }
 
 /// The voices the engine has told apart so far, and the one calendar
@@ -1601,19 +1616,17 @@ impl Meetings {
         self.mark_active(cx);
     }
 
-    fn acquire_mic(
-        &mut self,
-        doc_id: &str,
-        cx: &mut Context<Self>,
-    ) -> (
-        Result<MicInput, HealthIssue>,
-        Option<flume::Sender<MicrophoneSamples>>,
-    ) {
+    fn acquire_mic(&mut self, doc_id: &str, cx: &mut Context<Self>) -> AcquiredMic {
         let access = crate::media_access::MediaAccess::global(cx)
             .read(cx)
             .status(crate::permissions::OSPermission::Microphone);
         if access == crate::permissions::OSPermissionStatus::Denied {
-            return (Err(HealthIssue::MissingPermission), None);
+            return AcquiredMic {
+                input: Err(HealthIssue::MissingPermission),
+                sender: None,
+                actor: None,
+                own: None,
+            };
         }
         let (tx, rx) = flume::bounded::<MicrophoneSamples>(256);
         let current = crate::feeds::Feeds::global(cx).read(cx).microphone.clone();
@@ -1621,7 +1634,7 @@ impl Meetings {
             Microphone::Named(name) => Some(name.clone()),
             Microphone::Auto => current,
         };
-        match named {
+        let actor = match named.clone() {
             Some(name) => self.attach_mic(name, tx.clone(), cx),
             None => {
                 let doc_id = doc_id.to_string();
@@ -1636,7 +1649,13 @@ impl Meetings {
                             return;
                         }
                         match name {
-                            Some(name) => this.attach_mic(name, sender, cx),
+                            Some(name) => {
+                                let actor = this.attach_mic(name.clone(), sender, cx);
+                                if let Some(recording) = this.recording.as_mut() {
+                                    recording.mic_actor = actor;
+                                    recording.mic_own.get_or_insert(name);
+                                }
+                            }
                             None => {
                                 if let Some(active) = this.active.as_mut() {
                                     active.mic.health =
@@ -1649,43 +1668,198 @@ impl Meetings {
                     .ok();
                 })
                 .detach();
+                None
             }
+        };
+        AcquiredMic {
+            input: Ok(MicInput::Feed(rx)),
+            sender: Some(tx),
+            actor,
+            own: named,
         }
-        (Ok(MicInput::Feed(rx)), Some(tx))
     }
 
+    /// Hands the meeting's sender to the microphone feed, on `name` unless a
+    /// screen recording holds the feed. The feed it went to, if any.
     fn attach_mic(
         &mut self,
         name: String,
         sender: flume::Sender<MicrophoneSamples>,
         cx: &mut Context<Self>,
-    ) {
-        let feeds = crate::feeds::Feeds::global(cx);
-        let current = feeds.read(cx).microphone.clone();
-        let screen_idle = crate::session::RecordingSession::global(cx).read(cx).phase
-            == crate::session::Phase::Idle;
-        if current.as_deref() != Some(name.as_str()) && (screen_idle || current.is_none()) {
-            feeds.update(cx, |feeds, cx| feeds.set_microphone(Some(name.clone()), cx));
-            if let Some(recording) = self.recording.as_mut() {
-                recording.restore_mic = Some((current, Some(name)));
-            } else {
-                self.pending_restore_mic = Some((current, Some(name)));
-            }
-        }
-        let Some(actor) = feeds.read(cx).mic_actor() else {
+    ) -> Option<kameo::actor::ActorID> {
+        self.point_feed_at(&name, cx);
+        let Some(actor) = crate::feeds::Feeds::global(cx).read(cx).mic_actor() else {
             if let Some(active) = self.active.as_mut() {
                 active.mic.health = SourceHealth::Error(HealthIssue::Failed(
                     "The microphone could not be opened".into(),
                 ));
             }
-            return;
+            return None;
         };
+        let id = actor.id();
         gpui_tokio::Tokio::spawn(cx, async move {
             if let Err(error) = actor.ask(AddSender(sender)).await {
                 tracing::warn!(%error, "could not attach the meeting microphone tap");
             }
         })
         .detach();
+        Some(id)
+    }
+
+    /// Puts the app's microphone feed on `name` for the meeting, unless a
+    /// screen recording holds it. Stop gives the feed back to whatever it was
+    /// on before the meeting first moved it.
+    fn point_feed_at(&mut self, name: &str, cx: &mut Context<Self>) {
+        let feeds = crate::feeds::Feeds::global(cx);
+        let current = feeds.read(cx).microphone.clone();
+        let screen_idle = crate::session::RecordingSession::global(cx).read(cx).phase
+            == crate::session::Phase::Idle;
+        if current.as_deref() != Some(name) && (screen_idle || current.is_none()) {
+            feeds.update(cx, |feeds, cx| {
+                feeds.set_microphone(Some(name.to_string()), cx)
+            });
+            let slot = match self.recording.as_mut() {
+                Some(recording) => &mut recording.restore_mic,
+                None => &mut self.pending_restore_mic,
+            };
+            let previous = slot.take().map_or(current, |(previous, _)| previous);
+            *slot = Some((previous, Some(name.to_string())));
+        }
+    }
+
+    /// Once a second: when the meeting's microphone has stopped delivering
+    /// (unplugged, a device reset) or the meeting is away from its own one,
+    /// looks at the computer's inputs off the main thread and moves.
+    fn watch_mic(&mut self, cx: &mut Context<Self>) {
+        let stalled = self.active.as_ref().is_some_and(|active| {
+            matches!(
+                active.mic.health,
+                SourceHealth::Error(HealthIssue::NoCallbacks | HealthIssue::NoInputDevice)
+            )
+        });
+        let current = crate::feeds::Feeds::global(cx).read(cx).microphone.clone();
+        let Some(recording) = self.recording.as_mut() else {
+            return;
+        };
+        if recording.mic_sender.is_none() {
+            return;
+        }
+        if recording.mic_moved.is_some() && recording.mic_moved != current {
+            // Someone else put the feed elsewhere since: theirs to keep.
+            recording.mic_moved = None;
+        }
+        let away = recording.mic_moved.is_some();
+        let Some(tries) = recording.mic_watch.due(Instant::now(), stalled, away) else {
+            return;
+        };
+        let doc_id = recording.doc_id.clone();
+        let candidates: Vec<String> = [recording.mic_own.clone(), current]
+            .into_iter()
+            .flatten()
+            .collect();
+        cx.spawn(async move |this, cx| {
+            let (listed, default) = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut listed = MicrophoneFeed::list_names();
+                    for name in candidates {
+                        if !listed.contains(&name) && MicrophoneFeed::is_connected(&name) {
+                            listed.push(name);
+                        }
+                    }
+                    let default = MicrophoneFeed::default_device().map(|(name, _, _)| name);
+                    (listed, default)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.move_mic(&doc_id, (tries > 0).then_some(tries), &listed, default, cx);
+                if let Some(recording) = this.recording.as_mut().filter(|r| r.doc_id == doc_id) {
+                    recording.mic_watch.done();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn move_mic(
+        &mut self,
+        doc_id: &str,
+        stalled: Option<u32>,
+        listed: &[String],
+        default: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let feeds = crate::feeds::Feeds::global(cx);
+        let current = feeds.read(cx).microphone.clone();
+        let screen_idle = crate::session::RecordingSession::global(cx).read(cx).phase
+            == crate::session::Phase::Idle;
+        let Some(recording) = self.recording.as_mut().filter(|r| r.doc_id == doc_id) else {
+            return;
+        };
+        if !screen_idle {
+            // The screen recording's own watch keeps its feed.
+            return;
+        }
+        let Some(step) = mic_watch::mic_move(
+            recording.mic_own.as_deref(),
+            current.as_deref(),
+            listed,
+            default.as_deref(),
+            stalled,
+        ) else {
+            if stalled == Some(1) {
+                tracing::warn!("the meeting microphone stopped and no other input is there");
+            }
+            return;
+        };
+        let attached = recording.mic_actor.is_some()
+            && feeds.read(cx).mic_actor().map(|actor| actor.id()) == recording.mic_actor;
+        let own = recording.mic_own.clone();
+        let sender = recording.mic_sender.clone();
+        match step {
+            mic_watch::MicMove::Reopen(name) if attached => {
+                tracing::info!(stalled, "reopening the meeting microphone");
+                let Some(actor) = feeds.read(cx).mic_actor() else {
+                    return;
+                };
+                let settings = crate::store::RecordingDeviceSettings::for_microphone(&name);
+                gpui_tokio::Tokio::spawn(cx, async move {
+                    match actor
+                        .ask(cap_recording::feeds::microphone::SetInput {
+                            label: name,
+                            settings,
+                        })
+                        .await
+                    {
+                        Ok(ready) => {
+                            if let Err(error) = ready.await {
+                                tracing::warn!(%error, "the meeting microphone did not reopen");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "the meeting microphone did not reopen")
+                        }
+                    }
+                })
+                .detach();
+            }
+            mic_watch::MicMove::Reopen(name) | mic_watch::MicMove::Switch(name) => {
+                tracing::info!(stalled, to = %name, "the meeting microphone moves");
+                if attached {
+                    self.point_feed_at(&name, cx);
+                } else if let Some(sender) = sender {
+                    let actor = self.attach_mic(name.clone(), sender, cx);
+                    if let Some(recording) = self.recording.as_mut() {
+                        recording.mic_actor = actor;
+                        recording.mic_own.get_or_insert(name.clone());
+                    }
+                }
+                if let Some(recording) = self.recording.as_mut() {
+                    recording.mic_moved = (own.as_deref() != Some(name.as_str())).then_some(name);
+                }
+            }
+        }
     }
 
     fn open_doc(
@@ -1901,10 +2075,21 @@ impl Meetings {
         let dev_mic = self.dev_mic.take();
         #[cfg(not(debug_assertions))]
         let dev_mic: Option<flume::Receiver<capture::RawBatch>> = None;
-        let (mic, mic_sender) = match dev_mic {
-            Some(rx) => (Ok(MicInput::Raw(rx)), None),
+        let acquired = match dev_mic {
+            Some(rx) => AcquiredMic {
+                input: Ok(MicInput::Raw(rx)),
+                sender: None,
+                actor: None,
+                own: None,
+            },
             None => self.acquire_mic(&doc_id, cx),
         };
+        let AcquiredMic {
+            input: mic,
+            sender: mic_sender,
+            actor: mic_actor,
+            own: mic_own,
+        } = acquired;
         let restore_mic = self.pending_restore_mic.take();
         // Audio the person doesn't keep is still saved as a scratch copy
         // outside the note, so lost words can be repaired; it goes once the
@@ -2071,6 +2256,10 @@ impl Meetings {
             _capture_pump: capture_pump,
             transcript,
             mic_sender,
+            mic_actor,
+            mic_own,
+            mic_moved: None,
+            mic_watch: mic_watch::MicWatch::default(),
             restore_mic,
             awaiting_mode,
             voices: live_voices,
@@ -2313,6 +2502,7 @@ impl Meetings {
     /// Once a second while recording: the watchdog over the computer audio,
     /// a look at the disk now and then, and the one health line.
     fn health_tick(&mut self, cx: &mut Context<Self>) {
+        self.watch_mic(cx);
         // Debug builds: CAP_GPUI_MEETING_FAKE_CALL=1 acts as if a meeting app
         // held the microphone.
         let call = !self.active_calls().is_empty()
