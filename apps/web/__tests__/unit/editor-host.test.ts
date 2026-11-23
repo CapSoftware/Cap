@@ -233,6 +233,7 @@ test("publishes a browser-rendered Save and marks it published", async () => {
 	expect(reply.value).toEqual({ shareUrl: `${ORIGIN}/s/video` });
 	expect(uploadWebEditorFile).toHaveBeenCalledWith(
 		"video",
+		"save-1",
 		file,
 		metadata,
 		expect.any(AbortSignal),

@@ -434,10 +434,11 @@ export class EditorHostBridge {
 			]);
 			// Registers the Save, which also withdraws a farm render still
 			// running for an earlier one so it can't replace this file.
-			if (!(await this.browserSaveId()))
-				throw new Error("The rendered video could not be published");
+			const saveId = await this.browserSaveId();
+			if (!saveId) throw new Error("The rendered video could not be published");
 			await uploadWebEditorFile(
 				this.videoId,
+				saveId,
 				file,
 				metadata,
 				signal,

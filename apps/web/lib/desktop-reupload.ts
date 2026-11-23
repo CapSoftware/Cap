@@ -16,7 +16,9 @@ import { Effect, Option } from "effect";
 import { retireDesktopRecordingJobForOutputReplacement } from "@/lib/desktop-recording-jobs";
 import {
 	assertDesktopReuploadTarget,
+	browserSaveIsCurrent,
 	type DesktopReuploadToken,
+	SupersededBrowserSaveError,
 } from "@/lib/desktop-reupload-token";
 import { knownEditorSourceDuration } from "@/lib/editor-source-duration";
 import { runPromise } from "@/lib/server";
@@ -60,6 +62,9 @@ export async function prepareDesktopReupload(
 		locked.source.outputKey === token.outputKey
 	) {
 		return null;
+	}
+	if (!browserSaveIsCurrent(token.browserSaveId, locked.metadata)) {
+		throw new SupersededBrowserSaveError();
 	}
 	const [upload] = await tx
 		.select({ rawFileKey: videoUploads.rawFileKey })

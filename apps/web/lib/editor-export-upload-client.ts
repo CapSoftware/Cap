@@ -44,8 +44,20 @@ export function validWebEditorExport(
 	);
 }
 
+const SAVE_SUPERSEDED = "A newer save replaced this one";
+
+function saveSuperseded(error: unknown) {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "SAVE_SUPERSEDED"
+	);
+}
+
 export async function uploadWebEditorFile(
 	videoId: string,
+	browserSaveId: string,
 	file: Blob,
 	metadata: WebEditorExportMetadata,
 	signal: AbortSignal,
@@ -59,12 +71,14 @@ export async function uploadWebEditorFile(
 	// A cast rather than Video.VideoId.make: the value import would bring the
 	// whole Effect runtime into the editor page.
 	const video = videoId as Video.VideoId;
-	const api = { extraBody: { replaceExisting: true } };
+	const api = { extraBody: { replaceExisting: true, browserSaveId } };
 	const target = await initiateMultipartUpload({
 		videoId: video,
 		contentType: "video/mp4",
 		subpath: "result.mp4",
 		api,
+	}).catch((error: unknown) => {
+		throw saveSuperseded(error) ? new Error(SAVE_SUPERSEDED) : error;
 	});
 	let uploadedBytes = 0;
 	let reportedPercent = -1;
@@ -172,6 +186,7 @@ export async function uploadWebEditorFile(
 				subpath: "result.mp4",
 			});
 		} catch (error) {
+			if (saveSuperseded(error)) throw new Error(SAVE_SUPERSEDED);
 			if (error instanceof MultipartCompletionUncertainError) {
 				completionUncertain = true;
 				throw new Error(

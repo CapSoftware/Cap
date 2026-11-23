@@ -21,9 +21,12 @@ import {
 } from "@/lib/desktop-reupload";
 import {
 	assertDesktopReuploadTarget,
+	browserSaveIdSchema,
+	browserSaveIsCurrent,
 	createDesktopReuploadKey,
 	createDesktopReuploadToken,
 	decodeDesktopReuploadToken,
+	SupersededBrowserSaveError,
 } from "@/lib/desktop-reupload-token";
 import { parseRecorderCamera } from "@/lib/editor-default-style";
 import { editorRequestOrigin } from "@/lib/editor-request-origin";
@@ -116,6 +119,7 @@ app.post(
 			.object({
 				contentType: z.string(),
 				replaceExisting: z.boolean().optional(),
+				browserSaveId: browserSaveIdSchema.optional(),
 			})
 			.and(
 				z.union([
@@ -126,7 +130,8 @@ app.post(
 			),
 	),
 	async (c) => {
-		const { contentType, replaceExisting, ...body } = c.req.valid("json");
+		const { contentType, replaceExisting, browserSaveId, ...body } =
+			c.req.valid("json");
 		const user = c.get("user");
 
 		const fileKey = getMultipartFileKey(user.id, body);
@@ -153,6 +158,18 @@ app.post(
 				if (Option.isNone(owned))
 					return c.json({ error: "Video not found" }, 404);
 				const [video] = owned.value;
+				if (
+					browserSaveId !== undefined &&
+					!browserSaveIsCurrent(browserSaveId, Option.getOrNull(video.metadata))
+				) {
+					return c.json(
+						{
+							error: new SupersededBrowserSaveError().message,
+							code: "SAVE_SUPERSEDED",
+						},
+						409,
+					);
+				}
 				const [bucket] = yield* Storage.getAccessForVideo(video, {
 					resolvePublishedOutput: false,
 				});
@@ -171,6 +188,7 @@ app.post(
 							uploadId: backendUploadId,
 							provider: bucket.provider,
 							outputKey,
+							browserSaveId,
 						}),
 					);
 					const state = {
@@ -890,9 +908,18 @@ app.post(
 						objectIdentity: head.ETag,
 					});
 				}).pipe(
-					Effect.catchAll(() =>
+					Effect.catchAll((error) =>
 						Effect.succeed(
-							c.json({ error: "Could not publish replacement recording" }, 500),
+							error instanceof Error &&
+								error.cause instanceof SupersededBrowserSaveError
+								? c.json(
+										{ error: error.cause.message, code: "SAVE_SUPERSEDED" },
+										409,
+									)
+								: c.json(
+										{ error: "Could not publish replacement recording" },
+										500,
+									),
 						),
 					),
 				);

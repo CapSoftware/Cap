@@ -95,6 +95,7 @@ import {
 	createDesktopReuploadToken,
 	type DesktopReuploadToken,
 	decodeDesktopReuploadToken,
+	SupersededBrowserSaveError,
 } from "@/lib/desktop-reupload-token";
 
 const request = () =>
@@ -836,6 +837,66 @@ describe("desktop reupload completion", () => {
 			expect(video.source.outputKey).toBe(oldKey);
 		},
 	);
+	it("binds a browser Save to its upload and refuses one a newer Save replaced", async () => {
+		const saveA = "00000000-0000-4000-8000-00000000000a";
+		const saveB = "00000000-0000-4000-8000-00000000000b";
+		const initiate = () =>
+			app.request("/initiate", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					videoId: "video",
+					contentType: "video/mp4",
+					replaceExisting: true,
+					browserSaveId: saveA,
+				}),
+			});
+		const withSave = (saveId: string, status: string) =>
+			Effect.sync(() =>
+				Option.some([
+					{
+						...video,
+						source: { ...video.source },
+						metadata: Option.some({
+							webEditorBrowserSave: { saveId, status },
+						}),
+					},
+				]),
+			);
+		mocks.getOwnedById.mockImplementationOnce(() =>
+			withSave(saveA, "rendering"),
+		);
+		const current = await initiate();
+		expect(current.status).toBe(200);
+		expect(
+			decodeDesktopReuploadToken((await current.json()).uploadId)
+				?.browserSaveId,
+		).toBe(saveA);
+		mocks.create.mockClear();
+		for (const [saveId, status] of [
+			[saveB, "rendering"],
+			[saveB, "published"],
+			[saveA, "error"],
+		] as const) {
+			mocks.getOwnedById.mockImplementationOnce(() => withSave(saveId, status));
+			const superseded = await initiate();
+			expect(superseded.status).toBe(409);
+			expect(await superseded.json()).toMatchObject({
+				code: "SAVE_SUPERSEDED",
+			});
+		}
+		expect(mocks.create).not.toHaveBeenCalled();
+	});
+	it("reports a Save superseded while it uploaded as a conflict, not a failure", async () => {
+		mocks.prepareReplacement.mockRejectedValueOnce(
+			new SupersededBrowserSaveError(),
+		);
+		const response = await complete();
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({ code: "SAVE_SUPERSEDED" });
+		expect(video.source.outputKey).toBe(oldKey);
+		expect(events).not.toContain("publish");
+	});
 	it("publishes verified replacement bytes without overwriting current playback", async () => {
 		const response = await complete();
 		expect(response.status).toBe(200);

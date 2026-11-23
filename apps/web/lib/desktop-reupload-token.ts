@@ -19,6 +19,28 @@ const identifier = z
 	.min(1)
 	.max(255)
 	.regex(/^[A-Za-z0-9_-]+$/);
+export const browserSaveIdSchema = z.string().regex(/^[0-9a-f-]{36}$/);
+
+export class SupersededBrowserSaveError extends Error {
+	constructor() {
+		super("A newer save replaced this one");
+		this.name = "SupersededBrowserSaveError";
+	}
+}
+
+export function browserSaveIsCurrent(
+	browserSaveId: string | undefined,
+	metadata: {
+		webEditorBrowserSave?: { saveId: string; status: string };
+	} | null,
+) {
+	const save = metadata?.webEditorBrowserSave;
+	return (
+		browserSaveId === undefined ||
+		(save?.saveId === browserSaveId && save.status === "rendering")
+	);
+}
+
 const tokenSchema = z
 	.object({
 		version: z.literal(1),
@@ -30,6 +52,7 @@ const tokenSchema = z
 		uploadId: z.string().min(1).max(8192),
 		outputKey: z.string().min(1).max(1024),
 		sourceIdentity: z.string().regex(/^[a-f0-9]{64}$/),
+		browserSaveId: browserSaveIdSchema.optional(),
 		expiresAt: z.number().int().safe(),
 	})
 	.strict();
@@ -118,7 +141,10 @@ export function createDesktopReuploadKey(
 
 export function createDesktopReuploadToken(
 	video: DesktopReuploadVideo,
-	upload: Pick<DesktopReuploadToken, "uploadId" | "provider" | "outputKey">,
+	upload: Pick<
+		DesktopReuploadToken,
+		"uploadId" | "provider" | "outputKey" | "browserSaveId"
+	>,
 ): string {
 	const token = parseToken({
 		version: 1,
@@ -130,6 +156,9 @@ export function createDesktopReuploadToken(
 		uploadId: upload.uploadId,
 		outputKey: upload.outputKey,
 		sourceIdentity: desktopReuploadSourceIdentity(video.source),
+		...(upload.browserSaveId === undefined
+			? {}
+			: { browserSaveId: upload.browserSaveId }),
 		expiresAt: Date.now() + TOKEN_LIFETIME_MS,
 	});
 	const payload = Buffer.from(JSON.stringify(token)).toString("base64url");

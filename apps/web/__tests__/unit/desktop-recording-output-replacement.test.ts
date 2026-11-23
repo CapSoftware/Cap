@@ -268,12 +268,13 @@ describe("desktop reupload publication", () => {
 		storageIntegrationId: Option.none(),
 		source: Schema.decodeUnknownSync(Video.Video.fields.source)(video.source),
 	});
-	const tokenFor = (snapshot = original()) => {
+	const tokenFor = (snapshot = original(), browserSaveId?: string) => {
 		const token = decodeDesktopReuploadToken(
 			createDesktopReuploadToken(snapshot, {
 				uploadId: "provider-upload-id",
 				provider: "s3",
 				outputKey: createDesktopReuploadKey(snapshot),
+				browserSaveId,
 			}),
 		);
 		if (!token) throw new Error("Expected a replacement token");
@@ -424,6 +425,62 @@ describe("desktop reupload publication", () => {
 			tokenFor(),
 		);
 		expect(unknown?.metadata).not.toHaveProperty("editorSourceDuration");
+	});
+
+	describe("browser Saves", () => {
+		const saveA = "00000000-0000-4000-8000-00000000000a";
+		const saveB = "00000000-0000-4000-8000-00000000000b";
+		const browserSave = (saveId: string, status = "rendering") => ({
+			version: 1,
+			saveId,
+			status,
+			projectSavedAt: null,
+			progress: 0.9,
+			startedAt: operation.startedAt,
+			updatedAt: operation.startedAt,
+		});
+
+		it("publishes the Save that is still current", async () => {
+			video.metadata.webEditorBrowserSave = browserSave(saveA);
+			const snapshot = original();
+			const token = tokenFor(snapshot, saveA);
+			await expect(
+				prepareDesktopReupload(transaction(), snapshot, token),
+			).resolves.toMatchObject({ source: { outputKey: token.outputKey } });
+		});
+
+		it.each([
+			["a newer browser Save started", () => browserSave(saveB)],
+			["a newer browser Save published", () => browserSave(saveB, "published")],
+			["a farm Save took over", () => undefined],
+		])(
+			"refuses an older Save after %s mid-upload, before touching anything",
+			async (_case, next) => {
+				video.metadata.webEditorBrowserSave = browserSave(saveA);
+				const snapshot = original();
+				const token = tokenFor(snapshot, saveA);
+				video.metadata.webEditorBrowserSave = next();
+				const before = structuredClone(video);
+				await expect(
+					prepareDesktopReupload(transaction(), snapshot, token),
+				).rejects.toThrow("A newer save replaced this one");
+				expect(video).toEqual(before);
+				expect(updates).toEqual([]);
+				expect(mocks.retire).not.toHaveBeenCalled();
+				expect(events).toEqual(["lock-job", "lock-video"]);
+			},
+		);
+
+		it("still answers a retried completion of the Save that already published", async () => {
+			video.metadata.webEditorBrowserSave = browserSave(saveA);
+			const snapshot = original();
+			const token = tokenFor(snapshot, saveA);
+			video.source = { type: "desktopMP4", outputKey: token.outputKey };
+			video.metadata.webEditorBrowserSave = browserSave(saveA, "published");
+			await expect(
+				prepareDesktopReupload(transaction(), snapshot, token),
+			).resolves.toBeNull();
+		});
 	});
 
 	it("compares normalized source fields under the lock", async () => {
