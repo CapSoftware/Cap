@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BASE_SHA: e69ffe5e6b0758caa2975fabf38b18276d4aa316
+  BASE_SHA: 031ad14ec6f3024a193d95c517d06210d9368c92
   CARGO_PROFILE_RELEASE_DEBUG: "0"
 
 jobs:
