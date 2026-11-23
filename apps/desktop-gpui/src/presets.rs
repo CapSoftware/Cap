@@ -155,6 +155,7 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
         map.remove("markers");
         map.remove("autoZoomVersion");
         map.remove("autoZoomPending");
+        map.remove("cameraPicture");
         if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
             captions.insert("segments".into(), Value::Array(Vec::new()));
             captions.remove("sourceTimed");
@@ -497,6 +498,36 @@ mod tests {
         let preset = preset_config(&current);
         assert!(apply_preset(&preset, &current).unwrap().captions.is_none());
         assert!(default_project_config(&current).captions.is_none());
+    }
+
+    #[test]
+    fn presets_never_carry_or_drop_a_camera_picture() {
+        let source = ProjectConfiguration {
+            camera_picture: Some("content/images/other.jpg".into()),
+            ..Default::default()
+        };
+        let preset = preset_config(&source);
+        assert!(preset.get("cameraPicture").is_none());
+        let current = ProjectConfiguration {
+            camera_picture: Some("content/images/mine.jpg".into()),
+            ..Default::default()
+        };
+        let legacy = serde_json::to_value(&source).unwrap();
+        for preset in [preset, legacy] {
+            assert_eq!(
+                apply_preset(&preset, &current)
+                    .unwrap()
+                    .camera_picture
+                    .as_deref(),
+                Some("content/images/mine.jpg")
+            );
+        }
+        assert_eq!(
+            apply_preset(&preset_config(&current), &ProjectConfiguration::default())
+                .unwrap()
+                .camera_picture,
+            None
+        );
     }
 
     #[test]

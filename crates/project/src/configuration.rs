@@ -3418,6 +3418,7 @@ impl ProjectConfiguration {
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
         preset.markers = self.markers.clone();
+        preset.camera_picture = self.camera_picture.clone();
         preset
     }
 
