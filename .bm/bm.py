@@ -209,6 +209,8 @@ class App:
             "panics": text.count("panicked at"),
             "errors": len([l for l in text.splitlines() if " ERROR " in l or "ERROR " in l[:40]]),
             "remotes": sorted(self.remotes),
+            "launch_error": [l for l in text.splitlines()
+                             if re.search(r"Library not loaded|error while loading shared|cannot open shared object|was not found|0xc0000135", l)][:3],
         }
         with open(os.path.join(self.dir, "result.json"), "w") as f:
             json.dump(res, f, indent=1)
@@ -707,11 +709,19 @@ class Flow:
         store = json.load(open(store_path))
         store["gpui"] = {"selectedTranscriptionModel": "small", "selectedTranscriptionLanguage": "en"}
         json.dump(store, open(store_path, "w"))
-        r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
-        self.record("captions.record", r)
-        if not proj:
-            return
-        mics = glob.glob(os.path.join(proj, "**", "audio-input.*"), recursive=True)
+        if self.a.fixture:
+            proj = os.path.join(p0, "recordings", "fixture.cap")
+            shutil.copytree(self.a.fixture, proj)
+            self.record("captions.fixture_files", sorted(
+                os.path.relpath(f, proj) for f in glob.glob(os.path.join(proj, "**", "*"), recursive=True)
+                if os.path.isfile(f))[:60])
+        else:
+            r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
+            self.record("captions.record", r)
+            if not proj:
+                return
+        mics = [f for f in glob.glob(os.path.join(proj, "**", "*"), recursive=True)
+                if re.search(r"(audio-input|system_audio|mic)[^/\\]*\.(m4a|ogg|mp3|wav|aac|opus|flac)$", f)]
         self.record("captions.mic_files", mics)
         wav = os.path.join(self.out, "speech.wav")
         subprocess.run(["espeak-ng", "-s", "150", "-w", wav, text], check=True)
@@ -719,8 +729,13 @@ class Flow:
             info = mp4_info(mic)
             dur = float(info.get("format", {}).get("duration", 12))
             tmp = mic + ".new" + os.path.splitext(mic)[1]
+            ext = os.path.splitext(mic)[1].lower()
+            codec = {".m4a": "aac", ".aac": "aac", ".ogg": "libopus", ".opus": "libopus",
+                     ".mp3": "libmp3lame", ".wav": "pcm_s16le", ".flac": "flac"}[ext]
+            streams = [x for x in info.get("streams", []) if x.get("codec_type") == "audio"]
             subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", wav, "-af", f"apad,atrim=0:{dur}",
-                            "-ar", "48000", "-ac", "1", "-c:a", "aac", "-b:a", "128k", tmp], check=True)
+                            "-ar", "48000", "-ac", "1", "-c:a", codec, tmp], check=True)
+            self.record(f"captions.replaced.{os.path.basename(mic)}", {"duration": dur, "codec": codec, "orig_streams": streams})
             os.replace(tmp, mic)
         dumps = {}
         for tag in ("base", "head", "fix"):
@@ -783,6 +798,7 @@ def main():
     ap.add_argument("--base-libs")
     ap.add_argument("--head-libs")
     ap.add_argument("--fix")
+    ap.add_argument("--fixture")
     ap.add_argument("--fix-libs")
     ap.add_argument("--out", required=True)
     ap.add_argument("--rounds", type=int, default=3)
