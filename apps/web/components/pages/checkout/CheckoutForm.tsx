@@ -264,7 +264,7 @@ function OrderSummary({
 					{!discounted || discounted.recurring === "forever"
 						? `per user, per ${period}`
 						: discounted.recurring === "repeating"
-							? `per user, for ${discounted.months} months`
+							? `per user, per ${period} for ${discounted.months} months`
 							: `per user, first ${period}`}
 				</span>
 				{pendingPlan ? (
