@@ -7,7 +7,7 @@
 //! which changes both, and the next scan reads that one transcript again.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     io::Write as _,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
@@ -102,8 +102,8 @@ pub fn index(docs: &[(String, PathBuf)], cache_path: &Path) -> HashMap<String, V
             _ => stale.push((id.clone(), path.clone(), stamp)),
         }
     }
-    let changed = !stale.is_empty()
-        || cache.docs.keys().any(|id| !docs.iter().any(|(d, _)| d == id));
+    let ids: HashSet<&str> = docs.iter().map(|(id, _)| id.as_str()).collect();
+    let changed = !stale.is_empty() || cache.docs.keys().any(|id| !ids.contains(id.as_str()));
     if !stale.is_empty() {
         let threads = std::thread::available_parallelism()
             .map_or(4, usize::from)
@@ -139,7 +139,7 @@ pub fn index(docs: &[(String, PathBuf)], cache_path: &Path) -> HashMap<String, V
     }
     if changed {
         cache.version = CACHE_VERSION;
-        cache.docs.retain(|id, _| docs.iter().any(|(d, _)| d == id));
+        cache.docs.retain(|id, _| ids.contains(id.as_str()));
         save_cache(cache_path, &cache);
     }
     out
