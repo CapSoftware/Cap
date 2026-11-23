@@ -309,7 +309,12 @@ function OrderSummary({
 	);
 }
 
-export function PlanHeading({ tag }: { tag: string }) {
+const FRIDAY_CHIP = {
+	background: "rgba(255,77,141,0.16)",
+	color: "#FFB59A",
+} as const;
+
+export function PlanHeading({ tag, dark }: { tag: string; dark?: boolean }) {
 	const theme = MODE_THEME.instant;
 	return (
 		<>
@@ -318,14 +323,16 @@ export function PlanHeading({ tag }: { tag: string }) {
 					Cap Pro
 				</h2>
 				<span
-					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em]"
-					style={{ background: theme.chip, color: theme.glyph }}
+					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em] transition-colors duration-700"
+					style={
+						dark ? FRIDAY_CHIP : { background: theme.chip, color: theme.glyph }
+					}
 				>
 					{tag}
 				</span>
 			</div>
 			<p
-				className={`${BODY_TEXT} mt-3 text-[15px] leading-[1.5] text-[rgba(17,17,17,0.72)] max-sm:hidden`}
+				className={`${BODY_TEXT} mt-3 text-[15px] leading-[1.5] transition-colors duration-700 max-sm:hidden ${dark ? "text-[rgba(245,241,234,0.66)]" : "text-[rgba(17,17,17,0.72)]"}`}
 			>
 				Everything in Desktop, plus unlimited cloud sharing, AI, and team
 				collaboration.
@@ -334,10 +341,12 @@ export function PlanHeading({ tag }: { tag: string }) {
 	);
 }
 
-export function PlanFeatures() {
+export function PlanFeatures({ dark }: { dark?: boolean }) {
 	const theme = MODE_THEME.instant;
 	return (
-		<div className="mt-7 hidden border-t border-[#E1E7EE] pt-6 lg:block">
+		<div
+			className={`mt-7 hidden border-t pt-6 transition-colors duration-700 lg:block ${dark ? "border-[rgba(245,241,234,0.1)]" : "border-[#E1E7EE]"}`}
+		>
 			<p className="text-[13px] font-medium">
 				Everything in Desktop License, plus:
 			</p>
@@ -345,12 +354,18 @@ export function PlanFeatures() {
 				{HIGHLIGHTS.map((feature) => (
 					<li key={feature} className="flex items-start gap-3">
 						<span
-							className="mt-px grid size-5 shrink-0 place-items-center rounded-full"
-							style={{ background: theme.chip, color: theme.glyph }}
+							className="mt-px grid size-5 shrink-0 place-items-center rounded-full transition-colors duration-700"
+							style={
+								dark
+									? FRIDAY_CHIP
+									: { background: theme.chip, color: theme.glyph }
+							}
 						>
 							<Check className="size-3" strokeWidth={2.5} />
 						</span>
-						<span className="text-[14px] leading-snug text-[rgba(17,17,17,0.72)]">
+						<span
+							className={`text-[14px] leading-snug transition-colors duration-700 ${dark ? "text-[rgba(245,241,234,0.72)]" : "text-[rgba(17,17,17,0.72)]"}`}
+						>
 							{feature}
 						</span>
 					</li>
