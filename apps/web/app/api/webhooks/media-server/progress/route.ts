@@ -218,12 +218,10 @@ export async function POST(request: NextRequest) {
 				.select({ rawFileKey: videoUploads.rawFileKey })
 				.from(videoUploads)
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
-			if (currentVideo)
-				await rejectFreePlanOverLimitVideo(
-					currentVideo,
-					currentUpload?.rawFileKey,
-				);
-			return NextResponse.json({ success: true, status: "rejected" });
+			const status = currentVideo
+				? await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)
+				: "stale";
+			return NextResponse.json({ success: true, status });
 		}
 
 		if (dbPhase === "complete") {
@@ -269,12 +267,12 @@ export async function POST(request: NextRequest) {
 				currentVideo &&
 				!isEditUpload &&
 				freePlanLimited &&
-				exceedsFreePlanMeasuredDuration(measuredMediaSeconds(payload.metadata))
+				exceedsFreePlanMeasuredDuration(
+					measuredMediaSeconds(payload.metadata),
+				) &&
+				(await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)) ===
+					"rejected"
 			) {
-				await rejectFreePlanOverLimitVideo(
-					currentVideo,
-					currentUpload?.rawFileKey,
-				);
 				return NextResponse.json({ success: true, status: "rejected" });
 			}
 			const receipt = proof

@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import {
 	freePlanDurationExceededError,
 	freePlanDurationExceededMessage,
+	getFreePlanDurationLimit,
 } from "@/lib/free-plan-duration";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
@@ -13,11 +14,16 @@ import { decodeStorageVideo } from "@/lib/video-storage";
 // upload is failed first, with the message multipart completion returns, so
 // processing stops; then its output, previews and raw upload are removed. The
 // raw key is only cleared once they are gone, so a retried callback still
-// finds a source stored under any supported extension.
+// finds a source stored under any supported extension. A late callback is
+// ignored once the upload is gone or the plan no longer limits the video, so
+// it cannot remove a newer, published result.
 export async function rejectFreePlanOverLimitVideo(
 	video: typeof videos.$inferSelect,
-	rawFileKey: string | null | undefined,
-) {
+	upload: { rawFileKey: string | null } | undefined,
+): Promise<"rejected" | "stale"> {
+	if (!upload || (await getFreePlanDurationLimit(video)) === null)
+		return "stale";
+	const rawFileKey = upload.rawFileKey;
 	await db()
 		.update(videoUploads)
 		.set({
@@ -47,4 +53,5 @@ export async function rejectFreePlanOverLimitVideo(
 		.update(videoUploads)
 		.set({ rawFileKey: null })
 		.where(eq(videoUploads.videoId, video.id));
+	return "rejected";
 }
