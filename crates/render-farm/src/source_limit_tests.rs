@@ -1,4 +1,4 @@
-use crate::{ProbeRequest, audio, probe, video};
+use crate::{ProbeRequest, audio, probe, project::LoadedProject, video};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     path::{Path, PathBuf},
@@ -325,6 +325,12 @@ fn rss_case_child() {
             let project = project_from("display-100h.webm", None, None);
             report_outcome(runtime.block_on(probe(probe_request(project.path()))));
         }
+        "audio-webm-mic-on-20h-display" => {
+            let project = project_from("display-20h.webm", Some("mic-live.webm"), Some(1.0));
+            report_outcome(
+                runtime.block_on(audio::render(audio_request(project.path(), [0, 48_000]))),
+            );
+        }
         other => panic!("unknown case {other}"),
     }
     #[cfg(unix)]
@@ -541,6 +547,57 @@ fn audio_beyond_the_supported_rate_or_channels_is_refused() {
     }
 }
 
+/// A browser WebM mic has no usable length, so its clip's stands in
+/// (audio.rs `track_duration`). A display can declare 20 h inside the source
+/// limit while the edit is 1 s: the mic's buffer has to follow the edit.
+#[test]
+fn a_clip_length_standing_in_for_a_webm_mic_sizes_only_what_the_edit_reads() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let project = project_from("display-20h.webm", Some("mic-live.webm"), Some(1.0));
+    let loaded = LoadedProject::load(project.path()).unwrap();
+    let segment = &loaded.recordings.segments[0];
+    assert_eq!(segment.display.duration, 72_000.0);
+    let mic = segment.mic.as_ref().expect("mic.webm probed");
+    assert!(
+        crate::project::usable_duration(mic.duration).is_none(),
+        "mic.webm probed a usable {} s",
+        mic.duration
+    );
+
+    let (rendered, peak) = peak_heap_during(|| {
+        runtime().block_on(audio::render(audio_request(project.path(), [0, 48_000])))
+    });
+    let rendered = rendered.unwrap();
+    assert_eq!(rendered.total_samples, 48_000);
+    assert!(!rendered.sizes.is_empty());
+    let twenty_hours_of_mono = 72_000u64 * 48_000 * 4;
+    assert!(
+        peak < 64 << 20,
+        "a 1 s edit of a 20 h clip grew the heap by {peak} bytes ({twenty_hours_of_mono} for its whole length)"
+    );
+}
+
+#[test]
+fn a_webm_mic_without_a_length_still_renders_its_clip() {
+    init();
+    let _heavy = HEAVY.lock().unwrap_or_else(|error| error.into_inner());
+    let project = project_from("display-red.webm", Some("mic-live.webm"), None);
+    let rendered = runtime()
+        .block_on(audio::render(audio_request(
+            project.path(),
+            [0, 3 * 48_000],
+        )))
+        .unwrap();
+    assert_eq!(rendered.total_samples, 3 * 48_000);
+    assert_eq!(rendered.first_packet, 0);
+    assert_eq!(
+        rendered.sizes.len(),
+        (3 * 48_000 + 1024usize).div_ceil(1024)
+    );
+    assert!(rendered.sizes.iter().any(|&size| size > 16));
+}
+
 #[cfg(unix)]
 #[test]
 fn crafted_lengths_are_refused_within_the_probe_budget() {
@@ -549,6 +606,7 @@ fn crafted_lengths_are_refused_within_the_probe_budget() {
         ("probe-mic-ogg-100h", "declares 360000 s"),
         ("audio-mic-ogg-100h", "declares 360000 s"),
         ("probe-display-webm-100h", "declares 360000 s"),
+        ("audio-webm-mic-on-20h-display", "ok"),
     ] {
         let (peak, outcome) = child_run(case);
         assert!(outcome.contains(expected), "{case}: {outcome}");

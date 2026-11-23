@@ -1,5 +1,5 @@
 use crate::{
-    project::{LoadedProject, usable_duration},
+    project::{LoadedProject, MAX_SOURCE_SECONDS, usable_duration},
     video::base64_encode,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -311,6 +311,9 @@ fn track_duration(probed: f64, clip: Option<f64>) -> Option<f64> {
     usable_duration(probed).or(clip.and_then(usable_duration))
 }
 
+/// Track kept past the end of a section's source window.
+const TRACK_TAIL_SECONDS: f64 = 60.0;
+
 /// Decodes only the first `VOICE_PROFILE_SAMPLES` (what Studio Sound's voice
 /// profile reads) plus the section's source window, placed at their true
 /// offsets in a zero-backed buffer. Within the window the renderer sees exactly
@@ -349,12 +352,21 @@ async fn load_track(
         let channels = section.channels().max(profile.channels()) as usize;
         let section_start = section.source_start_sample();
         let decoded_end = section_start + section.sample_count();
+        // Past `to` the buffer is zeros, not audio, so nothing the renderer
+        // reads lies past it; a longer declared length only sizes zeros.
+        let reach = ((to + TRACK_TAIL_SECONDS) * rate) as usize;
         let total = if near_end {
             decoded_end
         } else {
-            decoded_end.max(duration_samples.unwrap_or(0))
+            decoded_end.max(duration_samples.unwrap_or(0).min(reach))
         }
         .max(profile.sample_count());
+        if total as f64 > (MAX_SOURCE_SECONDS + TRACK_TAIL_SECONDS) * rate {
+            bail!(
+                "{label} spans {:.0} s, longer than cloud export supports",
+                total as f64 / rate
+            );
+        }
         let mut samples = vec![0.0f32; total * channels];
         let copy = |samples: &mut [f32], data: &cap_audio::AudioData| {
             let offset = data.source_start_sample() * channels;
