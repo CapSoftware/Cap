@@ -47,9 +47,9 @@ import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { zValidator } from "@/utils/zod-validator";
 import {
-	getMultipartFileKey,
 	getSubpath,
 	isRawRecorderUpload,
+	resolveMultipartFileKey,
 } from "./multipart-utils";
 
 export const app = new Hono().use(withAuth);
@@ -109,7 +109,10 @@ app.post(
 		const { contentType, replaceExisting, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
-		const fileKey = getMultipartFileKey(user.id, body);
+		const resolved = resolveMultipartFileKey(user.id, body);
+		if ("error" in resolved)
+			return c.json({ error: resolved.error }, resolved.status);
+		const { fileKey } = resolved;
 		if (isNonMediaRawUploadKey(fileKey)) {
 			return c.json({ error: nonMediaUploadMessage }, 400);
 		}
@@ -320,7 +323,10 @@ app.post(
 		const { uploadId, partNumber, ...body } = c.req.valid("json");
 		const user = c.get("user");
 
-		const fileKey = getMultipartFileKey(user.id, body);
+		const resolved = resolveMultipartFileKey(user.id, body);
+		if ("error" in resolved)
+			return c.json({ error: resolved.error }, resolved.status);
+		const { fileKey } = resolved;
 
 		try {
 			try {
@@ -448,12 +454,15 @@ app.post(
 	(c) => {
 		const { uploadId, parts, ...body } = c.req.valid("json");
 		const user = c.get("user");
+		const resolved = resolveMultipartFileKey(user.id, body);
+		if ("error" in resolved)
+			return c.json({ error: resolved.error }, resolved.status);
+		const { fileKey } = resolved;
 
 		return Effect.gen(function* () {
 			const policy = yield* VideosPolicy;
 			const db = yield* Database;
 
-			const fileKey = getMultipartFileKey(user.id, body);
 			const subpath = getSubpath(body) ?? "result.mp4";
 			const replacesVideo =
 				body.replaceExisting === true && subpath === "result.mp4";
@@ -1115,7 +1124,10 @@ app.post("/abort", abortRequestValidator, (c) => {
 	const { uploadId, ...body } = c.req.valid("json");
 	const user = c.get("user");
 
-	const fileKey = getMultipartFileKey(user.id, body);
+	const resolved = resolveMultipartFileKey(user.id, body);
+	if ("error" in resolved)
+		return c.json({ error: resolved.error }, resolved.status);
+	const { fileKey } = resolved;
 
 	const videoIdFromFileKey = fileKey.split("/")[1];
 	const videoIdRaw = "videoId" in body ? body.videoId : videoIdFromFileKey;
