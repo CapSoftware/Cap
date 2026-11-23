@@ -32,7 +32,6 @@ import {
 	finishLiveTranscription,
 	liveContextSeconds,
 	promoteLiveTranscript,
-	readLiveTranscript,
 	writeLiveChunk,
 	writeLiveChunkGap,
 } from "@/lib/live-transcribe-runner";
@@ -330,9 +329,15 @@ async function transcribeNextLiveChunk(options: {
 	if (options.resumeFromArtifact) {
 		// A retried step re-sends the cursor it started from, but the attempt
 		// that failed may already have written later chunks. Re-applying an
-		// older chunk would briefly drop the words after it from the share
-		// page and pay to transcribe them again.
-		const artifact = await readLiveTranscript(bucket, video.ownerId, videoId);
+		// older chunk drops the words after it while the stored cursor stays
+		// ahead, so a storage error here must fail the step instead of reading
+		// as "no transcript yet" and replaying.
+		const existing = await bucket
+			.getObject(getLiveTranscriptObjectKey(video.ownerId, videoId))
+			.pipe(runWorkflowPromise);
+		const artifact = Option.isSome(existing)
+			? parseLiveTranscript(existing.value)
+			: null;
 		if (artifact && artifact.lastAudioSegmentIndex > lastProcessedIndex) {
 			return {
 				outcome: "chunk",
