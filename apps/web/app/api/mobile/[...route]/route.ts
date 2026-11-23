@@ -6,6 +6,7 @@ import {
 	isEmailBlockedFromSignup,
 	normalizeSignInEmail,
 } from "@cap/database/auth/domain-utils";
+import { revokeAllCredentials } from "@cap/database/auth/revoke-credentials";
 import {
 	decrypt,
 	encrypt,
@@ -701,27 +702,7 @@ const requestAccountDeletion = Effect.fn("Mobile.requestAccountDeletion")(
 
 		const database = yield* Database;
 		yield* database.use((db) =>
-			db.transaction(async (tx) => {
-				await tx
-					.update(Db.users)
-					.set({
-						authSessionVersion: sql`${Db.users.authSessionVersion} + 1`,
-					})
-					.where(eq(Db.users.id, user.id));
-				await tx.delete(Db.sessions).where(eq(Db.sessions.userId, user.id));
-				await tx
-					.delete(Db.authApiKeys)
-					.where(eq(Db.authApiKeys.userId, user.id));
-				await tx
-					.update(Db.agentApiKeys)
-					.set({ revokedAt: new Date() })
-					.where(
-						and(
-							eq(Db.agentApiKeys.userId, user.id),
-							isNull(Db.agentApiKeys.revokedAt),
-						),
-					);
-			}),
+			db.transaction((tx) => revokeAllCredentials(tx, user.id)),
 		);
 
 		return { success: true as const };

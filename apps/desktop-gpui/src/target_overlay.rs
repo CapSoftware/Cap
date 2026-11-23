@@ -473,6 +473,45 @@ enum Arrangement {
     PutBack(ArrangedWindow),
 }
 
+/// Whether macOS raised its "allow Cap to control this app" prompt for a
+/// refused move; if so, waits (up to two minutes) for the user to answer.
+async fn wait_for_app_control_prompt(cx: &mut gpui::AsyncApp) -> bool {
+    let poll = |cx: &mut gpui::AsyncApp| {
+        cx.background_executor()
+            .spawn(async { crate::platform::app_control_prompt_visible() })
+    };
+    let mut seen = false;
+    for _ in 0..8 {
+        if poll(cx).await {
+            seen = true;
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(150))
+            .await;
+    }
+    if !seen {
+        return false;
+    }
+    cx.update(|cx| app_windows::lower_target_overlays(true, cx));
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline && poll(cx).await {
+        cx.background_executor()
+            .timer(Duration::from_millis(250))
+            .await;
+    }
+    true
+}
+
+/// A user-asked resize that macOS 27.3 refused although Cap holds the
+/// Override grant: the app just isn't one Cap may control yet.
+fn resize_needs_app_choice(arrangement: &Arrangement) -> bool {
+    cfg!(target_os = "macos")
+        && matches!(arrangement, Arrangement::Frame(_))
+        && crate::permissions::grants_are_settings_only()
+        && crate::foreign_window::can_arrange()
+}
+
 /// Focus records a window by itself, which only macOS and Windows capture.
 const FOCUS_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
@@ -2813,11 +2852,19 @@ impl OverlayWindow {
             label.push_str(&format!("  ·  {w}:{h}"));
         }
         let arrangeable = crate::foreign_window::can_arrange();
+        // macOS only needs the user's OK, so the chip walks them through it.
+        let needs_permission = !arrangeable && cfg!(target_os = "macos");
+        let app = self
+            .select
+            .read(cx)
+            .active_window()
+            .map(|window| window.app_name.clone())
+            .filter(|name| !name.is_empty());
         let hint = if arrangeable {
             Hint::new(tr::overlay::window::size_title()).body(tr::overlay::window::size_body())
-        } else if cfg!(target_os = "macos") {
-            Hint::new(tr::overlay::window::size_needs_accessibility_title())
-                .body(tr::overlay::window::size_needs_accessibility_body())
+        } else if needs_permission {
+            Hint::new(tr::overlay::window::size_needs_permission_title())
+                .body(tr::overlay::window::size_needs_permission_body())
         } else {
             Hint::new(tr::overlay::window::size_unavailable_title())
                 .body(tr::overlay::window::size_unavailable_body())
@@ -2846,6 +2893,23 @@ impl OverlayWindow {
                         cx.stop_propagation();
                         this.open_window_menu(event.position(), cx);
                     }))
+            })
+            .when(needs_permission, move |chip| {
+                chip.cursor_pointer()
+                    .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let app = app.clone();
+                        // The picker dims every screen above System Settings,
+                        // so it closes for the help; the main window comes
+                        // back once the help does.
+                        cx.defer(move |cx| {
+                            crate::permission_help::show_from_picker(
+                                crate::permission_help::Need::WindowControl { app },
+                                cx,
+                            )
+                        });
+                    })
             })
     }
 
@@ -3225,6 +3289,18 @@ impl OverlayWindow {
         raise: bool,
         cx: &mut Context<Self>,
     ) {
+        self.arrange_active_window_after(arrangement, raise, false, cx);
+    }
+
+    /// [`Self::arrange_active_window`]; `after_prompt` marks the one retry
+    /// that follows macOS asking the user to let Cap control the app.
+    fn arrange_active_window_after(
+        &mut self,
+        arrangement: Arrangement,
+        raise: bool,
+        after_prompt: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(window) = self.select.read(cx).active_window().cloned() else {
             return;
         };
@@ -3241,6 +3317,11 @@ impl OverlayWindow {
         let before = window.bounds;
         let requested = id.clone();
         let select = self.select.clone();
+        let needs_app_choice = resize_needs_app_choice(&arrangement);
+        let retry_frame = match &arrangement {
+            Arrangement::Frame(frame) => Some(*frame),
+            Arrangement::PutBack(_) => None,
+        };
         cx.spawn(async move |this, cx| {
             let moved = crate::foreign_window::in_order(move || {
                 let arranged = match arrangement {
@@ -3275,6 +3356,60 @@ impl OverlayWindow {
             let (arranged, fresh) = moved;
             if !arranged {
                 tracing::warn!("the picked window could not be arranged");
+                // From macOS 27.3 Cap can hold the grant yet still not be
+                // allowed to control this app (it is not one of the apps
+                // chosen for Cap under System & App Protection Override).
+                if needs_app_choice {
+                    // An app set to "Ask First" makes macOS ask the user
+                    // right now; let that prompt do its job and try again
+                    // once it closes. Help only when nobody is asking, or
+                    // the user said no.
+                    if !after_prompt && let Some(frame) = retry_frame {
+                        let asked = wait_for_app_control_prompt(cx).await;
+                        cx.update(|cx| app_windows::lower_target_overlays(false, cx));
+                        if asked {
+                            let same = requested.clone();
+                            this.update(cx, |this, cx| {
+                                let still_picked = this
+                                    .select
+                                    .read(cx)
+                                    .active_window()
+                                    .is_some_and(|window| window.id == same);
+                                if still_picked {
+                                    this.arrange_active_window_after(
+                                        Arrangement::Frame(frame),
+                                        raise,
+                                        true,
+                                        cx,
+                                    );
+                                }
+                            })
+                            .ok();
+                            return;
+                        }
+                    }
+                    // Only for the window still picked in a live picker: the
+                    // user may have moved on while the move was refused.
+                    let still_picked = this
+                        .update(cx, |_, cx| {
+                            select
+                                .read(cx)
+                                .active_window()
+                                .is_some_and(|window| window.id == requested)
+                        })
+                        .unwrap_or(false);
+                    if !still_picked {
+                        return;
+                    }
+                    let app = Some(window.app_name.clone()).filter(|name| !name.is_empty());
+                    cx.update(|cx| {
+                        crate::permission_help::show_from_picker(
+                            crate::permission_help::Need::WindowControl { app },
+                            cx,
+                        )
+                    });
+                    return;
+                }
             }
             // Only while this picker is still up with the same window picked:
             // a slow move must not replace a newer choice.
