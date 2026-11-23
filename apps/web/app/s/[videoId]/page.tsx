@@ -100,6 +100,7 @@ import {
 } from "@/lib/video-edits";
 import { getSharedSpacesForVideo as loadSharedSpacesForVideo } from "@/lib/video-shared-spaces";
 import { getVideoViewCount } from "@/lib/video-view-count";
+import { withoutCreatorClient } from "@/lib/viewer-video-metadata";
 import { isWebStudioEnabledForEmail } from "@/lib/web-studio-rollout";
 import { optionFromTOrFirst } from "@/utils/effect";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -401,7 +402,9 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 		}
 
 		return Option.fromNullable(
-			row && row.organizationTombstoneAt === null ? toShareVideo(row) : null,
+			row && row.organizationTombstoneAt === null
+				? withoutCreatorClient(toShareVideo(row))
+				: null,
 		);
 	}).pipe(
 		Effect.flatten,
