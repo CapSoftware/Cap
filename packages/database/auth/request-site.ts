@@ -17,6 +17,14 @@ const parseUrl = (value: string | null | undefined) => {
 	}
 };
 
+const getWebUrl = () => {
+	try {
+		return parseUrl(serverEnv().WEB_URL);
+	} catch {
+		return null;
+	}
+};
+
 const isOwnOrigin = (origin: URL, request: SiteCheckedRequest) => {
 	const ownHosts = [
 		request.headers.get("x-forwarded-host")?.split(",")[0]?.trim(),
@@ -24,14 +32,17 @@ const isOwnOrigin = (origin: URL, request: SiteCheckedRequest) => {
 		parseUrl(request.url)?.host,
 	];
 	if (ownHosts.includes(origin.host)) return true;
+	return getWebUrl()?.origin === origin.origin;
+};
 
-	let webUrl: string | undefined;
-	try {
-		webUrl = serverEnv().WEB_URL;
-	} catch {
-		return false;
-	}
-	return parseUrl(webUrl)?.origin === origin.origin;
+const isOwnSiteOrigin = (origin: URL, request: SiteCheckedRequest) => {
+	if (isOwnOrigin(origin, request)) return true;
+	const webUrl = getWebUrl();
+	if (!webUrl || webUrl.protocol !== origin.protocol) return false;
+	const counterpart = webUrl.host.startsWith("www.")
+		? webUrl.host.slice(4)
+		: `www.${webUrl.host}`;
+	return origin.host === counterpart;
 };
 
 // Callers must only consult this on the cookie-auth path: a successfully
@@ -46,7 +57,14 @@ export const isCrossSiteCookieWrite = (request: SiteCheckedRequest) => {
 	// predate fetch metadata and for plain-http self-hosted installs, where
 	// browsers do not send Sec-Fetch-* headers.
 	const fetchSite = request.headers.get("sec-fetch-site");
-	if (fetchSite) return fetchSite === "cross-site";
+	if (fetchSite === "cross-site") return true;
+	// same-site also covers every sibling subdomain, so a same-site write must
+	// come from the app itself or its www counterpart.
+	if (fetchSite === "same-site") {
+		const sameSiteOrigin = parseUrl(request.headers.get("origin"));
+		return !sameSiteOrigin || !isOwnSiteOrigin(sameSiteOrigin, request);
+	}
+	if (fetchSite) return false;
 
 	const origin = request.headers.get("origin");
 	if (!origin) return false;

@@ -3,16 +3,17 @@ import { videoProcessingJobs } from "@cap/database/schema";
 import { inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { DESKTOP_RECORDING_SOURCE_REUPLOAD_REQUIRED } from "@/lib/desktop-recording-jobs";
+import { integer } from "@/utils/zod";
 
 const RECOVERY_GRACE_MS = 30 * 60 * 1_000;
 
 const countsSchema = z.object({
-	stalledWorkers: z.number().int().nonnegative(),
-	stalledCommits: z.number().int().nonnegative(),
-	retryLoops: z.number().int().nonnegative(),
-	blockedCommittedSources: z.number().int().nonnegative(),
-	changedSources: z.number().int().nonnegative(),
-	awaitingSourceReupload: z.number().int().nonnegative(),
+	stalledWorkers: integer().nonnegative(),
+	stalledCommits: integer().nonnegative(),
+	retryLoops: integer().nonnegative(),
+	blockedCommittedSources: integer().nonnegative(),
+	changedSources: integer().nonnegative(),
+	awaitingSourceReupload: integer().nonnegative(),
 });
 
 export async function getDesktopRecordingHealth({

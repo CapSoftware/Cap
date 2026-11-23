@@ -63,12 +63,19 @@ export async function sendDownloadLink(email: string) {
 	}
 
 	try {
-		await sendEmail({
+		const delivery = await sendEmail({
 			email: sanitized,
-			subject: "Your Cap download links",
+			subject: "Your Cap download link",
 			react: DownloadLink({ email: sanitized }),
 			marketing: true,
 		});
+
+		if (!delivery?.data) {
+			return {
+				success: false,
+				error: "Something went wrong. Please try again.",
+			};
+		}
 
 		return { success: true };
 	} catch {

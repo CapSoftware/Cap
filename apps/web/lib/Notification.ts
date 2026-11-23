@@ -10,6 +10,7 @@ import { Comment, User, Video } from "@cap/web-domain";
 import { and, eq, gte, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { getSessionHash } from "@/lib/anonymous-names";
+import { queueNotificationPush } from "@/lib/mobile-push";
 
 export type NotificationType = Notification["type"];
 
@@ -160,6 +161,14 @@ export async function createNotification(
 				videoId: notification.videoId,
 			});
 
+			queueNotificationPush({
+				type,
+				recipientId,
+				videoId: notification.videoId,
+				authorId: notification.authorId,
+				content: notification.comment.content,
+			});
+
 			return { success: true, notificationId };
 		}
 
@@ -233,6 +242,14 @@ export async function createNotification(
 			type,
 			data,
 			videoId: notification.videoId,
+		});
+
+		queueNotificationPush({
+			type,
+			recipientId: videoResult.ownerId,
+			videoId: notification.videoId,
+			authorId: notification.authorId,
+			content: "comment" in notification ? notification.comment.content : null,
 		});
 
 		if (type === "comment") {
@@ -400,6 +417,13 @@ export async function createAnonymousViewNotification({
 			videoId,
 			dedupKey,
 		});
+
+		queueNotificationPush({
+			type: "anon_view",
+			recipientId: videoWithOwner.ownerId,
+			videoId,
+			anonName,
+		});
 	} catch (error) {
 		if (isDuplicateEntryError(error)) return;
 		throw error;
@@ -437,13 +461,6 @@ export async function sendFirstViewEmail(
 		if (!params.isAnonymous && params.viewerUserId === videoWithOwner.ownerId)
 			return;
 
-		const preferences = videoWithOwner.preferences as UserPreferences;
-		if (params.isAnonymous) {
-			if (preferences?.notifications?.pauseAnonViews) return;
-		} else {
-			if (preferences?.notifications?.pauseViews) return;
-		}
-
 		const [result] = await database
 			.update(videos)
 			.set({ firstViewEmailSentAt: new Date() })
@@ -455,6 +472,15 @@ export async function sendFirstViewEmail(
 			);
 
 		if (result.affectedRows === 0) return;
+
+		// The first view is claimed even when its email is paused: later views
+		// aren't the first, and Loops reads this column as "the Cap was shared".
+		const preferences = videoWithOwner.preferences as UserPreferences;
+		if (params.isAnonymous) {
+			if (preferences?.notifications?.pauseAnonViews) return;
+		} else {
+			if (preferences?.notifications?.pauseViews) return;
+		}
 
 		let viewerName: string;
 		if (params.isAnonymous) {

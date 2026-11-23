@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
 	objects: {} as Record<string, string>,
 	source: { type: "MediaConvert" } as { type: string },
 	sign: vi.fn(),
+	viewerId: null as string | null,
+	overShareLimit: vi.fn(async () => false),
 	dispose: async () => {},
 }));
 
@@ -18,6 +20,7 @@ vi.mock("@cap/env", () => ({
 vi.mock("@cap/web-backend", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@cap/web-backend")>();
 	const { Context, Effect, Option } = await import("effect");
+	const { CurrentUser } = await import("@cap/web-domain");
 	const bucket = {
 		provider: "s3",
 		getObject: (key: string) =>
@@ -32,7 +35,12 @@ vi.mock("@cap/web-backend", async (importOriginal) => {
 		...actual,
 		provideOptionalAuth: <A, E, R>(
 			effect: import("effect").Effect.Effect<A, E, R>,
-		) => effect,
+		) =>
+			mocks.viewerId
+				? Effect.provideService(effect, CurrentUser, {
+						id: mocks.viewerId,
+					} as Context.Tag.Service<typeof CurrentUser>)
+				: effect,
 		Storage: Object.assign(Context.GenericTag("LegacyPlaylistTestStorage"), {
 			getAccessForVideo: () => Effect.succeed([bucket, Option.none()] as const),
 		}),
@@ -79,6 +87,10 @@ vi.mock("@/lib/server", async () => {
 	};
 });
 
+vi.mock("@/lib/shareable-link-quota", () => ({
+	isVideoLockedByShareableLinkLimit: mocks.overShareLimit,
+}));
+
 import { GET } from "@/app/api/playlist/route";
 
 const request = (type: string) =>
@@ -94,6 +106,8 @@ describe("HLS playlists on default storage", () => {
 	beforeEach(() => {
 		mocks.objects = {};
 		mocks.source = { type: "MediaConvert" };
+		mocks.viewerId = null;
+		mocks.overShareLimit.mockReset().mockResolvedValue(false);
 	});
 	afterAll(() => mocks.dispose());
 
@@ -177,5 +191,31 @@ describe("HLS playlists on default storage", () => {
 		expect(response.headers.get("location")).toBe(
 			signed("owner/recording/result.mp4"),
 		);
+	});
+
+	it("refuses an over-limit video to anyone but its owner", async () => {
+		mocks.overShareLimit.mockResolvedValue(true);
+		mocks.sign.mockClear();
+		for (const type of ["mp4", "master", "video"]) {
+			expect((await request(type)).status).toBe(403);
+		}
+		mocks.viewerId = "viewer";
+		expect((await request("mp4")).status).toBe(403);
+		expect(mocks.sign).not.toHaveBeenCalled();
+		expect(mocks.overShareLimit).toHaveBeenCalledWith("recording");
+
+		mocks.viewerId = "owner";
+		mocks.overShareLimit.mockClear();
+		const response = await request("mp4");
+		expect(response.status).toBe(302);
+		expect(response.headers.get("location")).toBe(
+			signed("owner/recording/result.mp4"),
+		);
+		expect(mocks.overShareLimit).not.toHaveBeenCalled();
+	});
+
+	it("keeps serving the video when the quota check fails", async () => {
+		mocks.overShareLimit.mockRejectedValue(new Error("db down"));
+		expect((await request("mp4")).status).toBe(302);
 	});
 });

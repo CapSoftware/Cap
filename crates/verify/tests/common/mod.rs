@@ -98,6 +98,7 @@ pub fn set_cuts(config: &mut ProjectConfiguration, cuts: &[(f64, f64, f64)]) {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         })
         .collect();
@@ -116,6 +117,7 @@ pub fn set_clip_cuts(config: &mut ProjectConfiguration, cuts: &[(u32, f64, f64, 
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            voice_eq: None,
             volume: None,
         })
         .collect();
@@ -1208,6 +1210,7 @@ pub async fn realtime_playback(
         music: cap_editor::MusicTracks::new(),
         audio_output: Arc::new(audio_output),
         telemetry: Some(telemetry),
+        preview_speed: Default::default(),
     };
     let started = std::time::Instant::now();
     let handle = playback

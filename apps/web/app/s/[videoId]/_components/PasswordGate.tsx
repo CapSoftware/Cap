@@ -11,6 +11,7 @@ import {
 	PaperState,
 	paperStateStyles as styles,
 } from "@/components/paper-state/PaperState";
+import { TOO_MANY_PASSWORD_ATTEMPTS } from "@/lib/password-attempts";
 
 export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
 	const [password, setPassword] = useState("");
@@ -66,7 +67,9 @@ export function PasswordGate({ videoId }: { videoId: Video.VideoId }) {
 				</button>
 				{failed && (
 					<p className={styles.error} role="alert">
-						That password didn't work. Check it and try again.
+						{verifyPassword.error.message === TOO_MANY_PASSWORD_ATTEMPTS
+							? TOO_MANY_PASSWORD_ATTEMPTS
+							: "That password didn't work. Check it and try again."}
 					</p>
 				)}
 			</form>

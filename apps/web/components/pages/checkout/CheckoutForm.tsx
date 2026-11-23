@@ -19,7 +19,10 @@ import {
 	useId,
 	useState,
 } from "react";
-import { changeProCheckoutPlan } from "@/actions/billing/checkout";
+import {
+	changeProCheckoutPlan,
+	setProCheckoutUsEin,
+} from "@/actions/billing/checkout";
 import { trackEvent } from "@/app/utils/analytics";
 import {
 	BODY_TEXT,
@@ -30,6 +33,7 @@ import {
 import { Segmented } from "@/components/pages/pricing/controls";
 import { homepageCopy } from "@/data/homepage-copy";
 import type { CheckoutPlan } from "@/lib/checkout/plans";
+import { formatUsEin, usEinChange } from "@/lib/checkout/us-ein";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import {
 	CARD,
@@ -169,6 +173,7 @@ export function CheckoutForm({
 		>
 			<PaymentForm
 				checkout={checkout}
+				clientSecret={clientSecret}
 				email={email}
 				seatsPending={seatsPending}
 			/>
@@ -412,12 +417,10 @@ function SeatControl({
 	const valid =
 		Number.isInteger(seats) && seats >= 1 && seats <= MAX_CHECKOUT_QUANTITY;
 
-	useEffect(() => {
-		setDraft(String(quantity));
-	}, [quantity]);
-
 	// A chosen count only reaches Stripe after the debounce and the update
-	// request, so payment waits until the session's quantity matches it.
+	// request, so payment waits until the session's quantity matches it. The
+	// draft never follows the session's quantity: an update landing while the
+	// buyer is still picking would undo their newer pick.
 	const pending = valid && seats !== quantity;
 	useEffect(() => {
 		onPendingChange(pending);
@@ -431,7 +434,11 @@ function SeatControl({
 				quantity: seats,
 			});
 			setFailed(result.type === "error");
-			if (result.type === "error") setDraft(String(quantity));
+			if (result.type === "error") {
+				setDraft((current) =>
+					Number(current) === seats ? String(quantity) : current,
+				);
+			}
 		}, SEAT_COMMIT_DELAY_MS);
 		return () => clearTimeout(timer);
 	}, [checkout, lineItemId, quantity, seats, valid]);
@@ -504,6 +511,10 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 	const [code, setCode] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	// A partner referral discount is applied as a coupon. Stripe won't stack a
+	// promotion code on top of it, so there is nothing to offer here.
+	if (!applied && checkout.discountAmounts?.length) return null;
 
 	if (applied?.promotionCode) {
 		return (
@@ -598,10 +609,12 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 
 function PaymentForm({
 	checkout,
+	clientSecret,
 	email,
 	seatsPending,
 }: {
 	checkout: Checkout;
+	clientSecret: Promise<string>;
 	email: string | null;
 	seatsPending: boolean;
 }) {
@@ -612,6 +625,15 @@ function PaymentForm({
 	const [guestEmail, setGuestEmail] = useState(checkout.email ?? "");
 	const [emailError, setEmailError] = useState<string | null>(null);
 	const [company, setCompany] = useState(hasCompanyDetails(checkout));
+	const einId = useId();
+	const [ein, setEin] = useState("");
+	const [appliedEin, setAppliedEin] = useState<string | null>(null);
+	const [einSaveUnconfirmed, setEinSaveUnconfirmed] = useState(false);
+	const [einError, setEinError] = useState<string | null>(null);
+	const [addressCountry, setAddressCountry] = useState(
+		checkout.billingAddress?.address.country ?? null,
+	);
+	const usCompany = company && addressCountry === "US";
 	const [walletsAvailable, setWalletsAvailable] = useState(false);
 	// Phones get one full-width wallet button (Apple Pay on iPhone, Google Pay
 	// on Android) instead of two squeezed side by side.
@@ -650,6 +672,32 @@ function PaymentForm({
 		return true;
 	};
 
+	const applyUsEin = async () => {
+		const change = usEinChange({
+			ein,
+			usCompany,
+			appliedEin,
+			saveUnconfirmed: einSaveUnconfirmed,
+		});
+		if (change.state === "invalid") {
+			setEinError("Enter your EIN as 9 digits, like 12-3456789.");
+			return false;
+		}
+		if (change.state === "unchanged") return true;
+		const result = await setProCheckoutUsEin({
+			clientSecret: await clientSecret,
+			ein: change.ein ?? "",
+		});
+		if (!result.ok) {
+			setEinSaveUnconfirmed(true);
+			setError("Couldn't save your EIN. Please try again.");
+			return false;
+		}
+		setEinSaveUnconfirmed(false);
+		setAppliedEin(change.ein);
+		return true;
+	};
+
 	const confirm = async (
 		expressCheckoutConfirmEvent?: StripeExpressCheckoutElementConfirmEvent,
 	) => {
@@ -670,6 +718,11 @@ function PaymentForm({
 				setSubmitting(false);
 				return;
 			}
+		}
+		if (!(await applyUsEin())) {
+			setSubmitting(false);
+			expressCheckoutConfirmEvent?.paymentFailed();
+			return;
 		}
 		trackEvent("checkout_payment_submitted", {
 			method: expressCheckoutConfirmEvent ? "express" : "form",
@@ -878,7 +931,47 @@ function PaymentForm({
 								},
 							}}
 						/>
-						<BillingAddressElement />
+						<BillingAddressElement
+							onChange={(event) =>
+								setAddressCountry(event.value.address.country)
+							}
+						/>
+						{usCompany ? (
+							<div className="flex flex-col gap-1.5">
+								<label htmlFor={einId} className={LABEL}>
+									EIN (optional)
+								</label>
+								<input
+									id={einId}
+									inputMode="numeric"
+									autoComplete="off"
+									value={ein}
+									onChange={(event) => {
+										setEin(
+											event.target.value.replace(/[^\d-]/g, "").slice(0, 10),
+										);
+										if (einError) setEinError(null);
+									}}
+									onBlur={() => {
+										const formatted = formatUsEin(ein);
+										if (formatted) setEin(formatted);
+									}}
+									placeholder="12-3456789"
+									aria-invalid={Boolean(einError)}
+									aria-describedby={einError ? `${einId}-error` : undefined}
+									className={INPUT}
+								/>
+								{einError ? (
+									<p
+										id={`${einId}-error`}
+										role="alert"
+										className="text-[13px] text-[#B4322E]"
+									>
+										{einError}
+									</p>
+								) : null}
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</section>

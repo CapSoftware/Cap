@@ -7,6 +7,9 @@ struct MockHost {
     actions_run: Mutex<Vec<String>>,
     upload_results: Mutex<VecDeque<Result<(), String>>>,
     upload_verification: Result<bool, String>,
+    export_result: Result<(), String>,
+    delete_guard: Option<fn(Option<PrecedingAction<'_>>) -> Result<(), String>>,
+    preceding_seen: Mutex<Vec<Option<(String, bool)>>>,
 }
 
 impl MockHost {
@@ -16,6 +19,9 @@ impl MockHost {
             actions_run: Mutex::new(Vec::new()),
             upload_results: Mutex::new(VecDeque::new()),
             upload_verification: Ok(false),
+            export_result: Ok(()),
+            delete_guard: None,
+            preceding_seen: Mutex::new(Vec::new()),
         }
     }
 
@@ -59,7 +65,7 @@ impl AutomationHost for MockHost {
         _dest: &ExportDestination,
     ) -> Result<(), String> {
         self.record("export");
-        Ok(())
+        self.export_result.clone()
     }
 
     async fn upload(
@@ -140,6 +146,20 @@ impl AutomationHost for MockHost {
     async fn delete_local_files(&self, _ctx: &TriggerContext) -> Result<(), String> {
         self.record("delete_local_files");
         Ok(())
+    }
+
+    async fn verify_before_delete(
+        &self,
+        _ctx: &TriggerContext,
+        preceding: Option<PrecedingAction<'_>>,
+    ) -> Result<(), String> {
+        self.preceding_seen.lock().unwrap().push(
+            preceding.map(|preceding| (format!("{:?}", preceding.action), preceding.succeeded)),
+        );
+        match self.delete_guard {
+            Some(guard) => guard(preceding),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1027,6 +1047,25 @@ fn sanitize_filename_component_neutralizes_traversal_and_reserved_chars() {
 }
 
 #[test]
+fn sanitized_unicode_title_fits_a_filename_without_splitting_characters() {
+    let title = "界".repeat(100);
+    let sanitized = sanitize_filename_component(&title);
+    assert_eq!(sanitized, "界".repeat(42));
+    assert!(sanitized.len() <= 128);
+    assert_eq!(
+        sanitize_filename_component(&format!("{}界", "a".repeat(127))),
+        "a".repeat(127)
+    );
+
+    let dir = std::env::temp_dir().join(format!("cap-automation-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let result = std::fs::write(dir.join(format!("{sanitized}.png")), b"capture");
+    let cleanup = std::fs::remove_dir_all(&dir);
+    result.unwrap();
+    cleanup.unwrap();
+}
+
+#[test]
 fn multiple_rules_same_trigger() {
     let rule1 = AutomationRule {
         id: "a".to_string(),
@@ -1056,4 +1095,115 @@ fn multiple_rules_same_trigger() {
 
     let matched = evaluate(&store, &Trigger::ScreenshotTaken, &TriggerContext::new());
     assert_eq!(matched.len(), 2);
+}
+
+fn export_then_delete_store() -> AutomationsStore {
+    let mut store = AutomationsStore {
+        version: 1,
+        rules: vec![studio_export_rule()],
+    };
+    store.rules[0].conditions.clear();
+    store.rules[0].actions.push(Action::DeleteLocalFiles);
+    store
+}
+
+fn require_successful_export(preceding: Option<PrecedingAction<'_>>) -> Result<(), String> {
+    match preceding {
+        Some(PrecedingAction {
+            action: Action::Export { .. },
+            succeeded: true,
+        }) => Ok(()),
+        _ => Err("refused".to_string()),
+    }
+}
+
+#[tokio::test]
+async fn delete_guard_sees_the_action_right_before_it_and_its_outcome() {
+    for export_succeeds in [true, false] {
+        let mut host = MockHost::new(desktop_capabilities());
+        if !export_succeeds {
+            host.export_result = Err("encoder failed".to_string());
+        }
+        let result = run(
+            &host,
+            &export_then_delete_store(),
+            &Trigger::StudioRecordingFinished,
+            &TriggerContext::new(),
+        )
+        .await;
+        let seen = host.preceding_seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        let (action, succeeded) = seen[0].clone().unwrap();
+        assert!(action.starts_with("Export"), "{action}");
+        assert_eq!(succeeded, export_succeeds);
+        assert_eq!(result[0].action_results[0].success, export_succeeds);
+    }
+}
+
+#[tokio::test]
+async fn delete_guard_refusal_keeps_files_and_reports_the_reason() {
+    let mut host = MockHost::new(desktop_capabilities());
+    host.export_result = Err("encoder failed".to_string());
+    host.delete_guard = Some(require_successful_export);
+    let result = run(
+        &host,
+        &export_then_delete_store(),
+        &Trigger::StudioRecordingFinished,
+        &TriggerContext::new(),
+    )
+    .await;
+    assert_eq!(host.actions_run(), vec!["export"]);
+    let delete = &result[0].action_results[1];
+    assert!(!delete.success);
+    assert_eq!(delete.error.as_deref(), Some("refused"));
+
+    let mut host = MockHost::new(desktop_capabilities());
+    host.delete_guard = Some(require_successful_export);
+    let mut store = export_then_delete_store();
+    store.rules[0].actions.remove(0);
+    let result = run(
+        &host,
+        &store,
+        &Trigger::StudioRecordingFinished,
+        &TriggerContext::new(),
+    )
+    .await;
+    assert!(host.actions_run().is_empty());
+    assert_eq!(*host.preceding_seen.lock().unwrap(), vec![None]);
+    assert!(!result[0].action_results[0].success);
+
+    let mut host = MockHost::new(desktop_capabilities());
+    host.delete_guard = Some(require_successful_export);
+    run(
+        &host,
+        &export_then_delete_store(),
+        &Trigger::StudioRecordingFinished,
+        &TriggerContext::new(),
+    )
+    .await;
+    assert_eq!(host.actions_run(), vec!["export", "delete_local_files"]);
+}
+
+#[tokio::test]
+async fn delete_guard_runs_only_after_upload_checks_pass() {
+    let mut host = MockHost::new(desktop_capabilities());
+    host.delete_guard = Some(require_successful_export);
+    let store = upload_cleanup_store(
+        Trigger::StudioRecordingFinished,
+        vec![upload_action(), Action::DeleteLocalFiles],
+    );
+    let result = run(
+        &host,
+        &store,
+        &Trigger::StudioRecordingFinished,
+        &TriggerContext::new(),
+    )
+    .await;
+    assert!(host.preceding_seen.lock().unwrap().is_empty());
+    assert!(!result[0].action_results[1].success);
+    assert!(
+        !host
+            .actions_run()
+            .contains(&"delete_local_files".to_string())
+    );
 }

@@ -2,17 +2,11 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
-import {
-	organizationInvites,
-	organizationMembers,
-	spaceMembers,
-	spaces,
-	users,
-} from "@cap/database/schema";
+import { organizationMembers, users } from "@cap/database/schema";
 import type { Organisation } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { deleteOrganizationMembership } from "@/lib/organization-member-removal";
 import {
 	canRemoveOrganizationMember,
 	getEffectiveOrganizationRole,
@@ -73,46 +67,7 @@ export async function removeOrganizationMember(
 			throw new Error("You do not have permission to remove this member");
 		}
 
-		const [result] = await tx
-			.delete(organizationMembers)
-			.where(
-				and(
-					eq(organizationMembers.id, memberId),
-					eq(organizationMembers.organizationId, organizationId),
-				),
-			);
-
-		if (result.affectedRows === 0) throw new Error("Member not found");
-
-		if (member.hasProSeat) {
-			await releaseProSeatSubscription(tx, member.userId);
-		}
-
-		const organizationSpaces = await tx
-			.select({ id: spaces.id })
-			.from(spaces)
-			.where(eq(spaces.organizationId, organizationId));
-		const spaceIds = organizationSpaces.map((space) => space.id);
-
-		if (spaceIds.length > 0) {
-			await tx
-				.delete(spaceMembers)
-				.where(
-					and(
-						eq(spaceMembers.userId, member.userId),
-						inArray(spaceMembers.spaceId, spaceIds),
-					),
-				);
-		}
-
-		await tx
-			.delete(organizationInvites)
-			.where(
-				and(
-					eq(organizationInvites.organizationId, organizationId),
-					eq(organizationInvites.invitedEmail, member.email.toLowerCase()),
-				),
-			);
+		await deleteOrganizationMembership(tx, organizationId, member);
 	});
 
 	revalidatePath("/dashboard/settings/organization");

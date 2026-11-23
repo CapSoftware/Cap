@@ -117,6 +117,7 @@ fn audible_spec_with_duration(duration_secs: usize) -> PlaySpec {
         duration_secs: duration_secs as f64,
         start_playhead_secs: 0.0,
         playhead_rx,
+        preview_speed: Default::default(),
     }
 }
 
@@ -422,6 +423,7 @@ fn preparing_test_sources(
             audio_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
             camera3d_segments: Vec::new(),
             transitions: Vec::new(),
         }),

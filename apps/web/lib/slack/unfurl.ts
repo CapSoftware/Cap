@@ -1,9 +1,11 @@
 import { Video } from "@cap/web-domain";
 import { parseCapShareUrl } from "@/lib/oembed";
+import { formatClock } from "@/lib/player-time";
 import {
 	getPublicShareVideo,
 	type PublicShareVideo,
 } from "@/lib/public-share-video";
+import { buildVideoOgImageUrl } from "@/lib/share-video-metadata";
 import { sendSlackUnfurl } from "./client";
 import {
 	deleteSlackInstallationByTeamId,
@@ -41,10 +43,7 @@ const truncate = (value: string, maxLength: number) =>
 
 const formatDuration = (duration: number | null) => {
 	if (!duration || duration <= 0) return "Watch this recording on Cap";
-	const seconds = Math.round(duration);
-	const minutes = Math.floor(seconds / 60);
-	const remainder = seconds % 60;
-	return `Watch this ${minutes}:${remainder.toString().padStart(2, "0")} recording on Cap`;
+	return `Watch this ${formatClock(Math.round(duration))} recording on Cap`;
 };
 
 export const buildSlackVideoBlock = ({
@@ -60,8 +59,11 @@ export const buildSlackVideoBlock = ({
 	const embedUrl = new URL(`/embed/${video.id}`, webUrl);
 	embedUrl.searchParams.set("autoplay", "true");
 	embedUrl.searchParams.set("slack", "true");
-	const thumbnailUrl = new URL("/api/video/og", webUrl);
-	thumbnailUrl.searchParams.set("videoId", video.id);
+	const thumbnailUrl = buildVideoOgImageUrl({
+		videoId: video.id,
+		webUrl,
+		thumbnailVersion: video.thumbnailVersion,
+	});
 
 	return {
 		type: "video",
@@ -78,7 +80,7 @@ export const buildSlackVideoBlock = ({
 		},
 		video_url: embedUrl.toString(),
 		alt_text: truncate(`Watch ${video.name}`, 200),
-		thumbnail_url: thumbnailUrl.toString(),
+		thumbnail_url: thumbnailUrl,
 		provider_name: "Cap",
 		...(video.ownerName ? { author_name: truncate(video.ownerName, 49) } : {}),
 	};
@@ -183,7 +185,8 @@ export const processSlackEvent = async ({
 	const uniqueLinks = [
 		...new Map(payload.event.links.map((link) => [link.url, link])).values(),
 	].slice(0, 5);
-	const resolved = await Promise.all(
+	// A failed lookup must not suppress unfurls for other links in the event.
+	const resolved = await Promise.allSettled(
 		uniqueLinks.map(async (link) => {
 			const videoId = parseCapShareUrl(link.url);
 			if (!videoId) return null;
@@ -201,9 +204,22 @@ export const processSlackEvent = async ({
 			] as const;
 		}),
 	);
+	// A rejected lookup is different from an inaccessible video (which returns
+	// null). Retain an error trail while allowing the other links to unfurl.
+	for (const [index, result] of resolved.entries()) {
+		if (result.status === "rejected") {
+			const link = uniqueLinks[index];
+			console.warn("Slack unfurl video lookup failed", {
+				videoId: link ? parseCapShareUrl(link.url) : null,
+				error: result.reason,
+			});
+		}
+	}
 	const unfurls = Object.fromEntries(
-		resolved.filter(
-			(entry): entry is NonNullable<typeof entry> => entry !== null,
+		resolved.flatMap((result) =>
+			result.status === "fulfilled" && result.value !== null
+				? [result.value]
+				: [],
 		),
 	);
 	if (Object.keys(unfurls).length === 0) return;

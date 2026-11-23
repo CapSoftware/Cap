@@ -1,0 +1,79 @@
+---
+title: "Introducing Cap Infra"
+description: The infrastructure we built to run Cap is now open to everyone. Upload a video and get adaptive streaming up to 4K and a player, or send audio and get a transcript. Uploading and encoding are free.
+publishedAt: "2026-11-13"
+category: Technical
+image: /blog/introducing-cap-infra.jpg
+video: /blog/introducing-cap-infra.mp4
+author: Richie McIlroy
+tags: Infrastructure, Video, API, Performance
+layout: feature
+---
+
+From today, anyone can build on the infrastructure that runs Cap. We're calling it Cap Infra.
+
+Every Cap recording is uploaded, encoded on our own GPU farm, transcribed and served from a CDN, usually within seconds of you pressing stop. Cap Infra gives you that same pipeline through an API.
+
+<InfraFilm />
+
+## What you get
+
+Upload a video and you get adaptive streaming up to 4K, an MP4, a poster, a hosted player and an embed.
+
+<InfraLadder />
+
+Your server creates the upload and the browser sends the file straight to storage, so your secret key never leaves your server.
+
+<InfraCode />
+
+Speech to text works on its own too. Send audio or video and you get back a transcript with word timings.
+
+## How it's built
+
+<InfraPipeline />
+
+We operate and maintain our own GPU farm. Each upload is decoded once and every rendition is encoded from it at the same time, so a full ladder costs us very little to make.
+
+A video can be played as soon as its first output is done, and the rest finish in the background.
+
+<InfraSpeed />
+
+Transcription runs on the same GPUs with our own speech recognition. In our tests an hour of audio takes under 24 seconds.
+
+## Reliable
+
+It's the same system every Cap recording goes through, all day, every day.
+
+- **Room for everyone.** Each worker limits how many high resolution Cap Infra encodes it runs at once, so one busy app can't slow everyone else down.
+- **Careful rollouts.** New versions go to one worker first, and rolling back takes a restart.
+- **Health checks and alarms.** Unhealthy workers stop getting work, and we get paged when capacity drops.
+- **Awkward files.** Phone videos with variable frame rates and unusual audio formats are handled properly. Anything we can't process safely is refused with a reason.
+- **Open source.** The API, media server and player are all on [GitHub](https://github.com/CapSoftware/Cap).
+
+## Safe for health data
+
+We work with a lot of healthcare companies. Cap is proudly HIPAA compliant, as well as SOC 2 Type II and ISO 27001 certified, and Cap Infra runs on the same infrastructure. You can buy a signed BAA straight from your [organization settings](/dashboard/settings/organization).
+
+## Pricing
+
+You pay for storing video, delivering it and transcribing audio. Uploading, encoding and the player are free.
+
+<InfraPrices />
+
+Storage is charged per minute of video, and the rate depends on resolution, so a 1080p video costs less to keep than a 4K one. A video pays for its first month once it's ready, then by the day after that.
+
+Delivery is $0.95 per 1,000 delivered minutes, at every resolution, billed from 14 November 2026. A delivered minute is a minute of video your viewers' players download.
+
+You buy prepaid credits for each app, with auto top-up if you want it. Cap Pro includes $5 of credit every month.
+
+## How we compare
+
+At list prices, storing video on Cap Infra costs a lot less than on other video APIs, and delivering 4K costs the same as 1080p.
+
+<InfraCompare />
+
+## Bring your agent
+
+Paste one prompt into Claude Code, Codex or Cursor and it wires up uploads and playback for you. There's an MCP server too, and the [docs](/docs/api/get-started) if you'd rather do it yourself.
+
+<InfraCta />

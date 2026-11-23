@@ -69,6 +69,7 @@ pub struct CameraFeed {
 pub struct NativeCameraIngress {
     senders: std::sync::atomic::AtomicUsize,
     mailbox_full: std::sync::atomic::AtomicU64,
+    mjpeg_budget: Arc<MjpegOverlayBudget>,
 }
 
 impl NativeCameraIngress {
@@ -165,11 +166,12 @@ enum State {
 }
 
 impl State {
-    fn try_as_open(&mut self) -> Result<&mut OpenState, FeedLockedError> {
-        let is_stale = matches!(self, Self::Locked { token, .. } if token.strong_count() == 0);
-
-        if is_stale {
-            warn!("Detected stale camera feed lock, auto-recovering");
+    /// Opens a lock whose every holder has dropped it. Dropping the lock only
+    /// queues its `Unlock`, so a message sent right after the drop can get
+    /// here first.
+    fn release_dropped_lock(&mut self) -> bool {
+        let dropped = matches!(self, Self::Locked { token, .. } if token.strong_count() == 0);
+        if dropped {
             replace_with_or_abort(self, |state| {
                 if let Self::Locked { inner, .. } = state {
                     Self::Open(OpenState {
@@ -180,6 +182,13 @@ impl State {
                     state
                 }
             });
+        }
+        dropped
+    }
+
+    fn try_as_open(&mut self) -> Result<&mut OpenState, FeedLockedError> {
+        if self.release_dropped_lock() {
+            warn!("Detected stale camera feed lock, auto-recovering");
         }
 
         if let Self::Open(open_state) = self {
@@ -346,6 +355,98 @@ impl CameraFeedLock {
 
     pub fn video_info(&self) -> &VideoInfo {
         &self.video_info
+    }
+
+    /// Pins MJPEG decode at full resolution for the guard's lifetime.
+    /// Studio camera tracks hold this so an instant overlay budget cannot shrink them.
+    pub fn hold_full_resolution(&self) -> MjpegFullResHold {
+        MjpegOverlayBudget::hold_full(&self.native_ingress.mjpeg_budget)
+    }
+
+    /// Allows a scaled MJPEG IDCT that still covers `width`×`height`.
+    /// A studio full-resolution hold overrides this.
+    pub fn hold_instant_overlay(&self, width: u32, height: u32) -> MjpegOverlayHold {
+        MjpegOverlayBudget::hold_overlay(&self.native_ingress.mjpeg_budget, width, height)
+    }
+}
+
+/// Shared with the Linux capture thread. Studio increments `full_res_holds`;
+/// instant mode publishes the overlay rectangle. Full resolution wins.
+/// The mutex keeps an older hold from publishing over, or clearing, a newer one.
+#[derive(Debug, Default)]
+struct MjpegOverlayBudget {
+    state: std::sync::Mutex<MjpegOverlayState>,
+}
+
+#[derive(Debug, Default)]
+struct MjpegOverlayState {
+    full_res_holds: usize,
+    overlay: u64,
+    overlay_generation: u64,
+}
+
+impl MjpegOverlayBudget {
+    fn lock(&self) -> std::sync::MutexGuard<'_, MjpegOverlayState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn overlay_target(&self) -> Option<(u32, u32)> {
+        let state = self.lock();
+        if state.full_res_holds > 0 {
+            return None;
+        }
+        let width = (state.overlay >> 32) as u32;
+        let height = state.overlay as u32;
+        (width > 0 && height > 0).then_some((width, height))
+    }
+
+    fn hold_full(budget: &Arc<Self>) -> MjpegFullResHold {
+        budget.lock().full_res_holds += 1;
+        MjpegFullResHold {
+            budget: Arc::clone(budget),
+        }
+    }
+
+    fn hold_overlay(budget: &Arc<Self>, width: u32, height: u32) -> MjpegOverlayHold {
+        let mut state = budget.lock();
+        state.overlay_generation = state.overlay_generation.wrapping_add(1);
+        let generation = state.overlay_generation;
+        state.overlay = if width == 0 || height == 0 {
+            0
+        } else {
+            (u64::from(width) << 32) | u64::from(height)
+        };
+        drop(state);
+        MjpegOverlayHold {
+            budget: Arc::clone(budget),
+            generation,
+        }
+    }
+}
+
+pub struct MjpegFullResHold {
+    budget: Arc<MjpegOverlayBudget>,
+}
+
+impl Drop for MjpegFullResHold {
+    fn drop(&mut self) {
+        let holds = &mut self.budget.lock().full_res_holds;
+        *holds = holds.saturating_sub(1);
+    }
+}
+
+pub struct MjpegOverlayHold {
+    budget: Arc<MjpegOverlayBudget>,
+    generation: u64,
+}
+
+impl Drop for MjpegOverlayHold {
+    fn drop(&mut self) {
+        let mut state = self.budget.lock();
+        if state.overlay_generation == self.generation {
+            state.overlay = 0;
+        }
     }
 }
 
@@ -1294,7 +1395,7 @@ async fn setup_camera(
     recipient: Recipient<NewFrame>,
     _native_recipient: Recipient<NewNativeFrame>,
     _ffmpeg_sender_count: Arc<std::sync::atomic::AtomicUsize>,
-    _native_ingress: Arc<NativeCameraIngress>,
+    native_ingress: Arc<NativeCameraIngress>,
     _cancel_rx: &mpsc::Receiver<()>,
 ) -> Result<SetupCameraResult, SetInputError> {
     let camera = find_camera(id).ok_or(SetInputError::DeviceNotFound)?;
@@ -1303,6 +1404,7 @@ async fn setup_camera(
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let mut ready_signal = Some(ready_tx);
+    let mjpeg_budget = Arc::clone(&native_ingress.mjpeg_budget);
 
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
@@ -1311,7 +1413,19 @@ async fn setup_camera(
 
             let timestamp = Timestamp::Instant(std::time::Instant::now());
 
-            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
+            // The first frame stays full resolution: VideoInfo is taken from it,
+            // and studio records that size. Scaled IDCT starts on later frames,
+            // and only while an instant overlay budget is set with no studio hold.
+            let overlay = if ready_signal.is_some() {
+                None
+            } else {
+                mjpeg_budget.overlay_target()
+            };
+            let decoded = match overlay {
+                Some((width, height)) => frame.as_ffmpeg_covering(width, height),
+                None => frame.as_ffmpeg(),
+            };
+            let Ok(mut ff_frame) = decoded else {
                 return;
             };
 
@@ -1388,6 +1502,11 @@ impl Message<SetInput> for CameraFeed {
             SetInputError::Initialisation
         );
 
+        // A Studio camera switch drops the recording's lock and selects the
+        // next camera at once; the lock's `Unlock` may still be queued.
+        if self.state.release_dropped_lock() {
+            debug!("CameraFeed.SetInput: the recording's lock was already dropped");
+        }
         if let State::Locked { inner, .. } = &self.state
             && inner.id != msg.id
         {
@@ -2046,7 +2165,7 @@ impl Message<Unlock> for CameraFeed {
 
 /// Test-only camera feeds driven by a synthetic device instead of hardware,
 /// so recording tests exercise the real feed, lock and pipeline paths.
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod synthetic {
     use super::*;
 
@@ -2158,6 +2277,31 @@ mod tests {
     }
 
     struct AttachedCamera;
+
+    /// The lock's `Unlock` is sent from a task after the drop, so a camera
+    /// selected right after a recording drops its lock can reach the feed
+    /// first. A lock nobody holds must not refuse it.
+    #[test]
+    fn a_dropped_lock_does_not_refuse_the_next_camera() {
+        let (connection, _stopped) = test_camera_connection(1);
+        let id = connection.id.clone();
+        let token = Arc::new(());
+        let mut state = State::Locked {
+            inner: AttachedState::new(id.clone(), connection),
+            token: Arc::downgrade(&token),
+        };
+        assert!(!state.release_dropped_lock());
+        assert!(matches!(state, State::Locked { .. }));
+        drop(token);
+        assert!(state.release_dropped_lock());
+        assert!(matches!(
+            state,
+            State::Open(OpenState {
+                connecting: None,
+                attached: Some(_)
+            })
+        ));
+    }
 
     #[tokio::test]
     async fn camera_reuse_requires_matching_settings_and_recent_frames() {
@@ -2655,6 +2799,37 @@ mod tests {
         feed.wait_for_stop().await;
     }
 
+    #[tokio::test]
+    async fn camera_selection_after_the_recording_drops_its_lock_is_accepted() {
+        let (connection, done_rx) = test_camera_connection(1);
+        let token = Arc::new(());
+        let camera = CameraFeed {
+            setup_slots: Arc::new(tokio::sync::Semaphore::new(0)),
+            lock_generation: 7,
+            setup_generation: 1,
+            state: State::Locked {
+                inner: AttachedState::new(connection.id.clone(), connection),
+                token: Arc::downgrade(&token),
+            },
+            ..CameraFeed::default()
+        };
+        let feed = CameraFeed::spawn(camera);
+        drop(token);
+        for id in ["different-camera", "another-camera"] {
+            let result = feed
+                .ask(SetInput {
+                    id: DeviceOrModelID::DeviceID(id.into()),
+                    settings: None,
+                })
+                .await;
+            assert!(result.is_ok());
+            feed.tell(Unlock { generation: 7 }).await.unwrap();
+        }
+        assert!(done_rx.try_recv().is_ok());
+        feed.kill();
+        feed.wait_for_stop().await;
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn camera_removal_does_not_block_on_an_already_queued_stop() {
         let (connection, done_rx) = test_camera_connection(1);
@@ -3139,5 +3314,41 @@ mod ingress_tests {
             eventually("overflow counted", || f.dropped.load(Relaxed) == 3).await;
             assert_eq!(f.rx.len(), capacity);
         }
+    }
+}
+
+#[cfg(test)]
+mod mjpeg_budget_tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn studio_hold_overrides_instant_overlay_until_both_are_released() {
+        let budget = Arc::new(MjpegOverlayBudget::default());
+        assert!(budget.overlay_target().is_none());
+
+        let overlay = MjpegOverlayBudget::hold_overlay(&budget, 324, 324);
+        assert_eq!(budget.overlay_target(), Some((324, 324)));
+
+        let studio = MjpegOverlayBudget::hold_full(&budget);
+        assert!(budget.overlay_target().is_none());
+        drop(studio);
+        assert_eq!(budget.overlay_target(), Some((324, 324)));
+
+        let replacement = MjpegOverlayBudget::hold_overlay(&budget, 200, 180);
+        drop(overlay);
+        assert_eq!(budget.overlay_target(), Some((200, 180)));
+        drop(replacement);
+        assert!(budget.overlay_target().is_none());
+    }
+
+    #[test]
+    fn empty_overlay_does_not_enable_scaled_decode() {
+        let budget = Arc::new(MjpegOverlayBudget::default());
+        let hold = MjpegOverlayBudget::hold_overlay(&budget, 0, 324);
+        assert!(budget.overlay_target().is_none());
+        drop(hold);
+        assert!(budget.overlay_target().is_none());
     }
 }

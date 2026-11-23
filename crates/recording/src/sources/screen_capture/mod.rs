@@ -74,6 +74,7 @@ pub enum ScreenCaptureTarget {
         bounds: LogicalBounds,
     },
     CameraOnly,
+    AudioOnly,
 }
 
 #[cfg(target_os = "linux")]
@@ -90,18 +91,24 @@ impl LinuxCaptureSource {
         match target {
             ScreenCaptureTarget::Window { id } => Self::Window { id: id.clone() },
             ScreenCaptureTarget::Area { .. } => Self::Area,
-            ScreenCaptureTarget::Display { .. } | ScreenCaptureTarget::CameraOnly => Self::Display,
+            ScreenCaptureTarget::Display { .. }
+            | ScreenCaptureTarget::CameraOnly
+            | ScreenCaptureTarget::AudioOnly => Self::Display,
         }
     }
 }
 
 impl ScreenCaptureTarget {
+    pub fn is_audio_only(&self) -> bool {
+        matches!(self, Self::AudioOnly)
+    }
+
     pub fn display(&self) -> Option<Display> {
         match self {
             Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
-            Self::CameraOnly => None,
+            Self::CameraOnly | Self::AudioOnly => None,
         }
     }
 
@@ -169,8 +176,7 @@ impl ScreenCaptureTarget {
                 {
                     let display_bounds = self.display()?.raw_handle().physical_bounds()?;
                     let window_bounds = window.raw_handle().physical_bounds()?;
-
-                    return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
+                    let relative = PhysicalBounds::new(
                         PhysicalPosition::new(
                             window_bounds.position().x() - display_bounds.position().x(),
                             window_bounds.position().y() - display_bounds.position().y(),
@@ -179,7 +185,11 @@ impl ScreenCaptureTarget {
                             window_bounds.size().width(),
                             window_bounds.size().height(),
                         ),
-                    )));
+                    );
+
+                    return Some(CursorCropBounds::new_windows(
+                        window_crop_on_display(relative, display_bounds.size()).unwrap_or(relative),
+                    ));
                 }
 
                 #[cfg(target_os = "linux")]
@@ -233,7 +243,7 @@ impl ScreenCaptureTarget {
                     return Some(CursorCropBounds::new_linux(bounds));
                 }
             }
-            Self::CameraOnly => None,
+            Self::CameraOnly | Self::AudioOnly => None,
         }
     }
 
@@ -267,7 +277,7 @@ impl ScreenCaptureTarget {
                     )
                 }
             }
-            Self::CameraOnly => None,
+            Self::CameraOnly | Self::AudioOnly => None,
         }
     }
 
@@ -277,6 +287,7 @@ impl ScreenCaptureTarget {
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
             Self::CameraOnly => Some("Camera".to_string()),
+            Self::AudioOnly => Some("Audio".to_string()),
         }
     }
 
@@ -286,6 +297,7 @@ impl ScreenCaptureTarget {
             ScreenCaptureTarget::Window { .. } => "Window",
             ScreenCaptureTarget::Area { .. } => "Area",
             ScreenCaptureTarget::CameraOnly => "Camera",
+            ScreenCaptureTarget::AudioOnly => "Audio",
         }
     }
 }
@@ -390,13 +402,6 @@ pub struct Config {
 #[cfg(target_os = "macos")]
 pub type CropBounds = LogicalBounds;
 
-/// macOS hands a single window over with its rounded corners transparent,
-/// which the encoder fills with black. Window-only capture reads this many
-/// points in from every edge: a corner's curve clears 0.29 of its radius in,
-/// and this covers radii up to 27 pt.
-#[cfg(target_os = "macos")]
-pub const WINDOW_CORNER_TRIM: f64 = 8.0;
-
 /// `bounds` shrunk to whole, even pixel dimensions at `scale`. The encoder
 /// needs even frames; a region an odd number of pixels across would be read
 /// whole and squeezed a pixel smaller, resampling, and so softening, every
@@ -411,27 +416,43 @@ pub fn even_pixel_crop(bounds: CropBounds, scale: f64) -> CropBounds {
     )
 }
 
-/// `bounds` with [`WINDOW_CORNER_TRIM`] taken off every side, or as it was
-/// when the window is too small to trim.
-#[cfg(target_os = "macos")]
-pub fn trim_window_corners(bounds: CropBounds) -> CropBounds {
-    let size = bounds.size();
-    let trim = WINDOW_CORNER_TRIM;
-    if size.width() <= trim * 4. || size.height() <= trim * 4. {
-        return bounds;
-    }
-    let position = bounds.position();
-    LogicalBounds::new(
-        LogicalPosition::new(position.x() + trim, position.y() + trim),
-        LogicalSize::new(size.width() - 2. * trim, size.height() - 2. * trim),
-    )
-}
-
 #[cfg(windows)]
 pub type CropBounds = PhysicalBounds;
 
 #[cfg(target_os = "linux")]
 pub type CropBounds = PhysicalBounds;
+
+/// The part of a window that lies on its display, in display pixels. A
+/// screen-region capture cannot copy pixels from past the display's edge, and
+/// asking it to dropped every frame (#3594).
+#[cfg(any(windows, test))]
+pub(crate) fn window_crop_on_display(
+    window: PhysicalBounds,
+    display: PhysicalSize,
+) -> Option<PhysicalBounds> {
+    let axis = |position: f64, size: f64, extent: f64| {
+        if !position.is_finite() || !size.is_finite() || !extent.is_finite() {
+            return None;
+        }
+        let start = position.clamp(0.0, extent);
+        let end = (position + size).clamp(0.0, extent);
+        (end - start >= 2.0).then_some((start, end - start))
+    };
+    let (x, width) = axis(
+        window.position().x(),
+        window.size().width(),
+        display.width(),
+    )?;
+    let (y, height) = axis(
+        window.position().y(),
+        window.size().height(),
+        display.height(),
+    )?;
+    Some(PhysicalBounds::new(
+        PhysicalPosition::new(x, y),
+        PhysicalSize::new(width, height),
+    ))
+}
 
 #[cfg(any(windows, target_os = "linux", test))]
 pub(crate) fn logical_area_to_physical_bounds(
@@ -524,13 +545,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         let target_refresh = validated_refresh_rate(display.refresh_rate());
         let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
 
-        // The capture reads the window inside its corners (see
-        // `WINDOW_CORNER_TRIM`), so the output and the cursor crop match that.
-        #[cfg(target_os = "macos")]
-        let crop_bounds = match window {
-            Some(_) => crop_bounds.map(trim_window_corners),
-            None => crop_bounds,
-        };
         // Read exactly as many pixels as the frame holds (see `even_pixel_crop`).
         #[cfg(target_os = "macos")]
         let crop_bounds = crop_bounds
@@ -819,6 +833,44 @@ mod tests {
             panic!("window target must retain a window source");
         };
         assert_eq!(selected, id);
+    }
+
+    #[test]
+    fn window_crop_stays_on_its_display() {
+        let display = PhysicalSize::new(1920.0, 1080.0);
+        let crop = |x: f64, y: f64, width: f64, height: f64| {
+            window_crop_on_display(
+                PhysicalBounds::new(
+                    PhysicalPosition::new(x, y),
+                    PhysicalSize::new(width, height),
+                ),
+                display,
+            )
+            .map(|bounds| {
+                (
+                    bounds.position().x(),
+                    bounds.position().y(),
+                    bounds.size().width(),
+                    bounds.size().height(),
+                )
+            })
+        };
+
+        assert_eq!(
+            crop(100.0, 50.0, 800.0, 600.0),
+            Some((100.0, 50.0, 800.0, 600.0))
+        );
+        assert_eq!(
+            crop(1000.0, 500.0, 1000.0, 700.0),
+            Some((1000.0, 500.0, 920.0, 580.0))
+        );
+        assert_eq!(
+            crop(-8.0, -8.0, 1936.0, 1096.0),
+            Some((0.0, 0.0, 1920.0, 1080.0))
+        );
+        assert_eq!(crop(1919.0, 0.0, 400.0, 400.0), None);
+        assert_eq!(crop(2000.0, 0.0, 400.0, 400.0), None);
+        assert_eq!(crop(f64::NAN, 0.0, 400.0, 400.0), None);
     }
 
     #[test]
@@ -1167,21 +1219,8 @@ mod tests {
 }
 
 #[cfg(all(test, target_os = "macos"))]
-mod window_corner_tests {
+mod even_pixel_crop_tests {
     use super::*;
-
-    #[test]
-    fn window_capture_reads_inside_the_rounded_corners() {
-        let window = LogicalBounds::new(
-            LogicalPosition::new(100., 50.),
-            LogicalSize::new(920., 436.),
-        );
-        let trimmed = trim_window_corners(window);
-        assert_eq!(trimmed.position().x(), 108.);
-        assert_eq!(trimmed.position().y(), 58.);
-        assert_eq!(trimmed.size().width(), 904.);
-        assert_eq!(trimmed.size().height(), 420.);
-    }
 
     #[test]
     fn crops_read_whole_even_pixels() {
@@ -1197,14 +1236,5 @@ mod window_corner_tests {
         );
         assert_eq!(retina.size().width() * 2.0, 1690.);
         assert_eq!(retina.size().height() * 2.0, 1506.);
-    }
-
-    #[test]
-    fn a_tiny_window_is_left_whole() {
-        let window = LogicalBounds::new(LogicalPosition::new(0., 0.), LogicalSize::new(30., 200.));
-        let kept = trim_window_corners(window);
-        assert_eq!(kept.position().x(), 0.);
-        assert_eq!(kept.size().width(), 30.);
-        assert_eq!(kept.size().height(), 200.);
     }
 }

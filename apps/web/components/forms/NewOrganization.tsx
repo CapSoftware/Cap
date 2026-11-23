@@ -59,7 +59,8 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
 							setIsUploading(true);
 						}
 
-						await createOrganization(formData);
+						const result = await createOrganization(formData);
+						if (!result.success) throw new Error(result.error);
 						toast.success("Organization created successfully");
 						router.push(`/dashboard/caps`);
 						props.onOrganizationCreated();

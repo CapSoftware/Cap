@@ -7,7 +7,7 @@ export const googleChromeScreenRecorderContent: SeoPageContent = {
 	title:
 		"Google Chrome Screen Recorder: Record Your Screen Right From the Browser",
 	description:
-		"Cap is a free, open-source screen recorder for Google Chrome. Add the extension, click record, and get an instant shareable link — no downloads, no watermarks, no sign-up required.",
+		"Cap is a free, open source screen recorder for Google Chrome. Add the extension from the Chrome Web Store and record a tab, a window, the full screen, or your camera.",
 
 	featuresTitle: "Why Cap Is the Best Chrome Screen Recorder",
 	featuresDescription:
@@ -35,11 +35,6 @@ export const googleChromeScreenRecorderContent: SeoPageContent = {
 				"Add your webcam to put a face to your recording. Great for async updates, feedback, and onboarding videos that feel personal.",
 		},
 		{
-			title: "No Watermarks, No Time Limits",
-			description:
-				"Unlike most browser recorders, Cap never stamps a watermark on your video and never cuts you off. Record as long as you need, for free.",
-		},
-		{
 			title: "Free & Open Source",
 			description:
 				"Cap is fully <a href='/open-source-screen-recorder'>open source</a>. Your recordings stay yours — keep them local, use your own storage, or self-host.",
@@ -50,9 +45,9 @@ export const googleChromeScreenRecorderContent: SeoPageContent = {
 		title: "See the Cap Chrome Extension in Action",
 	},
 
-	comparisonTitle: "Does Chrome Have a Built-In Screen Recorder?",
+	comparisonTitle: "Record your screen in Chrome",
 	comparisonDescription:
-		"Google Chrome has no native screen recorder. You can capture screenshots and share your screen on a call, but to <a href='/record-screen'>record and save a video</a> you need an extension. Here's how Cap stacks up.",
+		"Cap's Chrome extension, available on the Chrome Web Store, can record a browser tab, a window, the full screen, or the camera on its own. You can also <a href='/record-screen'>record your screen</a> straight from the browser in the Cap dashboard.",
 	comparison: [
 		{
 			title: "Built Into Your Browser",
@@ -62,58 +57,9 @@ export const googleChromeScreenRecorderContent: SeoPageContent = {
 		{
 			title: "Own Your Recordings",
 			description:
-				"Most Chrome recorders lock your videos behind their cloud. Cap lets you keep recordings local, connect your own storage, or share with a link on your terms.",
+				"Cap lets you keep recordings local, connect your own storage, or share them with a link.",
 		},
 	],
-
-	comparisonTable: {
-		title: "Cap vs. Other Chrome Screen Recorders",
-		headers: ["Feature", "Cap", "Loom", "Screencastify"],
-		rows: [
-			[
-				"Free with no watermark",
-				{ text: "Yes", status: "positive" },
-				{ text: "Watermark on free", status: "negative" },
-				{ text: "Watermark on free", status: "negative" },
-			],
-			[
-				"Recording length (free)",
-				{ text: "Unlimited (with desktop app)", status: "positive" },
-				{ text: "5 minutes", status: "warning" },
-				{ text: "5 minutes", status: "warning" },
-			],
-			[
-				"Instant shareable link",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Recording quality",
-				{ text: "Up to 4K", status: "positive" },
-				{ text: "1080p", status: "warning" },
-				{ text: "1080p", status: "warning" },
-			],
-			[
-				"Desktop app for studio editing",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Open source",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Own your data / self-host",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-		],
-	},
 
 	useCasesTitle: "What People Record With Cap on Chrome",
 	useCasesDescription:
@@ -157,7 +103,7 @@ export const googleChromeScreenRecorderContent: SeoPageContent = {
 		{
 			question: "Is the Cap Chrome extension free?",
 			answer:
-				"Yes. Cap's Chrome extension is free to use with no watermarks and no recording time limits. Cap Pro is available if you want custom domains, longer cloud sharing, and advanced collaboration features, but recording and sharing work without it.",
+				"Yes. Cap has a free plan for personal use with no credit card required. Cap Pro adds unlimited shareable links, custom domains, password protected shares, viewer analytics and Cap AI.",
 		},
 		{
 			question: "Can I record a single tab instead of my whole screen?",

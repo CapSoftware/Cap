@@ -1,5 +1,3 @@
-"use server";
-
 import { db } from "@cap/database";
 import {
 	organizationMembers,
@@ -63,6 +61,8 @@ export async function getSpaceAccess(
 		ownerId: space.ownerId,
 		memberRole: space.organizationMemberRole,
 	});
+	if (!organizationRole) return null;
+
 	const spaceRole = getEffectiveSpaceRole({
 		userId,
 		createdById: space.createdById,

@@ -256,7 +256,10 @@ pub fn apply_desktop_headers(mut request: reqwest::RequestBuilder) -> reqwest::R
 }
 
 pub fn server_url() -> String {
-    let url = store::GeneralSettings::load().server_url;
+    normalize_server_url(&store::GeneralSettings::load().server_url)
+}
+
+fn normalize_server_url(url: &str) -> String {
     if url.trim().is_empty() {
         DEFAULT_SERVER_URL.to_string()
     } else {
@@ -405,7 +408,7 @@ pub async fn authed_request_with(
     } else {
         let auth = store::auth_snapshot();
         (
-            server_url(),
+            normalize_server_url(&auth.server_url),
             auth.token.ok_or(AuthApiError::InvalidAuthentication)?,
         )
     };
@@ -719,6 +722,9 @@ fn query_map(url: &reqwest::Url) -> HashMap<String, String> {
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect()
 }
+
+#[cfg(test)]
+mod server_change_tests;
 
 #[cfg(test)]
 mod tests {

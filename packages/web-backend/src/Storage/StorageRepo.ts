@@ -65,6 +65,9 @@ export type StorageObjectUpdate = Omit<
 	"integrationId" | "ownerId" | "videoId" | "objectKey"
 >;
 
+// Integration pickers order by updatedAt, so token bookkeeping must not bump it.
+const keepIntegrationUpdatedAt = Dz.sql`${Db.storageIntegrations.updatedAt}`;
+
 const getAffectedRows = (result: unknown) => {
 	if (Array.isArray(result)) {
 		return (
@@ -221,7 +224,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 							.set({
 								googleDriveTokenRefreshLeaseId: leaseId,
 								googleDriveTokenRefreshLeaseExpiresAt: leaseExpiresAt,
-								updatedAt: new Date(),
+								updatedAt: keepIntegrationUpdatedAt,
 							})
 							.where(
 								Dz.and(
@@ -267,7 +270,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 								googleDriveAccessTokenExpiresAt: cache.expiresAt,
 								googleDriveTokenRefreshLeaseId: null,
 								googleDriveTokenRefreshLeaseExpiresAt: null,
-								updatedAt: new Date(),
+								updatedAt: keepIntegrationUpdatedAt,
 							})
 							.where(
 								Dz.and(
@@ -293,7 +296,7 @@ export class StorageRepo extends Effect.Service<StorageRepo>()("StorageRepo", {
 					.set({
 						googleDriveTokenRefreshLeaseId: null,
 						googleDriveTokenRefreshLeaseExpiresAt: null,
-						updatedAt: new Date(),
+						updatedAt: keepIntegrationUpdatedAt,
 					})
 					.where(
 						Dz.and(

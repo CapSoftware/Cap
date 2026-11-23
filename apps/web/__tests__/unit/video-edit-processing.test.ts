@@ -61,6 +61,10 @@ const viewPolicy = Context.GenericTag<{
 	canViewLoaded: () => Effect.Effect<void>;
 }>("EditNavigationViewPolicy");
 
+vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("@/lib/share-web-url", () => ({
+	resolveForeignShareRedirect: async () => null,
+}));
 vi.mock("@cap/database", () => ({
 	db: () => ({
 		select: database.select,
