@@ -3909,6 +3909,10 @@ settings = "Notizen-Einstellungen"
 record_detail = "Cap hört zu und schreibt die Zusammenfassung"
 blank_detail = "Eine leere Seite, ohne Aufnahme"
 more = "Weitere Möglichkeiten"
+recording = "Aufnahme {elapsed}"
+replace_label = "Neue Notizen starten"
+replace_detail = "Beendet zuerst das laufende Meeting"
+replace_confirm = "Dieses Meeting beenden und neue Notizen starten"
 
 [documents.sidebar]
 recent = "Zuletzt"

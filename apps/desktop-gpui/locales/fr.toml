@@ -3909,6 +3909,10 @@ settings = "Réglages des notes"
 record_detail = "Cap écoute et rédige le résumé"
 blank_detail = "Une page vierge, sans enregistrement"
 more = "Autres façons de commencer"
+recording = "Enregistrement {elapsed}"
+replace_label = "Lancer de nouvelles notes"
+replace_detail = "Arrête d'abord la réunion en cours d'enregistrement"
+replace_confirm = "Arrêter cette réunion et lancer de nouvelles notes"
 
 [documents.sidebar]
 recent = "Récents"

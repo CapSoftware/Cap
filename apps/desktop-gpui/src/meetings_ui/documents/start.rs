@@ -35,7 +35,46 @@ pub struct StartButton {
     palette: Palette,
     size: StartSize,
     menu: Option<Point<Pixels>>,
+    /// The menu asked once to start new notes while a meeting records: the
+    /// next pick of that row replaces the meeting.
+    confirm_replace: bool,
+    /// Ticks the "Recording 2:47" clock once a second while one records.
+    ticker: Option<gpui::Task<()>>,
     _subscription: Option<gpui::Subscription>,
+}
+
+/// The meeting recording right now and for how long: while there is one the
+/// pill shows it instead of offering to start, so a click never quietly
+/// ends it.
+fn recording(cx: &gpui::App) -> Option<(String, u64)> {
+    crate::meetings_ui::live::active(cx)
+        .filter(|active| {
+            matches!(
+                active.state,
+                crate::meetings::ActiveState::Starting | crate::meetings::ActiveState::Recording
+            )
+        })
+        .map(|active| (active.doc_id, active.started.elapsed().as_secs()))
+}
+
+pub fn recording_label(elapsed_secs: u64) -> String {
+    tr::documents::start::recording(crate::meetings_ui::live::model::elapsed(elapsed_secs))
+}
+
+/// What picking a row of the menu does: while a meeting records, starting
+/// new notes ends it, so the first pick only asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuPick {
+    Start(StartChoice),
+    Confirm,
+}
+
+pub fn menu_pick(choice: StartChoice, recording: bool, confirmed: bool) -> MenuPick {
+    if choice == StartChoice::Record && recording && !confirmed {
+        MenuPick::Confirm
+    } else {
+        MenuPick::Start(choice)
+    }
 }
 
 impl EventEmitter<StartEvent> for StartButton {}
@@ -96,7 +135,13 @@ impl StartButton {
             cx.subscribe(
                 &meetings,
                 |_, _, event: &crate::meetings::MeetingEvent, cx| {
-                    if matches!(event, crate::meetings::MeetingEvent::SettingsChanged) {
+                    if matches!(
+                        event,
+                        crate::meetings::MeetingEvent::SettingsChanged
+                            | crate::meetings::MeetingEvent::RecordingStarted { .. }
+                            | crate::meetings::MeetingEvent::RecordingStopped { .. }
+                            | crate::meetings::MeetingEvent::ActiveChanged
+                    ) {
                         cx.notify();
                     }
                 },
@@ -107,6 +152,8 @@ impl StartButton {
             palette: Palette::new(theme),
             size,
             menu: None,
+            confirm_replace: false,
+            ticker: None,
             _subscription: subscription,
         }
     }
@@ -117,6 +164,7 @@ impl StartButton {
     }
 
     pub fn dismiss(&mut self, cx: &mut Context<Self>) -> bool {
+        self.confirm_replace = false;
         if self.menu.take().is_some() {
             cx.notify();
             return true;
@@ -126,14 +174,67 @@ impl StartButton {
 
     fn pick(&mut self, choice: StartChoice, cx: &mut Context<Self>) {
         self.menu = None;
+        self.confirm_replace = false;
         cx.emit(StartEvent::Start(choice));
         cx.notify();
     }
 
-    fn render_menu(&self, at: Point<Pixels>, cx: &mut Context<Self>) -> AnyElement {
+    pub fn pick_from_menu(&mut self, choice: StartChoice, recording: bool, cx: &mut Context<Self>) {
+        match menu_pick(choice, recording, self.confirm_replace) {
+            MenuPick::Confirm => {
+                self.confirm_replace = true;
+                cx.notify();
+            }
+            MenuPick::Start(choice) => self.pick(choice, cx),
+        }
+    }
+
+    fn tick_while_recording(&mut self, recording: bool, cx: &mut Context<Self>) {
+        if !recording {
+            self.ticker = None;
+            return;
+        }
+        if self.ticker.is_none() {
+            self.ticker = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
+    }
+
+    fn render_menu(
+        &self,
+        at: Point<Pixels>,
+        recording: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let palette = self.palette;
         let now = current(cx);
+        let confirm = self.confirm_replace;
         let row = |choice: StartChoice, index: usize| {
+            let replaces = recording && choice == StartChoice::Record;
+            let (title, about) = match (replaces, confirm) {
+                (false, _) => (label(choice).to_string(), detail(choice).to_string()),
+                (true, false) => (
+                    tr::documents::start::replace_label().to_string(),
+                    tr::documents::start::replace_detail().to_string(),
+                ),
+                (true, true) => (
+                    tr::documents::start::replace_confirm().to_string(),
+                    tr::documents::start::replace_detail().to_string(),
+                ),
+            };
+            let title_color = if replaces && confirm {
+                palette.live
+            } else {
+                palette.text
+            };
             div()
                 .id((self.id, index))
                 .px(px(10.))
@@ -160,25 +261,32 @@ impl StartButton {
                             div()
                                 .text_size(px(13.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(palette.text)
-                                .child(label(choice)),
+                                .text_color(title_color)
+                                .child(title),
                         )
                         .child(
                             div()
                                 .text_size(px(12.))
                                 .text_color(palette.muted)
-                                .child(detail(choice)),
+                                .child(about),
                         ),
                 )
-                .child(div().w(px(14.)).flex_shrink_0().when(now == choice, |el| {
-                    el.child(
-                        svg()
-                            .path("icons/check.svg")
-                            .size(px(12.))
-                            .text_color(palette.muted),
-                    )
-                }))
-                .on_click(cx.listener(move |this, _, _, cx| this.pick(choice, cx)))
+                .child(
+                    div()
+                        .w(px(14.))
+                        .flex_shrink_0()
+                        .when(now == choice && !replaces, |el| {
+                            el.child(
+                                svg()
+                                    .path("icons/check.svg")
+                                    .size(px(12.))
+                                    .text_color(palette.muted),
+                            )
+                        }),
+                )
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.pick_from_menu(choice, recording, cx)),
+                )
         };
         menu::float(
             at,
@@ -193,6 +301,7 @@ impl StartButton {
                 .child(row(StartChoice::Blank, 1))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.menu = None;
+                    this.confirm_replace = false;
                     cx.notify();
                 }))
                 .into_any_element(),
@@ -204,6 +313,8 @@ impl Render for StartButton {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = self.palette;
         let choice = current(cx);
+        let live = recording(cx);
+        self.tick_while_recording(live.is_some(), cx);
         let (height, text, wide) = match self.size {
             StartSize::Toolbar => (32., 13., false),
             StartSize::Hero => (38., 14., false),
@@ -214,7 +325,18 @@ impl Render for StartButton {
             ..palette.on_ink
         };
         let dark = Theme::new(Appearance::Dark);
-        let menu = self.menu.map(|at| self.render_menu(at, cx));
+        let menu = self.menu.map(|at| self.render_menu(at, live.is_some(), cx));
+        let (main_mark, main_label) = match &live {
+            Some((_, secs)) => (
+                mark(StartChoice::Record, &palette, palette.on_ink),
+                recording_label(*secs),
+            ),
+            None => (
+                mark(choice, &palette, palette.on_ink),
+                label(choice).to_string(),
+            ),
+        };
+        let open_doc = live.map(|(doc, _)| doc);
         div()
             .id(self.id)
             .h(px(height))
@@ -241,9 +363,17 @@ impl Render for StartButton {
                     .rounded_l_full()
                     .cursor_pointer()
                     .hover(move |s| s.bg(soft))
-                    .child(mark(choice, &palette, palette.on_ink))
-                    .child(div().truncate().child(label(choice)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.pick(choice, cx))),
+                    .child(main_mark)
+                    .child(div().truncate().child(main_label))
+                    .on_click(cx.listener(move |this, _, _, cx| match &open_doc {
+                        // The meeting recording now: open it.
+                        Some(doc) => {
+                            let doc = doc.clone();
+                            this.menu = None;
+                            cx.defer(move |cx| crate::meetings_ui::documents::open(Some(doc), cx));
+                        }
+                        None => this.pick(choice, cx),
+                    })),
             )
             .child(div().w(px(1.)).h(px(height * 0.45)).bg(Hsla {
                 a: 0.22,
@@ -271,6 +401,7 @@ impl Render for StartButton {
                     )
                     .on_click(cx.listener(move |this, e: &gpui::ClickEvent, _, cx| {
                         let at = e.position();
+                        this.confirm_replace = false;
                         this.menu = if this.menu.is_some() {
                             None
                         } else {

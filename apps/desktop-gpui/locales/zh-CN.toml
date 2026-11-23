@@ -3909,6 +3909,10 @@ settings = "笔记设置"
 record_detail = "Cap 会聆听并撰写摘要"
 blank_detail = "空白页面，不录音"
 more = "更多开始方式"
+recording = "正在录制 {elapsed}"
+replace_label = "开始新的记录"
+replace_detail = "会先停止正在录制的会议"
+replace_confirm = "停止此会议并开始新的记录"
 
 [documents.sidebar]
 recent = "最近"

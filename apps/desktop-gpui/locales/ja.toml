@@ -3909,6 +3909,10 @@ settings = "メモの設定"
 record_detail = "Capが聞き取り、要約を作成します"
 blank_detail = "白紙のページ。録音はしません"
 more = "ほかの始め方"
+recording = "録音中 {elapsed}"
+replace_label = "新しいメモを開始"
+replace_detail = "録音中の会議を先に停止します"
+replace_confirm = "この会議を停止して新しいメモを開始"
 
 [documents.sidebar]
 recent = "最近"

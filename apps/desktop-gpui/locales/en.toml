@@ -3911,6 +3911,10 @@ settings = "Notes settings"
 record_detail = "Cap listens and writes the summary"
 blank_detail = "A blank page, nothing recorded"
 more = "More ways to start"
+recording = { text = "Recording {elapsed}", context = "The start button while a meeting records: {elapsed} is how long it has been recording, like 2:47. A click opens that meeting." }
+replace_label = "Start new notes"
+replace_detail = "Stops the meeting being recorded first"
+replace_confirm = { text = "Stop this meeting and start new notes", context = "Shown after one click on Start new notes while a meeting records; a second click stops that meeting and starts new notes." }
 
 [documents.sidebar]
 recent = "Recent"

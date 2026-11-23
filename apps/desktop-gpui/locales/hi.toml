@@ -3909,6 +3909,10 @@ settings = "नोट्स सेटिंग्स"
 record_detail = "Cap सुनता है और सारांश लिखता है"
 blank_detail = "खाली पेज, कुछ रिकॉर्ड नहीं होता"
 more = "शुरू करने के और तरीके"
+recording = "रिकॉर्डिंग {elapsed}"
+replace_label = "नए नोट्स शुरू करें"
+replace_detail = "पहले रिकॉर्ड हो रही मीटिंग रोकता है"
+replace_confirm = "यह मीटिंग रोकें और नए नोट्स शुरू करें"
 
 [documents.sidebar]
 recent = "हाल के"

@@ -2126,3 +2126,65 @@ fn a_title_typed_just_before_quitting_is_saved(cx: &mut TestAppContext) {
     let saved = f.library.load(&id).unwrap().title;
     assert!(saved.contains("renamed"), "{saved}");
 }
+
+/// While a meeting records, the start pill says so ("Recording 2:47") and
+/// starting new notes from its menu asks once before it ends that meeting;
+/// a blank note, or starting when nothing records, still takes one pick.
+#[test]
+fn starting_new_notes_while_a_meeting_records_asks_first() {
+    use super::start::{MenuPick, StartChoice, menu_pick, recording_label};
+    assert_eq!(recording_label(167), "Recording 2:47");
+    assert_eq!(recording_label(3_725), "Recording 1:02:05");
+    assert_eq!(
+        menu_pick(StartChoice::Record, true, false),
+        MenuPick::Confirm
+    );
+    assert_eq!(
+        menu_pick(StartChoice::Record, true, true),
+        MenuPick::Start(StartChoice::Record)
+    );
+    assert_eq!(
+        menu_pick(StartChoice::Record, false, false),
+        MenuPick::Start(StartChoice::Record)
+    );
+    assert_eq!(
+        menu_pick(StartChoice::Blank, true, false),
+        MenuPick::Start(StartChoice::Blank)
+    );
+}
+
+#[gpui::test]
+fn the_start_menu_replaces_a_recording_meeting_only_on_the_second_pick(cx: &mut TestAppContext) {
+    use super::start::{StartButton, StartChoice, StartEvent, StartSize};
+    let theme = Theme::light();
+    let button =
+        cx.update(|cx| cx.new(|cx| StartButton::new("test-start", StartSize::Sidebar, &theme, cx)));
+    let picked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = picked.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&button, move |_, event: &StartEvent, _| {
+            let StartEvent::Start(choice) = *event;
+            seen.borrow_mut().push(choice);
+        })
+    });
+    let pick = |choice, recording, cx: &mut TestAppContext| {
+        button.update(cx, |b, cx| b.pick_from_menu(choice, recording, cx));
+        cx.run_until_parked();
+    };
+    pick(StartChoice::Record, true, cx);
+    assert!(picked.borrow().is_empty(), "the first pick only asks");
+    button.update(cx, |b, cx| b.dismiss(cx));
+    pick(StartChoice::Record, true, cx);
+    assert!(
+        picked.borrow().is_empty(),
+        "closing the menu forgets the answer"
+    );
+    pick(StartChoice::Record, true, cx);
+    assert_eq!(*picked.borrow(), vec![StartChoice::Record]);
+    pick(StartChoice::Blank, true, cx);
+    pick(StartChoice::Record, false, cx);
+    assert_eq!(
+        *picked.borrow(),
+        vec![StartChoice::Record, StartChoice::Blank, StartChoice::Record]
+    );
+}
