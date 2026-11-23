@@ -457,6 +457,10 @@ impl RequiredMicrophoneHealth {
         true
     }
 
+    fn capture_epoch_current(&self, epoch: u64) -> bool {
+        self.source.capture_epoch_current(epoch)
+    }
+
     fn accepts_frame(&self, id: u32) -> bool {
         let current = match self.loss {
             LinuxSourceLoss::FailRecording => self.source.frame_is_current(id),
@@ -766,10 +770,10 @@ impl Microphone {
                                     continue;
                                 }
                                 #[cfg(target_os = "linux")]
-                                if required_health
-                                    .as_ref()
-                                    .is_some_and(|health| !health.accepts_frame(frame.stream_id))
-                                {
+                                if required_health.as_ref().is_some_and(|health| {
+                                    !health.accepts_frame(frame.stream_id)
+                                        || !health.capture_epoch_current(frame.capture_epoch)
+                                }) {
                                     continue;
                                 }
                                 if silence_mode {

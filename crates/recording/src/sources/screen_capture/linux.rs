@@ -1770,7 +1770,7 @@ impl PulseInputRoute {
         self,
         input_callback_observed: &AtomicBool,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<u32> {
         let output = wait_for_started_source_output(
             &self.previous_outputs,
             input_callback_observed,
@@ -1781,7 +1781,7 @@ impl PulseInputRoute {
             // Pulse remembers the generic ALSA application's last route, including speaker capture.
             move_pactl_source_output(output.id, &self.source)?;
         }
-        Ok(())
+        Ok(output.id)
     }
 }
 
@@ -2423,6 +2423,196 @@ fn pactl_monitor_preference(name: &str, default_sink: Option<&str>) -> Option<(u
     });
 
     Some((u8::from(!is_default_sink), rank))
+}
+
+// PipeWire and Pulse rescue a capture when its monitor disappears by moving
+// the stream onto the default source. That source is the microphone, and the
+// stream keeps delivering samples, so the device-loss path never sees an
+// error. Only a `<sink>.monitor` name is still system audio.
+fn output_monitor_source_name(name: &str) -> bool {
+    name.strip_suffix(".monitor")
+        .is_some_and(|sink| !sink.is_empty())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SystemAudioRoutePlan {
+    Keep,
+    Reattach,
+    Lost,
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SystemAudioCaptureRoute {
+    pub stream_id: u32,
+    pub source_output: u32,
+}
+
+fn plan_system_audio_route(
+    source_output_id: u32,
+    outputs: &[(u32, u32)],
+    sources_short: &str,
+    monitor_name: Option<&str>,
+) -> SystemAudioRoutePlan {
+    let Some((_, source_index)) = outputs
+        .iter()
+        .copied()
+        .find(|(id, _)| *id == source_output_id)
+    else {
+        return SystemAudioRoutePlan::Ignore;
+    };
+    let Some(name) = pactl_source_name(sources_short, source_index) else {
+        return SystemAudioRoutePlan::Ignore;
+    };
+    if output_monitor_source_name(name) {
+        return SystemAudioRoutePlan::Keep;
+    }
+    if monitor_name.is_some_and(output_monitor_source_name) {
+        SystemAudioRoutePlan::Reattach
+    } else {
+        SystemAudioRoutePlan::Lost
+    }
+}
+
+fn pactl_source_name(sources: &str, index: u32) -> Option<&str> {
+    sources.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let found = fields.next()?.parse::<u32>().ok()?;
+        let name = fields.next()?;
+        (found == index).then_some(name)
+    })
+}
+
+fn current_output_monitor_name(sources: &str) -> Option<String> {
+    pulse_input_route_destination(
+        sources,
+        PulseInputRole::SystemAudio,
+        None,
+        pactl_default_sink().as_deref(),
+    )
+    .map(|(_, name)| name)
+    .filter(|name| output_monitor_source_name(name))
+}
+
+fn inspect_system_audio_source_output(
+    source_output: u32,
+) -> (SystemAudioRoutePlan, Option<String>) {
+    let Ok(outputs) = current_process_source_outputs() else {
+        return (SystemAudioRoutePlan::Ignore, None);
+    };
+    let Ok(output) = Command::new("pactl")
+        .args(["list", "short", "sources"])
+        .output()
+    else {
+        return (SystemAudioRoutePlan::Ignore, None);
+    };
+    if !output.status.success() {
+        return (SystemAudioRoutePlan::Ignore, None);
+    }
+    let sources = String::from_utf8_lossy(&output.stdout);
+    let monitor = current_output_monitor_name(&sources);
+    let pairs = outputs
+        .iter()
+        .map(|item| (item.id, item.source))
+        .collect::<Vec<_>>();
+    let plan = plan_system_audio_route(source_output, &pairs, &sources, monitor.as_deref());
+    (plan, monitor)
+}
+
+pub(crate) fn watch_system_audio_route(
+    cancel: CancellationToken,
+    route: Arc<std::sync::Mutex<Option<SystemAudioCaptureRoute>>>,
+    mut on_plan: impl FnMut(u32, SystemAudioRoutePlan),
+) {
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+    let mut subscribe = Command::new("pactl")
+        .arg("subscribe")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok();
+    if let Some(child) = subscribe.as_mut()
+        && let Some(stdout) = child.stdout.take()
+    {
+        let _ = std::thread::Builder::new()
+            .name("system-audio-subscribe".into())
+            .spawn(move || {
+                use std::io::BufRead;
+                let mut reader = std::io::BufReader::new(stdout);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {
+                            if wake_tx.send(()).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    let mut announced = None;
+    while !cancel.is_cancelled() {
+        let current = route.lock().unwrap().as_ref().copied();
+        if let Some(current) = current
+            && !cancel.is_cancelled()
+        {
+            let (plan, monitor) = inspect_system_audio_source_output(current.source_output);
+            let resolved = match plan {
+                SystemAudioRoutePlan::Reattach => {
+                    on_plan(current.stream_id, SystemAudioRoutePlan::Reattach);
+                    match monitor {
+                        Some(monitor) => {
+                            match move_pactl_source_output(current.source_output, &monitor) {
+                                Ok(()) => SystemAudioRoutePlan::Keep,
+                                Err(error) => {
+                                    if announced != Some(SystemAudioRoutePlan::Lost) {
+                                        tracing::warn!(
+                                            %error,
+                                            "Could not move system audio back onto an output monitor"
+                                        );
+                                    }
+                                    SystemAudioRoutePlan::Lost
+                                }
+                            }
+                        }
+                        None => SystemAudioRoutePlan::Lost,
+                    }
+                }
+                other => other,
+            };
+            if announced != Some(resolved) {
+                match resolved {
+                    SystemAudioRoutePlan::Lost => tracing::warn!(
+                        source_output = current.source_output,
+                        "System audio capture is not on an output monitor"
+                    ),
+                    SystemAudioRoutePlan::Keep
+                        if matches!(
+                            announced,
+                            Some(SystemAudioRoutePlan::Lost | SystemAudioRoutePlan::Reattach)
+                        ) =>
+                    {
+                        tracing::info!("System audio capture is back on an output monitor");
+                    }
+                    _ => {}
+                }
+                announced = Some(resolved);
+            }
+            if !cancel.is_cancelled() {
+                on_plan(current.stream_id, resolved);
+            }
+        }
+        let _ = wake_rx.recv_timeout(Duration::from_millis(200));
+    }
+
+    if let Some(mut child) = subscribe {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn pactl_default_sink() -> Option<String> {
@@ -3359,12 +3549,12 @@ fn x11_source_pixel(
 #[cfg(test)]
 mod system_audio_tests {
     use super::{
-        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, newly_created_source_output,
-        pactl_monitor_preference, pactl_source_index, preferred_system_audio_device,
-        previous_source_destination, process_source_output_ids, pulse_input_route_destination,
-        retry_system_audio_connection, source_output_needs_move, source_output_route_matches,
-        started_input_source_output, uses_default_pulse_input, wait_for_audio_after_route,
-        wait_for_started_source_output,
+        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, SystemAudioRoutePlan,
+        newly_created_source_output, pactl_monitor_preference, pactl_source_index,
+        plan_system_audio_route, preferred_system_audio_device, previous_source_destination,
+        process_source_output_ids, pulse_input_route_destination, retry_system_audio_connection,
+        source_output_needs_move, source_output_route_matches, started_input_source_output,
+        uses_default_pulse_input, wait_for_audio_after_route, wait_for_started_source_output,
     };
     use tokio_util::sync::CancellationToken;
 
@@ -3431,6 +3621,62 @@ mod system_audio_tests {
                 Some("new")
             ),
             Some((3, "new.monitor".to_string()))
+        );
+    }
+
+    #[test]
+    fn system_audio_stays_on_an_output_monitor() {
+        let sources = "74\talsa_input.pci-analog-stereo\n42\tcap_null.monitor\n";
+        assert_eq!(
+            plan_system_audio_route(10, &[(10, 42), (11, 74)], sources, Some("cap_null.monitor")),
+            SystemAudioRoutePlan::Keep
+        );
+        assert_eq!(
+            plan_system_audio_route(10, &[(10, 42)], "42\tauto_null.monitor\n", None),
+            SystemAudioRoutePlan::Keep
+        );
+    }
+
+    #[test]
+    fn system_audio_on_a_microphone_reattaches_when_a_monitor_exists() {
+        let sources = "74\talsa_input.pci-analog-stereo\n42\tspeakers.monitor\n";
+        assert_eq!(
+            plan_system_audio_route(10, &[(10, 74), (11, 74)], sources, Some("speakers.monitor")),
+            SystemAudioRoutePlan::Reattach
+        );
+    }
+
+    #[test]
+    fn system_audio_on_a_microphone_is_lost_without_an_output_monitor() {
+        let sources = "74\talsa_input.pci-analog-stereo\n";
+        for monitor in [None, Some("alsa_input.pci-analog-stereo"), Some(".monitor")] {
+            assert_eq!(
+                plan_system_audio_route(10, &[(10, 74)], sources, monitor),
+                SystemAudioRoutePlan::Lost,
+                "{monitor:?}"
+            );
+        }
+        assert_eq!(
+            plan_system_audio_route(
+                10,
+                &[(10, 3)],
+                "3\tOutput Monitor\n",
+                Some("Output Monitor")
+            ),
+            SystemAudioRoutePlan::Lost
+        );
+    }
+
+    #[test]
+    fn system_audio_route_ignores_a_missing_stream_or_source_name() {
+        let sources = "42\tcap_null.monitor\n";
+        assert_eq!(
+            plan_system_audio_route(10, &[(11, 42)], sources, Some("cap_null.monitor")),
+            SystemAudioRoutePlan::Ignore
+        );
+        assert_eq!(
+            plan_system_audio_route(10, &[(10, 99)], sources, Some("cap_null.monitor")),
+            SystemAudioRoutePlan::Ignore
         );
     }
     use crate::feeds::microphone::MicrophoneFeed;
