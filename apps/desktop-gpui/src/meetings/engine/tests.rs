@@ -1212,6 +1212,60 @@ fn while_recording_a_short_read_waits_for_the_rest() {
 }
 
 #[test]
+fn a_tail_across_a_clock_jump_is_transcribed_on_both_sides_of_the_hole() {
+    // Speech 8-10 s into each file, as the speech segmenter hears it.
+    fn file(seconds: u64) -> Vec<f32> {
+        (0..seconds * 16_000)
+            .map(|at| {
+                if (8 * 16_000..10 * 16_000).contains(&at) {
+                    0.3 * ((at as f32) * 0.37).sin() * if at % 7 < 4 { 1.0 } else { -0.6 }
+                } else {
+                    0.0005 * if at % 3 == 0 { 1.0 } else { -1.0 }
+                }
+            })
+            .collect()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    // 40 s, then the clock jumps 90 s and the track goes on in a new file.
+    let after_jump = 130 * 16_000;
+    let mut parts = Vec::new();
+    for (name, offset) in [("others.ogg", 0), ("others.r1.ogg", after_jump)] {
+        let path = dir.path().join(name);
+        let mut writer = crate::meetings::audio_file::OpusOggWriter::create(&path).unwrap();
+        writer.write(&file(40)).unwrap();
+        writer.finish().unwrap();
+        parts.push(AudioPart { source: Source::System, path, offset_samples: offset });
+    }
+    let gap = Gap {
+        id: Gap::id_for(Source::System, 0),
+        source: Source::System,
+        start_sample: 0,
+        end_sample: after_jump + 40 * 16_000,
+        segments: Vec::new(),
+        reason: reason::TAIL.into(),
+    };
+    let mut b = bench(gap.clone(), parts);
+    b.worker.finishing = true;
+    let jobs = b.worker.gap_jobs(&gap).expect("the saved audio");
+    let starts: Vec<u64> = jobs.iter().map(|j| j.start_sample / 16_000).collect();
+    assert!(starts.iter().any(|s| *s < 40), "speech before the jump: {starts:?}");
+    assert!(starts.iter().any(|s| *s >= 130), "speech after the jump: {starts:?}");
+    b.worker.repairing.clear();
+
+    b.worker.repair_after_stop();
+    let (transcript, _) = Transcript::load_jsonl(&b.path).unwrap();
+    let heard: Vec<u64> = transcript
+        .utterances()
+        .iter()
+        .filter(|u| u.text == "hello from here")
+        .map(|u| u.start_ms / 1000)
+        .collect();
+    assert!(heard.iter().any(|s| *s < 40), "{heard:?}");
+    assert!(heard.iter().any(|s| *s >= 130), "the words after the jump: {heard:?}");
+    assert!(transcript.gaps().is_empty(), "closed once both sides were heard");
+}
+
+#[test]
 fn after_stop_the_saved_audio_is_read_again_from_the_finished_file() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("audio/others.ogg");

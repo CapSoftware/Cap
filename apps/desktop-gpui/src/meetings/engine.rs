@@ -1826,6 +1826,17 @@ impl Worker {
         }
     }
 
+    /// Where the first of the track's files starting in `(after, before)`
+    /// begins.
+    fn next_part_start(&self, source: Source, after: u64, before: u64) -> Option<u64> {
+        self.config
+            .audio
+            .iter()
+            .filter(|p| p.source == source && p.offset_samples > after && p.offset_samples < before)
+            .map(|p| p.offset_samples)
+            .min()
+    }
+
     /// A gap's audio as segments: the exact ones when known, else the
     /// speech found again in the span. None when the audio can't be read.
     fn gap_jobs(&mut self, gap: &Gap) -> Option<Vec<SegmentJob>> {
@@ -1845,7 +1856,13 @@ impl Worker {
                 found.extend(segmenter.push(at, &samples));
                 at += samples.len() as u64;
                 if (samples.len() as u64) < want {
-                    break;
+                    // This file ends here. After a clock jump the track goes
+                    // on in a later file, past a hole; otherwise this is
+                    // where the saved audio ends.
+                    let Some(next) = self.next_part_start(gap.source, at, gap.end_sample) else {
+                        break;
+                    };
+                    at = next;
                 }
             }
             found.extend(segmenter.flush());
