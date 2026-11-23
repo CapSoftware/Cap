@@ -932,7 +932,7 @@ impl MeetingDiarizer {
                 .map(|(r, (_, sum))| (r, dot(sum, e) / dot(sum, sum).sqrt().max(1e-9)))
                 .max_by(|a, b| a.1.total_cmp(&b.1));
             match nearest {
-                Some((r, sim)) if track == Track::System || sim >= threshold => {
+                Some((r, sim)) if sim >= threshold => {
                     let (members, sum) = &mut runs[r];
                     members.push(i);
                     for (s, x) in sum.iter_mut().zip(e) {

@@ -1396,3 +1396,16 @@ fn the_call_is_never_echo_of_a_level_copy_while_it_dips() {
         );
     }
 }
+
+#[test]
+fn two_remotes_trading_turns_without_a_pause_on_the_call_are_told_apart() {
+    // The call's first segment holds two people back to back, before anyone
+    // is known: each gets their own voice, as on the microphone.
+    let mut d = diarizer(speakers(4));
+    let first = push(&mut d, Track::System, 0, &[(2, 12_000), (3, 10_000)]);
+    let ids: Vec<SpeakerId> = first.spans.iter().map(|s| s.speaker).collect();
+    assert_eq!(first.spans.len(), 2, "{first:?}");
+    assert_ne!(ids[0], ids[1]);
+    let again = only(&push(&mut d, Track::System, 24_000, &[(3, 4_000)]));
+    assert_eq!(again, ids[1]);
+}
