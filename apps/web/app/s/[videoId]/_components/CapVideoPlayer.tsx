@@ -232,7 +232,7 @@ export function CapVideoPlayer({
 	const hasRetriedInitialPlaybackSource = useRef(false);
 	const initialPlaybackSourceRetryPending = useRef(false);
 	const playbackToRestore = useRef<
-		(PlaybackSnapshot & { sourceUrl: string }) | null
+		(PlaybackSnapshot & { sourceUrl: string; loadStarted?: true }) | null
 	>(null);
 	const signedSourceRefreshes = useRef(createSourceRefreshBudget());
 	const sourceObtainedAt = useRef(Date.now());
@@ -736,12 +736,27 @@ export function CapVideoPlayer({
 			}
 		};
 
+		// A pause once the new source starts loading is the viewer or another
+		// player stopping this one, so the restore must not resume it; the
+		// browser's own pause for a failed load arrives before that.
+		const handleRestoreLoadStart = () => {
+			const restore = playbackToRestore.current;
+			if (restore && video.currentSrc !== restore.sourceUrl)
+				restore.loadStarted = true;
+		};
+		const handleRestorePause = () => {
+			const restore = playbackToRestore.current;
+			if (restore?.loadStarted) restore.wasPlaying = false;
+		};
+
 		video.addEventListener("loadeddata", handleLoadedData);
 		video.addEventListener("canplay", handleCanPlay);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
 		video.addEventListener("seeked", handleSeeked);
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
+		video.addEventListener("loadstart", handleRestoreLoadStart);
+		video.addEventListener("pause", handleRestorePause);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -753,6 +768,8 @@ export function CapVideoPlayer({
 			video.removeEventListener("play", handlePlay);
 			video.removeEventListener("error", handleError as EventListener);
 			video.removeEventListener("seeked", handleSeeked);
+			video.removeEventListener("loadstart", handleRestoreLoadStart);
+			video.removeEventListener("pause", handleRestorePause);
 			video.removeEventListener(
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,

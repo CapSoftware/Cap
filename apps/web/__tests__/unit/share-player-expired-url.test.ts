@@ -834,6 +834,53 @@ describe("share MP4 playback after its initial signature expires", () => {
 				}
 			});
 
+			it("does not resume when another player pauses it during the swap", async () => {
+				const now = vi.spyOn(Date, "now");
+				const start = Date.UTC(2026, 10, 23, 12);
+				now.mockReturnValue(start);
+				const first = policyUrl("first", start + 24 * HOUR);
+				const second = policyUrl("second", start + 46 * HOUR);
+				const fetchImpl = vi
+					.fn<typeof fetch>()
+					.mockResolvedValueOnce(response(first, 206, true))
+					.mockResolvedValueOnce(response(second, 206, true));
+				const { player, video, state, play } = await renderPlaying(
+					fetchImpl,
+					first,
+				);
+				try {
+					state.paused = false;
+					await act(async () => {
+						video.dispatchEvent(new Event("play"));
+					});
+					state.currentTime = 300;
+					now.mockReturnValue(start + 22 * HOUR);
+					await act(async () => {
+						video.dispatchEvent(new Event("waiting"));
+					});
+					await settleFetch(fetchImpl, 2);
+					await vi.waitFor(() => {
+						expect(video.getAttribute("src")).toBe(second);
+					});
+					await act(async () => {
+						state.paused = true;
+						video.dispatchEvent(new Event("loadstart"));
+						video.dispatchEvent(new Event("pause"));
+						state.currentTime = 0;
+						video.dispatchEvent(new Event("loadedmetadata"));
+					});
+					await act(async () => {
+						video.dispatchEvent(new Event("seeked"));
+					});
+					expect(state.currentTime).toBe(300);
+					expect(play).not.toHaveBeenCalled();
+				} finally {
+					now.mockRestore();
+					await act(async () => player.root.unmount());
+					player.client.clear();
+				}
+			});
+
 			it("keeps the current URL when the route can't sign a fresh one", async () => {
 				const now = vi.spyOn(Date, "now");
 				const start = Date.UTC(2026, 10, 23, 12);
