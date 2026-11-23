@@ -1294,6 +1294,8 @@ struct SystemPlatform {
     stop: Arc<AtomicBool>,
     child: Arc<std::sync::Mutex<Option<std::process::Child>>>,
     thread: Option<JoinHandle<()>>,
+    /// Picks the output to read (`sink.rs`) and restarts the reader on a change.
+    watch: Option<JoinHandle<()>>,
     dropped: Arc<AtomicU64>,
     callbacks: Arc<AtomicU64>,
     frames: Arc<AtomicU64>,
@@ -1303,11 +1305,60 @@ struct SystemPlatform {
 #[cfg(target_os = "linux")]
 const MONITOR_RATE: u32 = 48_000;
 
+#[cfg(any(target_os = "linux", test))]
+mod sink;
+
+/// The output a meeting's computer audio is read from: `None` is the default.
 #[cfg(target_os = "linux")]
-fn spawn_monitor_reader() -> std::io::Result<std::process::Child> {
+type SinkTarget = Arc<std::sync::Mutex<Option<String>>>;
+
+#[cfg(target_os = "linux")]
+const SINK_CHECK_EVERY: Duration = Duration::from_secs(2);
+
+#[cfg(target_os = "linux")]
+fn pactl(args: &[&str]) -> String {
+    std::process::Command::new("pactl")
+        .args(args)
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
+/// One look at the sound server: the output to read (`None`: the default)
+/// and whether the reader `reader` (a `parec` pid) sits on that output's
+/// monitor (`None` when pactl does not say).
+fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>) {
+    let default = sink::parse_default_sink(&pactl(&["info"]));
+    let recording = sink::parse_streams(&pactl(&["list", "source-outputs"]), "Source");
+    let target = sink::choose(
+        &sink::parse_sinks(&pactl(&["list", "short", "sinks"])),
+        default.as_deref(),
+        &sink::parse_streams(&pactl(&["list", "sink-inputs"]), "Sink"),
+        &recording,
+        std::process::id(),
+    );
+    let placed = reader
+        .zip(target.clone().or(default))
+        .and_then(|(pid, output)| {
+            let sources = sink::parse_sinks(&pactl(&["list", "short", "sources"]));
+            sink::reader_on_monitor(&sources, &recording, pid, &output)
+        });
+    (target, placed)
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_monitor_reader(sink: Option<&str>) -> std::io::Result<std::process::Child> {
+    let device = match sink {
+        Some(sink) => format!("--device={sink}.monitor"),
+        None => "--device=@DEFAULT_MONITOR@".to_string(),
+    };
     std::process::Command::new("parec")
         .args([
-            "--device=@DEFAULT_MONITOR@",
+            device.as_str(),
             "--raw",
             "--format=float32le",
             "--rate=48000",
@@ -1343,7 +1394,9 @@ impl SystemPlatform {
         if !system_audio_available() {
             return Err(HealthIssue::TapUnsupported);
         }
-        let first = spawn_monitor_reader()
+        // The default at first; the watch looks at once, off this thread.
+        let target: SinkTarget = Arc::new(std::sync::Mutex::new(None));
+        let first = spawn_monitor_reader(None)
             .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
         let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
         let stop = Arc::new(AtomicBool::new(false));
@@ -1352,15 +1405,29 @@ impl SystemPlatform {
         let thread = std::thread::Builder::new()
             .name("cap-meeting-monitor".into())
             .spawn({
-                let (stop, child, counters) = (stop.clone(), child.clone(), counters.clone());
-                move || run_monitor(&stop, &child, &tx, &counters)
+                let (stop, child, counters, target) = (
+                    stop.clone(),
+                    child.clone(),
+                    counters.clone(),
+                    target.clone(),
+                );
+                move || run_monitor(&stop, &child, &tx, &counters, &target)
             })
             .map_err(|e| HealthIssue::Failed(e.to_string()))?;
+        let watch = std::thread::Builder::new()
+            .name("cap-meeting-sink-watch".into())
+            .spawn({
+                let (stop, child, target) = (stop.clone(), child.clone(), target.clone());
+                let monitor = thread.thread().clone();
+                move || watch_sink(&stop, &child, &target, &monitor)
+            })
+            .ok();
         Ok((
             Self {
                 stop,
                 child,
                 thread: Some(thread),
+                watch,
                 dropped: counters.dropped,
                 callbacks: counters.callbacks,
                 frames: counters.frames,
@@ -1399,6 +1466,53 @@ struct MonitorCounters {
     restarts: Arc<AtomicU64>,
 }
 
+/// Every couple of seconds: when the call moved to another output (or
+/// started on one), the reader is ended so the monitor loop opens that one.
+#[cfg(target_os = "linux")]
+fn watch_sink(
+    stop: &AtomicBool,
+    child: &std::sync::Mutex<Option<std::process::Child>>,
+    target: &SinkTarget,
+    monitor: &std::thread::Thread,
+) {
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let reader = child
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(|c| c.id()));
+        let (next, placed) = look_at_outputs(reader);
+        let Ok(mut current) = target.lock() else {
+            return;
+        };
+        if *current != next {
+            tracing::info!(from = ?*current, to = ?next, "the meeting's computer audio follows the call to another output");
+            *current = next;
+        } else if placed == Some(false) {
+            // PulseAudio moves a recording off a monitor when the default
+            // input changes (a headset's microphone gone and back).
+            tracing::warn!(
+                "meeting computer audio was moved off the output's monitor; reopening it"
+            );
+        } else {
+            drop(current);
+            std::thread::park_timeout(SINK_CHECK_EVERY);
+            continue;
+        }
+        drop(current);
+        if let Ok(mut slot) = child.lock()
+            && let Some(child) = slot.as_mut()
+        {
+            let _ = child.kill();
+        }
+        // The monitor loop opens the new output now, not a second later.
+        monitor.unpark();
+        std::thread::park_timeout(SINK_CHECK_EVERY);
+    }
+}
+
 /// Reads the monitor until stopped; a stream that ends on its own is opened
 /// again a second later.
 #[cfg(target_os = "linux")]
@@ -1407,6 +1521,7 @@ fn run_monitor(
     child: &std::sync::Mutex<Option<std::process::Child>>,
     tx: &flume::Sender<SystemChunk>,
     counters: &MonitorCounters,
+    target: &SinkTarget,
 ) {
     use std::io::Read;
     const READ: usize = (MONITOR_RATE as usize / 50) * 4;
@@ -1453,7 +1568,8 @@ fn run_monitor(
         if stop.load(Ordering::Acquire) {
             return;
         }
-        match spawn_monitor_reader() {
+        let sink = target.lock().ok().and_then(|t| t.clone());
+        match spawn_monitor_reader(sink.as_deref()) {
             Ok(mut next) => {
                 counters.restarts.fetch_add(1, Ordering::Relaxed);
                 // Checked under the lock Drop takes, so a reader started while
@@ -1485,6 +1601,10 @@ impl Drop for SystemPlatform {
         if let Some(thread) = self.thread.take() {
             thread.thread().unpark();
             let _ = thread.join();
+        }
+        if let Some(watch) = self.watch.take() {
+            watch.thread().unpark();
+            let _ = watch.join();
         }
     }
 }
