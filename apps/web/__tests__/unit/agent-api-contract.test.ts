@@ -411,6 +411,20 @@ describe("agent API contract", () => {
 		);
 
 		expect(listSource).toContain(".limit(limit + 1)");
+		expect(listSource).toContain(".select(developerVideoColumns)");
+		const columns = source.slice(
+			source.indexOf("const developerVideoColumns = {"),
+			source.indexOf("const normalizedRole"),
+		);
+		expect(columns).toContain("status:");
+		expect(columns).toContain("playbackId:");
+		expect(columns).not.toContain("s3Key");
+		expect(columns).not.toContain("metadata");
+		expect(columns).not.toContain("storedBytes");
+		expect(listSource).toContain(
+			"eq(Db.developerVideos.externalUserId, externalUserId)",
+		);
+		expect(listSource).toContain("externalUserId} AS BINARY) = CAST(");
 		expect(listSource).not.toContain("s3Key:");
 		expect(listSource).not.toContain("metadata:");
 
@@ -423,16 +437,26 @@ describe("agent API contract", () => {
 					appId: "app_synthetic",
 					externalUserId: "customer_synthetic",
 					name: "Synthetic SDK video",
+					status: "ready",
+					errorReason: null,
+					playbackId: "playback_synthetic",
 					durationSeconds: 30,
 					width: 1920,
 					height: 1080,
 					fps: 30,
+					maxResolutionTier: "1080p",
+					renditions: [],
 					transcriptionStatus: "COMPLETE",
+					hlsUrl: null,
+					mp4Url: null,
+					posterUrl: null,
+					shareUrl: "https://cap.test/dev/playback_synthetic",
+					embedUrl: "https://cap.test/dev/playback_synthetic/embed",
 					createdAt: "2026-07-18T12:00:00.000Z",
 					updatedAt: "2026-07-18T12:01:00.000Z",
-					capabilities: {},
 				},
 			],
+			capabilities: {},
 			nextCursor: null,
 			requestId: "request_synthetic",
 		});

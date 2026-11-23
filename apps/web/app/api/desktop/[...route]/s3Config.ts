@@ -5,7 +5,6 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets } from "@cap/database/schema";
 import { userIsPro } from "@cap/utils";
 import { Organisation, S3Bucket } from "@cap/web-domain";
-import { zValidator } from "@hono/zod-validator";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -25,6 +24,7 @@ import {
 	isDisallowedS3Endpoint,
 	publicOnlyS3Agents,
 } from "@/lib/s3-endpoint-policy";
+import { zValidator } from "@/utils/zod-validator";
 import {
 	getAccessibleOrganization,
 	getManagedOrganizationStorage,

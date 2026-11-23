@@ -3,8 +3,7 @@
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
-import { faPlay } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPlay } from "@fortawesome/free-solid-svg-icons/faPlay";
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import Hls, { type Fragment } from "hls.js";
@@ -16,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { retryVideoProcessing } from "@/actions/video/retry-processing";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import type { ShareCallToAction } from "@/lib/share-call-to-action";
 import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
@@ -31,7 +31,7 @@ import {
 	shouldReloadPlaybackAfterUploadCompletes,
 	type UploadProgress,
 } from "./upload-progress";
-import { VideoPreviewGif } from "./VideoPreviewGif";
+import { VideoPoster, VideoPreviewGif } from "./VideoPreviewGif";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -110,6 +110,7 @@ interface Props {
 	disableCaptions?: boolean;
 	captionsInitiallyOff?: boolean;
 	autoplay?: boolean;
+	muted?: boolean;
 	hasActiveUpload?: boolean;
 	isLiveSegments?: boolean;
 	allowSegmentProbeDuringUpload?: boolean;
@@ -135,6 +136,7 @@ interface Props {
 	 */
 	controlsPortalEl?: HTMLElement | null;
 	callToAction?: ShareCallToAction | null;
+	posterUrl?: string | null;
 }
 
 export function HLSVideoPlayer({
@@ -145,6 +147,7 @@ export function HLSVideoPlayer({
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
+	muted = false,
 	hasActiveUpload,
 	isLiveSegments = false,
 	allowSegmentProbeDuringUpload = false,
@@ -166,6 +169,7 @@ export function HLSVideoPlayer({
 	externalTimeline = false,
 	controlsPortalEl = null,
 	callToAction = null,
+	posterUrl = null,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -812,7 +816,7 @@ export function HLSVideoPlayer({
 							exit={{ opacity: 0, y: 10 }}
 							transition={{ duration: 0.2 }}
 							onClick={() => videoRef.current?.play()}
-							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+							className="player-brand-play flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
 						>
 							<FontAwesomeIcon
 								icon={faPlay}
@@ -821,24 +825,31 @@ export function HLSVideoPlayer({
 						</motion.div>
 					)}
 			</AnimatePresence>
-			<VideoPreviewGif
-				videoId={videoId}
-				preload={
-					!hasActiveUpload &&
-					!hasPlayedOnce &&
-					!hasFailedOrError &&
-					!isLiveSegments &&
-					!isBackgroundPreview
-				}
-				visible={
-					videoLoaded &&
-					!hasPlayedOnce &&
-					!hasFailedOrError &&
-					!hlsInitFailed &&
-					!isLiveSegments &&
-					!isBackgroundPreview
-				}
-			/>
+			{posterUrl && !isLiveSegments && !isBackgroundPreview ? (
+				<VideoPoster
+					src={posterUrl}
+					visible={!hasPlayedOnce && !hasFailedOrError && !hlsInitFailed}
+				/>
+			) : (
+				<VideoPreviewGif
+					videoId={videoId}
+					preload={
+						!hasActiveUpload &&
+						!hasPlayedOnce &&
+						!hasFailedOrError &&
+						!isLiveSegments &&
+						!isBackgroundPreview
+					}
+					visible={
+						videoLoaded &&
+						!hasPlayedOnce &&
+						!hasFailedOrError &&
+						!hlsInitFailed &&
+						!isLiveSegments &&
+						!isBackgroundPreview
+					}
+				/>
+			)}
 			<MediaPlayerVideo
 				src={undefined} // HLS source is handled by HLS.js
 				ref={videoRef}
@@ -849,7 +860,7 @@ export function HLSVideoPlayer({
 				}}
 				playsInline
 				autoPlay={autoplay}
-				muted={isBackgroundPreview}
+				muted={isBackgroundPreview || muted}
 				loop={isBackgroundPreview}
 				preload="auto"
 			>

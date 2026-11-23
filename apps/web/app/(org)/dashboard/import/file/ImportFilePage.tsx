@@ -1,13 +1,14 @@
 "use client";
 
-import { faArrowLeft, faUpload } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
+import { faUpload } from "@fortawesome/free-solid-svg-icons/faUpload";
 import { useStore } from "@tanstack/react-store";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { importMediaFile } from "../import-media";
 
@@ -96,8 +97,7 @@ export const ImportFilePage = () => {
 					<FontAwesomeIcon className="size-3" icon={faArrowLeft} />
 					Back to Import
 				</Link>
-				<h1 className="text-2xl font-medium text-gray-12">Upload File</h1>
-				<p className="mt-1 text-sm text-gray-10">
+				<p className="text-sm text-gray-10">
 					Upload a video or image file from your device.
 				</p>
 			</div>

@@ -1,0 +1,40 @@
+{
+	"available": true,
+	"data": {
+		"capName": "Launch walkthrough",
+		"counts": { "caps": 1, "views": 1200, "comments": 3, "reactions": 9 },
+		"chart": [
+			{
+				"bucket": "2026-10-27T00:00:00Z",
+				"caps": 0,
+				"views": 400,
+				"comments": 1,
+				"reactions": 2
+			},
+			{
+				"bucket": "2026-10-28T00:00:00Z",
+				"caps": 1,
+				"views": 800,
+				"comments": 2,
+				"reactions": 7
+			}
+		],
+		"breakdowns": {
+			"countries": [{ "name": "GB", "views": 700, "percentage": 58.3 }],
+			"cities": [
+				{ "name": "London", "subtitle": "GB", "views": 500, "percentage": 41.6 }
+			],
+			"browsers": [{ "name": "Safari", "views": 600, "percentage": 50 }],
+			"operatingSystems": [{ "name": "iOS", "views": 600, "percentage": 50 }],
+			"devices": [{ "name": "Mobile", "views": 600, "percentage": 50 }],
+			"topCaps": [
+				{
+					"id": "cap_1",
+					"name": "Launch walkthrough",
+					"views": 1200,
+					"percentage": 100
+				}
+			]
+		}
+	}
+}

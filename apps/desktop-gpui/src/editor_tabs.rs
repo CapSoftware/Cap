@@ -24,8 +24,8 @@ use cap_project::CaptionsData;
 use cap_project::{
     BackgroundBlurConfig, BackgroundBlurMode, CameraShape, CameraXPosition, CameraYPosition,
     CaptionSegment, CaptionSettings, CornerStyle, CursorAnimationStyle, CursorRippleConfig,
-    KeyboardData, KeyboardSettings, ProjectConfiguration, RecordingMeta, ShadowConfiguration,
-    StereoMode, transcription_ranges_cover, transcription_source_ranges,
+    KeyboardData, KeyboardSettings, PaddingMode, ProjectConfiguration, RecordingMeta,
+    ShadowConfiguration, StereoMode, transcription_ranges_cover, transcription_source_ranges,
 };
 use gpui::{
     AnyElement, Bounds, Context, EntityId, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -77,6 +77,14 @@ pub const CAMERA_BLUR_MODES: &[(BackgroundBlurMode, Label)] = &[
 pub const CORNER_STYLES: [(CornerStyle, Label); 2] = [
     (CornerStyle::Squircle, tr::editor::tabs::corner::squircle),
     (CornerStyle::Rounded, tr::editor::tabs::corner::rounded),
+];
+
+pub const PADDING_MODES: [(PaddingMode, Label); 2] = [
+    (PaddingMode::Even, tr::editor::tabs::padding::even),
+    (
+        PaddingMode::Proportional,
+        tr::editor::tabs::padding::proportional,
+    ),
 ];
 
 /// `STEREO_MODES` (`:375-379`).
@@ -187,8 +195,8 @@ pub static CAPTION_MODELS: &[CaptionModel] = &[
     CaptionModel {
         name: "best",
         label: tr::editor::tabs::captions::model::recommended,
-        model_name: "parakeet-tdt-0.6b-v3 int8",
-        size: "~640MB",
+        model_name: "parakeet-tdt-0.6b-v3 8-bit",
+        size: "~870MB",
         description: tr::editor::tabs::captions::model::recommended_description,
     },
     CaptionModel {
@@ -780,6 +788,7 @@ fn with_keyboard_settings(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMenu {
     BackgroundCornerStyle,
+    BackgroundPaddingMode,
     CameraBlur,
     CameraShape,
     CameraCornerStyle,
@@ -822,6 +831,12 @@ impl EditorWindow {
                 .iter()
                 .map(|(style, label)| {
                     ui::MenuItem::new(label(), *style == project.background.rounding_type)
+                })
+                .collect(),
+            SidebarMenu::BackgroundPaddingMode => PADDING_MODES
+                .iter()
+                .map(|(mode, label)| {
+                    ui::MenuItem::new(label(), *mode == project.background.padding_mode)
                 })
                 .collect(),
             SidebarMenu::CameraBlur => CAMERA_BLUR_MODES
@@ -1005,6 +1020,12 @@ impl EditorWindow {
                     project.background.rounding_type = style;
                     true
                 });
+            }
+            SidebarMenu::BackgroundPaddingMode => {
+                let Some((mode, _)) = PADDING_MODES.get(index) else {
+                    return;
+                };
+                self.set_padding_mode(*mode, window, cx);
             }
             SidebarMenu::CameraBlur => {
                 let Some((mode, _)) = CAMERA_BLUR_MODES.get(index) else {
@@ -1895,6 +1916,7 @@ impl EditorWindow {
                 ),
             )
             .children(has_microphone.then(|| self.render_studio_sound_card(cx)))
+            .children(has_microphone.then(|| self.render_voice_eq_card(cx)))
             .children(has_microphone.then(|| {
                 self.slider_field_disabled(
                     tr::editor::tabs::audio::mic_volume(),
@@ -2297,6 +2319,29 @@ impl EditorWindow {
                             .into_any_element(),
                     )),
             );
+
+        if smooth {
+            let hover = cursor.interaction_anchors && cursor.hover_anchors;
+            body = body.child(
+                ui::Field::inline(&theme, tr::editor::tabs::cursor::follow_hover()).value(
+                    ui::Toggle::plain(&theme, "cursor-hover-anchors", hover)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = {
+                                let cursor = &this.style_control_project().cursor;
+                                !(cursor.interaction_anchors && cursor.hover_anchors)
+                            };
+                            this.edit_project("cursor-hover-anchors", window, cx, move |p| {
+                                p.cursor.hover_anchors = next;
+                                if next {
+                                    p.cursor.interaction_anchors = true;
+                                }
+                                true
+                            });
+                        }))
+                        .into_any_element(),
+                ),
+            );
+        }
 
         // An explicit family forces the SVG assets, so the toggle would be
         // showing a setting the renderer is already overriding.
@@ -2718,8 +2763,65 @@ impl EditorWindow {
                     }))
                     .into_any_element(),
             )
+            .children(Self::keystroke_permission_callout(&theme))
             .child(body)
             .into_any_element()
+    }
+
+    /// From macOS 27.3 keystrokes need Input Monitoring (before, the
+    /// Accessibility grant onboarding asks for). Without it a recording has no
+    /// key presses to show, so the tab says why and walks through the fix.
+    fn keystroke_permission_callout(theme: &crate::theme::Theme) -> Option<AnyElement> {
+        if !crate::permission_help::keystrokes_missing() {
+            return None;
+        }
+        Some(
+            div()
+                .id("keyboard-permission")
+                .mb(px(4.))
+                .p(px(12.))
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(Hsla::from(theme.gray_5))
+                .bg(Hsla::from(theme.gray_3))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(Hsla::from(theme.gray_12))
+                        .child(tr::editor::tabs::keyboard::permission_title()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(17.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(tr::editor::tabs::keyboard::permission_body()),
+                )
+                .child(
+                    div().pt(px(6.)).child(
+                        ui::Button::plain(
+                            theme,
+                            "keyboard-permission-help",
+                            ui::ButtonVariant::Dark,
+                            ui::ButtonSize::Sm,
+                        )
+                        .label(tr::editor::tabs::keyboard::permission_action())
+                        .on_click(|_, _, cx| {
+                            cx.defer(|cx| {
+                                crate::permission_help::show(
+                                    crate::permission_help::Need::Keystrokes,
+                                    cx,
+                                )
+                            })
+                        }),
+                    ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// A slider with a `text-xs text-right` readout underneath -- the shape the
@@ -2971,6 +3073,14 @@ impl EditorWindow {
                         .text_color(error_color)
                         .child(error),
                 );
+            } else if snapshot.no_speech {
+                column = column.child(
+                    div()
+                        .id("caption-no-speech")
+                        .text_size(px(12.))
+                        .text_color(Hsla::from(theme.gray_10))
+                        .child(SharedString::from(tr::editor::transcript::no_speech())),
+                );
             } else if snapshot.refining {
                 column = column.child(
                     div()
@@ -3006,7 +3116,30 @@ impl EditorWindow {
                     .label(tr::editor::tabs::captions::download((model.label)()))
             };
 
-            let mut column = div().flex().flex_col().gap(px(8.)).child(download_button);
+            let mut column = div().flex().flex_col().gap(px(8.));
+            if model.name == "best" && snapshot.recommended_outdated {
+                column = column.child(
+                    div()
+                        .id("caption-model-updated")
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(theme.gray_12))
+                                .child(tr::editor::tabs::captions::model_updated()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(Hsla::from(theme.gray_11))
+                                .child(tr::editor::tabs::captions::model_updated_description()),
+                        ),
+                );
+            }
+            column = column.child(download_button);
             if is_downloading {
                 column = column
                     .child(
@@ -3730,6 +3863,11 @@ impl EditorWindow {
                         this.refine_caption_timings(window, cx);
                     });
                 }
+                Err(error) if error == transcription::NO_SPEECH => {
+                    tracing::info!("caption generation heard no speech");
+                    transcription::finish_generation_without_speech(&project_path);
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }
                 Err(error) => {
                     tracing::error!("caption generation failed: {error}");
                     transcription::finish_generation(
@@ -3938,7 +4076,7 @@ impl EditorWindow {
                                 .text_size(px(12.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(Hsla::from(theme.editor.text_2))
-                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip)))
+                                .child(SharedString::from(tr::editor::tabs::sync::clip(clip + 1)))
                                 .into_any_element()
                         }))
                         .children(auto.then(|| {

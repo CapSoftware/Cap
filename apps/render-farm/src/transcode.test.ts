@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { canRemux, encodedSeconds, transcodeArgs } from "./transcode";
+import {
+	canRemux,
+	encodedSeconds,
+	MAX_DECODE_PIXELS,
+	probeArgs,
+	remuxArgs,
+	sourceSizeError,
+	transcodeArgs,
+} from "./transcode";
 
 describe("transcodeArgs", () => {
 	test("NVENC keeps frames on the GPU and forces one-second IDR frames", () => {
@@ -87,5 +95,36 @@ describe("canRemux", () => {
 			).toBe(false);
 		}
 		expect(canRemux(source.replace("dts_time=0.100000|", ""))).toBe(false);
+	});
+});
+
+describe("source size", () => {
+	const probed = (width: number, height: number) =>
+		`codec_name=vp8|width=${width}|height=${height}|pix_fmt=yuv420p|has_b_frames=0\npts_time=0.000000|dts_time=0.000000|flags=K__`;
+
+	test("sources up to 40 million pixels are accepted", () => {
+		expect(sourceSizeError(probed(1920, 1080))).toBeNull();
+		expect(sourceSizeError(probed(8000, 5000))).toBeNull();
+		expect(sourceSizeError(probed(16384, 2441))).toBeNull();
+		expect(sourceSizeError("codec_name=vp8")).toBeNull();
+	});
+
+	test("larger sources are refused with their size", () => {
+		expect(sourceSizeError(probed(8000, 5008))).toContain("8000x5008");
+		expect(sourceSizeError(probed(16400, 100))).toContain("16400x100");
+	});
+
+	test("every ffmpeg run on a source decodes under the pixel limit", () => {
+		for (const args of [
+			probeArgs("https://in"),
+			remuxArgs("https://in", "/tmp/out.mp4"),
+			transcodeArgs("https://in", "/tmp/out.mp4", 1, "h264_nvenc"),
+			transcodeArgs("https://in", "/tmp/out.mp4", 1, "libx264"),
+		]) {
+			const limit = args.indexOf("-max_pixels");
+			expect(limit).toBeGreaterThanOrEqual(0);
+			expect(args[limit + 1]).toBe(String(MAX_DECODE_PIXELS));
+			expect(limit).toBeLessThan(args.indexOf("https://in"));
+		}
 	});
 });

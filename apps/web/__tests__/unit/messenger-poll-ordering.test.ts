@@ -18,6 +18,7 @@ vi.mock("next/image", () => ({
 	default: ({ src, alt }: { src: string; alt: string }) =>
 		createElement("img", { src, alt }),
 }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/" }));
 vi.mock("next/link", () => ({
 	default: ({ children, href }: { children: ReactNode; href: string }) =>
 		createElement("a", { href }, children),
@@ -62,6 +63,16 @@ beforeEach(() => {
 		return id;
 	});
 	vi.stubGlobal("clearInterval", (id: number) => polls.delete(id));
+	vi.stubGlobal("fetch", async (input: string) => {
+		const conversationId = decodeURIComponent(
+			new URL(input, "https://cap.so").pathname.split("/")[4] ?? "",
+		);
+		const data = await actions.fetchMessengerConversation(conversationId);
+		return Response.json({
+			mode: data.conversation.mode,
+			messages: data.messages,
+		});
+	});
 	actions.fetchMessengerConversations.mockResolvedValue([]);
 	actions.createMessengerConversation.mockResolvedValue(conversation.id);
 	actions.fetchMessengerConversation.mockReset().mockResolvedValue(data());

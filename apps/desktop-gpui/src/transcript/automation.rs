@@ -72,6 +72,7 @@ fn seeded_captions(words: usize, duration: f64) -> cap_project::CaptionsData {
                     .collect::<Vec<_>>()
                     .join(" "),
                 words: chunk.to_vec(),
+                recording_clip: None,
             })
             .collect(),
         settings: Default::default(),
@@ -104,9 +105,7 @@ pub(crate) async fn run(handle: WindowHandle<EditorWindow>, cx: &mut AsyncApp) {
         let detail = handle.update(cx, |view, window, cx| -> String {
             match name {
                 "open" => {
-                    if !view.transcript.open {
-                        view.toggle_transcript(window, cx);
-                    }
+                    view.set_panel_tab(crate::editor_side_panel::PanelTab::Transcript, window, cx);
                     format!(
                         "{} words, {} paragraphs",
                         view.transcript

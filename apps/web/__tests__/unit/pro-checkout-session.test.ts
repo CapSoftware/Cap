@@ -45,13 +45,14 @@ vi.mock("@/lib/checkout/stripe", () => ({
 }));
 vi.mock("@/lib/rate-limit", () => ({
 	isRateLimited: vi.fn(async () => false),
-	RATE_LIMIT_IDS: { GUEST_CHECKOUT: "guest-checkout" },
+	RATE_LIMIT_IDS: { GUEST_CHECKOUT: "guest-checkout", CHECKOUT: "checkout" },
 }));
 vi.mock("@/lib/server-analytics", () => ({
 	trackServerEvent: mocks.trackServerEvent,
 }));
 
 import { createProCheckout } from "@/actions/billing/checkout";
+import { isRateLimited } from "@/lib/rate-limit";
 
 const signedInUser = {
 	id: "user-1",
@@ -150,6 +151,29 @@ describe("createProCheckout", () => {
 		expect(await checkout()).toEqual({ ok: false, reason: "already_pro" });
 		expect(mocks.ensureStripeCustomerId).not.toHaveBeenCalled();
 		expect(mocks.stripe.subscriptions.list).not.toHaveBeenCalled();
+		expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("limits signed-in checkouts per account before reaching Stripe or Dub", async () => {
+		vi.mocked(isRateLimited).mockResolvedValueOnce(true);
+
+		expect(await checkout()).toEqual({ ok: false, reason: "rate_limited" });
+		expect(isRateLimited).toHaveBeenCalledWith("checkout", {
+			key: "checkout:user-1",
+		});
+		expect(mocks.ensureStripeCustomerId).not.toHaveBeenCalled();
+		expect(mocks.stripe.subscriptions.list).not.toHaveBeenCalled();
+		expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
+	});
+
+	it("keeps limiting guest checkouts per address", async () => {
+		mocks.getCurrentUser.mockResolvedValue(null);
+		vi.mocked(isRateLimited).mockResolvedValueOnce(true);
+
+		expect(await checkout()).toEqual({ ok: false, reason: "rate_limited" });
+		expect(isRateLimited).toHaveBeenCalledWith("guest-checkout", {
+			headers: expect.any(Headers),
+		});
 		expect(mocks.stripe.checkout.sessions.create).not.toHaveBeenCalled();
 	});
 });

@@ -1,9 +1,6 @@
-import {
-	faHome,
-	faImage,
-	faRecordVinyl,
-} from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faHome } from "@fortawesome/free-solid-svg-icons/faHome";
+import { faImage } from "@fortawesome/free-solid-svg-icons/faImage";
+import { faRecordVinyl } from "@fortawesome/free-solid-svg-icons/faRecordVinyl";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
@@ -11,6 +8,7 @@ import { Check, Minus, Plus } from "lucide-react";
 import type React from "react";
 import { memo, useState } from "react";
 import { useTheme } from "@/app/(org)/dashboard/Contexts";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { Tooltip } from "@/components/Tooltip";
 import {
 	type ImageLoadingStatus,

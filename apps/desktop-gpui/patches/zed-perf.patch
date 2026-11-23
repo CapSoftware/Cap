@@ -1,0 +1,1625 @@
+diff --git a/crates/gpui/src/bounds_tree.rs b/crates/gpui/src/bounds_tree.rs
+index e95e324..990df26 100644
+--- a/crates/gpui/src/bounds_tree.rs
++++ b/crates/gpui/src/bounds_tree.rs
+@@ -1,96 +1,63 @@
+ use crate::{Bounds, Half};
+ use std::{
+-    cmp,
++    cmp::{self, Ordering},
+     fmt::Debug,
+     ops::{Add, Sub},
+-    ptr::NonNull,
+ };
+ 
+-/// Maximum children per internal node (R-tree style branching factor).
+-/// Higher values = shorter tree = fewer cache misses, but more work per node.
+ const MAX_CHILDREN: usize = 12;
+ 
+-/// A spatial tree optimized for finding maximum ordering among intersecting bounds.
+-///
+-/// This is an R-tree variant specifically designed for the use case of assigning
+-/// z-order to overlapping UI elements. Key optimizations:
+-/// - Tracks the leaf with global max ordering for O(1) fast-path queries
+-/// - Uses higher branching factor (4) for lower tree height
+-/// - Aggressive pruning during search based on max_order metadata
++/// A balanced R-tree: primitives arrive in paint order, which a tree that never
++/// splits full nodes turns into long chains (5-6k instructions per insert on a
++/// cached-view frame). Results depend only on the inserted bounds, so the
++/// tree's shape can change freely.
+ #[derive(Debug)]
+ pub(crate) struct BoundsTree<U>
+ where
+     U: Clone + Debug + Default + PartialEq,
+ {
+-    /// All nodes stored contiguously for cache efficiency.
++    entries: Vec<Entry<U>>,
+     nodes: Vec<Node<U>>,
+-    /// Index of the root node, if any.
+-    root: Option<usize>,
+-    /// Index of the leaf with the highest ordering (for fast-path lookups).
+-    max_leaf: Option<usize>,
+-    /// Reusable stack for tree traversal during insertion.
+-    insert_path: Vec<usize>,
+-    /// Reusable stack for search operations.
+-    search_stack: Vec<NonNull<Node<U>>>,
++    root: Option<u32>,
++    max_entry: Option<u32>,
++    insert_path: Vec<u32>,
++    search_stack: Vec<u32>,
+ }
+ 
+-/// A node in the bounds tree.
+ #[derive(Debug, Clone)]
+-struct Node<U>
++struct Entry<U>
+ where
+     U: Clone + Debug + Default + PartialEq,
+ {
+-    /// Bounding box containing this node and all descendants.
+     bounds: Bounds<U>,
+-    /// Maximum ordering value in this subtree.
+-    max_order: u32,
+-    /// Node-specific data.
+-    kind: NodeKind,
++    order: u32,
+ }
+ 
+ #[derive(Debug, Clone)]
+-enum NodeKind {
+-    /// Leaf node containing actual bounds data.
+-    Leaf {
+-        /// The ordering assigned to this bounds.
+-        order: u32,
+-    },
+-    /// Internal node with children.
+-    Internal {
+-        /// Indices of child nodes (2 to MAX_CHILDREN).
+-        children: NodeChildren,
+-    },
+-}
+-
+-/// Fixed-size array for child indices, avoiding heap allocation.
+-#[derive(Debug, Clone)]
+-struct NodeChildren {
+-    // Keeps an invariant where the max order child is always at the end
+-    indices: [usize; MAX_CHILDREN],
++struct Node<U>
++where
++    U: Clone + Debug + Default + PartialEq,
++{
++    bounds: Bounds<U>,
++    max_order: u32,
++    leaf: bool,
+     len: u8,
++    children: [u32; MAX_CHILDREN + 1],
+ }
+ 
+-impl NodeChildren {
+-    fn new() -> Self {
+-        Self {
+-            indices: [0; MAX_CHILDREN],
+-            len: 0,
+-        }
++impl<U> Node<U>
++where
++    U: Clone + Debug + Default + PartialEq,
++{
++    fn children(&self) -> &[u32] {
++        &self.children[..self.len as usize]
+     }
+ 
+-    fn push(&mut self, index: usize) {
+-        debug_assert!((self.len as usize) < MAX_CHILDREN);
+-        self.indices[self.len as usize] = index;
++    fn push(&mut self, child: u32) {
++        debug_assert!((self.len as usize) <= MAX_CHILDREN);
++        self.children[self.len as usize] = child;
+         self.len += 1;
+     }
+-
+-    fn len(&self) -> usize {
+-        self.len as usize
+-    }
+-
+-    fn as_slice(&self) -> &[usize] {
+-        &self.indices[..self.len as usize]
+-    }
+ }
+ 
+ impl<U> BoundsTree<U>
+@@ -104,11 +71,11 @@ where
+         + Half
+         + Default,
+ {
+-    /// Clears all nodes from the tree.
+     pub fn clear(&mut self) {
++        self.entries.clear();
+         self.nodes.clear();
+         self.root = None;
+-        self.max_leaf = None;
++        self.max_entry = None;
+         self.insert_path.clear();
+         self.search_stack.clear();
+     }
+@@ -118,253 +85,233 @@ where
+     /// The ordering is one greater than the maximum ordering of any
+     /// existing bounds that intersect with the new bounds.
+     pub fn insert(&mut self, new_bounds: Bounds<U>) -> u32 {
+-        // Find maximum ordering among intersecting bounds
+-        let max_intersecting = self.find_max_ordering(&new_bounds);
+-        let ordering = max_intersecting + 1;
+-
+-        // Insert the new leaf
+-        let new_leaf_idx = self.insert_leaf(new_bounds, ordering);
+-
+-        // Update max_leaf tracking
+-        self.max_leaf = match self.max_leaf {
+-            None => Some(new_leaf_idx),
+-            Some(old_idx) if self.nodes[old_idx].max_order < ordering => Some(new_leaf_idx),
+-            some => some,
++        let ordering = self.find_max_ordering(&new_bounds) + 1;
++
++        let entry = self.entries.len() as u32;
++        let indexed = !has_nan(&new_bounds);
++        self.entries.push(Entry {
++            bounds: new_bounds,
++            order: ordering,
++        });
++        self.max_entry = match self.max_entry {
++            Some(max) if self.entries[max as usize].order >= ordering => Some(max),
++            _ => Some(entry),
+         };
++        // Bounds with a NaN coordinate intersect nothing, so no query can
++        // ever return them; leaving them out keeps NaN out of node bounds,
++        // where it would hide the entries around it.
++        if indexed {
++            self.index_entry(entry);
++        }
+ 
+         ordering
+     }
+ 
+-    /// Finds the maximum ordering among all bounds that intersect with the query.
+     fn find_max_ordering(&mut self, query: &Bounds<U>) -> u32 {
+-        let Some(root_idx) = self.root else {
+-            return 0;
+-        };
+-
+-        // Fast path: check if the max-ordering leaf intersects
+-        if let Some(max_idx) = self.max_leaf {
+-            let max_node = &self.nodes[max_idx];
+-            if query.intersects(&max_node.bounds) {
+-                return max_node.max_order;
++        if let Some(max) = self.max_entry {
++            let max = &self.entries[max as usize];
++            if query.intersects(&max.bounds) {
++                return max.order;
+             }
+         }
++        let Some(root) = self.root else {
++            return 0;
++        };
+ 
+-        // Slow path: search the tree
++        let mut max_found = 0;
+         self.search_stack.clear();
+-        self.search_stack.push(NonNull::from(&self.nodes[root_idx]));
+-
+-        let mut max_found = 0u32;
+-
++        self.search_stack.push(root);
+         while let Some(node) = self.search_stack.pop() {
+-            // SAFETY: `node` is guaranteed to be valid as the `nodes` stack is unmodified in this function
+-            // and the `search_stack` only contains pointers from this function call.
+-            let node = unsafe { node.as_ref() };
+-
+-            // Pruning: skip if this subtree can't improve our result
+-            if node.max_order <= max_found {
+-                continue;
+-            }
+-
+-            // Spatial pruning: skip if bounds don't intersect
+-            if !query.intersects(&node.bounds) {
++            let node = &self.nodes[node as usize];
++            if node.max_order <= max_found || !query.intersects(&node.bounds) {
+                 continue;
+             }
+-
+-            match &node.kind {
+-                NodeKind::Leaf { order } => {
+-                    max_found = cmp::max(max_found, *order);
++            if node.leaf {
++                for &entry in node.children() {
++                    let entry = &self.entries[entry as usize];
++                    if entry.order > max_found && query.intersects(&entry.bounds) {
++                        max_found = entry.order;
++                    }
+                 }
+-                NodeKind::Internal { children } => {
+-                    // Children are maintained with highest max_order at the end.
+-                    // Push in forward order to highest (last) is popped first.
+-                    self.search_stack.extend(
+-                        children
+-                            .as_slice()
+-                            .iter()
+-                            .map(|&child_idx| &self.nodes[child_idx])
+-                            .filter(|node| node.max_order > max_found)
+-                            .map(NonNull::from),
+-                    );
++            } else {
++                for &child in node.children() {
++                    if self.nodes[child as usize].max_order > max_found {
++                        self.search_stack.push(child);
++                    }
+                 }
+             }
+         }
+-
+         max_found
+     }
+ 
+-    /// Inserts a leaf node with the given bounds and ordering.
+-    /// Returns the index of the new leaf.
+-    fn insert_leaf(&mut self, bounds: Bounds<U>, order: u32) -> usize {
+-        let new_leaf_idx = self.nodes.len();
+-        self.nodes.push(Node {
+-            bounds: bounds.clone(),
+-            max_order: order,
+-            kind: NodeKind::Leaf { order },
+-        });
++    fn index_entry(&mut self, entry: u32) {
++        let bounds = self.entries[entry as usize].bounds.clone();
++        let order = self.entries[entry as usize].order;
+ 
+-        let Some(root_idx) = self.root else {
+-            // Tree is empty, new leaf becomes root
+-            self.root = Some(new_leaf_idx);
+-            return new_leaf_idx;
++        let Some(root) = self.root else {
++            let leaf = self.push_node(true, bounds, order);
++            self.nodes[leaf as usize].push(entry);
++            self.root = Some(leaf);
++            return;
+         };
+ 
+-        // If root is a leaf, create internal node with both
+-        if matches!(self.nodes[root_idx].kind, NodeKind::Leaf { .. }) {
+-            let root_bounds = self.nodes[root_idx].bounds.clone();
+-            let root_order = self.nodes[root_idx].max_order;
+-
+-            let mut children = NodeChildren::new();
+-            // Max end invariant
+-            if order > root_order {
+-                children.push(root_idx);
+-                children.push(new_leaf_idx);
++        self.insert_path.clear();
++        let mut node = root;
++        loop {
++            self.insert_path.push(node);
++            let current = &mut self.nodes[node as usize];
++            current.bounds = current.bounds.union(&bounds);
++            current.max_order = cmp::max(current.max_order, order);
++            if current.leaf {
++                break;
++            }
++            node = self.choose_child(node, &bounds);
++        }
++        self.nodes[node as usize].push(entry);
++
++        // Bounds and orderings along the path already cover the new entry,
++        // and a split only redistributes a node's children, so splitting
++        // never changes an ancestor's bounds or maximum ordering.
++        for depth in (0..self.insert_path.len()).rev() {
++            let node = self.insert_path[depth];
++            if (self.nodes[node as usize].len as usize) <= MAX_CHILDREN {
++                break;
++            }
++            let sibling = self.split(node);
++            if depth == 0 {
++                let node_bounds = self.nodes[node as usize].bounds.clone();
++                let sibling_bounds = self.nodes[sibling as usize].bounds.clone();
++                let max_order = cmp::max(
++                    self.nodes[node as usize].max_order,
++                    self.nodes[sibling as usize].max_order,
++                );
++                let new_root = self.push_node(false, node_bounds.union(&sibling_bounds), max_order);
++                self.nodes[new_root as usize].push(node);
++                self.nodes[new_root as usize].push(sibling);
++                self.root = Some(new_root);
+             } else {
+-                children.push(new_leaf_idx);
+-                children.push(root_idx);
++                let parent = self.insert_path[depth - 1];
++                self.nodes[parent as usize].push(sibling);
+             }
+-
+-            let new_root_idx = self.nodes.len();
+-            self.nodes.push(Node {
+-                bounds: root_bounds.union(&bounds),
+-                max_order: cmp::max(root_order, order),
+-                kind: NodeKind::Internal { children },
+-            });
+-            self.root = Some(new_root_idx);
+-            return new_leaf_idx;
+         }
++    }
+ 
+-        // Descend to find the best internal node to insert into
+-        self.insert_path.clear();
+-        let mut current_idx = root_idx;
+-
+-        loop {
+-            let current = &self.nodes[current_idx];
+-            let NodeKind::Internal { children } = &current.kind else {
+-                unreachable!("Should only traverse internal nodes");
+-            };
+-
+-            self.insert_path.push(current_idx);
+-
+-            // Find the best child to descend into
+-            let mut best_child_idx = children.as_slice()[0];
+-            let mut best_child_pos = 0;
+-            let mut best_cost = bounds
+-                .union(&self.nodes[best_child_idx].bounds)
+-                .half_perimeter();
+-
+-            for (pos, &child_idx) in children.as_slice().iter().enumerate().skip(1) {
+-                let cost = bounds.union(&self.nodes[child_idx].bounds).half_perimeter();
+-                if cost < best_cost {
+-                    best_cost = cost;
+-                    best_child_idx = child_idx;
+-                    best_child_pos = pos;
++    fn choose_child(&self, node: u32, bounds: &Bounds<U>) -> u32 {
++        let mut best = None::<(u32, U, U)>;
++        for &child in self.nodes[node as usize].children() {
++            let child_bounds = &self.nodes[child as usize].bounds;
++            let size = child_bounds.half_perimeter();
++            let growth = child_bounds.union(bounds).half_perimeter() - size.clone();
++            let better = match &best {
++                None => true,
++                Some((_, best_growth, best_size)) => {
++                    growth < *best_growth || (growth == *best_growth && size < *best_size)
+                 }
++            };
++            if better {
++                best = Some((child, growth, size));
+             }
++        }
++        best.expect("internal nodes have children").0
++    }
+ 
+-            // Check if best child is a leaf or internal
+-            if matches!(self.nodes[best_child_idx].kind, NodeKind::Leaf { .. }) {
+-                // Best child is a leaf. Check if current node has room for another child.
+-                if children.len() < MAX_CHILDREN {
+-                    // Add new leaf directly to this node
+-                    let node = &mut self.nodes[current_idx];
+-
+-                    if let NodeKind::Internal { children } = &mut node.kind {
+-                        children.push(new_leaf_idx);
+-                        // Swap new leaf only if it has the highest max_order
+-                        if order <= node.max_order {
+-                            let last = children.len() - 1;
+-                            children.indices.swap(last - 1, last);
+-                        }
+-                    }
++    fn split(&mut self, node: u32) -> u32 {
++        let leaf = self.nodes[node as usize].leaf;
++        let mut children = self.nodes[node as usize].children;
++        let len = self.nodes[node as usize].len as usize;
++        let by_x = {
++            let bounds = &self.nodes[node as usize].bounds;
++            bounds.size.width >= bounds.size.height
++        };
++        children[..len].sort_by(|&a, &b| {
++            let a = self.child_bounds(leaf, a);
++            let b = self.child_bounds(leaf, b);
++            let (a, b) = if by_x {
++                (&a.origin.x, &b.origin.x)
++            } else {
++                (&a.origin.y, &b.origin.y)
++            };
++            a.partial_cmp(b).unwrap_or(Ordering::Equal)
++        });
+ 
+-                    node.bounds = node.bounds.union(&bounds);
+-                    node.max_order = cmp::max(node.max_order, order);
+-                    break;
+-                } else {
+-                    // Node is full, create new internal with [best_leaf, new_leaf]
+-                    let sibling_bounds = self.nodes[best_child_idx].bounds.clone();
+-                    let sibling_order = self.nodes[best_child_idx].max_order;
+-
+-                    let mut new_children = NodeChildren::new();
+-                    // Max end invariant
+-                    if order > sibling_order {
+-                        new_children.push(best_child_idx);
+-                        new_children.push(new_leaf_idx);
+-                    } else {
+-                        new_children.push(new_leaf_idx);
+-                        new_children.push(best_child_idx);
+-                    }
++        let keep = len.div_ceil(2);
++        let sibling = self.push_node(leaf, Bounds::default(), 0);
++        self.nodes[node as usize].len = 0;
++        for (position, &child) in children[..len].iter().enumerate() {
++            let target = if position < keep { node } else { sibling };
++            self.nodes[target as usize].push(child);
++        }
++        self.recompute(node);
++        self.recompute(sibling);
++        sibling
++    }
+ 
+-                    let new_internal_idx = self.nodes.len();
+-                    let new_internal_max = cmp::max(sibling_order, order);
+-                    self.nodes.push(Node {
+-                        bounds: sibling_bounds.union(&bounds),
+-                        max_order: new_internal_max,
+-                        kind: NodeKind::Internal {
+-                            children: new_children,
+-                        },
+-                    });
+-
+-                    // Replace the leaf with the new internal in parent
+-                    let parent = &mut self.nodes[current_idx];
+-                    if let NodeKind::Internal { children } = &mut parent.kind {
+-                        let children_len = children.len();
+-
+-                        children.indices[best_child_pos] = new_internal_idx;
+-
+-                        // If new internal has highest max_order, swap it to the end
+-                        // to maintain sorting invariant
+-                        if new_internal_max > parent.max_order {
+-                            children.indices.swap(best_child_pos, children_len - 1);
+-                        }
+-                    }
+-                    break;
+-                }
+-            } else {
+-                // Best child is internal, continue descent
+-                current_idx = best_child_idx;
+-            }
++    fn child_bounds(&self, leaf: bool, child: u32) -> &Bounds<U> {
++        if leaf {
++            &self.entries[child as usize].bounds
++        } else {
++            &self.nodes[child as usize].bounds
+         }
++    }
+ 
+-        // Propagate bounds and max_order updates up the tree
+-        let mut updated_child_idx = None;
+-        for &node_idx in self.insert_path.iter().rev() {
+-            let node = &mut self.nodes[node_idx];
+-            node.bounds = node.bounds.union(&bounds);
+-
+-            if node.max_order < order {
+-                node.max_order = order;
+-
+-                // Swap updated child to end (skip first iteration since the invariant is already handled by previous cases)
+-                if let Some(child_idx) = updated_child_idx {
+-                    if let NodeKind::Internal { children } = &mut node.kind {
+-                        if let Some(pos) = children.as_slice().iter().position(|&c| c == child_idx)
+-                        {
+-                            let last = children.len() - 1;
+-                            if pos != last {
+-                                children.indices.swap(pos, last);
+-                            }
+-                        }
+-                    }
+-                }
+-            }
++    fn recompute(&mut self, node: u32) {
++        let current = &self.nodes[node as usize];
++        let leaf = current.leaf;
++        let mut children = current.children().iter();
++        let first = *children
++            .next()
++            .expect("a split leaves both halves non-empty");
++        let (mut bounds, mut max_order) = self.child_bounds_and_order(leaf, first);
++        for &child in children {
++            let (child_bounds, child_order) = self.child_bounds_and_order(leaf, child);
++            bounds = bounds.union(&child_bounds);
++            max_order = cmp::max(max_order, child_order);
++        }
++        let current = &mut self.nodes[node as usize];
++        current.bounds = bounds;
++        current.max_order = max_order;
++    }
+ 
+-            updated_child_idx = Some(node_idx);
++    fn child_bounds_and_order(&self, leaf: bool, child: u32) -> (Bounds<U>, u32) {
++        if leaf {
++            let entry = &self.entries[child as usize];
++            (entry.bounds.clone(), entry.order)
++        } else {
++            let node = &self.nodes[child as usize];
++            (node.bounds.clone(), node.max_order)
+         }
++    }
+ 
+-        new_leaf_idx
++    fn push_node(&mut self, leaf: bool, bounds: Bounds<U>, max_order: u32) -> u32 {
++        let index = self.nodes.len() as u32;
++        self.nodes.push(Node {
++            bounds,
++            max_order,
++            leaf,
++            len: 0,
++            children: [0; MAX_CHILDREN + 1],
++        });
++        index
+     }
+ }
+ 
++fn has_nan<U: Clone + Debug + Default + PartialEq>(bounds: &Bounds<U>) -> bool {
++    bounds.origin.x != bounds.origin.x
++        || bounds.origin.y != bounds.origin.y
++        || bounds.size.width != bounds.size.width
++        || bounds.size.height != bounds.size.height
++}
++
+ impl<U> Default for BoundsTree<U>
+ where
+     U: Clone + Debug + Default + PartialEq,
+ {
+     fn default() -> Self {
+         BoundsTree {
++            entries: Vec::new(),
+             nodes: Vec::new(),
+             root: None,
+-            max_leaf: None,
++            max_entry: None,
+             insert_path: Vec::new(),
+             search_stack: Vec::new(),
+         }
+@@ -469,4 +416,106 @@ mod tests {
+             }
+         }
+     }
++
++    fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<f32> {
++        Bounds {
++            origin: Point { x, y },
++            size: Size { width, height },
++        }
++    }
++
++    fn check_against_brute_force(tree: &mut BoundsTree<f32>, all: &[Bounds<f32>]) {
++        tree.clear();
++        let mut inserted: Vec<(Bounds<f32>, u32)> = Vec::with_capacity(all.len());
++        for (ix, bounds) in all.iter().enumerate() {
++            let expected = inserted
++                .iter()
++                .filter(|(other, _)| other.intersects(bounds))
++                .map(|(_, order)| *order)
++                .max()
++                .unwrap_or(0)
++                + 1;
++            let actual = tree.insert(*bounds);
++            assert_eq!(actual, expected, "ordering of bounds #{ix}: {bounds:?}");
++            inserted.push((*bounds, actual));
++        }
++    }
++
++    #[test]
++    fn matches_brute_force_on_ui_shaped_frames() {
++        let mut tree = BoundsTree::default();
++
++        let mut cards = vec![bounds(0., 0., 1920., 1080.)];
++        for row in 0..30 {
++            for column in 0..10 {
++                let x = 16. + column as f32 * 188.;
++                let y = 16. + row as f32 * 72.;
++                cards.push(bounds(x, y, 180., 64.));
++                cards.push(bounds(x, y, 180., 1.));
++                for glyph in 0..12 {
++                    cards.push(bounds(x + 8. + glyph as f32 * 7., y + 8., 7., 14.));
++                }
++                cards.push(bounds(x + 150., y + 4., 26., 26.));
++            }
++        }
++        check_against_brute_force(&mut tree, &cards);
++
++        let mut rows = Vec::new();
++        for row in 0..2_000 {
++            let y = row as f32 * 24.;
++            rows.push(bounds(0., y, 800., 24.));
++            rows.push(bounds(8., y + 4., 16., 16.));
++            rows.push(bounds(32., y + 5., 300., 14.));
++        }
++        check_against_brute_force(&mut tree, &rows);
++
++        let mut nested = Vec::new();
++        for depth in 0..400 {
++            let inset = depth as f32 * 0.5;
++            nested.push(bounds(inset, inset, 1000. - 2. * inset, 800. - 2. * inset));
++        }
++        check_against_brute_force(&mut tree, &nested);
++
++        let identical = vec![bounds(10., 10., 5., 5.); 200];
++        check_against_brute_force(&mut tree, &identical);
++    }
++
++    #[test]
++    fn matches_brute_force_on_large_random_frames() {
++        let mut tree = BoundsTree::default();
++        for seed in 0..20u64 {
++            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
++            let count = rng.random_range(500..3_000);
++            let all: Vec<_> = (0..count)
++                .map(|_| {
++                    let width = if rng.random_bool(0.05) {
++                        rng.random_range(0.0..2000.0)
++                    } else {
++                        rng.random_range(0.0..40.0)
++                    };
++                    bounds(
++                        rng.random_range(-50.0..2000.0),
++                        rng.random_range(-50.0..1200.0),
++                        width,
++                        rng.random_range(0.0..40.0),
++                    )
++                })
++                .collect();
++            check_against_brute_force(&mut tree, &all);
++        }
++    }
++
++    #[test]
++    fn nan_bounds_intersect_nothing() {
++        let mut tree = BoundsTree::default();
++        let all = vec![
++            bounds(0., 0., 100., 100.),
++            bounds(f32::NAN, 0., 10., 10.),
++            bounds(10., 10., 10., 10.),
++            bounds(0., 0., f32::NAN, 100.),
++            bounds(5., 5., 50., 50.),
++        ];
++        check_against_brute_force(&mut tree, &all);
++        assert_eq!(tree.insert(bounds(1., 1., 2., 2.)), 2);
++    }
+ }
+diff --git a/crates/gpui/src/elements/text.rs b/crates/gpui/src/elements/text.rs
+index 3470ac9..e32c357 100644
+--- a/crates/gpui/src/elements/text.rs
++++ b/crates/gpui/src/elements/text.rs
+@@ -693,8 +693,9 @@ impl TextLayout {
+                     return size;
+                 }
+ 
+-                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
+                 let (text, runs) = if let Some(truncate_width) = truncate_width {
++                    let mut line_wrapper =
++                        cx.text_system().line_wrapper(text_style.font(), font_size);
+                     if let Some(max_lines) = text_style.line_clamp
+                         && let Some(wrap_width) = wrap_width
+                     {
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index 4c1f558..ebeb308 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -54,6 +54,7 @@ pub struct Scene {
+     /// stream: the renderer breaks its render pass at each blur's order to
+     /// snapshot the framebuffer.
+     pub backdrop_blurs: Vec<BackdropBlur>,
++    sort_scratch: Vec<(u64, u32)>,
+ }
+ 
+ #[expect(missing_docs)]
+@@ -170,16 +171,20 @@ impl Scene {
+     }
+ 
+     pub fn finish(&mut self) {
+-        self.shadows.sort_by_key(|shadow| shadow.order);
+-        self.quads.sort_by_key(|quad| quad.order);
++        let scratch = &mut self.sort_scratch;
++        stable_sort_by_key(&mut self.shadows, scratch, |shadow| shadow.order as u64);
++        stable_sort_by_key(&mut self.quads, scratch, |quad| quad.order as u64);
+         self.paths.sort_by_key(|path| path.order);
+-        self.underlines.sort_by_key(|underline| underline.order);
+-        self.monochrome_sprites
+-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+-        self.subpixel_sprites
+-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+-        self.polychrome_sprites
+-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
++        stable_sort_by_key(&mut self.underlines, scratch, |underline| {
++            underline.order as u64
++        });
++        stable_sort_by_key(&mut self.monochrome_sprites, scratch, sprite_sort_key);
++        stable_sort_by_key(&mut self.subpixel_sprites, scratch, |sprite| {
++            order_and_tile_key(sprite.order, sprite.tile.tile_id)
++        });
++        stable_sort_by_key(&mut self.polychrome_sprites, scratch, |sprite| {
++            order_and_tile_key(sprite.order, sprite.tile.tile_id)
++        });
+         self.surfaces.sort_by_key(|surface| surface.order);
+         self.backdrop_blurs.sort_by_key(|blur| blur.order);
+     }
+@@ -1091,3 +1096,127 @@ impl PathVertex<Pixels> {
+         }
+     }
+ }
++
++fn sprite_sort_key(sprite: &MonochromeSprite) -> u64 {
++    order_and_tile_key(sprite.order, sprite.tile.tile_id)
++}
++
++fn order_and_tile_key(order: DrawOrder, tile_id: crate::TileId) -> u64 {
++    ((order as u64) << 32) | tile_id.0 as u64
++}
++
++/// Equivalent to the stable `items.sort_by_key(key)`, but moves each ~100-byte
++/// primitive once instead of several times. No two pairs share an index, so the
++/// unstable sort of `(key, index)` orders equal keys by original position.
++fn stable_sort_by_key<T: Copy>(
++    items: &mut [T],
++    scratch: &mut Vec<(u64, u32)>,
++    key: impl Fn(&T) -> u64,
++) {
++    if items.len() < 2 {
++        return;
++    }
++    debug_assert!(items.len() <= u32::MAX as usize);
++    scratch.clear();
++    scratch.extend(
++        items
++            .iter()
++            .enumerate()
++            .map(|(index, item)| (key(item), index as u32)),
++    );
++    if scratch.windows(2).all(|pair| pair[0].0 <= pair[1].0) {
++        return;
++    }
++    scratch.sort_unstable();
++
++    const DONE: u32 = u32::MAX;
++    for start in 0..items.len() {
++        if scratch[start].1 == DONE {
++            continue;
++        }
++        let first = items[start];
++        let mut slot = start;
++        loop {
++            let source = scratch[slot].1 as usize;
++            scratch[slot].1 = DONE;
++            if source == start {
++                items[slot] = first;
++                break;
++            }
++            items[slot] = items[source];
++            slot = source;
++        }
++    }
++}
++
++#[cfg(test)]
++mod sort_tests {
++    use super::stable_sort_by_key;
++    use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
++
++    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
++    struct Item {
++        order: u32,
++        tile: u32,
++        payload: u32,
++    }
++
++    fn check(items: Vec<Item>) {
++        let mut expected = items.clone();
++        expected.sort_by_key(|item| (item.order, item.tile));
++        let mut actual = items;
++        let mut scratch = Vec::new();
++        stable_sort_by_key(&mut actual, &mut scratch, |item| {
++            ((item.order as u64) << 32) | item.tile as u64
++        });
++        assert_eq!(actual, expected);
++    }
++
++    #[test]
++    fn matches_the_stable_sort_on_random_input() {
++        let mut rng = StdRng::seed_from_u64(7);
++        for len in [0, 1, 2, 3, 7, 31, 64, 500, 4_000] {
++            for key_range in [1, 3, 50, u32::MAX] {
++                let items = (0..len)
++                    .map(|payload| Item {
++                        order: rng.random_range(0..key_range.min(64)),
++                        tile: rng.random_range(0..key_range),
++                        payload,
++                    })
++                    .collect();
++                check(items);
++            }
++        }
++    }
++
++    #[test]
++    fn matches_the_stable_sort_on_sorted_and_reversed_input() {
++        let sorted: Vec<Item> = (0..300)
++            .map(|payload| Item {
++                order: payload / 7,
++                tile: payload % 5,
++                payload,
++            })
++            .collect();
++        check(sorted.clone());
++        check(sorted.iter().rev().copied().collect());
++        check(
++            (0..300)
++                .map(|payload| Item {
++                    order: 4,
++                    tile: 9,
++                    payload,
++                })
++                .collect(),
++        );
++        check(
++            (0..100)
++                .map(|payload| Item {
++                    order: u32::MAX - payload % 3,
++                    tile: u32::MAX - payload % 2,
++                    payload,
++                })
++                .collect(),
++        );
++    }
++}
+diff --git a/crates/gpui/src/taffy.rs b/crates/gpui/src/taffy.rs
+index eb3c391..dc4dd84 100644
+--- a/crates/gpui/src/taffy.rs
++++ b/crates/gpui/src/taffy.rs
+@@ -33,9 +33,9 @@ struct NodeContext {
+ }
+ pub struct TaffyLayoutEngine {
+     taffy: TaffyTree<NodeContext>,
+-    absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
+-    /// Unrounded absolute border-box top-left per-node coordinate in device pixels.
+-    absolute_outer_origins: FxHashMap<LayoutId, Point<f32>>,
++    /// Snapped absolute bounds, plus the unrounded absolute border-box origin in
++    /// device pixels that children are placed from.
++    absolute_layouts: FxHashMap<LayoutId, AbsoluteLayout>,
+     computed_layouts: FxHashSet<LayoutId>,
+     layout_bounds_scratch_space: Vec<LayoutId>,
+ }
+@@ -48,8 +48,7 @@ impl TaffyLayoutEngine {
+         taffy.disable_rounding();
+         TaffyLayoutEngine {
+             taffy,
+-            absolute_layout_bounds: FxHashMap::default(),
+-            absolute_outer_origins: FxHashMap::default(),
++            absolute_layouts: FxHashMap::default(),
+             computed_layouts: FxHashSet::default(),
+             layout_bounds_scratch_space: Vec::new(),
+         }
+@@ -57,8 +56,7 @@ impl TaffyLayoutEngine {
+ 
+     pub fn clear(&mut self) {
+         self.taffy.clear();
+-        self.absolute_layout_bounds.clear();
+-        self.absolute_outer_origins.clear();
++        self.absolute_layouts.clear();
+         self.computed_layouts.clear();
+     }
+ 
+@@ -211,8 +209,7 @@ impl TaffyLayoutEngine {
+             let stack = &mut self.layout_bounds_scratch_space;
+             stack.push(id);
+             while let Some(id) = stack.pop() {
+-                self.absolute_layout_bounds.remove(&id);
+-                self.absolute_outer_origins.remove(&id);
++                self.absolute_layouts.remove(&id);
+                 stack.extend(
+                     self.taffy
+                         .children(id.into())
+@@ -348,8 +345,8 @@ impl TaffyLayoutEngine {
+     // 1dp residual into descendants.
+ 
+     pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
+-        if let Some(layout) = self.absolute_layout_bounds.get(&id).cloned() {
+-            return layout;
++        if let Some(layout) = self.absolute_layouts.get(&id) {
++            return layout.bounds;
+         }
+ 
+         let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
+@@ -361,16 +358,15 @@ impl TaffyLayoutEngine {
+             Some(parent_id) => {
+                 let parent_id = LayoutId::from(parent_id);
+                 self.layout_bounds(parent_id, scale_factor);
+-                let parent_origin = *self
+-                    .absolute_outer_origins
++                let parent_origin = self
++                    .absolute_layouts
+                     .get(&parent_id)
+-                    .expect("parent absolute outer origin should be cached");
++                    .expect("parent absolute outer origin should be cached")
++                    .outer_origin;
+                 parent_origin + Point::from(layout_location)
+             }
+             None => Point::from(layout_location),
+         };
+-        self.absolute_outer_origins
+-            .insert(id, absolute_outer_origin);
+ 
+         let absolute_far = absolute_outer_origin + Point::from(Size::from(layout_size));
+         let snapped_bounds = Bounds::from_corners(
+@@ -379,11 +375,23 @@ impl TaffyLayoutEngine {
+         );
+ 
+         let bounds = (snapped_bounds / scale_factor).map(Pixels);
+-        self.absolute_layout_bounds.insert(id, bounds);
++        self.absolute_layouts.insert(
++            id,
++            AbsoluteLayout {
++                bounds,
++                outer_origin: absolute_outer_origin,
++            },
++        );
+         bounds
+     }
+ }
+ 
++#[derive(Clone, Copy)]
++struct AbsoluteLayout {
++    bounds: Bounds<Pixels>,
++    outer_origin: Point<f32>,
++}
++
+ /// A unique identifier for a layout node, generated when requesting a layout from Taffy
+ #[derive(Copy, Clone, Eq, PartialEq, Debug)]
+ #[repr(transparent)]
+diff --git a/crates/gpui/src/text_system.rs b/crates/gpui/src/text_system.rs
+index f3dc95b..0083f98 100644
+--- a/crates/gpui/src/text_system.rs
++++ b/crates/gpui/src/text_system.rs
+@@ -3,6 +3,8 @@ mod font_features;
+ mod line;
+ mod line_layout;
+ mod line_wrapper;
++#[cfg(test)]
++mod paint_tests;
+ 
+ pub use font_fallbacks::*;
+ pub use font_features::*;
+@@ -426,7 +428,7 @@ impl WindowTextSystem {
+             });
+         }
+ 
+-        let layout = self.layout_line(&text, font_size, runs, force_width);
++        let layout = self.layout_line_impl(&text, font_size, runs, force_width);
+ 
+         ShapedLine {
+             layout,
+@@ -524,7 +526,7 @@ impl WindowTextSystem {
+         let mut process_line = |line_text: SharedString, line_start, line_end| {
+             font_runs.clear();
+ 
+-            let mut decoration_runs = <Vec<DecorationRun>>::with_capacity(32);
++            let mut decoration_runs = <Vec<DecorationRun>>::new();
+             let mut run_start = line_start;
+             while run_start < line_end {
+                 let Some(run) = runs.peek_mut() else {
+@@ -649,6 +651,20 @@ impl WindowTextSystem {
+         runs: &[TextRun],
+         force_width: Option<Pixels>,
+     ) -> Arc<LineLayout> {
++        self.layout_line_impl(text, font_size, runs, force_width)
++    }
++
++    fn layout_line_impl<Text>(
++        &self,
++        text: Text,
++        font_size: Pixels,
++        runs: &[TextRun],
++        force_width: Option<Pixels>,
++    ) -> Arc<LineLayout>
++    where
++        Text: AsRef<str>,
++        SharedString: From<Text>,
++    {
+         let mut last_run = None::<&TextRun>;
+         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
+         font_runs.clear();
+@@ -681,12 +697,9 @@ impl WindowTextSystem {
+             }
+         }
+ 
+-        let layout = self.line_layout_cache.layout_line(
+-            &SharedString::new(text),
+-            font_size,
+-            &font_runs,
+-            force_width,
+-        );
++        let layout = self
++            .line_layout_cache
++            .layout_line(text, font_size, &font_runs, force_width);
+ 
+         self.font_runs_pool.lock().push(font_runs);
+ 
+diff --git a/crates/gpui/src/text_system/font_features.rs b/crates/gpui/src/text_system/font_features.rs
+index c1ab72b..9b64f74 100644
+--- a/crates/gpui/src/text_system/font_features.rs
++++ b/crates/gpui/src/text_system/font_features.rs
+@@ -1,12 +1,20 @@
+ use std::borrow::Cow;
+-use std::sync::Arc;
++use std::sync::{Arc, LazyLock};
+ 
+ use schemars::{JsonSchema, json_schema};
+ 
+ /// The OpenType features that can be configured for a given font.
+-#[derive(Default, Clone, Eq, PartialEq, Hash)]
++#[derive(Clone, Eq, PartialEq, Hash)]
+ pub struct FontFeatures(pub Arc<Vec<(String, u32)>>);
+ 
++impl Default for FontFeatures {
++    // Sharing one Arc is safe: equality and hashing compare the list's contents.
++    fn default() -> Self {
++        static NONE: LazyLock<Arc<Vec<(String, u32)>>> = LazyLock::new(Default::default);
++        Self(NONE.clone())
++    }
++}
++
+ impl FontFeatures {
+     /// Disables `calt`.
+     pub fn disable_ligatures() -> Self {
+diff --git a/crates/gpui/src/text_system/line.rs b/crates/gpui/src/text_system/line.rs
+index cb66359..367dbb0 100644
+--- a/crates/gpui/src/text_system/line.rs
++++ b/crates/gpui/src/text_system/line.rs
+@@ -373,8 +373,10 @@ fn paint_line(
+         let mut prev_glyph_position = Point::default();
+         let mut max_glyph_size = size(px(0.), px(0.));
+         let mut first_glyph_x = origin.x;
++        let mut dilation_for_color: Option<(Hsla, u8)> = None;
+         for (run_ix, run) in layout.runs.iter().enumerate() {
+             max_glyph_size = text_system.bounding_box(run.font_id, layout.font_size).size;
++            let mut run_subpixel_rendering: Option<bool> = None;
+ 
+             for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
+                 glyph_origin.x += glyph.position.x - prev_glyph_position.x;
+@@ -532,12 +534,25 @@ fn paint_line(
+                             layout.font_size,
+                         )?;
+                     } else {
+-                        window.paint_glyph(
++                        let subpixel_rendering = *run_subpixel_rendering.get_or_insert_with(|| {
++                            window.should_use_subpixel_rendering(run.font_id, layout.font_size)
++                        });
++                        let dilation = match dilation_for_color {
++                            Some((cached_color, dilation)) if cached_color == color => dilation,
++                            _ => {
++                                let dilation = text_system.glyph_dilation_for_color(color);
++                                dilation_for_color = Some((color, dilation));
++                                dilation
++                            }
++                        };
++                        window.paint_glyph_with_rendering(
+                             glyph_origin + baseline_offset + vertical_offset,
+                             run.font_id,
+                             glyph.id,
+                             layout.font_size,
+                             color,
++                            subpixel_rendering,
++                            dilation,
+                         )?;
+                     }
+                 }
+@@ -596,6 +611,15 @@ fn paint_line_background(
+         ),
+     );
+     window.paint_layer(line_bounds, |window| {
++        // The layer above is still pushed when nothing paints in it: it takes a
++        // draw order, and skipping it would renumber everything after.
++        if decoration_runs
++            .iter()
++            .all(|run| run.background_color.is_none())
++        {
++            return Ok(());
++        }
++
+         let mut decoration_runs = decoration_runs.iter();
+         let mut wraps = wrap_boundaries.iter().peekable();
+         let mut run_end = 0;
+diff --git a/crates/gpui/src/text_system/paint_tests.rs b/crates/gpui/src/text_system/paint_tests.rs
+new file mode 100644
+index 0000000..9688c50
+--- /dev/null
++++ b/crates/gpui/src/text_system/paint_tests.rs
+@@ -0,0 +1,260 @@
++//! Scene-level tests for painting shaped text: every glyph sprite must carry
++//! the rendering inputs (dilation) of its own color, background runs must
++//! still paint, and cache hits must return the very layout a miss produced.
++
++use std::{borrow::Cow, rc::Rc, sync::Arc};
++
++use crate::{
++    AnyWindowHandle, App, AppCell, AppContext as _, BackgroundExecutor, Bounds, Context,
++    DevicePixels, Font, FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, Hsla,
++    IntoElement, LineLayout, NoopTextSystem, ParentElement as _, Pixels, PlatformTextSystem,
++    RenderGlyphParams, Result, Size, StyledText, TestAppContext, TestDispatcher, TestPlatform,
++    TextRenderingMode, TextRun, Window, WindowBounds, WindowOptions, WindowTextSystem,
++    app::GpuiMode, div, font, hsla, point, px, size,
++};
++
++// For the `#[crate::test]` macro, which expands to `gpui::` paths.
++use crate as gpui;
++
++/// The no-op text system, except that glyphs rasterize to a non-empty tile
++/// whose width encodes the dilation they were rendered with, and dilation
++/// follows the color's lightness.
++struct RasterizingTextSystem(NoopTextSystem);
++
++fn dilation_for(color: Hsla) -> u8 {
++    (color.l * 4.0).round() as u8
++}
++
++impl PlatformTextSystem for RasterizingTextSystem {
++    fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> Result<()> {
++        self.0.add_fonts(fonts)
++    }
++
++    fn all_font_names(&self) -> Vec<String> {
++        self.0.all_font_names()
++    }
++
++    fn font_id(&self, descriptor: &Font) -> Result<FontId> {
++        self.0.font_id(descriptor)
++    }
++
++    fn font_metrics(&self, font_id: FontId) -> FontMetrics {
++        self.0.font_metrics(font_id)
++    }
++
++    fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
++        self.0.typographic_bounds(font_id, glyph_id)
++    }
++
++    fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
++        self.0.advance(font_id, glyph_id)
++    }
++
++    fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
++        self.0.glyph_for_char(font_id, ch)
++    }
++
++    fn glyph_raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
++        Ok(Bounds {
++            origin: point(DevicePixels(0), DevicePixels(-8)),
++            size: size(DevicePixels(1 + params.dilation as i32), DevicePixels(8)),
++        })
++    }
++
++    fn rasterize_glyph(
++        &self,
++        _params: &RenderGlyphParams,
++        raster_bounds: Bounds<DevicePixels>,
++    ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
++        let len = (raster_bounds.size.width.0 * raster_bounds.size.height.0) as usize;
++        Ok((raster_bounds.size, vec![255; len]))
++    }
++
++    fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
++        self.0.layout_line(text, font_size, runs)
++    }
++
++    fn recommended_rendering_mode(&self, font_id: FontId, font_size: Pixels) -> TextRenderingMode {
++        self.0.recommended_rendering_mode(font_id, font_size)
++    }
++
++    fn glyph_dilation_for_color(&self, color: Hsla) -> u8 {
++        dilation_for(color)
++    }
++}
++
++fn app_with_rasterizing_text_system() -> Rc<AppCell> {
++    let dispatcher = Arc::new(TestDispatcher::new(0));
++    let background_executor = BackgroundExecutor::new(dispatcher.clone());
++    let foreground_executor = ForegroundExecutor::new(dispatcher);
++    let platform = TestPlatform::with_text_system(
++        background_executor,
++        foreground_executor,
++        Arc::new(RasterizingTextSystem(NoopTextSystem)),
++    );
++    let app = App::new_app(
++        platform,
++        Arc::new(()),
++        http_client::FakeHttpClient::with_404_response(),
++    );
++    app.borrow_mut().mode = GpuiMode::test();
++    app
++}
++
++struct Text {
++    text: &'static str,
++    runs: Vec<TextRun>,
++}
++
++impl crate::Render for Text {
++    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++        div().child(StyledText::new(self.text).with_runs(self.runs.clone()))
++    }
++}
++
++fn run(len: usize, color: Hsla, background_color: Option<Hsla>) -> TextRun {
++    TextRun {
++        len,
++        font: font("Test"),
++        color,
++        background_color,
++        underline: None,
++        strikethrough: None,
++    }
++}
++
++/// Paints `text` with `runs` on one line and returns, per monochrome sprite
++/// from left to right, its color and the dilation encoded in its tile width,
++/// plus the solid color of every quad in the scene (in paint order).
++fn paint(text: &'static str, runs: Vec<TextRun>) -> (Vec<(Hsla, u8)>, Vec<Hsla>) {
++    let app = app_with_rasterizing_text_system();
++    let mut app = app.borrow_mut();
++    let cx: &mut App = &mut app;
++    let window: AnyWindowHandle = cx
++        .open_window(
++            WindowOptions {
++                window_bounds: Some(WindowBounds::Windowed(Bounds {
++                    origin: point(px(0.), px(0.)),
++                    size: size(px(800.), px(600.)),
++                })),
++                ..Default::default()
++            },
++            |_, cx| cx.new(|_| Text { text, runs }),
++        )
++        .expect("open test window")
++        .into();
++    // The untyped handle leaves the root view unleased, so `draw` can render it.
++    window
++        .update(cx, |_, window, cx| {
++            window.draw(cx).clear();
++            let scene = &window.rendered_frame.scene;
++            let mut sprites: Vec<_> = scene.monochrome_sprites.iter().collect();
++            // The scene orders sprites by tile, not by position.
++            sprites.sort_by(|a, b| a.bounds.origin.x.0.total_cmp(&b.bounds.origin.x.0));
++            let glyphs = sprites
++                .into_iter()
++                .map(|sprite| (sprite.color, (sprite.bounds.size.width.0 as i32 - 1) as u8))
++                .collect();
++            let backgrounds = scene
++                .quads
++                .iter()
++                .map(|quad| quad.background.solid)
++                .collect();
++            (glyphs, backgrounds)
++        })
++        .expect("draw test window")
++}
++
++#[test]
++fn every_glyph_is_rendered_with_the_dilation_of_its_own_color() {
++    let dark = hsla(0., 0., 0., 1.);
++    let light = hsla(0., 0., 1., 1.);
++    let mid = hsla(0.6, 0.5, 0.5, 1.);
++    assert_ne!(dilation_for(dark), dilation_for(light));
++    assert_ne!(dilation_for(dark), dilation_for(mid));
++
++    // Colors alternate run to run, so a dilation remembered for the wrong
++    // color would show up on the glyphs after every switch.
++    let text = "aaabbbcccdddeee";
++    let runs = vec![
++        run(3, dark, None),
++        run(3, light, None),
++        run(3, dark, None),
++        run(3, mid, None),
++        run(3, light, None),
++    ];
++    let (glyphs, _) = paint(text, runs);
++
++    let expected_colors = [dark, light, dark, mid, light]
++        .into_iter()
++        .flat_map(|color| [color; 3])
++        .collect::<Vec<_>>();
++    assert_eq!(glyphs.len(), text.len());
++    for (ix, ((color, dilation), expected_color)) in glyphs.iter().zip(&expected_colors).enumerate()
++    {
++        assert_eq!(color, expected_color, "glyph {ix} color");
++        assert_eq!(*dilation, dilation_for(*color), "glyph {ix} dilation");
++    }
++}
++
++#[test]
++fn text_without_background_runs_paints_no_quads() {
++    let color = hsla(0., 0., 0.2, 1.);
++    let (glyphs, backgrounds) = paint("no backgrounds here", vec![run(19, color, None)]);
++    assert_eq!(glyphs.len(), 19);
++    assert!(backgrounds.is_empty(), "unexpected quads: {backgrounds:?}");
++}
++
++#[test]
++fn background_runs_still_paint_their_quads() {
++    let color = hsla(0., 0., 0.2, 1.);
++    let highlight = hsla(0.15, 1., 0.5, 1.);
++    let other = hsla(0.55, 1., 0.5, 1.);
++    let (glyphs, backgrounds) = paint(
++        "plain highlighted plain other",
++        vec![
++            run(6, color, None),
++            run(12, color, Some(highlight)),
++            run(6, color, None),
++            run(5, color, Some(other)),
++        ],
++    );
++    assert_eq!(glyphs.len(), 29);
++    assert_eq!(backgrounds, vec![highlight, other]);
++}
++
++#[crate::test]
++fn shaped_and_laid_out_lines_share_one_cached_layout(cx: &mut TestAppContext) {
++    cx.update(|cx| {
++        let text_system = WindowTextSystem::new(cx.text_system().clone());
++        // Longer than an inline `SharedString`, so a copy would be a new heap string.
++        let text = "a line comfortably longer than twenty-three bytes";
++        let runs = [TextRun {
++            len: text.len(),
++            font: font("Test"),
++            color: Default::default(),
++            background_color: None,
++            underline: None,
++            strikethrough: None,
++        }];
++
++        let shaped = text_system.shape_line(text.into(), px(14.), &runs, None);
++        let laid_out = text_system.layout_line(text, px(14.), &runs, None);
++        let shaped_again = text_system.shape_line(text.into(), px(14.), &runs, None);
++        assert!(Arc::ptr_eq(&shaped.layout, &laid_out));
++        assert!(Arc::ptr_eq(&shaped.layout, &shaped_again.layout));
++        assert_eq!(shaped.text.as_ref(), text);
++
++        // The next frame reuses the previous frame's layout for both entry points.
++        text_system.finish_frame();
++        let laid_out_next_frame = text_system.layout_line(text, px(14.), &runs, None);
++        let shaped_next_frame = text_system.shape_line(text.into(), px(14.), &runs, None);
++        assert!(Arc::ptr_eq(&shaped.layout, &laid_out_next_frame));
++        assert!(Arc::ptr_eq(&shaped.layout, &shaped_next_frame.layout));
++
++        // Different text is a different layout.
++        let other =
++            text_system.layout_line("something else entirely, also long", px(14.), &runs, None);
++        assert!(!Arc::ptr_eq(&shaped.layout, &other));
++    });
++}
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 82cdc92..0dc181d 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -993,6 +993,7 @@ pub(crate) struct Frame {
+     pub(crate) window_active: bool,
+     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
+     accessed_element_states: Vec<(GlobalElementId, TypeId)>,
++    reused_element_state_ranges: Vec<Range<usize>>,
+     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
+     pub(crate) dispatch_tree: DispatchTree,
+     pub(crate) scene: Scene,
+@@ -1039,6 +1040,7 @@ impl Frame {
+             window_active: false,
+             element_states: FxHashMap::default(),
+             accessed_element_states: Vec::new(),
++            reused_element_state_ranges: Vec::new(),
+             mouse_listeners: Vec::new(),
+             dispatch_tree,
+             scene: Scene::default(),
+@@ -1064,6 +1066,7 @@ impl Frame {
+     pub(crate) fn clear(&mut self) {
+         self.element_states.clear();
+         self.accessed_element_states.clear();
++        self.reused_element_state_ranges.clear();
+         self.mouse_listeners.clear();
+         self.dispatch_tree.clear();
+         self.scene.clear();
+@@ -1134,11 +1137,18 @@ impl Frame {
+     }
+ 
+     pub(crate) fn finish(&mut self, prev_frame: &mut Self) {
+-        for element_state_key in &self.accessed_element_states {
+-            if let Some((element_state_key, element_state)) =
+-                prev_frame.element_states.remove_entry(element_state_key)
+-            {
+-                self.element_states.insert(element_state_key, element_state);
++        // Only keys copied by reuse_prepaint/reuse_paint can still have state in
++        // the previous frame: with_element_state removes it on first access.
++        // Ranges are clamped because truncate may have shortened the list.
++        let accessed = self.accessed_element_states.len();
++        for range in &self.reused_element_state_ranges {
++            let range = range.start.min(accessed)..range.end.min(accessed);
++            for element_state_key in &self.accessed_element_states[range] {
++                if let Some((element_state_key, element_state)) =
++                    prev_frame.element_states.remove_entry(element_state_key)
++                {
++                    self.element_states.insert(element_state_key, element_state);
++                }
+             }
+         }
+ 
+@@ -3407,12 +3417,19 @@ impl Window {
+                 .iter_mut()
+                 .map(|request| request.take()),
+         );
++        let reused_start = self.next_frame.accessed_element_states.len();
+         self.next_frame.accessed_element_states.extend(
+             self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
+                 ..range.end.accessed_element_states_index]
+                 .iter()
+                 .map(|(id, type_id)| (id.clone(), *type_id)),
+         );
++        let reused_end = self.next_frame.accessed_element_states.len();
++        if reused_end > reused_start {
++            self.next_frame
++                .reused_element_state_ranges
++                .push(reused_start..reused_end);
++        }
+         self.text_system
+             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
+ 
+@@ -3477,12 +3494,19 @@ impl Window {
+                 .iter_mut()
+                 .map(|listener| listener.take()),
+         );
++        let reused_start = self.next_frame.accessed_element_states.len();
+         self.next_frame.accessed_element_states.extend(
+             self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
+                 ..range.end.accessed_element_states_index]
+                 .iter()
+                 .map(|(id, type_id)| (id.clone(), *type_id)),
+         );
++        let reused_end = self.next_frame.accessed_element_states.len();
++        if reused_end > reused_start {
++            self.next_frame
++                .reused_element_state_ranges
++                .push(reused_start..reused_end);
++        }
+         self.next_frame.tab_stops.replay(
+             &self.rendered_frame.tab_stops.insertion_history
+                 [range.start.tab_handle_index..range.end.tab_handle_index],
+@@ -4440,6 +4464,31 @@ impl Window {
+         glyph_id: GlyphId,
+         font_size: Pixels,
+         color: Hsla,
++    ) -> Result<()> {
++        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
++        let dilation = self.text_system().glyph_dilation_for_color(color);
++        self.paint_glyph_with_rendering(
++            origin,
++            font_id,
++            glyph_id,
++            font_size,
++            color,
++            subpixel_rendering,
++            dilation,
++        )
++    }
++
++    /// `subpixel_rendering` must equal `should_use_subpixel_rendering(font_id,
++    /// font_size)` and `dilation` must equal `glyph_dilation_for_color(color)`.
++    pub(crate) fn paint_glyph_with_rendering(
++        &mut self,
++        origin: Point<Pixels>,
++        font_id: FontId,
++        glyph_id: GlyphId,
++        font_size: Pixels,
++        color: Hsla,
++        subpixel_rendering: bool,
++        dilation: u8,
+     ) -> Result<()> {
+         self.invalidator.debug_assert_paint();
+ 
+@@ -4461,8 +4510,6 @@ impl Window {
+             (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
+         );
+         let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
+-        let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
+-        let dilation = self.text_system().glyph_dilation_for_color(color);
+         let params = RenderGlyphParams {
+             font_id,
+             glyph_id,
+@@ -4514,7 +4561,7 @@ impl Window {
+         Ok(())
+     }
+ 
+-    fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
++    pub(crate) fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
+         if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
+             return false;
+         }
+@@ -7378,3 +7425,90 @@ mod tests {
+         assert_eq!(b_focus_count.get(), 1);
+     }
+ }
++
++#[cfg(test)]
++mod reused_element_state_tests {
++    use crate::{
++        AnyView, AnyWindowHandle, AppContext as _, Context, Entity, EntityId, IntoElement,
++        ParentElement as _, Render, StyleRefinement, Styled as _, TestAppContext, Window, canvas,
++        div,
++    };
++    use std::{cell::Cell, rc::Rc};
++
++    struct Child {
++        seen: Rc<Cell<Option<EntityId>>>,
++    }
++
++    impl Render for Child {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            let seen = self.seen.clone();
++            div().size_full().child(
++                canvas(
++                    move |_, window, cx| {
++                        let state = window.use_keyed_state("reused-state", cx, |_, _| 0usize);
++                        seen.set(Some(state.entity_id()));
++                    },
++                    |_, _, _, _| {},
++                )
++                .size_full(),
++            )
++        }
++    }
++
++    struct Root {
++        child: Entity<Child>,
++    }
++
++    impl Render for Root {
++        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++            div().size_full().child(
++                AnyView::from(self.child.clone()).cached(StyleRefinement::default().size_full()),
++            )
++        }
++    }
++
++    #[test]
++    fn element_state_survives_frames_that_reuse_its_view() {
++        let mut cx = TestAppContext::single();
++        let seen = Rc::new(Cell::new(None));
++        let child = cx.new({
++            let seen = seen.clone();
++            |_| Child { seen }
++        });
++        let root = cx.add_window({
++            let child = child.clone();
++            move |_, _| Root { child }
++        });
++        let window: AnyWindowHandle = root.into();
++        let draw = |cx: &mut TestAppContext| {
++            cx.update_window(window, |_, window, cx| window.draw(cx).clear())
++                .unwrap();
++        };
++
++        draw(&mut cx);
++        let first = seen.take().expect("the child paints on the first frame");
++
++        for _ in 0..3 {
++            root.update(&mut cx, |_, _, cx| cx.notify()).unwrap();
++            draw(&mut cx);
++            assert_eq!(
++                seen.take(),
++                None,
++                "the cached child should have been reused"
++            );
++        }
++
++        child.update(&mut cx, |_, cx| cx.notify());
++        draw(&mut cx);
++        assert_eq!(seen.take(), Some(first));
++
++        cx.update_window(window, |_, window, cx| {
++            window.refresh();
++            window.draw(cx).clear();
++        })
++        .unwrap();
++        child.update(&mut cx, |_, cx| cx.notify());
++        draw(&mut cx);
++        assert_eq!(seen.take(), Some(first));
++    }
++}

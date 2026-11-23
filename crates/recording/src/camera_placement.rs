@@ -96,7 +96,7 @@ fn display_bounds(display: scap_targets::Display) -> Option<[f64; 4]> {
 
 fn capture_bounds(target: &ScreenCaptureTarget) -> Option<[f64; 4]> {
     match target {
-        ScreenCaptureTarget::CameraOnly => None,
+        ScreenCaptureTarget::CameraOnly | ScreenCaptureTarget::AudioOnly => None,
         ScreenCaptureTarget::Display { .. } => display_bounds(target.display()?),
         ScreenCaptureTarget::Window { id } => {
             let window = scap_targets::Window::from_id(id)?;

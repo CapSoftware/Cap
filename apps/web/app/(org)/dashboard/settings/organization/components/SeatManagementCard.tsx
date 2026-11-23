@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Card, CardDescription, CardHeader, CardTitle } from "@cap/ui";
+import { Button } from "@cap/ui";
 import NumberFlow from "@number-flow/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus } from "lucide-react";
@@ -19,6 +19,8 @@ import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/Confirmati
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { formatAmount } from "@/utils/currency";
 import { calculateSeats } from "@/utils/organization";
+import { SeatMeter, SeatsDoodle } from "../_components/doodles";
+import { SettingsRow } from "../_components/settings-ui";
 
 const DEBOUNCE_MS = 500;
 
@@ -137,83 +139,110 @@ export function SeatManagementCard() {
 	const isCancelRequest = desiredQuantity === 0;
 	const baaActive = baa?.status === "active" || baa?.status === "paid";
 
+	const stepperButton =
+		"flex justify-center items-center rounded-full transition-colors size-7 text-gray-12 hover:bg-gray-4 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent";
+
 	return (
-		<Card>
-			<CardHeader>
-				<CardTitle>Pro Seats</CardTitle>
-				<CardDescription>
-					Manage how many Pro seats are available for your team.
-				</CardDescription>
-			</CardHeader>
-			<div className="flex flex-col gap-5 mt-4">
-				<div className="flex flex-col gap-1 text-sm text-gray-11">
-					<span>
-						<span className="font-medium text-gray-12">{proSeatsUsed}</span> of{" "}
-						<span className="font-medium text-gray-12">{proSeatsTotal}</span>{" "}
-						Pro seats in use
-					</span>
-					{activeOrganization?.ownerIsPro && (
-						<span className="text-xs text-gray-10">
-							The organization owner is always on Cap Pro and uses one of your
-							seats.
+		<>
+			<SettingsRow
+				anchor="seats"
+				icon={<SeatsDoodle />}
+				title="Pro seats"
+				description={
+					<>
+						<span className="font-medium tabular-nums text-gray-12">
+							{proSeatsUsed} of {proSeatsTotal}
+						</span>{" "}
+						in use
+						{activeOrganization?.ownerIsPro &&
+							". The organization owner is always on Cap Pro and uses one of your seats."}
+					</>
+				}
+				control={
+					<>
+						<span className="hidden mr-2 sm:block">
+							<SeatMeter
+								used={proSeatsUsed}
+								total={Math.max(desiredQuantity, proSeatsUsed)}
+							/>
 						</span>
-					)}
-				</div>
-
-				<div className="flex flex-wrap items-center gap-4">
-					<div className="flex items-center gap-1">
-						<span className="mr-2 text-sm text-gray-12">Seats:</span>
-						<button
-							type="button"
-							onClick={() =>
-								canDecrease && updateDesiredQuantity(desiredQuantity - 1)
-							}
-							className="flex justify-center items-center w-8 h-8 rounded-l-md bg-gray-4 hover:bg-gray-5 disabled:opacity-50 disabled:cursor-not-allowed"
-							disabled={!canDecrease}
-						>
-							<Minus className="w-4 h-4 text-gray-12" />
-						</button>
-						<NumberFlow
-							value={desiredQuantity}
-							className="mx-auto w-8 text-sm tabular-nums text-center text-gray-12"
-						/>
-						<button
-							type="button"
-							onClick={() =>
-								canIncrease && updateDesiredQuantity(desiredQuantity + 1)
-							}
-							className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5 disabled:opacity-50 disabled:cursor-not-allowed"
-							disabled={!canIncrease}
-						>
-							<Plus className="w-4 h-4 text-gray-12" />
-						</button>
-					</div>
-
-					{hasChanges && (
-						<div className="flex items-center gap-3">
-							{debounceInFlight ? (
-								<span className="text-sm text-gray-10">Calculating...</span>
-							) : isCancelRequest ? (
-								<span className="text-sm text-amber-700">
-									Cancels Cap Pro at the end of the billing period
-								</span>
-							) : previewLoading ? (
-								<span className="text-sm text-gray-10">Calculating...</span>
-							) : previewError ? (
-								<span className="text-sm text-red-500">
-									Unable to calculate preview
-								</span>
-							) : preview ? (
-								<span className="text-sm text-gray-11">
-									{preview.proratedAmount === 0
-										? "No prorated adjustment"
-										: `${preview.proratedAmount > 0 ? "Due now" : "Prorated credit"}: ${formatAmount(Math.abs(preview.proratedAmount / 100), preview.currency)}`}
-								</span>
-							) : null}
+						<div className="flex gap-0.5 items-center p-0.5 rounded-full border shadow-xs border-gray-4 bg-gray-1">
+							<button
+								type="button"
+								aria-label="Remove a seat"
+								onClick={() =>
+									canDecrease && updateDesiredQuantity(desiredQuantity - 1)
+								}
+								className={stepperButton}
+								disabled={!canDecrease}
+							>
+								<Minus className="size-3.5" />
+							</button>
+							<NumberFlow
+								value={desiredQuantity}
+								aria-label="Seats"
+								className="w-9 text-sm font-medium tabular-nums text-center text-gray-12"
+							/>
+							<button
+								type="button"
+								aria-label="Add a seat"
+								onClick={() =>
+									canIncrease && updateDesiredQuantity(desiredQuantity + 1)
+								}
+								className={stepperButton}
+								disabled={!canIncrease}
+							>
+								<Plus className="size-3.5" />
+							</button>
+						</div>
+					</>
+				}
+			>
+				{hasChanges && (
+					<div className="flex flex-wrap gap-3 justify-between items-center px-4 py-3 mt-4 rounded-xl bg-gray-2">
+						{debounceInFlight ? (
+							<span className="text-[13px] text-gray-10">Calculating...</span>
+						) : isCancelRequest ? (
+							<span className="text-[13px] text-amber-700">
+								Cancels Cap Pro at the end of the billing period
+							</span>
+						) : previewLoading ? (
+							<span className="text-[13px] text-gray-10">Calculating...</span>
+						) : previewError ? (
+							<span className="text-[13px] text-red-500">
+								Unable to calculate preview
+							</span>
+						) : preview ? (
+							<span className="text-[13px] text-gray-11">
+								{preview.proratedAmount === 0
+									? "No prorated adjustment"
+									: `${preview.proratedAmount > 0 ? "Due now" : "Prorated credit"}: ${formatAmount(Math.abs(preview.proratedAmount / 100), preview.currency)}`}
+							</span>
+						) : (
+							<span />
+						)}
+						<div className="flex gap-2 items-center">
 							<Button
 								type="button"
-								size="sm"
-								variant={isCancelRequest ? "destructive" : "primary"}
+								size="xs"
+								variant="outline"
+								className="px-4"
+								onClick={() => {
+									setDesiredQuantity(proSeatsTotal);
+									setDebouncedQuantity(proSeatsTotal);
+									if (debounceTimer.current) {
+										clearTimeout(debounceTimer.current);
+									}
+								}}
+								disabled={updateMutation.isPending}
+							>
+								Cancel
+							</Button>
+							<Button
+								type="button"
+								size="xs"
+								variant={isCancelRequest ? "destructive" : "dark"}
+								className="px-4"
 								onClick={() => {
 									if (isCancelRequest) setCancelDialogOpen(true);
 									else updateMutation.mutate(desiredQuantity);
@@ -227,25 +256,10 @@ export function SeatManagementCard() {
 							>
 								{updateMutation.isPending ? "Updating..." : "Confirm"}
 							</Button>
-							<Button
-								type="button"
-								size="sm"
-								variant="gray"
-								onClick={() => {
-									setDesiredQuantity(proSeatsTotal);
-									setDebouncedQuantity(proSeatsTotal);
-									if (debounceTimer.current) {
-										clearTimeout(debounceTimer.current);
-									}
-								}}
-								disabled={updateMutation.isPending}
-							>
-								Cancel
-							</Button>
 						</div>
-					)}
-				</div>
-			</div>
+					</div>
+				)}
+			</SettingsRow>
 			<ConfirmationDialog
 				open={cancelDialogOpen}
 				title="Cancel Cap Pro?"
@@ -263,6 +277,6 @@ export function SeatManagementCard() {
 					if (!updateMutation.isPending) setCancelDialogOpen(false);
 				}}
 			/>
-		</Card>
+		</>
 	);
 }

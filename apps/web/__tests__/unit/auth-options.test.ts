@@ -36,6 +36,9 @@ const mocks = vi.hoisted(() => ({
 		) => Adapter
 	>(() => ({})),
 	isCap: undefined as string | undefined,
+	disposableSignup: vi.fn<(email: string) => Promise<boolean>>(
+		async () => false,
+	),
 }));
 
 const env = vi.hoisted(() => ({
@@ -77,6 +80,10 @@ vi.mock("@cap/database/auth/sso", () => ({
 
 vi.mock("../../../../packages/database/auth/drizzle-adapter", () => ({
 	DrizzleAdapter: mocks.adapter,
+}));
+
+vi.mock("../../../../packages/database/auth/disposable-signup", () => ({
+	isDisposableEmailSignup: mocks.disposableSignup,
 }));
 
 const WORKOS_ACCOUNT: Account = {
@@ -516,6 +523,51 @@ describe("authOptions", () => {
 		});
 	});
 
+	it("sends new accounts on disposable addresses to the login page with DisposableEmail", async () => {
+		mocks.disposableSignup.mockImplementation(
+			async (email) => email === "new@throwaway.example",
+		);
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+
+		await expect(
+			callbacks.signIn({
+				user: { id: "new@throwaway.example", email: "New@Throwaway.example" },
+				account: {
+					provider: "email",
+					providerAccountId: "new@throwaway.example",
+					type: "email",
+				},
+				email: { verificationRequest: true },
+			}),
+		).resolves.toBe("/login?error=DisposableEmail");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u1", email: "new@throwaway.example" },
+				account: { provider: "google", providerAccountId: "g1", type: "oauth" },
+			}),
+		).resolves.toBe("/login?error=DisposableEmail");
+		await expect(
+			callbacks.signIn({
+				user: { id: "u2", email: "person@company.example" },
+				account: { provider: "google", providerAccountId: "g2", type: "oauth" },
+			}),
+		).resolves.toBe(true);
+		mocks.disposableSignup.mockReset();
+		mocks.disposableSignup.mockResolvedValue(false);
+	});
+
+	it("does not run the disposable check for SSO sign-ins", async () => {
+		mocks.disposableSignup.mockClear();
+		mocks.validate.mockResolvedValueOnce(IDENTITY);
+		const callbacks = callbacksFor(authOptions(CONTEXT));
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account: WORKOS_ACCOUNT,
+			profile: PROFILE as never,
+		});
+		expect(mocks.disposableSignup).not.toHaveBeenCalled();
+	});
+
 	it("does not block anyone when CAP_BLOCKED_SIGNUP_DOMAINS is unset", async () => {
 		const callbacks = callbacksFor(authOptions(CONTEXT));
 		await expect(
@@ -682,6 +734,51 @@ describe("authOptions", () => {
 			}),
 		).rejects.toThrow("SSO billing revoked");
 		expect(mocks.select).not.toHaveBeenCalled();
+	});
+
+	it("stamps the sign-in time only when someone signs in", async () => {
+		const options = authOptions(CONTEXT);
+		const callbacks = callbacksFor(options);
+		const account = { ...WORKOS_ACCOUNT, provider: "google" };
+		await callbacks.signIn({
+			user: AUTHENTICATED_USER,
+			account,
+			profile: PROFILE,
+		});
+		const before = Math.floor(Date.now() / 1000);
+		const signedIn = await callbacks.jwt({
+			token: { id: "old-user", email: PROFILE.email },
+			user: AUTHENTICATED_USER,
+			account,
+		});
+		const after = Math.floor(Date.now() / 1000);
+		expect(signedIn.authTime).toBeGreaterThanOrEqual(before);
+		expect(signedIn.authTime).toBeLessThanOrEqual(after);
+		expect(signedIn.authMethod).toBe("google");
+
+		const refreshed = await callbacks.jwt({ token: { ...signedIn } } as never);
+		expect(refreshed.authTime).toBe(signedIn.authTime);
+		expect(refreshed.authMethod).toBe("google");
+
+		const updated = await callbacks.jwt({
+			token: { ...signedIn },
+			trigger: "update",
+			session: { authTime: after + 100_000, authMethod: "email" },
+		} as never);
+		expect(updated.authTime).toBe(signedIn.authTime);
+		expect(updated.authMethod).toBe("google");
+
+		const legacy = await callbacks.jwt({
+			token: { email: AUTHENTICATED_USER.email },
+		} as never);
+		expect(legacy.authTime).toBeUndefined();
+
+		const session = await options.callbacks?.session?.({
+			session: { user: {}, expires: "" },
+			token: { id: AUTHENTICATED_USER.id, authTime: 1234, authMethod: "email" },
+		} as never);
+		expect((session as { authTime?: number }).authTime).toBe(1234);
+		expect((session as { authMethod?: string }).authMethod).toBe("email");
 	});
 
 	it.each(["workos", "google", "apple"])(

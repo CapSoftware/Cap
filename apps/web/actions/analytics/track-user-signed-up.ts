@@ -4,6 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { users } from "@cap/database/schema";
 import { sql } from "drizzle-orm";
+import { userPreferencesObject } from "@/lib/user-preferences-sql";
 
 const SIGNUP_TRACKING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -67,13 +68,18 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 			return { shouldTrack: false };
 		}
 
+		const preferences = userPreferencesObject();
+		// JSON_SET only adds a member whose parent exists, so trackedEvents is
+		// written as a whole object rather than through the nested path.
+		const trackedEvents = sql`IF(JSON_TYPE(JSON_EXTRACT(${preferences}, '$.trackedEvents')) = 'OBJECT', JSON_EXTRACT(${preferences}, '$.trackedEvents'), JSON_OBJECT())`;
 		const result = await db()
 			.update(users)
 			.set({
-				preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.trackedEvents.user_signed_up', true)`,
+				preferences: sql`JSON_SET(${preferences}, '$.trackedEvents', JSON_SET(${trackedEvents}, '$.user_signed_up', true))`,
 			})
 			.where(
-				sql`(${users.id} = ${currentUser.id}) AND JSON_CONTAINS(COALESCE(${users.preferences}, JSON_OBJECT()), CAST(true AS JSON), '$.trackedEvents.user_signed_up') = 0`,
+				// JSON_CONTAINS is NULL when the path is missing, which `= 0` never matches.
+				sql`(${users.id} = ${currentUser.id}) AND IFNULL(JSON_CONTAINS(${preferences}, CAST(true AS JSON), '$.trackedEvents.user_signed_up'), 0) = 0`,
 			);
 
 		return { shouldTrack: getAffectedRows(result) > 0 };

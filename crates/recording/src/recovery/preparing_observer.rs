@@ -462,6 +462,7 @@ mod tests {
             cursor: None,
             keyboard: None,
             display_notch: None,
+            cursor_shape_version: None,
         }
     }
 
@@ -476,6 +477,8 @@ mod tests {
                     segments: vec![segment()],
                     cursors: cap_project::Cursors::Correct(Default::default()),
                     status: Some(StudioRecordingStatus::NeedsRemux),
+                    cursor_shape_version: 0,
+                    audio_only: false,
                 },
             })),
             upload: None,
