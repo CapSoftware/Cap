@@ -31,7 +31,6 @@
 					"apps/media-server/src/__tests__/loom-importer/app.test.ts": 1,
 					"apps/media-server/src/__tests__/loom-importer/rejections.test.ts": 2,
 					"apps/media-server/src/__tests__/routes/live-transcribe.test.ts": 1,
-					"apps/render-farm/src/coordinator.test.ts": 3,
 					"apps/web/__tests__/integration/developer-transcripts-database.test.ts": 1,
 					"apps/web/__tests__/integration/infra-auto-top-up-database.test.ts": 3,
 					"apps/web/__tests__/integration/infra-first-month-auto-top-up-database.test.ts": 1,

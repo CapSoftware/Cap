@@ -123,6 +123,12 @@ jobs:
           bun test apps/render-farm
           bun run --cwd apps/render-farm typecheck
 
+      - name: Test web editor
+        run: bun run --cwd packages/web-editor test
+
+      - name: Test recorder core
+        run: bun run --cwd packages/recorder-core test
+
       - name: Typecheck
         run: bun run typecheck
 
