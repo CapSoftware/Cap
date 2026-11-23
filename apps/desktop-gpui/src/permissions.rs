@@ -239,7 +239,7 @@ pub fn grants_are_settings_only() -> bool {
     }
 }
 
-fn version_has_settings_only_grants(version: &str) -> bool {
+pub(crate) fn version_has_settings_only_grants(version: &str) -> bool {
     let mut parts = version
         .trim()
         .split('.')
@@ -562,7 +562,7 @@ fn spawn_relaunch(
 mod screen_capture;
 
 #[cfg(target_os = "macos")]
-mod macos {
+pub(crate) mod macos {
     use super::{MediaAuthorization, OSPermission, RawPermissions};
 
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -1288,5 +1288,74 @@ mod capture_consent_tests {
         )
         .await;
         assert_eq!(result.unwrap_err(), "native request failed");
+    }
+}
+
+#[cfg(test)]
+mod entitlement_tests {
+    // Release builds are signed with the hardened runtime, which refuses these
+    // resources without the matching entitlement: the system never prompts and
+    // the request reports denied, even though dev builds work.
+    const PAIRS: &[(&str, &str)] = &[
+        (
+            "NSCameraUsageDescription",
+            "com.apple.security.device.camera",
+        ),
+        (
+            "NSMicrophoneUsageDescription",
+            "com.apple.security.device.audio-input",
+        ),
+        (
+            "NSCalendarsUsageDescription",
+            "com.apple.security.personal-information.calendars",
+        ),
+        (
+            "NSCalendarsFullAccessUsageDescription",
+            "com.apple.security.personal-information.calendars",
+        ),
+        (
+            "NSContactsUsageDescription",
+            "com.apple.security.personal-information.addressbook",
+        ),
+        (
+            "NSLocationUsageDescription",
+            "com.apple.security.personal-information.location",
+        ),
+        (
+            "NSPhotoLibraryUsageDescription",
+            "com.apple.security.personal-information.photos-library",
+        ),
+        (
+            "NSAppleEventsUsageDescription",
+            "com.apple.security.automation.apple-events",
+        ),
+    ];
+
+    fn enabled(plist: &str, key: &str) -> bool {
+        let tag = format!("<key>{key}</key>");
+        plist
+            .split_once(&tag)
+            .is_some_and(|(_, rest)| rest.trim_start().starts_with("<true/>"))
+    }
+
+    #[test]
+    fn every_privacy_prompt_has_its_hardened_runtime_entitlement() {
+        let info = include_str!("../Info.plist");
+        let entitlements = include_str!("../packaging/macos/Entitlements.plist");
+        let mut checked = 0;
+        for (usage, entitlement) in PAIRS {
+            if !info.contains(&format!("<key>{usage}</key>")) {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                enabled(entitlements, entitlement),
+                "Info.plist asks for {usage} but packaging/macos/Entitlements.plist lacks {entitlement}"
+            );
+        }
+        assert!(
+            checked >= 3,
+            "Info.plist privacy keys moved: {checked} checked"
+        );
     }
 }

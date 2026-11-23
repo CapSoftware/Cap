@@ -13,7 +13,10 @@ impl Render for RecordingActions {
     }
 }
 
-fn settings_fixture(window: &mut Window, cx: &mut Context<SettingsWindow>) -> SettingsWindow {
+pub(crate) fn settings_fixture(
+    window: &mut Window,
+    cx: &mut Context<SettingsWindow>,
+) -> SettingsWindow {
     let input = cx.new(|cx| ui::TextInputState::single_line(window, cx));
     let scroll = ScrollHandle::new();
     SettingsWindow {
