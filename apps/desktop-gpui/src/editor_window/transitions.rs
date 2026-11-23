@@ -546,8 +546,8 @@ impl EditorWindow {
                             .justify_center()
                             .cursor_pointer()
                             .border_1()
-                            .border_color(Hsla::from(theme.editor.line))
-                            .bg(Hsla::from(theme.editor.card))
+                            .border_color(theme.editor.pop_line())
+                            .bg(theme.editor.pop_bg())
                             .shadow(theme.editor.pop_shadow())
                             .hover(|chip| {
                                 chip.border_color(accent)
@@ -687,10 +687,11 @@ impl EditorWindow {
                 .whitespace_nowrap()
                 .cursor_pointer()
                 .bg(if selected {
-                    Hsla::from(theme.editor.ctl_active)
+                    theme.editor.pill_fill()
                 } else {
                     gpui::transparent_black()
                 })
+                .when(selected, |this| this.shadow(theme.editor.pill_shadow()))
                 .text_color(Hsla::from(if selected {
                     theme.editor.text_1
                 } else {
@@ -723,8 +724,8 @@ impl EditorWindow {
             .gap(px(10.))
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .p(px(8.))
             .shadow(theme.editor.pop_shadow())
             .occlude()

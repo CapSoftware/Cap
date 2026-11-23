@@ -484,6 +484,7 @@ impl TextLayer {
         texts: &[PreparedText],
         force_segmented: bool,
     ) {
+        self.text_atlas.trim();
         self.previous_buffers = std::mem::take(&mut self.buffer_keys)
             .into_iter()
             .zip(self.buffers.drain(..))
@@ -1194,5 +1195,78 @@ mod gpu_tests {
             let [red, green, _, _] = pixel(&pixels, x, y);
             red > 200 && green > 200
         })));
+    }
+
+    fn animated_title(frame: u32) -> PreparedText {
+        PreparedText {
+            color: [0.1, 0.1, 0.1, 1.0],
+            background_color: None,
+            content: "Sphinx of black quartz, judge my vow".to_string(),
+            font_size: 14.0,
+            scale: 0.4 + frame as f32 * 0.004,
+            ..text([2.0, 2.0, 62.0, 62.0], [0.0; 4])
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a working wgpu adapter"]
+    fn a_title_scaled_through_hundreds_of_sizes_draws_like_a_fresh_one() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let mut layer = TextLayer::new(&device, &queue);
+        for frame in 0..400 {
+            layer.prepare(&device, &queue, (OUTPUT, OUTPUT), &[animated_title(frame)]);
+            if frame % 50 == 0 {
+                render_pixels(&device, &queue, &layer);
+            }
+        }
+        let last = [animated_title(250)];
+        layer.prepare(&device, &queue, (OUTPUT, OUTPUT), &last);
+        let animated = render_pixels(&device, &queue, &layer);
+        let mut fresh = TextLayer::new(&device, &queue);
+        fresh.prepare(&device, &queue, (OUTPUT, OUTPUT), &last);
+        assert_eq!(animated, render_pixels(&device, &queue, &fresh));
+    }
+
+    /// Prepare cost and memory while a 4K title grows through 600 sizes.
+    #[test]
+    #[ignore = "benchmark; requires a working wgpu adapter"]
+    fn text_atlas_while_a_4k_title_scales() {
+        let (device, queue) = device().expect("A working wgpu adapter is required for this test");
+        let mut layer = TextLayer::new(&device, &queue);
+        let mut samples = Vec::new();
+        for frame in 0..600u32 {
+            let title = PreparedText {
+                color: [1.0; 4],
+                background_color: None,
+                content: "The quick brown fox jumps over the lazy dog 0123456789".to_string(),
+                font_size: 96.0,
+                scale: 0.5 + frame as f32 * 0.0025,
+                ..text([200.0, 200.0, 3640.0, 1960.0], [0.0; 4])
+            };
+            let started = std::time::Instant::now();
+            layer.prepare(&device, &queue, (3840, 2160), &[title]);
+            samples.push(started.elapsed().as_secs_f64() * 1e3);
+            queue.submit([]);
+        }
+        let mut sorted = samples.clone();
+        sorted.sort_by(f64::total_cmp);
+        println!(
+            "text atlas: prepare p50 {:.2} ms, p99 {:.2} ms, max {:.2} ms, total {:.0} ms",
+            sorted[sorted.len() / 2],
+            sorted[sorted.len() * 99 / 100],
+            sorted[sorted.len() - 1],
+            samples.iter().sum::<f64>(),
+        );
+        let footprint = std::process::Command::new("/usr/bin/footprint")
+            .args(["-p", &std::process::id().to_string()])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            .unwrap_or_default();
+        for line in footprint
+            .lines()
+            .filter(|line| line.contains("Footprint") || line.contains("IOAccelerator"))
+        {
+            println!("{line}");
+        }
     }
 }

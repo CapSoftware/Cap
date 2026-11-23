@@ -516,6 +516,195 @@ unsafe impl Send for RetainedImageBuf {}
 #[cfg(target_os = "macos")]
 unsafe impl Sync for RetainedImageBuf {}
 
+/// A decoder recycles a fixed set of IOSurfaces (about 40 per screen reader
+/// and 100 per camera reader), and importing one as new Metal textures for
+/// every frame made each command buffer submission map new GPU resources.
+/// Each native reader owns one of these and its frames only point at it, so
+/// an import keeps its IOSurface alive exactly as long as that reader: frames
+/// that outlive a reset (holds, the first frame) fall back to a one-off
+/// import rather than pinning the old reader's whole set.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+pub struct IOSurfaceImports {
+    inner: std::sync::Mutex<IOSurfaceImportsInner>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct IOSurfaceImportsInner {
+    entries: Vec<IOSurfaceImport>,
+    uses: u64,
+}
+
+#[cfg(target_os = "macos")]
+const IOSURFACE_IMPORT_CAPACITY: usize = 128;
+#[cfg(target_os = "macos")]
+const IOSURFACE_IMPORT_BIND_GROUPS: usize = 4;
+
+#[cfg(target_os = "macos")]
+struct IOSurfaceImport {
+    surface: cidre::arc::R<cidre::io::Surf>,
+    device: wgpu::Device,
+    width: u32,
+    height: u32,
+    y_view: wgpu::TextureView,
+    uv_view: wgpu::TextureView,
+    bind_groups: Vec<(wgpu::BindGroupLayout, wgpu::TextureView, wgpu::BindGroup)>,
+    last_used: u64,
+}
+
+// SAFETY: IOSurface reference counting is thread-safe and the surface is only
+// retained, never read, through this handle; all access is behind the mutex.
+#[cfg(target_os = "macos")]
+unsafe impl Send for IOSurfaceImports {}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for IOSurfaceImports {}
+
+#[cfg(target_os = "macos")]
+impl IOSurfaceImports {
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .len()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        cache: &IOSurfaceTextureCache,
+        layout: &wgpu::BindGroupLayout,
+        io_surface: &cidre::io::Surf,
+        width: u32,
+        height: u32,
+        output_view: &wgpu::TextureView,
+    ) -> Result<wgpu::BindGroup, YuvConversionError> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.uses += 1;
+        let now = inner.uses;
+        let index = match inner.entries.iter().position(|entry| {
+            std::ptr::eq(entry.surface.as_ref(), io_surface)
+                && entry.width == width
+                && entry.height == height
+                && &entry.device == device
+        }) {
+            Some(index) => index,
+            None => {
+                let (y_view, uv_view) =
+                    import_nv12_planes(device, cache, io_surface, width, height)?;
+                if inner.entries.len() >= IOSURFACE_IMPORT_CAPACITY
+                    && let Some(oldest) = inner
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .min_by_key(|(_, entry)| entry.last_used)
+                        .map(|(index, _)| index)
+                {
+                    inner.entries.swap_remove(oldest);
+                }
+                inner.entries.push(IOSurfaceImport {
+                    surface: io_surface.retained(),
+                    device: device.clone(),
+                    width,
+                    height,
+                    y_view,
+                    uv_view,
+                    bind_groups: Vec::new(),
+                    last_used: now,
+                });
+                inner.entries.len() - 1
+            }
+        };
+        let entry = &mut inner.entries[index];
+        entry.last_used = now;
+        if let Some((_, _, bind_group)) = entry
+            .bind_groups
+            .iter()
+            .find(|(cached_layout, view, _)| cached_layout == layout && view == output_view)
+        {
+            return Ok(bind_group.clone());
+        }
+        let bind_group =
+            nv12_iosurface_bind_group(device, layout, &entry.y_view, &entry.uv_view, output_view);
+        if entry.bind_groups.len() >= IOSURFACE_IMPORT_BIND_GROUPS {
+            entry.bind_groups.remove(0);
+        }
+        entry
+            .bind_groups
+            .push((layout.clone(), output_view.clone(), bind_group.clone()));
+        Ok(bind_group)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn import_nv12_planes(
+    device: &wgpu::Device,
+    cache: &IOSurfaceTextureCache,
+    io_surface: &cidre::io::Surf,
+    width: u32,
+    height: u32,
+) -> Result<(wgpu::TextureView, wgpu::TextureView), YuvConversionError> {
+    let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
+    let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
+
+    let y_wgpu_texture = import_metal_texture_to_wgpu(
+        device,
+        &y_metal_texture,
+        wgpu::TextureFormat::R8Unorm,
+        width,
+        height,
+        Some("IOSurface Y Plane"),
+    )?;
+
+    let uv_wgpu_texture = import_metal_texture_to_wgpu(
+        device,
+        &uv_metal_texture,
+        wgpu::TextureFormat::Rg8Unorm,
+        width / 2,
+        height / 2,
+        Some("IOSurface UV Plane"),
+    )?;
+
+    Ok((
+        y_wgpu_texture.create_view(&Default::default()),
+        uv_wgpu_texture.create_view(&Default::default()),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn nv12_iosurface_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    y_view: &wgpu::TextureView,
+    uv_view: &wgpu::TextureView,
+    output_view: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("NV12 IOSurface Converter Bind Group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(y_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(uv_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(output_view),
+            },
+        ],
+    })
+}
+
 pub struct YuvToRgbaConverter {
     pipelines: Arc<YuvConverterPipelines>,
     matrix: YuvMatrix,
@@ -1170,7 +1359,13 @@ impl YuvToRgbaConverter {
         self.ensure_texture_size(device, effective_width, effective_height);
         self.swap_output_buffer();
 
-        self.encode_nv12_from_iosurface(device, encoder, image_buf, self.current_output_view())?;
+        self.encode_nv12_from_iosurface(
+            device,
+            encoder,
+            image_buf,
+            self.current_output_view(),
+            None,
+        )?;
 
         // The Metal textures alias the IOSurface without retaining the pixel
         // buffer, and the decoder recycles released buffers for new pictures.
@@ -1189,6 +1384,7 @@ impl YuvToRgbaConverter {
         encoder: &mut wgpu::CommandEncoder,
         image_buf: &cv::ImageBuf,
         target: &wgpu::TextureView,
+        imports: Option<&IOSurfaceImports>,
     ) -> Result<RetainedImageBuf, YuvConversionError> {
         validate_dimensions(
             image_buf.width() as u32,
@@ -1196,7 +1392,7 @@ impl YuvToRgbaConverter {
             self.gpu_max_texture_size,
         )?;
 
-        self.encode_nv12_from_iosurface(device, encoder, image_buf, target)?;
+        self.encode_nv12_from_iosurface(device, encoder, image_buf, target, imports)?;
 
         Ok(RetainedImageBuf::new(image_buf))
     }
@@ -1208,6 +1404,7 @@ impl YuvToRgbaConverter {
         encoder: &mut wgpu::CommandEncoder,
         image_buf: &cv::ImageBuf,
         output_view: &wgpu::TextureView,
+        imports: Option<&IOSurfaceImports>,
     ) -> Result<(), YuvConversionError> {
         let io_surface = image_buf
             .io_surf()
@@ -1220,48 +1417,23 @@ impl YuvToRgbaConverter {
             .iosurface_cache
             .as_ref()
             .ok_or(IOSurfaceTextureError::NoMetalDevice)?;
-        let y_metal_texture = cache.create_y_texture(io_surface, width, height)?;
-        let uv_metal_texture = cache.create_uv_texture(io_surface, width, height)?;
-
-        let y_wgpu_texture = import_metal_texture_to_wgpu(
-            device,
-            &y_metal_texture,
-            wgpu::TextureFormat::R8Unorm,
-            width,
-            height,
-            Some("IOSurface Y Plane"),
-        )?;
-
-        let uv_wgpu_texture = import_metal_texture_to_wgpu(
-            device,
-            &uv_metal_texture,
-            wgpu::TextureFormat::Rg8Unorm,
-            width / 2,
-            height / 2,
-            Some("IOSurface UV Plane"),
-        )?;
-
-        let y_view = y_wgpu_texture.create_view(&Default::default());
-        let uv_view = uv_wgpu_texture.create_view(&Default::default());
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("NV12 IOSurface Converter Bind Group"),
-            layout: &self.pipelines.nv12_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&y_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&uv_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(output_view),
-                },
-            ],
-        });
+        let layout = &self.pipelines.nv12_bind_group_layout;
+        let bind_group = match imports {
+            Some(imports) => imports.bind_group(
+                device,
+                cache,
+                layout,
+                io_surface,
+                width,
+                height,
+                output_view,
+            )?,
+            None => {
+                let (y_view, uv_view) =
+                    import_nv12_planes(device, cache, io_surface, width, height)?;
+                nv12_iosurface_bind_group(device, layout, &y_view, &uv_view, output_view)
+            }
+        };
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2122,5 +2294,113 @@ mod colour_matrix_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod iosurface_import_tests {
+    use super::*;
+    use cidre::{arc, cf};
+
+    fn pool() -> arc::R<cv::PixelBufPool> {
+        let format = cv::PixelFormat::_420V.to_cf_number();
+        let dimension = cf::Number::from_usize(16);
+        let surface = cf::Dictionary::new();
+        let keys: [&cf::Type; 5] = [
+            cv::pixel_buffer::keys::pixel_format().as_ref(),
+            cv::pixel_buffer::keys::width().as_ref(),
+            cv::pixel_buffer::keys::height().as_ref(),
+            cv::pixel_buffer::keys::io_surf_props().as_ref(),
+            cv::pixel_buffer::keys::metal_compatibility().as_ref(),
+        ];
+        let values: [&cf::Type; 5] = [
+            format.as_ref(),
+            dimension.as_ref(),
+            dimension.as_ref(),
+            surface.as_ref(),
+            cf::Boolean::value_true().as_ref(),
+        ];
+        let attributes = cf::Dictionary::with_keys_values(&keys, &values).unwrap();
+        cv::PixelBufPool::new(None, Some(attributes.as_ref())).unwrap()
+    }
+
+    fn output_view(device: &wgpu::Device) -> wgpu::TextureView {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 16,
+                    height: 16,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    }
+
+    #[test]
+    fn imports_are_reused_per_surface_and_bounded() {
+        let instance = crate::create_wgpu_instance_sync();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("no GPU adapter available, skipping");
+            return;
+        };
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let converter = YuvToRgbaConverter::new(&device);
+        let imports = IOSurfaceImports::default();
+        let pool = pool();
+        let buffers = (0..IOSURFACE_IMPORT_CAPACITY + 8)
+            .map(|_| pool.pixel_buf().unwrap())
+            .collect::<Vec<_>>();
+        let views = [output_view(&device), output_view(&device)];
+        let convert = |buffer: &cv::PixelBuf, view: &wgpu::TextureView| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let _source = converter
+                .convert_nv12_from_iosurface_into(
+                    &device,
+                    &mut encoder,
+                    buffer,
+                    view,
+                    Some(&imports),
+                )
+                .unwrap();
+        };
+
+        for round in 0..4 {
+            for buffer in &buffers[..3] {
+                convert(buffer, &views[round % 2]);
+            }
+        }
+        assert_eq!(imports.len(), 3);
+        {
+            let inner = imports.inner.lock().unwrap();
+            assert!(
+                inner
+                    .entries
+                    .iter()
+                    .all(|entry| entry.bind_groups.len() == 2)
+            );
+        }
+
+        for buffer in &buffers {
+            convert(buffer, &views[0]);
+        }
+        assert_eq!(imports.len(), IOSURFACE_IMPORT_CAPACITY);
+        let newest = buffers.last().unwrap().io_surf().unwrap();
+        assert!(
+            imports
+                .inner
+                .lock()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| std::ptr::eq(entry.surface.as_ref(), newest))
+        );
     }
 }

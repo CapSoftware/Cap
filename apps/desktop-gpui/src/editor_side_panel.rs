@@ -210,34 +210,106 @@ pub(crate) fn panel_empty_state(
         .gap(px(8.))
         .px(px(32.))
         .pb(px(SIDEBAR_TAB_BAR_HEIGHT))
+        // The icon sits in a small raised tile, the same lit edge and ring
+        // as the panel's pills.
         .child(
-            svg()
-                .path(icon)
-                .size(px(22.))
-                .mb(px(2.))
-                .text_color(Hsla::from(editor.text_3)),
+            div()
+                .size(px(48.))
+                .mb(px(6.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(14.))
+                .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(Hsla::from(editor.ctl_active), 0.),
+                    gpui::linear_color_stop(Hsla::from(editor.ctl), 1.),
+                ))
+                .shadow(editor.pill_shadow())
+                .child(
+                    svg()
+                        .path(icon)
+                        .size(px(20.))
+                        .text_color(Hsla::from(editor.text_2)),
+                ),
         )
         .child(
             div()
-                .text_size(px(13.))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(14.))
+                .line_height(px(18.))
                 .text_color(Hsla::from(editor.text_1))
+                .text_center()
                 .child(title.into()),
         )
         .when(!description.is_empty(), |empty| {
             empty.child(
                 div()
-                    .max_w(px(280.))
-                    .text_size(px(12.))
+                    .max_w(px(260.))
+                    .text_size(px(12.5))
                     .line_height(px(18.))
                     .text_center()
-                    .text_color(Hsla::from(editor.text_2))
+                    .text_color(Hsla::from(editor.text_3))
                     .child(description),
             )
         })
 }
 
+/// How long a tab switch takes to fade its new content in.
+const PANEL_FADE: std::time::Duration = std::time::Duration::from_millis(180);
+
+/// How opaque the fade's cover is `elapsed` into it: fully at the start,
+/// clear by the end, easing out so the content arrives quickly and settles.
+pub(crate) fn panel_fade_cover(elapsed: std::time::Duration) -> f32 {
+    let t = (elapsed.as_secs_f32() / PANEL_FADE.as_secs_f32()).clamp(0., 1.);
+    (1. - t).powi(3)
+}
+
+/// The tab-switch fade: a cover in the card's own colour over the new
+/// content, clearing over [`PANEL_FADE`]. It is its own view so each frame of
+/// the fade re-renders only the cover: a frame asked for from the editor's
+/// render would notify every section that observes the editor.
+#[derive(Default)]
+pub(crate) struct PanelFade {
+    /// When the fade began, how far down the card the new content starts,
+    /// and the card's colour.
+    started: Option<(std::time::Instant, f32, Hsla)>,
+}
+
+impl gpui::Render for PanelFade {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let cover = self
+            .started
+            .filter(|_| !cx.reduce_motion())
+            .map(|(since, top, color)| (panel_fade_cover(since.elapsed()), top, color))
+            .filter(|(cover, ..)| *cover > 0.001);
+        let Some((cover, top, color)) = cover else {
+            self.started = None;
+            return div().absolute();
+        };
+        window.request_animation_frame();
+        let radius = px(crate::theme::EDITOR_CARD_RADIUS - 1.);
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .top(px(top))
+            .rounded_bl(radius)
+            .rounded_br(radius)
+            .bg(color.opacity(cover))
+    }
+}
+
 impl EditorWindow {
+    /// Fades the panel's new content in from `top` down.
+    pub(crate) fn start_panel_fade(&self, top: f32, cx: &mut Context<Self>) {
+        let color = self.panel_bg();
+        self.panel_fade.update(cx, |fade, cx| {
+            fade.started = Some((std::time::Instant::now(), top, color));
+            cx.notify();
+        });
+    }
+
     pub(crate) fn panel_tab(&self) -> PanelTab {
         PanelTab::from_flags(self.transcript.open, self.clips.open)
     }
@@ -290,6 +362,7 @@ impl EditorWindow {
             PanelTab::Style => {}
         }
         tracing::debug!(from = ?current, to = ?tab, "editor panel tab");
+        self.start_panel_fade(SWITCHER_HEIGHT, cx);
         cx.notify();
     }
 
@@ -380,7 +453,7 @@ impl EditorWindow {
         window.refresh();
     }
 
-    fn render_panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let active = self.panel_tab();
         let ready = self.project_ready();
@@ -457,12 +530,9 @@ impl EditorWindow {
     /// The panel card: the switcher, then whichever body the active tab owns.
     /// Style and Clips draw through the sidebar's cached section view, the
     /// transcript through its own, so playback repaints only the transcript.
-    pub(crate) fn render_side_panel(
-        &self,
-        viewport_width: f32,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// The switcher is a section of its own, so its hover and glide frames
+    /// repaint the switcher alone rather than every section of the editor.
+    pub(crate) fn render_side_panel(&self, viewport_width: f32, window: &Window) -> AnyElement {
         let theme = self.theme;
         let tab = self.panel_tab();
         let focused = tab == PanelTab::Transcript && self.transcript.focus.is_focused(window);
@@ -474,7 +544,7 @@ impl EditorWindow {
             .h_full()
             .min_h_0()
             .w(px(self.panel_width(viewport_width)))
-            .rounded(px(12.))
+            .rounded(px(crate::theme::EDITOR_CARD_RADIUS))
             .border_1()
             .border_color(if focused {
                 Hsla::from(theme.editor.line_strong)
@@ -484,11 +554,24 @@ impl EditorWindow {
             .bg(self.panel_bg())
             .shadow(theme.editor.card_shadow())
             .overflow_hidden()
-            .child(self.render_panel_switcher(cx))
+            .relative()
+            .child(self.panel_switcher_view.clone())
+            // A section of its own, so its hover fades repaint the rail
+            // without rebuilding the tab under it.
+            .child(self.sidebar_rail_view.clone().cached(
+                StyleRefinement::default().w_full().flex_none().h(px(
+                    if self.sidebar_rail_shown() {
+                        SIDEBAR_TAB_BAR_HEIGHT
+                    } else {
+                        0.
+                    },
+                )),
+            ))
             .child(self.cached_panel_body(
                 tab == PanelTab::Transcript,
                 StyleRefinement::default().w_full().flex_1().min_h_0(),
             ))
+            .child(self.panel_fade.clone())
             .into_any_element()
     }
 }
@@ -496,6 +579,16 @@ impl EditorWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tab_switch_fade_clears_quickly_and_settles() {
+        use std::time::Duration;
+        assert_eq!(panel_fade_cover(Duration::ZERO), 1.);
+        let early = panel_fade_cover(PANEL_FADE / 4);
+        assert!(early > 0. && early < 0.5, "{early}");
+        assert_eq!(panel_fade_cover(PANEL_FADE), 0.);
+        assert_eq!(panel_fade_cover(PANEL_FADE * 3), 0.);
+    }
 
     #[test]
     fn the_tab_follows_the_mode_flags() {

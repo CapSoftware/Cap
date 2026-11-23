@@ -43,8 +43,9 @@ use gpui::{
 
 use crate::editor_edits::ProjectHistory;
 use crate::editor_sidebar::{
-    self, BACKGROUND_COLORS, BACKGROUND_IMAGE_EXTENSIONS, BACKGROUND_THEMES, DEFAULT_GRADIENT_FROM,
-    DEFAULT_GRADIENT_TO, GRADIENT_PRESETS, color_to_hsla, hex_to_rgb,
+    self, BACKGROUND_COLORS, BACKGROUND_IMAGE_EXTENSIONS, BACKGROUND_THEMES, DEFAULT_COLOR,
+    DEFAULT_GRADIENT_ANGLE, DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, GRADIENT_PRESETS,
+    color_to_hsla, hex_to_rgb,
 };
 use crate::i18n::tr;
 use crate::screenshot_annotations::{self as annotations, AnnotationState, Tool};
@@ -304,6 +305,7 @@ async fn render_still(
         segment_time: 0.0,
         recording_time: 0.0,
         segment_has_camera: false,
+        display_placeholder: false,
     };
 
     let resolution_base = resolution_base.unwrap_or_else(|| {
@@ -3344,20 +3346,25 @@ impl ScreenshotEditorWindow {
         if tab == BgTab::Wallpaper {
             self.ensure_wallpapers(cx);
         }
+        let fallback_wallpaper = (tab == BgTab::Wallpaper)
+            .then(|| editor_sidebar::default_wallpaper(BACKGROUND_THEMES[self.wallpaper_theme].0))
+            .flatten();
         self.edit_project(
             move |project| {
                 if BgTab::for_source(&project.background.source) != tab {
                     project.background.source = match tab {
-                        BgTab::Wallpaper => BackgroundSource::Wallpaper { path: None },
+                        BgTab::Wallpaper => BackgroundSource::Wallpaper {
+                            path: fallback_wallpaper.clone(),
+                        },
                         BgTab::Image => BackgroundSource::Image { path: None },
                         BgTab::Color => BackgroundSource::Color {
-                            value: DEFAULT_GRADIENT_FROM,
+                            value: DEFAULT_COLOR,
                             alpha: 255,
                         },
                         BgTab::Gradient => BackgroundSource::Gradient {
                             from: DEFAULT_GRADIENT_FROM,
                             to: DEFAULT_GRADIENT_TO,
-                            angle: 90,
+                            angle: DEFAULT_GRADIENT_ANGLE,
                             noise_intensity: None,
                             noise_scale: None,
                             animated: None,
@@ -3592,7 +3599,7 @@ impl ScreenshotEditorWindow {
             .gap(px(12.))
             .child(self.render_rgb_input(
                 HexTarget::BackgroundColor,
-                current.map_or(DEFAULT_GRADIENT_FROM, |(value, _)| value),
+                current.map_or(DEFAULT_COLOR, |(value, _)| value),
             ))
             .child(
                 div().flex().flex_row().flex_wrap().gap(px(8.)).children(
@@ -3656,7 +3663,11 @@ impl ScreenshotEditorWindow {
             BackgroundSource::Gradient {
                 from, to, angle, ..
             } => (*from, *to, *angle),
-            _ => (DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO, 90),
+            _ => (
+                DEFAULT_GRADIENT_FROM,
+                DEFAULT_GRADIENT_TO,
+                DEFAULT_GRADIENT_ANGLE,
+            ),
         };
 
         div()

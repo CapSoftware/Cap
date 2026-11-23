@@ -165,6 +165,7 @@ pub struct DecodedFrame {
 struct SendableImageBuf {
     image_buf: Mutex<Option<R<cv::ImageBuf>>>,
     raw_data: OnceLock<Vec<u8>>,
+    imports: Option<std::sync::Weak<crate::yuv_converter::IOSurfaceImports>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -177,10 +178,14 @@ unsafe impl Sync for SendableImageBuf {}
 
 #[cfg(target_os = "macos")]
 impl SendableImageBuf {
-    fn new(image_buf: R<cv::ImageBuf>) -> Self {
+    fn new(
+        image_buf: R<cv::ImageBuf>,
+        imports: Option<std::sync::Weak<crate::yuv_converter::IOSurfaceImports>>,
+    ) -> Self {
         Self {
             image_buf: Mutex::new(Some(image_buf)),
             raw_data: OnceLock::new(),
+            imports,
         }
     }
 
@@ -456,6 +461,7 @@ impl DecodedFrame {
         y_stride: u32,
         uv_stride: u32,
         image_buf: R<cv::ImageBuf>,
+        imports: Option<std::sync::Weak<crate::yuv_converter::IOSurfaceImports>>,
     ) -> Self {
         Self {
             data: Arc::new(Vec::new()),
@@ -466,7 +472,7 @@ impl DecodedFrame {
             y_stride,
             uv_stride,
             ffmpeg_backing: None,
-            image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf))),
+            image_buf_backing: Some(Arc::new(SendableImageBuf::new(image_buf, imports))),
             presentation_secs: None,
         }
     }
@@ -615,6 +621,13 @@ impl DecodedFrame {
         self.image_buf_backing
             .as_ref()
             .and_then(|backing| backing.with_image_buf(f))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn iosurface_imports(&self) -> Option<Arc<crate::yuv_converter::IOSurfaceImports>> {
+        self.image_buf_backing
+            .as_ref()
+            .and_then(|backing| backing.imports.as_ref()?.upgrade())
     }
 
     pub fn width(&self) -> u32 {
@@ -2413,6 +2426,7 @@ mod tests {
             y_stride as u32,
             uv_stride as u32,
             image_buf,
+            None,
         );
 
         assert_eq!(frame.byte_len(), y_size + uv_size);
@@ -2421,6 +2435,31 @@ mod tests {
         assert_eq!(frame.uv_plane().unwrap(), vec![0x22; uv_size]);
         assert_eq!(frame.data().len(), y_size + uv_size);
         assert!(frame.with_image_buf(|_| ()).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn frames_do_not_keep_a_replaced_readers_imports() {
+        let imports = Arc::new(crate::yuv_converter::IOSurfaceImports::default());
+        let image_buf = cv::ImageBuf::new(4, 2, cv::PixelFormat::_420V, None).unwrap();
+        let frame = DecodedFrame::new_nv12_with_image_buf(
+            4,
+            2,
+            image_buf.plane_bytes_per_row(0) as u32,
+            image_buf.plane_bytes_per_row(1) as u32,
+            image_buf,
+            Some(Arc::downgrade(&imports)),
+        );
+        let held = frame.clone();
+
+        assert!(
+            frame
+                .iosurface_imports()
+                .is_some_and(|found| Arc::ptr_eq(&found, &imports))
+        );
+        drop(imports);
+        assert!(frame.iosurface_imports().is_none());
+        assert!(held.iosurface_imports().is_none());
     }
 
     #[test]
@@ -3479,6 +3518,7 @@ mod managed_worker_tests {
         let (camera, camera_join) = ordinary_worker_with_fps(reference, 0.125, false, 24).await;
         let ordinary = RecordingSegmentDecoders {
             screen: display.with_max_fallback_distance(crate::SCREEN_MAX_FALLBACK_DISTANCE),
+            display_placeholder: false,
             camera: Some(camera.with_max_fallback_distance(crate::CAMERA_MAX_FALLBACK_DISTANCE)),
             source_video: None,
             segment_offset: 10.25,

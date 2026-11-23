@@ -36,6 +36,7 @@ async fn gradient_angles_and_stops_follow_the_canvas_when_resizing() {
         segment_time: 0.0,
         recording_time: 0.0,
         segment_has_camera: false,
+        display_placeholder: false,
     };
     let mut project = ProjectConfiguration::default();
     project.cursor.hide = true;

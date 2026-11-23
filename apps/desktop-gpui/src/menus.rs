@@ -135,6 +135,7 @@ actions!(
         /// Settings… -- ⌘, on macOS, Ctrl+, on Windows and Linux.
         OpenSettings,
         OpenFile,
+        NewBlankProject,
         ImportMedia,
         Changelog,
         HelpDashboard,
@@ -198,6 +199,9 @@ pub fn init(cx: &mut App) {
             }
         })
         .detach();
+    });
+    cx.on_action(|_: &NewBlankProject, cx: &mut App| {
+        crate::audio_project::open_blank_in_editor(cx);
     });
     cx.on_action(|_: &ImportMedia, cx: &mut App| {
         crate::import::pick_and_import_media(cx);
@@ -377,6 +381,7 @@ pub fn build_menus(update_status: &updates::UpdateStatus, settings_enabled: bool
             name: tr::menu::file::title().into(),
             disabled: false,
             items: vec![
+                MenuItem::action(tr::menu::file::new_blank_project(), NewBlankProject),
                 MenuItem::action(tr::menu::file::open_file(), OpenFile),
                 MenuItem::action(tr::menu::file::import_media(), ImportMedia),
                 MenuItem::separator(),
@@ -1356,6 +1361,7 @@ mod tests {
             .map(describe)
             .collect();
         let expected_file_items = vec![
+            "New Blank Project".into(),
             "Open File…".into(),
             "Import Media…".into(),
             "-".into(),

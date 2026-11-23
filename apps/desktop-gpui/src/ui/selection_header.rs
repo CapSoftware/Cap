@@ -79,7 +79,7 @@ impl SelectionHeader {
             label: label.into(),
             select_all: None,
             label_color: Hsla::from(theme.editor.text_2),
-            action_color: Hsla::from(theme.editor.accent),
+            action_color: Hsla::from(theme.editor.accent_ink),
             theme: *theme,
             on_done: None,
             on_delete: None,

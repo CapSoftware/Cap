@@ -1010,12 +1010,14 @@ impl Player {
         let rendered = if let Some((clip, time, kind, progress)) = outgoing {
             let outgoing_frames = self.fetch(clip, time, seek).await?;
             let screen_size = self.constants.options.screen_size;
+            let camera_size = self.constants.options.camera_size;
             let outgoing_zoom = self.outgoing_zooms.entry(clip).or_insert_with(|| {
                 cap_rendering::ZoomTransformTimeline::from_project_for_outgoing_clip(
                     &self.config,
                     &self.segments[clip as usize].cursor,
                     self.duration,
                     screen_size,
+                    camera_size,
                     clip,
                 )
             });

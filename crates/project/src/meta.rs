@@ -520,6 +520,19 @@ impl StudioRecordingMeta {
         }
     }
 
+    /// A project started empty rather than recorded.
+    pub fn is_blank(&self) -> bool {
+        match self {
+            StudioRecordingMeta::SingleSegment { .. } => false,
+            StudioRecordingMeta::MultipleSegments { inner } => inner.blank,
+        }
+    }
+
+    /// Whether the display track is a placeholder that is never drawn.
+    pub fn hides_display(&self) -> bool {
+        self.is_audio_only() || self.is_blank()
+    }
+
     /// Notch captured with this recording. Every segment shares one display, so
     /// the first segment speaks for all of them. `None` for recordings made
     /// before Cap started capturing this, and for every non-macOS recording.
@@ -720,6 +733,11 @@ pub struct MultipleSegments {
     /// recovery and the editor on their usual paths; it is never shown.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub audio_only: bool,
+    /// Made from nothing: a project started empty to build a video from the
+    /// background, music, keys, text and images alone. Its display track is
+    /// the same never-shown placeholder, as long as the project can run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blank: bool,
 }
 
 fn is_legacy_cursor_shape_version(version: &u32) -> bool {
@@ -1783,6 +1801,7 @@ mod ordinary_media_access_tests {
                 status,
                 cursor_shape_version: 0,
                 audio_only: false,
+                blank: false,
             },
         }
     }

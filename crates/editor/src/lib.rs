@@ -6,6 +6,7 @@ mod editor;
 mod editor_instance;
 mod export_audio;
 pub mod hover_analysis;
+mod input_sounds;
 mod join_fade;
 mod playback;
 mod preparing_audio;
@@ -49,6 +50,7 @@ pub use editor_instance::{
 pub use export_audio::{
     ExportAudioError, ExportAudioPreparation, ExportAudioRenderer, ExportAudioValidation,
 };
+pub use input_sounds::{InputSoundPreview, InputSounds, render_input_sound_preview};
 pub use playback::{Playback, PlaybackEvent, PlaybackHandle, PlaybackStartError};
 pub use preparing_editor::{PreparingEditorPhase, PreparingEditorProgress, PreparingPlaybackState};
 pub use preparing_handoff::{

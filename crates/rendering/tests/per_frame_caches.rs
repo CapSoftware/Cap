@@ -51,6 +51,7 @@ fn screen_frame(time: f64) -> DecodedSegmentFrames {
         segment_time: time as f32,
         recording_time: time as f32,
         segment_has_camera: false,
+        display_placeholder: false,
     }
 }
 

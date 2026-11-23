@@ -36,6 +36,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use cap_rendering::keycaps::{self, KeycapStyle};
+
 mod playback_follow;
 
 pub use playback_follow::PlaybackFollow;
@@ -67,7 +69,7 @@ pub const TIMELINE_PADDING: f32 = 11.;
 pub const TIMELINE_TOP_PADDING: f32 = 9.;
 pub const TIMELINE_BOTTOM_PADDING: f32 = 11.;
 pub const TRACK_GUTTER_GAP: f32 = 8.;
-pub const TRACK_GUTTER: f32 = 104.;
+pub const TRACK_GUTTER: f32 = 136.;
 pub const TRACK_ICON_WIDTH: f32 = TRACK_GUTTER - TRACK_GUTTER_GAP;
 pub const TIMELINE_HEADER_HEIGHT: f32 = 26.;
 /// The playhead hangs from the ruler's baseline, which is the header's bottom
@@ -84,8 +86,8 @@ pub const TIMELINE_SLOT_PADDING: f32 = 8.;
 /// the timeline is computed over a column four pixels narrower than the ruler's.
 pub const SCROLL_BODY_PADDING_RIGHT: f32 = 4.;
 
-pub const TRACK_HEIGHT: f32 = 44.;
-pub const TRACK_ROW_GAP: f32 = 6.;
+pub const TRACK_HEIGHT: f32 = 48.;
+pub const TRACK_ROW_GAP: f32 = 8.;
 /// The radius of the band a row draws across its gutter and lane.
 pub const TRACK_BAND_RADIUS: f32 = 8.;
 /// The gap between the ruler's baseline and the first track row. It is not the
@@ -116,13 +118,17 @@ pub fn hug_height(rows: usize) -> f32 {
 const RULER_MAJOR_TICK: f32 = 8.;
 const RULER_MINOR_TICK: f32 = 5.;
 /// The gutter cell: a 22px tile at 4px of left padding, then the label.
-const TRACK_TILE_SIZE: f32 = 22.;
+const TRACK_TILE_SIZE: f32 = 26.;
+/// Room kept right of the label for the lane's delete button, which sits
+/// 24px in from the gutter's edge, so a label never runs under it.
+const TRACK_DELETE_CLEARANCE: f32 = 28.;
 const TRACK_TILE_INSET: f32 = 4.;
+/// How far a paused hold's well sits in from the clip's edges and its own.
+const HOLD_INSET_X: f32 = 3.;
+const HOLD_INSET_Y: f32 = 6.;
 /// The segment's radius, its left accent bar and the content inset that clears
 /// it (`0 10px 0 13px`).
-const SEGMENT_RADIUS: f32 = 8.;
-const SEGMENT_ACCENT_BAR: f32 = 3.;
-const SEGMENT_PADDING_LEFT: f32 = 13.;
+const SEGMENT_RADIUS: f32 = 10.;
 const SEGMENT_PADDING_RIGHT: f32 = 10.;
 /// The selected 3D shot's pose dots: 6px, 5px inside each edge, so the resize
 /// handles still own the outer pixels.
@@ -174,40 +180,97 @@ pub const MINIMAP_MAX_WIDTH: f32 = 78.;
 // Colours
 // ---------------------------------------------------------------------------
 
-/// The single source of truth for track colour is eleven CSS custom properties
-/// with one definition each -- not per-appearance values -- so they are literal
-/// in both themes exactly as they are there
-/// (`apps/desktop/src/styles/theme.css`).
 pub mod track_color {
-    pub const CLIP: u32 = 0x3b82f6;
-    pub const ZOOM: u32 = 0x64748b;
-    pub const CAPTION: u32 = 0x0ea5e9;
-    pub const KEYBOARD: u32 = 0xf97316;
-    pub const STYLE: u32 = 0xec4899;
-    pub const IMAGE: u32 = 0xf59e0b;
-    pub const TEXT: u32 = 0x14b8a6;
-    pub const MASK: u32 = 0xef4444;
-    pub const SHAPE: u32 = 0xd946ef;
-    pub const SCENE: u32 = 0x8b5cf6;
-    pub const AUDIO: u32 = 0x22c55e;
-    pub const THREE_D: u32 = 0x6366f1;
+    pub const CLIP: u32 = 0x3065c8;
+    pub const ZOOM: u32 = 0x6c50de;
+    pub const CAPTION: u32 = 0x0a6ea9;
+    pub const KEYBOARD: u32 = 0xb44b0b;
+    pub const STYLE: u32 = 0xa33fba;
+    pub const IMAGE: u32 = 0x945c07;
+    pub const TEXT: u32 = 0x0e7768;
+    pub const MASK: u32 = 0xc63838;
+    pub const SHAPE: u32 = 0x5a6787;
+    pub const SCENE: u32 = 0x5e6f12;
+    pub const AUDIO: u32 = 0x1b7940;
+    pub const THREE_D: u32 = 0xbe3b69;
+    pub const MUTED: u32 = 0x5f606a;
 }
 
 /// A muted clip keeps the clip lane's shape but drops its hue, so it reads as
 /// the row's own disabled state rather than as a different track.
-fn muted_clip_color(theme: &Theme) -> Hsla {
-    Hsla::from(theme.editor.text_3)
+fn muted_clip_color(_theme: &Theme) -> Hsla {
+    gpui::rgb(track_color::MUTED).into()
 }
 
 /// The `EditorPalette` mixers work in `Rgba`, which is what the `--ed-*`
 /// tokens are; every track colour in this file is an `Hsla`.
-fn seg_fill(theme: &Theme, color: Hsla, selected: bool) -> Hsla {
-    let color = gpui::Rgba::from(color);
-    if selected {
-        theme.editor.seg_fill_selected(color).into()
-    } else {
-        theme.editor.seg_fill(color).into()
-    }
+fn seg_fill(theme: &Theme, color: Hsla) -> Hsla {
+    theme.editor.seg_fill(gpui::Rgba::from(color)).into()
+}
+
+fn seg_fill_sheen(theme: &Theme, color: Hsla) -> gpui::Background {
+    let (top, bottom) = theme.editor.seg_gradient(gpui::Rgba::from(color));
+    gpui::linear_gradient(
+        180.,
+        gpui::linear_color_stop(top, 0.),
+        gpui::linear_color_stop(bottom, 1.),
+    )
+}
+
+fn seg_gloss() -> Vec<gpui::BoxShadow> {
+    vec![
+        gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.2),
+            offset: gpui::point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+            inset: true,
+        },
+        gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.1),
+            offset: gpui::point(px(0.), px(-10.)),
+            blur_radius: px(14.),
+            spread_radius: px(-6.),
+            inset: true,
+        },
+        gpui::BoxShadow {
+            color: gpui::hsla(0., 0., 1., 0.12),
+            offset: gpui::point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(1.),
+            inset: true,
+        },
+    ]
+}
+
+/// The segment's own colour glowing under it: soft on hover, fuller once
+/// selected, so selection reads as lit rather than boxed in. Drawn by
+/// [`render_segment_glows`] under every row, so it spreads freely.
+fn seg_glow(color: Hsla, dark: bool, selected: bool) -> Vec<gpui::BoxShadow> {
+    let alpha = match (dark, selected) {
+        (true, true) => 0.42,
+        (false, true) => 0.32,
+        (true, false) => 0.3,
+        (false, false) => 0.22,
+    };
+    // A tight glow that hugs the segment, then a faint wide one that lights
+    // the lane around it.
+    vec![
+        gpui::BoxShadow {
+            color: color.opacity(alpha),
+            offset: gpui::point(px(0.), px(2.)),
+            blur_radius: px(if selected { 12. } else { 10. }),
+            spread_radius: px(if selected { -1. } else { -2. }),
+            inset: false,
+        },
+        gpui::BoxShadow {
+            color: color.opacity(alpha * 0.35),
+            offset: gpui::point(px(0.), px(3.)),
+            blur_radius: px(22.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+    ]
 }
 
 fn seg_border(theme: &Theme, color: Hsla, extra_alpha: f32) -> Hsla {
@@ -955,10 +1018,15 @@ pub fn waveform_sample_count(canvas_width: f64) -> usize {
     ((canvas_width * WAVEFORM_SAMPLES_PER_PIXEL).ceil() as usize).min(MAX_WAVEFORM_SAMPLES)
 }
 
-/// Both waveforms are the lane's own colour at 55 %: over a tinted segment a
-/// white or orange fill (`TL/ClipTrack.tsx:293-302`) has nothing to sit on.
+/// A deep shade of the track colour: it sits on the lit bottom of the fill,
+/// so a darker shape reads as the sound's outline where a pale one washed
+/// the segment out.
 pub fn waveform_color(color: Hsla) -> Hsla {
-    with_alpha(color, 0.55)
+    Hsla {
+        l: color.l * 0.5,
+        a: 0.6,
+        ..color
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,7 +1349,6 @@ pub enum SegmentDetail {
     /// `TL/TextTrack.tsx:428-450`.
     Text {
         content: SharedString,
-        color: Hsla,
         italic: bool,
         bold: bool,
         fullscreen: bool,
@@ -1314,7 +1381,34 @@ pub enum SegmentDetail {
     /// `TL/KeyboardTrack.tsx:168-266`.
     Keyboard {
         text: SharedString,
+        /// Typed words, which read as text; a shortcut or a lone special key
+        /// reads as keys.
+        typed: bool,
+        /// The keys the overlay draws: what a shortcut shows as small
+        /// keycaps.
+        keys: Arc<[TimelineKey]>,
     },
+}
+
+/// One key a keyboard segment shows on the timeline, and the width its
+/// keycap takes, worked out once when the timeline is built so drawing a
+/// segment only adds widths.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimelineKey {
+    pub label: SharedString,
+    pub modifier: bool,
+    pub width: f32,
+}
+
+impl TimelineKey {
+    fn new(label: SharedString, modifier: bool) -> Self {
+        let width = key_chip_width(&label);
+        Self {
+            label,
+            modifier,
+            width,
+        }
+    }
 }
 
 impl SegmentDetail {
@@ -1382,6 +1476,29 @@ pub struct TimelineModel {
 }
 
 impl TimelineModel {
+    /// A blank project's first clip is the canvas everything sits on, so it
+    /// is named for that unless the user renamed it.
+    pub fn label_blank_canvas(&mut self, timeline: Option<&TimelineConfiguration>) {
+        let Some(timeline) = timeline else {
+            return;
+        };
+        for (segment, config) in self.clips.iter_mut().zip(&timeline.segments) {
+            let renamed = config
+                .name
+                .as_deref()
+                .is_some_and(|name| !name.trim().is_empty());
+            if let SegmentDetail::Clip {
+                name,
+                recording_clip: 0,
+                ..
+            } = &mut segment.detail
+                && !renamed
+            {
+                *name = SharedString::new_static(tr::editor::timeline::segment::canvas());
+            }
+        }
+    }
+
     pub fn track_height(&self) -> f32 {
         TRACK_HEIGHT
     }
@@ -1416,6 +1533,17 @@ impl TimelineModel {
     /// whether more than one recording clip exists (which decides `"Clip"` vs
     /// `"Clip N"`, `TL/ClipTrack.tsx:617-620`).
     pub fn build(config: &ProjectConfiguration, has_camera: bool, multiple_clips: bool) -> Self {
+        Self::build_for(config, has_camera, multiple_clips, None)
+    }
+
+    /// [`TimelineModel::build`] for a recording made on `platform`, whose
+    /// keyboard the keys print as the renderer draws them.
+    pub fn build_for(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        platform: Option<&cap_project::Platform>,
+    ) -> Self {
         let Some(timeline) = config.timeline.as_ref() else {
             return Self::default();
         };
@@ -1477,7 +1605,6 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.content.clone())
                     },
-                    color: parse_hex_color(&segment.color).unwrap_or_else(gpui::white),
                     italic: segment.italic,
                     // `font-weight: segment.fontWeight ?? 700` -- gpui has one
                     // weight per family here, so anything at or above 600
@@ -1565,6 +1692,27 @@ impl TimelineModel {
             })
             .collect();
 
+        // The keys print the way the chosen keyboard prints them; the classic
+        // label reads like a Mac's.
+        let styled_keys = timeline.keyboard_segments.iter().any(|segment| {
+            segment.color_override.is_some() || segment.background_color_override.is_some()
+        });
+        let key_style = config
+            .keyboard
+            .as_ref()
+            .map(|keyboard| {
+                KeycapStyle::from_setting_for(
+                    keyboard.settings.effective_style_for(platform, styled_keys),
+                    platform,
+                )
+            })
+            .filter(|style| *style != KeycapStyle::Classic)
+            .unwrap_or(KeycapStyle::MacOs);
+        // As the overlay decides: with typing hidden, a lone key is a key.
+        let show_typing = config.keyboard.as_ref().map_or_else(
+            || cap_project::KeyboardSettings::default().show_typing,
+            |keyboard| keyboard.settings.show_typing,
+        );
         let keyboard = timeline
             .keyboard_segments
             .iter()
@@ -1578,6 +1726,21 @@ impl TimelineModel {
                     } else {
                         SharedString::from(segment.display_text.clone())
                     },
+                    typed: (show_typing || cap_project::is_manual_keyboard_segment(segment))
+                        && is_typed_text(segment),
+                    keys: keycaps::keycaps_for(&segment.display_text, key_style)
+                        .into_iter()
+                        .map(|cap| {
+                            // Apple's named keys carry only their word; the
+                            // space bar carries nothing and reads as ␣.
+                            let label = match (cap.label.is_empty(), cap.legend) {
+                                (false, _) => SharedString::from(cap.label),
+                                (true, Some(word)) => SharedString::from(word),
+                                (true, None) => SharedString::new_static("\u{2423}"),
+                            };
+                            TimelineKey::new(label, cap.modifier)
+                        })
+                        .collect(),
                 },
             })
             .collect();
@@ -1647,7 +1810,17 @@ impl TimelineModel {
         multiple_clips: bool,
         lanes: &TrackLanes,
     ) -> Self {
-        let mut model = Self::build(config, has_camera, multiple_clips);
+        Self::build_with_lanes_for(config, has_camera, multiple_clips, lanes, None)
+    }
+
+    pub fn build_with_lanes_for(
+        config: &ProjectConfiguration,
+        has_camera: bool,
+        multiple_clips: bool,
+        lanes: &TrackLanes,
+        platform: Option<&cap_project::Platform>,
+    ) -> Self {
+        let mut model = Self::build_for(config, has_camera, multiple_clips, platform);
         model.rows = build_rows(config, &model, has_camera, lanes);
         model
     }
@@ -1923,6 +2096,9 @@ pub struct SegmentUi<'a> {
     /// `editorState.timeline.interactMode === "split"`, which swaps the cursor
     /// and turns a segment press into a cut.
     pub split_mode: bool,
+    /// Marker mode, where a press anywhere on the timeline drops a marker:
+    /// segments take the same crosshair and hide their trim handles.
+    pub marker_mode: bool,
     /// The segment under the pointer, as `(track, lane, index)`. This is the
     /// `group-hover` the handles' `opacity-100` hangs off
     /// (`TL/Track.tsx:250`).
@@ -1942,6 +2118,9 @@ pub struct SegmentUi<'a> {
     /// Which end of the selected 3D shot the panel is editing, for the pose
     /// dots on its box.
     pub camera3d_editing_end: bool,
+    /// What the empty keyboard lane offers: the recording's keys, the typing
+    /// showing shortcuts only hides, or keys typed in by hand.
+    pub key_lane_offer: crate::editor_tabs::KeyLaneOffer,
 }
 
 impl SegmentUi<'_> {
@@ -1976,7 +2155,6 @@ impl SegmentUi<'_> {
 /// track's name. The saturated pill the source draws
 /// (`TL/TrackManager.tsx:264-281`) is gone.
 pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
-    let color = kind.color();
     div()
         .w_full()
         .h_full()
@@ -1985,32 +2163,51 @@ pub fn track_chip(theme: &Theme, kind: TrackKind) -> impl IntoElement {
         .items_center()
         .gap(px(8.))
         .pl(px(TRACK_TILE_INSET))
-        .pr(px(6.))
-        .child(
-            div()
-                .flex_none()
-                .size(px(TRACK_TILE_SIZE))
-                .rounded(px(6.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(tile_bg(theme, color))
-                .child(
-                    svg()
-                        .path(kind.icon())
-                        .size(px(12.))
-                        .flex_none()
-                        .text_color(tile_fg(theme, color)),
-                ),
-        )
+        .pr(px(TRACK_DELETE_CLEARANCE))
+        .child(track_tile(theme, kind))
         .child(
             div()
                 .min_w_0()
                 .truncate()
-                .text_size(px(11.))
-                .line_height(px(14.))
-                .font_weight(FontWeight::MEDIUM)
+                .text_size(px(13.))
+                .line_height(px(16.))
                 .child(kind.label()),
+        )
+}
+
+/// The track's tile: a small piece of its own segment, the same gradient,
+/// lit edge and ring, with a white glyph.
+pub fn track_tile(theme: &Theme, kind: TrackKind) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(px(TRACK_TILE_SIZE))
+        .rounded(px(7.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(seg_fill_sheen(theme, kind.color()))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.22),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.1),
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+        ])
+        .child(
+            svg()
+                .path(kind.icon())
+                .size(px(14.))
+                .flex_none()
+                .text_color(gpui::hsla(0., 0., 1., 0.95)),
         )
 }
 
@@ -2281,7 +2478,7 @@ pub fn render_row(
 ) -> AnyElement {
     let height = model.track_height();
     let selected = ui.row_selected(model, row);
-    let active_bg = Hsla::from(theme.editor.ctl_hover);
+    let active_bg = Hsla::from(theme.editor.ctl);
     let active_text = Hsla::from(theme.editor.text_1);
     div()
         .relative()
@@ -2291,15 +2488,11 @@ pub fn render_row(
         .h(px(height))
         .flex_none()
         .rounded(px(TRACK_BAND_RADIUS))
-        .bg(if selected {
-            active_bg
-        } else {
-            Hsla::from(theme.editor.ctl)
-        })
+        .when(selected, |this| this.bg(active_bg))
         .text_color(if selected {
             active_text
         } else {
-            Hsla::from(theme.editor.text_2)
+            Hsla::from(theme.editor.text_2).blend(Hsla::from(theme.editor.text_1).opacity(0.5))
         })
         .hover(|style| style.bg(active_bg).text_color(active_text))
         .child(
@@ -2329,6 +2522,93 @@ pub fn render_row(
         .into_any_element()
 }
 
+/// The glow under every hovered or selected segment, as one layer the lane
+/// area draws beneath all of its rows. Lit there rather than on the segment,
+/// the glow spreads past its own lane, across the gaps and up over the ruler
+/// without a row edge cutting it off, and it never washes over another clip.
+/// Positions are in the lane area's space; `scroll_y` is the rows' scroll
+/// offset (zero or negative).
+pub fn render_segment_glows(
+    theme: &Theme,
+    model: &TimelineModel,
+    view: TimelineView,
+    viewport_width: f32,
+    ui: SegmentUi<'_>,
+    scroll_y: f32,
+) -> Vec<AnyElement> {
+    if ui.selection.is_none() && ui.hovered.is_none() {
+        return Vec::new();
+    }
+    let width = content_width(viewport_width);
+    let secs_per_pixel = view.transform.secs_per_pixel(width);
+    let height = model.track_height();
+    let dark = theme.is_dark();
+    let mut glows = Vec::new();
+    for (row_index, row) in model.rows.iter().enumerate() {
+        let segments = model.segments_for(*row);
+        let visible_ends = if row.kind == TrackKind::Keyboard {
+            keyboard_visible_ends(segments, secs_per_pixel)
+        } else {
+            Vec::new()
+        };
+        let top = row_index as f32 * (height + TRACK_ROW_GAP) + scroll_y;
+        for (index, segment) in segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| segment.lane == row.lane)
+        {
+            let selected = ui.is_selected(row.kind, index);
+            if !selected && !ui.is_hovered(row.kind, row.lane, index) {
+                continue;
+            }
+            let end = visible_ends
+                .get(index)
+                .copied()
+                .flatten()
+                .unwrap_or(segment.end);
+            if !view.transform.segment_visible(segment.start, end) {
+                continue;
+            }
+            let left =
+                (((segment.start - view.transform.position) / secs_per_pixel) as f32).max(0.);
+            let right = (((end - view.transform.position) / secs_per_pixel) as f32).min(width);
+            if right <= left {
+                continue;
+            }
+            let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
+                muted_clip_color(theme)
+            } else {
+                row.kind.color()
+            };
+            // A disabled segment glows as faintly as it draws.
+            let dim = match &segment.detail {
+                SegmentDetail::Text { enabled, .. }
+                | SegmentDetail::Shape { enabled, .. }
+                | SegmentDetail::Style { enabled, .. }
+                | SegmentDetail::Image { enabled, .. }
+                    if !enabled =>
+                {
+                    0.6
+                }
+                SegmentDetail::Audio { enabled, .. } if !enabled => 0.5,
+                _ => 1.,
+            };
+            glows.push(
+                div()
+                    .absolute()
+                    .top(px(top))
+                    .left(px(TRACK_GUTTER + left))
+                    .w(px(right - left))
+                    .h(px(height))
+                    .rounded(px(SEGMENT_RADIUS))
+                    .shadow(seg_glow(color.opacity(dim), dark, selected))
+                    .into_any_element(),
+            );
+        }
+    }
+    glows
+}
+
 /// The content column of one row: its segments, or the track's own empty state.
 #[allow(clippy::too_many_arguments)]
 fn render_track_content(
@@ -2352,10 +2632,17 @@ fn render_track_content(
             row.kind,
             view.hovered_track == Some(row.kind),
             row.kind == TrackKind::Audio && ui.audio_picker_lane == Some(row.lane),
+            ui.key_lane_offer,
         )
     {
         content = content.child(empty);
     }
+
+    let visible_ends = if row.kind == TrackKind::Keyboard {
+        keyboard_visible_ends(segments, secs_per_pixel)
+    } else {
+        Vec::new()
+    };
 
     // Enumerated before the lane filter so the index stays the **config**
     // index -- what the selection and every mutator address segments by.
@@ -2369,6 +2656,18 @@ fn render_track_content(
         if !view.transform.segment_visible(segment.start, segment.end) {
             continue;
         }
+        // Key presses linger after the key goes up, so one often runs past
+        // the next press; the overlay then shows the newer one. Each is drawn
+        // only until the next begins, so the row reads like the video.
+        let clipped = visible_ends
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|end| Segment {
+                end,
+                ..segment.clone()
+            });
+        let segment = clipped.as_ref().unwrap_or(segment);
         content = content.child(render_segment(
             theme,
             model,
@@ -2381,6 +2680,7 @@ fn render_track_content(
             ui.is_selected(row.kind, index),
             ui.is_hovered(row.kind, row.lane, index),
             ui.split_mode,
+            ui.marker_mode,
             ui.camera3d_editing_end,
         ));
     }
@@ -2391,6 +2691,7 @@ fn render_track_content(
     // land. Pressing it is what creates the segment.
     if row.kind == TrackKind::Zoom
         && !ui.dragging
+        && !ui.marker_mode
         && !ui.hovering_generate_zoom
         && view.hovered_track == Some(TrackKind::Zoom)
         && let Some(preview) = view.preview_time
@@ -2481,7 +2782,7 @@ fn render_track_content(
                         .px(px(6.))
                         .py(px(2.))
                         .rounded(px(6.))
-                        .bg(Hsla::from(gpui::rgb(0xef4444)))
+                        .bg(Hsla::from(gpui::rgb(0xdc2626)))
                         .text_size(px(10.))
                         .line_height(px(12.))
                         .font_weight(FontWeight::MEDIUM)
@@ -2567,6 +2868,56 @@ pub fn new_gap_segment(
     Some((start, start + min_duration))
 }
 
+/// A track's segments as the row draws them: key presses end where the next
+/// begins; every other track as stored. Hit-testing uses this so a handle is
+/// where it is drawn. Indices are unchanged.
+pub fn drawn_segments(
+    kind: TrackKind,
+    segments: &[Segment],
+    secs_per_pixel: f64,
+) -> std::borrow::Cow<'_, [Segment]> {
+    if kind != TrackKind::Keyboard {
+        return std::borrow::Cow::Borrowed(segments);
+    }
+    let ends = keyboard_visible_ends(segments, secs_per_pixel);
+    std::borrow::Cow::Owned(
+        segments
+            .iter()
+            .zip(ends)
+            .map(|(segment, end)| Segment {
+                end: end.unwrap_or(segment.end),
+                ..segment.clone()
+            })
+            .collect(),
+    )
+}
+
+/// Where each key press stops being the one on screen: just before the next
+/// press to start, when that comes before its own end. Never shorter than a
+/// few pixels, so a burst of presses stays clickable. One sort, so hovering
+/// a long track stays cheap.
+pub fn keyboard_visible_ends(segments: &[Segment], secs_per_pixel: f64) -> Vec<Option<f64>> {
+    let mut order: Vec<usize> = (0..segments.len()).collect();
+    order.sort_by(|a, b| segments[*a].start.total_cmp(&segments[*b].start));
+    let mut ends = vec![None; segments.len()];
+    let mut next = 0;
+    for (position, &index) in order.iter().enumerate() {
+        let segment = &segments[index];
+        next = next.max(position + 1);
+        while next < order.len() && segments[order[next]].start <= segment.start {
+            next += 1;
+        }
+        if let Some(&following) = order.get(next) {
+            let start = segments[following].start;
+            if start < segment.end {
+                ends[index] =
+                    Some((start - 2.0 * secs_per_pixel).max(segment.start + 6.0 * secs_per_pixel));
+            }
+        }
+    }
+    ends
+}
+
 /// The 3D lane's create ghost: where a click would put a shot, and what it
 /// would be. Pointer-events-none, like the zoom lane's -- the press is the
 /// row's own.
@@ -2628,7 +2979,7 @@ fn render_camera3d_ghost(
         .border_1()
         .border_dashed()
         .border_color(seg_border(theme, color, 0.))
-        .bg(seg_fill(theme, color, false))
+        .bg(seg_fill(theme, color))
         .child(
             div()
                 .h(px(height))
@@ -2688,7 +3039,7 @@ fn render_gap_ghost(
                 .justify_center()
                 .rounded(px(SEGMENT_RADIUS))
                 .overflow_hidden()
-                .bg(seg_fill(theme, color, false))
+                .bg(seg_fill(theme, color))
                 .border_1()
                 .border_dashed()
                 .border_color(seg_border(theme, color, 0.))
@@ -2720,10 +3071,19 @@ fn render_empty_prompt(
         .gap(px(5.))
         .px(px(10.))
         .rounded(px(SEGMENT_RADIUS))
-        .when(active, |this| this.bg(seg_fill(theme, color, false)))
+        // While the lane waits on a pick it is lit as the target: a wash of
+        // the track colour inside a dashed ring, the copy still in the
+        // window's own text colours so it reads on either theme.
+        .when(active, |this| {
+            let dark = theme.is_dark();
+            this.bg(color.opacity(if dark { 0.16 } else { 0.1 }))
+                .border_1()
+                .border_dashed()
+                .border_color(color.opacity(if dark { 0.6 } else { 0.5 }))
+        })
         .text_size(px(12.))
         .line_height(px(16.))
-        .text_color(Hsla::from(if hovered {
+        .text_color(Hsla::from(if hovered || active {
             theme.editor.text_2
         } else {
             theme.editor.text_3
@@ -2740,7 +3100,11 @@ fn render_empty_prompt(
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.editor.text_2))
+                        .text_color(Hsla::from(if active {
+                            theme.editor.text_1
+                        } else {
+                            theme.editor.text_2
+                        }))
                         .child(action),
                 )
         }))
@@ -2754,12 +3118,29 @@ fn render_empty_track(
     kind: TrackKind,
     hovered: bool,
     active: bool,
+    key_lane_offer: crate::editor_tabs::KeyLaneOffer,
 ) -> Option<AnyElement> {
     let (copy, action) = match kind {
         // `TL/CaptionsTrack.tsx:146-160`.
         TrackKind::Caption => (tr::editor::timeline::empty::captions(), None),
         // `TL/KeyboardTrack.tsx:146-153`.
-        TrackKind::Keyboard => (tr::editor::timeline::empty::keyboard(), None),
+        // A press puts the recording's keys back, shows the typing the
+        // Shortcuts setting hides, or adds keys by hand, and the copy says
+        // which.
+        TrackKind::Keyboard => match key_lane_offer {
+            crate::editor_tabs::KeyLaneOffer::Recorded => (
+                tr::editor::timeline::empty::keyboard_recorded(),
+                Some(tr::editor::timeline::empty::show_keys()),
+            ),
+            crate::editor_tabs::KeyLaneOffer::Typing => (
+                tr::editor::timeline::empty::keyboard_shortcuts(),
+                Some(tr::editor::timeline::empty::show_all_keys()),
+            ),
+            crate::editor_tabs::KeyLaneOffer::AddByHand => (
+                tr::editor::timeline::empty::keyboard(),
+                Some(tr::editor::timeline::empty::add_key()),
+            ),
+        },
         // `TL/AudioTrack.tsx:400-427`, `TL/ThreeDTrack.tsx:319-337`, and the
         // scene lane, which had no empty state at all.
         TrackKind::Audio => (
@@ -2818,8 +3199,10 @@ fn render_segment(
     selected: bool,
     hovered: bool,
     split_mode: bool,
+    marker_mode: bool,
     camera3d_editing_end: bool,
 ) -> AnyElement {
+    let placing = split_mode || marker_mode;
     let color = if matches!(segment.detail, SegmentDetail::Clip { muted: true, .. }) {
         muted_clip_color(theme)
     } else {
@@ -2853,17 +3236,8 @@ fn render_segment(
         .flex_row()
         .rounded(px(SEGMENT_RADIUS))
         .overflow_hidden()
-        .bg(seg_fill(theme, color, selected))
-        .child(
-            div()
-                .absolute()
-                .top(px(SEGMENT_RADIUS))
-                .bottom(px(SEGMENT_RADIUS))
-                .left(px(2.))
-                .w(px(SEGMENT_ACCENT_BAR))
-                .rounded_full()
-                .bg(color),
-        );
+        .bg(seg_fill_sheen(theme, color))
+        .shadow(seg_gloss());
 
     // The clip track's waveform and its per-second markings, both under the
     // label (`TL/ClipTrack.tsx:943-957`).
@@ -2898,7 +3272,7 @@ fn render_segment(
         for (hold_start, hold_end) in holds.iter() {
             let hold_x = ((hold_start - segment.start) / secs_per_pixel) as f32;
             let hold_width = ((hold_end - hold_start) / secs_per_pixel) as f32;
-            fill = fill.child(render_hold(theme, color, hold_x, hold_width, width, height));
+            fill = fill.child(render_hold(hold_x, hold_width));
         }
     }
 
@@ -2933,12 +3307,27 @@ fn render_segment(
         ));
     }
 
+    let (label_width, label_center) = match &segment.detail {
+        SegmentDetail::Clip { holds, .. } if !holds.is_empty() => {
+            let spans: Vec<(f64, f64)> = holds
+                .iter()
+                .map(|(start, end)| {
+                    (
+                        (start - segment.start) / secs_per_pixel,
+                        (end - segment.start) / secs_per_pixel,
+                    )
+                })
+                .collect();
+            label_box_clear_of(visible_width, center_x, &spans)
+        }
+        _ => (visible_width, center_x),
+    };
     fill = fill.child(render_label(
         theme,
         color,
         segment,
-        visible_width,
-        center_x,
+        label_width,
+        label_center,
         kind,
     ));
 
@@ -2998,7 +3387,9 @@ fn render_segment(
     // visible bar, half-overhanging each edge. A *compact* handle carries no
     // `group-hover` class over there, so it stays visible with the pointer on
     // it (`TL/Track.tsx:250`).
-    let compact = (width as f64) < 40.;
+    // A key press is often a sliver; its handles wait for the pointer, so a
+    // run of presses reads as keys rather than a fence of bars.
+    let compact = (width as f64) < 40. && kind != TrackKind::Keyboard;
     let handle_opacity = if compact {
         0.55
     } else if hovered {
@@ -3018,7 +3409,7 @@ fn render_segment(
         // `interactMode === "split" && "timeline-scissors-cursor"`
         // (`TL/Track.tsx:107-108`). That cursor is an inline SVG data-URI;
         // this rev has the standard set only, so a crosshair stands in.
-        .when(split_mode, |this| this.cursor(gpui::CursorStyle::Crosshair))
+        .when(placing, |this| this.cursor(gpui::CursorStyle::Crosshair))
         .child(fill)
         .child(
             div()
@@ -3029,7 +3420,7 @@ fn render_segment(
                     if selected || (split_mode && hovered) {
                         border
                             .border(px(1.5))
-                            .border_color(Hsla::from(theme.editor.accent))
+                            .border_color(gpui::hsla(0., 0., 1., 0.9))
                     } else {
                         border.border_1().border_color(seg_border(
                             theme,
@@ -3039,7 +3430,7 @@ fn render_segment(
                     }
                 }),
         )
-        .when(!split_mode, |this| {
+        .when(!placing, |this| {
             this.child(render_handle(theme, color, true, handle_opacity))
                 .child(render_handle(theme, color, false, handle_opacity))
         })
@@ -3212,7 +3603,7 @@ fn render_fade(
 ) -> impl IntoElement {
     let span = (fraction * width).max(0.);
     let shade_x = if edge_in { 0. } else { width - span };
-    let shade = with_alpha(Hsla::from(theme.editor.card), 0.55);
+    let shade = with_alpha(Hsla::from(theme.editor.window), 0.55);
     let curve = with_alpha(seg_label(theme, color), 0.85);
     let corner = with_alpha(seg_handle(theme, color), 0.8);
 
@@ -3348,70 +3739,56 @@ fn rounded_segment_overlay(
 }
 
 /// The paused window a fullscreen text segment inserts inside a clip
-/// (`TL/ClipTrack.tsx:959-1002`): the clip's tint washed back to the card,
-/// ruled off at both edges, with a pause glyph.
-fn render_hold(
-    theme: &Theme,
-    color: Hsla,
-    x: f32,
-    width: f32,
-    segment_width: f32,
-    height: f32,
-) -> impl IntoElement {
-    let ink = with_alpha(seg_label(theme, color), 0.75);
+/// (`TL/ClipTrack.tsx:959-1002`): a rounded well cut into the clip, shaded
+/// along its top and lit along its lower lip, with a pause glyph and, when it
+/// fits, its name.
+fn render_hold(x: f32, width: f32) -> impl IntoElement {
+    let ink = gpui::hsla(0., 0., 1., 0.9);
+    let well = (width - HOLD_INSET_X * 2.).max(0.);
     div()
         .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(x))
-        .w(px(width))
+        .left(px(x + HOLD_INSET_X))
+        .top(px(HOLD_INSET_Y))
+        .bottom(px(HOLD_INSET_Y))
+        .w(px(well))
+        .rounded(px(SEGMENT_RADIUS - HOLD_INSET_X))
+        .bg(gpui::hsla(0., 0., 0., 0.26))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.3),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(3.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.14),
+                offset: gpui::point(px(0.), px(-1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ])
         .flex()
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(4.))
+        .gap(px(5.))
         .overflow_hidden()
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px(-x))
-                .w(px(segment_width))
-                .rounded(px(SEGMENT_RADIUS))
-                .bg(with_alpha(Hsla::from(theme.editor.card), 0.6)),
-        )
-        .children([0., width - 1.].map(|edge| {
-            let radius = SEGMENT_RADIUS.min(segment_width / 2.).min(height / 2.);
-            let inset = rounded_corner_inset(
-                f64::from(x + edge),
-                f64::from(segment_width),
-                f64::from(radius),
+        .when(well >= 14., |this| {
+            this.child(
+                svg()
+                    .path("icons/pause.svg")
+                    .size(px(10.))
+                    .flex_none()
+                    .text_color(ink),
             )
-            .max(rounded_corner_inset(
-                f64::from(x + edge + 1.),
-                f64::from(segment_width),
-                f64::from(radius),
-            )) as f32;
-            div()
-                .absolute()
-                .left(px(edge))
-                .top(px(inset))
-                .bottom(px(inset))
-                .w(px(1.))
-                .bg(seg_border(theme, color, 0.))
-        }))
-        .child(
-            svg()
-                .path("icons/pause.svg")
-                .size(px(12.))
-                .flex_none()
-                .text_color(ink),
-        )
-        .when(width >= 64., |this| {
+        })
+        .when(well >= 64., |this| {
             this.child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(px(11.))
+                    .line_height(px(15.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(ink)
                     .child(tr::editor::timeline::paused()),
@@ -3599,6 +3976,42 @@ fn waveform_canvas(
     .into_any_element()
 }
 
+fn label_box_clear_of(visible_width: f64, center_x: f64, covered: &[(f64, f64)]) -> (f64, f64) {
+    let start = center_x - visible_width / 2.;
+    let end = center_x + visible_width / 2.;
+    let mut covered: Vec<(f64, f64)> = covered
+        .iter()
+        .map(|&(a, b)| (a.max(start), b.min(end)))
+        .filter(|(a, b)| b > a)
+        .collect();
+    if covered.is_empty() {
+        return (visible_width, center_x);
+    }
+    covered.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut runs = Vec::new();
+    let mut cursor = start;
+    for (a, b) in covered {
+        if a > cursor {
+            runs.push((cursor, a));
+        }
+        cursor = cursor.max(b);
+    }
+    if end > cursor {
+        runs.push((cursor, end));
+    }
+    let pick = runs
+        .iter()
+        .find(|(a, b)| b - a >= SEGMENT_LABEL_COMPACT_PX)
+        .or_else(|| {
+            runs.iter()
+                .max_by(|x, y| (x.1 - x.0).total_cmp(&(y.1 - y.0)))
+        });
+    match pick {
+        Some(&(a, b)) => (b - a, (a + b) / 2.),
+        None => (0., center_x),
+    }
+}
+
 /// `SegmentLabel` (`TL/Track.tsx:186-220`): full, compact and glyph tiers,
 /// anchored to the visible box and left-aligned inside the segment's own
 /// `0 10px 0 13px` content padding.
@@ -3610,6 +4023,9 @@ fn render_label(
     center_x: f64,
     kind: TrackKind,
 ) -> impl IntoElement {
+    if let SegmentDetail::Keyboard { text, typed, keys } = &segment.detail {
+        return render_key_label(theme, color, text, *typed, keys, visible_width, center_x);
+    }
     let compact_at = match kind {
         TrackKind::Caption | TrackKind::Keyboard | TrackKind::Audio => {
             SEGMENT_LABEL_COMPACT_TIGHT_PX
@@ -3635,9 +4051,9 @@ fn render_label(
     let (pad_left, pad_right) = if tier == LabelTier::Glyph {
         (4., 4.)
     } else if visible_width >= 60. {
-        (SEGMENT_PADDING_LEFT as f64, SEGMENT_PADDING_RIGHT as f64)
+        (SEGMENT_PADDING_RIGHT as f64, SEGMENT_PADDING_RIGHT as f64)
     } else {
-        (6., 4.)
+        (5., 5.)
     };
     let max_width = (visible_width - pad_left - pad_right).max(0.);
     let left = center_x - visible_width / 2. + pad_left;
@@ -3651,7 +4067,7 @@ fn render_label(
             .w(px(max_width as f32))
             .flex()
             .items_center()
-            .when(tier == LabelTier::Glyph, |this| this.justify_center())
+            .justify_center()
             .overflow_hidden()
             .child(body),
     )
@@ -3691,6 +4107,241 @@ fn label_secondary(theme: &Theme, color: Hsla) -> gpui::Div {
         .line_height(px(15.))
         .font_features(tabular_numerals())
         .text_color(seg_muted(theme, color))
+}
+
+/// One key on a keyboard segment: a small physical key in a deeper shade
+/// of the segment, lit along its top and standing on a darker lip, with its
+/// legend in white. It is exactly as wide as [`key_chip_width`] says, so the
+/// keys laid out by [`fit_key_label`] never overrun the segment. Modifiers
+/// sit a step quieter than the key they modify.
+fn key_chip(theme: &Theme, color: Hsla, key: &TimelineKey) -> gpui::Div {
+    let face = theme.editor.badge_fill(gpui::Rgba::from(color));
+    div()
+        .flex_none()
+        .w(px(key.width))
+        .h(px(KEY_CHIP_HEIGHT))
+        .px(px(KEY_CHIP_PAD_X))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.5))
+        .bg(Hsla::from(face))
+        .shadow(vec![
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 1., 0.16),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            gpui::BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.3),
+                offset: gpui::point(px(0.), px(-2.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+        ])
+        .text_size(px(11.))
+        .line_height(px(13.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(gpui::hsla(
+            0.,
+            0.,
+            1.,
+            if key.modifier { 0.82 } else { 0.98 },
+        ))
+        .truncate()
+        .child(key.label.clone())
+}
+
+/// Whether a key segment is typed words: not a shortcut, and with at least
+/// one character that is not a key symbol, so a lone Shift or Return reads
+/// as its key. The shortcut test matches the overlay's own.
+fn is_typed_text(segment: &cap_project::KeyboardTrackSegment) -> bool {
+    !is_shortcut(segment) && segment.display_text.chars().any(|c| !is_key_symbol(c))
+}
+
+fn is_key_symbol(c: char) -> bool {
+    matches!(
+        c,
+        '⌘' | '⌥'
+            | '⇧'
+            | '⌃'
+            | '⇪'
+            | '⏎'
+            | '↵'
+            | '⇥'
+            | '⌫'
+            | '⌦'
+            | '⎋'
+            | '⇱'
+            | '⇲'
+            | '⇞'
+            | '⇟'
+            | '↑'
+            | '↓'
+            | '←'
+            | '→'
+            | '␣'
+    )
+}
+
+/// A shortcut, as the overlay tells one from typing: it holds ⌃, ⌥ or ⌘,
+/// or one key struck again and again, unless each strike typed one more of
+/// the same character.
+fn is_shortcut(segment: &cap_project::KeyboardTrackSegment) -> bool {
+    if segment.display_text.contains(['⌃', '⌥', '⌘']) {
+        return true;
+    }
+    let repeated = segment.keys.len() > 1
+        && segment
+            .keys
+            .iter()
+            .all(|key| key.key == segment.keys[0].key);
+    if !repeated {
+        return false;
+    }
+    let mut chars = segment.display_text.chars();
+    let first = chars.next();
+    let typed = segment.display_text.chars().count() == segment.keys.len()
+        && chars.all(|c| Some(c) == first);
+    !typed
+}
+
+/// How far a keyboard segment's label stays in from each edge: clear of the
+/// trim handle's bar, which sits 5 to 8 px inside the edge.
+const KEY_LABEL_INSET: f32 = 10.;
+const KEY_CHIP_HEIGHT: f32 = 18.;
+const KEY_CHIP_PAD_X: f32 = 5.;
+const KEY_CHIP_MIN_WIDTH: f32 = 18.;
+const KEY_CHIP_GAP: f32 = 3.;
+/// The narrowest box typed words show in: a letter and an ellipsis.
+const KEY_TEXT_MIN_WIDTH: f32 = 16.;
+/// The narrowest box the keyboard glyph shows in.
+const KEY_GLYPH_MIN_WIDTH: f32 = 12.;
+
+/// The width of one key's keycap at the timeline's 11 px legend, from its
+/// characters, erring wide so the legend fits the cap it is given.
+fn key_chip_width(label: &str) -> f32 {
+    let ink: f32 = label
+        .chars()
+        .map(|c| match c {
+            ' ' => 3.5,
+            c if c.is_ascii_uppercase() || c.is_ascii_digit() => 7.4,
+            c if c.is_ascii_lowercase() => 6.4,
+            c if c.is_ascii() => 4.8,
+            // Key symbols and anything outside ASCII.
+            _ => 10.5,
+        })
+        .sum();
+    (ink + KEY_CHIP_PAD_X * 2.).max(KEY_CHIP_MIN_WIDTH)
+}
+
+/// The width of the quiet `+N` that stands for keys left out.
+fn more_keys_width(more: usize) -> f32 {
+    let digits = more.checked_ilog10().unwrap_or(0) + 1;
+    7. + 6.6 * digits as f32
+}
+
+/// What a keyboard segment shows in `width` pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyLabel {
+    /// The first `n` keys, and a count of the rest when some are left out.
+    Keys {
+        shown: usize,
+        more: usize,
+    },
+    /// The typed words, cut short with an ellipsis if they must be.
+    Text,
+    Glyph,
+    Nothing,
+}
+
+/// Whole keys only: as many of a shortcut's keys as fit, with a `+N` for
+/// the rest, and failing that the keyboard glyph. Typed words show as text.
+fn fit_key_label(typed: bool, keys: &[TimelineKey], width: f32) -> KeyLabel {
+    let fallback = if width >= KEY_GLYPH_MIN_WIDTH {
+        KeyLabel::Glyph
+    } else {
+        KeyLabel::Nothing
+    };
+    if typed || keys.is_empty() {
+        return if width >= KEY_TEXT_MIN_WIDTH {
+            KeyLabel::Text
+        } else {
+            fallback
+        };
+    }
+    // `row[n]` is the width of the first `n` keys and the gaps between them.
+    let row = |n: usize| -> f32 {
+        keys[..n].iter().map(|key| key.width).sum::<f32>()
+            + KEY_CHIP_GAP * n.saturating_sub(1) as f32
+    };
+    if row(keys.len()) <= width {
+        return KeyLabel::Keys {
+            shown: keys.len(),
+            more: 0,
+        };
+    }
+    (1..keys.len())
+        .rev()
+        .find(|&shown| row(shown) + KEY_CHIP_GAP + more_keys_width(keys.len() - shown) <= width)
+        .map_or(fallback, |shown| KeyLabel::Keys {
+            shown,
+            more: keys.len() - shown,
+        })
+}
+
+/// A keyboard segment's label: its keys or words, centred in the box left
+/// between the trim handles.
+fn render_key_label(
+    theme: &Theme,
+    color: Hsla,
+    text: &SharedString,
+    typed: bool,
+    keys: &[TimelineKey],
+    visible_width: f64,
+    center_x: f64,
+) -> gpui::Div {
+    let width = (visible_width as f32 - KEY_LABEL_INSET * 2.).max(0.);
+    let body = match fit_key_label(typed, keys, width) {
+        KeyLabel::Keys { shown, more } => label_row()
+            .gap(px(KEY_CHIP_GAP))
+            .children(keys[..shown].iter().map(|key| key_chip(theme, color, key)))
+            .when(more > 0, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .line_height(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(with_alpha(seg_label(theme, color), 0.78))
+                        .child(SharedString::from(format!("+{more}"))),
+                )
+            })
+            .into_any_element(),
+        KeyLabel::Text => label_row()
+            .child(label_primary(theme, color).child(text.clone()))
+            .into_any_element(),
+        KeyLabel::Glyph => label_glyph(theme, color, "icons/keyboard.svg", 12.),
+        KeyLabel::Nothing => return div(),
+    };
+    div().child(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(
+                center_x as f32 - visible_width as f32 / 2. + KEY_LABEL_INSET
+            ))
+            .w(px(width))
+            .flex()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .child(body),
+    )
 }
 
 fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> AnyElement {
@@ -3871,7 +4522,6 @@ fn label_body(
         (
             SegmentDetail::Text {
                 content,
-                color: text_color,
                 italic,
                 bold,
                 fullscreen,
@@ -3880,28 +4530,23 @@ fn label_body(
             LabelTier::Full | LabelTier::Compact,
         ) => label_row()
             .gap(px(6.))
-            .child(
-                div()
-                    .size(px(8.))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(*text_color),
-            )
-            .child(
-                label_primary(theme, color)
-                    .when(*bold, |this| this.font_weight(FontWeight::BOLD))
-                    .when(*italic, |this| this.italic())
-                    .child(content.clone()),
-            )
+            // A fullscreen text pauses the video: it leads with the same
+            // glyph as the hold it cuts into the clip.
             .when(*fullscreen, |this| {
                 this.child(
                     svg()
                         .path("icons/pause.svg")
                         .size(px(10.))
                         .flex_none()
-                        .text_color(seg_muted(theme, color)),
+                        .text_color(seg_label(theme, color)),
                 )
             })
+            .child(
+                label_primary(theme, color)
+                    .when(*bold, |this| this.font_weight(FontWeight::SEMIBOLD))
+                    .when(*italic, |this| this.italic())
+                    .child(content.clone()),
+            )
             .into_any_element(),
         (SegmentDetail::Text { fullscreen, .. }, LabelTier::Glyph) => {
             if !*fullscreen {
@@ -3935,9 +4580,20 @@ fn label_body(
                     .path(shape_kind_icon(*kind))
                     .size(px(12.))
                     .flex_none()
-                    .text_color(*swatch),
+                    .text_color(seg_label(theme, color)),
             )
             .child(label_primary(theme, color).child(shape_kind_label(*kind)))
+            // The shape's own colour, ringed so a dark or track-coloured
+            // swatch still shows on the fill.
+            .child(
+                div()
+                    .size(px(9.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(*swatch)
+                    .border_1()
+                    .border_color(seg_label(theme, color).opacity(0.85)),
+            )
             .into_any_element(),
         (SegmentDetail::Shape { kind, .. }, LabelTier::Glyph) => label_glyph(
             theme,
@@ -3965,18 +4621,8 @@ fn label_body(
             .into_any_element(),
         (SegmentDetail::Caption { .. }, LabelTier::Glyph) => return None,
 
-        // -- Keyboard (`TL/KeyboardTrack.tsx:166-173, 260-268`) -----------
-        (SegmentDetail::Keyboard { text }, LabelTier::Full | LabelTier::Compact) => label_row()
-            .child(
-                label_primary(theme, color)
-                    .font_family("monospace")
-                    .child(text.clone()),
-            )
-            .into_any_element(),
-        (SegmentDetail::Keyboard { .. }, LabelTier::Glyph) => label_primary(theme, color)
-            .font_family("monospace")
-            .child("\u{2328}")
-            .into_any_element(),
+        // Key presses fit their own label: see `render_key_label`.
+        (SegmentDetail::Keyboard { .. }, _) => return None,
     })
 }
 
@@ -4029,17 +4675,17 @@ fn clip_badge(
         .gap(px(3.))
         .px(px(5.))
         .rounded(px(4.))
-        .bg(seg_border(theme, color, 0.))
+        .bg(Hsla::from(theme.editor.badge_fill(gpui::Rgba::from(color))))
         .text_size(px(10.))
         .line_height(px(14.))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(seg_label(theme, color))
+        .text_color(Hsla::from(theme.editor.badge_ink(gpui::Rgba::from(color))))
         .child(
             svg()
                 .path(icon)
                 .size(px(10.))
                 .flex_none()
-                .text_color(seg_label(theme, color)),
+                .text_color(Hsla::from(theme.editor.badge_ink(gpui::Rgba::from(color)))),
         )
         .child(label)
 }
@@ -4077,14 +4723,14 @@ pub fn render_playhead(theme: &Theme, x: f32, opacity: f32) -> AnyElement {
         color,
         x,
         opacity,
-        Some((12., color, theme.editor.card.into())),
+        Some((12., color, theme.editor.window.into())),
     )
 }
 
 /// The hover preview line (`TL/index.tsx:1255-1277`).
 pub fn render_preview_line(theme: &Theme, x: f32) -> AnyElement {
     let color = with_alpha(Hsla::from(theme.editor.text_3), 0.5);
-    render_line(color, x, 1., Some((10., color, theme.editor.card.into())))
+    render_line(color, x, 1., Some((10., color, theme.editor.window.into())))
 }
 
 fn render_line(color: Hsla, x: f32, opacity: f32, head: Option<(f32, Hsla, Hsla)>) -> AnyElement {
@@ -4126,6 +4772,81 @@ pub fn wheel_zoom_delta(dom_delta_y: f64, zoom: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_track_label_and_value_reads_at_aa_contrast_in_both_themes() {
+        use crate::theme::{EditorPalette, mix, relative_luminance};
+        let contrast = |a: gpui::Rgba, b: gpui::Rgba| {
+            let (a, b) = (relative_luminance(a), relative_luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        let tracks = [
+            track_color::CLIP,
+            track_color::ZOOM,
+            track_color::CAPTION,
+            track_color::KEYBOARD,
+            track_color::STYLE,
+            track_color::IMAGE,
+            track_color::TEXT,
+            track_color::MASK,
+            track_color::SHAPE,
+            track_color::SCENE,
+            track_color::AUDIO,
+            track_color::THREE_D,
+        ];
+        for palette in [EditorPalette::light(), EditorPalette::dark()] {
+            let colors = tracks
+                .into_iter()
+                .map(gpui::rgb)
+                .chain([gpui::rgb(track_color::MUTED)]);
+            for color in colors {
+                let badge = palette.badge_fill(color);
+                assert!(
+                    contrast(palette.badge_ink(color), badge) >= 4.5,
+                    "badge {color:?}: {:.2}",
+                    contrast(palette.badge_ink(color), badge)
+                );
+                for fill in palette.seg_text_band(color) {
+                    for text in [palette.seg_label(color), palette.seg_muted(color)] {
+                        let ink = mix(fill, gpui::Rgba { a: 1., ..text }, text.a);
+                        assert!(
+                            contrast(ink, fill) >= 4.5,
+                            "{color:?}: {:.2}",
+                            contrast(ink, fill)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_clip_label_steps_past_a_hold_at_its_start() {
+        let (width, center) = label_box_clear_of(1000., 500., &[(0., 150.)]);
+        assert_eq!(width, 850.);
+        assert_eq!(center, 575.);
+    }
+
+    #[test]
+    fn a_clip_label_takes_the_first_gap_wide_enough() {
+        let (width, center) = label_box_clear_of(1000., 500., &[(0., 150.), (170., 400.)]);
+        assert_eq!(width, 600.);
+        assert_eq!(center, 700.);
+    }
+
+    #[test]
+    fn a_clip_label_without_holds_keeps_the_visible_box() {
+        assert_eq!(label_box_clear_of(320., 160., &[]), (320., 160.));
+        assert_eq!(
+            label_box_clear_of(320., 160., &[(400., 500.)]),
+            (320., 160.)
+        );
+    }
+
+    #[test]
+    fn a_clip_fully_held_shows_no_label() {
+        assert_eq!(label_box_clear_of(200., 100., &[(0., 200.)]).0, 0.);
+    }
 
     const AUDIO_SAMPLE_RATE: usize = 48_000;
 
@@ -4421,14 +5142,14 @@ mod tests {
     // -- Geometry -----------------------------------------------------------
 
     /// The editor's default width: 1275 minus 16 (slot), 24 (the card's
-    /// hairline and padding), 4 (`pr-1`) and 104 (gutter) = 1127px of track
-    /// content starting at x = 124, with the ruler's own strip four pixels
+    /// hairline and padding), 4 (`pr-1`) and 136 (gutter) = 1095px of track
+    /// content starting at x = 156, with the ruler's own strip four pixels
     /// wider.
     #[test]
     fn the_content_column_carries_the_scroll_bodys_padding() {
-        assert_eq!(content_width(1275.), 1127.);
-        assert_eq!(ruler_width(1275.), 1131.);
-        assert_eq!(content_left(), 124.);
+        assert_eq!(content_width(1275.), 1095.);
+        assert_eq!(ruler_width(1275.), 1099.);
+        assert_eq!(content_left(), 156.);
     }
 
     #[test]
@@ -4438,10 +5159,10 @@ mod tests {
         let transform = Transform::initial(total);
         let content = content_width(width);
 
-        assert!(time_from_x(124., width, transform, total).abs() < 1e-9);
-        let end = time_from_x(124. + content, width, transform, total);
+        assert!(time_from_x(content_left(), width, transform, total).abs() < 1e-9);
+        let end = time_from_x(content_left() + content, width, transform, total);
         assert!((end - total).abs() < 1e-6, "{end}");
-        let middle = time_from_x(124. + content / 2., width, transform, total);
+        let middle = time_from_x(content_left() + content / 2., width, transform, total);
         assert!((middle - total / 2.).abs() < 1e-6, "{middle}");
     }
 
@@ -4450,8 +5171,11 @@ mod tests {
         let width = 1275.;
         let total = 60.0;
         let transform = Transform::initial(total);
-        assert_eq!(time_from_x(124. + 9., width, transform, total), 0.0);
-        assert!(time_from_x(124. + 11., width, transform, total) > 0.0);
+        assert_eq!(
+            time_from_x(content_left() + 9., width, transform, total),
+            0.0
+        );
+        assert!(time_from_x(content_left() + 11., width, transform, total) > 0.0);
         assert_eq!(time_from_x(0., width, transform, total), 0.0);
         assert_eq!(time_from_x(9_000., width, transform, total), total);
     }
@@ -4465,7 +5189,12 @@ mod tests {
             zoom: 10.,
             position: 20.,
         };
-        let time = time_from_x(124. + content_width(width) / 2., width, transform, 600.);
+        let time = time_from_x(
+            content_left() + content_width(width) / 2.,
+            width,
+            transform,
+            600.,
+        );
         assert!((time - 25.0).abs() < 1e-6, "{time}");
     }
 
@@ -4475,17 +5204,166 @@ mod tests {
     fn the_hover_preview_clears_outside_the_content_column() {
         let width = 1275.;
         let transform = Transform::initial(60.);
-        assert_eq!(preview_time_from_x(123., width, transform), None);
         assert_eq!(
-            preview_time_from_x(124. + content_width(width) + 1., width, transform),
+            preview_time_from_x(content_left() - 1., width, transform),
             None
         );
-        assert_eq!(preview_time_from_x(124. + 5., width, transform), Some(0.));
-        let middle = preview_time_from_x(124. + content_width(width) / 2., width, transform);
+        assert_eq!(
+            preview_time_from_x(content_left() + content_width(width) + 1., width, transform),
+            None
+        );
+        assert_eq!(
+            preview_time_from_x(content_left() + 5., width, transform),
+            Some(0.)
+        );
+        let middle =
+            preview_time_from_x(content_left() + content_width(width) / 2., width, transform);
         assert!((middle.unwrap() - 30.).abs() < 1e-6);
     }
 
+    /// A key press that runs past the next one is drawn, and hit, only up
+    /// to it; the last press keeps its full length.
+    #[test]
+    fn key_presses_end_where_the_next_one_begins() {
+        let press = |start: f64, end: f64| Segment {
+            start,
+            end,
+            lane: 0,
+            detail: SegmentDetail::Keyboard {
+                text: SharedString::new_static("a"),
+                typed: true,
+                keys: Arc::from(Vec::new()),
+            },
+        };
+        let segments = [press(1., 3.), press(0., 2.), press(5., 6.), press(1., 1.5)];
+        let drawn = drawn_segments(TrackKind::Keyboard, &segments, 0.01);
+        assert_eq!(drawn[0].end, 3.);
+        assert!((drawn[1].end - 0.98).abs() < 1e-9);
+        assert_eq!(drawn[2].end, 6.);
+        // Two presses starting together don't clip each other.
+        assert_eq!(drawn[3].end, 1.5);
+        assert!(matches!(
+            drawn_segments(TrackKind::Zoom, &segments, 0.01),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
     // -- Labels -------------------------------------------------------------
+
+    fn timeline_keys(labels: &[&'static str]) -> Vec<TimelineKey> {
+        labels
+            .iter()
+            .map(|label| TimelineKey::new(SharedString::new_static(label), false))
+            .collect()
+    }
+
+    /// A shortcut shows every key it has room for, whole, then a count of
+    /// the keys left out, then the keyboard glyph, then nothing.
+    #[test]
+    fn key_segments_show_whole_keys_and_count_the_rest() {
+        let keys = timeline_keys(&["⌘", "⇧", "P"]);
+        let all = keys.iter().map(|key| key.width).sum::<f32>() + KEY_CHIP_GAP * 2.;
+        assert_eq!(
+            fit_key_label(false, &keys, all),
+            KeyLabel::Keys { shown: 3, more: 0 }
+        );
+        let two_and_more = keys[0].width + keys[1].width + KEY_CHIP_GAP * 2. + more_keys_width(1);
+        assert!(two_and_more < all);
+        assert_eq!(
+            fit_key_label(false, &keys, all - 1.),
+            KeyLabel::Keys { shown: 2, more: 1 }
+        );
+        assert_eq!(
+            fit_key_label(false, &keys, two_and_more - 1.),
+            KeyLabel::Keys { shown: 1, more: 2 }
+        );
+        let one_and_more = keys[0].width + KEY_CHIP_GAP + more_keys_width(2);
+        assert_eq!(
+            fit_key_label(false, &keys, one_and_more),
+            KeyLabel::Keys { shown: 1, more: 2 }
+        );
+        assert_eq!(
+            fit_key_label(false, &keys, one_and_more - 1.),
+            KeyLabel::Glyph
+        );
+        assert_eq!(
+            fit_key_label(false, &keys, KEY_GLYPH_MIN_WIDTH - 1.),
+            KeyLabel::Nothing
+        );
+        // Whatever the width, the keys shown and the count fit inside it.
+        for width in 0..200 {
+            let width = width as f32;
+            if let KeyLabel::Keys { shown, more } = fit_key_label(false, &keys, width) {
+                let used = keys[..shown].iter().map(|key| key.width).sum::<f32>()
+                    + KEY_CHIP_GAP * (shown - 1) as f32
+                    + if more > 0 {
+                        KEY_CHIP_GAP + more_keys_width(more)
+                    } else {
+                        0.
+                    };
+                assert!(used <= width, "{width}: {used}");
+                assert_eq!(shown + more, keys.len());
+            }
+        }
+    }
+
+    /// Typed words read as text down to a letter and an ellipsis.
+    #[test]
+    fn typed_key_segments_read_as_words() {
+        let keys = timeline_keys(&["hello"]);
+        assert_eq!(fit_key_label(true, &keys, 200.), KeyLabel::Text);
+        assert_eq!(
+            fit_key_label(true, &keys, KEY_TEXT_MIN_WIDTH),
+            KeyLabel::Text
+        );
+        assert_eq!(
+            fit_key_label(true, &keys, KEY_TEXT_MIN_WIDTH - 1.),
+            KeyLabel::Glyph
+        );
+        assert_eq!(fit_key_label(false, &[], 40.), KeyLabel::Text);
+    }
+
+    /// A key's cap grows with its legend and never shrinks below a square.
+    #[test]
+    fn key_chips_size_to_their_legend() {
+        assert_eq!(key_chip_width("P"), KEY_CHIP_MIN_WIDTH);
+        assert!(key_chip_width("⌘") >= KEY_CHIP_MIN_WIDTH);
+        assert!(key_chip_width("Backspace") > key_chip_width("Tab"));
+        assert!(key_chip_width("Shift") > KEY_CHIP_MIN_WIDTH);
+        assert_eq!(more_keys_width(9), more_keys_width(1));
+        assert!(more_keys_width(10) > more_keys_width(9));
+    }
+
+    /// Words are typed text; a shortcut, or a special key alone, is keys.
+    #[test]
+    fn key_segments_tell_typing_from_shortcuts() {
+        let segment = |text: &str, keys: &[&str]| cap_project::KeyboardTrackSegment {
+            display_text: text.to_string(),
+            keys: keys
+                .iter()
+                .map(|key| cap_project::KeyPressDisplay {
+                    key: key.to_string(),
+                    time_offset: 0.,
+                })
+                .collect(),
+            id: String::new(),
+            start: 0.,
+            end: 1.,
+            fade_duration_override: None,
+            position_override: None,
+            color_override: None,
+            background_color_override: None,
+            font_size_override: None,
+            uppercase_override: None,
+        };
+        assert!(is_typed_text(&segment("hello", &["h", "e", "l", "l", "o"])));
+        assert!(is_typed_text(&segment("⌫e", &["Backspace", "e"])));
+        assert!(is_typed_text(&segment("aa", &["a", "a"])));
+        assert!(!is_typed_text(&segment("⌘C", &["Meta", "c"])));
+        assert!(!is_typed_text(&segment("⇧", &["Shift"])));
+        assert!(!is_typed_text(&segment("⏎", &["Enter"])));
+        assert!(!is_typed_text(&segment("⎋", &["Escape", "Escape"])));
+    }
 
     /// `useSegmentVisibleBox`: a segment wider than the viewport has its true
     /// centre off screen, so the label anchors to the middle of the *visible*
@@ -4561,6 +5439,33 @@ mod tests {
     /// arrives: the row order is the source's mount order, multi-lane tracks
     /// contribute one row per used lane with the highest-priority lane first,
     /// and the two locked tracks are always there.
+    /// The timeline's keys print for the platform the recording was made
+    /// on, as the preview and every export draw them.
+    #[test]
+    fn timeline_keys_print_for_the_recording_platform() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [{ "start": 0.0, "end": 4.0, "timescale": 1.0, "recordingSegment": 0 }],
+                "zoomSegments": [],
+                "keyboardSegments": [
+                    { "id": "k", "start": 0.5, "end": 1.5, "displayText": "⌘C" }
+                ]
+            },
+            "keyboard": { "settings": { "enabled": true, "style": "auto" } }
+        }))
+        .unwrap();
+        let first_key = |platform: cap_project::Platform| {
+            let model = TimelineModel::build_for(&config, false, false, Some(&platform));
+            match &model.keyboard[0].detail {
+                SegmentDetail::Keyboard { keys, .. } => keys[0].label.to_string(),
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(first_key(cap_project::Platform::MacOS), "⌘");
+        assert_eq!(first_key(cap_project::Platform::Windows), "Win");
+        assert_eq!(first_key(cap_project::Platform::Linux), "Super");
+    }
+
     #[test]
     fn the_row_order_is_the_sources_mount_order() {
         let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
@@ -5209,7 +6114,7 @@ mod tests {
                     let (first, last) = path
                         .vertices
                         .iter()
-                        .filter(|vertex| f32::from(vertex.xy_position.y) < 35.)
+                        .filter(|vertex| f32::from(vertex.xy_position.y) < 43. - SEGMENT_RADIUS)
                         .map(|vertex| {
                             range.0
                                 + f64::from(f32::from(vertex.xy_position.x)) / 600.
@@ -6063,11 +6968,11 @@ pub(crate) fn render_preparing_timeline(
                 ),
         );
     }
-    let mut veil = theme.editor.card;
+    let mut veil = theme.editor.window;
     veil.a = 0.88;
-    let mut edge = theme.editor.card;
+    let mut edge = theme.editor.window;
     edge.a = 0.35;
-    let mut clear = theme.editor.card;
+    let mut clear = theme.editor.window;
     clear.a = 0.0;
     div()
         .size_full()

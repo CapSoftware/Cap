@@ -79,6 +79,7 @@ fn frames() -> DecodedSegmentFrames {
         segment_time: 0.0,
         recording_time: 0.0,
         segment_has_camera: false,
+        display_placeholder: false,
     }
 }
 
@@ -199,6 +200,7 @@ fn with_overlay(kind: &str, path: &str) -> ProjectConfiguration {
             project.keyboard = Some(cap_project::KeyboardData {
                 settings: cap_project::KeyboardSettings {
                     enabled: true,
+                    style: "classic".to_string(),
                     ..Default::default()
                 },
             });
@@ -776,6 +778,7 @@ async fn layers_sharing_a_pass_render_like_one_pass_per_layer() {
             48,
         )),
         segment_has_camera: true,
+        display_placeholder: false,
         ..frames()
     };
     let mut camera_only_transition = project();

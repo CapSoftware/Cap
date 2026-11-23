@@ -40,6 +40,7 @@ const FORMATTED: &[&str] = &[
     "dialog.clipboard.unavailable_error",
     "dialog.file.failed",
     "import.audio_failed",
+    "import.blank_failed",
     "import.image_failed",
     "import.video_failed",
     "import.progress.converting",
@@ -324,6 +325,7 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         ),
         (tr::auth::sign_in_failed(), "Sign in failed"),
         (tr::import::error_title(), "Import Error"),
+        (tr::import::blank_name(), "Untitled"),
         (tr::import::unsupported(), "Unsupported media file."),
         (tr::import::filter::image(), "Image Files"),
         (tr::import::filter::media(), "Media Files"),
@@ -483,17 +485,17 @@ fn dialog_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::overlay::start::instant(),
-            "Instant Mode — Record shareable link",
+            "Instant Mode · Record shareable link",
         ),
         (
             tr::overlay::start::instant_sign_in(),
-            "Instant Mode — Sign in to record instantly",
+            "Instant Mode · Sign in to record instantly",
         ),
         (tr::overlay::start::sign_in(), "Sign In To Use"),
         (tr::overlay::start::start_recording(), "Start Recording"),
         (
             tr::overlay::start::studio(),
-            "Studio Mode — Record and edit locally",
+            "Studio Mode · Record and edit locally",
         ),
         (tr::overlay::start::take_screenshot(), "Take Screenshot"),
         (
@@ -1190,6 +1192,10 @@ fn assembled_dialog_messages_match_the_code_they_replaced() {
     ] {
         assert_eq!(formatted, format!("Failed to import {media}: {message}"));
     }
+    assert_eq!(
+        tr::import::blank_failed(message),
+        format!("Failed to create a project: {message}")
+    );
     assert_eq!(
         tr::dialog::capture::shortcut_hint("Ctrl+Shift+F9"),
         "Press and release Ctrl+Shift+F9 to start. Use the same shortcut to stop. This temporary shortcut does not change your settings."

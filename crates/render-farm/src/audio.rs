@@ -83,7 +83,14 @@ pub async fn render(request: AudioRequest) -> Result<AudioResult> {
         (end + 2 * PACKET_SAMPLES).min(total_samples)
     };
 
-    let mut renderer = AudioRenderer::new(segments).with_music(music);
+    let input_sounds = cap_editor::InputSounds::load(
+        &project.config,
+        &project.recording_meta,
+        &project.studio_meta,
+    );
+    let mut renderer = AudioRenderer::new(segments)
+        .with_music(music)
+        .with_input_sounds(input_sounds);
     renderer.set_playhead(input_start as f64 / SAMPLE_RATE as f64, &project.config);
 
     let codec = ffmpeg::encoder::find(ffmpeg::codec::Id::AAC).context("aac encoder")?;

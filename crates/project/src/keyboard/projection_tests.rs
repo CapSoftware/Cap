@@ -237,6 +237,9 @@ fn indexed_projection_matches_baseline_with_offsets_speed_transitions_and_holds(
     for show_modifiers in [false, true] {
         let settings = KeyboardSettings {
             show_modifiers,
+            show_typing: true,
+            show_special_keys: true,
+            linger_duration: 0.8,
             ..Default::default()
         };
         assert_eq!(
@@ -299,7 +302,12 @@ fn benchmark_keyboard_projection() {
             timeline.segments[0].end = start + 2.0;
         }
         let takes = [(events, 0.0)];
-        let settings = KeyboardSettings::default();
+        let settings = KeyboardSettings {
+            show_typing: true,
+            show_special_keys: true,
+            linger_duration: 0.8,
+            ..Default::default()
+        };
         let expected = baseline_project_keyboard_events(&takes, &timeline, &settings);
         let actual = project_keyboard_events(&takes, &timeline, &settings);
         assert_eq!(

@@ -226,7 +226,7 @@ fn default_badge(theme: &crate::theme::Theme) -> gpui::Div {
         .text_size(px(10.5))
         .font_weight(FontWeight::MEDIUM)
         .bg(crate::editor_sidebar::with_alpha(theme.editor.accent, 0.16))
-        .text_color(Hsla::from(theme.editor.accent))
+        .text_color(Hsla::from(theme.editor.accent_ink))
         .child(tr::editor::panel::style_presets::default_badge())
 }
 
@@ -490,7 +490,7 @@ impl EditorWindow {
                                 svg()
                                     .path("icons/check.svg")
                                     .size(px(14.))
-                                    .text_color(Hsla::from(theme.editor.accent)),
+                                    .text_color(Hsla::from(theme.editor.accent_ink)),
                             )
                         }))
                         .child(
@@ -644,8 +644,8 @@ impl EditorWindow {
             .flex_col()
             .rounded(px(12.))
             .border_1()
-            .border_color(Hsla::from(theme.editor.line))
-            .bg(Hsla::from(theme.editor.card))
+            .border_color(theme.editor.pop_line())
+            .bg(theme.editor.pop_bg())
             .shadow(theme.editor.pop_shadow())
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -751,8 +751,8 @@ impl EditorWindow {
                 .gap(px(2.))
                 .rounded(px(12.))
                 .border_1()
-                .border_color(Hsla::from(theme.editor.line))
-                .bg(Hsla::from(theme.editor.card))
+                .border_color(theme.editor.pop_line())
+                .bg(theme.editor.pop_bg())
                 .shadow(theme.editor.pop_shadow())
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(

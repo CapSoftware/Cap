@@ -1,6 +1,6 @@
 use crate::{ExporterBase, Mp4ExporterBase};
 use cap_editor::{
-    AudioRenderer, ExportAudioError, ExportAudioRenderer, get_audio_segments,
+    AudioRenderer, ExportAudioError, ExportAudioRenderer, InputSounds, get_audio_segments,
     load_music_tracks_uncached,
 };
 use cap_enc_ffmpeg::{AudioEncoder, PacketQueue, aac::AACEncoder, h264::H264Encoder, mp4::*};
@@ -455,7 +455,11 @@ impl Mp4ExportSettings {
         let pipeline_start = std::time::Instant::now();
         let sample_timing = base.sample_timing.clone();
         let output_path = base.output_path.clone();
-        let mut streaming_audio = base.streaming_audio.take();
+        let input_sounds = InputSounds::for_segments(&base.project_config, &base.segments);
+        let mut streaming_audio = base
+            .streaming_audio
+            .take()
+            .map(|audio| audio.with_input_sounds(input_sounds.clone()));
         let audio_control = base.audio_cancellation.take();
         let audio_cancellation = audio_control.as_ref().map(|control| control.stop.clone());
         let user_cancellation = audio_control.as_ref().map(|control| control.user.clone());
@@ -500,7 +504,7 @@ impl Mp4ExportSettings {
             .first()
             .filter(|_| !base.project_config.audio.mute)
             .is_some();
-        let has_audio = has_recording_audio || !music.is_empty();
+        let has_audio = has_recording_audio || !music.is_empty() || input_sounds.is_some();
 
         let record_first_queued_ms = mode.record_first_queued_ms_since_pipeline;
         let software_encoder = mode.software_encoder;
@@ -616,7 +620,11 @@ impl Mp4ExportSettings {
                 Some(audio_encoder) => {
                     let source = match streaming_audio.take() {
                         Some(audio) => ExportAudioSource::Streaming(audio),
-                        None => ExportAudioSource::Renderer(AudioRenderer::new(audio_segments).with_music(music)),
+                        None => ExportAudioSource::Renderer(
+                            AudioRenderer::new(audio_segments)
+                                .with_music(music)
+                                .with_input_sounds(input_sounds),
+                        ),
                     };
                     let worker_cancellation = encoder_cancellation.clone();
                     let worker_user_cancellation = encoder_user_cancellation.clone();

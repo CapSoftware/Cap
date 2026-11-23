@@ -215,7 +215,7 @@ impl Section {
             children,
             pro: false,
             muted: theme.settings_muted(),
-            accent: Hsla::from(theme.blue_9),
+            accent: Hsla::from(theme.editor.accent_fill),
         }
     }
 

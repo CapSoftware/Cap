@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use cap_project::{AudioVisualizerStyle, AudioVisualsConfiguration};
+use cap_project::{
+    AnimatedGradientConfig, AudioVisualizerStyle, AudioVisualsConfiguration, BackgroundSource,
+};
 use cap_rendering::AudioLevels;
 use gpui::{
     AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, svg,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
+use crate::editor_sidebar::SelectionRing as _;
 use crate::editor_window::EditorWindow;
 use crate::i18n::tr;
 use crate::ui;
@@ -71,7 +74,7 @@ impl EditorWindow {
     }
 
     /// `CAP_GPUI_AUTO_AUDIO_VISUALS=bars|wave|circle`: turn visuals on the way
-    /// Add Visuals does, for the automated export checks.
+    /// a visualiser tile does, for the automated export checks.
     pub(crate) fn enable_audio_visuals_for_automation(
         &mut self,
         style: &str,
@@ -90,6 +93,105 @@ impl EditorWindow {
         });
     }
 
+    /// Turns visuals on in `style` in one step. A project still on the plain
+    /// background a recording starts with gets the animated one, so the
+    /// first look is already a video worth exporting.
+    fn show_visuals(
+        &mut self,
+        style: AudioVisualizerStyle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let plain = matches!(
+            self.project.background.source,
+            BackgroundSource::Color {
+                value: [255, 255, 255],
+                alpha: 255
+            }
+        );
+        self.edit_project_without_timeline("audio-visuals-style", window, cx, move |project| {
+            let before = project.audio_visuals.clone();
+            if plain {
+                project.background.source = BackgroundSource::AnimatedGradient {
+                    config: AnimatedGradientConfig::default(),
+                };
+            }
+            let background = &project.background.source;
+            let visuals = project.audio_visuals.get_or_insert_with(|| {
+                Box::new(AudioVisualsConfiguration::for_background(background))
+            });
+            visuals.enabled = true;
+            visuals.style = style;
+            plain || project.audio_visuals != before
+        });
+        if plain {
+            self.sidebar.source_tab = crate::editor_sidebar::SourceTab::AnimatedGradient;
+        }
+    }
+
+    /// One tile per visualiser, each drawing its look in small so the choice
+    /// is seen before it is made. `selected` rings the one showing.
+    fn render_visualizer_tiles(
+        &self,
+        selected: Option<AudioVisualizerStyle>,
+        tile_height: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let editor = theme.editor;
+        div()
+            .flex()
+            .flex_row()
+            .gap(px(8.))
+            .w_full()
+            .children(AudioVisualizerStyle::ALL.iter().map(|&style| {
+                let chosen = selected == Some(style);
+                div()
+                    .id(gpui::SharedString::from(format!(
+                        "audio-visualizer-{style:?}"
+                    )))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(6.))
+                    .pb(px(10.))
+                    .rounded(px(12.))
+                    .map(|this| {
+                        if chosen {
+                            this.bg(editor.choice_selected_fill())
+                                .shadow(editor.choice_selected_shadow())
+                        } else {
+                            this.bg(editor.choice_fill())
+                                .shadow(editor.choice_ring())
+                                .cursor_pointer()
+                                .hover(move |this| this.bg(editor.choice_hover_fill()))
+                        }
+                    })
+                    .child(visualizer_preview(style, tile_height))
+                    .child(
+                        div()
+                            .w_full()
+                            .text_center()
+                            .text_size(px(12.))
+                            .text_color(Hsla::from(if chosen {
+                                editor.text_1
+                            } else {
+                                editor.text_2
+                            }))
+                            .child(style_label(style)),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.show_visuals(style, window, cx);
+                    }))
+            }))
+            .into_any_element()
+    }
+
+    /// Shown in place of the preview while an audio-only project has no
+    /// visuals: its sound, a way out as audio, and the visualisers it can
+    /// become, each one click away.
     pub(crate) fn render_audio_card(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let editor = theme.editor;
@@ -100,27 +202,26 @@ impl EditorWindow {
             0.0
         };
         let bars = card_bars(self.audio_levels.as_deref(), &self.project, CARD_BARS);
-        let played = Hsla::from(editor.accent);
+        let played = Hsla::from(editor.text_1);
         let unplayed = Hsla::from(editor.text_3);
 
-        let waveform =
-            div()
-                .h(px(96.))
-                .w_full()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .children(bars.into_iter().enumerate().map(move |(index, level)| {
-                    let position = (index as f32 + 0.5) / CARD_BARS as f32;
-                    div().w(px(3.)).h(px(4. + 88. * level)).rounded_full().bg(
-                        if position <= progress {
-                            played
-                        } else {
-                            unplayed
-                        },
-                    )
-                }));
+        let waveform = div()
+            .h(px(88.))
+            .w_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .children(bars.into_iter().enumerate().map(move |(index, level)| {
+                let position = (index as f32 + 0.5) / CARD_BARS as f32;
+                div().w(px(2.5)).h(px(3. + 82. * level)).rounded_full().bg(
+                    if position <= progress {
+                        played
+                    } else {
+                        unplayed
+                    },
+                )
+            }));
 
         div()
             .debug_selector(|| "editor-audio-card".into())
@@ -132,62 +233,43 @@ impl EditorWindow {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(640.))
+                    .max_w(px(560.))
                     .flex()
                     .flex_col()
-                    .items_center()
-                    .gap(px(22.))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .size(px(44.))
-                                    .rounded(px(14.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(Hsla::from(editor.seg_fill(gpui::rgb(
-                                        crate::editor_timeline::track_color::AUDIO,
-                                    ))))
-                                    .child(
-                                        svg()
-                                            .path("icons/microphone.svg")
-                                            .size(px(20.))
-                                            .text_color(Hsla::from(editor.text_1)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(17.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(Hsla::from(editor.text_1))
-                                    .child(tr::editor::audio_only::title()),
-                            )
-                            .child(
-                                div()
-                                    .max_w(px(420.))
-                                    .text_center()
-                                    .text_size(px(13.))
-                                    .text_color(Hsla::from(editor.text_2))
-                                    .child(tr::editor::audio_only::body()),
-                            ),
-                    )
-                    .child(waveform)
+                    .gap(px(28.))
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .gap(px(10.))
+                            .items_end()
+                            .justify_between()
+                            .gap(px(16.))
                             .child(
-                                ui::Button::plain(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(px(17.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(Hsla::from(editor.text_1))
+                                            .child(tr::editor::audio_only::title()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .text_color(Hsla::from(editor.text_2))
+                                            .child(tr::editor::audio_only::body()),
+                                    ),
+                            )
+                            .child(
+                                ui::Button::editor(
                                     &theme,
                                     "audio-only-export",
                                     ui::ButtonVariant::Blue,
-                                    ui::ButtonSize::Lg,
+                                    ui::ButtonSize::Md,
                                 )
                                 .icon("icons/music.svg")
                                 .label(tr::editor::audio_only::export_audio())
@@ -196,32 +278,30 @@ impl EditorWindow {
                                         this.open_export(window, cx);
                                     },
                                 )),
-                            )
-                            .child(
-                                ui::Button::plain(
-                                    &theme,
-                                    "audio-only-add-visuals",
-                                    ui::ButtonVariant::Outline,
-                                    ui::ButtonSize::Lg,
-                                )
-                                .icon("icons/image.svg")
-                                .label(tr::editor::audio_only::add_visuals())
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        this.edit_audio_visuals(
-                                            "audio-visuals-on",
-                                            window,
-                                            cx,
-                                            |visuals| visuals.enabled = true,
-                                        );
-                                    },
-                                )),
                             ),
+                    )
+                    .child(waveform)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(10.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(Hsla::from(editor.text_1))
+                                    .child(tr::editor::audio_only::make_video()),
+                            )
+                            .child(self.render_visualizer_tiles(None, 64., cx)),
                     ),
             )
             .into_any_element()
     }
 
+    /// The visualiser, at the top of the Background tab so the background it
+    /// stands on is right below: a switch in the header, the looks as tiles,
+    /// then its size and colour once it shows.
     pub(crate) fn render_audio_visuals_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.is_audio_only() {
             return None;
@@ -230,7 +310,6 @@ impl EditorWindow {
         let editor = theme.editor;
         let visuals = self.project.audio_visuals.clone().unwrap_or_default();
         let enabled = visuals.enabled;
-        let styles = AudioVisualizerStyle::ALL;
         let size_index = VISUALIZER_SIZES
             .iter()
             .enumerate()
@@ -249,16 +328,17 @@ impl EditorWindow {
                 .id(gpui::SharedString::from(format!(
                     "audio-visualizer-color-{color}"
                 )))
-                .size(px(24.))
                 .rounded_full()
-                .border_2()
-                .border_color(if selected {
-                    Hsla::from(editor.accent)
-                } else {
-                    Hsla::from(editor.line)
-                })
-                .bg(fill)
+                .selection_ring(Hsla::from(editor.card), editor.accent, selected)
                 .cursor_pointer()
+                .child(
+                    div()
+                        .size(px(20.))
+                        .rounded_full()
+                        .bg(fill)
+                        .border_1()
+                        .border_color(Hsla::from(editor.line)),
+                )
                 .on_click(cx.listener({
                     let color = color.to_string();
                     move |this, _, window, cx| {
@@ -275,89 +355,140 @@ impl EditorWindow {
                 }))
                 .into_any_element()
         });
+        let swatches: Vec<AnyElement> = swatches.collect();
+        let tiles = self.render_visualizer_tiles(enabled.then_some(visuals.style), 48., cx);
 
         Some(
             ui::Field::section(&theme, tr::editor::audio_only::visuals())
-                .child(
-                    ui::Subfield::plain(&theme, tr::editor::audio_only::show_visuals()).child(
-                        ui::Toggle::plain(&theme, "audio-visuals-enabled", enabled).on_click(
-                            cx.listener(move |this, _, window, cx| {
+                .value(
+                    ui::Toggle::plain(&theme, "audio-visuals-enabled", enabled)
+                        .label(tr::editor::audio_only::show_visuals())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if enabled {
                                 this.edit_audio_visuals(
                                     "audio-visuals-enabled",
                                     window,
                                     cx,
-                                    move |visuals| visuals.enabled = !enabled,
+                                    |visuals| visuals.enabled = false,
                                 );
-                            }),
-                        ),
-                    ),
+                            } else {
+                                let style = this
+                                    .project
+                                    .audio_visuals
+                                    .as_ref()
+                                    .map_or(AudioVisualizerStyle::Bars, |visuals| visuals.style);
+                                this.show_visuals(style, window, cx);
+                            }
+                        }))
+                        .into_any_element(),
                 )
-                .when(enabled, |field| {
-                    field
-                        .child(
-                            ui::SegmentedControl::editor(
-                                &theme,
-                                "audio-visualizer-style",
-                                styles
-                                    .iter()
-                                    .map(|style| {
-                                        ui::SegmentOption::new(
-                                            style_label(*style),
-                                            *style == visuals.style,
-                                        )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .child(tiles)
+                        .when(enabled, |this| {
+                            this.child(
+                                ui::SegmentedControl::editor(
+                                    &theme,
+                                    "audio-visualizer-size",
+                                    [
+                                        tr::editor::audio_only::size_small(),
+                                        tr::editor::audio_only::size_medium(),
+                                        tr::editor::audio_only::size_large(),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(|(index, label)| {
+                                        ui::SegmentOption::new(label, index == size_index)
                                     })
                                     .collect(),
+                                )
+                                .stretch()
+                                .on_select(cx.listener(
+                                    |this, index: &usize, window, cx| {
+                                        let Some(size) = VISUALIZER_SIZES.get(*index).copied()
+                                        else {
+                                            return;
+                                        };
+                                        this.edit_audio_visuals(
+                                            "audio-visuals-size",
+                                            window,
+                                            cx,
+                                            move |visuals| visuals.size = size,
+                                        );
+                                    },
+                                )),
                             )
-                            .stretch()
-                            .on_select(cx.listener(
-                                move |this, index: &usize, window, cx| {
-                                    let Some(style) = styles.get(*index).copied() else {
-                                        return;
-                                    };
-                                    this.edit_audio_visuals(
-                                        "audio-visuals-style",
-                                        window,
-                                        cx,
-                                        move |visuals| visuals.style = style,
-                                    );
-                                },
-                            )),
-                        )
-                        .child(
-                            ui::SegmentedControl::editor(
-                                &theme,
-                                "audio-visualizer-size",
-                                [
-                                    tr::editor::audio_only::size_small(),
-                                    tr::editor::audio_only::size_medium(),
-                                    tr::editor::audio_only::size_large(),
-                                ]
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, label)| {
-                                    ui::SegmentOption::new(label, index == size_index)
-                                })
-                                .collect(),
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .px(px(2.))
+                                    .children(swatches),
                             )
-                            .stretch()
-                            .on_select(cx.listener(
-                                |this, index: &usize, window, cx| {
-                                    let Some(size) = VISUALIZER_SIZES.get(*index).copied() else {
-                                        return;
-                                    };
-                                    this.edit_audio_visuals(
-                                        "audio-visuals-size",
-                                        window,
-                                        cx,
-                                        move |visuals| visuals.size = size,
-                                    );
-                                },
-                            )),
-                        )
-                        .child(div().flex().flex_row().gap(px(8.)).children(swatches))
-                })
+                        }),
+                )
                 .into_any_element(),
         )
+    }
+}
+
+/// A visualiser's look in small, white over the animated background's own
+/// palette, so a tile reads as the video it makes.
+fn visualizer_preview(style: AudioVisualizerStyle, height: f32) -> gpui::Div {
+    let surface = div()
+        .relative()
+        .w_full()
+        .h(px(height))
+        .rounded(px(8.))
+        .overflow_hidden()
+        .bg(gpui::linear_gradient(
+            135.,
+            gpui::linear_color_stop(gpui::rgb(0x6f9bf5), 0.),
+            gpui::linear_color_stop(gpui::rgb(0x9a7ff5), 1.),
+        ));
+    let ink = gpui::hsla(0., 0., 1., 0.95);
+    match style {
+        AudioVisualizerStyle::Bars => surface.flex().items_center().justify_center().child(
+            div().flex().flex_row().items_center().gap(px(3.)).children(
+                [0.35, 0.6, 0.9, 0.55, 1.0, 0.7, 0.45, 0.8, 0.5, 0.3]
+                    .into_iter()
+                    .map(move |level: f32| {
+                        div()
+                            .w(px(3.))
+                            .h(px(4. + (height * 0.55) * level))
+                            .rounded_full()
+                            .bg(ink)
+                    }),
+            ),
+        ),
+        AudioVisualizerStyle::Wave => surface.children((0..22).map(move |index| {
+            let t = index as f32 / 21.;
+            let y = height * 0.5 + (t * std::f32::consts::TAU * 1.5).sin() * height * 0.22;
+            div()
+                .absolute()
+                .left(gpui::relative(0.08 + t * 0.84))
+                .top(px(y - 1.5))
+                .size(px(3.))
+                .rounded_full()
+                .bg(ink)
+        })),
+        AudioVisualizerStyle::Circle => surface.children((0..18).map(move |index| {
+            let angle = index as f32 / 18. * std::f32::consts::TAU;
+            let radius = height * (0.26 + 0.05 * ((index * 5 % 7) as f32 / 6.));
+            div()
+                .absolute()
+                .left(gpui::relative(0.5))
+                .ml(px(angle.cos() * radius - 1.5))
+                .top(px(height * 0.5 + angle.sin() * radius - 1.5))
+                .size(px(3.))
+                .rounded_full()
+                .bg(ink)
+        })),
     }
 }
 

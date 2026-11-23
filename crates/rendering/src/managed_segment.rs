@@ -52,12 +52,17 @@ impl ManagedVideoTrackInput {
 #[derive(Clone)]
 pub struct ManagedSegmentVideoInput {
     segment_index: usize,
+    display_placeholder: bool,
     timing: SegmentVideoTiming,
     display: ManagedVideoTrackInput,
     camera: Option<ManagedVideoTrackInput>,
 }
 
 impl ManagedSegmentVideoInput {
+    pub fn has_camera(&self) -> bool {
+        self.camera.is_some()
+    }
+
     pub fn new(
         segment_index: usize,
         metadata: &StudioRecordingMeta,
@@ -67,6 +72,7 @@ impl ManagedSegmentVideoInput {
         let timing = validated_timing(segment_index, metadata, camera.is_some())?;
         Ok(Self {
             segment_index,
+            display_placeholder: metadata.is_blank() && segment_index == 0,
             timing,
             display,
             camera,
@@ -185,6 +191,7 @@ impl Drop for CancelSegmentReadiness {
 
 pub struct ManagedRecordingSegmentDecoders {
     segment_index: usize,
+    display_placeholder: bool,
     segment_offset: f64,
     display: Option<ManagedVideoDecoder>,
     camera: Option<ManagedVideoDecoder>,
@@ -201,6 +208,7 @@ impl ManagedRecordingSegmentDecoders {
     ) -> Self {
         Self {
             segment_index: 0,
+            display_placeholder: false,
             segment_offset: 0.0,
             handles: ManagedSegmentStopHandles {
                 display: Some(display.stop_handle()),
@@ -217,12 +225,14 @@ impl ManagedRecordingSegmentDecoders {
         let readiness_phase = crate::readiness::Phase::start("managed.spawn_to_ready");
         let ManagedSegmentVideoInput {
             segment_index,
+            display_placeholder,
             timing,
             display,
             camera,
         } = input;
         let mut result = Self {
             segment_index,
+            display_placeholder,
             segment_offset: timing.latest_start_time.unwrap_or(0.0),
             display: None,
             camera: None,
@@ -452,6 +462,7 @@ impl ManagedRecordingSegmentDecoders {
             segment_time,
             recording_time,
             segment_has_camera: self.camera.is_some(),
+            display_placeholder: self.display_placeholder,
         })
     }
 
@@ -507,6 +518,29 @@ mod tests {
             vec![PathBuf::from("segment-0").join("display").join("init.mp4")],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn only_a_blank_projects_first_clip_is_a_hidden_placeholder() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = RelocatableSource::new(directory.path().to_path_buf()).unwrap();
+        let blank: StudioRecordingMeta = serde_json::from_value(serde_json::json!({
+            "blank": true,
+            "segments": [
+                {"display": {"path":"display.mp4", "fps":30, "start_time":0.0}},
+                {"display": {"path":"imported.mp4", "fps":30, "start_time":0.0}}
+            ]
+        }))
+        .unwrap();
+        assert!(blank.is_blank());
+        let placeholder = ManagedSegmentVideoInput::new(0, &blank, track(&source), None).unwrap();
+        let imported = ManagedSegmentVideoInput::new(1, &blank, track(&source), None).unwrap();
+        assert!(placeholder.display_placeholder);
+        assert!(!imported.display_placeholder);
+        let recorded =
+            ManagedSegmentVideoInput::new(0, &metadata(), track(&source), Some(track(&source)))
+                .unwrap();
+        assert!(!recorded.display_placeholder);
     }
 
     #[test]

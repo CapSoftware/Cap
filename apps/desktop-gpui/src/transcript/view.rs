@@ -1885,6 +1885,7 @@ impl EditorWindow {
                 }
             }))
             .child(self.render_transcript_header(cx))
+            .children(self.render_captions_offer(cx))
             .children(self.render_transcript_search(cx))
             .children(self.render_transcript_cleanup(cx))
             .child(body)
@@ -2046,6 +2047,85 @@ impl EditorWindow {
         )
     }
 
+    /// Asked once after the Transcribe button lands a transcript while the
+    /// video shows no captions.
+    fn render_captions_offer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let captions_on = self
+            .project
+            .captions
+            .as_ref()
+            .is_some_and(|captions| captions.settings.enabled);
+        if !self.transcript.offer_captions || captions_on || self.transcript.doc.is_none() {
+            return None;
+        }
+        let theme = self.theme;
+        Some(
+            div()
+                .id("transcript-captions-offer")
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .flex_none()
+                .gap(px(8.))
+                .px(px(12.))
+                .py(px(8.))
+                .border_b_1()
+                .border_color(Hsla::from(theme.editor.line))
+                .bg(Hsla::from(theme.editor.card_2))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(Hsla::from(theme.editor.text_1))
+                        .child(tr::editor::transcript::captions_offer()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            ui::Button::editor(
+                                &theme,
+                                "transcript-captions-offer-dismiss",
+                                ui::ButtonVariant::Ghost,
+                                ui::ButtonSize::Sm,
+                            )
+                            .label(tr::editor::transcript::captions_offer_dismiss())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.transcript.offer_captions = false;
+                                this.invalidate_transcript(cx);
+                            })),
+                        )
+                        .child(
+                            ui::Button::editor(
+                                &theme,
+                                "transcript-captions-offer-add",
+                                ui::ButtonVariant::Primary,
+                                ui::ButtonSize::Sm,
+                            )
+                            .icon("icons/captions.svg")
+                            .label(tr::editor::transcript::captions_offer_add())
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.transcript.offer_captions = false;
+                                    this.toggle_track(
+                                        crate::editor_timeline::TrackKind::Caption,
+                                        true,
+                                        window,
+                                        cx,
+                                    );
+                                    this.invalidate_transcript(cx);
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_transcript_cleanup(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.transcript.cleanup.open {
             return None;
@@ -2086,7 +2166,7 @@ impl EditorWindow {
         }));
 
         let action = if on_pauses {
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-shorten-pauses",
                 ui::ButtonVariant::Primary,
@@ -2098,7 +2178,7 @@ impl EditorWindow {
                 this.transcript_shorten_pauses(window, cx);
             }))
         } else {
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-remove-fillers",
                 ui::ButtonVariant::Primary,
@@ -2501,6 +2581,12 @@ impl EditorWindow {
             )
         } else if snapshot.no_speech {
             (tr::editor::transcript::no_speech(), "")
+        } else if !has_audio {
+            // Nothing to transcribe: say so once, with nothing to press.
+            (
+                tr::editor::transcript::empty_title(),
+                tr::editor::transcript::no_audio(),
+            )
         } else {
             (
                 tr::editor::transcript::empty_title(),
@@ -2509,13 +2595,9 @@ impl EditorWindow {
         };
 
         let action: AnyElement = if !has_audio {
-            div()
-                .text_size(px(12.))
-                .text_color(Hsla::from(theme.editor.text_3))
-                .child(tr::editor::transcript::no_audio())
-                .into_any_element()
+            div().into_any_element()
         } else if downloaded {
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-transcribe",
                 ui::ButtonVariant::Primary,
@@ -2536,7 +2618,7 @@ impl EditorWindow {
             let percent = download.map_or(0, |download| {
                 download.progress.clamp(0.0, 100.0).round() as u32
             });
-            ui::Button::plain(
+            ui::Button::editor(
                 &theme,
                 "transcript-download-model",
                 ui::ButtonVariant::Primary,

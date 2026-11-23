@@ -10,9 +10,30 @@ pub struct AnimatedGradientStop {
     pub position: f32,
 }
 
+/// How the gradient is drawn: as an ordered dither of its own palette, crisp
+/// and printed-looking, or as a smooth wash.
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimatedGradientStyle {
+    #[default]
+    Dither,
+    Smooth,
+}
+
+impl AnimatedGradientStyle {
+    /// Backgrounds saved before the choice existed were smooth.
+    fn saved_before() -> Self {
+        Self::Smooth
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AnimatedGradientConfig {
+    #[serde(default = "AnimatedGradientStyle::saved_before")]
+    pub style: AnimatedGradientStyle,
+    /// The dither's cell, in pixels of a 1080p frame.
+    pub dither_size: f32,
     pub color_stops: Vec<AnimatedGradientStop>,
     pub direction: f32,
     pub flow_scale: f32,
@@ -38,6 +59,10 @@ impl Default for AnimatedGradientConfig {
     }
 }
 
+/// A dither cell a few pixels across at 1080p: fine enough to read as a
+/// gradient, coarse enough to read as dither.
+const DEFAULT_DITHER_SIZE: f32 = 3.0;
+
 /// Aqua to periwinkle to lilac; also the default palette for a fresh animated background.
 const COOL_CANDY: [u32; 5] = [0x7ddcf9, 0x6f9bf5, 0x6b6fe8, 0x9a7ff5, 0xc0a6f7];
 
@@ -56,6 +81,8 @@ impl Mood {
         let variation = index as f32;
         match self {
             Self::Field => AnimatedGradientConfig {
+                style: AnimatedGradientStyle::Dither,
+                dither_size: DEFAULT_DITHER_SIZE,
                 color_stops: stops(palette),
                 direction: (30.0 + variation * 33.0) % 360.0,
                 flow_scale: 0.8 + (index % 3) as f32 * 0.1,
@@ -75,6 +102,8 @@ impl Mood {
                 seed: index as u32 * 137,
             },
             Self::Deep => AnimatedGradientConfig {
+                style: AnimatedGradientStyle::Dither,
+                dither_size: DEFAULT_DITHER_SIZE,
                 color_stops: stops(palette),
                 direction: (20.0 + variation * 37.0) % 360.0,
                 flow_scale: 0.9 + (index % 3) as f32 * 0.1,
@@ -187,6 +216,15 @@ parameters![
         0.5,
         3.0,
         0.1
+    ),
+    (
+        DitherSize,
+        dither_size,
+        "Dither Size",
+        "Texture",
+        1.0,
+        8.0,
+        1.0
     ),
     (Exposure, exposure, "Exposure", "Colour", -50.0, 50.0, 1.0),
     (Contrast, contrast, "Contrast", "Colour", 50.0, 200.0, 1.0),
@@ -311,6 +349,8 @@ impl AnimatedGradientConfig {
             })
             .collect();
         Self {
+            style: AnimatedGradientStyle::Dither,
+            dither_size: DEFAULT_DITHER_SIZE,
             color_stops,
             direction: random.range(0.0, 360.0),
             flow_scale: random.range(0.6, 1.8),
@@ -527,8 +567,21 @@ mod tests {
 
     #[test]
     fn defaults_and_library_round_trip() {
+        // A gradient saved before the style choice stays smooth; a new one
+        // starts as a dither.
         let config: AnimatedGradientConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(config, AnimatedGradientConfig::default());
+        assert_eq!(config.style, AnimatedGradientStyle::Smooth);
+        assert_eq!(
+            AnimatedGradientConfig::default().style,
+            AnimatedGradientStyle::Dither
+        );
+        assert_eq!(
+            config,
+            AnimatedGradientConfig {
+                style: AnimatedGradientStyle::Smooth,
+                ..AnimatedGradientConfig::default()
+            }
+        );
         assert_eq!(config, config.normalized());
         assert_eq!(
             serde_json::from_str::<AnimatedGradientLibrary>("{}").unwrap(),
@@ -588,7 +641,13 @@ mod tests {
         let crate::BackgroundSource::AnimatedGradient { config } = &source else {
             panic!("Expected animated gradient");
         };
-        assert_eq!(config, &AnimatedGradientConfig::default());
+        assert_eq!(
+            config,
+            &AnimatedGradientConfig {
+                style: AnimatedGradientStyle::Smooth,
+                ..AnimatedGradientConfig::default()
+            }
+        );
         let json = serde_json::to_value(&source).unwrap();
         assert_eq!(json["type"], "animatedGradient");
         let round_trip: crate::BackgroundSource = serde_json::from_value(json).unwrap();

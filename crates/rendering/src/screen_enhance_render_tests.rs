@@ -90,6 +90,7 @@ async fn render(
         segment_time: 1.0,
         recording_time: 1.0,
         segment_has_camera: false,
+        display_placeholder: false,
     };
     let resolution = XY::new(
         (fixture.screen.x as f32 * scale).round() as u32,
@@ -453,6 +454,7 @@ async fn bench_enhancement_frame_time() {
                     segment_time: 1.0 + index as f32 / 60.0,
                     recording_time: 1.0 + index as f32 / 60.0,
                     segment_has_camera: false,
+                    display_placeholder: false,
                 };
                 let resolution = XY::new(
                     (screen.x as f32 * scale) as u32,

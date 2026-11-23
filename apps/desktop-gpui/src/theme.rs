@@ -85,6 +85,10 @@ impl Global for ThemePreference {}
 
 pub fn init(preference: AppTheme, cx: &mut App) {
     cx.set_global(ThemePreference(preference));
+    sync_new_keys(resolve_appearance(
+        preference,
+        Appearance::from_window(cx.window_appearance()),
+    ));
 }
 
 pub fn current_preference(cx: &App) -> AppTheme {
@@ -95,6 +99,20 @@ pub fn current_preference(cx: &App) -> AppTheme {
 
 pub fn set_preference(preference: AppTheme, cx: &mut App) {
     cx.set_global(ThemePreference(preference));
+    sync_new_keys(resolve_appearance(
+        preference,
+        Appearance::from_window(cx.window_appearance()),
+    ));
+}
+
+/// Keys added to a project from now on take the app's appearance on a Mac:
+/// light keys in light mode, dark in dark mode. Elsewhere they start dark.
+/// Set at launch, on a theme change, and whenever a window resolves its
+/// theme, so a project made before any editor opens gets it too.
+fn sync_new_keys(appearance: Appearance) {
+    cap_project::KeyboardSettings::set_new_keys_light(
+        cfg!(target_os = "macos") && appearance == Appearance::Light,
+    );
 }
 
 /// Light/Dark force that appearance; System follows the window (and therefore
@@ -241,9 +259,9 @@ impl MaterialTokens {
                 selection: rgba(0x0000001a),
                 // `--macos-settings-text: rgba(0, 0, 0, 0.88)`
                 text: rgba(0x000000e0),
-                // `:root { --macos-settings-muted: rgba(0, 0, 0, 0.48) }`,
-                // not overridden by the glass block.
-                muted: rgba(0x0000007a),
+                // 60% black, so secondary text clears 4.5:1 on the grey
+                // sidebar as well as the cards.
+                muted: rgba(0x00000099),
                 // The glass block *does* override these three:
                 // `--macos-settings-fill: rgba(0, 0, 0, 0.045)`
                 fill: rgba(0x0000000b),
@@ -320,7 +338,7 @@ impl MaterialTokens {
                 control_active: rgba(0x00000014),
                 selection: rgba(0x0000001a),
                 text: rgba(0x000000e0),
-                muted: rgba(0x0000007a),
+                muted: rgba(0x00000099),
                 // The `:root` values, none of them overridden without the
                 // glass block: `--macos-settings-fill: rgba(0, 0, 0, 0.055)`
                 fill: rgba(0x0000000e),
@@ -467,9 +485,12 @@ pub struct Theme {
     pub editor: EditorPalette,
 }
 
-/// Editor surfaces, transcribed from the `--ed-*` custom properties in
-/// `apps/desktop/src/styles/theme.css`. A layered, low-contrast system
-/// (window < card < control) with one accent; change both files together.
+pub const EDITOR_CARD_RADIUS: f32 = 14.;
+
+/// Editor surfaces: a layered, low-contrast system (window < card < control)
+/// with one accent. Every text and icon colour clears WCAG AA (4.5:1) on each
+/// surface it sits on, and every control part clears 3:1; the tests below
+/// hold both themes to that.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EditorPalette {
     pub window: Rgba,
@@ -484,18 +505,20 @@ pub struct EditorPalette {
     pub ctl: Rgba,
     pub ctl_hover: Rgba,
     pub ctl_active: Rgba,
+    /// Rings, indicators, tints and fills with no text on them.
     pub accent: Rgba,
-    pub accent_2: Rgba,
+    /// Accent-coloured text and icons: deep enough on light, and bright enough
+    /// on dark, to clear 4.5:1 even over a 28% accent tint.
+    pub accent_ink: Rgba,
+    /// A fill under white text or a white thumb, bottom and lit top stops.
+    pub accent_fill: Rgba,
+    pub accent_fill_2: Rgba,
+    /// A slider's rail and an off switch: 3:1 against the surface and the
+    /// white thumb, so the control is visible without colour.
+    pub track: Rgba,
     pub playhead: Rgba,
     pub thumb: Rgba,
-    /// `--ed-seg-tint`: how much of a track colour a segment fill carries.
-    pub seg_tint: f32,
-    /// `--ed-seg-line`: the segment border's alpha.
-    pub seg_line: f32,
-    /// `--ed-seg-label-base` / `--ed-seg-label-mix`: segment text is the
-    /// track colour pulled this far toward black (light) or white (dark).
     pub seg_label_base: Rgba,
-    pub seg_label_mix: f32,
     /// `--ed-card-shadow` / `--ed-pop-shadow`: how black each surface's drop
     /// shadow is. A card lifts barely at all on white and much more on the dark
     /// window, where the hairline alone is invisible.
@@ -508,91 +531,117 @@ pub struct EditorPalette {
 impl EditorPalette {
     pub fn light() -> Self {
         Self {
-            window: rgb(0xf1f1f3),
+            window: rgb(0xf7f7f9),
             card: rgb(0xffffff),
-            card_2: rgb(0xf6f6f7),
-            stage: rgb(0xe9e9ec),
-            line: rgba(0x00000013),
-            line_strong: rgba(0x0000001f),
-            text_1: rgb(0x1c1c1e),
-            text_2: rgb(0x6e6e75),
-            text_3: rgb(0xa0a0a8),
-            ctl: rgba(0x0000000b),
-            ctl_hover: rgba(0x00000013),
-            ctl_active: rgba(0x0000001c),
-            accent: rgb(0x007aff),
-            accent_2: rgb(0x2b8cff),
+            card_2: rgb(0xffffff),
+            stage: rgb(0xf7f7f9),
+            line: rgba(0x00000014),
+            line_strong: rgba(0x00000021),
+            text_1: rgb(0x17171a),
+            text_2: rgb(0x4f4f56),
+            text_3: rgb(0x68686f),
+            ctl: rgba(0x00000008),
+            ctl_hover: rgba(0x0000000f),
+            ctl_active: rgba(0x00000018),
+            accent: rgb(0x0a7cff),
+            accent_ink: rgb(0x0058c8),
+            accent_fill: rgb(0x0563d8),
+            accent_fill_2: rgb(0x1670e6),
+            track: rgba(0x0000006e),
             playhead: rgb(0xff3b30),
             thumb: rgb(0xffffff),
-            seg_tint: 0.13,
-            seg_line: 0.34,
             seg_label_base: rgb(0x000000),
-            seg_label_mix: 0.58,
-            card_shadow_alpha: 0.04,
-            pop_shadow_alpha: 0.25,
-            pop_shadow_offset: 12.,
-            pop_shadow_blur: 32.,
+            card_shadow_alpha: 0.05,
+            pop_shadow_alpha: 0.22,
+            pop_shadow_offset: 14.,
+            pop_shadow_blur: 36.,
         }
     }
 
     pub fn dark() -> Self {
         Self {
-            window: rgb(0x131315),
-            card: rgb(0x1b1b1e),
-            card_2: rgb(0x202024),
-            stage: rgb(0x121214),
-            line: rgba(0xffffff14),
-            line_strong: rgba(0xffffff21),
-            text_1: rgb(0xf4f4f5),
-            text_2: rgb(0x9a9aa3),
-            text_3: rgb(0x62626a),
-            ctl: rgba(0xffffff0f),
-            ctl_hover: rgba(0xffffff17),
+            window: rgb(0x0c0d10),
+            card: rgb(0x16171b),
+            card_2: rgb(0x1e1f24),
+            stage: rgb(0x0e0f12),
+            line: rgba(0xffffff12),
+            line_strong: rgba(0xffffff1f),
+            text_1: rgb(0xf5f5f7),
+            text_2: rgb(0xb8b9c2),
+            text_3: rgb(0x9a9ba5),
+            ctl: rgba(0xffffff0d),
+            ctl_hover: rgba(0xffffff16),
             ctl_active: rgba(0xffffff21),
             accent: rgb(0x0a84ff),
-            accent_2: rgb(0x3d9bff),
+            accent_ink: rgb(0x5aaaff),
+            accent_fill: rgb(0x0563d8),
+            accent_fill_2: rgb(0x1670e6),
+            track: rgba(0xffffff5c),
             playhead: rgb(0xff453a),
-            thumb: rgb(0xe8e8ea),
-            seg_tint: 0.20,
-            seg_line: 0.42,
+            thumb: rgb(0xf4f4f6),
             seg_label_base: rgb(0xffffff),
-            seg_label_mix: 0.55,
-            card_shadow_alpha: 0.30,
-            pop_shadow_alpha: 0.60,
+            card_shadow_alpha: 0.42,
+            pop_shadow_alpha: 0.62,
             pop_shadow_offset: 16.,
-            pop_shadow_blur: 40.,
+            pop_shadow_blur: 44.,
         }
     }
 
-    /// `color-mix(in srgb, color <tint>, card)`: the segment fill.
+    fn is_dark(&self) -> bool {
+        self.card.r < 0.5
+    }
+
     pub fn seg_fill(&self, color: Rgba) -> Rgba {
-        mix(self.card, color, self.seg_tint)
+        if self.is_dark() {
+            mix(color, rgb(0x000000), 0.10)
+        } else {
+            color
+        }
     }
 
-    /// A selected segment: the tint plus ten points.
-    pub fn seg_fill_selected(&self, color: Rgba) -> Rgba {
-        mix(self.card, color, self.seg_tint + 0.10)
-    }
-
-    /// The segment's 1px inset border.
     pub fn seg_border(&self, color: Rgba) -> Rgba {
-        rgba_alpha(color, self.seg_line)
+        rgba_alpha(mix(color, rgb(0x000000), 0.32), 0.9)
     }
 
-    /// Segment label text.
     pub fn seg_label(&self, color: Rgba) -> Rgba {
-        mix(self.seg_label_base, color, self.seg_label_mix)
+        self.seg_ink(color, 1.)
     }
 
-    /// Segment secondary text (durations, amounts): the label colour at 45%
-    /// toward `text_3`.
     pub fn seg_muted(&self, color: Rgba) -> Rgba {
-        mix(self.text_3, color, 0.45)
+        self.seg_ink(color, 1.)
     }
 
-    /// The track gutter's icon tile: `color 16%` over transparent.
+    /// White or a deep shade of the track colour, whichever contrasts more
+    /// with the brightest part of the fill (its lit top), so labels stay
+    /// readable on the bright hues without dulling every track.
+    pub fn badge_fill(&self, color: Rgba) -> Rgba {
+        mix(self.seg_fill(color), rgb(0x000000), 0.32)
+    }
+
+    pub fn badge_ink(&self, _color: Rgba) -> Rgba {
+        rgb(0xffffff)
+    }
+
+    pub fn seg_gradient(&self, color: Rgba) -> (Rgba, Rgba) {
+        let fill = self.seg_fill(color);
+        (
+            mix(fill, rgb(0x000000), 0.24),
+            mix(fill, rgb(0xffffff), 0.22),
+        )
+    }
+
+    #[cfg(test)]
+    pub fn seg_text_band(&self, color: Rgba) -> [Rgba; 2] {
+        let (top, bottom) = self.seg_gradient(color);
+        [mix(top, bottom, 1. / 3.), mix(top, bottom, 2. / 3.)]
+    }
+
+    fn seg_ink(&self, _color: Rgba, alpha: f32) -> Rgba {
+        rgba_alpha(rgb(0xffffff), alpha)
+    }
+
     pub fn tile_bg(&self, color: Rgba) -> Rgba {
-        rgba_alpha(color, 0.16)
+        rgba_alpha(color, 0.2)
     }
 
     /// The tile's glyph: the track colour pulled 62% toward the label base.
@@ -600,31 +649,179 @@ impl EditorPalette {
         mix(self.seg_label_base, color, 0.62)
     }
 
-    /// Trim handles: the colour at 70% toward the label base.
     pub fn seg_handle(&self, color: Rgba) -> Rgba {
-        mix(self.seg_label_base, color, 0.70)
+        self.seg_ink(color, 0.9)
     }
 
-    /// `--ed-card-shadow`: `0 1px 2px` under every editor card.
     pub fn card_shadow(&self) -> Vec<BoxShadow> {
+        let dark = self.is_dark();
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 1., if dark { 0.045 } else { 0.9 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., self.card_shadow_alpha),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., self.card_shadow_alpha * 0.8),
+                offset: point(px(0.), px(8.)),
+                blur_radius: px(28.),
+                spread_radius: px(-10.),
+                inset: false,
+            },
+        ]
+    }
+
+    pub fn pop_shadow(&self) -> Vec<BoxShadow> {
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 1., if self.is_dark() { 0.06 } else { 0.9 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., self.pop_shadow_alpha),
+                offset: point(px(0.), px(self.pop_shadow_offset)),
+                blur_radius: px(self.pop_shadow_blur),
+                spread_radius: px(-12.),
+                inset: false,
+            },
+        ]
+    }
+
+    pub fn pop_bg(&self) -> Hsla {
+        if self.is_dark() {
+            self.card_2.into()
+        } else {
+            self.card.into()
+        }
+    }
+
+    pub fn pop_line(&self) -> Hsla {
+        self.line_strong.into()
+    }
+
+    /// An inset shadow, so the ring adds no layout size.
+    pub fn trough_ring(&self) -> Vec<BoxShadow> {
         vec![BoxShadow {
-            color: gpui::hsla(0., 0., 0., self.card_shadow_alpha),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
-            spread_radius: px(0.),
-            inset: false,
+            color: self.line.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(1.),
+            inset: true,
         }]
     }
 
-    /// `--ed-pop-shadow`: the lift under a menu, popover or dialog.
-    pub fn pop_shadow(&self) -> Vec<BoxShadow> {
-        vec![BoxShadow {
-            color: gpui::hsla(0., 0., 0., self.pop_shadow_alpha),
-            offset: point(px(0.), px(self.pop_shadow_offset)),
-            blur_radius: px(self.pop_shadow_blur),
-            spread_radius: px(-12.),
-            inset: false,
-        }]
+    pub fn pill_shadow(&self) -> Vec<BoxShadow> {
+        let dark = self.is_dark();
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 1., if dark { 0.05 } else { 0.8 }),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+                inset: true,
+            },
+            BoxShadow {
+                color: if dark {
+                    gpui::hsla(0., 0., 1., 0.07)
+                } else {
+                    gpui::hsla(0., 0., 0., 0.09)
+                },
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+        ]
+    }
+
+    /// A choice tile at rest. On the white light panel a grey wash reads as
+    /// muddy and makes the white selected tile look like the odd one out, so
+    /// light tiles are the card's own white behind a hairline.
+    pub fn choice_fill(&self) -> Hsla {
+        if self.is_dark() {
+            self.ctl.into()
+        } else {
+            self.card.into()
+        }
+    }
+
+    pub fn choice_hover_fill(&self) -> Hsla {
+        if self.is_dark() {
+            self.ctl_hover.into()
+        } else {
+            self.window.into()
+        }
+    }
+
+    /// Inset, so the ring adds no layout size.
+    pub fn choice_ring(&self) -> Vec<BoxShadow> {
+        if self.is_dark() {
+            return self.trough_ring();
+        }
+        vec![
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.1),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+            BoxShadow {
+                color: gpui::hsla(0., 0., 0., 0.04),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            },
+        ]
+    }
+
+    /// The selected tile: a faint accent wash on light, so selection always
+    /// reads as a step away from the white tiles beside it.
+    pub fn choice_selected_fill(&self) -> Hsla {
+        if self.is_dark() {
+            self.pill_fill()
+        } else {
+            mix(self.card, self.accent, 0.07).into()
+        }
+    }
+
+    /// Shadows only, so selecting a tile never shifts the layout.
+    pub fn choice_selected_shadow(&self) -> Vec<BoxShadow> {
+        let mut shadow = if self.is_dark() {
+            self.pill_shadow()
+        } else {
+            Vec::new()
+        };
+        shadow.push(BoxShadow {
+            color: self.accent.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(0.),
+            spread_radius: px(1.5),
+            inset: true,
+        });
+        shadow
+    }
+
+    /// Opaque, so the pill's own drop shadow never shows through it.
+    pub fn pill_fill(&self) -> Hsla {
+        if self.is_dark() {
+            mix(self.card_2, rgb(0xffffff), 0.08).into()
+        } else {
+            self.card.into()
+        }
     }
 }
 
@@ -663,13 +860,22 @@ pub fn raised_pill_shadow() -> Vec<BoxShadow> {
 
 /// The drop shadow under a slider knob.
 pub fn thumb_shadow() -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color: gpui::hsla(0., 0., 0., 0.25),
-        offset: point(px(0.), px(1.)),
-        blur_radius: px(3.),
-        spread_radius: px(0.),
-        inset: false,
-    }]
+    vec![
+        BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.22),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+        BoxShadow {
+            color: gpui::hsla(0., 0., 0., 0.14),
+            offset: point(px(0.), px(3.)),
+            blur_radius: px(8.),
+            spread_radius: px(0.),
+            inset: false,
+        },
+    ]
 }
 
 /// `color-mix(in srgb, b <t>, a)`: straight sRGB interpolation, which is what
@@ -682,6 +888,18 @@ pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
         b: a.b + (b.b - a.b) * t,
         a: a.a + (b.a - a.a) * t,
     }
+}
+
+#[cfg(test)]
+pub fn relative_luminance(color: Rgba) -> f32 {
+    let channel = |value: f32| {
+        if value <= 0.040_45 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
 }
 
 pub fn rgba_alpha(color: Rgba, alpha: f32) -> Rgba {
@@ -707,7 +925,9 @@ impl Theme {
                 }
             })
             .unwrap_or_else(|| Appearance::from_window(window.appearance()));
-        let theme = Self::new(resolve_appearance(preference, system));
+        let appearance = resolve_appearance(preference, system);
+        sync_new_keys(appearance);
+        let theme = Self::new(appearance);
         if with_material {
             theme.with_material(platform::active_material(cx))
         } else {
@@ -732,16 +952,18 @@ impl Theme {
             editor: EditorPalette::light(),
 
             gray_1: rgb(0xfcfcfc),
-            gray_2: rgb(0xf9f9f9),
-            gray_3: rgb(0xf0f0f0),
-            gray_4: rgb(0xe8e8e8),
-            gray_5: rgb(0xe0e0e0),
-            gray_6: rgb(0xd9d9d9),
-            gray_7: rgb(0xcecece),
+            gray_2: rgb(0xf8f8fa),
+            gray_3: rgb(0xeff0f2),
+            gray_4: rgb(0xe7e8eb),
+            gray_5: rgb(0xdfe0e3),
+            gray_6: rgb(0xd8d9dd),
+            gray_7: rgb(0xcdced2),
             gray_8: rgb(0xbbbbbb),
-            gray_9: rgb(0x8d8d8d),
-            gray_10: rgb(0x838383),
-            gray_11: rgb(0x646464),
+            // 9-11 are the text steps, so each clears 4.5:1 on gray 1-3, and
+            // 11 also on the main window's light glass.
+            gray_9: rgb(0x6c6c6c),
+            gray_10: rgb(0x686868),
+            gray_11: rgb(0x505050),
             gray_12: rgb(0x202020),
 
             blue_3: rgb(0xe6f4fe),
@@ -786,19 +1008,19 @@ impl Theme {
             material: None,
             editor: EditorPalette::dark(),
 
-            // gray 1-6 and 11 are the theme.css overrides, not stock Radix.
-            gray_1: rgb(0x111111),
-            gray_2: rgb(0x1c1c1c),
-            gray_3: rgb(0x282828),
-            gray_4: rgb(0x323232),
-            gray_5: rgb(0x3a3a3a),
-            gray_6: rgb(0x444444),
-            gray_7: rgb(0x484848),
-            gray_8: rgb(0x606060),
-            gray_9: rgb(0x6e6e6e),
-            gray_10: rgb(0x7b7b7b),
-            gray_11: rgb(0xa1a1a1),
-            gray_12: rgb(0xeeeeee),
+            gray_1: rgb(0x101114),
+            gray_2: rgb(0x1a1b1f),
+            gray_3: rgb(0x26272c),
+            gray_4: rgb(0x303136),
+            gray_5: rgb(0x38393f),
+            gray_6: rgb(0x424349),
+            gray_7: rgb(0x47484e),
+            gray_8: rgb(0x5f6067),
+            // 9-11 are the text steps, so each clears 4.5:1 on gray 1-3.
+            gray_9: rgb(0x909198),
+            gray_10: rgb(0x95969d),
+            gray_11: rgb(0xb0b1b8),
+            gray_12: rgb(0xeeeef0),
 
             blue_3: rgb(0x0d2847),
             blue_4: rgb(0x003362),
@@ -826,10 +1048,10 @@ impl Theme {
             red_300: rgb(0xff4766),
 
             // `theme.css:101-107`.
-            gray_200_legacy: rgb(0x282828),
-            gray_300_legacy: rgb(0x323232),
+            gray_200_legacy: rgb(0x26272c),
+            gray_300_legacy: rgb(0x303136),
             // `--gray-400: #a1a1a1` (`theme.css:105`).
-            gray_400_legacy: rgb(0xa1a1a1),
+            gray_400_legacy: rgb(0xa1a2a9),
             gray_500_legacy: rgb(0xffffff),
 
             text_primary: rgba(0xfffffff2),
@@ -1195,6 +1417,85 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fg` composited over `bg` (itself over `base`), as the screen shows it.
+    fn contrast_over(fg: Rgba, bg: Rgba, base: Rgba) -> f32 {
+        let flat = |top: Rgba, under: Rgba| Rgba {
+            r: top.r * top.a + under.r * (1. - top.a),
+            g: top.g * top.a + under.g * (1. - top.a),
+            b: top.b * top.a + under.b * (1. - top.a),
+            a: 1.,
+        };
+        let under = flat(bg, base);
+        let over = flat(fg, under);
+        let (a, b) = (relative_luminance(over), relative_luminance(under));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// The Radix steps the other windows write text in clear 4.5:1 on the
+    /// backgrounds they sit on.
+    #[test]
+    fn radix_text_steps_clear_wcag_aa() {
+        let clear = rgba(0x00000000);
+        for theme in [Theme::light(), Theme::dark()] {
+            for ink in [theme.gray_9, theme.gray_10, theme.gray_11, theme.gray_12] {
+                for surface in [theme.gray_1, theme.gray_2, theme.gray_3] {
+                    let ratio = contrast_over(ink, clear, surface);
+                    assert!(ratio >= 4.5, "{ink:?} at {ratio:.2} on {surface:?}");
+                }
+            }
+        }
+    }
+
+    /// WCAG AA in both editor themes: 4.5:1 for every text colour on every
+    /// surface and resting control it sits on, 3:1 for control parts.
+    #[test]
+    fn editor_text_and_controls_clear_wcag_aa_in_both_themes() {
+        let white = rgb(0xffffff);
+        for palette in [EditorPalette::light(), EditorPalette::dark()] {
+            let surfaces = [palette.window, palette.card, palette.card_2];
+            let clear = rgba(0x00000000);
+            for (name, ink) in [
+                ("text_1", palette.text_1),
+                ("text_2", palette.text_2),
+                ("text_3", palette.text_3),
+                ("accent_ink", palette.accent_ink),
+            ] {
+                for surface in surfaces {
+                    for under in [clear, palette.ctl, palette.ctl_hover] {
+                        let ratio = contrast_over(ink, under, surface);
+                        assert!(ratio >= 4.5, "{name} at {ratio:.2} on {surface:?}");
+                    }
+                }
+            }
+            // Accent text sits on accent washes: up to 22% on light (the
+            // open speed chip) and 28% on dark (the hovered add-track button).
+            let deepest_wash = if palette.is_dark() { 0.28 } else { 0.22 };
+            for surface in surfaces {
+                let wash = rgba_alpha(palette.accent, deepest_wash);
+                let ratio = contrast_over(palette.accent_ink, wash, surface);
+                assert!(ratio >= 4.5, "accent_ink at {ratio:.2} on a wash");
+            }
+            // White labels on the filled buttons, at rest and deepened on
+            // hover, measured at the lighter top stop.
+            for fill in [palette.accent_fill, palette.accent_fill_2] {
+                assert!(contrast_over(white, clear, fill) >= 4.5);
+                let hover = mix(fill, rgb(0x000000), 0.08);
+                assert!(contrast_over(white, clear, hover) >= 4.5);
+            }
+            // A rail or off switch reads against the surface and the thumb.
+            for surface in surfaces {
+                let rail = contrast_over(palette.track, clear, surface);
+                assert!(rail >= 3., "track at {rail:.2} on {surface:?}");
+                let thumb = contrast_over(white, palette.track, surface);
+                assert!(palette.is_dark() || thumb >= 3., "thumb at {thumb:.2}");
+            }
+            // Selection rings and indicators.
+            for surface in surfaces {
+                assert!(contrast_over(palette.accent, clear, surface) >= 3.);
+            }
+        }
+    }
 
     /// With no material the palette must be byte-for-byte what it was before
     /// the material existed: the shell is opaque `gray-1`, and every body fill

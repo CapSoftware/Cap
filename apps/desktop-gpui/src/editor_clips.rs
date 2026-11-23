@@ -1146,7 +1146,7 @@ impl EditorWindow {
                                     })
                                     .text_size(px(14.))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(Hsla::from(theme.gray_9))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .child((index + 1).to_string()),
                             )
                             .children(thumb.map(|image| {
@@ -1208,7 +1208,7 @@ impl EditorWindow {
                             .child(
                                 div()
                                     .text_size(px(12.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .child(subtitle),
                             ),
                     )
@@ -1231,7 +1231,7 @@ impl EditorWindow {
                                     .size(px(28.))
                                     .opacity(0.)
                                     .group_hover(group.clone(), |style| style.opacity(1.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .hover(move |style| {
                                         style
                                             .bg(Hsla::from(theme.gray_5))
@@ -1256,7 +1256,7 @@ impl EditorWindow {
                                     .size(px(28.))
                                     .opacity(0.)
                                     .group_hover(group.clone(), |style| style.opacity(1.))
-                                    .text_color(Hsla::from(theme.gray_10))
+                                    .text_color(Hsla::from(theme.editor.text_3))
                                     .hover(move |style| {
                                         style.bg(red_3(&theme)).text_color(red_11(&theme))
                                     })
@@ -1544,7 +1544,7 @@ impl EditorWindow {
 
     /// `pickCapRecording` (`:533-539`): the `.cap` picker, rooted at the
     /// recordings directory where the platform dialog supports a root.
-    fn pick_existing_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_existing_recording(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.importing {
             return;
         }
@@ -1562,7 +1562,7 @@ impl EditorWindow {
         .detach();
     }
 
-    fn pick_mp4(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn pick_mp4(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.clips.importing {
             return;
         }
@@ -1594,7 +1594,7 @@ impl EditorWindow {
     /// config (the `setProjectConfig` call -- the import merges into what is
     /// on disk), run the import off-thread, then reload the editor the way
     /// `window.location.reload()` does.
-    fn import_recording_path(
+    pub(crate) fn import_recording_path(
         &mut self,
         source: PathBuf,
         window: &mut Window,
@@ -2004,6 +2004,7 @@ impl PreparedMp4Import {
             );
         }
         let mut config = latest.clone();
+        clear_untouched_canvas(&self.meta, &mut config);
         let inner = ensure_multiple_segments(&mut self.meta)?;
         let index = u32::try_from(inner.segments.len()).map_err(|error| error.to_string())?;
         inner.segments.push(self.segment.clone());
@@ -2473,6 +2474,33 @@ fn source_asset_path(
     Ok(Some(canonical))
 }
 
+/// A blank project that still holds only the canvas it started with gives
+/// the canvas's place to the first clip imported into it, so the video starts
+/// with that clip. The canvas stays in the recording, unused, and the
+/// background stays the project's background.
+fn clear_untouched_canvas(meta: &RecordingMeta, config: &mut ProjectConfiguration) {
+    let Some(studio) = meta.studio_meta() else {
+        return;
+    };
+    let recording_clips = match studio {
+        StudioRecordingMeta::SingleSegment { .. } => 1,
+        StudioRecordingMeta::MultipleSegments { inner } => inner.segments.len(),
+    };
+    if !crate::editor_window::blank_canvas_untouched(
+        config,
+        studio.is_blank(),
+        studio.is_audio_only(),
+        recording_clips,
+        false,
+    ) {
+        return;
+    }
+    if let Some(timeline) = config.timeline.as_mut() {
+        timeline.segments.clear();
+        timeline.transitions.clear();
+    }
+}
+
 /// `ensure_multiple_segments` (`import.rs:273-303`): normalise a
 /// single-segment studio bundle into the multi-segment shape imports extend.
 fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSegments, String> {
@@ -2498,6 +2526,7 @@ fn ensure_multiple_segments(meta: &mut RecordingMeta) -> Result<&mut MultipleSeg
                 status: Some(StudioRecordingStatus::Complete),
                 cursor_shape_version: 0,
                 audio_only: false,
+                blank: false,
             },
         };
     }
@@ -3402,6 +3431,11 @@ pub(crate) fn append_cap_project_to_editor(
         }
         StudioRecordingStatus::Complete | StudioRecordingStatus::NeedsRemux => {}
     }
+    // A blank project's only recording is its hidden placeholder canvas;
+    // copied in as a clip it would play as a stretch of black.
+    if source_studio_meta.is_blank() {
+        return Err(tr::editor::clips::error::blank_source().to_string());
+    }
 
     let target_audio_only = RecordingMeta::load_for_project(target_project_path)
         .ok()
@@ -3430,6 +3464,7 @@ pub(crate) fn append_cap_project_to_editor(
         inner.status = Some(StudioRecordingStatus::Complete);
         inner.segments.clone()
     };
+    clear_untouched_canvas(&target_meta, &mut config);
     ensure_project_timeline(&mut config, target_project_path, &existing_segments)?;
 
     let (base_index, copied_segments, source_to_target_index) = {
@@ -3732,6 +3767,7 @@ mod tests {
                             status: Some(StudioRecordingStatus::Complete),
                             cursor_shape_version: 0,
                             audio_only: false,
+                            blank: false,
                         },
                     },
                 )),
@@ -4020,6 +4056,103 @@ mod tests {
         let changed = fixture.project_bytes();
         assert!(prepared.commit(&fixture.config).is_err());
         assert_eq!(fixture.project_bytes(), changed);
+    }
+
+    fn blank_target(root: &Path, with_text: bool) -> (PathBuf, ProjectConfiguration) {
+        let project = root.join("blank.cap");
+        cap_export::audio_project::create_blank_project(&project, "Blank").unwrap();
+        let mut config = ProjectConfiguration::load(&project).unwrap();
+        if with_text {
+            config
+                .timeline
+                .as_mut()
+                .unwrap()
+                .text_segments
+                .push(crate::style_presets::new_text_segment(1.0, 3.0, 0));
+            config.write(&project).unwrap();
+        }
+        (project, config)
+    }
+
+    fn clip_order(project: &Path) -> Vec<u32> {
+        ProjectConfiguration::load(project)
+            .unwrap()
+            .timeline
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.recording_clip)
+            .collect()
+    }
+
+    #[test]
+    fn the_first_video_takes_an_untouched_blank_canvas_place() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let (project, config) = blank_target(&fixture.root, false);
+        let prepared = PreparedMp4Import::prepare(
+            &project,
+            &fixture.source,
+            &config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        )
+        .unwrap();
+        let committed = prepared.commit(&config).unwrap();
+        assert_eq!(clip_order(&project), vec![1]);
+        let timeline = committed.timeline.unwrap();
+        assert_eq!(timeline.segments.len(), 1);
+        assert!(
+            timeline.duration() < cap_export::audio_project::BLANK_PROJECT_CLIP.as_secs_f64(),
+            "{}",
+            timeline.duration()
+        );
+        let meta = RecordingMeta::load_for_project(&project).unwrap();
+        assert!(meta.studio_meta().unwrap().is_blank());
+        assert!(matches!(
+            committed.background.source,
+            cap_project::BackgroundSource::AnimatedGradient { .. }
+        ));
+    }
+
+    #[test]
+    fn a_video_imported_over_content_on_the_canvas_goes_after_it() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let (project, config) = blank_target(&fixture.root, true);
+        let prepared = PreparedMp4Import::prepare(
+            &project,
+            &fixture.source,
+            &config,
+            Arc::new(AtomicBool::new(false)),
+            crate::import::InFlightImport::begin(),
+        )
+        .unwrap();
+        prepared.commit(&config).unwrap();
+        assert_eq!(clip_order(&project), vec![0, 1]);
+    }
+
+    #[test]
+    fn an_existing_recording_takes_an_untouched_blank_canvas_place() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let (project, _) = blank_target(&fixture.root, false);
+        assert_eq!(
+            append_cap_project_to_editor(&project, &fixture.project).unwrap(),
+            1
+        );
+        assert_eq!(clip_order(&project), vec![1]);
+
+        let other = fixture.root.join("other");
+        std::fs::create_dir(&other).unwrap();
+        let (project, _) = blank_target(&other, true);
+        append_cap_project_to_editor(&project, &fixture.project).unwrap();
+        assert_eq!(clip_order(&project), vec![0, 1]);
+    }
+
+    #[test]
+    fn importing_into_a_recording_keeps_its_clips() {
+        let fixture = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let prepared = fixture.prepare(Arc::new(AtomicBool::new(false)));
+        prepared.commit(&fixture.config).unwrap();
+        assert_eq!(clip_order(&fixture.project), vec![0, 1]);
     }
 
     #[test]
@@ -4713,6 +4846,23 @@ mod tests {
                 source_version.unwrap_or(0)
             );
         }
+    }
+
+    #[test]
+    fn a_blank_project_is_refused_as_a_clip_source() {
+        let target = ImportFixture::new(MP4_WITHOUT_AUDIO);
+        let source = target.root.join("blank.cap");
+        cap_export::audio_project::create_blank_project(&source, "Blank").unwrap();
+        let before = std::fs::read(target.project.join("recording-meta.json")).unwrap();
+
+        let error = append_cap_project_to_editor(&target.project, &source).unwrap_err();
+
+        assert_eq!(error, tr::editor::clips::error::blank_source());
+        assert_eq!(
+            std::fs::read(target.project.join("recording-meta.json")).unwrap(),
+            before,
+            "the target project is untouched"
+        );
     }
 
     #[test]

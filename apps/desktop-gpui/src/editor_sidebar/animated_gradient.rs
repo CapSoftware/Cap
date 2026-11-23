@@ -1,6 +1,6 @@
 use cap_project::{
     AnimatedGradientCatalog, AnimatedGradientConfig, AnimatedGradientControl,
-    AnimatedGradientLibrary, AnimatedGradientPreset, AnimatedGradientStop,
+    AnimatedGradientLibrary, AnimatedGradientPreset, AnimatedGradientStop, AnimatedGradientStyle,
     animated_gradient_catalog,
 };
 use gpui::{AppContext as _, MouseButton};
@@ -155,6 +155,9 @@ fn control_label(control: &AnimatedGradientControl) -> SharedString {
         AnimatedGradientParameter::MotionSpeed => {
             tr::editor::sidebar::animated_gradient::control::motion_speed()
         }
+        AnimatedGradientParameter::DitherSize => {
+            tr::editor::sidebar::animated_gradient::control::dither_size()
+        }
     })
 }
 
@@ -177,10 +180,25 @@ fn group_label(name: &str) -> SharedString {
     }
 }
 
-fn control_groups(catalog: &AnimatedGradientCatalog) -> Vec<(&str, Vec<&AnimatedGradientControl>)> {
+/// The fine-tune groups for a gradient drawn in `style`: a dither draws only
+/// its palette, so it has no lighting or grain to tune, but it has a cell
+/// size; a smooth wash is the other way round.
+fn control_groups(
+    catalog: &AnimatedGradientCatalog,
+    style: AnimatedGradientStyle,
+) -> Vec<(&str, Vec<&AnimatedGradientControl>)> {
     let mut groups: Vec<(&str, Vec<&AnimatedGradientControl>)> = Vec::new();
     for control in &catalog.controls {
-        if control.key == AnimatedGradientParameter::MotionSpeed {
+        let dither = style == AnimatedGradientStyle::Dither;
+        let shown = match control.key {
+            AnimatedGradientParameter::MotionSpeed => false,
+            AnimatedGradientParameter::DitherSize => dither,
+            AnimatedGradientParameter::GrainAmount | AnimatedGradientParameter::GrainSize => {
+                !dither
+            }
+            _ => !(dither && control.group == "Lighting"),
+        };
+        if !shown {
             continue;
         }
         match groups.iter_mut().find(|(name, _)| *name == control.group) {
@@ -814,6 +832,7 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.red_11))
                     .child(error)
             }))
+            .child(self.render_animated_gradient_style(config, cx))
             .child(self.render_animated_gradient_presets(cx))
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_animated_gradient_colours(config, cx))
@@ -822,6 +841,65 @@ impl EditorWindow {
             .child(dashed_divider(Hsla::from(theme.editor.line)))
             .child(self.render_animated_gradient_fine_tune(config, cx))
             .into_any_element()
+    }
+
+    /// Dither or smooth: the first choice, since it changes the whole look.
+    fn render_animated_gradient_style(
+        &self,
+        config: &AnimatedGradientConfig,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let styles = [AnimatedGradientStyle::Dither, AnimatedGradientStyle::Smooth];
+        ui::Field::inline(&theme, tr::editor::sidebar::animated_gradient::style())
+            .value(
+                ui::SegmentedControl::editor(
+                    &theme,
+                    "animated-gradient-style",
+                    styles
+                        .iter()
+                        .map(|style| {
+                            ui::SegmentOption::new(
+                                match style {
+                                    AnimatedGradientStyle::Dither => {
+                                        tr::editor::sidebar::animated_gradient::style_dither()
+                                    }
+                                    AnimatedGradientStyle::Smooth => {
+                                        tr::editor::sidebar::animated_gradient::style_smooth()
+                                    }
+                                },
+                                *style == config.style,
+                            )
+                        })
+                        .collect(),
+                )
+                .on_select(cx.listener(move |this, index: &usize, window, cx| {
+                    let Some(&style) = styles.get(*index) else {
+                        return;
+                    };
+                    this.edit_animated_gradient(
+                        |config| {
+                            let changed = config.style != style;
+                            config.style = style;
+                            changed
+                        },
+                        window,
+                        cx,
+                    );
+                }))
+                .into_any_element(),
+            )
+            .into_any_element()
+    }
+
+    /// A template or a shuffle keeps the style already chosen; only a saved
+    /// gradient brings its own.
+    fn with_current_style(&self, mut config: AnimatedGradientConfig) -> AnimatedGradientConfig {
+        if let Some(current) = self.animated_gradient_config() {
+            config.style = current.style;
+            config.dither_size = current.dither_size;
+        }
+        config
     }
 
     fn render_animated_gradient_presets(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -855,7 +933,8 @@ impl EditorWindow {
                     .text_color(Hsla::from(theme.editor.text_3)),
             )
             .on_click(cx.listener(|this, _, window, cx| {
-                this.select_animated_gradient(AnimatedGradientConfig::random(), window, cx);
+                let config = this.with_current_style(AnimatedGradientConfig::random());
+                this.select_animated_gradient(config, window, cx);
             }));
 
         let mut swatches = vec![shuffle.into_any_element()];
@@ -979,8 +1058,12 @@ impl EditorWindow {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
-        let selected = self.animated_gradient_config() == Some(&preset.config);
-        let config = preset.config.clone();
+        let config = if saved {
+            preset.config.clone()
+        } else {
+            self.with_current_style(preset.config.clone())
+        };
+        let selected = self.animated_gradient_config() == Some(&config);
         let name = SharedString::from(preset.name.clone());
         let id = preset.id.clone();
         let swatch = div()
@@ -1201,17 +1284,15 @@ impl EditorWindow {
         config: &AnimatedGradientConfig,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = self.theme;
         let control = AnimatedGradientParameter::MotionSpeed.control();
         let value = AnimatedGradientParameter::MotionSpeed.get(config);
-        ui::Field::inline(&theme, tr::editor::sidebar::animated_gradient::motion())
-            .value_text(format_control_value(&control, value))
-            .child(self.slider_flex(
-                SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
-                slider_unit(AnimatedGradientParameter::MotionSpeed),
-                cx,
-            ))
-            .into_any_element()
+        self.slider_field_readout(
+            tr::editor::sidebar::animated_gradient::motion(),
+            SliderKey::AnimatedGradient(AnimatedGradientParameter::MotionSpeed),
+            format_control_value(&control, value),
+            cx,
+        )
+        .into_any_element()
     }
 
     fn render_animated_gradient_fine_tune(
@@ -1222,7 +1303,7 @@ impl EditorWindow {
         let theme = self.theme;
         let state = &self.sidebar.animated_gradient;
         let open = state.fine_tune_open.is_open();
-        let groups = control_groups(&state.catalog);
+        let groups = control_groups(&state.catalog, config.style);
         let active = state.fine_tune_group.min(groups.len().saturating_sub(1));
 
         let tabs = ui::SegmentedControl::icons(
@@ -1483,8 +1564,23 @@ mod tests {
     #[test]
     fn fine_tune_groups_exclude_motion() {
         let catalog = animated_gradient_catalog();
-        let groups = control_groups(&catalog);
+        let groups = control_groups(&catalog, AnimatedGradientStyle::Smooth);
         assert_eq!(groups.len(), 4);
+        // A dither has a cell size and no lighting or grain to tune.
+        let dither = control_groups(&catalog, AnimatedGradientStyle::Dither);
+        let keys: Vec<_> = dither
+            .iter()
+            .flat_map(|(_, controls)| controls.iter().map(|control| control.key))
+            .collect();
+        assert!(keys.contains(&AnimatedGradientParameter::DitherSize));
+        assert!(!keys.contains(&AnimatedGradientParameter::GrainAmount));
+        assert!(!keys.contains(&AnimatedGradientParameter::Relief));
+        assert!(
+            !groups
+                .iter()
+                .flat_map(|(_, controls)| controls)
+                .any(|control| control.key == AnimatedGradientParameter::DitherSize)
+        );
         assert!(groups.iter().all(|(name, _)| *name != "Animation"));
         assert!(
             groups

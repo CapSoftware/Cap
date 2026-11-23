@@ -48,6 +48,7 @@ mod field;
 pub mod glass;
 mod glass_switch;
 mod hint;
+mod hover_fade;
 mod kbd;
 pub mod keyboard_nav;
 mod menu;
@@ -91,6 +92,7 @@ pub use editor_button::{EditorButton, EditorButtonVariant};
 pub use field::{Field, Subfield};
 #[allow(unused_imports)]
 pub use hint::{Hint, Hints, Side as HintSide};
+pub use hover_fade::{blend as hover_blend, hover_fade};
 
 pub use kbd::{KbdChip, KbdSize, kbd_symbol};
 #[allow(unused_imports)]
@@ -128,7 +130,7 @@ pub use text_input::{
 };
 #[allow(unused_imports)]
 pub use glass_switch::Switch as GlassSwitch;
-pub use toggle::{Toggle, ToggleSize};
+pub use toggle::Toggle;
 #[allow(unused_imports)]
 pub use tooltip::{TOOLTIP_SHOW_DELAY, Tooltip, TooltipStyle};
 #[cfg(target_os = "windows")]

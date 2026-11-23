@@ -63,6 +63,7 @@ fn incremental_export_zoom_matches_eager_across_clips_transitions_and_seeks() {
                         &cursor,
                         30.0,
                         XY::new(1920, 1080),
+                        None,
                         clip,
                     )
                 } else {
@@ -71,6 +72,7 @@ fn incremental_export_zoom_matches_eager_across_clips_transitions_and_seeks() {
                         &cursor,
                         30.0,
                         XY::new(1920, 1080),
+                        None,
                         clip,
                     )
                 }
@@ -129,6 +131,7 @@ fn benchmark_long_recording_zoom_startup() {
             &cursor,
             duration,
             XY::new(1920, 1080),
+            None,
             0,
         );
         eager.precompute();
@@ -139,6 +142,7 @@ fn benchmark_long_recording_zoom_startup() {
             &cursor,
             duration,
             XY::new(1920, 1080),
+            None,
             0,
         );
         incremental.ensure_precomputed_until(1.0 / 60.0);
