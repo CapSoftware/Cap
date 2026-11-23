@@ -690,6 +690,9 @@ function CodeEntry({
 				event.preventDefault();
 				if (parsePromotionCode(code) !== CODE) {
 					setInvalid(true);
+					if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+						return;
+					}
 					form.current?.animate(
 						[
 							{ transform: "translateX(0)" },
