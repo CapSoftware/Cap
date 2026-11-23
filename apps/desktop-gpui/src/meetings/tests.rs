@@ -680,6 +680,24 @@ fn recovery_leaves_a_meeting_opened_in_this_run_alone() {
 }
 
 #[test]
+fn a_running_process_is_alive_and_a_finished_one_is_not() {
+    assert!(persist::process_alive(std::process::id()));
+    #[cfg(unix)]
+    let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    #[cfg(windows)]
+    let mut child = std::process::Command::new("ping")
+        .args(["-n", "30", "127.0.0.1"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    assert!(persist::process_alive(pid), "a second running process");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(!persist::process_alive(pid), "the process ended");
+}
+
+#[test]
 fn edits_to_a_finished_meeting_land_in_the_order_they_were_made() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("transcript.jsonl");

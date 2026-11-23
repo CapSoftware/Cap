@@ -600,6 +600,35 @@ pub fn after_repair(meta: &mut DocMeta, open: bool) -> (bool, bool) {
     (pending, open && give_up)
 }
 
+/// Whether a process with this pid runs; true when it can't tell.
+#[cfg(unix)]
+pub fn process_alive(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return true;
+    };
+    pid > 0
+        && (unsafe { libc::kill(pid, 0) } == 0
+            || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH))
+}
+
+/// Whether a process with this pid runs; true when it can't tell.
+#[cfg(windows)]
+pub fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError},
+        System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+    const STILL_ACTIVE: u32 = 259;
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return unsafe { GetLastError() } != ERROR_INVALID_PARAMETER;
+    }
+    let mut code = 0u32;
+    let known = unsafe { GetExitCodeProcess(handle, &mut code) } != 0;
+    unsafe { CloseHandle(handle) };
+    !known || code == STILL_ACTIVE
+}
+
 /// Appends edits to a meeting no engine is writing. They go through the
 /// documents writer, one thread, so they land in the order they were made.
 pub fn append_edits(path: PathBuf, lines: Vec<LogLine>) {

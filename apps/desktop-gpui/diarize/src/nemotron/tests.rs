@@ -172,25 +172,32 @@ fn an_after_stop_model_failure_is_an_answer_not_a_hang() {
 }
 
 #[test]
-fn spools_a_quit_left_behind_are_cleared_but_not_fresh_or_own_ones() {
+fn spools_whose_process_is_gone_are_cleared_but_not_running_ones() {
     let dir = std::env::temp_dir().join(format!("cap-nemotron-stale-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let old = dir.join("cap-nemotron-1-0.f32");
-    let fresh = dir.join("cap-nemotron-2-0.f32");
-    let own = dir.join("cap-nemotron-7-0.f32");
+    // pid 1 quit, pid 2 still runs (a second Cap in a long silent meeting)
+    let quit = dir.join("cap-nemotron-1-0-00ff.f32");
+    let running = dir.join("cap-nemotron-2-0-00ff.f32");
+    let abandoned = dir.join("cap-nemotron-3-0-00ff.f32");
+    let own = dir.join("cap-nemotron-7-0-00ff.f32");
     let other = dir.join("notes-1-0.f32");
-    for f in [&old, &fresh, &own, &other] {
+    let odd = dir.join("cap-nemotron-x-0.f32");
+    for f in [&quit, &running, &abandoned, &own, &other, &odd] {
         std::fs::write(f, b"x").unwrap();
     }
-    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3_600);
-    for f in [&old, &own, &other] {
-        std::fs::File::options().write(true).open(f).unwrap().set_modified(hour_ago).unwrap();
+    let hours_ago = |h: u64| std::time::SystemTime::now() - std::time::Duration::from_secs(h * 3_600);
+    for f in [&running, &own, &other, &odd] {
+        std::fs::File::options().write(true).open(f).unwrap().set_modified(hours_ago(5)).unwrap();
     }
-    assert_eq!(remove_stale_spools(&dir, 7), 1);
-    assert!(!old.exists());
-    assert!(fresh.exists(), "a spool still being written stays");
+    std::fs::File::options().write(true).open(&abandoned).unwrap().set_modified(hours_ago(25)).unwrap();
+
+    let alive = |pid| pid != 1;
+    assert_eq!(remove_stale_spools(&dir, 7, alive), 2);
+    assert!(!quit.exists(), "a spool whose process is gone goes, however new");
+    assert!(running.exists(), "a running process's spool stays");
+    assert!(!abandoned.exists(), "a day-old spool goes even if its pid runs");
     assert!(own.exists(), "this process's spools stay");
-    assert!(other.exists(), "other files stay");
+    assert!(other.exists() && odd.exists(), "other files stay");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

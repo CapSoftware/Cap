@@ -429,14 +429,15 @@ struct Spool {
     index: Vec<(Track, u64, usize)>,
 }
 
-/// A spool older than this whose process is gone was left by a quit before
-/// its pass ran (the file is only removed when the spool drops).
-const STALE_SPOOL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// A spool this old goes even if its process seems to run (a reused pid):
+/// no meeting is silent this long.
+const ABANDONED_SPOOL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-/// Removes other processes' spools older than `STALE_SPOOL` from `dir`;
-/// returns how many went.
-fn remove_stale_spools(dir: &std::path::Path, own_pid: u32) -> usize {
-    let own = format!("cap-nemotron-{own_pid}-");
+/// Removes other processes' spools from `dir` (the file is only removed when
+/// the spool drops, so a crash or quit leaves it): those whose process is
+/// gone, and any older than `ABANDONED_SPOOL`. `alive` says whether a pid
+/// runs, true when it can't tell. Returns how many went.
+fn remove_stale_spools(dir: &std::path::Path, own_pid: u32, alive: impl Fn(u32) -> bool) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -444,16 +445,24 @@ fn remove_stale_spools(dir: &std::path::Path, own_pid: u32) -> usize {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !name.starts_with("cap-nemotron-") || !name.ends_with(".f32") || name.starts_with(&own) {
+        let Some(pid) = name
+            .strip_prefix("cap-nemotron-")
+            .filter(|_| name.ends_with(".f32"))
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|pid| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == own_pid {
             continue;
         }
-        let old = entry
+        let abandoned = entry
             .metadata()
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.elapsed().ok())
-            .is_some_and(|age| age >= STALE_SPOOL);
-        if old && std::fs::remove_file(entry.path()).is_ok() {
+            .is_some_and(|age| age >= ABANDONED_SPOOL);
+        if (abandoned || !alive(pid)) && std::fs::remove_file(entry.path()).is_ok() {
             removed += 1;
         }
     }
@@ -461,9 +470,10 @@ fn remove_stale_spools(dir: &std::path::Path, own_pid: u32) -> usize {
 }
 
 /// Removes the speech files a crash or quit left in the temp folder before
-/// their pass ran. The app calls it once at launch; returns how many went.
-pub fn clear_stale_spools() -> usize {
-    remove_stale_spools(&std::env::temp_dir(), std::process::id())
+/// their pass ran. The app calls it once at launch with a check of whether
+/// a pid runs; returns how many went.
+pub fn clear_stale_spools(alive: impl Fn(u32) -> bool) -> usize {
+    remove_stale_spools(&std::env::temp_dir(), std::process::id(), alive)
 }
 
 /// The meeting's speech sits in the shared temp folder until Stop, so the
@@ -496,7 +506,7 @@ impl Spool {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir();
         if n == 0 {
-            remove_stale_spools(&dir, std::process::id());
+            remove_stale_spools(&dir, std::process::id(), |_| true);
         }
         let mut attempt = 0;
         let (path, file) = loop {
