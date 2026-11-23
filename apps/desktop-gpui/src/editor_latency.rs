@@ -599,13 +599,17 @@ mod tests {
                 Stage::Rendered,
                 frame,
                 0,
-                painted - Duration::from_millis(8),
+                painted
+                    .checked_sub(Duration::from_millis(8))
+                    .expect("rendered fixture stays after the offset"),
             ));
             marks.push(mark(
                 Stage::Arrived,
                 frame,
                 sequence,
-                painted - Duration::from_millis(2),
+                painted
+                    .checked_sub(Duration::from_millis(2))
+                    .expect("arrived fixture stays after the offset"),
             ));
             marks.push(mark(Stage::Painted, frame, sequence, painted));
             sizes.push((sequence, size));

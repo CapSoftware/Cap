@@ -1188,11 +1188,13 @@ fn metric_overlap(
         return "inconclusive";
     }
     let mut saw_overlap = false;
-    for pair in summaries.windows(2) {
-        match ranges_overlap(metric(&pair[0]), metric(&pair[1])) {
-            "inconclusive" => return "inconclusive",
-            "true" => saw_overlap = true,
-            _ => {}
+    for (left_index, left) in summaries.iter().enumerate() {
+        for right in summaries.iter().skip(left_index + 1) {
+            match ranges_overlap(metric(left), metric(right)) {
+                "inconclusive" => return "inconclusive",
+                "true" => saw_overlap = true,
+                _ => {}
+            }
         }
     }
     if saw_overlap { "true" } else { "false" }
@@ -1376,6 +1378,48 @@ mod compare_tests {
                 .contains("quality=full samples=5 playback_fps_median=42.0 range=40.0..44.0")
         );
         assert!(report.text.contains("playback_fps_ranges_overlap=false"));
+        assert!(
+            report
+                .text
+                .contains("playback_frame_latency_ranges_overlap=false")
+        );
+    }
+
+    #[test]
+    fn non_adjacent_qualities_still_count_as_overlapping() {
+        let quarter = [50.0, 52.0, 55.0, 58.0, 60.0];
+        let half = [20.0, 22.0, 25.0, 28.0, 30.0];
+        let full = [55.0, 57.0, 60.0, 63.0, 65.0];
+        let mut passes = Vec::new();
+        for (index, ((quarter_fps, half_fps), full_fps)) in
+            quarter.into_iter().zip(half).zip(full).enumerate()
+        {
+            let repeat = u32::try_from(index + 1).unwrap();
+            passes.push(pass(
+                crate::store::EditorPreviewQuality::Quarter,
+                repeat,
+                quarter_fps,
+                1.0,
+                [480, 270],
+            ));
+            passes.push(pass(
+                crate::store::EditorPreviewQuality::Half,
+                repeat,
+                half_fps,
+                10.0,
+                [1248, 702],
+            ));
+            passes.push(pass(
+                crate::store::EditorPreviewQuality::Full,
+                repeat,
+                full_fps,
+                20.0,
+                [1920, 1080],
+            ));
+        }
+        let report = compare_report(&passes, true);
+        assert!(!report.failed);
+        assert!(report.text.contains("playback_fps_ranges_overlap=true"));
         assert!(
             report
                 .text
