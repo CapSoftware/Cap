@@ -637,7 +637,9 @@ pub fn seed_wave(seed: usize) -> Wave {
 /// can free them from the GPU atlas.
 #[derive(Default)]
 pub struct WaveImages {
-    ready: HashMap<(usize, bool), Arc<gpui::RenderImage>>,
+    /// Each entry holds its wave, so its address can't be freed and handed
+    /// to another item's wave while the entry lives.
+    ready: HashMap<(usize, bool), (Wave, Arc<gpui::RenderImage>)>,
     order: std::collections::VecDeque<(usize, bool)>,
     evicted: Vec<Arc<gpui::RenderImage>>,
 }
@@ -655,17 +657,22 @@ impl WaveImages {
         ink: gpui::Hsla,
     ) -> Arc<gpui::RenderImage> {
         let key = (Arc::as_ptr(wave) as usize, dark);
-        if let Some(image) = self.ready.get(&key) {
+        if let Some((kept, image)) = self.ready.get(&key)
+            && Arc::ptr_eq(kept, wave)
+        {
             return image.clone();
         }
         let image = crate::library::rgba_to_render_image(rasterize(wave, w, h, ink));
-        self.ready.insert(key, image.clone());
-        self.order.push_back(key);
+        if let Some((_, old)) = self.ready.insert(key, (wave.clone(), image.clone())) {
+            self.evicted.push(old);
+        } else {
+            self.order.push_back(key);
+        }
         while self.ready.len() > WAVE_IMAGES {
             let Some(oldest) = self.order.pop_front() else {
                 break;
             };
-            if let Some(old) = self.ready.remove(&oldest) {
+            if let Some((_, old)) = self.ready.remove(&oldest) {
                 self.evicted.push(old);
             }
         }
@@ -756,6 +763,37 @@ mod tests {
         }
         assert!(images.ready.len() <= WAVE_IMAGES);
         assert_eq!(images.take_evicted().len(), 12);
+    }
+
+    #[test]
+    fn a_cached_image_keeps_its_wave_so_its_address_is_never_reused() {
+        let mut images = WaveImages::default();
+        let ink = gpui::hsla(0., 0., 0., 0.5);
+        let wave = seed_wave(5);
+        let first = images.get(&wave, false, (52., 28.), ink);
+        // The entry holds the wave: dropping the item's copy can't free the
+        // allocation another wave would then be given.
+        assert_eq!(Arc::strong_count(&wave), 2);
+        let addr = Arc::as_ptr(&wave) as usize;
+        drop(wave);
+        let others: Vec<Wave> = (0..64).map(seed_wave).collect();
+        for other in &others {
+            assert_ne!(Arc::as_ptr(other) as usize, addr);
+            assert!(!Arc::ptr_eq(
+                &images.get(other, false, (52., 28.), ink),
+                &first
+            ));
+        }
+        // A key that matches but a wave that doesn't is never served the old
+        // image (the check behind the key).
+        let stranger = seed_wave(5);
+        let key = (Arc::as_ptr(&stranger) as usize, false);
+        let (_, kept_image) = images.ready.values().next().cloned().unwrap();
+        images.ready.insert(key, (seed_wave(6), kept_image.clone()));
+        assert!(!Arc::ptr_eq(
+            &images.get(&stranger, false, (52., 28.), ink),
+            &kept_image
+        ));
     }
 
     #[test]
