@@ -1384,6 +1384,7 @@ pub async fn upload_exported_video(
             progress,
             cancel,
             false,
+            true,
         ))
         .await
         .map(|(result, _)| result);
@@ -1399,6 +1400,7 @@ async fn upload_exported_video_inner(
     progress: impl Fn(f64),
     cancel: Arc<AtomicBool>,
     defer_completion: bool,
+    replace_shared_video: bool,
 ) -> Result<(UploadResult, Option<String>), String> {
     check_export_cancelled(&cancel).map_err(|error| error.to_string())?;
     if store_auth_missing() {
@@ -1501,7 +1503,7 @@ async fn upload_exported_video_inner(
             &metadata,
             progress,
             &cancel,
-            meta.sharing.is_some(),
+            replace_shared_video && meta.sharing.is_some(),
         )
     })
     .await
