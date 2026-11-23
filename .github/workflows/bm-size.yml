@@ -1,0 +1,174 @@
+name: Scratch installer size, main vs head (temporary)
+
+on:
+  push:
+    branches: [ci/bm-size]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-size
+  cancel-in-progress: true
+
+env:
+  MAIN_RUN: "45167422846"
+
+jobs:
+  linux:
+    name: deb size (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: apps/desktop-gpui/licenses
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dl
+          pattern: app-linux-*
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: releases
+          path: ${{ runner.temp }}/dl/releases
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - run: |
+          set -euo pipefail
+          T=$RUNNER_TEMP; A=$T/apps; mkdir -p $A
+          for t in base head; do tar -C $A -xf $T/dl/app-linux-$t/app-linux-$t.tar; done
+          deb=$T/dl/releases/latest-linux.deb
+          ar t "$deb"
+          comp=$(ar t "$deb" | grep data.tar | sed 's/data.tar.//')
+          echo "compression: $comp"
+          mkdir -p $T/x && dpkg-deb -R "$deb" $T/x/orig
+          dpkg-deb -c "$deb" | awk '{print $3, $6}' | sort -n | tail -8
+          bin=$(cd $T/x/orig && find . -type f -size +20M | head -1); echo "main binary in package: $bin"
+          file "$T/x/orig/$bin"
+          z=$(case $comp in xz) echo xz;; zst) echo zstd;; gz) echo gzip;; *) echo xz;; esac)
+          for t in base head; do
+            cp -a $T/x/orig $T/x/$t
+            cp $A/$t/cap-gpui "$T/x/$t/$bin"
+            if file "$T/x/orig/$bin" | grep -q ', stripped'; then strip --strip-all "$T/x/$t/$bin"; fi
+            if [ "$t" = head ]; then
+              lic=$(dirname $(find $T/x/orig -type d -name assets -path '*cap*' | head -1))
+              [ -d "$lic" ] && mkdir -p "$lic/licenses" && cp -R apps/desktop-gpui/licenses/nemotron-3-diarization apps/desktop-gpui/licenses/wespeaker-campplus "$lic/licenses/" || true
+            fi
+            dpkg-deb -Z$z --root-owner-group -b $T/x/$t $T/x/$t.deb >/dev/null
+          done
+          dpkg-deb -Z$z --root-owner-group -b $T/x/orig $T/x/repacked-0.6.3.deb >/dev/null
+          {
+            echo "| package | bytes | MB |"; echo "|---|---|---|"
+            for f in "$deb" $T/x/repacked-0.6.3.deb $T/x/base.deb $T/x/head.deb; do s=$(stat -c %s "$f"); echo "| $(basename $f) | $s | $(python3 -c "print(round($s/1048576,2))") |"; done
+            echo; echo "binary sizes: shipped $(stat -c %s $T/x/orig/$bin) base $(stat -c %s $T/x/base/$bin) head $(stat -c %s $T/x/head/$bin)"
+          } | tee $T/size-linux.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: size-linux
+          path: ${{ runner.temp }}/size-linux.md
+
+  macos:
+    name: dmg size (macOS)
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: apps/desktop-gpui/licenses
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dl
+          pattern: app-macos-*
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: releases
+          path: ${{ runner.temp }}/dl/releases
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - run: |
+          set -euo pipefail
+          T=$RUNNER_TEMP; A=$T/apps; mkdir -p $A
+          for t in base head; do tar -C $A -xf $T/dl/app-macos-$t/app-macos-$t.tar; done
+          dmg=$T/dl/releases/latest-mac.dmg
+          fmt=$(hdiutil imageinfo "$dmg" | awk -F': ' '/^Format:/ {print $2}'); echo "format: $fmt"
+          hdiutil attach -nobrowse -readonly -mountpoint $T/mnt "$dmg" >/dev/null
+          app=$(find $T/mnt -maxdepth 1 -name '*.app' | head -1); name=$(basename "$app")
+          ls -la $T/mnt
+          exe=$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Contents/Info.plist")
+          file "$app/Contents/MacOS/$exe"
+          for t in orig base head; do
+            mkdir -p $T/src-$t
+            ditto "$app" "$T/src-$t/$name"
+            ln -s /Applications $T/src-$t/Applications
+            if [ "$t" != orig ]; then
+              cp $A/$t/cap-gpui "$T/src-$t/$name/Contents/MacOS/$exe"
+              strip -x "$T/src-$t/$name/Contents/MacOS/$exe" 2>/dev/null || true
+            fi
+            if [ "$t" = head ]; then
+              mkdir -p "$T/src-$t/$name/Contents/Resources/licenses"
+              cp -R apps/desktop-gpui/licenses/nemotron-3-diarization apps/desktop-gpui/licenses/wespeaker-campplus "$T/src-$t/$name/Contents/Resources/licenses/"
+            fi
+            hdiutil create -quiet -srcfolder $T/src-$t -volname Cap -format "$fmt" -o $T/$t.dmg
+          done
+          hdiutil detach $T/mnt >/dev/null || true
+          {
+            echo "| package | bytes | MB |"; echo "|---|---|---|"
+            for f in "$dmg" $T/orig.dmg $T/base.dmg $T/head.dmg; do s=$(stat -f %z "$f"); echo "| $(basename $f) | $s | $(python3 -c "print(round($s/1048576,2))") |"; done
+            echo; echo "binary sizes: shipped $(stat -f %z "$T/src-orig/$name/Contents/MacOS/$exe") base $(stat -f %z "$T/src-base/$name/Contents/MacOS/$exe") head $(stat -f %z "$T/src-head/$name/Contents/MacOS/$exe")"
+          } | tee $T/size-macos.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: size-macos
+          path: ${{ runner.temp }}/size-macos.md
+
+  windows:
+    name: installer size (Windows)
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: apps/desktop-gpui/licenses
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/dl
+          pattern: app-windows-*
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: releases
+          path: ${{ runner.temp }}/dl/releases
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - shell: pwsh
+        run: |
+          $T = $env:RUNNER_TEMP; $A = "$T\apps"; New-Item -ItemType Directory -Force $A | Out-Null
+          foreach ($t in 'base','head') { tar -C $A -xf "$T\dl\app-windows-$t\app-windows-$t.tar" }
+          $inst = "$T\dl\releases\latest-win.exe"
+          Start-Process -Wait -FilePath $inst -ArgumentList '/S'
+          $exe = Get-ChildItem -Path "$env:LOCALAPPDATA","$env:ProgramFiles" -Recurse -Filter 'Cap.exe' -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 20MB } | Select-Object -First 1
+          $dir = $exe.DirectoryName; Write-Host "installed at $dir"
+          foreach ($t in 'orig','base','head') {
+            $d = "$T\pkg-$t"; Copy-Item -Recurse $dir $d
+            if ($t -ne 'orig') { Copy-Item -Force "$A\$t\cap-gpui.exe" "$d\Cap.exe" }
+            if ($t -eq 'head') { New-Item -ItemType Directory -Force "$d\licenses" | Out-Null; Copy-Item -Recurse apps\desktop-gpui\licenses\nemotron-3-diarization,apps\desktop-gpui\licenses\wespeaker-campplus "$d\licenses\" }
+            & 7z a -t7z -m0=lzma -mx=9 -ms=on "$T\$t.7z" "$d\*" | Out-Null
+          }
+          $rows = @("| package | bytes | MB |","|---|---|---|")
+          foreach ($f in @($inst, "$T\orig.7z", "$T\base.7z", "$T\head.7z")) { $s=(Get-Item $f).Length; $rows += "| $(Split-Path $f -Leaf) | $s | $([math]::Round($s/1MB,2)) |" }
+          $rows += ""; $rows += "binary sizes: shipped $((Get-Item "$dir\Cap.exe").Length) base $((Get-Item "$A\base\cap-gpui.exe").Length) head $((Get-Item "$A\head\cap-gpui.exe").Length)"
+          $rows += "LZMA solid 7z of the install dir is the NSIS-equivalent measure; orig.7z calibrates it against the real installer."
+          $rows | Tee-Object -FilePath "$T\size-windows.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: size-windows
+          path: ${{ runner.temp }}/size-windows.md
