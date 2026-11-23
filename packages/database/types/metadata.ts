@@ -96,9 +96,6 @@ export interface VideoMetadata {
 	 * Title of the captured monitor or window
 	 */
 	sourceName?: string;
-	/**
-	 * Desktop app version that created the video, read from its request headers
-	 */
 	desktopClient?: { version: string; gpui: boolean };
 	/**
 	 * AI generated title for the video
