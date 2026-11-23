@@ -193,6 +193,7 @@ async function route(request: NextRequest) {
 		if (
 			!(
 				isPublicAsset(path) ||
+				path.startsWith("/editor/") ||
 				path.startsWith("/s/") ||
 				path.startsWith("/c/") ||
 				path.startsWith("/cli/") ||

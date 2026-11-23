@@ -41,3 +41,4 @@ next-env.d.ts
 public/.well-known/workflow/
 /.swc
 /public/editor/
+/.studio-editor-build/

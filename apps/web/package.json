@@ -4,8 +4,8 @@
 	"private": true,
 	"scripts": {
 		"dev": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 dotenv -e ../../.env -- next dev",
-		"build": "next build --turbopack",
-		"build:web": "bun run build:studio && next build --turbopack",
+		"build": "node scripts/next-build.mjs",
+		"build:web": "bun run build:studio && node scripts/next-build.mjs",
 		"build:studio": "bun --cwd=../../packages/web-editor run build",
 		"build:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
 		"start": "cross-env NODE_OPTIONS=--disable-warning=DEP0169 next start",
