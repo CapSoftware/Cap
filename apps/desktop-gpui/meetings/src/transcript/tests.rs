@@ -402,18 +402,22 @@ const SHORT_COPIES: [(&str, u64); 6] = [
 
 /// A sentence that comes back through the speakers starts on the microphone
 /// while the call is still saying it. Someone reading the call back waits
-/// for it to finish, so that is no evidence the microphone hears the call.
+/// for it to finish: their words stay, and are no evidence the microphone
+/// hears the call.
 #[test]
 fn only_an_echo_over_the_call_shows_the_microphone_hears_it() {
-    let numbers = "Four one five two nine.";
-    for gap in [0, 150, 600] {
-        let mut t = Transcript::new();
-        t.upsert(timed("far", Source::System, 10_000, numbers, 220));
-        t.upsert(timed("back", Source::Mic, 11_100 + gap, numbers, 320));
-        assert!(
-            !t.suppress_echo_report(&EchoConfig::default()).heard,
-            "{gap}"
-        );
+    for numbers in ["Four one five two nine.", "Anna, Ben, Chris and Dana."] {
+        for gap in [0, 150, 600] {
+            let mut t = Transcript::new();
+            t.upsert(timed("far", Source::System, 10_000, numbers, 220));
+            t.upsert(timed("back", Source::Mic, 11_100 + gap, numbers, 320));
+            let report = t.suppress_echo_report(&EchoConfig::default());
+            assert!(
+                report.removed.is_empty() && !report.heard,
+                "{numbers} {gap}"
+            );
+            assert!(t.get("back").is_some());
+        }
     }
     let call = "The squire was not pleased with the answer.";
     for lag in [0, 60, 320] {

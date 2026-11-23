@@ -117,9 +117,8 @@ pub struct EchoConfig {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EchoReport {
     pub removed: Vec<String>,
-    /// A removed sentence began on the microphone while the call was still
-    /// saying it: the speakers are playing into the microphone. Someone
-    /// reading the call back ("four one five two") waits for it to finish.
+    /// A sentence of the call was removed: the speakers are playing into
+    /// the microphone.
     pub heard: bool,
 }
 
@@ -738,12 +737,14 @@ impl Transcript {
             else {
                 continue;
             };
-            let lags = words[mic_first]
-                .start_ms
-                .saturating_add(ECHO_EARLY_SLACK_MS)
-                >= overlapping[far_first].start_ms;
-            if lags && common as f64 >= config.min_containment * words.len() as f64 {
-                heard |= words[mic_first].start_ms < overlapping[far_last].start_ms;
+            let start = words[mic_first].start_ms;
+            let lags = start.saturating_add(ECHO_EARLY_SLACK_MS) >= overlapping[far_first].start_ms;
+            // An echo starts while the call is still saying the sentence.
+            // Someone reading it back ("four one five two nine") waits for
+            // the end.
+            let during = start < overlapping[far_last].start_ms;
+            if lags && during && common as f64 >= config.min_containment * words.len() as f64 {
+                heard = true;
                 echoes.push(mic.id.clone());
             }
         }

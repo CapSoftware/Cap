@@ -402,9 +402,9 @@ fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
         "four one five two nine",
     ));
     transcript.upsert(timed("m3", Source::Mic, 21_600, "four one five two nine"));
-    super::remove_echoes(&mut transcript, &mut heard);
+    assert!(super::remove_echoes(&mut transcript, &mut heard).is_empty());
     assert!(!heard, "a read-back is no evidence");
-    assert!(transcript.get("m1").is_some());
+    assert!(transcript.get("m1").is_some() && transcript.get("m3").is_some());
     let call = "the squire was not pleased with the answer he got";
     transcript.upsert(timed("s2", Source::System, 30_000, call));
     transcript.upsert(timed("m2", Source::Mic, 30_060, call));
