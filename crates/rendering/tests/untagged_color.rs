@@ -3,10 +3,12 @@ use std::path::{Path, PathBuf};
 use cap_rendering::{
     DecodedFrame, PixelFormat,
     cpu_yuv::{YuvMatrix, nv12_to_rgba_with_matrix, yuv420p_to_rgba_with_matrix},
-    decoder::spawn_decoder,
+    decoder::{DecoderType, spawn_decoder},
 };
 
 const ORANGE: [u8; 3] = [224, 122, 48];
+const ORANGE_BT709_YCBCR: [u8; 3] = [133, 85, 175];
+const ORANGE_BT601_YCBCR: [u8; 3] = [140, 80, 178];
 const TOLERANCE: u8 = 8;
 
 struct Clip {
@@ -27,7 +29,7 @@ async fn editor_and_export_decode_untagged_hd_as_bt709() {
             name: "untagged-hd",
             width: 1280,
             height: 720,
-            ycbcr: [133, 85, 175],
+            ycbcr: ORANGE_BT709_YCBCR,
             tag: None,
             matrix: YuvMatrix::Bt709,
         },
@@ -35,7 +37,7 @@ async fn editor_and_export_decode_untagged_hd_as_bt709() {
             name: "untagged-480p",
             width: 640,
             height: 480,
-            ycbcr: [140, 80, 178],
+            ycbcr: ORANGE_BT601_YCBCR,
             tag: None,
             matrix: YuvMatrix::Bt601,
         },
@@ -43,7 +45,7 @@ async fn editor_and_export_decode_untagged_hd_as_bt709() {
             name: "tagged-bt601",
             width: 1280,
             height: 720,
-            ycbcr: [140, 80, 178],
+            ycbcr: ORANGE_BT601_YCBCR,
             tag: Some(ffmpeg::util::color::Space::SMPTE170M),
             matrix: YuvMatrix::Bt601,
         },
@@ -56,6 +58,12 @@ async fn editor_and_export_decode_untagged_hd_as_bt709() {
         let decoder = spawn_decoder(clip.name, path, 30, 0.0, true)
             .await
             .unwrap_or_else(|error| panic!("{} decoder: {error}", clip.name));
+        assert_eq!(
+            decoder.decoder_type(),
+            DecoderType::FFmpegSoftware,
+            "{} should use the software decoder the editor and export share",
+            clip.name
+        );
         let frame = decoder
             .get_frame_initial(0.0)
             .await

@@ -330,7 +330,10 @@ impl CachedFrame {
                             width: frame.width(),
                             height: frame.height(),
                             format: PixelFormat::Nv12,
-                            matrix: YuvMatrix::from_color_space(frame.color_space()),
+                            matrix: YuvMatrix::from_color_space(
+                                frame.color_space(),
+                                frame.height(),
+                            ),
                             y_stride: cuda.y_pitch as u32,
                             uv_stride: cuda.uv_pitch as u32,
                             planes: Arc::clone(converter.plane_pool()),
@@ -344,7 +347,7 @@ impl CachedFrame {
                 let planes = Arc::clone(converter.plane_pool());
                 let width = frame.width();
                 let height = frame.height();
-                let matrix = YuvMatrix::from_color_space(frame.color_space());
+                let matrix = YuvMatrix::from_color_space(frame.color_space(), frame.height());
 
                 if let Some((pixel_format, y_stride, uv_stride)) = borrowable_yuv_layout(frame) {
                     let bytes = yuv_plane_bytes(pixel_format, y_stride, uv_stride, height);

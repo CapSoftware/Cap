@@ -1,10 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-/// The Y'CbCr matrix a limited-range picture was encoded with, which decides
-/// how it converts back to RGB. Decoders take it from the source's colour tag:
-/// BT.709 when the stream says so, BT.601 otherwise (untagged sources keep the
-/// BT.601 decode they always had).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum YuvMatrix {
     #[default]
@@ -12,10 +8,15 @@ pub enum YuvMatrix {
     Bt709,
 }
 
+pub const UNTAGGED_HD_MIN_HEIGHT: u32 = 720;
+
 impl YuvMatrix {
-    pub fn from_color_space(space: ffmpeg::util::color::Space) -> Self {
+    pub fn from_color_space(space: ffmpeg::util::color::Space, height: u32) -> Self {
         match space {
             ffmpeg::util::color::Space::BT709 => Self::Bt709,
+            ffmpeg::util::color::Space::Unspecified if height >= UNTAGGED_HD_MIN_HEIGHT => {
+                Self::Bt709
+            }
             _ => Self::Bt601,
         }
     }
@@ -2468,14 +2469,33 @@ mod tests {
     #[test]
     fn matrix_follows_the_colour_tag() {
         use ffmpeg::util::color::Space;
-        assert_eq!(YuvMatrix::from_color_space(Space::BT709), YuvMatrix::Bt709);
-        for space in [
-            Space::Unspecified,
-            Space::BT470BG,
-            Space::SMPTE170M,
-            Space::RGB,
-        ] {
-            assert_eq!(YuvMatrix::from_color_space(space), YuvMatrix::Bt601);
+        assert_eq!(
+            YuvMatrix::from_color_space(Space::BT709, 480),
+            YuvMatrix::Bt709
+        );
+        assert_eq!(
+            YuvMatrix::from_color_space(Space::BT709, 1080),
+            YuvMatrix::Bt709
+        );
+        assert_eq!(
+            YuvMatrix::from_color_space(Space::Unspecified, UNTAGGED_HD_MIN_HEIGHT),
+            YuvMatrix::Bt709
+        );
+        assert_eq!(
+            YuvMatrix::from_color_space(Space::Unspecified, 1080),
+            YuvMatrix::Bt709
+        );
+        assert_eq!(
+            YuvMatrix::from_color_space(Space::Unspecified, 480),
+            YuvMatrix::Bt601
+        );
+        assert_eq!(
+            YuvMatrix::from_color_space(Space::Unspecified, 0),
+            YuvMatrix::Bt601
+        );
+        for space in [Space::BT470BG, Space::SMPTE170M, Space::RGB] {
+            assert_eq!(YuvMatrix::from_color_space(space, 1080), YuvMatrix::Bt601);
+            assert_eq!(YuvMatrix::from_color_space(space, 480), YuvMatrix::Bt601);
         }
     }
 

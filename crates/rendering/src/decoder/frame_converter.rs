@@ -127,7 +127,7 @@ impl FrameConverter {
                 width,
                 height,
                 &mut output,
-                YuvMatrix::from_color_space(frame.color_space()),
+                YuvMatrix::from_color_space(frame.color_space(), frame.height()),
             );
             return output;
         }
@@ -137,7 +137,7 @@ impl FrameConverter {
 
         self.ensure_scaler(
             frame.format(),
-            YuvMatrix::from_color_space(frame.color_space()),
+            YuvMatrix::from_color_space(frame.color_space(), frame.height()),
             width,
             height,
         );
@@ -497,6 +497,36 @@ mod tests {
             let rgba = converter.convert(&mut source);
             assert_eq!(rgba.len(), width as usize * height as usize * 4);
             assert_eq!(converter.scaler.is_none(), fast_path, "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn untagged_height_selects_the_matrix_swscale_uses() {
+        ffmpeg::init().unwrap();
+        let orange = [224u8, 122, 48];
+        let bt709 = [133u8, 85, 175];
+        let bt601 = [140u8, 80, 178];
+        let cases = [
+            (720u32, bt709, ffmpeg::color::Space::Unspecified),
+            (480, bt601, ffmpeg::color::Space::Unspecified),
+            (720, bt601, ffmpeg::color::Space::SMPTE170M),
+        ];
+        for (height, [y, cb, cr], space) in cases {
+            let mut source = frame::Video::new(format::Pixel::YUV420P, 32, height);
+            source.data_mut(0).fill(y);
+            source.data_mut(1).fill(cb);
+            source.data_mut(2).fill(cr);
+            source.set_color_space(space);
+            source.set_color_range(ffmpeg::color::Range::MPEG);
+            let rgba = FrameConverter::new().convert(&mut source);
+            let index = ((height as usize / 2) * 32 + 16) * 4;
+            let pixel = [rgba[index], rgba[index + 1], rgba[index + 2]];
+            for (channel, (actual, expected)) in pixel.into_iter().zip(orange).enumerate() {
+                assert!(
+                    actual.abs_diff(expected) <= 8,
+                    "{height} {space:?} channel {channel}: {pixel:?}"
+                );
+            }
         }
     }
 

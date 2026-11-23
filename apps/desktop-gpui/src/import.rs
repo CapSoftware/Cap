@@ -1948,9 +1948,6 @@ fn frame_timestamp(frame: &ffmpeg::frame::Video, time_base: ffmpeg::Rational) ->
     Duration::from_secs_f64(seconds.max(0.0))
 }
 
-/// The Y'CbCr matrix an imported display.mp4 is written and tagged with. The
-/// renderer decodes with BT.709 for a BT.709 tag and BT.601 for anything
-/// else, so the tag has to describe the samples the scaler wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ImportMatrix {
     Bt601,
@@ -1979,9 +1976,12 @@ impl SourceColor {
             _ if rgb => ImportMatrix::Bt709,
             ffmpeg::color::Space::BT709 => ImportMatrix::Bt709,
             ffmpeg::color::Space::BT470BG | ffmpeg::color::Space::SMPTE170M => ImportMatrix::Bt601,
-            // Untagged video follows the usual convention: BT.601 for
-            // standard definition, BT.709 for HD.
-            ffmpeg::color::Space::Unspecified if height < 720 => ImportMatrix::Bt601,
+            ffmpeg::color::Space::Unspecified => {
+                match cap_rendering::cpu_yuv::YuvMatrix::from_color_space(space, height) {
+                    cap_rendering::cpu_yuv::YuvMatrix::Bt709 => ImportMatrix::Bt709,
+                    cap_rendering::cpu_yuv::YuvMatrix::Bt601 => ImportMatrix::Bt601,
+                }
+            }
             _ => ImportMatrix::Bt709,
         };
         let full_range = rgb
