@@ -3275,8 +3275,14 @@ impl Meetings {
         {
             tracing::warn!(%error, doc_id, "could not follow the late speaker labels in the summary");
         }
+        if !renames.is_empty() {
+            tracing::info!(
+                doc_id,
+                count = renames.len(),
+                "the summary follows Nemotron's after-Stop labels"
+            );
+        }
         for (from, to) in renames {
-            tracing::info!(doc_id, from, to, "the summary follows Nemotron's after-Stop labels");
             cx.emit(MeetingEvent::SpeakerRenamed {
                 doc_id: doc_id.to_string(),
                 from,
