@@ -848,3 +848,33 @@ fn the_library_is_owner_only() {
         "an existing library folder is closed to other users"
     );
 }
+
+#[test]
+fn a_trash_waits_for_a_meta_update_in_progress_and_both_changes_stay() {
+    let (_dir, library) = lib();
+    let id = library.create(DocKind::Meeting, t(3, 9), 1).unwrap().id;
+
+    let engine = lock_meta();
+    let mut meta = library.load(&id).unwrap();
+    let (done_tx, done) = std::sync::mpsc::channel();
+    let trash = std::thread::spawn({
+        let (library, id) = (library.clone(), id.clone());
+        move || {
+            library.trash(&id, t(3, 10)).unwrap();
+            done_tx.send(()).unwrap();
+        }
+    });
+    assert!(
+        done.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "the trash landed inside another writer's load and save"
+    );
+    meta.title = "Weekly sync".into();
+    library.save(&meta).unwrap();
+    drop(engine);
+    trash.join().unwrap();
+
+    let meta = library.load(&id).unwrap();
+    assert_eq!(meta.title, "Weekly sync");
+    assert_eq!(meta.trashed_at, Some(t(3, 10)));
+}

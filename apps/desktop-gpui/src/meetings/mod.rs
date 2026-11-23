@@ -34,7 +34,7 @@ use cap_meetings::{
     apps::{self, Platform},
     browser::{BrowserEvidence, judge_browser},
     detect::{DetectConfig, DetectEvent, Detector, MicClient},
-    library::{DocKind, DocMeta, Library, MeetingDetails, TitleHint, auto_title_from},
+    library::{DocKind, DocMeta, Library, MeetingDetails, TitleHint, auto_title_from, lock_meta},
     prompt::{Prompt, PromptAction, PromptPlanner, RecordSource, RecordingState},
     session::{Session, SessionAction, SessionState, Warning},
     settings::{Engine, Language, MeetingSettings, Microphone},
@@ -1652,6 +1652,7 @@ impl Meetings {
             .cloned()
             .ok_or_else(|| MeetingError::Library("the library is unavailable".into()))?;
         if let Some(doc_id) = &origin.resume_doc {
+            let lock = lock_meta();
             let mut meta = library.load(doc_id).map_err(|_| MeetingError::NotFound)?;
             if meta.is_trashed() {
                 return Err(MeetingError::NotFound);
@@ -1712,6 +1713,7 @@ impl Meetings {
             library
                 .save(&meta)
                 .map_err(|e| MeetingError::Library(e.to_string()))?;
+            drop(lock);
             let offset = previous_ms + RESUME_GAP_MS;
             return Ok((meta, transcript, offset, suffix));
         }
@@ -1898,6 +1900,11 @@ impl Meetings {
             return;
         }
 
+        let lock = lock_meta();
+        // open_doc saved everything it changed; an edit made since is kept
+        if let Ok(saved) = library.load(&doc_id) {
+            meta = saved;
+        }
         if let Some(meeting) = meta.meeting.as_mut() {
             if offset_ms == 0 {
                 meeting.started_at = Some(capture.origin_wall());
@@ -1937,6 +1944,7 @@ impl Meetings {
         if let Err(error) = library.save(&meta) {
             tracing::warn!(%error, "could not save the meeting before recording");
         }
+        drop(lock);
         for part in persist::audio_parts(&library, &meta) {
             let _ = engine.send(EngineCommand::AudioPart(part));
         }
@@ -2094,7 +2102,7 @@ impl Meetings {
         let doc_id = recording.doc_id.clone();
         let chars = recording.transcript.stats().total_chars as u64;
         if let Some(library) = self.library().cloned()
-            && let Ok(mut meta) = library.load(&doc_id)
+            && let (_lock, Ok(mut meta)) = (lock_meta(), library.load(&doc_id))
         {
             let tracks = persist::audio_tracks(&library, &doc_id);
             if let Some(meeting) = meta.meeting.as_mut() {
@@ -2358,6 +2366,7 @@ impl Meetings {
         let Some(library) = self.library().cloned() else {
             return;
         };
+        let _lock = lock_meta();
         let Ok(mut meta) = library.load(&doc_id) else {
             return;
         };
@@ -2502,7 +2511,7 @@ impl Meetings {
         finishing._engine_pump.detach();
         let mut heard_nothing = false;
         if let Some(library) = self.library().cloned()
-            && let Ok(mut meta) = library.load(&doc_id)
+            && let (lock, Ok(mut meta)) = (lock_meta(), library.load(&doc_id))
             && let Some(meeting) = meta.meeting.as_mut()
         {
             meeting.transcript_chars = chars as u64;
@@ -2534,6 +2543,7 @@ impl Meetings {
             if let Err(error) = library.save(&meta) {
                 tracing::warn!(%error, "could not save the meeting transcript size");
             }
+            drop(lock);
             let again = self.recording.as_ref().is_some_and(|r| r.doc_id == doc_id);
             if !again && false_start(&library, &meta, chars) {
                 // A false start: nothing heard, nothing typed. Trash keeps it
@@ -2683,7 +2693,7 @@ impl Meetings {
         let Some(library) = self.library().cloned() else {
             return;
         };
-        if let Ok(mut meta) = library.load(doc_id)
+        if let (lock, Ok(mut meta)) = (lock_meta(), library.load(doc_id))
             && (persist::set_flag(&mut meta, persist::RECOVERED_KEY, false)
                 | persist::set_flag(&mut meta, persist::NOTES_STALE_KEY, false)
                 | persist::clear_missed_audio(&mut meta))
@@ -2691,6 +2701,7 @@ impl Meetings {
             if let Err(error) = library.save(&meta) {
                 tracing::warn!(%error, "could not clear a recovered meeting's line");
             }
+            drop(lock);
             cx.emit(MeetingEvent::LibraryChanged);
         }
     }
@@ -2709,6 +2720,7 @@ impl Meetings {
         let Some(library) = self.library().cloned() else {
             return;
         };
+        let _lock = lock_meta();
         let Ok(mut meta) = library.load(doc_id) else {
             return;
         };
@@ -3432,7 +3444,7 @@ impl Meetings {
             if let Some(library) = library.as_ref()
                 && let Ok(path) = library.transcript_path(&finishing.doc_id)
                 && let Ok((transcript, _)) = Transcript::load_jsonl(&path)
-                && let Ok(mut meta) = library.load(&finishing.doc_id)
+                && let (_lock, Ok(mut meta)) = (lock_meta(), library.load(&finishing.doc_id))
             {
                 // Whatever the drain did not reach is finished next launch.
                 let open = !finished
@@ -4098,6 +4110,7 @@ impl Meetings {
             library
                 .write_enhanced(doc_id, &document.to_json())
                 .map_err(|e| NotesError::Failed(e.to_string()))?;
+            let _lock = lock_meta();
             let mut meta = library.load(doc_id).map_err(|_| NotesError::NotFound)?;
             if let Some(meeting) = meta.meeting.as_mut() {
                 meeting.has_enhanced = true;

@@ -604,11 +604,8 @@ pub fn recover_unfinished(library: &Library, skip: Option<&str>) -> Vec<String> 
         return Vec::new();
     };
     let mut recovered = Vec::new();
-    for mut meta in listing.docs {
-        if Some(meta.id.as_str()) == skip {
-            continue;
-        }
-        let Some(meeting) = meta.meeting.as_mut() else {
+    for listed in listing.docs {
+        let Some(meeting) = listed.meeting.as_ref() else {
             continue;
         };
         let Some(started_at) = meeting.started_at else {
@@ -618,20 +615,32 @@ pub fn recover_unfinished(library: &Library, skip: Option<&str>) -> Vec<String> 
             continue;
         }
         let transcript = library
-            .transcript_path(&meta.id)
+            .transcript_path(&listed.id)
             .ok()
             .and_then(|p| Transcript::load_jsonl(&p).ok())
             .map(|(t, _)| t)
             .unwrap_or_default();
         let stats = transcript.stats();
-        let tracks = audio_tracks(library, &meta.id);
+        let tracks = audio_tracks(library, &listed.id);
         let audio_ms = tracks.iter().map(|t| t.duration_ms).max().unwrap_or(0);
         let duration_ms = meeting
             .duration_ms
             .max(stats.last_speech_end_ms.unwrap_or(0))
             .max(audio_ms);
-        meeting.duration_ms = duration_ms;
-        meeting.ended_at = Some(started_at + Duration::milliseconds(duration_ms as i64));
+        let tail = tail_gaps(library, &listed, &transcript);
+
+        if Some(listed.id.as_str()) == skip {
+            continue;
+        }
+        let _meta = cap_meetings::library::lock_meta();
+        let Ok(mut meta) = library.load(&listed.id) else {
+            continue;
+        };
+        let Some(meeting) = meta.meeting.as_mut().filter(|m| m.ended_at.is_none()) else {
+            continue;
+        };
+        meeting.duration_ms = meeting.duration_ms.max(duration_ms);
+        meeting.ended_at = Some(started_at + Duration::milliseconds(meeting.duration_ms as i64));
         meeting.stop_reason = Some(StopReason::Error);
         meeting.transcript_chars = stats.total_chars as u64;
         if !tracks.is_empty() {
@@ -640,7 +649,6 @@ pub fn recover_unfinished(library: &Library, skip: Option<&str>) -> Vec<String> 
         // What was recorded but never transcribed goes in the ledger, so the
         // repair after launch finishes the meeting.
         // The repair after launch also writes the notes the meeting missed.
-        let tail = tail_gaps(library, &meta, &transcript);
         if !tail.is_empty() {
             let lines: Vec<LogLine> = tail.into_iter().map(|gap| LogLine::Gap { gap }).collect();
             let written = library

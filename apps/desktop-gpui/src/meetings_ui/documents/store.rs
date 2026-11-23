@@ -371,15 +371,17 @@ impl DocStore {
         });
         if let Some(library) = self.library.clone() {
             let id = id.to_string();
-            writer::submit(move || match library.load(&id) {
-                Ok(mut meta) => {
+            writer::submit(move || match (cap_meetings::library::lock_meta(), library.load(&id)) {
+                (_lock, Ok(mut meta)) => {
                     change(&mut meta);
                     meta.updated_at = Utc::now();
                     if let Err(error) = library.save(&meta) {
                         tracing::warn!(%error, "could not save the document");
                     }
                 }
-                Err(error) => tracing::warn!(%error, "could not load the document to update it"),
+                (_, Err(error)) => {
+                    tracing::warn!(%error, "could not load the document to update it")
+                }
             });
         }
         cx.emit(StoreEvent::MetaChanged(id.to_string()));

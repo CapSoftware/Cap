@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Offset, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -375,6 +376,16 @@ pub struct Library {
     root: PathBuf,
 }
 
+static META_LOCK: Mutex<()> = Mutex::new(());
+
+/// Held from loading a note's meta.json to saving it again, by every
+/// read-modify-write in the app (the documents writer, the meetings engine,
+/// this file), so one writer never undoes another's change. Not reentrant:
+/// never call a [`Library`] method that saves while holding it.
+pub fn lock_meta() -> MutexGuard<'static, ()> {
+    META_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 impl Library {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
@@ -482,6 +493,7 @@ impl Library {
     }
 
     pub fn trash(&self, id: &str, now: DateTime<Utc>) -> Result<DocMeta> {
+        let _lock = lock_meta();
         let mut meta = self.load(id)?;
         if meta.trashed_at.is_none() {
             meta.trashed_at = Some(now);
@@ -491,6 +503,7 @@ impl Library {
     }
 
     pub fn restore(&self, id: &str) -> Result<DocMeta> {
+        let _lock = lock_meta();
         let mut meta = self.load(id)?;
         if meta.trashed_at.take().is_some() {
             self.save(&meta)?;
@@ -627,11 +640,11 @@ impl Library {
             folder_id: None,
         })?;
         let mut swept = Cleaned::default();
-        for mut meta in listing.docs {
+        for meta in listing.docs {
             if keep(&meta) {
                 continue;
             }
-            let Some(meeting) = meta.meeting.as_mut() else {
+            let Some(meeting) = meta.meeting.as_ref() else {
                 continue;
             };
             let Some(ended_at) = meeting.ended_at else {
@@ -655,8 +668,14 @@ impl Library {
                 swept.failed.push((meta.id, error.to_string()));
                 continue;
             }
-            meeting.audio.clear();
-            match self.save(&meta) {
+            let _lock = lock_meta();
+            let saved = self.load(&meta.id).and_then(|mut meta| {
+                if let Some(meeting) = meta.meeting.as_mut() {
+                    meeting.audio.clear();
+                }
+                self.save(&meta)
+            });
+            match saved {
                 Ok(()) => swept.done.push(meta.id),
                 Err(error) => swept.failed.push((meta.id, error.to_string())),
             }
@@ -751,7 +770,13 @@ impl Library {
             folder_id: Some(id.to_string()),
             ..ListFilter::default()
         })?;
-        for mut meta in listing.docs {
+        for listed in listing.docs {
+            let _lock = lock_meta();
+            let mut meta = match self.load(&listed.id) {
+                Ok(meta) if meta.folder_id.as_deref() == Some(id) => meta,
+                Ok(_) | Err(LibraryError::NotFound(_)) => continue,
+                Err(error) => return Err(error),
+            };
             meta.folder_id.clone_from(&removed.parent_id);
             self.save(&meta)?;
             moved.push(meta.id);
@@ -766,6 +791,7 @@ impl Library {
         {
             return Err(LibraryError::NotFound(folder.to_string()));
         }
+        let _lock = lock_meta();
         let mut meta = self.load(id)?;
         meta.folder_id = folder_id.map(str::to_string);
         self.save(&meta)?;
