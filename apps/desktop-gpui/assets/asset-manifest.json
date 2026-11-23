@@ -1,0 +1,385 @@
+{
+	"version": 1,
+	"wallpapers": [
+		{
+			"id": "blue/1",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.blue.1.jpg",
+			"size": 485157,
+			"sha256": "27e23cfcfbc3ca728aa5de03bab62544afca87e810594ed747c092e189d8b62f"
+		},
+		{
+			"id": "blue/2",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.blue.2.jpg",
+			"size": 475235,
+			"sha256": "b7c2616274dbb72a0f32bae14bd3cd4fca7b32f510aa4ba4b81e0b8c1dba4f84"
+		},
+		{
+			"id": "blue/3",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.blue.3.jpg",
+			"size": 474110,
+			"sha256": "ed1d7c77c60f09658e14133fa057b87f3bec1bd72acdb7f5ff43a1d365a27f0a"
+		},
+		{
+			"id": "blue/4",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.blue.4.jpg",
+			"size": 498772,
+			"sha256": "85a167315c21bb150b5d2481e198db88540b246a0bfa37ce37d8e4d3bdb8e428"
+		},
+		{
+			"id": "blue/5",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.blue.5.jpg",
+			"size": 492088,
+			"sha256": "88587a06fd14b42d03456dc585ce431e1ce816dc7a7391d1629c5331f95375de"
+		},
+		{
+			"id": "blue/6",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.blue.6.jpg",
+			"size": 189389,
+			"sha256": "a3a6bb06efc60f5798623e44e11d6adbfc4a7b09770cf50e2af0a6b7615087bc"
+		},
+		{
+			"id": "cities/liverpool",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.liverpool.jpg",
+			"size": 498013,
+			"sha256": "6bc689402be42b647033014123e9f2182ddc01e440afb23179f479aa4197f925"
+		},
+		{
+			"id": "cities/london",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.london.jpg",
+			"size": 499951,
+			"sha256": "8545f9fa68b92f44b61e9f736c5a8e1895d4af6b674703d64613927882198c27"
+		},
+		{
+			"id": "cities/miami",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.miami.jpg",
+			"size": 483894,
+			"sha256": "066ed853d1651de34f93c8fa8faa1c73ac67115173f528280dae2d0773987185"
+		},
+		{
+			"id": "cities/monaco",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.monaco.jpg",
+			"size": 497410,
+			"sha256": "8b62d15228068eabcef84bf5c64f28615885edbbad1bc8a2101e2787c65dec99"
+		},
+		{
+			"id": "cities/nyc",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.nyc.jpg",
+			"size": 489697,
+			"sha256": "ebda3c884d102bfee8417244ed937b11d1df42863e8cc4a884b75be1e1d8932a"
+		},
+		{
+			"id": "cities/rome",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.rome.jpg",
+			"size": 497519,
+			"sha256": "3d4a3d1fd82d94d20f9bb6b388d449103f2ae63aedb696093589156087cd3cf9"
+		},
+		{
+			"id": "cities/santorini",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.santorini.jpg",
+			"size": 484788,
+			"sha256": "915a0bd2834712acbc77ab4a3a93c83b83207ea01e24fe0ef3483c8163afbf8e"
+		},
+		{
+			"id": "cities/sf",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.cities.sf.jpg",
+			"size": 476479,
+			"sha256": "d56dd5107bd95dd3b82150a0c5c2e1b00155fce6c6a170bbd273a4c314ad7ba8"
+		},
+		{
+			"id": "dark/1",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.dark.1.jpg",
+			"size": 560113,
+			"sha256": "acf8daaf5975ad31497ceb87c19b4b4e97bcd3c7bb89ebb67ea87e0157c3cd53"
+		},
+		{
+			"id": "dark/2",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.dark.2.jpg",
+			"size": 576216,
+			"sha256": "c383049c7578a6e443746848e8a5f0e197370f69649b10b029a1779168847a81"
+		},
+		{
+			"id": "dark/3",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.dark.3.jpg",
+			"size": 650983,
+			"sha256": "1c66f195f0c68959934c896ba78ddbe72c9e7648475b46238b26549a7f276779"
+		},
+		{
+			"id": "dark/4",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.dark.4.jpg",
+			"size": 375493,
+			"sha256": "ffec7e61efb9e8e65b2d810c3abc4a5f93918bf447cbe2a1ec3c53ea96efca95"
+		},
+		{
+			"id": "dark/5",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.dark.5.jpg",
+			"size": 714850,
+			"sha256": "594b2fbd95026cc9d4c4825c96f6541880cf185cbea081bf0933a14a4e8a7536"
+		},
+		{
+			"id": "dark/6",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.dark.6.jpg",
+			"size": 589672,
+			"sha256": "88d7b1c460a87bc0d93deaf788c748940b8e4f8f81f10f8c50ea733edd44901e"
+		},
+		{
+			"id": "macOS/sequoia-dark",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sequoia-dark.jpg",
+			"size": 159330,
+			"sha256": "3e372725f963df6bb089cc0cb6d3302f2dd4d12ece4350f099de39ece42684ef"
+		},
+		{
+			"id": "macOS/sequoia-light",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sequoia-light.jpg",
+			"size": 161900,
+			"sha256": "fbd5570f7a6249659a49e64afe5c02adf31bd2260e1171701d3b3ec4682c7fc6"
+		},
+		{
+			"id": "macOS/sonoma-clouds",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-clouds.jpg",
+			"size": 253685,
+			"sha256": "67bfff57d6d103140799233212d904e30bf7163b4cd3331172998fad5afbc745"
+		},
+		{
+			"id": "macOS/sonoma-dark",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-dark.jpg",
+			"size": 74866,
+			"sha256": "71836d95747053afb3339d0efb7a784560a1f757513a7a17a8f28168418aba7d"
+		},
+		{
+			"id": "macOS/sonoma-evening",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-evening.jpg",
+			"size": 480499,
+			"sha256": "01cf7b816871412843d35be70fd9c64b2e41977a3141a6445c8b1999a4d854b8"
+		},
+		{
+			"id": "macOS/sonoma-fromabove",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-fromabove.jpg",
+			"size": 337655,
+			"sha256": "00a5fd6073b3de8afb3c107014cda3f600b8496c9cfff02648a23213a2011ee3"
+		},
+		{
+			"id": "macOS/sonoma-horizon",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-horizon.jpg",
+			"size": 589545,
+			"sha256": "9ce359a30d4a62f8164e6aeadce8022b28d85e4630b69183b01cc7d8f963c298"
+		},
+		{
+			"id": "macOS/sonoma-light",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-light.jpg",
+			"size": 91749,
+			"sha256": "c7cb6b4abd800ca36c9340a5cbef3c6d0d824bf7141aea3e4027658a314d4c8d"
+		},
+		{
+			"id": "macOS/sonoma-river",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.sonoma-river.jpg",
+			"size": 348938,
+			"sha256": "54567d8a15c4113e8ee8801d45bfbfbf9cec46cc3e456c0e14b998373f478f35"
+		},
+		{
+			"id": "macOS/tahoe-dark",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.tahoe-dark.jpg",
+			"size": 867521,
+			"sha256": "3a2c4613e39c8e0157c0a4e9365f6bf6582f8d3e1a72dc03881b369404990c96"
+		},
+		{
+			"id": "macOS/tahoe-dawn-min",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.tahoe-dawn-min.jpg",
+			"size": 491033,
+			"sha256": "d2dc4dbc049c42e85ff20d6fcc35c169ffdf9678cc123cf8c7b36ae4fe05e1a2"
+		},
+		{
+			"id": "macOS/tahoe-day-min",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.tahoe-day-min.jpg",
+			"size": 841752,
+			"sha256": "1b9269b4a71ca611109f18824b34d1cfe02c207af77275e64107778fdffaaaeb"
+		},
+		{
+			"id": "macOS/tahoe-dusk-min",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.tahoe-dusk-min.jpg",
+			"size": 572685,
+			"sha256": "177425da39f664f683c59f4aef7422ffb2f5c3ea39b35a53207c1658783e96f5"
+		},
+		{
+			"id": "macOS/tahoe-light",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.tahoe-light.jpg",
+			"size": 918748,
+			"sha256": "d1b41f3659144940e0c1ebaeb95ac29d2dad31e412abe5d6bf9acebb5d6500c3"
+		},
+		{
+			"id": "macOS/tahoe-night-min",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.tahoe-night-min.jpg",
+			"size": 234973,
+			"sha256": "57f78f3c8dc81f152f6b4871e1e814fd135618b5cb1810a0440116c0c7659ab3"
+		},
+		{
+			"id": "macOS/ventura-dark",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.ventura-dark.jpg",
+			"size": 108419,
+			"sha256": "67c8675d5e869b3c2b9ba46c459c318ddd9000e41d82b843b5cf2c13e2f1a3c2"
+		},
+		{
+			"id": "macOS/ventura-semi-dark",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.ventura-semi-dark.jpg",
+			"size": 94709,
+			"sha256": "3356501b28cc35955a9c9724af3f84836b9fcad5b24770a917ba6183c60ac455"
+		},
+		{
+			"id": "macOS/ventura",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.macOS.ventura.jpg",
+			"size": 96846,
+			"sha256": "9fa28974093f2b974c9c44c1a8b9d3c971d071ec3b9c1ceb9e2714d0c69913e2"
+		},
+		{
+			"id": "orange/1",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.1.jpg",
+			"size": 773396,
+			"sha256": "a511969bdda2734f0e5460b551a5f9b5c4c8623c3a31d4cfc660dbbde70e01f5"
+		},
+		{
+			"id": "orange/2",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.2.jpg",
+			"size": 621124,
+			"sha256": "115436cd12091e18c724528d1b0df058e070106425ef854fad256fc5f45c122c"
+		},
+		{
+			"id": "orange/3",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.3.jpg",
+			"size": 729722,
+			"sha256": "1b5e00d29ce77464b59400f827925f01fe146e57044bb995d6c101c52e219767"
+		},
+		{
+			"id": "orange/4",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.4.jpg",
+			"size": 480908,
+			"sha256": "aa710fd3e6dec196eaef809744508beb090818e52f3388d4174ccfea8fb945b1"
+		},
+		{
+			"id": "orange/5",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.5.jpg",
+			"size": 667902,
+			"sha256": "0770f195f4af9cddd428c41ae0cc08b30e80cf6b78b5eac861197f7920893f81"
+		},
+		{
+			"id": "orange/6",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.6.jpg",
+			"size": 799837,
+			"sha256": "921f988c456d2a917e0f1bc0a7c14196c66e4710bd0603da04a493fabe374988"
+		},
+		{
+			"id": "orange/7",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.7.jpg",
+			"size": 569716,
+			"sha256": "b45801304a79efb73521d7f9d23c4e60e06f65a533bf386c832f3df1a3e59121"
+		},
+		{
+			"id": "orange/8",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.8.jpg",
+			"size": 784329,
+			"sha256": "ff5ca194c747c36c7187adfa9e41930686decdff17225879a2650f7778a1f8c6"
+		},
+		{
+			"id": "orange/9",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.orange.9.jpg",
+			"size": 930466,
+			"sha256": "816dae77c05478801aca1e0c2aff32190aaa572acb38434810abd74c97820e0c"
+		},
+		{
+			"id": "purple/1",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.purple.1.jpg",
+			"size": 499074,
+			"sha256": "21239506a32e8c442a0369f0d08586c5d3317090baa5a08ff5a80394e33dc55c"
+		},
+		{
+			"id": "purple/2",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.purple.2.jpg",
+			"size": 489561,
+			"sha256": "edc3428a80061491a2ccb1c50cbe34945b178d3ec7e3449ace571542ae35296f"
+		},
+		{
+			"id": "purple/3",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.purple.3.jpg",
+			"size": 485401,
+			"sha256": "947d4c620e7b6ee482b818cc44e25cdb4896d0d9e29a5179e5cb4235b6d5af61"
+		},
+		{
+			"id": "purple/4",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.purple.4.jpg",
+			"size": 484200,
+			"sha256": "771dd8e1ffa37e907f4ebf76567359ca43f8c00cfbbb440c438721618ea861dc"
+		},
+		{
+			"id": "purple/5",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.purple.5.jpg",
+			"size": 471106,
+			"sha256": "78372b250064d72ab71498e5ab0b4a1ad2801f5b61bf64eaf6440b16b7208642"
+		},
+		{
+			"id": "purple/6",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/wallpaper.purple.6.jpg",
+			"size": 498788,
+			"sha256": "5e27c917f103745dd9086429aa6182de0ddd3a8c3d81110a1b1c62d9ab7c0e4b"
+		}
+	],
+	"music": [
+		{
+			"id": "ambient-trap-empty-streets-dreamstate-openmindaudio",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.ambient-trap-empty-streets-dreamstate-openmindaudio.mp3",
+			"size": 1104812,
+			"sha256": "5b3249b19ab4cd94aa273ccbc32c4d925db6b94ee142a661f13bd0603258fc52"
+		},
+		{
+			"id": "cassette-retrositive",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.cassette-retrositive.mp3",
+			"size": 2264588,
+			"sha256": "eec38195c3fd3447c28633942acf5114c033444860f4cadffa749a99afb96ba2"
+		},
+		{
+			"id": "good-night-lofi-cozy-chill-fassounds",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.good-night-lofi-cozy-chill-fassounds.mp3",
+			"size": 1766130,
+			"sha256": "76b621ab542a8fdb1a9faa8b49474501b5ed7483ed1cf794bf7fed5e69ba1c03"
+		},
+		{
+			"id": "lofi-beats-mirostar",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.lofi-beats-mirostar.mp3",
+			"size": 1336050,
+			"sha256": "d7ccb2485d7e6eb9bf646b99e8c4320362e56be994c78dfd7467bb5caf118460"
+		},
+		{
+			"id": "lofi-cinematic-pulsebox",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.lofi-cinematic-pulsebox.mp3",
+			"size": 1773260,
+			"sha256": "42995239014ea7922ce70f841da61d88469ba7d0721486898a8800ed0145a8c3"
+		},
+		{
+			"id": "lofi-hip-hop-leberch",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.lofi-hip-hop-leberch.mp3",
+			"size": 937004,
+			"sha256": "5027964e7d48283fca0354c630315b93c08c0b989fd3c674da66d9ab60f31d12"
+		},
+		{
+			"id": "lofi-smooth-pulsebox",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.lofi-smooth-pulsebox.mp3",
+			"size": 1198700,
+			"sha256": "cffaab848b5bb06d20918a81e2035de76dc01046ea2b0150926948c35a46dedf"
+		},
+		{
+			"id": "lofi-study-calm-peaceful-chill-hop-fassounds",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.lofi-study-calm-peaceful-chill-hop-fassounds.mp3",
+			"size": 1767384,
+			"sha256": "6cdec2b5236892d41f9f6f5ba56e6e15e2a12d9584d4af9a210c4709bf1eeac0"
+		},
+		{
+			"id": "raindrops-lofi-sleep-bluelike",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.raindrops-lofi-sleep-bluelike.mp3",
+			"size": 1644524,
+			"sha256": "bd4b42e1d32b56be011e4b1cf31825fc756190c40760b2abee5ef19df5227e5f"
+		},
+		{
+			"id": "sunday-mood-lofi-cafe-upbeat-bluelike",
+			"url": "https://github.com/CapSoftware/transcription-models/releases/download/desktop-assets-v1/music.sunday-mood-lofi-cafe-upbeat-bluelike.mp3",
+			"size": 1221164,
+			"sha256": "128f9e20630db2474627ba837fa4ff04071ddab7ef4962e425c0ede14c93746c"
+		}
+	]
+}

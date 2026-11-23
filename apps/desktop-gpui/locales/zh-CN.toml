@@ -3609,3 +3609,23 @@ verification_failed = "录制验证失败：{status}"
 
 [message.cli]
 binary_missing = "未在 {path} 找到内置的 CLI 程序"
+
+[assets]
+cancel = "取消"
+download_all_backgrounds = "下载全部背景"
+download_all_music = "下载全部音乐"
+downloading_backgrounds = "正在下载背景"
+downloading_music = "正在下载音乐"
+megabytes = "{size} MB"
+new_backgrounds = { other = "{count} 个新背景" }
+new_tracks = { other = "{count} 首新曲目" }
+progress = "{done} / {total}"
+retry = "重试"
+some_failed = { other = "{count} 个无法下载" }
+
+[assets.error]
+background = "无法下载此视频的背景。"
+disk = "无法保存下载的文件。"
+failed = "下载未完成。请重试。"
+no_space = "磁盘空间不足。"
+offline = "无法连接。请检查你的网络连接后重试。"

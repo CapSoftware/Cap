@@ -2186,6 +2186,10 @@ pub struct EditorWindow {
     pub(crate) audio_picker_generation: u64,
     pub(crate) audio_import_pending: Option<u64>,
     audio_picker_request: Option<AudioImportRequest>,
+    /// The last frame sent to the renderer stood a wallpaper's thumbnail in
+    /// for the file still downloading; a landed download republishes.
+    preview_placeholder: Cell<bool>,
+    _asset_watch: gpui::Task<()>,
     /// A transient line over the player: the one place an action that cannot
     /// apply says so (the editor has no toast host of its own).
     pub(crate) notice: Option<EditorNotice>,
@@ -2749,6 +2753,7 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Timeline, cx)
         });
+        let asset_watch = crate::asset_library::watch(window, cx, Self::assets_changed);
         let timeline_overlay_view =
             cx.new(move |cx| EditorSectionView::new(&editor, EditorSection::TimelineOverlay, cx));
 
@@ -2910,6 +2915,8 @@ impl EditorWindow {
             audio_picker_generation: 0,
             audio_import_pending: None,
             audio_picker_request: None,
+            preview_placeholder: Cell::new(false),
+            _asset_watch: asset_watch,
             notice: None,
             notice_seq: 0,
             play_until: None,
@@ -3622,6 +3629,8 @@ impl EditorWindow {
         };
         let mut config = self.project.clone();
         config.screen_enhancement = self.preview_screen_enhancement();
+        self.preview_placeholder
+            .set(crate::asset_library::apply_preview_placeholder(&mut config));
         instance.project_config.0.send(config).ok();
         if !self.playing {
             let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
@@ -4074,11 +4083,32 @@ impl EditorWindow {
         // A restored Enhance toggle reaches the renderer before its first
         // frame, not only once something publishes the project.
         let enhancement = self.preview_screen_enhancement();
-        instance
-            .project_config
-            .0
-            .send_modify(|config| config.screen_enhancement = enhancement);
+        let mut placeholder = false;
+        instance.project_config.0.send_modify(|config| {
+            config.screen_enhancement = enhancement;
+            placeholder = crate::asset_library::apply_preview_placeholder(config);
+        });
+        self.preview_placeholder.set(placeholder);
         self.instance = Some(instance);
+    }
+
+    /// An asset download moved, landed or failed, or the catalogue grew.
+    fn assets_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Once, when the wallpaper the preview stood a thumbnail in for lands.
+        if self.preview_placeholder.get()
+            && crate::asset_library::missing_project_wallpaper(&self.project).is_none()
+        {
+            self.publish_project();
+        }
+        let wallpapers_shown = self.sidebar.tab == crate::editor_sidebar::SidebarTab::Background
+            && self.sidebar.source_tab == crate::editor_sidebar::SourceTab::Wallpaper;
+        if wallpapers_shown {
+            self.ensure_wallpapers(window, cx);
+        }
+        if wallpapers_shown || self.audio_picker.is_some() {
+            self.invalidate_sidebar(cx);
+            cx.notify();
+        }
     }
 
     fn preview_screen_enhancement(&self) -> cap_project::ScreenEnhancement {
@@ -7220,11 +7250,24 @@ impl EditorWindow {
         };
         let project_path = self.project_path.clone();
         cx.spawn_in(window, async move |this, cx| {
+            let source = crate::asset_library::ensure(crate::asset_library::Kind::Music, id).await;
+            let source = match source {
+                Ok(source) => source,
+                Err(error) => {
+                    let message = crate::asset_library::error_message(&error);
+                    this.update_in(cx, |this, window, cx| {
+                        this.show_notice(message, window, cx);
+                        this.finish_audio_import(request, Ok(None), window, cx);
+                    })
+                    .ok();
+                    return;
+                }
+            };
             let imported = cx
                 .background_executor()
-                .spawn(
-                    async move { crate::editor_audio::copy_library_track(&project_path, id, name) },
-                )
+                .spawn(async move {
+                    crate::editor_audio::copy_library_track(&project_path, &source, id, name)
+                })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 this.finish_audio_import(

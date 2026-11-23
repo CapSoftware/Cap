@@ -1180,6 +1180,9 @@ async fn render(
     destination: &ExportDestination,
 ) -> Result<PathBuf, String> {
     tracing::info!(project = %project_path.display(), format = ?profile.format, "automation: exporting");
+    if let Ok(config) = cap_project::ProjectConfiguration::load(project_path) {
+        crate::asset_library::ensure_for_project(&config).await?;
+    }
     let mut builder = cap_export::ExporterBase::builder(project_path.to_path_buf());
     if let ExportDestination::CustomPath { dir } = destination {
         let folder = chosen_folder(dir)?;

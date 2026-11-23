@@ -3609,3 +3609,23 @@ verification_failed = "La verificación de la grabación ha fallado: {status}"
 
 [message.cli]
 binary_missing = "No se encontró la CLI incluida en {path}"
+
+[assets]
+cancel = "Cancelar"
+download_all_backgrounds = "Descargar todos los fondos"
+download_all_music = "Descargar toda la música"
+downloading_backgrounds = "Descargando fondos"
+downloading_music = "Descargando música"
+megabytes = "{size} MB"
+new_backgrounds = { one = "{count} fondo nuevo", other = "{count} fondos nuevos" }
+new_tracks = { one = "{count} pista nueva", other = "{count} pistas nuevas" }
+progress = "{done} de {total}"
+retry = "Reintentar"
+some_failed = { one = "{count} no se pudo descargar", other = "{count} no se pudieron descargar" }
+
+[assets.error]
+background = "No se pudo descargar el fondo de este video."
+disk = "No se pudo guardar la descarga."
+failed = "La descarga no terminó. Inténtalo de nuevo."
+no_space = "No hay suficiente espacio libre en el disco."
+offline = "No hay conexión. Revisa tu conexión a internet e inténtalo de nuevo."

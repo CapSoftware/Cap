@@ -3609,3 +3609,23 @@ verification_failed = "रिकॉर्डिंग की जाँच वि
 
 [message.cli]
 binary_missing = "{path} पर बंडल की गई CLI नहीं मिली"
+
+[assets]
+cancel = "रद्द करें"
+download_all_backgrounds = "सभी बैकग्राउंड डाउनलोड करें"
+download_all_music = "सारा म्यूज़िक डाउनलोड करें"
+downloading_backgrounds = "बैकग्राउंड डाउनलोड हो रहे हैं"
+downloading_music = "म्यूज़िक डाउनलोड हो रहा है"
+megabytes = "{size} MB"
+new_backgrounds = { one = "{count} नया बैकग्राउंड", other = "{count} नए बैकग्राउंड" }
+new_tracks = { one = "{count} नया ट्रैक", other = "{count} नए ट्रैक" }
+progress = "{total} में से {done}"
+retry = "फिर से कोशिश करें"
+some_failed = { one = "{count} डाउनलोड नहीं हो सका", other = "{count} डाउनलोड नहीं हो सके" }
+
+[assets.error]
+background = "इस वीडियो का बैकग्राउंड डाउनलोड नहीं हो सका।"
+disk = "डाउनलोड सेव नहीं हो सका।"
+failed = "डाउनलोड पूरा नहीं हुआ। फिर से कोशिश करें।"
+no_space = "डिस्क में पर्याप्त जगह नहीं है।"
+offline = "कनेक्ट नहीं हो सका। अपना इंटरनेट कनेक्शन जाँचें और फिर से कोशिश करें।"

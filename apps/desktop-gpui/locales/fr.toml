@@ -3609,3 +3609,23 @@ verification_failed = "La vérification de l'enregistrement a échoué : {status
 
 [message.cli]
 binary_missing = "CLI intégrée introuvable dans {path}"
+
+[assets]
+cancel = "Annuler"
+download_all_backgrounds = "Télécharger tous les fonds"
+download_all_music = "Télécharger toute la musique"
+downloading_backgrounds = "Téléchargement des fonds"
+downloading_music = "Téléchargement de la musique"
+megabytes = "{size} Mo"
+new_backgrounds = { one = "{count} nouveau fond", other = "{count} nouveaux fonds" }
+new_tracks = { one = "{count} nouveau morceau", other = "{count} nouveaux morceaux" }
+progress = "{done} sur {total}"
+retry = "Réessayer"
+some_failed = { one = "{count} n'a pas pu être téléchargé", other = "{count} n'ont pas pu être téléchargés" }
+
+[assets.error]
+background = "Impossible de télécharger le fond de cette vidéo."
+disk = "Impossible d'enregistrer le téléchargement."
+failed = "Le téléchargement n'a pas abouti. Réessayez."
+no_space = "Espace disque insuffisant."
+offline = "Connexion impossible. Vérifiez votre connexion Internet et réessayez."

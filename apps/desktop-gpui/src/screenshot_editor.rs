@@ -41,6 +41,7 @@ use gpui::{
     img, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, px, svg,
 };
 
+use crate::asset_library;
 use crate::editor_edits::ProjectHistory;
 use crate::editor_sidebar::{
     self, BACKGROUND_COLORS, BACKGROUND_IMAGE_EXTENSIONS, BACKGROUND_THEMES, DEFAULT_COLOR,
@@ -964,6 +965,9 @@ pub struct ScreenshotEditorWindow {
     wallpaper_theme: usize,
     wallpapers: HashMap<&'static str, Arc<RenderImage>>,
     wallpaper_task: Option<gpui::Task<()>>,
+    /// The preview stood a wallpaper's thumbnail in for its download.
+    preview_placeholder: bool,
+    _asset_watch: gpui::Task<()>,
     /// The Image tab's `h-48` preview, decoded off-thread and keyed by path.
     bg_image: Option<(String, Arc<RenderImage>)>,
     bg_image_task: Option<gpui::Task<()>>,
@@ -1050,6 +1054,8 @@ impl ScreenshotEditorWindow {
             wallpaper_theme: 0,
             wallpapers: HashMap::new(),
             wallpaper_task: None,
+            preview_placeholder: false,
+            _asset_watch: asset_library::watch(window, cx, Self::assets_changed),
             bg_image: None,
             bg_image_task: None,
             shadow_advanced: ui::CollapsibleState::new(false),
@@ -1132,6 +1138,17 @@ impl ScreenshotEditorWindow {
         self.project = config;
         self.render_gate = RenderInputGate::published(&mut self.project);
         self.image_size = Some(image_size);
+        // A wallpaper this install has not downloaded yet: the renderer got
+        // the stored path, so show the thumbnail now and fetch the file.
+        let mut preview = self.project.clone();
+        if asset_library::apply_preview_placeholder(&mut preview) {
+            self.preview_placeholder = true;
+            self.revision += 1;
+            let _ = config_tx.send(ConfigUpdate {
+                revision: self.revision,
+                config: preview,
+            });
+        }
         self.config_tx = Some(config_tx);
         self.export_tx = Some(export_tx);
         self.pending_save.borrow_mut().path = Some(self.bundle.clone());
@@ -1248,9 +1265,11 @@ impl ScreenshotEditorWindow {
             return;
         }
         self.revision += 1;
+        let mut config = self.project.clone();
+        self.preview_placeholder = asset_library::apply_preview_placeholder(&mut config);
         let _ = config_tx.send(ConfigUpdate {
             revision: self.revision,
-            config: self.project.clone(),
+            config,
         });
     }
 
@@ -1505,8 +1524,30 @@ impl ScreenshotEditorWindow {
 
     /// Decode the current theme's wallpaper tiles that are not cached yet --
     /// `ensure_wallpapers` on the video editor, against this window's own map.
+    /// An asset download moved, landed or failed, or the catalogue grew.
+    fn assets_changed(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // Once, when the wallpaper the preview stood a thumbnail in for
+        // lands. Straight to the renderer: the gate only admits changes to
+        // the project, and the project did not change.
+        if self.preview_placeholder
+            && asset_library::missing_project_wallpaper(&self.project).is_none()
+            && let Some(config_tx) = &self.config_tx
+        {
+            self.preview_placeholder = false;
+            self.revision += 1;
+            let _ = config_tx.send(ConfigUpdate {
+                revision: self.revision,
+                config: self.project.clone(),
+            });
+        }
+        if self.bg_tab == BgTab::Wallpaper {
+            self.ensure_wallpapers(cx);
+            cx.notify();
+        }
+    }
+
     fn ensure_wallpapers(&mut self, cx: &mut Context<Self>) {
-        let theme_name = BACKGROUND_THEMES[self.wallpaper_theme].0;
+        let theme_name = editor_sidebar::background_theme_at(self.wallpaper_theme);
         let wanted: Vec<&'static str> = editor_sidebar::wallpapers_for_theme(theme_name)
             .into_iter()
             .filter(|id| !self.wallpapers.contains_key(id))
@@ -1983,7 +2024,10 @@ impl ScreenshotEditorWindow {
                 config: config.clone(),
                 reply: reply_tx,
             };
-            let rendered = if export_tx.send(request).await.is_ok() {
+            let assets = crate::asset_library::ensure_for_project(&config).await;
+            let rendered = if let Err(error) = assets {
+                Err(error)
+            } else if export_tx.send(request).await.is_ok() {
                 match reply_rx.await {
                     Ok(result) => result,
                     Err(_) => Err(tr::screenshot_editor::error::renderer_stopped().into()),
@@ -2261,7 +2305,10 @@ impl ScreenshotEditorWindow {
                 config: config.clone(),
                 reply: reply_tx,
             };
-            let rendered = if export_tx.send(request).await.is_ok() {
+            let assets = crate::asset_library::ensure_for_project(&config).await;
+            let rendered = if let Err(error) = assets {
+                Err(error)
+            } else if export_tx.send(request).await.is_ok() {
                 match reply_rx.await {
                     Ok(result) => result,
                     Err(_) => Err(tr::screenshot_editor::error::renderer_stopped().into()),
@@ -3347,7 +3394,11 @@ impl ScreenshotEditorWindow {
             self.ensure_wallpapers(cx);
         }
         let fallback_wallpaper = (tab == BgTab::Wallpaper)
-            .then(|| editor_sidebar::default_wallpaper(BACKGROUND_THEMES[self.wallpaper_theme].0))
+            .then(|| {
+                editor_sidebar::default_wallpaper(editor_sidebar::background_theme_at(
+                    self.wallpaper_theme,
+                ))
+            })
             .flatten();
         self.edit_project(
             move |project| {
@@ -3391,7 +3442,7 @@ impl ScreenshotEditorWindow {
             }
             _ => None,
         };
-        let theme_name = BACKGROUND_THEMES[self.wallpaper_theme].0;
+        let theme_name = editor_sidebar::background_theme_at(self.wallpaper_theme);
 
         div()
             .flex()
@@ -3405,10 +3456,15 @@ impl ScreenshotEditorWindow {
                     .gap(px(8.))
                     .text_size(px(12.))
                     .children(
-                        BACKGROUND_THEMES
-                            .iter()
+                        editor_sidebar::background_themes()
+                            .into_iter()
                             .enumerate()
-                            .map(|(index, (_, label))| {
+                            .map(|(index, id)| {
+                                let label = BACKGROUND_THEMES
+                                    .iter()
+                                    .find(|(known, _)| *known == id)
+                                    .map(|(_, label)| *label)
+                                    .unwrap_or_else(|| editor_sidebar::background_theme_label(id));
                                 let selected = index == self.wallpaper_theme;
                                 div()
                                     .id(("screenshot-wallpaper-theme", index))
@@ -3430,7 +3486,7 @@ impl ScreenshotEditorWindow {
                                             .text_color(theme.gray_11)
                                             .hover(|style| style.border_color(theme.gray_7))
                                     })
-                                    .child(*label)
+                                    .child(label)
                                     .on_click(cx.listener(move |this, _, _window, cx| {
                                         cx.stop_propagation();
                                         this.wallpaper_theme = index;
@@ -3440,6 +3496,10 @@ impl ScreenshotEditorWindow {
                             }),
                     ),
             )
+            .children(asset_library::ui::download_row(
+                &theme,
+                asset_library::Kind::Wallpaper,
+            ))
             .child(
                 // `grid grid-cols-7 gap-2` over the first 21 tiles
                 // (`BackgroundSettingsPopover.tsx:356-358`).
@@ -3450,8 +3510,10 @@ impl ScreenshotEditorWindow {
                         .enumerate()
                         .map(|(index, id)| {
                             let selected = current == Some(id);
+                            let status = asset_library::status(asset_library::Kind::Wallpaper, id);
                             div()
                                 .id(("screenshot-wallpaper", index))
+                                .relative()
                                 .size(px(44.))
                                 .rounded(px(8.))
                                 .overflow_hidden()
@@ -3470,10 +3532,11 @@ impl ScreenshotEditorWindow {
                                         img(image).size_full().object_fit(gpui::ObjectFit::Cover),
                                     )
                                 })
+                                .children(asset_library::ui::tile_overlay(status, 6.))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     let Some(path) = editor_sidebar::wallpaper_path(id) else {
-                                        tracing::error!(id, "wallpaper asset not found");
+                                        tracing::error!(id, "unknown wallpaper");
                                         return;
                                     };
                                     let path = path.to_string_lossy().into_owned();

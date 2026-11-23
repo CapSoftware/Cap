@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use cap_enc_ffmpeg::remux::get_media_duration;
 use cap_project::{ProjectConfiguration, TimelineConfiguration};
@@ -7,7 +7,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, svg,
 };
 
-use crate::{editor_window::EditorWindow, i18n::tr, theme::Theme, ui};
+use crate::{asset_library, editor_window::EditorWindow, i18n::tr, theme::Theme, ui};
 
 pub const AUDIO_LIBRARY: &[(&str, &str)] = &[
     ("lofi-beats-mirostar", "Lofi Beats"),
@@ -112,44 +112,23 @@ pub(crate) fn probe_audio_duration(path: &Path) -> f64 {
         .unwrap_or(0.0)
 }
 
-pub fn bundled_track_path(id: &str) -> Option<PathBuf> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    bundled_track_path_from(id, &crate::store::bundled_resource_dirs(), &manifest)
-}
-
-fn bundled_track_path_from(
-    id: &str,
-    resource_dirs: &[PathBuf],
-    manifest: &Path,
-) -> Option<PathBuf> {
-    if !AUDIO_LIBRARY.iter().any(|(known, _)| *known == id) {
-        return None;
-    }
-
-    let file = format!("{id}.mp3");
-    let mut candidates = resource_dirs
-        .iter()
-        .map(|directory| directory.join("assets/music").join(&file))
-        .collect::<Vec<_>>();
-    candidates.push(manifest.join("assets/music").join(&file));
-    candidates.into_iter().find(|path| path.is_file())
-}
-
+/// Copies a library track already on disk (`source`) into the project, so
+/// the project keeps working wherever it goes.
 pub fn copy_library_track(
     project_path: &Path,
+    source: &Path,
     id: &str,
     name: &str,
 ) -> Result<(String, String, f64), String> {
-    let source = bundled_track_path(id).ok_or_else(|| format!("Unknown library track: {id}"))?;
     let audio_dir = project_path.join("assets").join("audio");
     std::fs::create_dir_all(&audio_dir)
         .map_err(|error| format!("Failed to create audio directory: {error}"))?;
     let dest_name = format!("library-{id}.mp3");
     let dest = audio_dir.join(&dest_name);
     if !dest.exists() {
-        std::fs::copy(&source, &dest).map_err(|error| {
+        std::fs::copy(source, &dest).map_err(|error| {
             format!(
-                "Failed to copy bundled track from {}: {error}",
+                "Failed to copy library track from {}: {error}",
                 source.display()
             )
         })?;
@@ -222,12 +201,16 @@ impl EditorWindow {
                         this.import_audio_from_picker(window, cx);
                     })),
             )
+            .children(asset_library::ui::download_row(
+                &theme,
+                asset_library::Kind::Music,
+            ))
             .child(
                 div().flex().flex_col().gap(px(6.)).children(
-                    AUDIO_LIBRARY
-                        .iter()
-                        .copied()
-                        .map(|(id, name)| render_library_row(&theme, id, name, importing, cx)),
+                    asset_library::catalog::current()
+                        .items(asset_library::Kind::Music)
+                        .map(|item| render_library_row(&theme, &item, importing, cx))
+                        .collect::<Vec<_>>(),
                 ),
             )
             .into_any_element()
@@ -236,11 +219,12 @@ impl EditorWindow {
 
 fn render_library_row(
     theme: &Theme,
-    id: &'static str,
-    name: &'static str,
+    item: &asset_library::Item,
     importing: bool,
     cx: &mut Context<EditorWindow>,
 ) -> AnyElement {
+    let (id, name) = (item.id, item.name);
+    let status = asset_library::status(asset_library::Kind::Music, id);
     div()
         .id(SharedString::from(format!("audio-lib-{id}")))
         .flex()
@@ -274,18 +258,23 @@ fn render_library_row(
                         .text_color(Hsla::from(theme.gray_12))
                         .child(name),
                 )
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(Hsla::from(theme.editor.text_3))
-                        .child("Lo-Fi"),
-                ),
+                .when(item.builtin, |this| {
+                    this.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(Hsla::from(theme.editor.text_3))
+                            .child("Lo-Fi"),
+                    )
+                }),
         )
         .child(
-            svg()
-                .path("icons/plus.svg")
-                .size(px(16.))
-                .text_color(Hsla::from(theme.gray_11)),
+            asset_library::ui::track_trailing(theme, status, item.file.size).unwrap_or_else(|| {
+                svg()
+                    .path("icons/plus.svg")
+                    .size(px(16.))
+                    .text_color(Hsla::from(theme.gray_11))
+                    .into_any_element()
+            }),
         )
         .into_any_element()
 }
@@ -293,9 +282,18 @@ fn render_library_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        AUDIO_LIBRARY, AudioImportRequest, AudioPicker, bundled_track_path,
-        bundled_track_path_from, copy_library_track, probe_audio_duration, replace_audio_asset,
+        AUDIO_LIBRARY, AudioImportRequest, AudioPicker, copy_library_track, probe_audio_duration,
+        replace_audio_asset,
     };
+
+    /// Where a library track is on disk right now, if it is.
+    fn library_track_path(id: &str) -> Option<std::path::PathBuf> {
+        let library = crate::asset_library::library();
+        let item = library
+            .catalog()
+            .item(crate::asset_library::Kind::Music, id)?;
+        library.installed_path(&item)
+    }
     use cap_project::ProjectConfiguration;
 
     fn audio_project() -> ProjectConfiguration {
@@ -432,8 +430,9 @@ mod tests {
     fn copied_library_audio_includes_source_duration() {
         let root =
             std::env::temp_dir().join(format!("cap-gpui-audio-duration-{}", std::process::id()));
+        let source = library_track_path("lofi-beats-mirostar").unwrap();
         let (path, name, duration) =
-            copy_library_track(&root, "lofi-beats-mirostar", "Lofi Beats").unwrap();
+            copy_library_track(&root, &source, "lofi-beats-mirostar", "Lofi Beats").unwrap();
         assert_eq!(name, "Lofi Beats");
         assert!(duration > 0.0);
         assert_eq!(duration, probe_audio_duration(&root.join(path)));
@@ -441,28 +440,10 @@ mod tests {
     }
 
     #[test]
-    fn built_in_music_resolves_from_an_installed_bundle() {
-        let root =
-            std::env::temp_dir().join(format!("cap-gpui-installed-music-{}", std::process::id()));
-        let resources = root.join("Cap.app/Contents/Resources");
-        let music = resources.join("assets/music");
-        std::fs::create_dir_all(&music).unwrap();
-        let track = music.join("lofi-beats-mirostar.mp3");
-        std::fs::write(&track, b"test track").unwrap();
-
-        assert_eq!(
-            bundled_track_path_from("lofi-beats-mirostar", &[resources], &root.join("missing")),
-            Some(track)
-        );
-
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn built_in_music_remains_available_from_the_development_checkout() {
         for (id, _) in AUDIO_LIBRARY {
             assert!(
-                bundled_track_path(id).is_some(),
+                library_track_path(id).is_some(),
                 "missing bundled track {id}"
             );
         }
@@ -470,7 +451,7 @@ mod tests {
 
     #[test]
     fn built_in_music_rejects_unknown_and_traversal_identifiers() {
-        assert_eq!(bundled_track_path("unknown-track"), None);
-        assert_eq!(bundled_track_path("../lofi-beats-mirostar"), None);
+        assert_eq!(library_track_path("unknown-track"), None);
+        assert_eq!(library_track_path("../lofi-beats-mirostar"), None);
     }
 }

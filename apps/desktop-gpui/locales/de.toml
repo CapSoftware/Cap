@@ -3609,3 +3609,23 @@ verification_failed = "Die Prüfung der Aufnahme ist fehlgeschlagen: {status}"
 
 [message.cli]
 binary_missing = "Mitgelieferte CLI unter {path} nicht gefunden"
+
+[assets]
+cancel = "Abbrechen"
+download_all_backgrounds = "Alle Hintergründe laden"
+download_all_music = "Alle Musik laden"
+downloading_backgrounds = "Hintergründe werden geladen"
+downloading_music = "Musik wird geladen"
+megabytes = "{size} MB"
+new_backgrounds = { one = "{count} neuer Hintergrund", other = "{count} neue Hintergründe" }
+new_tracks = { one = "{count} neuer Titel", other = "{count} neue Titel" }
+progress = "{done} von {total}"
+retry = "Erneut versuchen"
+some_failed = { one = "{count} konnte nicht geladen werden", other = "{count} konnten nicht geladen werden" }
+
+[assets.error]
+background = "Der Hintergrund dieses Videos konnte nicht geladen werden."
+disk = "Der Download konnte nicht gespeichert werden."
+failed = "Der Download wurde nicht abgeschlossen. Versuchen Sie es erneut."
+no_space = "Nicht genug freier Speicherplatz."
+offline = "Keine Verbindung. Prüfen Sie Ihre Internetverbindung und versuchen Sie es erneut."
