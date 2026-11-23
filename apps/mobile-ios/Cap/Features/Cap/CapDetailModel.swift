@@ -87,6 +87,8 @@ final class CapDetailModel {
     /// Captured when composing starts so it doesn't drift.
     var composerTimestamp: Double?
     var highlightedCommentID: String?
+    /// Bumped when the open section needs its top brought into view, such as when its search field takes the keyboard.
+    var sectionRevealRequests = 0
     var commentOrder: CommentOrder = .oldest
     var captionsEnabled: Bool {
         didSet { UserDefaults.standard.set(captionsEnabled, forKey: Self.captionsKey) }
