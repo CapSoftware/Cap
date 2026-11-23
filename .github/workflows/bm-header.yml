@@ -36,7 +36,7 @@ jobs:
           github-token: ${{ github.token }}
       - name: Audit
         run: |
-          A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          export A="$RUNNER_TEMP/apps"; mkdir -p "$A"
           find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
           cat "$A"/*/sha.txt
           cat > "$RUNNER_TEMP/run.sh" <<'EOF'
