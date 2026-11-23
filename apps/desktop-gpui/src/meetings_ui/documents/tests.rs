@@ -20,10 +20,53 @@ use super::{
 };
 use crate::theme::Theme;
 
+fn utc_day(at: chrono::DateTime<Utc>) -> NaiveDate {
+    at.date_naive()
+}
+
 fn meta(id: &str, kind: DocKind, at: chrono::DateTime<Utc>) -> DocMeta {
     let mut meta = DocMeta::new(id.to_string(), kind, at);
     meta.title = id.to_string();
     meta
+}
+
+#[test]
+fn a_summer_meeting_after_midnight_keeps_its_own_day_in_winter() {
+    // London, read in November (GMT): 23:30 UTC on 9 July was 00:30 on
+    // 10 July (BST), the day the Library and the row's time show.
+    let london = |at: chrono::DateTime<Utc>| {
+        at.with_timezone(&cap_calendar::Tz::Europe__London)
+            .date_naive()
+    };
+    let today = NaiveDate::from_ymd_opt(2026, 11, 23).unwrap();
+    let snapshot = Snapshot {
+        docs: vec![
+            meta(
+                "a",
+                DocKind::Meeting,
+                Utc.with_ymd_and_hms(2026, 7, 10, 9, 0, 0).unwrap(),
+            ),
+            meta(
+                "b",
+                DocKind::Meeting,
+                Utc.with_ymd_and_hms(2026, 7, 9, 23, 30, 0).unwrap(),
+            ),
+        ],
+        trashed: Vec::new(),
+        folders: Vec::new(),
+    };
+    let rows = build_rows(&snapshot, &Scope::All, today, &london);
+    let july_10 = super::format::day_label(NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(), today);
+    assert_eq!(
+        rows,
+        vec![
+            Row::Head,
+            Row::Header(july_10),
+            Row::Doc(0),
+            Row::Doc(1),
+            Row::Foot,
+        ]
+    );
 }
 
 #[test]
@@ -42,7 +85,7 @@ fn rows_put_pinned_first_then_group_by_day() {
         trashed: Vec::new(),
         folders: Vec::new(),
     };
-    let rows = build_rows(&snapshot, &Scope::All, today, 0);
+    let rows = build_rows(&snapshot, &Scope::All, today, &utc_day);
     assert_eq!(
         rows,
         vec![
@@ -56,7 +99,7 @@ fn rows_put_pinned_first_then_group_by_day() {
             Row::Foot,
         ]
     );
-    let pinned = build_rows(&snapshot, &Scope::Pinned, today, 0);
+    let pinned = build_rows(&snapshot, &Scope::Pinned, today, &utc_day);
     assert_eq!(
         pinned,
         vec![
@@ -71,7 +114,7 @@ fn rows_put_pinned_first_then_group_by_day() {
 #[test]
 fn an_empty_library_still_has_a_home_page() {
     let today = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
-    let rows = build_rows(&Snapshot::default(), &Scope::All, today, 0);
+    let rows = build_rows(&Snapshot::default(), &Scope::All, today, &utc_day);
     assert_eq!(rows, vec![Row::Head, Row::Empty, Row::Foot]);
 }
 
@@ -86,7 +129,7 @@ fn folder_scope_hides_coming_up_and_other_folders() {
         trashed: vec![meta("gone", DocKind::Note, at)],
         folders: Vec::new(),
     };
-    let rows = build_rows(&snapshot, &Scope::Folder("f-1".into()), today, 0);
+    let rows = build_rows(&snapshot, &Scope::Folder("f-1".into()), today, &utc_day);
     assert_eq!(
         rows,
         vec![
@@ -96,7 +139,7 @@ fn folder_scope_hides_coming_up_and_other_folders() {
             Row::Foot
         ]
     );
-    let trash = build_rows(&snapshot, &Scope::Trash, today, 0);
+    let trash = build_rows(&snapshot, &Scope::Trash, today, &utc_day);
     assert_eq!(trash, vec![Row::Head, Row::Trashed(0), Row::Foot]);
 }
 

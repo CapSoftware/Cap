@@ -770,7 +770,7 @@ impl LibraryWindow {
             let holds = |id: &str, item: &Item| self.in_folder(id, item);
             let ctx = EvalContext {
                 today: today(),
-                tz_offset_minutes: crate::meetings_ui::documents::store::tz_offset_minutes(),
+                local_day: &crate::meetings_ui::documents::store::local_day,
                 in_folder: &holds,
             };
             rules::evaluate_all(&folders, &self.scan.items, &ctx)
@@ -997,7 +997,7 @@ impl LibraryWindow {
         let holds = |id: &str, item: &Item| self.in_folder(id, item);
         let ctx = EvalContext {
             today: today(),
-            tz_offset_minutes: crate::meetings_ui::documents::store::tz_offset_minutes(),
+            local_day: &crate::meetings_ui::documents::store::local_day,
             in_folder: &holds,
         };
         let mut count = 0;

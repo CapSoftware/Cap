@@ -267,12 +267,7 @@ impl Home {
             {
                 self.scope = Scope::All;
             }
-            store::build_rows(
-                &store.snapshot,
-                &self.scope,
-                self.today,
-                store::tz_offset_minutes(),
-            )
+            store::build_rows(&store.snapshot, &self.scope, self.today, &store::local_day)
         };
         if *self.rows != rows {
             let top = self.list.logical_scroll_top();

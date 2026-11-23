@@ -1030,11 +1030,21 @@ pub fn is_valid_id(id: &str) -> bool {
 pub fn group_by_day(docs: &[DocMeta], tz_offset_minutes: i32) -> Vec<DayGroup> {
     let seconds = tz_offset_minutes.clamp(-14 * 60, 14 * 60) * 60;
     let offset = FixedOffset::east_opt(seconds).unwrap_or_else(|| Utc.fix());
+    group_by_local_day(docs, |at| at.with_timezone(&offset).date_naive())
+}
+
+/// Docs newest first, grouped by the day `day_of` puts each one on. Each doc
+/// gets its own day, so a zone's daylight saving rules apply to every date
+/// (a July meeting just after midnight stays on its own day in November).
+pub fn group_by_local_day(
+    docs: &[DocMeta],
+    day_of: impl Fn(DateTime<Utc>) -> NaiveDate,
+) -> Vec<DayGroup> {
     let mut sorted: Vec<&DocMeta> = docs.iter().collect();
     sorted.sort_by(|a, b| b.sort_time().cmp(&a.sort_time()).then(b.id.cmp(&a.id)));
     let mut groups: Vec<DayGroup> = Vec::new();
     for doc in sorted {
-        let date = doc.sort_time().with_timezone(&offset).date_naive();
+        let date = day_of(doc.sort_time());
         match groups.last_mut() {
             Some(group) if group.date == date => group.ids.push(doc.id.clone()),
             _ => groups.push(DayGroup {

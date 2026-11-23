@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{Duration, NaiveDate};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
@@ -260,7 +260,8 @@ enum TextField {
 /// zone, and which manual folders hold which items.
 pub struct EvalContext<'a> {
     pub today: NaiveDate,
-    pub tz_offset_minutes: i32,
+    /// The person's calendar day of a moment, with that date's own offset.
+    pub local_day: &'a dyn Fn(DateTime<Utc>) -> NaiveDate,
     /// Manual folder membership: does folder `id` hold this item?
     pub in_folder: &'a dyn Fn(&str, &Item) -> bool,
 }
@@ -376,7 +377,7 @@ fn rule_matches(rule: &CompiledRule, item: &Item, cx: &EvalContext<'_>) -> bool 
         },
         CompiledRule::Kind { op, value } => (item.kind == *value) == (*op == IsOp::Is),
         CompiledRule::Date { from, to } => {
-            let local = (item.at + Duration::minutes(i64::from(cx.tz_offset_minutes))).date_naive();
+            let local = (cx.local_day)(item.at);
             from.is_none_or(|from| local >= from) && to.is_none_or(|to| local <= to)
         }
         CompiledRule::Length { op, ms } => match item.duration_ms {

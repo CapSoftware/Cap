@@ -37,10 +37,18 @@ fn no_folders(_: &str, _: &Item) -> bool {
     false
 }
 
+fn utc_day(at: chrono::DateTime<Utc>) -> NaiveDate {
+    at.date_naive()
+}
+
+fn plus_one_hour_day(at: chrono::DateTime<Utc>) -> NaiveDate {
+    (at + chrono::Duration::minutes(60)).date_naive()
+}
+
 fn cx() -> EvalContext<'static> {
     EvalContext {
         today: today(),
-        tz_offset_minutes: 0,
+        local_day: &utc_day,
         in_folder: &no_folders,
     }
 }
@@ -172,7 +180,7 @@ fn dates_use_the_local_day() {
     );
     assert!(!today_rule.matches(&late, &cx()));
     let plus_one = EvalContext {
-        tz_offset_minutes: 60,
+        local_day: &plus_one_hour_day,
         ..cx()
     };
     assert!(today_rule.matches(&late, &plus_one));
@@ -357,4 +365,37 @@ fn cycling_fields_comes_back_to_a_text_field_that_keeps_its_text() {
         serde_json::from_value(serde_json::to_value(folder(Matching::All, vec![typed])).unwrap())
             .unwrap();
     assert_eq!(saved.rules, vec![title(TextOp::Contains, "retro")]);
+}
+
+#[test]
+fn a_date_rule_puts_a_summer_meeting_on_its_own_local_day() {
+    // London: 23:30 UTC on 9 July is 00:30 on 10 July (BST), even when the
+    // rule runs in November (GMT, offset zero).
+    let london = |at: chrono::DateTime<Utc>| {
+        at.with_timezone(&cap_calendar::Tz::Europe__London)
+            .date_naive()
+    };
+    let july_10 = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
+    let rule = folder(
+        Matching::All,
+        vec![Rule::Date {
+            range: DateRange::Between {
+                from: july_10,
+                to: july_10,
+            },
+        }],
+    )
+    .compile(today());
+    let item = Item::new(
+        ItemKey::Doc("july".into()),
+        ItemKind::Meeting,
+        "july",
+        Utc.with_ymd_and_hms(2026, 7, 9, 23, 30, 0).unwrap(),
+        ItemFacts::default(),
+    );
+    let in_london = EvalContext {
+        local_day: &london,
+        ..cx()
+    };
+    assert!(rule.matches(&item, &in_london));
 }

@@ -931,3 +931,36 @@ fn a_cleanup_claim_is_held_until_the_audio_is_gone_and_saved() {
     assert_eq!(swept.done, vec![old.id.clone()]);
     assert_eq!(*seen.borrow(), vec![true]);
 }
+
+#[test]
+fn local_days_follow_each_dates_own_offset() {
+    // A zone at UTC+1 in summer and UTC+0 in winter: 23:30 UTC on 9 July is
+    // 00:30 on 10 July there, whatever the offset is today.
+    let summer_start = Utc.with_ymd_and_hms(2026, 3, 29, 1, 0, 0).unwrap();
+    let summer_end = Utc.with_ymd_and_hms(2026, 10, 25, 1, 0, 0).unwrap();
+    let day_of = |at: DateTime<Utc>| {
+        let offset = if at >= summer_start && at < summer_end {
+            60
+        } else {
+            0
+        };
+        (at + chrono::Duration::minutes(offset)).date_naive()
+    };
+    let mk = |id: &str, at: DateTime<Utc>| DocMeta::new(id.into(), DocKind::Note, at);
+    let docs = vec![
+        mk("july", Utc.with_ymd_and_hms(2026, 7, 9, 23, 30, 0).unwrap()),
+        mk("nov", Utc.with_ymd_and_hms(2026, 11, 9, 23, 30, 0).unwrap()),
+    ];
+    let groups = group_by_local_day(&docs, day_of);
+    let shape: Vec<(NaiveDate, Vec<&str>)> = groups
+        .iter()
+        .map(|g| (g.date, g.ids.iter().map(String::as_str).collect()))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            (NaiveDate::from_ymd_opt(2026, 11, 9).unwrap(), vec!["nov"]),
+            (NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(), vec!["july"]),
+        ]
+    );
+}

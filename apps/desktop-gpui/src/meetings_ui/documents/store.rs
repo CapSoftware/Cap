@@ -4,8 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cap_meetings::library::{DocKind, DocMeta, Folder, Library, group_by_day, is_valid_id};
-use chrono::{Local, NaiveDate, Offset, Utc};
+use cap_meetings::library::{DocKind, DocMeta, Folder, Library, group_by_local_day, is_valid_id};
+use chrono::{DateTime, NaiveDate, Utc};
 use gpui::{App, Context, EventEmitter, Subscription, Task};
 
 use super::{format, writer};
@@ -83,15 +83,17 @@ pub enum Row {
     Foot,
 }
 
-pub fn tz_offset_minutes() -> i32 {
-    Local::now().offset().fix().local_minus_utc() / 60
+/// The calendar day a moment falls on here, with the daylight saving rules of
+/// that date (not today's offset).
+pub fn local_day(at: DateTime<Utc>) -> NaiveDate {
+    format::local(at).date()
 }
 
 pub fn build_rows(
     snapshot: &Snapshot,
     scope: &Scope,
     today: NaiveDate,
-    tz_minutes: i32,
+    day_of: &dyn Fn(DateTime<Utc>) -> NaiveDate,
 ) -> Vec<Row> {
     let mut rows = vec![Row::Head];
     if *scope == Scope::Trash {
@@ -137,7 +139,7 @@ pub fn build_rows(
         .enumerate()
         .map(|(i, d)| (d.id.as_str(), i))
         .collect();
-    for group in group_by_day(&rest, tz_minutes) {
+    for group in group_by_local_day(&rest, day_of) {
         rows.push(Row::Header(format::day_label(group.date, today)));
         rows.extend(
             group
