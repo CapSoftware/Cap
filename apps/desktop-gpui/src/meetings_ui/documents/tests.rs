@@ -1697,6 +1697,52 @@ fn every_save_trigger(
     check(cx, "after closing");
 }
 
+/// A meeting started from outside the window (a shortcut, the call prompt,
+/// the tray) opens with the cursor in its notes, open already or not, so
+/// the first thing typed is kept instead of going nowhere.
+#[gpui::test]
+fn a_meeting_started_from_outside_the_window_opens_ready_to_type(cx: &mut TestAppContext) {
+    let (_dir, _library, ids, pane, store, cx) = drawn_pane(
+        cx,
+        &[(DocKind::Meeting, "", None), (DocKind::Meeting, "", None)],
+    );
+    store.update(cx, |s, cx| s.open(Some(ids[0].clone()), cx));
+    cx.run_until_parked();
+    let notes = pane.read_with(cx, |p, _| p.notes.clone());
+    let typed = |cx: &mut VisualTestContext| {
+        notes.read_with(cx, |e, _| e.document().to_markdown().trim().to_string())
+    };
+    cx.simulate_input("lost");
+    cx.run_until_parked();
+    assert_eq!(typed(cx), "", "nothing has the cursor before");
+
+    let id = ids[1].clone();
+    pane.update_in(cx, |p, window, cx| p.focus_body_when_open(&id, window, cx));
+    store.update(cx, |s, cx| s.open(Some(ids[1].clone()), cx));
+    cx.run_until_parked();
+    cx.simulate_input("Ask about pricing");
+    cx.run_until_parked();
+    assert_eq!(
+        typed(cx),
+        "Ask about pricing",
+        "the note that loads takes the keys"
+    );
+
+    pane.update_in(cx, |p, window, cx| {
+        p.show_view(View::Generated, window, cx);
+        window.blur();
+    });
+    pane.update_in(cx, |p, window, cx| p.focus_body_when_open(&id, window, cx));
+    cx.run_until_parked();
+    cx.simulate_input(" now");
+    cx.run_until_parked();
+    assert_eq!(
+        typed(cx),
+        "Ask about pricing now",
+        "the note already open takes them too"
+    );
+}
+
 #[gpui::test]
 fn a_key_typed_before_the_saved_note_loads_never_costs_the_saved_text(cx: &mut TestAppContext) {
     let (_dir, library, ids, pane, store, cx) = drawn_pane(

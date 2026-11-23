@@ -141,6 +141,13 @@ pub fn open(doc_id: Option<String>, cx: &mut App) {
     window::open(target, cx);
 }
 
+/// Open the notes window on a meeting just started, cursor in its notes, so
+/// what the person types first is kept wherever they started it from.
+pub fn open_to_type(doc_id: String, cx: &mut App) {
+    tracing::info!(doc = doc_id, "opening the notes window to type");
+    window::open_to_type(doc_id, cx);
+}
+
 /// Make this the start button's one-click choice (the tray's picks count).
 pub fn remember_start(choice: cap_meetings::settings::StartChoice, cx: &mut App) {
     start::remember(choice, cx);
@@ -164,7 +171,7 @@ pub fn start_listening(source: crate::meetings::StartSource, cx: &mut App) {
         return;
     }
     match crate::meetings_ui::live::start(source, cx) {
-        Ok(doc_id) => window::open(Some(doc_id), cx),
+        Ok(doc_id) => window::open_to_type(doc_id, cx),
         Err(error) => tracing::warn!(%error, "meeting notes did not start"),
     }
 }

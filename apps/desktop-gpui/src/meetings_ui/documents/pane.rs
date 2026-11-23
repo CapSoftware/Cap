@@ -1548,6 +1548,25 @@ impl Pane {
         });
     }
 
+    /// A meeting someone just started from outside this window (a shortcut,
+    /// the call prompt, the tray) lands with the cursor in its notes, as the
+    /// window's own Start button does: now if the note is already open, else
+    /// once it loads.
+    pub fn focus_body_when_open(
+        &mut self,
+        doc_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.doc_id().as_deref() == Some(doc_id) {
+            self.show_view(View::Mine, window, cx);
+            self.focus_body(window, cx);
+        } else {
+            self.focus_body_on_load = true;
+            self.view = View::Mine;
+        }
+    }
+
     pub fn focus_body(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let handle = match self.view {
             View::Mine => self.notes.read(cx).focus_handle(cx),

@@ -131,11 +131,26 @@ fn placement(cx: &App) -> Bounds<Pixels> {
 }
 
 pub fn open(doc_id: Option<String>, cx: &mut App) {
+    open_with(doc_id, false, cx);
+}
+
+/// `open` for a meeting just started: the cursor lands in its notes.
+pub fn open_to_type(doc_id: String, cx: &mut App) {
+    open_with(Some(doc_id), true, cx);
+}
+
+fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
     crate::app_windows::hide_main_for_meeting_window(cx);
     if let Some(handle) = MeetingWindows::get(cx).documents {
         let revealed = handle.update(cx, |root, window, cx| {
             if let Ok(root) = root.downcast::<DocumentsWindow>() {
-                root.update(cx, |root, cx| root.reveal(doc_id.clone(), cx));
+                root.update(cx, |root, cx| {
+                    if type_into && let Some(id) = &doc_id {
+                        root.pane
+                            .update(cx, |pane, cx| pane.focus_body_when_open(id, window, cx));
+                    }
+                    root.reveal(doc_id.clone(), cx);
+                });
             }
             window.activate_window();
             platform::native_window(window)
@@ -149,12 +164,12 @@ pub fn open(doc_id: Option<String>, cx: &mut App) {
             Ok(None) => {}
             Err(_) => {
                 MeetingWindows::get(cx).documents = None;
-                open_new(doc_id, cx);
+                open_new(doc_id, type_into, cx);
             }
         }
         return;
     }
-    open_new(doc_id, cx);
+    open_new(doc_id, type_into, cx);
 }
 
 /// Open the notes window on a new, plain note: no recording, no setup.
@@ -173,7 +188,8 @@ pub fn new_note(cx: &mut App) {
         .ok();
 }
 
-fn open_new(doc_id: Option<String>, cx: &mut App) {
+fn open_new(doc_id: Option<String>, type_into: bool, cx: &mut App) {
+    let typed_doc = doc_id.clone().filter(|_| type_into);
     let opened_at = Instant::now();
     let bounds = placement(cx);
     let handle = cx.open_window(
@@ -209,6 +225,10 @@ fn open_new(doc_id: Option<String>, cx: &mut App) {
         .update(cx, |root, window, cx| {
             platform::kick_display_link(window);
             root.focus_initial(window, cx);
+            if let Some(id) = &typed_doc {
+                root.pane
+                    .update(cx, |pane, cx| pane.focus_body_when_open(id, window, cx));
+            }
             platform::native_window(window)
         })
         .ok()

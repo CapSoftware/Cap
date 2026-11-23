@@ -369,7 +369,7 @@ pub fn start_or_set_up(source: StartSource, cx: &mut App) {
         return;
     }
     match start(source, cx) {
-        Ok(doc_id) => crate::meetings_ui::documents::open(Some(doc_id), cx),
+        Ok(doc_id) => crate::meetings_ui::documents::open_to_type(doc_id, cx),
         Err(error) => tracing::warn!(%error, "meeting notes did not start"),
     }
 }
@@ -427,7 +427,7 @@ pub fn accept_prompt(id: u64, join: Option<String>, cx: &mut App) {
             .map(|active| active.doc_id.clone())
     });
     if let Some(doc_id) = started {
-        crate::meetings_ui::documents::open(Some(doc_id), cx);
+        crate::meetings_ui::documents::open_to_type(doc_id, cx);
     }
 }
 
