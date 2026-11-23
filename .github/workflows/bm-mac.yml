@@ -44,6 +44,7 @@ jobs:
           A="$RUNNER_TEMP/apps"; mkdir -p "$A" "$RUNNER_TEMP/old"
           find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
           for t in "$A"/*/; do mkdir -p "$t/MacOS"; mv "$t/cap-gpui" "$t/MacOS/"; [ -d "$t/resources" ] && mv "$t/resources" "$t/MacOS/"; cat "$t/sha.txt"; done
+          python3 .bm/fixfw.py "$A"
           hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/dl/releases/latest-mac.dmg"
           app=$(find "$RUNNER_TEMP/dmg" -maxdepth 1 -name '*.app' | head -1)
           cp -R "$app" "$RUNNER_TEMP/old/"
@@ -91,6 +92,7 @@ jobs:
           A="$RUNNER_TEMP/apps"; mkdir -p "$A"
           find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
           for t in "$A"/*/; do mkdir -p "$t/MacOS"; mv "$t/cap-gpui" "$t/MacOS/"; [ -d "$t/resources" ] && mv "$t/resources" "$t/MacOS/"; done
+          python3 .bm/fixfw.py "$A"
           sudo pmset -a displaysleep 0 sleep 0 || true
           caffeinate -u -t 2
           python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil pillow
@@ -133,6 +135,7 @@ jobs:
           A="$RUNNER_TEMP/apps"; mkdir -p "$A"
           find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
           for t in "$A"/*/; do mkdir -p "$t/MacOS"; mv "$t/cap-gpui" "$t/MacOS/"; [ -d "$t/resources" ] && mv "$t/resources" "$t/MacOS/"; cat "$t/sha.txt"; done
+          python3 .bm/fixfw.py "$A"
           sudo pmset -a displaysleep 0 sleep 0 || true
           caffeinate -u -t 2
           python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil
