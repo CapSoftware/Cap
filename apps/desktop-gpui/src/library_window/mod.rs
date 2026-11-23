@@ -1340,6 +1340,17 @@ fn kind_word(kind: ItemKind) -> &'static str {
     }
 }
 
+/// Where a list row says when.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum When {
+    /// Its own column, with the date: rows with no day heading over them.
+    Full,
+    /// Its own column, time only: the day heading above already says which day.
+    Time,
+    /// Folded into the meta line, so a narrow row's title gets the width.
+    Inline,
+}
+
 fn when_line(item: &Item, today: NaiveDate) -> String {
     let local = format::local(item.at);
     if local.date() == today {
@@ -2113,7 +2124,7 @@ impl LibraryWindow {
             .into_any_element()
     }
 
-    fn list_row(&self, index: u32, cx: &mut Context<Self>) -> AnyElement {
+    fn list_row(&self, index: u32, when: When, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let item = &self.scan.items[index as usize];
         let today = today();
@@ -2152,7 +2163,18 @@ impl LibraryWindow {
                             .truncate()
                             .text_size(px(12.))
                             .text_color(p.muted)
-                            .child(self.text(meta_line(item))),
+                            .child(self.text(match when {
+                                When::Inline => {
+                                    let local = format::local(item.at);
+                                    let day = if local.date() == today {
+                                        format::clock(local)
+                                    } else {
+                                        format::short_date(local.date(), today)
+                                    };
+                                    format!("{day}  ·  {}", meta_line(item))
+                                }
+                                When::Full | When::Time => meta_line(item),
+                            })),
                     ),
             )
             .when(item.pinned, |el| {
@@ -2163,13 +2185,19 @@ impl LibraryWindow {
                         .text_color(p.faint),
                 )
             })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_size(px(12.))
-                    .text_color(p.faint)
-                    .child(self.text(when_line(item, today))),
-            )
+            .when(when != When::Inline, |el| {
+                el.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(p.faint)
+                        .child(self.text(if when == When::Time {
+                            format::clock(format::local(item.at))
+                        } else {
+                            when_line(item, today)
+                        })),
+                )
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.open_item(index, cx)))
             .into_any_element()
     }
@@ -2314,7 +2342,7 @@ impl LibraryWindow {
                             .flex()
                             .flex_col()
                             .gap(px(2.))
-                            .children(side.into_iter().map(|i| self.list_row(i, cx))),
+                            .children(side.into_iter().map(|i| self.list_row(i, When::Inline, cx))),
                     ),
             );
         }
@@ -2404,7 +2432,7 @@ impl LibraryWindow {
                 current = Some(date);
                 page = page.child(self.heading(format::day_label(date, today)));
             }
-            page = page.child(self.list_row(i, cx));
+            page = page.child(self.list_row(i, When::Time, cx));
         }
         if self.visible.is_empty() {
             page = page.child(self.render_empty());
@@ -2465,7 +2493,9 @@ impl LibraryWindow {
                     "library-list",
                     visible.len(),
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                        let rows = range.map(|r| this.list_row(visible[r], cx)).collect();
+                        let rows = range
+                            .map(|r| this.list_row(visible[r], When::Full, cx))
+                            .collect();
                         // Rows render during layout, after render(): start
                         // their pictures here.
                         this.load_thumbs(cx);
