@@ -1374,15 +1374,9 @@ fn a_word_being_composed_survives_the_summary_streaming_into_its_block(cx: &mut 
     });
     cx.executor().advance_clock(Duration::from_millis(100));
     cx.run_until_parked();
-    let after = texts(&editor, cx);
-    assert!(
-        after[0].contains("日に本"),
-        "the composed word survives: {after:?}"
-    );
-    assert!(
-        after.concat().ends_with("**"),
-        "the held chunk landed: {after:?}"
-    );
+    // The held "**" closes the bold around the committed word.
+    assert_eq!(texts(&editor, cx), vec!["x 日に本語"]);
+    assert!(has_mark(&editor, cx, 0, 2.."x 日に本語".len(), &Mark::Bold));
     assert!(!editor.read_with(cx, |e, _| e.is_pacing()));
 }
 
@@ -1402,6 +1396,130 @@ fn a_composition_before_the_streamed_tail_does_not_hold_it(cx: &mut TestAppConte
     assert_eq!(texts(&editor, cx), vec!["Notes from me", "Summary line"]);
     let marked = cx.update(|window, cx| editor.update(cx, |e, cx| e.marked_text_range(window, cx)));
     assert!(marked.is_some());
+}
+
+/// A page the writer has started, the caret after `at` in its last block,
+/// the person typing `typed` there, then the writer going on with `rest`.
+fn type_into_the_stream<'a>(
+    cx: &'a mut TestAppContext,
+    start: &str,
+    at: &str,
+    typed: &str,
+    rest: &str,
+) -> (Entity<NotesEditor>, &'a mut VisualTestContext) {
+    let (editor, cx) = setup(cx, "");
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming(start, cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    let last = editor.read_with(cx, |e, _| e.document().blocks.len() - 1);
+    let offset = editor.read_with(cx, |e, _| {
+        let text = &e.document().blocks[last].text;
+        text.find(at)
+            .map(|i| i + at.len())
+            .expect("the caret mark is in the text")
+    });
+    caret(&editor, cx, Pos::new(last, offset));
+    cx.simulate_input(typed);
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming(rest, cap_notes::Origin::Generated, cx)
+    });
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    (editor, cx)
+}
+
+#[gpui::test]
+fn typing_inside_an_open_bold_keeps_the_words_and_leaves_no_stray_markers(cx: &mut TestAppContext) {
+    let (editor, cx) = type_into_the_stream(cx, "We **agreed", "agreed", " today", "** to ship.");
+    assert_eq!(texts(&editor, cx), vec!["We agreed today to ship."]);
+    assert!(has_mark(
+        &editor,
+        cx,
+        0,
+        3.."We agreed today".len(),
+        &Mark::Bold
+    ));
+}
+
+#[gpui::test]
+fn typing_inside_an_open_italic_keeps_the_words(cx: &mut TestAppContext) {
+    let (editor, cx) = type_into_the_stream(cx, "Ana *mostly", "Ana ", "and Ben ", "* agreed.");
+    assert_eq!(texts(&editor, cx), vec!["Ana and Ben mostly agreed."]);
+    assert!(has_mark(
+        &editor,
+        cx,
+        0,
+        12.."Ana and Ben mostly".len(),
+        &Mark::Italic
+    ));
+}
+
+#[gpui::test]
+fn typing_in_a_list_item_being_written_keeps_the_list(cx: &mut TestAppContext) {
+    let (editor, cx) = type_into_the_stream(
+        cx,
+        "- Ship the",
+        "Ship the",
+        " small",
+        " flow\n- Measure it\n",
+    );
+    assert_eq!(
+        texts(&editor, cx),
+        vec!["Ship the small flow", "Measure it"]
+    );
+    assert!(
+        kinds(&editor, cx).iter().all(BlockKind::is_list),
+        "{:?}",
+        kinds(&editor, cx)
+    );
+}
+
+#[gpui::test]
+fn typing_in_a_heading_being_written_keeps_the_heading(cx: &mut TestAppContext) {
+    let (editor, cx) = type_into_the_stream(cx, "### Next", "Next", " up", " steps\n\nShip it.");
+    assert_eq!(texts(&editor, cx), vec!["Next up steps", "Ship it."]);
+    assert_eq!(kinds(&editor, cx)[0], BlockKind::Heading(3));
+}
+
+#[gpui::test]
+fn an_edit_above_the_streamed_tail_keeps_the_writer_going(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, "My notes");
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("The **plan", cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    caret(&editor, cx, Pos::new(0, "My notes".len()));
+    cx.simulate_keystrokes("enter");
+    cx.simulate_input("more");
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("** is set.", cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        texts(&editor, cx),
+        vec!["My notes", "more", "The plan is set."]
+    );
+    assert!(has_mark(&editor, cx, 2, 4.."The plan".len(), &Mark::Bold));
+}
+
+#[gpui::test]
+fn typing_into_the_stream_with_reduced_motion(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (editor, cx) = type_into_the_stream(cx, "We **agreed", "agreed", " today", "** to ship.");
+    assert_eq!(texts(&editor, cx), vec!["We agreed today to ship."]);
+    assert!(!editor.read_with(cx, |e, _| e.is_pacing()));
+}
+
+#[test]
+fn the_writers_markers_are_not_escaped_when_the_tail_is_written_back() {
+    use crate::editor::writer_markers;
+    assert_eq!(writer_markers("We \\*\\*agreed today"), "We **agreed today");
+    assert_eq!(writer_markers("a \\_b\\_ \\~\\~c \\`d"), "a _b_ ~~c `d");
+    assert_eq!(
+        writer_markers("keep \\\\ and \\[link\\]"),
+        "keep \\\\ and \\[link\\]"
+    );
 }
 
 #[test]

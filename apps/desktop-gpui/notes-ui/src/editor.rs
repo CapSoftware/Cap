@@ -165,6 +165,65 @@ pub(crate) struct StreamTail {
     pub len_after: usize,
 }
 
+impl StreamTail {
+    /// The tail after the person edited the page. An edit before it shifts
+    /// it; an edit inside it becomes part of the writer's unsettled markdown,
+    /// so the next chunk re-parses the writer's text and theirs as one (an
+    /// open bold closes around their words, a list item goes on, nothing is
+    /// left over as stray markers). An edit across its start ends it.
+    fn after_edit(mut self, change: cap_notes::BlockChange, doc: &Document) -> Option<Self> {
+        let len = doc.blocks.len();
+        let old_len = (len + change.removed).checked_sub(change.inserted)?;
+        if self.len_after != old_len {
+            return None;
+        }
+        let edit_end = change.start + change.removed;
+        let tail_end = self.start + self.count;
+        if edit_end <= self.start && (change.start < self.start || change.removed == 0) {
+            self.start = (self.start + change.inserted).checked_sub(change.removed)?;
+        } else if change.start >= self.start && edit_end <= tail_end {
+            self.count = (self.count + change.inserted).checked_sub(change.removed)?;
+            let edited = Document::from_blocks(
+                doc.blocks
+                    .get(self.start..self.start + self.count)?
+                    .to_vec(),
+            );
+            let ending = self.markdown.len() - self.markdown.trim_end_matches('\n').len();
+            let mut markdown = writer_markers(edited.to_markdown().trim_end_matches('\n'));
+            markdown.push_str(&self.markdown[self.markdown.len() - ending..]);
+            self.markdown = markdown;
+        } else if change.start < tail_end {
+            return None;
+        }
+        self.len_after = len;
+        Some(self)
+    }
+}
+
+/// The tail written back as the writer would go on from it: the export
+/// escapes a literal `*` (an unclosed bold is literal text until its closer
+/// arrives), which would keep the writer's closer from pairing with it.
+/// Escaped backslashes and brackets stay as they are.
+pub(crate) fn writer_markers(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut chars = markdown.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('*' | '_' | '~' | '=' | '`') => continue,
+                Some('\\') => {
+                    out.push('\\');
+                    out.push(chars.next().unwrap_or('\\'));
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Text someone else writes arrives in bursts; the page shows it at a steady
 /// pace instead, a few whole words at a time, so it reads like ink rather
 /// than a terminal. The backlog is never more than about half a second.
@@ -952,7 +1011,10 @@ impl NotesEditor {
                 store.reset(self.editor.document(), &self.theme);
             }
             drop(store);
-            self.stream = None;
+            self.stream = self
+                .stream
+                .take()
+                .and_then(|tail| tail.after_edit(blocks, self.editor.document()));
             self.refresh_find();
             cx.emit(NotesEvent::Changed);
         }
