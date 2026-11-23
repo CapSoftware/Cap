@@ -30,6 +30,12 @@ import {
 	takesNv12Planes,
 	UPLOADS_NV12_PLANES,
 } from "./browser-nv12-planes";
+import {
+	isSourceUrlRenewReply,
+	parentSourceUrlRenewer,
+	type SourceUrlRenewReply,
+	type SourceUrlRenewRequest,
+} from "./source-url-renewal";
 
 export type BrowserExportTrackSource = {
 	display: string | null;
@@ -52,6 +58,7 @@ export type BrowserExportJob = {
 	tracks: BrowserExportTrackSource[];
 	inputEventsUrl: string | null;
 	audio: BrowserExportAudioSource[];
+	sourcesExpireAt: number | null;
 	musicUrls: Record<string, string>;
 	assetUrls: Record<string, string>;
 	fontUrls: string[];
@@ -88,7 +95,8 @@ export type BrowserExportMessage =
 			totalFrames: number;
 			renderMs: number;
 	  }
-	| { kind: "error"; id?: number; message: string };
+	| { kind: "error"; id?: number; message: string }
+	| SourceUrlRenewRequest;
 
 export type ExportStats = {
 	frames: number;
@@ -114,7 +122,10 @@ const scope = self as unknown as {
 		type: "message",
 		listener: (
 			event: MessageEvent<
-				BrowserExportJob | BrowserExportPreviewRequest | { kind: "cancel" }
+				| BrowserExportJob
+				| BrowserExportPreviewRequest
+				| { kind: "cancel" }
+				| SourceUrlRenewReply
 			>,
 		) => void,
 	) => void;
@@ -125,6 +136,9 @@ const scope = self as unknown as {
 };
 
 let canceled = false;
+
+const { renewer: sourceUrls, answer: answerSourceUrl } =
+	parentSourceUrlRenewer(scope);
 
 function checkCanceled() {
 	if (canceled) throw new Error("Export cancelled");
@@ -153,7 +167,10 @@ async function openCursor(url: string): Promise<TrackCursor | null> {
 	);
 	const input = new Input({
 		formats: ALL_FORMATS,
-		source: new UrlSource(url, { maxCacheSize: 64 * 1024 * 1024 }),
+		source: new UrlSource(
+			url,
+			sourceUrls.urlSourceOptions(url, 64 * 1024 * 1024),
+		),
 	});
 	const track: InputVideoTrack | null = await input.getPrimaryVideoTrack();
 	if (!track) {
@@ -376,6 +393,7 @@ function workerAudioLevels(module: RendererModule, url: string) {
 
 async function renderContext(job: BrowserExportJob): Promise<RenderContext> {
 	const key = contextKey(job);
+	sourceUrls.expiresAt = job.sourcesExpireAt;
 	if (cachedContext?.key === key) return cachedContext;
 	cachedContext?.dispose();
 	cachedContext = null;
@@ -886,6 +904,7 @@ async function runExport(job: BrowserExportJob) {
 			times,
 			output,
 			totalFrames,
+			(original, rejected) => sourceUrls.renew(original, rejected),
 		);
 		await output.start();
 		const audioDone = audio?.run() ?? Promise.resolve();
@@ -951,6 +970,10 @@ void rendererModule().catch(() => undefined);
 
 scope.addEventListener("message", (event) => {
 	const message = event.data;
+	if (isSourceUrlRenewReply(message)) {
+		answerSourceUrl(message);
+		return;
+	}
 	if (message.kind === "cancel") {
 		canceled = true;
 		return;

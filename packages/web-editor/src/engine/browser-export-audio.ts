@@ -6,6 +6,11 @@ import type {
 } from "./browser-export-audio-worker";
 import { EXPORT_AUDIO_BITRATE } from "./browser-export-estimate";
 import type { BrowserExportJob } from "./browser-export-worker";
+import {
+	answerSourceUrlRenewal,
+	isSourceUrlRenewRequest,
+	type SignedSourceUrl,
+} from "./source-url-renewal";
 
 const SAMPLE_RATE = 48_000;
 const PREFETCH_CHUNKS = 40;
@@ -105,6 +110,10 @@ export async function renderBrowserExportAudio(
 	times: BrowserRecordingTimes,
 	output: Output,
 	totalFrames: number,
+	renewSourceUrl: (
+		original: string,
+		rejected: string,
+	) => Promise<SignedSourceUrl>,
 ) {
 	const audioConfig = job.config.audio as { mute?: boolean } | undefined;
 	const hasMusic = Object.keys(job.musicUrls).length > 0;
@@ -165,6 +174,10 @@ export async function renderBrowserExportAudio(
 				"message",
 				(event: MessageEvent<BrowserExportAudioReply>) => {
 					const message = event.data;
+					if (isSourceUrlRenewRequest(message)) {
+						answerSourceUrlRenewal(worker, message, renewSourceUrl);
+						return;
+					}
 					if (message.kind === "chunk") {
 						outstanding = Math.max(outstanding - 1, 0);
 						if (message.samples.length > 0) chunks.push(message.samples);
@@ -187,6 +200,7 @@ export async function renderBrowserExportAudio(
 				outputSamples,
 				tracks,
 				musicUrls: job.musicUrls,
+				sourcesExpireAt: job.sourcesExpireAt,
 			};
 			worker.postMessage(request);
 			worker.postMessage({ kind: "pull", chunks: PREFETCH_CHUNKS });

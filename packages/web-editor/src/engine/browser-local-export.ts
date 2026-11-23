@@ -22,12 +22,21 @@ import { browserWebGpuPresentationWorks } from "./browser-gpu-probe";
 import { probeBrowserMedia } from "./browser-media-probe";
 import { loadBrowserRenderer } from "./browser-renderer";
 import { BROWSER_RENDERER_FONT_URLS } from "./browser-renderer-fonts";
-import { BrowserEditorSourceCatalog } from "./browser-sources";
+import {
+	BrowserEditorSourceCatalog,
+	type BrowserEditorSources,
+} from "./browser-sources";
 import { studioRecordingMeta, webInputRecording } from "./browser-studio-setup";
 import { emitEditorChannel } from "./channels";
 import { resolveEditorAssetUrl } from "./editor-asset-url";
 import { previewBackend } from "./renderer-backend";
 import { SHARE_RENDER_SOURCE_FPS, shareRenderFps } from "./share-render";
+import {
+	answerSourceUrlRenewal,
+	exportSourceRefresher,
+	isSourceUrlRenewRequest,
+	type SourceUrlRefresher,
+} from "./source-url-renewal";
 
 const COMPRESSION_BPP: Record<string, number> = {
 	Maximum: 0.3,
@@ -90,6 +99,30 @@ let workerState: { worker: Worker; listeners: Set<WorkerListener> } | null =
 let activeExport: { reject: (error: Error) => void } | null = null;
 let nextPreviewId = 1;
 
+/// Jobs the export worker may still read from, newest last: a preview's
+/// render context outlives the request that built it. A running export keeps
+/// its own however many previews follow.
+const refreshers: SourceUrlRefresher[] = [];
+const REFRESHER_LIMIT = 8;
+const jobRefreshers = new WeakMap<BrowserExportJob, SourceUrlRefresher>();
+let exportingRefresher: SourceUrlRefresher | null = null;
+
+function sourceRefresher(videoId: string, sources: BrowserEditorSources) {
+	const refresher = exportSourceRefresher(videoId, sources);
+	refreshers.push(refresher);
+	if (refreshers.length > REFRESHER_LIMIT) refreshers.shift();
+	return refresher;
+}
+
+function renewSourceUrl(original: string, rejected: string) {
+	const refresher = exportingRefresher?.knows(original)
+		? exportingRefresher
+		: refreshers.findLast((entry) => entry.knows(original));
+	return refresher
+		? refresher.renew(original, rejected)
+		: Promise.reject(new Error("Recording link is not one this export uses"));
+}
+
 function exportWorker() {
 	if (workerState) return workerState;
 	const worker = new Worker(
@@ -103,7 +136,12 @@ function exportWorker() {
 	worker.addEventListener(
 		"message",
 		(event: MessageEvent<BrowserExportMessage>) => {
-			for (const listener of [...listeners]) listener(event.data);
+			const message = event.data;
+			if (isSourceUrlRenewRequest(message)) {
+				answerSourceUrlRenewal(worker, message, renewSourceUrl);
+				return;
+			}
+			for (const listener of [...listeners]) listener(message);
 		},
 	);
 	worker.addEventListener("error", (event) => {
@@ -132,6 +170,7 @@ export function cancelBrowserLocalExport() {
 	resetExportWorker();
 	activeExport.reject(new Error("Export cancelled"));
 	activeExport = null;
+	exportingRefresher = null;
 	return true;
 }
 
@@ -164,6 +203,7 @@ async function exportJob(
 		const first = sources.segments[0];
 		if (!first?.display)
 			throw new Error("Editor display recording is unavailable");
+		const refresher = sourceRefresher(videoId, sources);
 		const [display, camera, mic, input] = await Promise.all([
 			probeBrowserMedia(first.display.url, signal),
 			first.camera ? probeBrowserMedia(first.camera.url, signal) : null,
@@ -249,7 +289,7 @@ async function exportJob(
 		) {
 			throw new Error("Editor export settings were invalid");
 		}
-		return {
+		const job: BrowserExportJob = {
 			kind: "export",
 			outputFile: "",
 			config,
@@ -271,6 +311,7 @@ async function exportJob(
 			})),
 			inputEventsUrl: sources.inputEvents?.url ?? null,
 			audio,
+			sourcesExpireAt: sources.expiresAt,
 			musicUrls,
 			assetUrls,
 			fontUrls: hasTextOverlays(config)
@@ -286,6 +327,8 @@ async function exportJob(
 					? customBpp
 					: (COMPRESSION_BPP[compression] ?? 0.3),
 		};
+		jobRefreshers.set(job, refresher);
+		return job;
 	} finally {
 		catalog.dispose();
 	}
@@ -575,6 +618,7 @@ export async function renderBrowserLocalExport(
 			exportJob(videoId, settings, controller.signal),
 			cancelled,
 		]);
+		exportingRefresher = jobRefreshers.get(job) ?? null;
 		job.outputFile = newExportFileName();
 		const release = await holdExportFile(job.outputFile);
 		if (release) heldExportFiles.set(job.outputFile, release);
@@ -588,7 +632,10 @@ export async function renderBrowserLocalExport(
 		throw cause;
 	} finally {
 		worker?.listeners.delete(state.listener);
-		if (activeExport === current) activeExport = null;
+		if (activeExport === current) {
+			activeExport = null;
+			exportingRefresher = null;
+		}
 	}
 	if (result.storedFile !== job.outputFile)
 		discardStoredBrowserExport(job.outputFile);

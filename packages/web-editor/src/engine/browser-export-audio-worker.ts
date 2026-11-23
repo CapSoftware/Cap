@@ -5,6 +5,12 @@ import {
 	interleave,
 	StreamedTracks,
 } from "./browser-export-audio-blocks";
+import {
+	isSourceUrlRenewReply,
+	parentSourceUrlRenewer,
+	type SourceUrlRenewReply,
+	type SourceUrlRenewRequest,
+} from "./source-url-renewal";
 
 type RendererModule =
 	typeof import("../../renderer/pkg-export/cap_editor_browser_renderer.js");
@@ -16,13 +22,16 @@ export type BrowserExportAudioRequest =
 			outputSamples: number;
 			tracks: BrowserExportAudioTrack[];
 			musicUrls: Record<string, string>;
+			sourcesExpireAt: number | null;
 	  }
-	| { kind: "pull"; chunks: number };
+	| { kind: "pull"; chunks: number }
+	| SourceUrlRenewReply;
 
 export type BrowserExportAudioReply =
 	| { kind: "chunk"; samples: Float32Array; done: boolean }
 	| { kind: "stats"; decodeMs: number; mixMs: number }
-	| { kind: "error"; message: string };
+	| { kind: "error"; message: string }
+	| SourceUrlRenewRequest;
 
 const scope = self as unknown as {
 	addEventListener: (
@@ -37,15 +46,24 @@ const scope = self as unknown as {
 
 const CHUNK_FRAMES = 4_800;
 
+const { renewer: sourceUrls, answer: answerSourceUrl } =
+	parentSourceUrlRenewer(scope);
+
 async function openAudio(
 	url: string,
+	renewable: boolean,
 ): Promise<(Audio & { input: Input }) | null> {
 	const { ALL_FORMATS, AudioSampleSink, Input, UrlSource } = await import(
 		"mediabunny"
 	);
 	const input = new Input({
 		formats: ALL_FORMATS,
-		source: new UrlSource(url, { maxCacheSize: 32 * 1024 * 1024 }),
+		source: new UrlSource(
+			url,
+			renewable
+				? sourceUrls.urlSourceOptions(url, 32 * 1024 * 1024)
+				: { maxCacheSize: 32 * 1024 * 1024 },
+		),
 	});
 	try {
 		const track = await input.getPrimaryAudioTrack();
@@ -102,6 +120,7 @@ async function start(
 	request: Extract<BrowserExportAudioRequest, { kind: "start" }>,
 ) {
 	const started = performance.now();
+	sourceUrls.expiresAt = request.sourcesExpireAt;
 	const module = await import(
 		"../../renderer/pkg-export/cap_editor_browser_renderer.js"
 	);
@@ -120,11 +139,11 @@ async function start(
 	remaining = request.outputSamples;
 	await Promise.all([
 		...request.tracks.map(async (track) => {
-			const source = await openAudio(track.url);
+			const source = await openAudio(track.url, true);
 			if (source) streamed.add(track, source);
 		}),
 		...Object.entries(request.musicUrls).map(async ([path, url]) => {
-			const source = await openAudio(url);
+			const source = await openAudio(url, false);
 			if (!source) return;
 			try {
 				audio.add_music(
@@ -189,6 +208,10 @@ let queue: Promise<void> = Promise.resolve();
 
 scope.addEventListener("message", (event) => {
 	const message = event.data;
+	if (isSourceUrlRenewReply(message)) {
+		answerSourceUrl(message);
+		return;
+	}
 	const task =
 		message.kind === "start"
 			? () => start(message)
