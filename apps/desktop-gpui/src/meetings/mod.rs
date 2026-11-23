@@ -1759,22 +1759,60 @@ impl Meetings {
             .into_iter()
             .flatten()
             .collect();
-        cx.spawn(async move |this, cx| {
-            let (listed, default) = cx
-                .background_executor()
-                .spawn(async move {
-                    let mut listed = MicrophoneFeed::list_names();
-                    for name in candidates {
-                        if !listed.contains(&name) && MicrophoneFeed::is_connected(&name) {
-                            listed.push(name);
-                        }
+        // Its own thread: the audio system can take seconds to answer while
+        // a device changes, and the shared pool is busy transcribing.
+        let (found_tx, found_rx) = flume::bounded(1);
+        let looked = std::thread::Builder::new()
+            .name("cap-meeting-mic-watch".into())
+            .spawn(move || {
+                let asked = Instant::now();
+                if tries > 0 {
+                    tracing::info!(tries, "looking at the microphones for a meeting");
+                }
+                let mut listed = MicrophoneFeed::list_names();
+                let listed_ms = asked.elapsed().as_millis() as u64;
+                for name in candidates {
+                    if !listed.contains(&name) && MicrophoneFeed::is_connected(&name) {
+                        listed.push(name);
                     }
-                    let default = MicrophoneFeed::default_device().map(|(name, _, _)| name);
-                    (listed, default)
-                })
-                .await;
+                }
+                // The default's name only: probing its formats can take the
+                // audio system a long time while a device changes.
+                let default = {
+                    use cpal::traits::{DeviceTrait, HostTrait};
+                    cpal::default_host()
+                        .default_input_device()
+                        .and_then(|device| device.name().ok())
+                };
+                let ms = asked.elapsed().as_millis() as u64;
+                if tries > 0 {
+                    tracing::info!(
+                        ms,
+                        listed_ms,
+                        tries,
+                        inputs = listed.len(),
+                        ?default,
+                        "looked at the microphones for a meeting"
+                    );
+                } else {
+                    tracing::debug!(
+                        ms,
+                        inputs = listed.len(),
+                        "looked for the meeting's own microphone"
+                    );
+                }
+                let _ = found_tx.send((listed, default));
+            });
+        if looked.is_err() {
+            recording.mic_watch.done();
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let found = found_rx.recv_async().await.ok();
             this.update(cx, |this, cx| {
-                this.move_mic(&doc_id, (tries > 0).then_some(tries), &listed, default, cx);
+                if let Some((listed, default)) = found {
+                    this.move_mic(&doc_id, (tries > 0).then_some(tries), &listed, default, cx);
+                }
                 if let Some(recording) = this.recording.as_mut().filter(|r| r.doc_id == doc_id) {
                     recording.mic_watch.done();
                 }
