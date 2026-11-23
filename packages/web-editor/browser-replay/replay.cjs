@@ -1095,8 +1095,15 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								endController.signal,
 							);
 							if (!endVideo.ended) {
-								await new Promise((resolve) =>
-									endVideo.addEventListener("ended", resolve, { once: true }),
+								const seeked = new Promise((resolve) =>
+									endVideo.addEventListener("seeked", resolve, { once: true }),
+								);
+								endVideo.currentTime = endVideo.duration;
+								await seeked;
+							}
+							if (!endVideo.ended) {
+								throw new Error(
+									`Display video did not reach its end: ${endVideo.currentTime} of ${endVideo.duration}`,
 								);
 							}
 							await playback.pool.frame(
