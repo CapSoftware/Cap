@@ -31,6 +31,46 @@ describe("mobile API contract schemas", () => {
 		).toBe(true);
 	});
 
+	it("holds a whole uploaded video to the free limit and needs its length to", () => {
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: 305,
+				isPro: false,
+			}),
+		).toBe(true);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: 900,
+				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: 900,
+				isPro: true,
+			}),
+		).toBe(true);
+		// Leaving the length out would skip the limit, so the free plan needs it.
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: undefined,
+				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: -1,
+				isPro: false,
+			}),
+		).toBe(false);
+		expect(
+			Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: undefined,
+				isPro: true,
+			}),
+		).toBe(true);
+	});
+
 	it("gates free recordings on the segments when the reported total is lower", () => {
 		const segments = Array.from({ length: 300 }, () => ({ duration: 2 }));
 		const gated = Mobile.mobileRecordingGateDurationSeconds({

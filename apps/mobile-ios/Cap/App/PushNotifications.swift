@@ -82,6 +82,10 @@ final class PushNotifications {
     }
 
     func open(_ userInfo: [AnyHashable: Any]) -> Bool {
+        if let projectId = userInfo["studioProject"] as? String {
+            Task { await StudioSession.shared.open(projectId: projectId) }
+            return true
+        }
         guard let id = (userInfo["capId"] as? String).flatMap(CapID.init) else { return false }
         pendingCapId = id
         return true

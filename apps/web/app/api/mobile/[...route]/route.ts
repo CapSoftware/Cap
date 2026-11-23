@@ -3315,6 +3315,29 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 	}
 
 	const database = yield* Database;
+
+	if (!screenshotExtension) {
+		const [userRow] = yield* database.use((db) =>
+			db
+				.select({
+					stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+					thirdPartyStripeSubscriptionId:
+						Db.users.thirdPartyStripeSubscriptionId,
+				})
+				.from(Db.users)
+				.where(eq(Db.users.id, user.id))
+				.limit(1),
+		);
+		if (
+			!Mobile.isMobileUploadDurationAllowed({
+				durationSeconds: input.durationSeconds,
+				isPro: userIsPro(userRow),
+			})
+		) {
+			return yield* Effect.fail(new HttpApiError.Forbidden());
+		}
+	}
+
 	const storage = yield* Storage;
 	const repo = yield* VideosRepo;
 	const folderId = input.folderId;
