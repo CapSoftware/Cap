@@ -4,6 +4,7 @@ import { motion } from "motion/react";
 import dynamic from "next/dynamic";
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { commentMediaUrl } from "@/lib/comment-media";
+import { watchExpiredMediaSource } from "../media-source-refresh";
 import { formatMediaDuration } from "./format-media-duration";
 import type { MediaComment } from "./media-comment-types";
 import {
@@ -127,6 +128,7 @@ export const VideoCommentCard = ({
 			// Keep the claim reachable while the lazy mini player loads.
 			if (!el) return;
 			videoRef.current = el;
+			watchExpiredMediaSource(el);
 			claimPlayback(el, collapse);
 			suspendMainVideo();
 			el.addEventListener("ended", () => {
