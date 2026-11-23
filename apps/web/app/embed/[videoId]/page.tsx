@@ -46,6 +46,7 @@ import { getCustomThumbnailUrl } from "@/lib/share-playback";
 import { buildShareVideoMetadata } from "@/lib/share-video-metadata";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { transcribeVideo } from "@/lib/transcribe";
+import { withoutCreatorClient } from "@/lib/viewer-video-metadata";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
@@ -175,7 +176,7 @@ export default async function EmbedVideoPage(
 				.where(and(eq(videos.id, videoId), isNull(organizations.tombstoneAt))),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
-		return Option.fromNullable(video);
+		return Option.fromNullable(video ? withoutCreatorClient(video) : null);
 	}).pipe(
 		Effect.flatten,
 		Effect.map((video) => ({ needsPassword: false, video }) as const),
