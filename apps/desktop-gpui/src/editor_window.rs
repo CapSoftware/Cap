@@ -14634,6 +14634,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     mod preview_compare {
         struct StoreGuard {
             path: std::path::PathBuf,
