@@ -55,8 +55,12 @@ jobs:
             cp $A/$t/cap-gpui "$T/x/$t/$bin"
             if file "$T/x/orig/$bin" | grep -q ', stripped'; then strip --strip-all "$T/x/$t/$bin"; fi
             if [ "$t" = head ]; then
-              lic=$(dirname $(find $T/x/orig -type d -name assets -path '*cap*' | head -1))
-              [ -d "$lic" ] && mkdir -p "$lic/licenses" && cp -R apps/desktop-gpui/licenses/nemotron-3-diarization apps/desktop-gpui/licenses/wespeaker-campplus "$lic/licenses/" || true
+              res=$(find $T/x/$t -type d -name assets -ipath '*usr/lib/cap*' | head -1)
+              if [ -n "$res" ]; then
+                lic="$(dirname "$res")/licenses"; mkdir -p "$lic"
+                cp -R apps/desktop-gpui/licenses/nemotron-3-diarization apps/desktop-gpui/licenses/wespeaker-campplus "$lic/"
+                echo "licenses added under $lic"
+              fi
             fi
             dpkg-deb -Z$z --root-owner-group -b $T/x/$t $T/x/$t.deb >/dev/null
           done
@@ -151,23 +155,23 @@ jobs:
           github-token: ${{ github.token }}
       - shell: pwsh
         run: |
-          $T = $env:RUNNER_TEMP; $A = "$T\apps"; New-Item -ItemType Directory -Force $A | Out-Null
-          foreach ($t in 'base','head') { tar -C $A -xf "$T\dl\app-windows-$t\app-windows-$t.tar" }
-          $inst = "$T\dl\releases\latest-win.exe"
+          $R = $env:RUNNER_TEMP; $A = "$R\apps"; New-Item -ItemType Directory -Force $A | Out-Null
+          foreach ($k in 'base','head') { tar -C $A -xf "$R\dl\app-windows-$k\app-windows-$k.tar" }
+          $inst = "$R\dl\releases\latest-win.exe"
           Start-Process -Wait -FilePath $inst -ArgumentList '/S'
           $exe = Get-ChildItem -Path "$env:LOCALAPPDATA","$env:ProgramFiles" -Recurse -Filter 'Cap.exe' -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 20MB } | Select-Object -First 1
           $dir = $exe.DirectoryName; Write-Host "installed at $dir"
-          foreach ($t in 'orig','base','head') {
-            $d = "$T\pkg-$t"; Copy-Item -Recurse $dir $d
-            if ($t -ne 'orig') { Copy-Item -Force "$A\$t\cap-gpui.exe" "$d\Cap.exe" }
-            if ($t -eq 'head') { New-Item -ItemType Directory -Force "$d\licenses" | Out-Null; Copy-Item -Recurse apps\desktop-gpui\licenses\nemotron-3-diarization,apps\desktop-gpui\licenses\wespeaker-campplus "$d\licenses\" }
-            & 7z a -t7z -m0=lzma -mx=9 -ms=on "$T\$t.7z" "$d\*" | Out-Null
+          foreach ($k in 'orig','base','head') {
+            $d = "$R\pkg-$k"; Copy-Item -Recurse $dir $d
+            if ($k -ne 'orig') { Copy-Item -Force "$A\$k\cap-gpui.exe" "$d\Cap.exe" }
+            if ($k -eq 'head') { New-Item -ItemType Directory -Force "$d\licenses" | Out-Null; Copy-Item -Recurse apps\desktop-gpui\licenses\nemotron-3-diarization,apps\desktop-gpui\licenses\wespeaker-campplus "$d\licenses\" }
+            & 7z a -t7z -m0=lzma -mx=9 -ms=on "$R\$k.7z" "$d\*" | Out-Null
           }
           $rows = @("| package | bytes | MB |","|---|---|---|")
-          foreach ($f in @($inst, "$T\orig.7z", "$T\base.7z", "$T\head.7z")) { $s=(Get-Item $f).Length; $rows += "| $(Split-Path $f -Leaf) | $s | $([math]::Round($s/1MB,2)) |" }
+          foreach ($f in @($inst, "$R\orig.7z", "$R\base.7z", "$R\head.7z")) { $s=(Get-Item $f).Length; $rows += "| $(Split-Path $f -Leaf) | $s | $([math]::Round($s/1MB,2)) |" }
           $rows += ""; $rows += "binary sizes: shipped $((Get-Item "$dir\Cap.exe").Length) base $((Get-Item "$A\base\cap-gpui.exe").Length) head $((Get-Item "$A\head\cap-gpui.exe").Length)"
           $rows += "LZMA solid 7z of the install dir is the NSIS-equivalent measure; orig.7z calibrates it against the real installer."
-          $rows | Tee-Object -FilePath "$T\size-windows.md"
+          $rows | Tee-Object -FilePath "$R\size-windows.md"
       - uses: actions/upload-artifact@v4
         with:
           name: size-windows
