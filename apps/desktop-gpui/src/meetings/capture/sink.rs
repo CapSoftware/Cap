@@ -88,12 +88,21 @@ pub fn choose(
             .find(|(i, _)| *i == index)
             .map(|(_, name)| name.clone())
     };
-    let pick = playing
+    // One process can play several things: a browser runs every tab's audio
+    // in one service, so a music tab on a headset and a call on the speakers
+    // share it. Only when everything the calling programs play goes to one
+    // output other than the default is that output followed.
+    let mut outputs: Vec<String> = playing
         .iter()
-        .rev()
-        .find(|s| s.pid.is_some_and(|pid| callers.contains(&pid)))
-        .and_then(|s| name(s.device))?;
-    (Some(pick.as_str()) != default).then_some(pick)
+        .filter(|s| s.pid.is_some_and(|pid| callers.contains(&pid)))
+        .filter_map(|s| name(s.device))
+        .collect();
+    outputs.sort();
+    outputs.dedup();
+    match outputs.as_slice() {
+        [only] if Some(only.as_str()) != default => Some(only.clone()),
+        _ => None,
+    }
 }
 
 /// Whether Cap's reader (the `parec` with `pid`) records `output`'s monitor.
@@ -174,6 +183,39 @@ mod tests {
         }];
         assert_eq!(
             choose(&sinks(), Some("room"), &playing, &recording, 900),
+            None
+        );
+    }
+
+    #[test]
+    fn a_browser_playing_to_two_outputs_keeps_the_default() {
+        // One audio service for every tab: the call on the speakers, a music
+        // tab on the headset, the service recording the microphone.
+        let playing = vec![
+            Stream {
+                device: 0,
+                pid: Some(4100),
+                ..Stream::default()
+            },
+            Stream {
+                device: 1,
+                pid: Some(4100),
+                ..Stream::default()
+            },
+        ];
+        let recording = vec![Stream {
+            device: 3,
+            pid: Some(4100),
+            ..Stream::default()
+        }];
+        assert_eq!(
+            choose(&sinks(), Some("room"), &playing, &recording, 900),
+            None
+        );
+        // Listed the other way round: still the default.
+        let reversed: Vec<Stream> = playing.into_iter().rev().collect();
+        assert_eq!(
+            choose(&sinks(), Some("room"), &reversed, &recording, 900),
             None
         );
     }
