@@ -164,6 +164,8 @@ fn describe(action: &SessionAction) -> String {
         SessionAction::ClearWarning => "clear".into(),
         SessionAction::OfferResume { until } => format!("offer {}", until.0),
         SessionAction::GenerateNotes => "notes".into(),
+        SessionAction::JoinedCall { app_id } => format!("joined {app_id}"),
+        SessionAction::LeftCall => "left".into(),
     }
 }
 
@@ -235,6 +237,54 @@ fn keeping_a_call_end_that_replaced_the_inactivity_warning_counts_as_activity() 
     s.at(MIN + 15_000).keep().expect(&[(75_000, "clear")]);
     assert_eq!(s.session.next_deadline(), Some(Millis(75_000 + MIN)));
     s.at(75_000 + MIN).expect(&[(135_000, "inactive 255000")]);
+}
+
+#[test]
+fn a_call_joined_after_starting_notes_ends_the_meeting_with_it() {
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(30_000)
+        .call_started("zoom")
+        .expect(&[(30_000, "joined zoom")]);
+    assert_eq!(s.session.attached_app(), Some("zoom"));
+    s.at(2 * MIN).far_speech(70_000);
+    s.at(3 * MIN)
+        .call_ended("zoom")
+        .expect(&[(180_000, "ending 200000")]);
+    s.at(200_000)
+        .expect(&[(200_000, "clear"), (200_000, "stop CallEnded")]);
+}
+
+#[test]
+fn a_call_that_begins_late_in_a_meeting_without_one_is_not_its_call() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    s.at(5 * MIN).call_started("zoom").quiet();
+    assert_eq!(s.session.attached_app(), None);
+    s.at(7 * MIN).far_speech(120_000);
+    s.call_ended("zoom").quiet();
+    assert_eq!(s.session.state(), SessionState::Recording);
+}
+
+#[test]
+fn a_short_call_joined_before_a_minute_of_speech_never_ends_the_notes() {
+    let mut s = Sim::with(SessionConfig {
+        inactivity_warn_ms: None,
+        ..SessionConfig::default()
+    });
+    s.recording(None);
+    s.at(MIN)
+        .call_started("slack")
+        .expect(&[(60_000, "joined slack")]);
+    s.speech(Source::Mic, 40_000).take();
+    s.at(90_000).call_ended("slack").expect(&[(90_000, "left")]);
+    assert_eq!(s.session.attached_app(), None);
+    s.at(4 * MIN).quiet();
+    assert_eq!(s.session.state(), SessionState::Recording);
+    s.call_started("zoom").expect(&[(240_000, "joined zoom")]);
 }
 
 #[test]

@@ -46,13 +46,31 @@ pub enum Warning {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionAction {
-    StartCapture { resume: bool },
-    StopCapture { reason: StopReason },
-    ShowEndingCountdown { stop_at: Millis },
-    ShowInactivityWarning { stop_at: Millis },
+    StartCapture {
+        resume: bool,
+    },
+    StopCapture {
+        reason: StopReason,
+    },
+    ShowEndingCountdown {
+        stop_at: Millis,
+    },
+    ShowInactivityWarning {
+        stop_at: Millis,
+    },
     ClearWarning,
-    OfferResume { until: Millis },
+    OfferResume {
+        until: Millis,
+    },
     GenerateNotes,
+    /// A call began early in a meeting started without one: the meeting is
+    /// that call's now, and ends with it.
+    JoinedCall {
+        app_id: String,
+    },
+    /// That call ended before the meeting had a minute of speech: it was not
+    /// what these notes are for, and the meeting goes on without it.
+    LeftCall,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,6 +84,11 @@ pub struct SessionConfig {
     pub resume_offer_ms: u64,
     pub min_transcript_chars: usize,
     pub auto_generate_notes: bool,
+    /// How long after a start without a call one that begins is taken as
+    /// the meeting's (Start notes first, then join).
+    pub join_window_ms: u64,
+    /// The speech a meeting needs before a call it joined can end it.
+    pub joined_call_min_speech_ms: u64,
 }
 
 impl Default for SessionConfig {
@@ -80,6 +103,8 @@ impl Default for SessionConfig {
             resume_offer_ms: 30_000,
             min_transcript_chars: 400,
             auto_generate_notes: true,
+            join_window_ms: 300_000,
+            joined_call_min_speech_ms: 60_000,
         }
     }
 }
@@ -104,6 +129,8 @@ pub struct Session {
     last_activity: Millis,
     warning: Option<Warning>,
     call_end_suppressed: bool,
+    /// The call was joined after the meeting started without one.
+    joined_late: bool,
     resume_offer_until: Option<Millis>,
     resume_queued: bool,
     has_meeting: bool,
@@ -130,6 +157,7 @@ impl Session {
             last_activity: Millis::ZERO,
             warning: None,
             call_end_suppressed: false,
+            joined_late: false,
             resume_offer_until: None,
             resume_queued: false,
             has_meeting: false,
@@ -206,6 +234,7 @@ impl Session {
         self.flush_notes(&mut out);
         self.pending_notes = None;
         self.app_id = app_id;
+        self.joined_late = false;
         self.event_end = None;
         self.recorded_before_ms = 0;
         self.mic_speech_ms = 0;
@@ -356,6 +385,17 @@ impl Session {
         let now = self.clamp(now);
         let mut out = self.advance(now);
         if self.app_id.as_deref() != Some(app_id) {
+            if self.app_id.is_none()
+                && matches!(self.state, SessionState::Starting | SessionState::Recording)
+                && self.recorded_ms() < self.config.join_window_ms
+            {
+                self.app_id = Some(app_id.to_string());
+                self.joined_late = true;
+                self.call_end_suppressed = false;
+                out.push(SessionAction::JoinedCall {
+                    app_id: app_id.to_string(),
+                });
+            }
             return out;
         }
         self.call_end_suppressed = false;
@@ -375,6 +415,15 @@ impl Session {
             || self.call_end_suppressed
             || matches!(self.warning, Some(Warning::Ending { .. }))
         {
+            return out;
+        }
+        if self.joined_late
+            && self.mic_speech_ms.saturating_add(self.system_speech_ms)
+                < self.config.joined_call_min_speech_ms
+        {
+            self.app_id = None;
+            self.joined_late = false;
+            out.push(SessionAction::LeftCall);
             return out;
         }
         // Every call that ends gets the countdown, however short: a three

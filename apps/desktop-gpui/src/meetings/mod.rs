@@ -1368,8 +1368,56 @@ impl Meetings {
                         self.request_auto_notes(doc_id, cx);
                     }
                 }
+                SessionAction::JoinedCall { app_id } => self.set_meeting_app(Some(app_id), cx),
+                SessionAction::LeftCall => self.set_meeting_app(None, cx),
             }
         }
+    }
+
+    /// The call the meeting being recorded belongs to changed (joined after
+    /// Start notes, or left again): its note shows that app, and an automatic
+    /// title follows it ("Zoom at 9:30 AM").
+    fn set_meeting_app(&mut self, app_id: Option<String>, cx: &mut Context<Self>) {
+        let app_name = app_id.as_ref().and_then(|id| {
+            apps::app_by_id(id).map(|a| a.name.to_string()).or_else(|| {
+                self.detector
+                    .active_calls()
+                    .iter()
+                    .find(|c| &c.app_id == id)
+                    .map(|c| c.app_name.clone())
+            })
+        });
+        let Some(doc_id) = self.recording.as_ref().map(|r| r.doc_id.clone()) else {
+            return;
+        };
+        tracing::info!(doc_id, app = ?app_name, "the meeting's call changed");
+        let Some(library) = self.library().cloned() else {
+            return;
+        };
+        let Ok(mut meta) = library.load(&doc_id) else {
+            return;
+        };
+        let meeting = meta.meeting.get_or_insert_with(MeetingDetails::default);
+        meeting.app_id = app_id;
+        meeting.app_name = app_name.clone();
+        if meta.title_is_auto && meeting.event.is_none() {
+            let started = meeting
+                .started_at
+                .unwrap_or_else(Utc::now)
+                .with_timezone(&chrono::Local)
+                .naive_local();
+            meta.title =
+                crate::meetings_ui::documents::format::meeting_title(app_name.as_deref(), started);
+        }
+        if let Err(error) = library.save(&meta) {
+            tracing::warn!(%error, "could not save the meeting's call");
+        }
+        if let Some(active) = self.active.as_mut().filter(|a| a.doc_id == doc_id) {
+            active.app_name = app_name;
+            active.title = meta.title.clone();
+        }
+        self.mark_active(cx);
+        cx.emit(MeetingEvent::LibraryChanged);
     }
 
     /// The notes model first; then, so nobody is left without a transcript
