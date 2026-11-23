@@ -834,3 +834,68 @@ describe("describeLiveChunk", () => {
 		expect(describe(2, 4, 0)).toBeNull();
 	});
 });
+
+describe("short final chunks", () => {
+	const manifest = {
+		...baseManifest,
+		is_complete: true,
+		audio_segments: [
+			...Array.from({ length: 10 }, (_, i) => seg(i + 1)),
+			seg(11, 0.021),
+		],
+	};
+
+	it("sends a tail too short to transcribe with earlier audio in front", () => {
+		const tail = planNextLiveChunk({
+			manifest,
+			lastProcessedIndex: 10,
+			targetSeconds: 10,
+			minSentSeconds: 0.5,
+		});
+		expect(tail).toMatchObject({
+			action: "chunk",
+			startMs: 20_000,
+			durationMs: 21,
+			contextMs: 2000,
+		});
+		if (tail.action === "chunk") {
+			expect(tail.context.map((entry) => entry.index)).toEqual([10]);
+			expect(tail.entries.map((entry) => entry.index)).toEqual([11]);
+		}
+	});
+
+	it("leaves chunks that are long enough, or have nothing before them, alone", () => {
+		expect(
+			planNextLiveChunk({
+				manifest,
+				lastProcessedIndex: 5,
+				targetSeconds: 10,
+				minSentSeconds: 0.5,
+			}),
+		).toMatchObject({ action: "chunk", contextMs: 0, context: [] });
+
+		const lone = planNextLiveChunk({
+			manifest: {
+				...baseManifest,
+				is_complete: true,
+				audio_segments: [seg(1, 0.5)],
+			},
+			lastProcessedIndex: 0,
+			targetSeconds: 10,
+			minSentSeconds: 0.5,
+		});
+		expect(lone).toMatchObject({ action: "chunk", contextMs: 0, context: [] });
+	});
+
+	it("keeps the larger of the configured context and the padding", () => {
+		expect(
+			planNextLiveChunk({
+				manifest,
+				lastProcessedIndex: 10,
+				targetSeconds: 10,
+				contextSeconds: 6,
+				minSentSeconds: 0.5,
+			}),
+		).toMatchObject({ action: "chunk", contextMs: 6000 });
+	});
+});

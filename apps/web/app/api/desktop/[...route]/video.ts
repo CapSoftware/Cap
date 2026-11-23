@@ -27,6 +27,7 @@ import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
 import { trackServerEvent } from "@/lib/server-analytics";
 import {
+	desktopClientInfo,
 	GOOGLE_DRIVE_UPLOAD_FEATURE,
 	hasDesktopFeature,
 	isFromDesktopSemver,
@@ -281,9 +282,14 @@ app.get(
 			const videoName =
 				name ??
 				`Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
-			const metadata: VideoMetadata | undefined = name
-				? { sourceName: name }
-				: undefined;
+			const desktopClient = desktopClientInfo(c.req);
+			const metadata: VideoMetadata | undefined =
+				name || desktopClient
+					? {
+							...(name ? { sourceName: name } : {}),
+							...(desktopClient ? { desktopClient } : {}),
+						}
+					: undefined;
 			const clientSupportsGoogleDriveUpload = hasDesktopFeature(
 				c.req,
 				GOOGLE_DRIVE_UPLOAD_FEATURE,
