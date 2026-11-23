@@ -377,6 +377,28 @@ describe("desktop reupload publication", () => {
 		expect(mocks.retire).not.toHaveBeenCalled();
 	});
 
+	it("publishes after the previous output's preview assets land mid-upload", async () => {
+		video.source = {
+			type: "webMP4",
+			outputKey:
+				"user/video/.recording/outputs/render-11111111-1111-4111-8111-111111111111/result.mp4",
+		};
+		const snapshot = original();
+		const token = tokenFor(snapshot);
+		video.source = {
+			...video.source,
+			thumbnailKey:
+				"user/video/.recording/outputs/render-11111111-1111-4111-8111-111111111111/result/screenshot.jpg",
+			previewKey:
+				"user/video/.recording/outputs/render-11111111-1111-4111-8111-111111111111/result/preview.gif",
+		};
+		await expect(
+			prepareDesktopReupload(transaction(), snapshot, token),
+		).resolves.toMatchObject({
+			source: { type: "webMP4", outputKey: token.outputKey },
+		});
+	});
+
 	it("compares normalized source fields under the lock", async () => {
 		const snapshot = original();
 		const token = tokenFor(snapshot);

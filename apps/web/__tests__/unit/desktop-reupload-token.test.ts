@@ -232,7 +232,7 @@ describe("desktop reupload tokens", () => {
 });
 
 describe("desktop reupload target identity", () => {
-	it("matches the Video.source schema with deterministic field order", () => {
+	it("identifies the published output with deterministic field order", () => {
 		const source = {
 			type: "desktopMP4",
 			outputKey: "output",
@@ -242,16 +242,7 @@ describe("desktop reupload target identity", () => {
 			previewKey: "preview",
 		};
 		const expected = createHash("sha256")
-			.update(
-				JSON.stringify({
-					audioLevelOutputKey: "audio-output",
-					audioLevelSourceKey: "audio-source",
-					outputKey: "output",
-					previewKey: "preview",
-					thumbnailKey: "thumbnail",
-					type: "desktopMP4",
-				}),
-			)
+			.update(JSON.stringify({ outputKey: "output", type: "desktopMP4" }))
 			.digest("hex");
 		expect(desktopReuploadSourceIdentity(source)).toBe(expected);
 		expect(
@@ -266,13 +257,82 @@ describe("desktop reupload target identity", () => {
 				outputKey: undefined,
 			}),
 		).toBe(desktopReuploadSourceIdentity({ type: "desktopMP4" }));
-		for (const key of Object.keys(source)) {
+		for (const key of ["type", "outputKey"]) {
 			const changed = {
 				...source,
 				[key]: key === "type" ? "webMP4" : "changed",
 			};
 			expect(desktopReuploadSourceIdentity(changed)).not.toBe(expected);
 		}
+		for (const key of [
+			"audioLevelOutputKey",
+			"audioLevelSourceKey",
+			"thumbnailKey",
+			"previewKey",
+		]) {
+			expect(
+				desktopReuploadSourceIdentity({ ...source, [key]: "changed" }),
+			).toBe(expected);
+		}
+	});
+
+	it("accepts preview assets published for the current output mid-upload", () => {
+		video = {
+			...video,
+			source: {
+				type: "webMP4",
+				outputKey: "user/video/.recording/outputs/render-1/result.mp4",
+			},
+		};
+		const token = decodedToken();
+		const refreshed: DesktopReuploadVideo = {
+			...video,
+			source: {
+				...video.source,
+				thumbnailKey:
+					"user/video/.recording/outputs/render-1/result/screenshot.jpg",
+				previewKey: "user/video/.recording/outputs/render-1/result/preview.gif",
+			},
+		};
+		expect(() =>
+			assertDesktopReuploadTarget(token, refreshed, canonicalKey, "s3"),
+		).not.toThrow();
+		expect(() =>
+			assertDesktopReuploadTarget(
+				token,
+				{
+					...refreshed,
+					source: {
+						...refreshed.source,
+						outputKey: "user/video/.recording/outputs/render-2/result.mp4",
+					},
+				},
+				canonicalKey,
+			),
+		).toThrow("Recording source changed");
+	});
+
+	it("still accepts tokens signed with the whole source before the change", () => {
+		const legacyIdentity = createHash("sha256")
+			.update(
+				JSON.stringify({
+					outputKey: "user/video/.recording/outputs/previous/result.mp4",
+					thumbnailKey: "user/video/thumbnail.jpg",
+					type: "desktopMP4",
+				}),
+			)
+			.digest("hex");
+		const token = { ...decodedToken(), sourceIdentity: legacyIdentity };
+		expect(() =>
+			assertDesktopReuploadTarget(token, video, canonicalKey),
+		).not.toThrow();
+		expect(() =>
+			assertDesktopReuploadTarget(
+				token,
+				{ ...video, source: { ...video.source, outputKey: "newer" } },
+				canonicalKey,
+			),
+		).toThrow("Recording source changed");
 	});
 
 	it("rejects malformed known source fields without echoing them", () => {

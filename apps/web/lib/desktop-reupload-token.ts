@@ -42,16 +42,33 @@ export type DesktopReuploadVideo = Pick<
 
 const decodeSource = Schema.decodeUnknownSync(Video.Video.fields.source);
 
-export function desktopReuploadSourceIdentity(source: unknown): string {
-	let normalized: Video.Video["source"];
+function hashSource(source: object) {
+	return createHash("sha256")
+		.update(JSON.stringify(source, Object.keys(source).sort()))
+		.digest("hex");
+}
+
+function decodeReuploadSource(source: unknown): Video.Video["source"] {
 	try {
-		normalized = decodeSource(source);
+		return decodeSource(source);
 	} catch {
 		throw new Error("Invalid recording source");
 	}
-	return createHash("sha256")
-		.update(JSON.stringify(normalized, Object.keys(normalized).sort()))
-		.digest("hex");
+}
+
+// Previews and audio levels are made for the published output after it
+// changes, so they can land mid-upload without anything being republished.
+export function desktopReuploadSourceIdentity(source: unknown): string {
+	const { type, outputKey } = decodeReuploadSource(source);
+	return hashSource({ type, outputKey });
+}
+
+// Tokens signed before then hashed the whole source.
+function sourceIdentityMatches(source: unknown, identity: string) {
+	return (
+		desktopReuploadSourceIdentity(source) === identity ||
+		hashSource(decodeReuploadSource(source)) === identity
+	);
 }
 
 function hasValidOutputKey(token: DesktopReuploadToken): boolean {
@@ -187,7 +204,7 @@ export function assertDesktopReuploadTarget(
 	) {
 		return;
 	}
-	if (desktopReuploadSourceIdentity(video.source) !== token.sourceIdentity) {
+	if (!sourceIdentityMatches(video.source, token.sourceIdentity)) {
 		throw new Error("Recording source changed during reupload");
 	}
 }
