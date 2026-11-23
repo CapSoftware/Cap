@@ -430,6 +430,7 @@ impl DeepLinkAction {
                                     input_readiness,
                                     microphone: mic_label,
                                     camera,
+                                    camera_picture: None,
                                     system_audio: capture_system_audio,
                                     excluded_windows: Vec::new(),
                                     camera_feed,
@@ -437,6 +438,8 @@ impl DeepLinkAction {
                                     mic_meter,
                                     #[cfg(target_os = "linux")]
                                     linux_instant_camera: None,
+                                    #[cfg(target_os = "linux")]
+                                    linux_instant_picture: None,
                                     start_gate: None,
                                 },
                                 permit.clone(),

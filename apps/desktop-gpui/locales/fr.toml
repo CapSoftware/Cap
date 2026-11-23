@@ -1013,6 +1013,13 @@ no_microphones = "Aucun micro trouvé"
 system_audio_off = "Sans audio système"
 system_audio_on = "Avec l'audio système"
 
+[main.device.picture]
+label = "Image"
+choose = "Utiliser une image"
+detail = "Affichée à la place d'une caméra"
+change = "Choisir une autre image"
+filter = "Images"
+
 [main.device.access]
 allow_access = "Autoriser l'accès"
 camera_denied = "Cap ne peut pas utiliser votre caméra. Activez-la dans Réglages Système."
@@ -1291,6 +1298,12 @@ blur_light = "Léger. Cliquez pour un flou plus fort."
 blur_heavy_then_cutout = "Fort. Cliquez pour retirer l'arrière-plan."
 blur_heavy_then_off = "Fort. Cliquez pour le désactiver."
 blur_cutout = "Arrière-plan retiré. Cliquez pour le désactiver."
+picture = "Utiliser une image"
+picture_body = "Afficher une image fixe à la place de votre caméra."
+change_picture = "Changer d'image"
+change_picture_body = "Choisir une autre image à afficher."
+use_camera = "Utiliser votre caméra"
+use_camera_body = "Afficher de nouveau votre caméra à la place de l'image."
 
 [camera.blur]
 light = "Léger"
@@ -2785,6 +2798,14 @@ shape_label = "Forme"
 size_during_zoom = "Taille pendant le zoom"
 size_label = "Taille"
 title = "Caméra"
+
+[editor.tabs.camera.picture]
+title = "Image"
+empty = "Ajoutez une image à afficher à la place de votre caméra."
+shown = "Affichée à la place de votre caméra."
+add = "Ajouter une image"
+replace = "Remplacer"
+remove = "Retirer"
 
 [editor.tabs.camera.blur]
 heavy = "Flou intense"

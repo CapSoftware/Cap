@@ -1013,6 +1013,13 @@ no_microphones = "कोई माइक्रोफ़ोन नहीं म�
 system_audio_off = "सिस्टम ऑडियो नहीं"
 system_audio_on = "सिस्टम ऑडियो रिकॉर्ड करें"
 
+[main.device.picture]
+label = "तस्वीर"
+choose = "तस्वीर इस्तेमाल करें"
+detail = "कैमरे की जगह दिखाई जाती है"
+change = "दूसरी तस्वीर चुनें"
+filter = "इमेज"
+
 [main.device.access]
 allow_access = "एक्सेस दें"
 camera_denied = "Cap आपका कैमरा इस्तेमाल नहीं कर सकता। इसे सिस्टम सेटिंग्स में चालू करें।"
@@ -1291,6 +1298,12 @@ blur_light = "हल्का। ज़्यादा ब्लर के ल�
 blur_heavy_then_cutout = "तेज़। बैकग्राउंड हटाने के लिए क्लिक करें।"
 blur_heavy_then_off = "तेज़। बंद करने के लिए क्लिक करें।"
 blur_cutout = "बैकग्राउंड हटाया गया। बंद करने के लिए क्लिक करें।"
+picture = "तस्वीर इस्तेमाल करें"
+picture_body = "अपने कैमरे की जगह एक तस्वीर दिखाएँ।"
+change_picture = "तस्वीर बदलें"
+change_picture_body = "दिखाने के लिए दूसरी तस्वीर चुनें।"
+use_camera = "अपना कैमरा इस्तेमाल करें"
+use_camera_body = "तस्वीर की जगह फिर से अपना कैमरा दिखाएँ।"
 
 [camera.blur]
 light = "हल्का"
@@ -2785,6 +2798,14 @@ shape_label = "आकृति"
 size_during_zoom = "ज़ूम के दौरान आकार"
 size_label = "आकार"
 title = "कैमरा"
+
+[editor.tabs.camera.picture]
+title = "तस्वीर"
+empty = "कैमरे की जगह दिखाने के लिए एक तस्वीर जोड़ें।"
+shown = "आपके कैमरे की जगह दिखाई जाती है।"
+add = "तस्वीर जोड़ें"
+replace = "बदलें"
+remove = "हटाएँ"
 
 [editor.tabs.camera.blur]
 heavy = "ज़्यादा ब्लर"

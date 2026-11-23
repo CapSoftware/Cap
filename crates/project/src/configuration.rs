@@ -3226,6 +3226,12 @@ pub struct ProjectConfiguration {
     pub markers: Vec<TimelineMarker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_visuals: Option<Box<AudioVisualsConfiguration>>,
+    /// A still picture, relative to the project, shown where the camera would
+    /// be in a recording that has no camera track. It sits outside `camera`
+    /// so presets and style segments, which copy `camera` whole, never carry
+    /// one project's picture into another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_picture: Option<String>,
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -3289,6 +3295,7 @@ impl Default for ProjectConfiguration {
             auto_zoom_pending: false,
             markers: Vec::new(),
             audio_visuals: None,
+            camera_picture: None,
         }
     }
 }
@@ -3411,6 +3418,7 @@ impl ProjectConfiguration {
         preset.overlay_order_with_shapes = self.overlay_order_with_shapes.clone();
         preset.clips = self.clips.clone();
         preset.markers = self.markers.clone();
+        preset.camera_picture = self.camera_picture.clone();
         preset
     }
 

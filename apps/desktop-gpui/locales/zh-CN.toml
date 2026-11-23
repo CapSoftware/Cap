@@ -1013,6 +1013,13 @@ no_microphones = "未找到麦克风"
 system_audio_off = "不录制系统音频"
 system_audio_on = "录制系统音频"
 
+[main.device.picture]
+label = "图片"
+choose = "使用图片"
+detail = "代替摄像头显示"
+change = "选择其他图片"
+filter = "图片"
+
 [main.device.access]
 allow_access = "允许访问"
 camera_denied = "Cap 无法使用你的摄像头。请在系统设置中开启。"
@@ -1291,6 +1298,12 @@ blur_light = "轻度。点击加强模糊。"
 blur_heavy_then_cutout = "强。点击移除背景。"
 blur_heavy_then_off = "强。点击关闭。"
 blur_cutout = "已移除背景。点击关闭。"
+picture = "使用图片"
+picture_body = "用一张静态图片代替你的摄像头。"
+change_picture = "更换图片"
+change_picture_body = "选择另一张要显示的图片。"
+use_camera = "使用摄像头"
+use_camera_body = "重新显示你的摄像头，而不是图片。"
 
 [camera.blur]
 light = "轻"
@@ -2785,6 +2798,14 @@ shape_label = "形状"
 size_during_zoom = "缩放时的大小"
 size_label = "大小"
 title = "摄像头"
+
+[editor.tabs.camera.picture]
+title = "图片"
+empty = "添加一张图片，显示在摄像头的位置。"
+shown = "显示在摄像头的位置。"
+add = "添加图片"
+replace = "替换"
+remove = "移除"
 
 [editor.tabs.camera.blur]
 heavy = "强模糊"

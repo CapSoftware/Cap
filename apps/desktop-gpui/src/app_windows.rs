@@ -3489,6 +3489,27 @@ fn linux_camera_presentation(
     Ok(presentation)
 }
 
+/// The picture is drawn where its bubble sits, as a camera is.
+#[cfg(target_os = "linux")]
+fn refresh_linux_instant_picture(config: &mut StartConfig, cx: &mut App) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !cap_recording::screenshot::uses_wayland_portal(),
+        tr::dialog::capture::camera_needs_x11()
+    );
+    let camera = cx
+        .global::<AppWindows>()
+        .camera
+        .ok_or_else(|| anyhow::anyhow!(tr::dialog::capture::camera_preview_closed()))?;
+    let snapshot = camera.update(cx, |camera, window, _| camera.recording_snapshot(window))??;
+    let capture = linux_capture_bounds(&config.target)?;
+    let presentation = linux_camera_presentation(snapshot, capture)?;
+    config.linux_instant_picture = Some(crate::recording::LinuxInstantPictureRequest {
+        presentation,
+        reference_size: (capture.width, capture.height),
+    });
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn refresh_linux_instant_camera(
     config: &mut StartConfig,
@@ -3498,10 +3519,16 @@ pub(crate) fn refresh_linux_instant_camera(
     use cap_recording::instant_recording::{LinuxCameraBlur, LinuxCameraProcessing};
 
     config.linux_instant_camera = None;
+    config.linux_instant_picture = None;
     if config.mode != RecordingMode::Instant
-        || config.camera.is_none()
         || matches!(config.target, ScreenCaptureTarget::CameraOnly)
     {
+        return Ok(());
+    }
+    if config.camera.is_none() {
+        if config.camera_picture.is_some() && !config.target.is_audio_only() {
+            refresh_linux_instant_picture(config, cx)?;
+        }
         return Ok(());
     }
     anyhow::ensure!(
@@ -4238,7 +4265,7 @@ pub fn begin_recording(mut config: StartConfig, cx: &mut App) {
         if clean_capture_supported(
             config.mode,
             &config.target,
-            config.camera.is_some(),
+            config.camera.is_some() || config.camera_picture.is_some(),
             wayland,
         ) {
             if let Err(error) = prepare_clean_capture(config, cx) {
@@ -4389,8 +4416,7 @@ pub fn open_camera_window(cx: &mut App) {
     }
 
     let state = crate::store::load().camera_window.unwrap_or_default();
-    let (width, height) =
-        camera_window::window_size(&state, camera_window::retained_preview_aspect(cx));
+    let (width, height) = camera_window::opening_window_size(&state, cx);
 
     let main = cx.global::<AppWindows>().main;
     let main_geometry = main
@@ -8614,6 +8640,22 @@ mod tests {
         });
     }
 
+    /// A start held for its shortcut already carries the picture, so the
+    /// picture cannot change under it.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn the_picture_cannot_change_while_a_clean_capture_holds_a_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            cx.set_global(test_app_windows(Vec::new()));
+            assert!(crate::camera_picture::can_change(cx));
+            cx.global_mut::<AppWindows>().clean_capture =
+                Some(pending_clean_capture(RecordingMode::Instant, false));
+            assert!(!crate::camera_picture::can_change(cx));
+        });
+    }
+
     /// A clean capture keeps the bubble closed until its lease is released.
     /// Asking to show the preview while the lease holds must keep it hidden,
     /// so the reopen after the lease is released still brings it back.
@@ -8826,6 +8868,7 @@ mod tests {
                 },
                 microphone: None,
                 camera: None,
+                camera_picture: None,
                 device_settings: crate::store::RecordingDeviceSettings::default(),
                 input_readiness: crate::feeds::InputReadiness::default(),
                 system_audio: false,
@@ -8834,6 +8877,7 @@ mod tests {
                 mic_feed: None,
                 mic_meter: None,
                 linux_instant_camera: None,
+                linux_instant_picture: None,
                 start_gate: None,
             }),
             gate: CleanCaptureGate::default(),
