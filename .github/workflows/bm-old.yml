@@ -1,0 +1,194 @@
+name: Scratch upgrade from 0.6.1 and 0.6.2 built from their tags (temporary)
+
+on:
+  push:
+    branches: [ci/bm-old]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-old
+  cancel-in-progress: true
+
+env:
+  MAIN_RUN: "45167422846"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  build-old:
+    name: Build ${{ matrix.os }} ${{ matrix.ver }} from its tag
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, windows, macos]
+        ver: ["0.6.1", "0.6.2"]
+        include:
+          - { os: linux, runner: blacksmith-8vcpu-ubuntu-2404, target: x86_64-unknown-linux-gnu }
+          - { os: windows, runner: blacksmith-8vcpu-windows-2025, target: x86_64-pc-windows-msvc }
+          - { os: macos, runner: blacksmith-6vcpu-macos-15, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cap-v${{ matrix.ver }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup from the 0.6.4 gate (ONNX Runtime from NuGet; GitHub archives are gone)
+        shell: bash
+        run: |
+          git fetch -q origin 62a826479204f6aaf8d18b7767f3382ad2384401
+          git show 62a826479204f6aaf8d18b7767f3382ad2384401:scripts/setup.js > scripts/setup.js
+          git show 62a826479204f6aaf8d18b7767f3382ad2384401:scripts/linux-bundle-config.mjs > scripts/linux-bundle-config.mjs
+      - if: matrix.os == 'linux'
+        uses: ./.github/actions/install-desktop-deps
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: ./.github/actions/setup-rust-cache
+        with:
+          target: ${{ matrix.target }}
+          prefix-key: v1-rust-bm-release-${{ matrix.ver }}
+          save-cache: "false"
+          workspaces: apps/desktop-gpui -> target
+      - shell: bash
+        run: node scripts/setup.js
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.target }}
+      - shell: bash
+        run: |
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - shell: bash
+        run: cargo +1.95.0 build --manifest-path apps/desktop-gpui/Cargo.toml --locked --release --target ${{ matrix.target }} --bin cap-gpui
+      - name: Stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=old
+          stage="$RUNNER_TEMP/stage/$tag"
+          mkdir -p "$stage/resources/assets"
+          bin=apps/desktop-gpui/target/${{ matrix.target }}/release/cap-gpui
+          cp -R apps/desktop-gpui/assets/backgrounds "$stage/resources/assets/" 2>/dev/null || echo "no GPUI wallpapers at this tag"
+          case "${{ matrix.os }}" in
+            linux) cp "$bin" "$stage/cap-gpui"; mkdir -p "$stage/libs" && cp -a target/native-deps/lib/. "$stage/libs/" ;;
+            macos) cp "$bin" "$stage/cap-gpui"; mkdir -p "$stage/Frameworks"; cp -R target/Frameworks/Spacedrive.framework "$stage/Frameworks/" ;;
+            windows)
+              cp "$bin.exe" "$stage/cap-gpui.exe"
+              mkdir -p "$stage/gpui-windows-shaders"
+              cp ../zed-cap/crates/gpui_windows/src/*.hlsl "$stage/gpui-windows-shaders/"
+              cp target/ffmpeg/bin/*.dll "$stage/" 2>/dev/null || true
+              cp target/native-deps/dxc/*.dll "$stage/" 2>/dev/null || true
+              printf '%s' "$GITHUB_WORKSPACE" > "$stage/build-workspace.txt"
+              printf '%s' "$(cd ../zed-cap && pwd -W)" > "$stage/build-zed.txt"
+              ;;
+          esac
+          git rev-parse HEAD > "$stage/sha.txt"
+          cd "$RUNNER_TEMP/stage" && tar -cf "../old-${{ matrix.os }}-${{ matrix.ver }}.tar" "$tag"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: old-${{ matrix.os }}-${{ matrix.ver }}
+          path: ${{ runner.temp }}/old-${{ matrix.os }}-${{ matrix.ver }}.tar
+          retention-days: 3
+
+  upgrade-old:
+    name: Upgrade from ${{ matrix.ver }} on ${{ matrix.os }}
+    needs: build-old
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [linux, windows, macos]
+        ver: ["0.6.1", "0.6.2"]
+        include:
+          - { os: linux, runner: blacksmith-8vcpu-ubuntu-2404 }
+          - { os: windows, runner: windows-2022 }
+          - { os: macos, runner: blacksmith-6vcpu-macos-15 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - if: matrix.os == 'linux'
+        uses: ./.github/actions/install-desktop-deps
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-${{ matrix.os }}-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: old-${{ matrix.os }}-${{ matrix.ver }}
+          path: ${{ runner.temp }}/dl
+      - name: Unpack
+        shell: bash
+        run: |
+          set -euo pipefail
+          A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar --force-local -C "$A" -xf {} \;
+          else
+            find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          fi
+          cat "$A"/*/sha.txt
+      - if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          foreach ($t in 'old','base','head') {
+            $app = "$env:RUNNER_TEMP\apps\$t"
+            $workspace = (Get-Content "$app\build-workspace.txt" -Raw).Trim()
+            if ($workspace -ne $env:GITHUB_WORKSPACE -and -not (Test-Path $workspace)) {
+              New-Item -ItemType Directory -Force (Split-Path $workspace) | Out-Null
+              cmd /c mklink /J "$workspace" "$env:GITHUB_WORKSPACE"
+            }
+            $shaders = Join-Path (Get-Content "$app\build-zed.txt" -Raw).Trim() "crates\gpui_windows\src"
+            New-Item -ItemType Directory -Force $shaders | Out-Null
+            Copy-Item "$app\gpui-windows-shaders\*.hlsl" $shaders -Force
+          }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
+          python -m pip install -q psutil
+          $env:Path = "$env:ProgramData\chocolatey\bin;$env:Path"
+          $a = "$env:RUNNER_TEMP\apps"
+          python .bm/bm.py --old "$a\old\cap-gpui.exe" --base "$a\base\cap-gpui.exe" --head "$a\head\cap-gpui.exe" --out "$env:RUNNER_TEMP\bm" --rounds 0
+      - if: matrix.os == 'linux'
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils dbus pulseaudio pulseaudio-utils ffmpeg python3-psutil openbox > /dev/null
+          export DISPLAY=:79 XDG_SESSION_TYPE=x11
+          unset WAYLAND_DISPLAY
+          Xvfb "$DISPLAY" -screen 0 1920x1080x24 >/dev/null 2>&1 &
+          sleep 1
+          openbox >/dev/null 2>&1 &
+          pulse_dir=$(mktemp -d)
+          export PULSE_SERVER=unix:$pulse_dir/native
+          pulseaudio -n --daemonize=no --exit-idle-time=-1 \
+            -L "module-native-protocol-unix socket=$pulse_dir/native auth-anonymous=1" \
+            -L "module-null-sink sink_name=bm_out" >/dev/null 2>&1 &
+          sleep 2
+          A="$RUNNER_TEMP/apps"
+          dbus-run-session -- python3 .bm/bm.py --old "$A/old/cap-gpui" --old-libs "$A/old/libs" \
+            --base "$A/base/cap-gpui" --base-libs "$A/base/libs" --head "$A/head/cap-gpui" --head-libs "$A/head/libs" \
+            --out "$RUNNER_TEMP/bm" --rounds 0
+      - if: matrix.os == 'macos'
+        run: |
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil
+          command -v ffmpeg || HOMEBREW_NO_AUTO_UPDATE=1 brew install -q ffmpeg
+          A="$RUNNER_TEMP/apps"
+          "$RUNNER_TEMP/venv/bin/python" .bm/bm.py --old "$A/old/cap-gpui" --base "$A/base/cap-gpui" --head "$A/head/cap-gpui" \
+            --out "$RUNNER_TEMP/bm" --rounds 0
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-${{ matrix.os }}-from-${{ matrix.ver }}
+          path: |
+            ${{ runner.temp }}/bm/summary.*
+            ${{ runner.temp }}/bm/snap-old.json
+            ${{ runner.temp }}/bm/runs/**/app.log
+            ${{ runner.temp }}/bm/runs/**/result.json
+            ${{ runner.temp }}/bm/runs/**/*.png
+          retention-days: 7
