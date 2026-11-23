@@ -15,6 +15,8 @@ export type VideoId = typeof VideoId.Type;
 
 export const FREE_PLAN_MAX_RECORDING_SECONDS = 5 * 60;
 
+export const FREE_PLAN_DURATION_ERROR_PREFIX = "free-plan-duration-exceeded";
+
 export const isLinkOpenToAnyone = (
 	videoSettings: { linkAccess?: string } | null | undefined,
 	organizationSettings:
@@ -132,6 +134,7 @@ export function isRetryableDesktopSegmentsFinalizationError(
 export const UploadProgressErrorKind = Schema.Literal(
 	"source-unavailable",
 	"retryable",
+	"upgrade-required",
 );
 export type UploadProgressErrorKind = typeof UploadProgressErrorKind.Type;
 
@@ -139,6 +142,8 @@ export function getUploadProgressErrorKind(
 	error: string | null | undefined,
 ): UploadProgressErrorKind | undefined {
 	if (!error) return undefined;
+	if (error.startsWith(`${FREE_PLAN_DURATION_ERROR_PREFIX}:`))
+		return "upgrade-required";
 	if (/^source-(?:incomplete|invalid|missing):/i.test(error))
 		return "source-unavailable";
 	if (isRetryableDesktopSegmentsFinalizationError(error)) return "retryable";

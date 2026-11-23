@@ -111,6 +111,23 @@ describe("shouldDeferPlaybackSource", () => {
 		).toBe(false);
 	});
 
+	it("explains a free plan duration rejection without offering a retry", () => {
+		const rejected = {
+			status: "error" as const,
+			lastUpdated: new Date(),
+			errorMessage: null,
+			errorKind: "upgrade-required" as const,
+			hasRawFallback: false,
+		};
+		expect(canRetryFailedProcessing(rejected, true)).toBe(false);
+		expect(getUploadFailureMessage(rejected, true)).toBe(
+			"Recording exceeds the free plan duration limit. Upgrade to Cap Pro to upload longer recordings.",
+		);
+		expect(getUploadFailureMessage(rejected, false)).toBe(
+			"This recording exceeds the free plan duration limit.",
+		);
+	});
+
 	it("uses upload-specific failure messaging", () => {
 		expect(
 			getUploadFailureMessage(
