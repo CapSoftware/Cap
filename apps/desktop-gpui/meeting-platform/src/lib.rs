@@ -1,3 +1,5 @@
+#[cfg(any(windows, test))]
+pub(crate) mod mix_gate;
 pub mod resample;
 
 #[cfg(target_os = "linux")]

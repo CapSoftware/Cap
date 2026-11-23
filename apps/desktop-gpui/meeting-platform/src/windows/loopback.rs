@@ -9,6 +9,7 @@
 //! computers) the meeting keeps its existing capture; see
 //! [`separate_comms_output`].
 
+use crate::mix_gate::MixGate;
 use std::{
     collections::VecDeque,
     sync::{
@@ -203,10 +204,20 @@ struct Legs {
     ids: Vec<String>,
     event: HANDLE,
     enumerator: IMMDeviceEnumerator,
+    /// Two outputs carrying the same sound are kept once.
+    gate: MixGate,
+    /// What each output hands the mix, reused.
+    pair: [Vec<f32>; 2],
 }
 
 impl Legs {
     fn close(&mut self) {
+        if self.gate.switches() > 0 {
+            tracing::info!(
+                switches = self.gate.switches(),
+                "meeting computer audio: times the outputs went between the same sound and different ones"
+            );
+        }
         for leg in &self.legs {
             let _ = unsafe { leg.client.Stop() };
         }
@@ -229,6 +240,11 @@ fn open() -> Result<Legs, String> {
         ids: Vec::new(),
         event,
         enumerator,
+        gate: MixGate::default(),
+        pair: [
+            Vec::with_capacity(LOOPBACK_RATE as usize / 10),
+            Vec::with_capacity(LOOPBACK_RATE as usize / 10),
+        ],
     };
     for role in [eConsole, eCommunications] {
         let Ok((_, id)) = device_client(&legs.enumerator, role) else {
@@ -390,28 +406,32 @@ pub(crate) fn finite(sample: f32) -> f32 {
 }
 
 /// Mixes what the legs have in common and hands it on; a leg that ran
-/// further ahead than [`MAX_SKEW`] loses its oldest excess.
-pub(crate) fn mix(fifos: &mut [&mut VecDeque<f32>], out: &mut Vec<f32>) {
+/// further ahead than [`MAX_SKEW`] loses its oldest excess. One output
+/// passes through untouched; two are summed (clipped at full scale), or only
+/// the louder kept while both carry the same sound ([`MixGate`]).
+pub(crate) fn mix(
+    fifos: &mut [&mut VecDeque<f32>],
+    gate: &mut MixGate,
+    pair: &mut [Vec<f32>; 2],
+    out: &mut Vec<f32>,
+) {
     out.clear();
     let Some(shortest) = fifos.iter().map(|f| f.len()).min() else {
         return;
     };
-    out.resize(shortest, 0.0);
-    for fifo in fifos.iter_mut() {
-        for (sum, sample) in out.iter_mut().zip(fifo.drain(..shortest)) {
-            *sum += sample;
-        }
+    if let [only] = fifos {
+        out.extend(only.drain(..shortest));
+        return;
+    }
+    for (fifo, taken) in fifos.iter_mut().zip(pair.iter_mut()) {
+        taken.clear();
+        taken.extend(fifo.drain(..shortest));
         if fifo.len() > MAX_SKEW {
             let excess = fifo.len() - MAX_SKEW;
             fifo.drain(..excess);
         }
     }
-    // One output passes through untouched; a sum of two can go past full scale.
-    if fifos.len() > 1 {
-        for sample in out.iter_mut() {
-            *sample = sample.clamp(-1.0, 1.0);
-        }
-    }
+    gate.mix(&pair[0], &pair[1], out);
 }
 
 fn run(
@@ -439,9 +459,22 @@ fn run(
                 leg.last = now;
             }
         }
-        let mut fifos: Vec<&mut VecDeque<f32>> =
-            legs.legs.iter_mut().map(|l| &mut l.fifo).collect();
-        mix(&mut fifos, &mut mixed);
+        let Legs {
+            legs: list,
+            gate,
+            pair,
+            ..
+        } = &mut *legs;
+        match list.as_mut_slice() {
+            [only] => mix(&mut [&mut only.fifo], gate, pair, &mut mixed),
+            [first, second, ..] => mix(
+                &mut [&mut first.fifo, &mut second.fifo],
+                gate,
+                pair,
+                &mut mixed,
+            ),
+            [] => mixed.clear(),
+        }
         if !mixed.is_empty() {
             counters.callbacks.fetch_add(1, Ordering::Relaxed);
             sink(LoopbackChunk { samples: &mixed });
@@ -465,7 +498,12 @@ mod tests {
         let mut speakers: VecDeque<f32> = [0.1, 0.2, 0.3].into_iter().collect();
         let mut headset: VecDeque<f32> = [0.5, 0.5].into_iter().collect();
         let mut out = Vec::new();
-        mix(&mut [&mut speakers, &mut headset], &mut out);
+        mix(
+            &mut [&mut speakers, &mut headset],
+            &mut MixGate::default(),
+            &mut Default::default(),
+            &mut out,
+        );
         assert_eq!(out, vec![0.6, 0.7]);
         assert_eq!(
             speakers.len(),
@@ -497,7 +535,12 @@ mod tests {
         let samples = [0.25, -0.5, 1.5, -1.25, f32::MIN_POSITIVE, 0.123_456_79];
         let mut only: VecDeque<f32> = samples.into_iter().collect();
         let mut out = Vec::new();
-        mix(&mut [&mut only], &mut out);
+        mix(
+            &mut [&mut only],
+            &mut MixGate::default(),
+            &mut Default::default(),
+            &mut out,
+        );
         let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
         assert_eq!(
             bits(&out),
@@ -506,7 +549,12 @@ mod tests {
         );
         let mut a: VecDeque<f32> = [0.8].into_iter().collect();
         let mut b: VecDeque<f32> = [0.8].into_iter().collect();
-        mix(&mut [&mut a, &mut b], &mut out);
+        mix(
+            &mut [&mut a, &mut b],
+            &mut MixGate::default(),
+            &mut Default::default(),
+            &mut out,
+        );
         assert_eq!(out, vec![1.0]);
     }
 
@@ -536,7 +584,12 @@ mod tests {
         let mut fast: VecDeque<f32> = std::iter::repeat_n(0.0, MAX_SKEW * 3).collect();
         let mut slow: VecDeque<f32> = std::iter::repeat_n(0.0, 10).collect();
         let mut out = Vec::new();
-        mix(&mut [&mut fast, &mut slow], &mut out);
+        mix(
+            &mut [&mut fast, &mut slow],
+            &mut MixGate::default(),
+            &mut Default::default(),
+            &mut out,
+        );
         assert_eq!(out.len(), 10);
         assert_eq!(fast.len(), MAX_SKEW);
     }
