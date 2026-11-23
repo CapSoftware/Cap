@@ -346,12 +346,32 @@ fn audio_retention_sweep() {
     let audio = library.audio_dir(&old.id).unwrap();
     std::fs::create_dir_all(&audio).unwrap();
     std::fs::write(audio.join("system.ogg"), b"ogg").unwrap();
-    let recent = library.create(DocKind::Meeting, t(20, 9), 2).unwrap();
+    let mut recent = library.create(DocKind::Meeting, t(20, 9), 2).unwrap();
+    recent.meeting.as_mut().unwrap().ended_at = Some(t(20, 10));
+    library.save(&recent).unwrap();
     std::fs::create_dir_all(library.audio_dir(&recent.id).unwrap()).unwrap();
     library.create(DocKind::Note, t(1, 9), 3).unwrap();
+    let unfinished = library.create(DocKind::Meeting, t(1, 9), 4).unwrap();
+    let unfinished_audio = library.audio_dir(&unfinished.id).unwrap();
+    std::fs::create_dir_all(&unfinished_audio).unwrap();
+    let mut held = library.create(DocKind::Meeting, t(1, 9), 5).unwrap();
+    held.meeting.as_mut().unwrap().ended_at = Some(t(1, 10));
+    library.save(&held).unwrap();
+    let held_audio = library.audio_dir(&held.id).unwrap();
+    std::fs::create_dir_all(&held_audio).unwrap();
 
-    let swept = library.sweep_audio(t(10, 9), 7).unwrap();
+    let swept = library
+        .sweep_audio(t(10, 9), 7, |m| m.id == held.id)
+        .unwrap();
     assert_eq!(swept, vec![old.id.clone()]);
+    assert!(
+        unfinished_audio.exists(),
+        "a meeting that never ended keeps its audio"
+    );
+    assert!(
+        held_audio.exists(),
+        "a meeting the caller still needs keeps its audio"
+    );
     assert!(!audio.exists());
     assert!(
         library
@@ -363,7 +383,12 @@ fn audio_retention_sweep() {
             .is_empty()
     );
     assert!(library.audio_dir(&recent.id).unwrap().exists());
-    assert!(library.sweep_audio(t(10, 9), 7).unwrap().is_empty());
+    assert!(
+        library
+            .sweep_audio(t(10, 9), 7, |m| m.id == held.id)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

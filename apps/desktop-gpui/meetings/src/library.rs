@@ -585,7 +585,15 @@ impl Library {
         }
     }
 
-    pub fn sweep_audio(&self, now: DateTime<Utc>, retention_days: u32) -> Result<Vec<String>> {
+    /// Deletes the audio of meetings that ended at least `retention_days`
+    /// ago. A meeting that never ended may still be recording or waiting to
+    /// be recovered, so its audio is kept, as is any meeting `keep` names.
+    pub fn sweep_audio(
+        &self,
+        now: DateTime<Utc>,
+        retention_days: u32,
+        keep: impl Fn(&DocMeta) -> bool,
+    ) -> Result<Vec<String>> {
         let listing = self.list(&ListFilter {
             kind: Some(DocKind::Meeting),
             trash: TrashFilter::Include,
@@ -593,14 +601,16 @@ impl Library {
         })?;
         let mut swept = Vec::new();
         for mut meta in listing.docs {
+            if keep(&meta) {
+                continue;
+            }
             let Some(meeting) = meta.meeting.as_mut() else {
                 continue;
             };
-            let reference = meeting
-                .ended_at
-                .or(meeting.started_at)
-                .unwrap_or(meta.created_at);
-            if (now - reference).num_days() < i64::from(retention_days) {
+            let Some(ended_at) = meeting.ended_at else {
+                continue;
+            };
+            if (now - ended_at).num_days() < i64::from(retention_days) {
                 continue;
             }
             let audio_dir = self.audio_dir(&meta.id)?;

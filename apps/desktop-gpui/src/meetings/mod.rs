@@ -423,6 +423,7 @@ pub struct Meetings {
     quit_subscription: Option<Subscription>,
     ignored_devices: Option<Vec<String>>,
     recovery: Option<Task<()>>,
+    audio_retention: Option<Task<()>>,
     /// Meetings whose saved audio still needs transcribing, finished one at
     /// a time while nothing records.
     repair_queue: VecDeque<String>,
@@ -430,6 +431,17 @@ pub struct Meetings {
     pending_restore_mic: Option<(Option<String>, Option<String>)>,
     #[cfg(debug_assertions)]
     pub(crate) dev_mic: Option<flume::Receiver<capture::RawBatch>>,
+}
+
+const AUDIO_RETENTION_FIRST_SWEEP: Duration = Duration::from_secs(120);
+const AUDIO_RETENTION_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
+#[derive(Debug, PartialEq)]
+enum RetentionPlan {
+    /// Recovery may still close or queue meetings for repair.
+    Later,
+    Off,
+    Sweep { days: u32, busy: Vec<String> },
 }
 
 struct MeetingsGlobal(Entity<Meetings>);
@@ -552,6 +564,7 @@ impl Meetings {
         let entity = cx.new(|cx| {
             let mut this = Self::new(settings);
             this.start_recovery(cx);
+            this.start_audio_retention(cx);
             this.resume_unwritten(cx);
             this.apply_lifecycle(cx);
             this
@@ -626,6 +639,7 @@ impl Meetings {
             quit_subscription: None,
             ignored_devices,
             recovery: None,
+            audio_retention: None,
             repair_queue: VecDeque::new(),
             last_start_error: None,
             pending_restore_mic: None,
@@ -3393,6 +3407,70 @@ impl Meetings {
         }
         unwritten.extend(self.auto_notes.keys().cloned());
         self.remember_unwritten(unwritten);
+    }
+
+    fn start_audio_retention(&mut self, cx: &mut Context<Self>) {
+        self.audio_retention = Some(cx.spawn(async move |this, cx| {
+            let mut wait = AUDIO_RETENTION_FIRST_SWEEP;
+            loop {
+                cx.background_executor().timer(wait).await;
+                let Ok(plan) = this.update(cx, |this, _| this.audio_retention_plan()) else {
+                    return;
+                };
+                wait = match plan {
+                    RetentionPlan::Later => AUDIO_RETENTION_FIRST_SWEEP,
+                    RetentionPlan::Off => AUDIO_RETENTION_EVERY,
+                    RetentionPlan::Sweep { days, busy } => {
+                        let dir = persist::documents_dir();
+                        let swept = cx
+                            .background_executor()
+                            .spawn(async move {
+                                if !dir.is_dir() {
+                                    return Vec::new();
+                                }
+                                Library::open(dir)
+                                    .map(|library| {
+                                        persist::sweep_old_audio(&library, Utc::now(), days, &busy)
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .await;
+                        if !swept.is_empty() {
+                            tracing::info!(
+                                count = swept.len(),
+                                "deleted meeting audio older than the keep setting"
+                            );
+                            if this
+                                .update(cx, |_, cx| cx.emit(MeetingEvent::LibraryChanged))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        AUDIO_RETENTION_EVERY
+                    }
+                };
+            }
+        }));
+    }
+
+    fn audio_retention_plan(&self) -> RetentionPlan {
+        if self.recovery.is_some() {
+            return RetentionPlan::Later;
+        }
+        let Some(days) = self.settings.recording.audio_retention_days else {
+            return RetentionPlan::Off;
+        };
+        let busy = self
+            .recording
+            .iter()
+            .map(|r| r.doc_id.clone())
+            .chain(self.finishing.iter().map(|f| f.doc_id.clone()))
+            .chain(self.repair_queue.iter().cloned())
+            .chain(self.session_doc.iter().cloned())
+            .chain(self.resume_doc.iter().cloned())
+            .collect();
+        RetentionPlan::Sweep { days, busy }
     }
 
     fn start_recovery(&mut self, cx: &mut Context<Self>) {

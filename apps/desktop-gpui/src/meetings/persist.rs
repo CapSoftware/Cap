@@ -431,6 +431,25 @@ pub fn pending_repairs(library: &Library) -> Vec<String> {
         .collect()
 }
 
+/// Applies "Keep audio for": deletes the audio of meetings that ended longer
+/// ago than `days`, except meetings in `busy` or still waiting for a repair
+/// that reads their audio.
+pub fn sweep_old_audio(
+    library: &Library,
+    now: chrono::DateTime<Utc>,
+    days: u32,
+    busy: &[String],
+) -> Vec<String> {
+    library
+        .sweep_audio(now, days, |meta| {
+            busy.iter().any(|id| *id == meta.id) || flag(meta, REPAIR_KEY)
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "could not delete old meeting audio");
+            Vec::new()
+        })
+}
+
 pub fn flag(meta: &DocMeta, key: &str) -> bool {
     meta.meeting
         .as_ref()

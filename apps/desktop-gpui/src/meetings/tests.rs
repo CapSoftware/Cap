@@ -1279,3 +1279,55 @@ fn missed_audio_adds_up_on_the_note_and_survives_a_relaunch() {
     );
     assert!(!persist::clear_missed_audio(&mut dismissed));
 }
+
+#[test]
+fn keep_audio_for_deletes_only_finished_meetings_nothing_still_needs() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let day = |d: u32| Utc.with_ymd_and_hms(2026, 3, d, 9, 0, 0).unwrap();
+    let make = |entropy: u64, ended: Option<u32>, repair: bool| {
+        let mut meta = library.create(DocKind::Meeting, day(1), entropy).unwrap();
+        meta.meeting.as_mut().unwrap().ended_at = ended.map(day);
+        persist::set_flag(&mut meta, persist::REPAIR_KEY, repair);
+        library.save(&meta).unwrap();
+        let audio = library.audio_dir(&meta.id).unwrap();
+        std::fs::create_dir_all(&audio).unwrap();
+        std::fs::write(audio.join("you.ogg"), b"ogg").unwrap();
+        (meta.id, audio)
+    };
+    let old = make(1, Some(1), false);
+    let recent = make(2, Some(9), false);
+    let unfinished = make(3, None, false);
+    let repairing = make(4, Some(1), true);
+    let in_use = make(5, Some(1), false);
+
+    let swept = persist::sweep_old_audio(&library, day(10), 7, std::slice::from_ref(&in_use.0));
+    assert_eq!(swept, vec![old.0]);
+    assert!(!old.1.exists());
+    for (what, kept) in [
+        ("ended two days ago", recent.1),
+        ("never ended", unfinished.1),
+        ("waiting for a repair", repairing.1),
+        ("in use", in_use.1),
+    ] {
+        assert!(kept.exists(), "a meeting that {what} keeps its audio");
+    }
+}
+
+#[test]
+fn keep_audio_for_waits_for_recovery_and_spares_the_meetings_in_use() {
+    use super::RetentionPlan;
+    let mut settings = cap_meetings::settings::MeetingSettings::default();
+    assert_eq!(super::Meetings::new(settings.clone()).audio_retention_plan(), RetentionPlan::Off);
+
+    settings.recording.audio_retention_days = Some(7);
+    let mut meetings = super::Meetings::new(settings);
+    meetings.repair_queue.push_back("repairing".into());
+    meetings.resume_doc = Some("resuming".into());
+    assert_eq!(
+        meetings.audio_retention_plan(),
+        RetentionPlan::Sweep { days: 7, busy: vec!["repairing".into(), "resuming".into()] }
+    );
+    meetings.recovery = Some(gpui::Task::ready(()));
+    assert_eq!(meetings.audio_retention_plan(), RetentionPlan::Later);
+}
