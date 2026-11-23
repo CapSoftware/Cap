@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockStripe = {
-	subscriptions: { retrieve: vi.fn(), update: vi.fn() },
+	subscriptions: { retrieve: vi.fn(), update: vi.fn(), list: vi.fn() },
 	customers: {
 		retrieve: vi.fn(),
 		update: vi.fn(),
@@ -57,7 +57,11 @@ function subscription(overrides: Record<string, unknown> = {}) {
 		collection_method: "charge_automatically",
 		current_period_end: PERIOD_END,
 		metadata: {},
-		default_payment_method: { card: { brand: "visa", last4: "4242" } },
+		default_payment_method: {
+			id: "pm_sub",
+			card: { brand: "visa", last4: "4242" },
+		},
+		latest_invoice: null,
 		items: {
 			data: [
 				{
@@ -92,6 +96,9 @@ beforeEach(() => {
 		invoice_settings: {},
 	});
 	mockStripe.invoices.retrieveUpcoming.mockResolvedValue(renewalPreview);
+	mockStripe.subscriptions.list.mockResolvedValue({
+		data: [{ id: "sub_1", status: "active" }],
+	});
 	mockStripe.coupons.retrieve.mockResolvedValue({ id: "coupon" });
 });
 
@@ -151,6 +158,66 @@ describe("Cap Friday for existing subscribers", () => {
 		});
 	});
 
+	it("refuses accounts with another live subscription sharing the credit", async () => {
+		mockStripe.subscriptions.list.mockResolvedValue({
+			data: [
+				{ id: "sub_1", status: "active" },
+				{ id: "sub_baa", status: "active" },
+			],
+		});
+		expect(await getCapFridayState(owner)).toEqual({
+			type: "unavailable",
+			reason: "custom",
+		});
+	});
+
+	it("finds a monthly switch from the subscription when metadata is missing", async () => {
+		const SWITCHED_END = 1_860_000_000;
+		mockStripe.subscriptions.retrieve.mockResolvedValue(
+			subscription({
+				current_period_end: SWITCHED_END,
+				latest_invoice: {
+					status: "paid",
+					metadata: {},
+					discount: { coupon: { id: "CAP_FRIDAY_2026_EXISTING" } },
+					discounts: [],
+				},
+			}),
+		);
+		expect(await getCapFridayState(owner)).toEqual({
+			type: "redeemed",
+			kind: "switch",
+			renewsOn: SWITCHED_END,
+		});
+	});
+
+	it("charges the card it shows", async () => {
+		mockStripe.customers.retrieve.mockResolvedValue({
+			id: "cus_1",
+			balance: 0,
+			metadata: {},
+			invoice_settings: { default_payment_method: "pm_customer" },
+		});
+		mockStripe.invoices.create.mockResolvedValue({ id: "in_1" });
+		mockStripe.invoiceItems.create.mockResolvedValue({ id: "ii_1" });
+		mockStripe.invoices.finalizeInvoice.mockResolvedValue({
+			id: "in_1",
+			status: "open",
+			total: 7200,
+		});
+		mockStripe.invoices.pay.mockResolvedValue({
+			id: "in_1",
+			status: "paid",
+			metadata: {},
+		});
+		const result = await redeemCapFriday(owner, { dueToday: 7200 });
+		expect(result).toEqual({ ok: true, kind: "prepay", renewsOn: PERIOD_END });
+		expect(mockStripe.invoices.create).toHaveBeenCalledWith(
+			expect.objectContaining({ default_payment_method: "pm_sub" }),
+			expect.anything(),
+		);
+	});
+
 	it("refuses a subscription owned by another customer", async () => {
 		mockStripe.subscriptions.retrieve.mockResolvedValue(
 			subscription({ customer: "cus_other" }),
@@ -168,14 +235,15 @@ describe("Cap Friday for existing subscribers", () => {
 		});
 		mockStripe.invoices.retrieve.mockResolvedValue({
 			status: "paid",
-			metadata: { renewsOn: String(PERIOD_END) },
+			metadata: { capFriday2026: "prepay", renewsOn: String(PERIOD_END) },
 		});
 		expect(await getCapFridayState(owner)).toEqual({
 			type: "redeemed",
+			kind: "prepay",
 			renewsOn: PERIOD_END,
 		});
 		const result = await redeemCapFriday(owner, { dueToday: 7200 });
-		expect(result).toEqual({ ok: true, renewsOn: PERIOD_END });
+		expect(result).toEqual({ ok: true, kind: "prepay", renewsOn: PERIOD_END });
 		expect(mockStripe.invoices.create).not.toHaveBeenCalled();
 	});
 

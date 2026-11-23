@@ -3,11 +3,6 @@ import { isProSubscription, STRIPE_PLAN_IDS, stripe } from "@cap/utils";
 import type Stripe from "stripe";
 import { CODE, ENDS_AT } from "@/components/pages/blackfriday/content";
 
-// Cap Friday for people already on Cap Pro. Yearly subscribers prepay their
-// next year at half price: one invoice now, then account credit that pays the
-// renewal. Monthly subscribers move to yearly today with the first year at
-// half price, less what's left of the current month.
-
 export const CAP_FRIDAY_CODE = CODE;
 export const CAP_FRIDAY_COUPON_ID = "CAP_FRIDAY_2026_EXISTING";
 export const CAP_FRIDAY_INVOICE_KEY = "capFriday2026Invoice";
@@ -48,7 +43,11 @@ export type CapFridayQuote =
 
 export type CapFridayState =
 	| { type: "quote"; quote: CapFridayQuote }
-	| { type: "redeemed"; renewsOn: number | null }
+	| {
+			type: "redeemed";
+			kind: "prepay" | "switch";
+			renewsOn: number | null;
+	  }
 	| { type: "awaiting_payment"; payUrl: string }
 	| {
 			type: "unavailable";
@@ -62,7 +61,7 @@ export type CapFridayState =
 	  };
 
 export type CapFridayRedeemResult =
-	| { ok: true; renewsOn: number }
+	| { ok: true; kind: "prepay" | "switch"; renewsOn: number }
 	| { ok: false; payUrl: string }
 	| { ok: false; message: string };
 
@@ -84,7 +83,7 @@ async function loadSubscription(owner: Owner) {
 	if (!owner.stripeSubscriptionId || !owner.stripeCustomerId) return null;
 	const subscription = await stripe().subscriptions.retrieve(
 		owner.stripeSubscriptionId,
-		{ expand: ["default_payment_method"] },
+		{ expand: ["default_payment_method", "latest_invoice.discounts"] },
 	);
 	const customerId =
 		typeof subscription.customer === "string"
@@ -98,7 +97,7 @@ async function loadSubscription(owner: Owner) {
 async function cardFor(
 	subscription: Stripe.Subscription,
 	customer: Stripe.Customer,
-): Promise<CapFridayCard | null> {
+): Promise<{ card: CapFridayCard; paymentMethodId: string } | null> {
 	const fromSubscription = subscription.default_payment_method;
 	let method: Stripe.PaymentMethod | null =
 		fromSubscription && typeof fromSubscription !== "string"
@@ -112,11 +111,12 @@ async function cardFor(
 				: fallback;
 	}
 	if (!method?.card) return null;
-	return { brand: method.card.brand, last4: method.card.last4 };
+	return {
+		card: { brand: method.card.brand, last4: method.card.last4 },
+		paymentMethodId: method.id,
+	};
 }
 
-// Anything unusual (custom deals, tax, several items, a schedule, invoice
-// billing) goes to a person instead of being priced automatically.
 function isPlainSubscription(subscription: Stripe.Subscription) {
 	return (
 		subscription.items.data.length === 1 &&
@@ -128,16 +128,42 @@ function isPlainSubscription(subscription: Stripe.Subscription) {
 	);
 }
 
+const usesCapFridayCoupon = (invoice: Stripe.Invoice) =>
+	invoice.discount?.coupon?.id === CAP_FRIDAY_COUPON_ID ||
+	(invoice.discounts ?? []).some(
+		(discount) =>
+			typeof discount !== "string" &&
+			!discount.deleted &&
+			discount.coupon?.id === CAP_FRIDAY_COUPON_ID,
+	);
+
 async function previousRedemption(
 	customer: Stripe.Customer,
+	subscription: Stripe.Subscription,
 ): Promise<CapFridayState | null> {
 	const invoiceId = customer.metadata?.[CAP_FRIDAY_INVOICE_KEY];
-	if (!invoiceId) return null;
-	const invoice = await stripe().invoices.retrieve(invoiceId);
+	// A monthly switch is charged before its metadata is written, so the
+	// subscription's own latest invoice is the fallback record of it.
+	const latest =
+		subscription.latest_invoice &&
+		typeof subscription.latest_invoice !== "string"
+			? subscription.latest_invoice
+			: null;
+	const invoice = invoiceId
+		? await stripe().invoices.retrieve(invoiceId)
+		: latest && usesCapFridayCoupon(latest)
+			? latest
+			: null;
+	if (!invoice) return null;
+	const kind =
+		invoice.metadata?.[CAP_FRIDAY_METADATA] === "prepay" ? "prepay" : "switch";
 	if (invoice.status === "paid") {
 		return {
 			type: "redeemed",
-			renewsOn: Number(invoice.metadata?.renewsOn) || null,
+			kind,
+			renewsOn:
+				Number(invoice.metadata?.renewsOn) ||
+				(kind === "switch" ? subscription.current_period_end : null),
 		};
 	}
 	if (invoice.status === "open" && invoice.hosted_invoice_url) {
@@ -263,6 +289,7 @@ type Loaded =
 			subscription: Stripe.Subscription;
 			customer: Stripe.Customer;
 			card: CapFridayCard;
+			paymentMethodId: string;
 	  };
 
 async function load(owner: Owner): Promise<Loaded> {
@@ -274,7 +301,7 @@ async function load(owner: Owner): Promise<Loaded> {
 	);
 	if (customer.deleted) return { state: unavailable("not_owner") };
 
-	const previous = await previousRedemption(customer);
+	const previous = await previousRedemption(customer, subscription);
 	if (previous) return { state: previous };
 
 	if (subscription.status === "past_due") {
@@ -290,9 +317,25 @@ async function load(owner: Owner): Promise<Loaded> {
 	if (!isPlainSubscription(subscription) || customer.balance !== 0) {
 		return { state: unavailable("custom") };
 	}
-	const card = await cardFor(subscription, customer);
-	if (!card) return { state: unavailable("no_card") };
-	return { subscription, customer, card };
+	// Account credit is shared by every subscription on the customer, so a
+	// separate SSO or BAA bill would spend the prepaid renewal first.
+	const others = await stripe().subscriptions.list({
+		customer: customer.id,
+		status: "all",
+		limit: 20,
+	});
+	if (
+		others.data.some(
+			(other) =>
+				other.id !== subscription.id &&
+				!["canceled", "incomplete_expired"].includes(other.status),
+		)
+	) {
+		return { state: unavailable("custom") };
+	}
+	const payment = await cardFor(subscription, customer);
+	if (!payment) return { state: unavailable("no_card") };
+	return { subscription, customer, ...payment };
 }
 
 const interval = (subscription: Stripe.Subscription) =>
@@ -330,14 +373,14 @@ export async function redeemCapFriday(
 	if ("state" in loaded) {
 		const { state } = loaded;
 		if (state.type === "redeemed") {
-			return { ok: true, renewsOn: state.renewsOn ?? 0 };
+			return { ok: true, kind: state.kind, renewsOn: state.renewsOn ?? 0 };
 		}
 		if (state.type === "awaiting_payment") {
 			return { ok: false, payUrl: state.payUrl };
 		}
 		return { ok: false, message: CHANGED };
 	}
-	const { subscription, customer, card } = loaded;
+	const { subscription, customer, card, paymentMethodId } = loaded;
 	await ensureCoupon();
 
 	if (interval(subscription) === "year") {
@@ -345,7 +388,7 @@ export async function redeemCapFriday(
 		if (quote?.kind !== "yearly" || quote.dueToday !== input.dueToday) {
 			return { ok: false, message: CHANGED };
 		}
-		return prepayYearly(subscription, customer, quote);
+		return prepayYearly(subscription, customer, quote, paymentMethodId);
 	}
 
 	const now = Math.floor(Date.now() / 1000);
@@ -364,6 +407,7 @@ async function prepayYearly(
 	subscription: Stripe.Subscription,
 	customer: Stripe.Customer,
 	quote: Extract<CapFridayQuote, { kind: "yearly" }>,
+	paymentMethodId: string,
 ): Promise<CapFridayRedeemResult> {
 	const key = `capfriday-${subscription.id}-${subscription.current_period_end}`;
 	const metadata = {
@@ -377,6 +421,7 @@ async function prepayYearly(
 			customer: customer.id,
 			currency: quote.currency,
 			collection_method: "charge_automatically",
+			default_payment_method: paymentMethodId,
 			auto_advance: false,
 			pending_invoice_items_behavior: "exclude",
 			description: `Covers your Cap Pro renewal on ${formatDay(quote.renewsOn)}. That renewal is paid from your account credit, then Cap Pro renews as normal on ${formatDay(quote.thenRenewsOn)}.`,
@@ -426,8 +471,15 @@ async function prepayYearly(
 		}
 		return { ok: false, message: DECLINED };
 	}
-	await grantCapFridayCredit(paid);
-	return { ok: true, renewsOn: quote.renewsOn };
+	try {
+		await grantCapFridayCredit(paid);
+	} catch (error) {
+		console.error("Cap Friday credit not granted yet, webhook retries it", {
+			invoiceId: paid.id,
+			error,
+		});
+	}
+	return { ok: true, kind: "prepay", renewsOn: quote.renewsOn };
 }
 
 async function switchMonthly(
@@ -446,15 +498,22 @@ async function switchMonthly(
 	});
 	const invoice = updated.latest_invoice as Stripe.Invoice | null;
 	if (invoice) {
-		await stripe().invoices.update(invoice.id, {
-			metadata: {
-				[CAP_FRIDAY_METADATA]: "switch",
-				renewsOn: String(quote.renewsOn),
-			},
-		});
-		await stripe().customers.update(subscription.customer as string, {
-			metadata: { [CAP_FRIDAY_INVOICE_KEY]: invoice.id },
-		});
+		try {
+			await stripe().invoices.update(invoice.id, {
+				metadata: {
+					[CAP_FRIDAY_METADATA]: "switch",
+					renewsOn: String(quote.renewsOn),
+				},
+			});
+			await stripe().customers.update(subscription.customer as string, {
+				metadata: { [CAP_FRIDAY_INVOICE_KEY]: invoice.id },
+			});
+		} catch (error) {
+			console.error("Cap Friday switch recorded without metadata", {
+				subscriptionId: subscription.id,
+				error,
+			});
+		}
 	}
 	if (updated.pending_update) {
 		if (invoice?.hosted_invoice_url) {
@@ -462,11 +521,9 @@ async function switchMonthly(
 		}
 		return { ok: false, message: DECLINED };
 	}
-	return { ok: true, renewsOn: quote.renewsOn };
+	return { ok: true, kind: "switch", renewsOn: quote.renewsOn };
 }
 
-// Runs after the prepay invoice is paid, from the redeem call or from the
-// invoice.paid webhook when the customer finished paying on Stripe's page.
 export async function grantCapFridayCredit(invoice: Stripe.Invoice) {
 	if (invoice.metadata?.[CAP_FRIDAY_METADATA] !== "prepay") return;
 	if (invoice.status !== "paid") return;

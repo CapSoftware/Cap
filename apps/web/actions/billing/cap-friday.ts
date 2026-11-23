@@ -11,7 +11,7 @@ import {
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 
 const FAILED =
-	"Something went wrong and nothing was charged. Try again, or email hello@cap.so.";
+	"Something went wrong. Refresh to see where your plan stands, or email hello@cap.so.";
 
 export async function getCapFridayOffer(): Promise<CapFridayState> {
 	const user = await getCurrentUser();
