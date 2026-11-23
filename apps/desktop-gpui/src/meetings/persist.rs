@@ -157,21 +157,26 @@ pub fn summary_follows(meta: &DocMeta, transcript: &Transcript) -> bool {
     notes_left_out(meta) == transcript.left_out_basis()
 }
 
-/// After the person changed who is left out of the notes: a summary written
-/// under other choices is offered for an update.
-pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript) {
+/// After the person changed who is left out of the notes, or a summary was
+/// written: one written under other choices is offered for an update.
+/// Returns whether the note changed.
+pub fn follow_left_out(library: &Library, doc_id: &str, transcript: &Transcript) -> bool {
     let _lock = cap_meetings::library::lock_meta();
     let Ok(mut meta) = library.load(doc_id) else {
-        return;
+        return false;
     };
     if !meta.meeting.as_ref().is_some_and(|m| m.has_enhanced)
         || summary_follows(&meta, transcript)
         || !set_flag(&mut meta, NOTES_STALE_KEY, true)
     {
-        return;
+        return false;
     }
-    if let Err(error) = library.save(&meta) {
-        tracing::warn!(%error, "could not offer to update the notes");
+    match library.save(&meta) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "could not offer to update the notes");
+            false
+        }
     }
 }
 

@@ -3620,8 +3620,10 @@ impl Meetings {
                 return;
             };
             self.edit_transcript(doc_id, line, cx);
-            if let (Some(library), Some(transcript)) = (library, self.transcript(doc_id)) {
-                persist::follow_left_out(&library, doc_id, &transcript);
+            if let (Some(library), Some(transcript)) = (library, self.transcript(doc_id))
+                && persist::follow_left_out(&library, doc_id, &transcript)
+            {
+                cx.emit(MeetingEvent::LibraryChanged);
             }
             return;
         }
@@ -3632,6 +3634,7 @@ impl Meetings {
             return;
         };
         let doc = doc_id.to_string();
+        let (changed, note) = flume::bounded(1);
         crate::meetings_ui::documents::queue_after_saves(move || {
             let mut transcript = Transcript::load_jsonl(&path)
                 .map(|(t, _)| t)
@@ -3644,11 +3647,52 @@ impl Meetings {
                 return;
             }
             transcript.apply(line);
-            persist::follow_left_out(&library, &doc, &transcript);
+            let _ = changed.send(persist::follow_left_out(&library, &doc, &transcript));
         });
+        Self::library_changed_when(note, cx);
         cx.emit(MeetingEvent::TranscriptChanged {
             doc_id: doc_id.to_string(),
         });
+    }
+
+    /// Tells the windows a note changed once a job on the documents writer
+    /// says it did.
+    fn library_changed_when(changed: flume::Receiver<bool>, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            if changed.recv_async().await.unwrap_or(false) {
+                this.update(cx, |_, cx| cx.emit(MeetingEvent::LibraryChanged))
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Notes were just written with the lines left out when they started. A
+    /// choice made while they were written (already saved, or still queued on
+    /// the documents writer) leaves them offered for an update, and Ask stops
+    /// using them.
+    fn notes_follow_left_out(&mut self, doc_id: &str, cx: &mut Context<Self>) {
+        let Some(library) = self.library().cloned() else {
+            return;
+        };
+        if let Some((transcript, _)) = self.live_transcript(doc_id) {
+            if persist::follow_left_out(&library, doc_id, transcript) {
+                cx.emit(MeetingEvent::LibraryChanged);
+            }
+            return;
+        }
+        let Ok(path) = library.transcript_path(doc_id) else {
+            return;
+        };
+        let doc = doc_id.to_string();
+        let (changed, note) = flume::bounded(1);
+        crate::meetings_ui::documents::queue_after_saves(move || {
+            let transcript = Transcript::load_jsonl(&path)
+                .map(|(t, _)| t)
+                .unwrap_or_default();
+            let _ = changed.send(persist::follow_left_out(&library, &doc, &transcript));
+        });
+        Self::library_changed_when(note, cx);
     }
 
     /// Makes a choice on a voice, if it changes anything in what is known
@@ -4874,6 +4918,9 @@ impl Meetings {
                 .map_err(|e| NotesError::Failed(e.to_string()))?;
             Ok(())
         });
+        if outcome.is_ok() {
+            self.notes_follow_left_out(doc_id, cx);
+        }
         let state = self.notes.entry(doc_id.to_string()).or_default();
         let stage = match &outcome {
             Ok(()) => {

@@ -2189,3 +2189,51 @@ fn after_stop_labels_keep_edits_made_meanwhile(cx: &mut gpui::TestAppContext) {
         "{prompt}"
     );
 }
+
+/// A voice left out while the notes were being written: the summary that
+/// lands was written with its words, so it is offered for an update and Ask
+/// does not use it, whether the choice was saved before the summary or was
+/// still queued.
+fn left_out_while_notes_are_written(queued: bool, cx: &mut gpui::TestAppContext) {
+    let (meetings, doc, _dir) = voice_choice_meeting(cx);
+    let library = meetings.read_with(cx, |m, _| m.library.clone().unwrap());
+    // The notes started with nothing left out.
+    let started = saved_transcript(&meetings, &doc, cx).left_out_basis();
+    if queued {
+        crate::meetings_ui::documents::hold_writer();
+    }
+    meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Id(2), true, cx)
+        })
+        .unwrap();
+    if !queued {
+        saved_transcript(&meetings, &doc, cx);
+    }
+    meetings.update(cx, |m, cx| {
+        m.notes.entry(doc.clone()).or_default().markdown = "- Dinner is ready".into();
+        m.finish_notes(&doc, Ok(()), false, "default".into(), started.clone(), cx)
+            .unwrap();
+    });
+    if queued {
+        crate::meetings_ui::documents::release_writer();
+    }
+    saved_transcript(&meetings, &doc, cx);
+    cx.run_until_parked();
+    let meta = library.load(&doc).unwrap();
+    assert!(persist::flag(&meta, persist::NOTES_STALE_KEY));
+    let (body, _) = meetings
+        .update(cx, |m, _| m.ask_request(&doc, "What was said?", &[]))
+        .unwrap();
+    assert!(!body.to_string().contains("Dinner"), "{body}");
+}
+
+#[gpui::test]
+fn a_voice_left_out_while_notes_are_written_leaves_them_stale(cx: &mut gpui::TestAppContext) {
+    left_out_while_notes_are_written(false, cx);
+}
+
+#[gpui::test]
+fn a_voice_left_out_queued_while_notes_land_leaves_them_stale(cx: &mut gpui::TestAppContext) {
+    left_out_while_notes_are_written(true, cx);
+}
