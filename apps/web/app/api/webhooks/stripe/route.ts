@@ -28,6 +28,10 @@ import {
 	isSignedBaaSubscription,
 } from "@/lib/baa/billing";
 import {
+	CAP_FRIDAY_METADATA,
+	grantCapFridayCredit,
+} from "@/lib/checkout/cap-friday";
+import {
 	syncCustomerUsEin,
 	US_EIN_METADATA_KEY,
 } from "@/lib/checkout/customer-us-ein";
@@ -540,6 +544,12 @@ export const POST = async (req: Request) => {
 				event.type === "invoice.payment_failed"
 			) {
 				const invoice = event.data.object as Stripe.Invoice;
+				if (invoice.metadata?.[CAP_FRIDAY_METADATA] === "prepay") {
+					if (event.type === "invoice.paid") {
+						await grantCapFridayCredit(invoice);
+					}
+					return NextResponse.json({ received: true });
+				}
 				const subscriptionId =
 					typeof invoice.subscription === "string"
 						? invoice.subscription
