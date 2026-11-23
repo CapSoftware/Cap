@@ -88,6 +88,7 @@ export async function invalidateVideoCache(videoId: string) {
 		}
 		const metadata = { ...(lockedVideo.metadata ?? {}) };
 		delete metadata.desktopRecordingUpload;
+		if (!metadata.editorSources) delete metadata.editorSourceDuration;
 		await tx
 			.update(videos)
 			.set({

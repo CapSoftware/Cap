@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import type { HttpApi } from "@effect/platform";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,6 +26,7 @@ vi.mock("@/lib/editor-session", async () => {
 				ownerId: "owner",
 				name: "Recording",
 				duration: 10,
+				source: { type: "webMP4" },
 				captionsEnabled: true,
 				metadata: mocks.metadata,
 			})),
@@ -314,6 +316,26 @@ describe("web editor clip registration", () => {
 			items: [{ kind: "clip", path: clipPath }],
 		});
 		expect(JSON.parse(project ?? "null")).toMatchObject({ version: 2 });
+	});
+
+	it("places the clip after the recording's own length, not a shorter Save's", async () => {
+		mocks.metadata = { ...mocks.metadata, editorSourceDuration: 60 };
+		const response = await json(clips.POST, "clips", "POST", {
+			...clip,
+			projectConfig: { background: { source: { type: "color" } } },
+		});
+		expect(response.status).toBe(200);
+		const project = sqlStrings(mocks.writes[0]).find((value) =>
+			value.includes("savedAt"),
+		);
+		const saved = JSON.parse(project ?? "null");
+		const config = JSON.parse(
+			gunzipSync(Buffer.from(saved.configGzipBase64, "base64")).toString(),
+		);
+		expect(config.timeline.segments).toEqual([
+			{ recordingSegment: 0, timescale: 1, start: 0, end: 60 },
+			{ recordingSegment: 1, timescale: 1, start: 0, end: 5 },
+		]);
 	});
 
 	it("refuses clips the browser measured outside what a clip stores", async () => {

@@ -399,6 +399,33 @@ describe("desktop reupload publication", () => {
 		});
 	});
 
+	it("keeps the recording's own duration across replacements", async () => {
+		const withDuration = video as typeof video & { duration: number };
+		withDuration.duration = 60;
+		video.source = { type: "webMP4", outputKey: "user/video/result.mp4" };
+		const first = await prepareDesktopReupload(
+			transaction(),
+			original(),
+			tokenFor(),
+		);
+		expect(first?.metadata.editorSourceDuration).toBe(60);
+		if (!first) throw new Error("Expected a publication");
+		Object.assign(video, first, { duration: 30 });
+		const second = await prepareDesktopReupload(
+			transaction(),
+			original(),
+			tokenFor(),
+		);
+		expect(second?.metadata.editorSourceDuration).toBe(60);
+		delete video.metadata.editorSourceDuration;
+		const unknown = await prepareDesktopReupload(
+			transaction(),
+			original(),
+			tokenFor(),
+		);
+		expect(unknown?.metadata).not.toHaveProperty("editorSourceDuration");
+	});
+
 	it("compares normalized source fields under the lock", async () => {
 		const snapshot = original();
 		const token = tokenFor(snapshot);

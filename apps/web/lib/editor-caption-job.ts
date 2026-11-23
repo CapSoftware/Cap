@@ -17,6 +17,8 @@ import {
 import { editTranscriptToEditorCaptions } from "./editor-captions";
 import { normalizeWebEditorImportOrder } from "./editor-imports";
 import { videoMetadataObject } from "./editor-metadata-sql";
+import { validEditorSourceDuration } from "./editor-source-duration";
+import { resolveEditorSourceDuration } from "./measure-editor-source-duration";
 import { getEditSourceKey } from "./video-edit-processing";
 import { decodeStorageVideo } from "./video-storage";
 
@@ -36,11 +38,10 @@ function currentJob(
 }
 
 export function editorCaptionSegments(
-	video: Pick<EditorVideo, "ownerId" | "id" | "duration" | "metadata">,
-	baseDuration: number | null,
+	video: Pick<EditorVideo, "ownerId" | "id" | "metadata">,
+	duration: number,
 ) {
-	const duration = baseDuration ?? video.duration;
-	if (!duration || !Number.isFinite(duration) || duration <= 0) return null;
+	if (!validEditorSourceDuration(duration)) return null;
 	const clips = video.metadata?.webEditorClips?.items ?? [];
 	const imports = normalizeWebEditorImportOrder(
 		video.metadata?.webEditorImports,
@@ -119,7 +120,9 @@ export const inspectEditorCaptionJob = Effect.fn(
 	}
 	const instance = editorCaptionSegments(
 		video,
-		legacyEdit ? legacyEdit.editSpec.sourceDuration : null,
+		legacyEdit
+			? legacyEdit.editSpec.sourceDuration
+			: yield* resolveEditorSourceDuration(video),
 	);
 	if (!instance) return yield* new HttpApiError.ServiceUnavailable();
 	const plan = buildEditorCaptionSourcePlan(

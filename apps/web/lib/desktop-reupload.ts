@@ -18,6 +18,7 @@ import {
 	assertDesktopReuploadTarget,
 	type DesktopReuploadToken,
 } from "@/lib/desktop-reupload-token";
+import { knownEditorSourceDuration } from "@/lib/editor-source-duration";
 import { runPromise } from "@/lib/server";
 
 type ReuploadedVideo = Pick<
@@ -79,6 +80,8 @@ export async function prepareDesktopReupload(
 	delete metadata.aiGenerationStatus;
 	Reflect.deleteProperty(metadata, "editProcessing");
 	Reflect.deleteProperty(metadata, "completedVideoEdit");
+	const sourceDuration = knownEditorSourceDuration(locked);
+	if (sourceDuration !== null) metadata.editorSourceDuration = sourceDuration;
 	return {
 		source:
 			locked.source.type === "webMP4"

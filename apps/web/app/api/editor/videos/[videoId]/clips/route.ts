@@ -29,6 +29,7 @@ import {
 } from "@/lib/editor-project-storage";
 import { loadEligibleEditorVideo } from "@/lib/editor-session";
 import { validEditorVideoAsset } from "@/lib/editor-video-upload";
+import { resolveEditorSourceDuration } from "@/lib/measure-editor-source-duration";
 import { apiToHandler } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
@@ -189,7 +190,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 					const nextConfig = appendWebEditorClipToConfig(
 						priorConfig,
 						nextEditorRecordingSegmentIndex(order),
-						video.duration ?? 0,
+						yield* resolveEditorSourceDuration(video),
 						clip.duration,
 					);
 					if (!nextConfig) return yield* new HttpApiError.Conflict();

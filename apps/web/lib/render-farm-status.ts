@@ -1,5 +1,9 @@
 import type { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import {
+	knownEditorSourceDuration,
+	validEditorSourceDuration,
+} from "@/lib/editor-source-duration";
 
 type DbVideo = typeof videos.$inferSelect;
 type RenderFarmSave = NonNullable<VideoMetadata["renderFarmSave"]>;
@@ -77,7 +81,10 @@ export function validRenderedOutput(output: RenderedOutput) {
 }
 
 export function publishedRenderFarmUpdate(
-	video: Pick<DbVideo, "source" | "metadata">,
+	video: Pick<DbVideo, "source" | "metadata" | "duration"> & {
+		id: string;
+		ownerId: string;
+	},
 	jobId: string,
 	output: RenderedOutput,
 	now: Date,
@@ -105,6 +112,12 @@ export function publishedRenderFarmUpdate(
 		Reflect.deleteProperty(metadata, "completedVideoEdit");
 	}
 	delete metadata.webEditorBrowserSave;
+	const sourceDuration =
+		knownEditorSourceDuration(video) ??
+		(!edited && validEditorSourceDuration(output.durationSeconds)
+			? output.durationSeconds
+			: null);
+	if (sourceDuration !== null) metadata.editorSourceDuration = sourceDuration;
 	metadata.renderFarmSave = {
 		...save,
 		status: "published",

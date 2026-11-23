@@ -15,6 +15,9 @@ const state = vi.hoisted(() => ({
 		sourceKey: string;
 		editSpec: { sourceDuration: number };
 	} | null,
+	probed: [] as string[],
+	probeDuration: 60,
+	updates: 0,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -25,6 +28,13 @@ vi.mock("../../lib/video-storage", () => ({
 	decodeStorageVideo: (value: unknown) => value,
 }));
 vi.mock("workflow/api", () => ({ start: vi.fn() }));
+vi.mock("../../lib/media-client", () => ({
+	isMediaServerConfigured: () => true,
+	probeVideoViaMediaServer: async (url: string) => {
+		state.probed.push(url);
+		return { duration: state.probeDuration };
+	},
+}));
 vi.mock("@/actions/videos/get-edit-transcript", () => ({
 	requestEditTranscript: vi.fn(),
 }));
@@ -106,6 +116,8 @@ function editorVideo(details: VideoMetadata) {
 function read(video: typeof videos.$inferSelect) {
 	const bucket = {
 		getObject: () => Effect.succeed(Option.fromNullable(state.stored)),
+		getInternalSignedObjectUrl: (key: string) =>
+			Effect.succeed(`https://storage.test/${key}`),
 		headObject: () =>
 			Effect.succeed({ ContentLength: 4000, ETag: JSON.stringify("original") }),
 	};
@@ -122,6 +134,14 @@ function read(video: typeof videos.$inferSelect) {
 					select: () => ({
 						from: () => ({
 							where: async () => (state.legacyEdit ? [state.legacyEdit] : []),
+						}),
+					}),
+					update: () => ({
+						set: () => ({
+							where: async () => {
+								state.updates++;
+								return [{ affectedRows: 1 }];
+							},
 						}),
 					}),
 				} as unknown as Parameters<typeof callback>[0]),
@@ -156,6 +176,9 @@ function prepare() {
 }
 
 afterEach(() => {
+	state.probed.length = 0;
+	state.probeDuration = 60;
+	state.updates = 0;
 	state.stored = null;
 	state.instance = null;
 	state.accessOptions.length = 0;
@@ -259,4 +282,42 @@ test("a farm-saved Studio recording transcribes its retained source, not the sha
 			"auto",
 		),
 	).toBe(false);
+});
+
+test("a trimmed Save plans captions with the recording's own duration", async () => {
+	const { details } = prepare();
+	const savedOutput =
+		"owner/video/.recording/outputs/render-00000000-0000-4000-8000-000000000002/result.mp4";
+	const trimmed = {
+		...editorVideo({ ...details, editorSourceDuration: 10 }),
+		duration: 4,
+		source: { type: "webMP4", outputKey: savedOutput },
+	} as typeof videos.$inferSelect;
+	const result = await read(trimmed);
+	expect(result.plan.sources.map((source) => source.mediaDurationMs)).toEqual([
+		10_000, 5000,
+	]);
+	expect(state.probed).toEqual([]);
+});
+
+test("a Save replaced before the duration was kept measures its retained source once", async () => {
+	const { details } = prepare();
+	state.probeDuration = 10;
+	const trimmed = {
+		...editorVideo(details),
+		duration: 4,
+		source: {
+			type: "webMP4",
+			outputKey:
+				"owner/video/.recording/outputs/reupload-00000000-0000-4000-8000-000000000003/result.mp4",
+		},
+	} as typeof videos.$inferSelect;
+	const result = await read(trimmed);
+	expect(state.probed).toEqual([
+		"https://storage.test/owner/video/display.webm",
+	]);
+	expect(state.updates).toBe(1);
+	expect(result.plan.sources.map((source) => source.mediaDurationMs)).toEqual([
+		10_000, 5000,
+	]);
 });

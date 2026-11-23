@@ -126,6 +126,8 @@ export interface VideoMetadata {
 		sourceHash: string;
 		requestedAt: string;
 	};
+	/** The duration of the recording the editor edits, kept once a Save publishes a different length. */
+	editorSourceDuration?: number;
 	editorSources?: {
 		version: 1;
 		display: {

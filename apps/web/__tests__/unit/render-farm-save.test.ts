@@ -44,6 +44,9 @@ const output = {
 
 describe("publishedRenderFarmUpdate", () => {
 	const video = {
+		id: "video",
+		ownerId: "owner",
+		duration: 60,
 		source: { type: "webMP4" as const, outputKey: "old.mp4" },
 		metadata: {
 			renderFarmSave: save,
@@ -129,6 +132,70 @@ describe("publishedRenderFarmUpdate", () => {
 				now,
 			),
 		).toBeNull();
+	});
+});
+
+describe("publishedRenderFarmUpdate source duration", () => {
+	const now = new Date("2026-09-26T01:00:00.000Z");
+	const trimmed = { ...output, durationSeconds: 30 };
+	const savedOutput =
+		"owner/video/.recording/outputs/render-00000000-0000-4000-8000-000000000001/result.mp4";
+	const original = {
+		id: "video",
+		ownerId: "owner",
+		duration: 60,
+		source: { type: "webMP4" as const, outputKey: "owner/video/result.mp4" },
+		metadata: { renderFarmSave: save },
+	};
+
+	it("keeps the recording's own duration when a Save publishes a shorter render", () => {
+		const first = publishedRenderFarmUpdate(original, "job-1", trimmed, now);
+		expect(first).toMatchObject({ duration: 30 });
+		expect(first?.metadata.editorSourceDuration).toBe(60);
+		if (!first) throw new Error("Expected a publication");
+		const second = publishedRenderFarmUpdate(
+			{
+				...original,
+				duration: first.duration,
+				source: { type: "webMP4", outputKey: savedOutput },
+				metadata: {
+					...first.metadata,
+					renderFarmSave: { ...save, jobId: "job-2" },
+				},
+			},
+			"job-2",
+			{ ...output, durationSeconds: 10 },
+			now,
+		);
+		expect(second?.metadata.editorSourceDuration).toBe(60);
+	});
+
+	it("records the untouched render's length when the recording has none yet", () => {
+		const update = publishedRenderFarmUpdate(
+			{
+				...original,
+				duration: null,
+				metadata: { renderFarmSave: { ...save, trigger: "recording" } },
+			},
+			"job-1",
+			{ ...output, durationSeconds: 61 },
+			now,
+		);
+		expect(update?.metadata.editorSourceDuration).toBe(61);
+	});
+
+	it("does not guess a duration for an output an earlier Save already replaced", () => {
+		const update = publishedRenderFarmUpdate(
+			{
+				...original,
+				duration: 30,
+				source: { type: "webMP4", outputKey: savedOutput },
+			},
+			"job-1",
+			trimmed,
+			now,
+		);
+		expect(update?.metadata).not.toHaveProperty("editorSourceDuration");
 	});
 });
 
