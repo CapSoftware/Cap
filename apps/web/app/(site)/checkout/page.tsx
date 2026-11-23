@@ -16,6 +16,7 @@ import {
 	type CheckoutEnvironment,
 	isCheckoutPlan,
 	parseCheckoutSeats,
+	parsePromotionCode,
 	planPriceId,
 } from "@/lib/checkout/plans";
 
@@ -34,6 +35,7 @@ export default async function CheckoutPage(props: {
 		plan?: string | string[];
 		seats?: string | string[];
 		onboarding?: string | string[];
+		promo?: string | string[];
 	}>;
 }) {
 	const [searchParams, user] = await Promise.all([
@@ -70,6 +72,7 @@ export default async function CheckoutPage(props: {
 			plan={plan}
 			seats={seats}
 			onboarding={onboarding}
+			promo={parsePromotionCode(first(searchParams.promo))}
 			priceIds={{
 				monthly: planPriceId("monthly", environment),
 				yearly: planPriceId("yearly", environment),

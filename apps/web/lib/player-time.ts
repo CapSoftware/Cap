@@ -27,7 +27,9 @@ export function formatClock(seconds: number): string {
 }
 
 export function formatClockWithHundredths(seconds: number): string {
-	const safe = Math.max(0, seconds);
+	// Round before splitting so 59.996 carries into the next minute instead of
+	// printing as 00:60.00.
+	const safe = Number(Math.max(0, seconds).toFixed(2));
 	const hours = Math.floor(safe / 3600);
 	const minutes = Math.floor((safe - hours * 3600) / 60);
 	const remainingSeconds = safe - hours * 3600 - minutes * 60;

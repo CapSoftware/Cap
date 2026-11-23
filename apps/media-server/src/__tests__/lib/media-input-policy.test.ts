@@ -4,9 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJob, updateJob } from "../../lib/job-manager";
 import {
+	ALLOWED_DEMUXERS,
+	allowedDemuxersIn,
 	assertMediaFileContent,
+	DECODER_WHITELIST,
 	getSafeDemuxerWhitelist,
 	INPUT_POLICY_VIOLATION,
+	isAllowedVideoCodec,
 	isInputPolicyViolationMessage,
 	isTrustedStreamingUrl,
 	looksLikeTextContainer,
@@ -59,12 +63,121 @@ describe("demuxer whitelist", () => {
 		]);
 	});
 
+	test("the allowed list is fixed and a build can only narrow it", () => {
+		const listing = [
+			" D   matroska,webm   Matroska / WebM",
+			" D   mov,mp4,m4a,3gp,3g2,mj2 QuickTime / MOV",
+			" D   mpegts          MPEG-TS",
+			" D   bink            Bink",
+			" D   xmv             Microsoft XMV",
+		].join("\n");
+		expect(allowedDemuxersIn(listing)).toEqual([
+			"mov,mp4,m4a,3gp,3g2,mj2",
+			"matroska,webm",
+			"mpegts",
+		]);
+		expect(allowedDemuxersIn("")).toEqual([...ALLOWED_DEMUXERS]);
+		const names = new Set(WHITELIST.split(","));
+		for (const name of ["bink", "xmv", "nut", "smjpeg"])
+			expect(names.has(name)).toBe(false);
+	});
+
 	test("the installed FFmpeg keeps common containers and excludes playlists", () => {
 		const names = new Set(WHITELIST.split(","));
 		for (const name of ["mov", "mp4", "matroska", "webm", "mpegts", "mp3"])
 			expect(names.has(name)).toBe(true);
 		for (const name of ["hls", "dash", "concat", "imf", "sdp", "lavfi"])
 			expect(names.has(name)).toBe(false);
+	});
+});
+
+describe("decoder whitelist", () => {
+	test("accepts the codecs Cap and Cap Infra take and nothing else", () => {
+		for (const codec of [
+			"h264",
+			"hevc",
+			"vp8",
+			"vp9",
+			"av1",
+			"prores",
+			"mpeg4",
+			"mjpeg",
+			"mpeg1video",
+			"mpeg2video",
+			"wmv1",
+			"wmv2",
+			"wmv3",
+			"vc1",
+			"msmpeg4v1",
+			"msmpeg4v2",
+			"msmpeg4v3",
+			"flv1",
+			"h263",
+			"theora",
+		])
+			expect(isAllowedVideoCodec(codec)).toBe(true);
+		for (const codec of ["dvvideo", "cinepak", "unknown"])
+			expect(isAllowedVideoCodec(codec)).toBe(false);
+		const decoders = new Set(DECODER_WHITELIST.split(","));
+		for (const name of [
+			"aac",
+			"mp3float",
+			"opus",
+			"flac",
+			"dca",
+			"pcm_s16le",
+			"mov_text",
+			"h264_cuvid",
+			"libdav1d",
+			"mpeg2video",
+			"msmpeg4",
+			"flv",
+			"mp2",
+			"wmav2",
+			"amrnb",
+			"adpcm_ms",
+		])
+			expect(decoders.has(name)).toBe(true);
+		for (const name of ["cinepak", "rawvideo", "dvvideo", "indeo5"])
+			expect(decoders.has(name)).toBe(false);
+	});
+
+	test("FFmpeg refuses to decode a stream outside the list", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "codec-whitelist-"));
+		try {
+			const path = join(dir, "cinepak.avi");
+			const make = spawn({
+				cmd: [
+					"ffmpeg",
+					"-v",
+					"error",
+					"-f",
+					"lavfi",
+					"-i",
+					"testsrc=d=0.2:s=64x64",
+					"-c:v",
+					"cinepak",
+					"-y",
+					path,
+				],
+				stdout: "ignore",
+				stderr: "pipe",
+			});
+			expect(await make.exited).toBe(0);
+			const decode = spawn({
+				cmd: ["ffmpeg", "-v", "error", "-i", path, "-f", "null", "-"],
+				stdout: "ignore",
+				stderr: "pipe",
+			});
+			const [code, stderr] = await Promise.all([
+				decode.exited,
+				new Response(decode.stderr).text(),
+			]);
+			expect(code).not.toBe(0);
+			expect(stderr).toContain("not on whitelist");
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -93,6 +206,8 @@ describe("hardenMediaCommand", () => {
 			"file",
 			"-format_whitelist",
 			WHITELIST,
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 		]);
 		expect(inputOptions(cmd, "https://bucket.example/b.webm?sig=1")).toEqual([
 			"-ss",
@@ -101,12 +216,16 @@ describe("hardenMediaCommand", () => {
 			"http,https,tcp,tls",
 			"-format_whitelist",
 			WHITELIST,
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 		]);
 		expect(inputOptions(cmd, "pipe:0")).toEqual([
 			"-f",
 			"s16le",
 			"-protocol_whitelist",
 			"pipe",
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 		]);
 		expect(cmd.at(-1)).toBe("/tmp/out.mp4");
 	});
@@ -122,6 +241,8 @@ describe("hardenMediaCommand", () => {
 			"file,concat",
 			"-f",
 			"mov",
+			"-codec_whitelist",
+			"h264",
 			"-i",
 			"concat:/tmp/init.mp4|/tmp/seg.m4s",
 			"-f",
@@ -129,6 +250,25 @@ describe("hardenMediaCommand", () => {
 			"-",
 		];
 		expect(hardenMediaCommand(original)).toEqual(original);
+	});
+
+	test("every other input is held to the allowed decoders", () => {
+		const cmd = hardenMediaCommand([
+			"ffmpeg",
+			"-f",
+			"mov",
+			"-i",
+			"/tmp/x.mov",
+			"o.mp4",
+		]);
+		expect(inputOptions(cmd, "/tmp/x.mov")).toEqual([
+			"-f",
+			"mov",
+			"-protocol_whitelist",
+			"file",
+			"-codec_whitelist",
+			DECODER_WHITELIST,
+		]);
 	});
 
 	test("unknown schemes are limited to local files", () => {
@@ -143,6 +283,8 @@ describe("hardenMediaCommand", () => {
 			"file",
 			"-format_whitelist",
 			WHITELIST,
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 		]);
 	});
 
@@ -157,6 +299,8 @@ describe("hardenMediaCommand", () => {
 		expect(inputOptions(cmd, "/tmp/stream-x/master.m3u8")).toEqual([
 			"-protocol_whitelist",
 			"file",
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 		]);
 	});
 
@@ -174,6 +318,8 @@ describe("hardenMediaCommand", () => {
 			"http,https,tcp,tls",
 			"-format_whitelist",
 			WHITELIST,
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 			"-v",
 			"error",
 			"https://bucket.example/x.mp4",
@@ -184,6 +330,8 @@ describe("hardenMediaCommand", () => {
 			"ffprobe",
 			"-protocol_whitelist",
 			"file",
+			"-codec_whitelist",
+			DECODER_WHITELIST,
 			"-f",
 			"mov",
 			"-i",

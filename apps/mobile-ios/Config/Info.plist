@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CapAPIBaseURL</key>
+	<string>$(CAP_API_BASE_URL)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>so.cap.mobile</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>cap</string>
+			</array>
+		</dict>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Cap records you with the camera so you can share a video message.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cap records your voice with your videos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Cap saves videos you download to your photo library.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleDefault</string>
+#if CAP_DEBUG
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Debug builds connect to a Cap server running on your local network.</string>
+#endif
+</dict>
+</plist>

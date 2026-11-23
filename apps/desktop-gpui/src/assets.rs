@@ -40,6 +40,7 @@ const FONTS: &[(&str, &[u8])] = assets!("fonts":
 /// element's text colour, so these must be single-colour glyphs -- a full-colour
 /// illustration would come out as a filled silhouette.
 const ICONS: &[(&str, &[u8])] = assets!("icons":
+    "volume-2.svg",
     "app-window-mac.svg",
     "app-window.svg",
     "ban.svg",
@@ -213,6 +214,7 @@ const ICONS: &[(&str, &[u8])] = assets!("icons":
     // (`AnnotationTools.tsx`, `LayersPanel.tsx`, `Header.tsx`). Lucide 24x24
     // originals, matching the `~icons/lucide/*` imports over there.
     "pencil.svg",
+    "eraser.svg",
     "arrow-up-right.svg",
     "more-horizontal.svg",
     "save.svg",
@@ -319,6 +321,7 @@ mod tests {
         // from, so the table has to scan here too.
         include_str!("library.rs"),
         include_str!("controls_window.rs"),
+        include_str!("live_draw.rs"),
         include_str!("camera_window.rs"),
         include_str!("target_overlay.rs"),
         include_str!("settings_window.rs"),
@@ -350,6 +353,7 @@ mod tests {
         include_str!("editor_clips.rs"),
         // The export page's destination cards and share-status glyphs.
         include_str!("editor_export.rs"),
+        include_str!("editor_audio_only.rs"),
         // The screenshot editor's toolbar, popovers and zoom HUD; the
         // annotation module names the tool and layer glyphs.
         include_str!("screenshot_editor.rs"),

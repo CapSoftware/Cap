@@ -721,12 +721,14 @@ mod tests {
         let Some(directory) = std::env::var_os("CAP_DIAGNOSTIC_TEST_DIRECTORY") else {
             return;
         };
-        let writer = crate::diagnostic_writer::DiagnosticWriter::new(
+        // Written synchronously: a non-blocking worker's guard waits at most 1 s
+        // on exit, and a slow first file open on a loaded runner then loses the
+        // final record before the parent reads it.
+        let writer = std::sync::Mutex::new(crate::diagnostic_writer::DiagnosticWriter::new(
             std::io::sink(),
             Path::new(&directory),
             "cap-test.log",
-        );
-        let (writer, guard) = tracing_appender::non_blocking(writer);
+        ));
         install_sink(
             AppInfo {
                 flavor: "test",
@@ -736,7 +738,9 @@ mod tests {
                 source_dirty: Some(false),
             },
             move |bytes| {
-                let _ = writer.clone().write_all(bytes);
+                if let Ok(mut writer) = writer.lock() {
+                    let _ = writer.write_all(bytes);
+                }
             },
         );
         let mut operation = Operation::start(
@@ -754,7 +758,6 @@ mod tests {
             }
         }
         operation.finish(true);
-        drop(guard);
     }
 
     fn history() -> &'static History {

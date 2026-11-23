@@ -555,7 +555,7 @@ pub fn nudged(
     )
 }
 
-pub fn convert_kind(segment: &mut ShapeSegment, kind: ShapeKind, aspect: f64) {
+pub fn convert_kind(segment: &mut ShapeSegment, kind: ShapeKind, aspect: f64, badge_number: u32) {
     if segment.kind == kind {
         return;
     }
@@ -581,19 +581,16 @@ pub fn convert_kind(segment: &mut ShapeSegment, kind: ShapeKind, aspect: f64) {
         segment.from = XY::new(center.x - w / 2., center.y - h / 2.);
         segment.to = XY::new(center.x + w / 2., center.y + h / 2.);
     }
-    let keep = (
-        segment.stroke_color.clone(),
-        segment.start,
-        segment.end,
-        segment.number,
-    );
+    let keep = (segment.stroke_color.clone(), segment.start, segment.end);
     segment.apply_kind_defaults();
     if kind != ShapeKind::Badge && kind != ShapeKind::Highlight {
         segment.stroke_color = keep.0;
     }
     segment.start = keep.1;
     segment.end = keep.2;
-    segment.number = keep.3;
+    if kind == ShapeKind::Badge {
+        segment.number = badge_number;
+    }
 }
 
 use crate::editor_canvas::CanvasSelection;
@@ -2062,11 +2059,12 @@ impl EditorWindow {
                 return;
             };
             this.last_shape_kind = next;
+            let badge_number = cap_project::next_badge_number(this.shape_segments());
             this.edit_shape_segment("shape-kind", index, window, cx, move |segment| {
                 if segment.kind == next {
                     return false;
                 }
-                convert_kind(segment, next, aspect);
+                convert_kind(segment, next, aspect, badge_number);
                 true
             });
         }));
@@ -2944,7 +2942,7 @@ mod tests {
         rect.stroke_color = "#00FF00".into();
         rect.start = 3.;
         rect.end = 7.;
-        convert_kind(&mut rect, ShapeKind::Badge, 16. / 9.);
+        convert_kind(&mut rect, ShapeKind::Badge, 16. / 9., 1);
         let bounds = rect.rect();
         assert!(close(bounds.w * 16. / 9., bounds.h));
         assert!(close(bounds.center().x, 0.4) && close(bounds.center().y, 0.3));
@@ -2953,9 +2951,29 @@ mod tests {
 
         let mut arrow = shape(ShapeKind::Arrow, (0.2, 0.2), (0.6, 0.2));
         arrow.stroke_color = "#00FF00".into();
-        convert_kind(&mut arrow, ShapeKind::Rectangle, 16. / 9.);
+        convert_kind(&mut arrow, ShapeKind::Rectangle, 16. / 9., 1);
         assert!(arrow.rect().h >= 0.02 - 1e-12);
         assert_eq!(arrow.stroke_color, "#00FF00");
+    }
+
+    #[test]
+    fn a_shape_turned_into_a_badge_takes_the_next_step_number() {
+        let badge = |number| ShapeSegment {
+            kind: ShapeKind::Badge,
+            number,
+            ..Default::default()
+        };
+        let shapes = [badge(1), badge(2), badge(3)];
+        let mut arrow = shape(ShapeKind::Arrow, (0.2, 0.2), (0.4, 0.4));
+        convert_kind(
+            &mut arrow,
+            ShapeKind::Badge,
+            16. / 9.,
+            cap_project::next_badge_number(&shapes),
+        );
+        assert_eq!(arrow.number, 4);
+        convert_kind(&mut arrow, ShapeKind::Ellipse, 16. / 9., 9);
+        assert_eq!(arrow.number, 4);
     }
 
     fn timed(start: f64, end: f64, track: u32) -> ShapeSegment {

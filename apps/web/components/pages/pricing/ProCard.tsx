@@ -13,6 +13,7 @@ import { useInAppCheckout } from "@/components/pages/checkout/useInAppCheckout";
 import { BTN_PRIMARY, MODE_THEME } from "@/components/pages/HomeTwo/theme";
 import { homepageCopy } from "@/data/homepage-copy";
 import { PRICING } from "@/data/pricing";
+import { CHECKOUT_RATE_LIMITED_MESSAGE } from "@/lib/checkout/messages";
 import { Segmented, Stepper } from "./controls";
 import { PlanCard, type PlanToggle } from "./PlanCard";
 
@@ -40,6 +41,10 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 				body: JSON.stringify({ priceId, quantity: users }),
 			});
 			const data = await response.json();
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
+			}
 			if (data.url) {
 				window.location.href = data.url;
 			} else {
@@ -85,6 +90,10 @@ export const ProCard = ({ collapsed, onToggle }: PlanToggle) => {
 			}
 			if (data.subscription === true) {
 				toast.success("You are already on the Cap Pro plan");
+			}
+			if (response.status === 429) {
+				toast.error(CHECKOUT_RATE_LIMITED_MESSAGE);
+				return;
 			}
 			if (data.url) {
 				window.location.href = data.url;

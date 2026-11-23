@@ -25,6 +25,7 @@ mod stage;
 mod welcome_script;
 
 pub use stage::Paper;
+pub(crate) use stage::paper_button;
 
 pub const ONBOARDING_WIDTH: f32 = 860.;
 pub const ONBOARDING_HEIGHT: f32 = 690.;
@@ -121,8 +122,11 @@ enum Step {
     Faq,
 }
 
+/// Opening Settings for this row also floats the + / drag guide: the
+/// required rows, and Input Monitoring, which macOS 27.3 only lists via +.
 fn guided_permission(permission: OSPermission) -> bool {
-    permission.required() && crate::permission_guide::eligible(permission)
+    (permission.required() || permission == OSPermission::InputMonitoring)
+        && crate::permission_guide::eligible(permission)
 }
 
 impl Step {
@@ -2945,9 +2949,10 @@ mod tests {
     fn denied_optional_devices_do_not_block_the_tour_but_either_required_permission_does() {
         for (screen, accessibility) in [(false, false), (false, true), (true, false), (true, true)]
         {
-            let state = PermissionsState::from_raw(Some(RawPermissions {
+            let state = PermissionsState::from_raw_for_test(Some(RawPermissions {
                 screen_granted: screen,
                 accessibility_granted: accessibility,
+                input_monitoring: MediaAuthorization::NotDetermined,
                 microphone: MediaAuthorization::Denied,
                 camera: MediaAuthorization::Restricted,
             }));
@@ -2964,10 +2969,11 @@ mod tests {
         let mut raw = RawPermissions {
             screen_granted: true,
             accessibility_granted: true,
+            input_monitoring: MediaAuthorization::NotDetermined,
             microphone: MediaAuthorization::Authorized,
             camera: MediaAuthorization::Authorized,
         };
-        let mut state = PermissionsState::from_raw(Some(raw));
+        let mut state = PermissionsState::from_raw_for_test(Some(raw));
         assert_eq!(
             Step::Permissions.next(false, state.necessary_granted()),
             Some(Step::Overview)

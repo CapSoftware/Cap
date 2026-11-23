@@ -105,6 +105,17 @@ export async function GET(request: NextRequest) {
 			);
 		}
 
+		if (video.ownerId !== user.id) {
+			return Response.json(
+				{
+					processing: false,
+					message: "Only the video owner can retry AI generation",
+					aiGenerationStatus: metadata.aiGenerationStatus ?? null,
+				},
+				{ status: 403 },
+			);
+		}
+
 		if (video.transcriptionStatus !== "COMPLETE") {
 			return Response.json(
 				{

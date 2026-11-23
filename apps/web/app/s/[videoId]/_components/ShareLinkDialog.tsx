@@ -6,6 +6,11 @@ import { Check, CodeXml, Link2, Lock, Megaphone, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+	DEFAULT_EMBED_TOGGLES,
+	EmbedOptionsFields,
+	embedTogglesToOptions,
+} from "@/components/embed/EmbedOptionsFields";
+import {
 	FacebookIcon,
 	GoogleIcon,
 	LinkedInIcon,
@@ -90,6 +95,7 @@ export const ShareLinkDialog = ({
 	isPublic,
 	canManageAccess = false,
 	onManageAccess,
+	ownerIsPro = false,
 }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -100,6 +106,7 @@ export const ShareLinkDialog = ({
 	isPublic: boolean;
 	canManageAccess?: boolean;
 	onManageAccess?: () => void;
+	ownerIsPro?: boolean;
 }) => {
 	const { webUrl } = usePublicEnv();
 	const playback = useOptionalPlayback();
@@ -107,6 +114,7 @@ export const ShareLinkDialog = ({
 	const [withTimestamp, setWithTimestamp] = useState(false);
 	const [startTime, setStartTime] = useState(0);
 	const [copied, setCopied] = useState(false);
+	const [embedToggles, setEmbedToggles] = useState(DEFAULT_EMBED_TOGGLES);
 
 	// The offset is sampled once, when the dialog opens. Subscribing would
 	// re-render the dialog at frame rate while the video plays on behind it, and
@@ -117,6 +125,7 @@ export const ShareLinkDialog = ({
 		setTab("social");
 		setWithTimestamp(false);
 		setCopied(false);
+		setEmbedToggles(DEFAULT_EMBED_TOGGLES);
 	}, [open, playback]);
 
 	useEffect(() => {
@@ -133,8 +142,17 @@ export const ShareLinkDialog = ({
 	);
 
 	const embedCode = useMemo(
-		() => buildEmbedCode({ webUrl, videoId, startTime: timestamp }),
-		[webUrl, videoId, timestamp],
+		() =>
+			buildEmbedCode({
+				webUrl,
+				videoId,
+				startTime: timestamp,
+				options: embedTogglesToOptions({
+					...embedToggles,
+					showBranding: ownerIsPro ? embedToggles.showBranding : true,
+				}),
+			}),
+		[webUrl, videoId, timestamp, embedToggles, ownerIsPro],
 	);
 
 	const handleCopy = useCallback(async () => {
@@ -252,6 +270,11 @@ export const ShareLinkDialog = ({
 									{embedCode}
 								</code>
 							</div>
+							<EmbedOptionsFields
+								value={embedToggles}
+								onChange={setEmbedToggles}
+								canHideBranding={ownerIsPro}
+							/>
 							<p className="text-sm text-gray-10">
 								Paste this wherever HTML is allowed. The player keeps its aspect
 								ratio and fills the width it's given.

@@ -44,6 +44,9 @@ mod x11_tests;
 #[cfg(test)]
 mod system_audio_channel_tests;
 
+#[cfg(test)]
+mod wayland_portal_tests;
+
 use frame_scaler::FrameScaler;
 
 #[derive(Debug)]
@@ -103,8 +106,49 @@ struct WaylandInputConfig {
 }
 
 struct WaylandPortalSession {
-    _proxy: Screencast<'static>,
-    _session: Session<'static, Screencast<'static>>,
+    session: Arc<Session<'static, Screencast<'static>>>,
+    _close_on_drop: tokio::sync::oneshot::Sender<()>,
+}
+
+impl WaylandPortalSession {
+    fn new(session: Session<'static, Screencast<'static>>) -> Self {
+        let session = Arc::new(session);
+        let (close_on_drop, dropped) = tokio::sync::oneshot::channel::<()>();
+        let close = {
+            let session = session.clone();
+            async move {
+                let _ = dropped.await;
+                let result = tokio::time::timeout(Duration::from_secs(3), session.close())
+                    .await
+                    .context("Wayland screen capture portal session close timed out")?;
+                if let Err(ashpd::Error::Portal(ashpd::PortalError::ZBus(
+                    ashpd::zbus::Error::MethodError(name, _, _),
+                ))) = &result
+                    && matches!(
+                        name.as_str(),
+                        "org.freedesktop.DBus.Error.UnknownObject"
+                            | "org.freedesktop.DBus.Error.UnknownMethod"
+                    )
+                {
+                    return Ok(());
+                }
+                result.context("close Wayland screen capture portal session")
+            }
+        };
+        if let Some(scope) = crate::output_pipeline::PipelineBuildScope::current() {
+            scope.spawn_cleanup(close);
+        } else {
+            drop(tokio::spawn(async move {
+                if let Err(error) = close.await {
+                    tracing::warn!(%error, "Could not close the Wayland screen capture portal session");
+                }
+            }));
+        }
+        Self {
+            session,
+            _close_on_drop: close_on_drop,
+        }
+    }
 }
 
 pub struct VideoSource {
@@ -199,12 +243,41 @@ pub fn x11_capture_rect(
     display_height: f64,
     crop: Option<(f64, f64, f64, f64)>,
 ) -> anyhow::Result<(i32, i32, u32, u32)> {
+    let (x, y, width, height) =
+        x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 2)?;
+    Ok((x, y, ensure_even(width), ensure_even(height)))
+}
+
+pub fn x11_screenshot_rect(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
+    x11_capture_bounds(display_x, display_y, display_width, display_height, crop, 1)
+}
+
+fn x11_capture_bounds(
+    display_x: f64,
+    display_y: f64,
+    display_width: f64,
+    display_height: f64,
+    crop: Option<(f64, f64, f64, f64)>,
+    minimum: i32,
+) -> anyhow::Result<(i32, i32, u32, u32)> {
     let display_left = floor_i32(display_x, "display x")?;
     let display_top = floor_i32(display_y, "display y")?;
-    let display_right = ceil_i32(display_x + display_width.max(2.0), "display right")?;
-    let display_bottom = ceil_i32(display_y + display_height.max(2.0), "display bottom")?;
+    let display_right = ceil_i32(
+        display_x + display_width.max(f64::from(minimum)),
+        "display right",
+    )?;
+    let display_bottom = ceil_i32(
+        display_y + display_height.max(f64::from(minimum)),
+        "display bottom",
+    )?;
 
-    if display_right - display_left < 2 || display_bottom - display_top < 2 {
+    if display_right - display_left < minimum || display_bottom - display_top < minimum {
         bail!("X11 display bounds are too small for capture");
     }
 
@@ -212,23 +285,24 @@ pub fn x11_capture_rect(
         Some((x, y, width, height)) => (
             floor_i32(display_x + x, "capture x")?,
             floor_i32(display_y + y, "capture y")?,
-            ceil_i32(display_x + x + width.max(2.0), "capture right")?,
-            ceil_i32(display_y + y + height.max(2.0), "capture bottom")?,
+            ceil_i32(
+                display_x + x + width.max(f64::from(minimum)),
+                "capture right",
+            )?,
+            ceil_i32(
+                display_y + y + height.max(f64::from(minimum)),
+                "capture bottom",
+            )?,
         ),
         None => (display_left, display_top, display_right, display_bottom),
     };
 
-    let left = raw_left.clamp(display_left, display_right - 2);
-    let top = raw_top.clamp(display_top, display_bottom - 2);
-    let right = raw_right.clamp(left + 2, display_right);
-    let bottom = raw_bottom.clamp(top + 2, display_bottom);
+    let left = raw_left.clamp(display_left, display_right - minimum);
+    let top = raw_top.clamp(display_top, display_bottom - minimum);
+    let right = raw_right.clamp(left + minimum, display_right);
+    let bottom = raw_bottom.clamp(top + minimum, display_bottom);
 
-    Ok((
-        left,
-        top,
-        ensure_even((right - left) as u32),
-        ensure_even((bottom - top) as u32),
-    ))
+    Ok((left, top, (right - left) as u32, (bottom - top) as u32))
 }
 
 fn floor_i32(value: f64, label: &str) -> anyhow::Result<i32> {
@@ -382,6 +456,7 @@ async fn open_wayland_portal(
         .create_session()
         .await
         .context("create XDG Desktop Portal ScreenCast session")?;
+    let portal_session = WaylandPortalSession::new(session);
     let cursor_mode = if show_cursor {
         CursorMode::Embedded
     } else {
@@ -390,7 +465,7 @@ async fn open_wayland_portal(
 
     proxy
         .select_sources(
-            &session,
+            &portal_session.session,
             cursor_mode,
             wayland_source_type(source),
             false,
@@ -401,7 +476,7 @@ async fn open_wayland_portal(
         .context("select Wayland screen capture source")?;
 
     let response = proxy
-        .start(&session, None)
+        .start(&portal_session.session, None)
         .await
         .context("start Wayland screen capture portal request")?
         .response()
@@ -412,17 +487,14 @@ async fn open_wayland_portal(
         .cloned()
         .ok_or_else(|| anyhow!("Wayland screen capture portal did not return a stream"))?;
     let fd = proxy
-        .open_pipe_wire_remote(&session)
+        .open_pipe_wire_remote(&portal_session.session)
         .await
         .context("open PipeWire remote for Wayland screen capture")?;
 
     Ok(WaylandPortalCapture {
         stream,
         fd,
-        portal_session: WaylandPortalSession {
-            _proxy: proxy,
-            _session: session,
-        },
+        portal_session,
     })
 }
 
@@ -1790,6 +1862,7 @@ impl AudioSource for SystemAudioSource {
             tx,
             ctx,
             X11Capture::audio_info().channels,
+            None,
         );
         async move {
             let inner = setup
@@ -1822,7 +1895,7 @@ impl AudioSource for SystemAudioSource {
     }
 }
 
-async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
+pub async fn create_system_audio_source_config() -> anyhow::Result<SystemAudioSourceConfig> {
     let (error_tx, _error_rx) = flume::bounded(16);
     let feed = MicrophoneFeed::spawn(MicrophoneFeed::new_system_audio(error_tx));
     let owned_feed = OwnedSystemAudioFeed {

@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
 		email,
 	})),
 	dispose: async () => {},
+	disposableSignup: vi.fn<(email: string) => Promise<boolean>>(),
+	blockedDomains: undefined as string | undefined,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -47,6 +49,10 @@ vi.mock("@cap/env", async (importOriginal) => {
 	const original = await importOriginal<typeof import("@cap/env")>();
 	return {
 		...original,
+		serverEnv: () => ({
+			...original.serverEnv(),
+			CAP_BLOCKED_SIGNUP_DOMAINS: mocks.blockedDomains,
+		}),
 		buildEnv: {
 			...original.buildEnv,
 			get NEXT_PUBLIC_IS_CAP() {
@@ -55,6 +61,9 @@ vi.mock("@cap/env", async (importOriginal) => {
 		},
 	};
 });
+vi.mock("@cap/database/auth/disposable-signup", () => ({
+	isDisposableEmailSignup: mocks.disposableSignup,
+}));
 vi.mock("@cap/database/emails/otp-email", () => ({
 	OTPEmail: (props: { code: string; email: string }) => props,
 }));
@@ -232,6 +241,9 @@ describe("mobile email sessions", () => {
 		mocks.tokenRow = null;
 		mocks.selectBarrier = null;
 		mocks.apiKeys = [];
+		mocks.disposableSignup.mockReset();
+		mocks.disposableSignup.mockResolvedValue(false);
+		mocks.blockedDomains = undefined;
 	});
 
 	afterAll(() => mocks.dispose());
@@ -331,6 +343,35 @@ describe("mobile email sessions", () => {
 		expect(mocks.getUserByEmail).toHaveBeenLastCalledWith("person@example.com");
 	});
 
+	it("sends and signs in an accented domain under its punycode form", async () => {
+		const code = await requestCode("person@exámple.com");
+		expect(mocks.sendEmail.mock.calls.at(-1)?.[0]).toMatchObject({
+			email: "person@xn--exmple-qta.com",
+		});
+
+		const response = await post("verify", {
+			email: "person@exámple.com",
+			code,
+		});
+
+		expect(response.status).toBe(200);
+		expect(mocks.getUserByEmail).toHaveBeenLastCalledWith(
+			"person@xn--exmple-qta.com",
+		);
+	});
+
+	it("refuses a non-ASCII local part without sending a code", async () => {
+		const request = await post("request", { email: "pérson@example.com" });
+		const verify = await post("verify", {
+			email: "pérson@example.com",
+			code: "123456",
+		});
+
+		expect(request.status).toBe(400);
+		expect(verify.status).toBe(400);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+	});
+
 	it("uses one bucket per normalized email", async () => {
 		await requestCode(" Person@Example.com ");
 		await requestCode("person@example.com");
@@ -340,6 +381,37 @@ describe("mobile email sessions", () => {
 		);
 		expect(first).toMatch(/^email-code-send:[0-9a-f]{64}$/);
 		expect(second).toBe(first);
+	});
+
+	it("refuses new accounts on disposable addresses without sending a code", async () => {
+		mocks.disposableSignup.mockImplementation(
+			async (email) => email === "new@throwaway.example",
+		);
+
+		const response = await post("request", { email: "New@Throwaway.example" });
+		expect(response.status).toBe(403);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
+		expect(mocks.tokenRow).toBeNull();
+
+		await requestCode("person@example.com");
+	});
+
+	it("checks for disposable addresses only after the rate limit", async () => {
+		mocks.isRateLimited.mockResolvedValue(true);
+
+		const response = await post("request", { email: "person@example.com" });
+		expect(response.status).toBe(429);
+		expect(mocks.disposableSignup).not.toHaveBeenCalled();
+	});
+
+	it("refuses blocked domains without sending a code", async () => {
+		mocks.blockedDomains = "blocked.example";
+
+		const response = await post("request", {
+			email: "someone@blocked.example",
+		});
+		expect(response.status).toBe(403);
+		expect(mocks.sendEmail).not.toHaveBeenCalled();
 	});
 
 	it("returns 429 without sending when code requests are limited", async () => {

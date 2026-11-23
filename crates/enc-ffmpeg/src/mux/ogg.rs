@@ -28,6 +28,8 @@ pub enum FinishError {
     AlreadyFinished,
     #[error("{0}")]
     WriteTrailerFailed(ffmpeg::Error),
+    #[error("Output writer did not finish")]
+    StorageStalled(#[from] crate::mux::write_behind::StorageStalled),
 }
 
 impl OggFile {
@@ -91,7 +93,7 @@ impl OggFile {
                 |output| encoder.flush_to(output),
                 |output: &mut OggOutput, flush_result| (flush_result, output.0.write_trailer()),
             )
-            .map_err(|stalled| FinishError::WriteTrailerFailed(stalled.into()))?;
+            .map_err(FinishError::StorageStalled)?;
         trailer_result.map_err(FinishError::WriteTrailerFailed)?;
 
         Ok(flush_result)

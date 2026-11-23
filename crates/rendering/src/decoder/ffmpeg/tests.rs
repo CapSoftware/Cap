@@ -18,6 +18,7 @@ fn odd_yuv_frames_preserve_every_chroma_row() {
             let mut cached = CachedFrame::Raw {
                 frame: source,
                 number: 7,
+                presentation_secs: 0.0,
             };
             let raw_bytes = cached.estimated_bytes();
             let output = cached.produce(&mut FrameConverter::new());
@@ -216,6 +217,7 @@ fn borrowed_planes_render_the_same_rgba_as_the_copy_path() {
         let borrowed = CachedFrame::Raw {
             frame: source,
             number: 0,
+            presentation_secs: 0.0,
         }
         .produce(&mut plane_converter);
         assert!(

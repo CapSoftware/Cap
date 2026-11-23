@@ -122,7 +122,11 @@ byte of what gets installed:
 - `packaging/windows/installer-hooks.nsh` gives the NSIS installer a 128 MB
   LZMA window, so `cap-cli.exe` compresses against `Cap.exe`. The NSIS install hook (`packaging/windows/installer-hooks.nsh`)
 deletes the Tauri-era `cap-gpui.exe`, `cap-exporter.exe` and Rive assets an
-update in place would otherwise leave behind.
+update in place would otherwise leave behind. Before copying files, and before
+uninstalling, it also ends this install's `cap mcp serve` processes (the
+stateless MCP servers AI assistants keep alive), which would otherwise hold the
+FFmpeg DLLs open and fail the update. Other `cap-cli.exe` work, such as a
+detached recording, is never ended.
 
 ### The native updater
 
@@ -721,6 +725,7 @@ drives a start/stop through the button code paths — the end-to-end check uses
 it because unprivileged synthetic clicks are dropped. Add
 `CAP_GPUI_AUTO_PAUSE=1` to pause for the middle third: two segments whose
 summed duration is ~⅔ of wall time is the proof the pause reached the engine.
+`CAP_GPUI_AUTO_DELETE=1` ends the recording with the bar's Delete instead.
 `CAP_GPUI_AUTO_CAMERA=1` selects the first camera at startup the way a click
 would, opening the preview bubble; combined with `CAP_GPUI_AUTO_RECORD` it
 verifies the camera track end to end.

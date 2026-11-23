@@ -28,6 +28,8 @@ pub struct H264PacketEncoder {
     encoder_time_base: Rational,
     frame_rate: Rational,
     codec_name: String,
+    /// Last, so the hardware encoder is released before it reports idle.
+    pub(crate) hardware_session: Option<crate::video::hardware_crash::HardwareEncoderSession>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +74,7 @@ impl H264PacketEncoder {
             encoder_time_base,
             frame_rate,
             codec_name,
+            hardware_session: None,
         }
     }
 
