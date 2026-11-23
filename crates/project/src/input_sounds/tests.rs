@@ -893,3 +893,82 @@ fn a_repeated_range_sounds_only_the_shortcut_each_place_shows() {
     assert_eq!(key_times(&events, true), [0.98, 1.0]);
     assert_eq!(key_times(&events, false), [1.06, 1.1]);
 }
+
+fn manual(id: &str, start: f64, end: f64, text: &str) -> KeyboardTrackSegment {
+    let mut segment = shown(start, end);
+    segment.id = format!("{}{id}", crate::keyboard::MANUAL_KEYBOARD_PREFIX);
+    segment.display_text = text.into();
+    segment.keys = crate::keyboard::manual_key_presses(text);
+    segment
+}
+
+fn one_clip(keys: bool) -> ProjectConfiguration {
+    project(
+        serde_json::json!({
+            "segments": [{ "start": 0.0, "end": 10.0, "timescale": 1.0, "recordingSegment": 0 }],
+            "zoomSegments": []
+        }),
+        keys,
+        false,
+    )
+}
+
+fn assert_times(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len(), "{actual:?}");
+    for (a, e) in actual.iter().zip(expected) {
+        assert!((a - e).abs() < 1e-6, "{actual:?} != {expected:?}");
+    }
+}
+
+#[test]
+fn only_the_keyboard_segment_on_screen_makes_sound_where_two_overlap() {
+    let keyboard = KeyboardEvents {
+        presses: [3_000.0, 4_050.0, 6_000.0]
+            .into_iter()
+            .flat_map(|at| [press("a", at, true), press("a", at + 40.0, false)])
+            .collect(),
+    };
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    // Keys added by hand over a recorded segment hide it while they run.
+    let mut project = one_clip(true);
+    project.timeline.as_mut().unwrap().keyboard_segments =
+        vec![shown(2.0, 8.0), manual("1", 4.0, 5.0, "hi")];
+    assert_times(
+        &key_times(&input_sound_events(&project, &takes), true),
+        &[3.0, 4.0, 4.11, 6.0],
+    );
+
+    // A recorded segment that starts later hides the hand-made keys after it.
+    project.timeline.as_mut().unwrap().keyboard_segments =
+        vec![manual("1", 2.9, 6.0, "hi"), shown(3.0, 8.0)];
+    assert_times(
+        &key_times(&input_sound_events(&project, &takes), true),
+        &[2.9, 3.0, 4.05, 6.0],
+    );
+}
+
+#[test]
+fn keys_trimmed_off_a_hand_made_segment_stay_silent() {
+    let keyboard = KeyboardEvents::default();
+    let takes = [InputSoundTake {
+        keyboard: &keyboard,
+        keyboard_offset_secs: 0.0,
+        clicks: &[],
+    }];
+    let mut project = one_clip(true);
+    let mut typed = manual("1", 2.0, 6.0, "hi");
+    // Trimming the start keeps each key at its time, so "h" now sits before
+    // the segment.
+    typed.start = 2.05;
+    for key in &mut typed.keys {
+        key.time_offset -= 50.0;
+    }
+    project.timeline.as_mut().unwrap().keyboard_segments = vec![typed];
+    let events = input_sound_events(&project, &takes);
+    assert_times(&key_times(&events, true), &[2.11]);
+    assert_eq!(key_times(&events, false).len(), 1);
+}

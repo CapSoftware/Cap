@@ -172,26 +172,50 @@ fn event_seed(kind: u64, recording_clip: u32, source_time_ms: f64, extra: u64) -
     )
 }
 
-/// Merged, sorted output ranges of the keyboard track. Key sounds follow the
-/// overlay: a press sounds only while its keys are on screen.
+/// The keyboard segment on screen at output `time`, chosen as the renderer
+/// chooses it: of the segments running then, the one that started last. A
+/// segment hidden under another, or a key trimmed off a segment's start,
+/// makes no sound.
+fn shown_keyboard_segment(segments: &[crate::KeyboardTrackSegment], time: f64) -> Option<usize> {
+    segments
+        .iter()
+        .enumerate()
+        .filter(|(_, segment)| {
+            segment.start.is_finite()
+                && segment.end.is_finite()
+                && segment.start <= time
+                && time < segment.end
+        })
+        .max_by(|(_, a), (_, b)| a.start.total_cmp(&b.start))
+        .map(|(index, _)| index)
+}
+
+/// Merged, sorted output ranges where a recorded keyboard segment is the one
+/// on screen. Key sounds follow the overlay: a press sounds only while its
+/// keys are on screen, so a recorded press under keys added by hand is
+/// silent.
 fn shown_key_ranges(project: &ProjectConfiguration) -> Vec<(f64, f64)> {
     let Some(timeline) = &project.timeline else {
         return Vec::new();
     };
-    // Keys added by hand sound their own text; a recorded press under one
-    // is not on screen.
-    let mut ranges = timeline
-        .keyboard_segments
+    let segments = &timeline.keyboard_segments;
+    let mut edges = segments
         .iter()
-        .filter(|segment| !crate::keyboard::is_manual_keyboard_segment(segment))
         .filter(|segment| {
             segment.start.is_finite() && segment.end.is_finite() && segment.end > segment.start
         })
-        .map(|segment| (segment.start, segment.end))
+        .flat_map(|segment| [segment.start, segment.end])
         .collect::<Vec<_>>();
-    ranges.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(ranges.len());
-    for (start, end) in ranges {
+    edges.sort_by(f64::total_cmp);
+    edges.dedup();
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for pair in edges.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        let recorded = shown_keyboard_segment(segments, (start + end) / 2.0)
+            .is_some_and(|index| !crate::keyboard::is_manual_keyboard_segment(&segments[index]));
+        if !recorded {
+            continue;
+        }
         match merged.last_mut() {
             Some(last) if start <= last.1 => last.1 = last.1.max(end),
             _ => merged.push((start, end)),
@@ -605,7 +629,9 @@ pub fn input_sound_events(
                 .filter(|(_, sounds)| **sounds)
             {
                 let down = segment.start + key.time_offset / 1000.0;
-                if !down.is_finite() || down >= segment.end {
+                if !down.is_finite()
+                    || shown_keyboard_segment(&timeline.keyboard_segments, down) != Some(index)
+                {
                     continue;
                 }
                 let edited = down - crate::configuration::held_time_before(&holds, down);
