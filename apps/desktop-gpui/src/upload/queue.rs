@@ -477,6 +477,10 @@ impl UploadBackend for LiveBackend {
                     |_| {},
                     upload.cancel.clone(),
                     true,
+                    // Instant recordings save their share link up front, but this upload is the
+                    // recording itself. Sent as a replacement, the server retires the recording's
+                    // processing job and every confirmation asks for another upload.
+                    false,
                 )
                 .await?;
                 match result {
