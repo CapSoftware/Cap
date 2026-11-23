@@ -67,6 +67,7 @@ pub fn run_from_env(cx: &mut App) {
             "switch" => switching(cx).await,
             "toggle-loop" => toggle_loop(cx).await,
             "scroll-all" => scroll_all(cx).await,
+            "rescan" => rescan(cx).await,
             _ => library(cx).await,
         }
         sleep(cx, 200).await;
@@ -446,6 +447,41 @@ async fn toggle_loop(cx: &mut AsyncApp) {
 
 /// Memory: every item drawn once in both layouts (Screenshots and Notes, down
 /// and back up), then a quiet pause marked `settled` for an outside RSS read.
+/// Coming back to the window (or a meeting changing the library) when
+/// nothing on disk changed: main-thread time to take in the scan and its
+/// visuals, then the next frame.
+async fn rescan(cx: &mut AsyncApp) {
+    if wait_for_items(cx).await.is_none() {
+        println!("{PREFIX}: no items, giving up");
+        return;
+    }
+    sleep(cx, 1500).await;
+    let mut main = Vec::new();
+    let mut frames = Vec::new();
+    for _ in 0..24 {
+        with_view(cx, |view, cx| {
+            view.bench_main_us = 0.;
+            view.reload(cx);
+        });
+        for _ in 0..500 {
+            if with_view(cx, |view, _| view.load_task.is_none()).unwrap_or(true) {
+                break;
+            }
+            sleep(cx, 5).await;
+        }
+        // Visuals from the cache land a moment after the scan.
+        sleep(cx, 400).await;
+        if let Some(us) = draw(cx) {
+            frames.push(us);
+        }
+        if let Some(us) = with_view(cx, |view, _| view.bench_main_us) {
+            main.push(us);
+        }
+    }
+    report(PREFIX, "rescan-main", &mut main);
+    report(PREFIX, "rescan-frame", &mut frames);
+}
+
 async fn scroll_all(cx: &mut AsyncApp) {
     if wait_for_items(cx).await.is_none() {
         println!("{PREFIX}: no items, giving up");

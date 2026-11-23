@@ -237,6 +237,9 @@ pub struct LibraryWindow {
     home_scroll: [gpui::ScrollHandle; 2],
     reload_again: bool,
     last_scan: Option<Instant>,
+    /// Main-thread time spent taking in scans and their visuals, for the
+    /// `rescan` bench.
+    bench_main_us: f64,
     people_task: Option<Task<()>>,
     thumbs: thumbs::Thumbs,
     app_icons: app_icons::AppIcons,
@@ -461,6 +464,7 @@ impl LibraryWindow {
             home_scroll: [gpui::ScrollHandle::new(), gpui::ScrollHandle::new()],
             reload_again: false,
             last_scan: None,
+            bench_main_us: 0.,
             people_task: None,
             thumbs: thumbs::Thumbs::default(),
             app_icons: app_icons::AppIcons::default(),
@@ -511,6 +515,7 @@ impl LibraryWindow {
                 "library scanned"
             );
             this.update(cx, |this, cx| {
+                let applying = Instant::now();
                 let mut scan = scan;
                 let jobs = std::mem::take(&mut scan.visual_jobs);
                 this.visuals.extend(std::mem::take(&mut scan.seed_visuals));
@@ -523,6 +528,7 @@ impl LibraryWindow {
                 this.reevaluate(cx);
                 this.check_members(cx);
                 this.index_people(library, cx);
+                this.bench_main_us += applying.elapsed().as_secs_f64() * 1e6;
                 if std::mem::take(&mut this.reload_again) {
                     this.reload(cx);
                 }
@@ -602,33 +608,44 @@ impl LibraryWindow {
                 "library people indexed"
             );
             this.update(cx, |this, cx| {
-                // A newer scan replaced the items: its own pass will follow.
-                let Some(current) = scan.upgrade() else {
-                    return;
-                };
-                if !Rc::ptr_eq(&current, &this.scan) {
-                    return;
-                }
-                drop(current);
-                let mut next = (*this.scan).clone();
-                let mut changed = false;
-                for item in &mut next.items {
-                    if let items::ItemKey::Doc(id) = &item.key
-                        && let Some(found) = names.get(id)
-                        && !found.is_empty()
-                    {
-                        let before = item.people.len();
-                        item.add_people(found);
-                        changed |= item.people.len() != before;
-                    }
-                }
-                if changed {
-                    this.scan = Rc::new(next);
-                    this.reevaluate(cx);
-                }
+                let merging = Instant::now();
+                this.merge_people(&scan, &names, cx);
+                this.bench_main_us += merging.elapsed().as_secs_f64() * 1e6;
             })
             .ok();
         }));
+    }
+
+    fn merge_people(
+        &mut self,
+        scan: &std::rc::Weak<load::Scan>,
+        names: &HashMap<String, Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        // A newer scan replaced the items: its own pass will follow.
+        let Some(current) = scan.upgrade() else {
+            return;
+        };
+        if !Rc::ptr_eq(&current, &self.scan) {
+            return;
+        }
+        drop(current);
+        let mut next = (*self.scan).clone();
+        let mut changed = false;
+        for item in &mut next.items {
+            if let items::ItemKey::Doc(id) = &item.key
+                && let Some(found) = names.get(id)
+                && !found.is_empty()
+            {
+                let before = item.people.len();
+                item.add_people(found);
+                changed |= item.people.len() != before;
+            }
+        }
+        if changed {
+            self.scan = Rc::new(next);
+            self.reevaluate(cx);
+        }
     }
 
     fn load_up_next(&mut self, cx: &mut Context<Self>) {
@@ -748,6 +765,16 @@ impl LibraryWindow {
     }
 
     fn merge_visuals(&mut self, found: HashMap<ItemKey, visuals::Visual>, cx: &mut Context<Self>) {
+        let merging = Instant::now();
+        self.merge_visuals_timed(found, cx);
+        self.bench_main_us += merging.elapsed().as_secs_f64() * 1e6;
+    }
+
+    fn merge_visuals_timed(
+        &mut self,
+        found: HashMap<ItemKey, visuals::Visual>,
+        cx: &mut Context<Self>,
+    ) {
         if found.is_empty() {
             return;
         }
