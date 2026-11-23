@@ -30,6 +30,7 @@ import {
 import {
 	CAP_FRIDAY_METADATA,
 	grantCapFridayCredit,
+	reverseCapFridayCredit,
 } from "@/lib/checkout/cap-friday";
 import {
 	syncCustomerUsEin,
@@ -511,6 +512,17 @@ export const POST = async (req: Request) => {
 				event.type === "charge.refunded" ||
 				event.type === "charge.dispute.created"
 			) {
+				const capFriday = await reverseCapFridayCredit(
+					event.data.object as Stripe.Charge | Stripe.Dispute,
+				);
+				if (capFriday === "awaiting_grant") {
+					return new Response("Cap Friday credit not granted yet, retry", {
+						status: 503,
+					});
+				}
+				if (capFriday === "reversed") {
+					return NextResponse.json({ received: true });
+				}
 				const reversed =
 					event.type === "charge.refunded"
 						? await reverseRefundedCharge(event.data.object as Stripe.Charge)

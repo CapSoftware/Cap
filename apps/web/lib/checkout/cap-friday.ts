@@ -8,6 +8,7 @@ export const CAP_FRIDAY_COUPON_ID = "CAP_FRIDAY_2026_EXISTING";
 export const CAP_FRIDAY_INVOICE_KEY = "capFriday2026Invoice";
 export const CAP_FRIDAY_METADATA = "capFriday2026";
 const CREDIT_TXN_KEY = "capFridayCreditTxn";
+const REVERSED_KEY = "capFridayReversed";
 const QUOTE_MAX_AGE_SECONDS = 60 * 60;
 
 export const capFridayLive = (now = Date.now()) => now < ENDS_AT;
@@ -552,6 +553,58 @@ export async function grantCapFridayCredit(invoice: Stripe.Invoice) {
 	await stripe().invoices.update(current.id, {
 		metadata: { [CREDIT_TXN_KEY]: transaction.id },
 	});
+}
+
+export type CapFridayReversal = "none" | "reversed" | "awaiting_grant";
+
+export async function reverseCapFridayCredit(
+	source: Stripe.Charge | Stripe.Dispute,
+): Promise<CapFridayReversal> {
+	const charge =
+		source.object === "dispute"
+			? typeof source.charge === "string"
+				? await stripe().charges.retrieve(source.charge)
+				: source.charge
+			: source;
+	const invoiceId =
+		typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id;
+	if (!invoiceId) return "none";
+	const invoice = await stripe().invoices.retrieve(invoiceId);
+	if (invoice.metadata?.[CAP_FRIDAY_METADATA] !== "prepay") return "none";
+	if (!invoice.metadata?.[CREDIT_TXN_KEY]) return "awaiting_grant";
+
+	const credit = Number(invoice.metadata.creditAmount);
+	const target =
+		source.object === "dispute" || charge.amount <= 0
+			? credit
+			: Math.min(
+					credit,
+					Math.round((credit * charge.amount_refunded) / charge.amount),
+				);
+	const already = Number(invoice.metadata?.[REVERSED_KEY]) || 0;
+	if (!Number.isInteger(credit) || target <= already) return "reversed";
+
+	const customerId =
+		typeof invoice.customer === "string"
+			? invoice.customer
+			: invoice.customer?.id;
+	if (!customerId) {
+		throw new Error(`Cap Friday invoice ${invoice.id} has no customer`);
+	}
+	await stripe().customers.createBalanceTransaction(
+		customerId,
+		{
+			amount: target - already,
+			currency: invoice.currency,
+			description: `Cap Friday: prepaid renewal credit reversed after a ${source.object === "dispute" ? "dispute" : "refund"} (invoice ${invoice.number ?? invoice.id})`,
+			metadata: { [CAP_FRIDAY_METADATA]: "reversal", invoiceId: invoice.id },
+		},
+		{ idempotencyKey: `capfriday-reverse-${invoice.id}-${target}` },
+	);
+	await stripe().invoices.update(invoice.id, {
+		metadata: { [REVERSED_KEY]: String(target) },
+	});
+	return "reversed";
 }
 
 const formatDay = (seconds: number) =>
