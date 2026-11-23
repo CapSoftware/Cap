@@ -14,6 +14,7 @@ import * as fragmentIndex from "./fragment-index";
 import * as hls from "./hls";
 import * as mp4 from "./mp4";
 import * as planning from "./planning";
+import * as prepare from "./prepare";
 import * as protocol from "./protocol";
 import * as recovery from "./recovery";
 import { pickQueued } from "./scheduler";
@@ -217,12 +218,7 @@ function harness(env: Record<string, string> = {}) {
 				this.pending?.reject(new Error("audio engine exited"));
 			}
 		},
-		prepareSupport: () => new Promise(() => {}),
-		prepareRecording: async () => false,
-		builtinPath: () => null,
-		builtinSize: () => {
-			throw new Error("no built-in assets in tests");
-		},
+		...prepare,
 		process: {
 			env: {
 				RF_TOKEN: "test",
@@ -1195,6 +1191,36 @@ describe("transcodes", () => {
 		expect(await (await call(h, "/transcodes", request)).json()).toMatchObject({
 			status: "queued",
 		});
+	});
+
+	test("built-in assets in a manifest go through the real asset checks", async () => {
+		const h = harness();
+		const prefix = "owner/video/builtin";
+		const manifestWith = (builtin: string) =>
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{ path: "recording-meta.json", size: 2 },
+						{ path: "assets/background.jpg", builtin },
+					],
+				}),
+			);
+		h.objects.set(
+			`${prefix}/recording-meta.json`,
+			new TextEncoder().encode("{}"),
+		);
+		h.objects.set(`${prefix}/manifest.json`, manifestWith("../etc/passwd"));
+		await expect(h.sourceIndex(prefix)).rejects.toThrow(
+			"manifest built-in for assets/background.jpg is invalid",
+		);
+		const wallpaper = "backgrounds/macOS/never-shipped.jpg";
+		expect(prepare.builtinPath(wallpaper)).toBe(
+			`${prepare.BUILTIN_DIR}/${wallpaper}`,
+		);
+		h.objects.set(`${prefix}/manifest.json`, manifestWith(wallpaper));
+		await expect(h.sourceIndex(prefix)).rejects.toThrow(
+			`built-in asset ${wallpaper} is not on this machine`,
+		);
 	});
 
 	test("manifest quotas count every raw source before scheduling any transcode", async () => {
