@@ -9112,6 +9112,10 @@ pub struct RendererLayers {
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
     realtime_camera_effects: bool,
+    /// The camera picture the camera layers last showed. A replaced picture
+    /// arrives at the same recording time as the old one, which the layers
+    /// would otherwise take for the frame they already have.
+    camera_picture_shown: Option<decoder::DecodedFrameStorageIdentity>,
     #[cfg(test)]
     split_layer_passes: bool,
 }
@@ -9131,6 +9135,25 @@ impl RendererLayers {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();
+        self.camera_picture_shown = None;
+    }
+
+    fn follow_camera_picture(&mut self, picture: Option<&DecodedFrame>) {
+        let Some(picture) = picture else {
+            self.camera_picture_shown = None;
+            return;
+        };
+        let identity = picture.storage_identity();
+        if self
+            .camera_picture_shown
+            .as_ref()
+            .is_some_and(|shown| shown.matches(&identity))
+        {
+            return;
+        }
+        self.camera.reset_frame_state();
+        self.camera_only.reset_frame_state();
+        self.camera_picture_shown = Some(identity);
     }
 
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -9242,6 +9265,7 @@ impl RendererLayers {
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
                 realtime_camera_effects: false,
+                camera_picture_shown: None,
                 #[cfg(test)]
                 split_layer_passes: false,
             }
@@ -9488,6 +9512,7 @@ impl RendererLayers {
             .prepare(segment_frames, cursor, uniforms, constants);
 
         let camera_picture = constants.camera_picture(&uniforms.project);
+        self.follow_camera_picture(camera_picture.as_ref());
         let has_camera = segment_frames.segment_has_camera || camera_picture.is_some();
         let camera_frame_data = if let Some(picture) = &camera_picture {
             Some((
@@ -9666,6 +9691,7 @@ impl RendererLayers {
         timings.cursor_prepare_duration = start.elapsed();
 
         let camera_picture = constants.camera_picture(&uniforms.project);
+        self.follow_camera_picture(camera_picture.as_ref());
         let has_camera = segment_frames.segment_has_camera || camera_picture.is_some();
         let camera_frame_data = if let Some(picture) = &camera_picture {
             Some((
