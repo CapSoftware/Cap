@@ -594,14 +594,16 @@ const postedAmount = (invoice: Stripe.Invoice, key: string) => {
 export type CapFridayReversal = "none" | "reversed" | "awaiting_grant";
 
 export async function reverseCapFridayCredit(
-	source: Stripe.Charge | Stripe.Dispute,
+	source: Stripe.Charge | Stripe.Dispute | Stripe.Refund,
 ): Promise<CapFridayReversal> {
+	const linked = source.object === "charge" ? null : source.charge;
 	const charge =
-		source.object === "dispute"
-			? typeof source.charge === "string"
-				? await stripe().charges.retrieve(source.charge)
-				: source.charge
-			: source;
+		source.object === "charge"
+			? source
+			: typeof linked === "string"
+				? await stripe().charges.retrieve(linked)
+				: linked;
+	if (!charge) return "none";
 	const invoiceId =
 		typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id;
 	if (!invoiceId) return "none";
@@ -647,7 +649,14 @@ export async function reverseCapFridayCredit(
 		});
 	}
 	const counted = slices.reduce((total, slice) => total + slice.amount, 0);
-	for (const refund of refunds.filter((refund) => !live(refund))) {
+	// Once a dispute has taken back the rest of the credit, undoing a refund
+	// it counted would hand that part of the credit back.
+	const disputeSettled = Object.keys(invoice.metadata ?? {}).some((key) =>
+		key.startsWith("cfDisp_"),
+	);
+	for (const refund of disputeSettled
+		? []
+		: refunds.filter((refund) => !live(refund))) {
 		const posted = postedAmount(invoice, `cfRev_${refund.id}`);
 		if (posted > 0) {
 			slices.push({
@@ -662,7 +671,7 @@ export async function reverseCapFridayCredit(
 		slices.push({
 			id: source.id,
 			amount: credit - counted,
-			key: `cfRev_${source.id}`,
+			key: `cfDisp_${source.id}`,
 			label: "after a dispute",
 		});
 	}

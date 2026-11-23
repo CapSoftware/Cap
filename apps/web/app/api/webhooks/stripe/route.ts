@@ -66,6 +66,8 @@ const relevantEvents = new Set([
 	"payment_intent.payment_failed",
 	"charge.refunded",
 	"charge.dispute.created",
+	"charge.refund.updated",
+	"refund.failed",
 ]);
 
 async function grantDeveloperCredits(
@@ -506,6 +508,21 @@ export const POST = async (req: Request) => {
 					event.data.object as Stripe.PaymentIntent,
 					event.type === "payment_intent.succeeded" ? "succeeded" : "failed",
 				);
+				return NextResponse.json({ received: true });
+			}
+			if (
+				event.type === "charge.refund.updated" ||
+				(event.type as string) === "refund.failed"
+			) {
+				const refund = event.data.object as Stripe.Refund;
+				if (
+					refund.status === "failed" &&
+					(await reverseCapFridayCredit(refund)) === "awaiting_grant"
+				) {
+					return new Response("Cap Friday credit not granted yet, retry", {
+						status: 503,
+					});
+				}
 				return NextResponse.json({ received: true });
 			}
 			if (
