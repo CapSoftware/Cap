@@ -423,7 +423,10 @@ impl SegmentState {
         }
         stats.track += track_started.elapsed();
 
-        let lost = self.tracks.iter().any(|t| t.lost && t.coasted == 1);
+        // A lost string coasts on its last place for a few frames, so a
+        // detection for it can wait a moment and serve several at once.
+        let lost = self.tracks.iter().any(|t| t.lost)
+            && self.frames_since_detection + 1 >= self.lost_gap();
         let settled = changed.is_empty();
         let due_frames = ((self.fps_estimate / 5.0).round() as u32).max(2);
         let first = previous.is_none();
@@ -442,6 +445,18 @@ impl SegmentState {
             self.ring.pop_front();
         }
 
+        if detect && self.dump {
+            let reason = if first {
+                "first"
+            } else if lost {
+                "lost"
+            } else if settled {
+                "settled"
+            } else {
+                "due"
+            };
+            eprintln!("{time:8.3} trigger {reason}");
+        }
         if detect {
             let rgb_started = Instant::now();
             let rgb = frames.rgb(&frame.video)?;
@@ -499,8 +514,13 @@ impl SegmentState {
         } else if leaving_frame(&r, self.tw, self.th) {
             (self.fps_estimate * 2.0) as u32
         } else {
-            3
+            self.lost_gap() + 2
         }
+    }
+
+    /// Frames between detections that a lost string triggers.
+    fn lost_gap(&self) -> u32 {
+        ((self.fps_estimate / 15.0).round() as u32).max(2)
     }
 
     /// Changed tiles whose content is not the last detection's content moved
