@@ -5,4 +5,4 @@ pub mod media;
 pub mod mft;
 pub mod video;
 
-pub use video::H264Encoder;
+pub use video::{H264Encoder, injected_failure_after_frames};

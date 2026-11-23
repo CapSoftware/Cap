@@ -6,6 +6,8 @@ pub mod h264_packet;
 pub mod hardware_crash;
 pub mod hevc;
 pub mod isolated_self_test;
+#[cfg(test)]
+mod mid_take;
 mod packed_yuv;
 pub mod prores;
 mod rgb_to_yuv;
