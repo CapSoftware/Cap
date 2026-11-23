@@ -4,7 +4,7 @@ import {
 	randomUUID,
 	timingSafeEqual,
 } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "./engine";
 import { initSegment, playlist } from "./fmp4";
@@ -32,6 +32,8 @@ import {
 	chunkPartLayout,
 	MIN_RANGE_PARTS,
 	planChunkBoundaries,
+	WAVEFORM_LEVELS_FILE,
+	waveformInputSpecs,
 } from "./planning";
 import {
 	builtinPath,
@@ -97,6 +99,12 @@ const PACKET = 1024;
 
 const probeEngine = new ProbeEngine(
 	() => new Engine(ENGINE_BIN, {}, "coordinator-engine"),
+);
+// Its own process, so one export's waveform analysis (decoding whole audio
+// files) never holds up another's probe.
+const levelsEngine = new ProbeEngine(
+	() => new Engine(ENGINE_BIN, {}, "levels-engine"),
+	15 * 60_000,
 );
 
 // Advertised only once this engine can prepare projects, so the web app keeps
@@ -341,6 +349,8 @@ type Job = {
 	final?: ReturnType<typeof summary>;
 	unservableSince?: number;
 	hls?: HlsState;
+	/** Waveform levels in the media bucket, deleted when the job ends. */
+	waveformLevelsKey?: string;
 	id: string;
 	request: JobRequest;
 	status: "planning" | "rendering" | "assembling" | "ready" | "error";
@@ -906,16 +916,43 @@ async function planJob(job: Job) {
 		spans: { clip: number; start: number; end: number }[][];
 		audio_cuts: number[];
 		clips: { index: number; camera: number; mic: number }[];
+		waveform_files?: string[];
 	};
-	const probe = await probeEngine
-		.request<Probe>({
+	let probe: Probe;
+	let waveformLevels: FileSpec | null = null;
+	try {
+		probe = await probeEngine.request<Probe>({
 			project: probeDir,
 			fps: job.fps,
 			resolution: job.resolution,
 			span_step: gop,
-		})
-		.finally(() => cache.close());
-	job.t.probed = now();
+		});
+		job.t.probed = now();
+		const inputs = probe.waveform_files ?? [];
+		if (inputs.length > 0) {
+			await cache.materialize(
+				waveformInputSpecs(inputs, [
+					...baseSpecs("all"),
+					...mediaFiles.map((file) => mediaSpec(file.path, [])),
+				]),
+			);
+			const out = join(probeDir, WAVEFORM_LEVELS_FILE);
+			await levelsEngine.request({ project: probeDir, out }, "levels");
+			const bytes = readFileSync(out);
+			const key = `${job.key.replace(/\.mp4$/, "")}.waveform-levels-${job.id}`;
+			job.waveformLevelsKey = key;
+			await s3.put(key, bytes, "application/octet-stream");
+			waveformLevels = {
+				path: WAVEFORM_LEVELS_FILE,
+				key,
+				size: bytes.byteLength,
+				ranges: "all",
+			};
+			job.t.waveformLevels = now();
+		}
+	} finally {
+		cache.close();
+	}
 	if (request.frameLimit && request.frameLimit < probe.total_frames) {
 		probe.total_frames = request.frameLimit;
 		probe.total_samples = Math.round(
@@ -1040,6 +1077,7 @@ async function planJob(job: Job) {
 				...mediaFiles.map((file) =>
 					mediaSpec(file.path, perFile.get(file.path) ?? []),
 				),
+				...(waveformLevels ? [waveformLevels] : []),
 			],
 			firstPart: 2 + index * partsPerChunk + 1,
 			partLimit,
@@ -1187,6 +1225,7 @@ async function planJob(job: Job) {
 			frames: chunk.frames,
 			threads: 8,
 			files: chunk.files,
+			...(waveformLevels ? { waveformLevels: waveformLevels.path } : {}),
 			upload: {
 				key: job.key,
 				uploadId: job.uploadId,
@@ -1257,6 +1296,7 @@ type JournaledJob = Pick<
 	| "sections"
 	| "plan"
 	| "probe"
+	| "waveformLevelsKey"
 > & { version: 3; tasks: Task[]; hls: { prefix: string } | null };
 
 function journalJob(job: Job) {
@@ -1278,6 +1318,7 @@ function journalJob(job: Job) {
 		sections: job.sections,
 		plan: job.plan,
 		probe: job.probe,
+		waveformLevelsKey: job.waveformLevelsKey,
 		tasks: [...job.tasks.values()]
 			.filter((state) => !state.duplicateOf)
 			.map((state) => state.task),
@@ -2475,6 +2516,11 @@ function finish(job: Job) {
 	dropStashes(job.id).catch((error) =>
 		console.error(`job ${job.id}: stash cleanup failed: ${error}`),
 	);
+	if (job.waveformLevelsKey) {
+		s3.delete(job.waveformLevelsKey).catch((error) =>
+			console.error(`job ${job.id}: waveform levels cleanup failed: ${error}`),
+		);
+	}
 }
 
 function recordStat(

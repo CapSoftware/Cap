@@ -26,6 +26,8 @@ export type VideoTask = {
 	/** x264 threads, fixed per job: output bytes must not depend on the machine. */
 	threads: number;
 	files: FileSpec[];
+	/** Project path of levels computed from whole audio files, when the export draws a waveform. */
+	waveformLevels?: string;
 	upload: {
 		key: string;
 		uploadId: string;

@@ -76,4 +76,6 @@ pub use telemetry::{
     PlaybackFrameSource, PlaybackRenderOutputFormat, PlaybackSkipReason, PlaybackTelemetry,
     PlaybackTelemetryEvent,
 };
-pub use waveform_levels::{has_waveform_segments, load_waveform_levels};
+pub use waveform_levels::{
+    has_waveform_segments, load_waveform_levels, load_waveform_levels_into, waveform_level_inputs,
+};

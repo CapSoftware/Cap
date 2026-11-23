@@ -123,6 +123,7 @@ fn video_request(project: &Path, frames: [u32; 2]) -> video::VideoRequest {
         frames,
         threads: Some(2),
         out: project.join("chunk.h264"),
+        waveform_levels: None,
     }
 }
 

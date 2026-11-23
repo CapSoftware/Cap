@@ -6,7 +6,7 @@ use cap_rendering::{
     AudioBandLevels, AudioLevelAnalyzer, AudioLevelSource, AudioLevelStore, RenderVideoConstants,
 };
 
-use crate::{SegmentMedia, segments::resolve_music_path};
+use crate::{SegmentAudioTimingRepair, SegmentMedia, segments::resolve_music_path};
 
 const CHUNK_FRAMES: usize = AudioData::SAMPLE_RATE as usize * 60;
 
@@ -44,7 +44,7 @@ struct LevelSource {
 fn audio_sources(
     recording: &RecordingMeta,
     meta: &StudioRecordingMeta,
-    segments: &[SegmentMedia],
+    repairs: &[SegmentAudioTimingRepair],
 ) -> Vec<LevelSource> {
     let clips: Vec<_> = match meta {
         StudioRecordingMeta::SingleSegment { segment } => {
@@ -64,7 +64,7 @@ fn audio_sources(
     };
     let mut sources = Vec::new();
     for (index, (display, mic, system)) in clips.into_iter().enumerate() {
-        let repair = segments.get(index).map(|media| media.audio_timing_repair);
+        let repair = repairs.get(index);
         if let Some(mic) = mic {
             sources.push(LevelSource {
                 clip: index as u32,
@@ -97,9 +97,9 @@ async fn load_recording_levels(
     store: &AudioLevelStore,
     recording: &RecordingMeta,
     meta: &StudioRecordingMeta,
-    segments: &[SegmentMedia],
+    repairs: &[SegmentAudioTimingRepair],
 ) {
-    for level_source in audio_sources(recording, meta, segments) {
+    for level_source in audio_sources(recording, meta, repairs) {
         let LevelSource {
             clip,
             source,
@@ -121,13 +121,9 @@ async fn load_recording_levels(
     }
 }
 
-async fn load_timeline_levels(
-    store: &AudioLevelStore,
-    project_path: &Path,
-    project: &ProjectConfiguration,
-) {
+fn timeline_audio_paths(project: &ProjectConfiguration) -> Vec<&str> {
     let Some(timeline) = &project.timeline else {
-        return;
+        return Vec::new();
     };
     let mut paths: Vec<&str> = timeline
         .audio_segments
@@ -137,7 +133,15 @@ async fn load_timeline_levels(
         .collect();
     paths.sort_unstable();
     paths.dedup();
-    for path in paths {
+    paths
+}
+
+async fn load_timeline_levels(
+    store: &AudioLevelStore,
+    project_path: &Path,
+    project: &ProjectConfiguration,
+) {
+    for path in timeline_audio_paths(project) {
         if store.timeline_audio(path).is_some() {
             continue;
         }
@@ -159,22 +163,54 @@ pub async fn load_waveform_levels(
     project: &ProjectConfiguration,
     segments: &[SegmentMedia],
 ) {
-    if !has_waveform_segments(project) {
-        return;
-    }
-    load_recording_levels(
+    let repairs: Vec<_> = segments
+        .iter()
+        .map(|segment| segment.audio_timing_repair)
+        .collect();
+    load_waveform_levels_into(
         &constants.waveform_levels,
         &constants.recording_meta,
         &constants.meta,
-        segments,
-    )
-    .await;
-    load_timeline_levels(
-        &constants.waveform_levels,
-        &constants.recording_meta.project_path,
         project,
+        &repairs,
     )
     .await;
+}
+
+/// The same levels as `load_waveform_levels`, for a caller that has no
+/// decoders open, such as a render farm computing them once per export.
+pub async fn load_waveform_levels_into(
+    store: &AudioLevelStore,
+    recording: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    project: &ProjectConfiguration,
+    repairs: &[SegmentAudioTimingRepair],
+) {
+    if !has_waveform_segments(project) {
+        return;
+    }
+    load_recording_levels(store, recording, meta, repairs).await;
+    load_timeline_levels(store, &recording.project_path, project).await;
+}
+
+/// Every file the waveform levels are read from, whole.
+pub fn waveform_level_inputs(
+    recording: &RecordingMeta,
+    meta: &StudioRecordingMeta,
+    project: &ProjectConfiguration,
+) -> Vec<PathBuf> {
+    if !has_waveform_segments(project) {
+        return Vec::new();
+    }
+    audio_sources(recording, meta, &[])
+        .into_iter()
+        .map(|source| source.path)
+        .chain(
+            timeline_audio_paths(project)
+                .into_iter()
+                .map(|path| resolve_music_path(&recording.project_path, path)),
+        )
+        .collect()
 }
 
 #[cfg(test)]

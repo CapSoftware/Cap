@@ -32,6 +32,14 @@ impl AudioLevelSource {
             _ => None,
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Display => "display",
+            Self::Mic => "mic",
+            Self::System => "system",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -159,6 +167,30 @@ impl AudioLevelStore {
             .unwrap_or_else(PoisonError::into_inner)
             .get(path)
             .cloned()
+    }
+
+    pub fn recording_levels(&self) -> Vec<(u32, AudioLevelSource, Arc<AudioBandLevels>)> {
+        let mut levels: Vec<_> = self
+            .levels
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(&(clip, source), levels)| (clip, source, levels.clone()))
+            .collect();
+        levels.sort_by_key(|(clip, source, _)| (*clip, source.name()));
+        levels
+    }
+
+    pub fn timeline_levels(&self) -> Vec<(String, Arc<AudioBandLevels>)> {
+        let mut levels: Vec<_> = self
+            .timeline_audio
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(path, levels)| (path.clone(), levels.clone()))
+            .collect();
+        levels.sort_by(|a, b| a.0.cmp(&b.0));
+        levels
     }
 
     pub fn is_empty(&self) -> bool {

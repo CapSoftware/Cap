@@ -559,6 +559,9 @@ async function runVideo(
 			frames: task.frames,
 			threads: task.threads,
 			out,
+			...(task.waveformLevels
+				? { waveform_levels: join(cache.root, task.waveformLevels) }
+				: {}),
 		});
 		const threadsPromise: Promise<Record<string, number>> =
 			process.env.RF_PROFILE_THREADS === "1"

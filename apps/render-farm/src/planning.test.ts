@@ -5,6 +5,7 @@ import {
 	MAX_CHUNKS,
 	MIN_RANGE_PARTS,
 	planChunkBoundaries,
+	waveformInputSpecs,
 } from "./planning";
 
 const base: ChunkPlanInput = {
@@ -111,4 +112,33 @@ test("the chunk cap is the largest count whose part ranges still fit", () => {
 			MIN_RANGE_PARTS,
 		);
 	}
+});
+
+test("waveform inputs are fetched whole, and only the files the levels read", () => {
+	const mic = {
+		path: "content/segments/segment-0/audio-input.ogg",
+		key: "owner/video/mic.ogg",
+		size: 900_000,
+		ranges: [
+			[0, 262_144],
+			[637_856, 900_000],
+		] as [number, number][],
+	};
+	const system = { ...mic, path: "system.ogg", key: "owner/video/sys.ogg" };
+	const display = {
+		path: "content/segments/segment-0/display.mp4",
+		key: "owner/video/raw-upload.mp4",
+		size: 50_000_000,
+		ranges: [[0, 4096]] as [number, number][],
+		prefix: { key: "owner/video/result.prefix-v1", size: 2048 },
+	};
+	const specs = waveformInputSpecs(
+		[mic.path, display.path, "assets/music.mp3"],
+		[mic, system, display],
+	);
+	expect(specs).toEqual([
+		{ ...mic, ranges: "all" },
+		{ ...display, ranges: "all" },
+	]);
+	expect(waveformInputSpecs([], [mic, system, display])).toEqual([]);
 });
