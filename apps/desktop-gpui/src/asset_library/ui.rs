@@ -187,8 +187,6 @@ pub fn progress_bar(theme: &Theme, fraction: f32) -> impl IntoElement {
         )
 }
 
-/// What a tile draws over its thumbnail: a progress bar while downloading, a
-/// small badge when the file is not here yet or the last try failed.
 pub fn tile_overlay(status: ItemStatus, radius: f32) -> Option<AnyElement> {
     let badge = |icon: &'static str| {
         div()
@@ -236,8 +234,6 @@ pub fn tile_overlay(status: ItemStatus, radius: f32) -> Option<AnyElement> {
     }
 }
 
-/// The trailing part of a music row: a size and download glyph when the
-/// track is not here yet, progress while it downloads.
 pub fn track_trailing(theme: &Theme, status: ItemStatus, size: u64) -> Option<AnyElement> {
     let palette = &theme.editor;
     match status {

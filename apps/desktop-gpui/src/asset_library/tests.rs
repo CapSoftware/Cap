@@ -253,14 +253,25 @@ impl Fixture {
             .block_on(async move { library.ensure(kind, &id).await })
     }
 
+    /// Returns once `condition` holds, checking it after each change the
+    /// library signals.
     fn wait_until(&self, condition: impl Fn(&Library) -> bool) {
-        for _ in 0..400 {
-            if condition(&self.library) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        panic!("condition not met in time");
+        let mut changes = self.library.subscribe();
+        let library = self.library.clone();
+        let met = self.runtime.block_on(async move {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    if condition(&library) {
+                        return;
+                    }
+                    if changes.changed().await.is_err() {
+                        return;
+                    }
+                }
+            })
+            .await
+        });
+        assert!(met.is_ok(), "condition not met in time");
     }
 }
 
@@ -644,7 +655,6 @@ fn cancel_stops_a_bulk_and_leaves_nothing_half_written() {
             )
         })
     });
-    std::thread::sleep(Duration::from_millis(100));
     assert!(staging_files(&fixture.root).is_empty());
     assert!(
         fixture.library.summary(Kind::Music).missing > 0,
@@ -883,20 +893,53 @@ fn a_legacy_project_path_resolves_to_its_catalogue_wallpaper() {
         ),
     };
     assert_eq!(
-        fixture.library.missing_project_wallpaper(&project),
-        Some("zztest/one")
+        fixture.library.missing_project_wallpapers(&project),
+        vec![Ok("zztest/one")]
     );
 
     project.background.source = cap_project::BackgroundSource::Wallpaper {
         path: Some("/Users/a/Pictures/mine.jpg".into()),
     };
-    assert_eq!(fixture.library.missing_project_wallpaper(&project), None);
+    assert!(
+        fixture
+            .library
+            .missing_project_wallpapers(&project)
+            .is_empty()
+    );
     project.background.source = cap_project::BackgroundSource::Image {
         path: Some(
             "/Applications/Cap.app/Contents/Resources/assets/backgrounds/zztest/one.jpg".into(),
         ),
     };
-    assert_eq!(fixture.library.missing_project_wallpaper(&project), None);
+    assert!(
+        fixture
+            .library
+            .missing_project_wallpapers(&project)
+            .is_empty()
+    );
+
+    // A style section's wallpaper counts too, and a catalogue-shaped path
+    // this catalogue does not list is reported apart.
+    let mut style_background = project.background.clone();
+    style_background.source = cap_project::BackgroundSource::Wallpaper {
+        path: Some("/gone/assets/backgrounds/zztest/one.jpg".into()),
+    };
+    let mut unknown_background = project.background.clone();
+    unknown_background.source = cap_project::BackgroundSource::Wallpaper {
+        path: Some("/gone/assets/backgrounds/later/added.jpg".into()),
+    };
+    let timeline = project.timeline.get_or_insert_with(|| {
+        serde_json::from_value(serde_json::json!({ "segments": [], "zoomSegments": [] })).unwrap()
+    });
+    for background in [style_background, unknown_background] {
+        let mut segment = cap_project::StyleSegment::default();
+        segment.overrides.background = Some(background);
+        timeline.style_segments.push(segment);
+    }
+    assert_eq!(
+        fixture.library.missing_project_wallpapers(&project),
+        vec![Ok("zztest/one"), Err("later/added.jpg".to_string())]
+    );
 }
 
 #[test]
@@ -911,20 +954,13 @@ fn progress_notifications_fire_and_are_throttled() {
         }],
     );
     let fixture = Fixture::new(&server, vec![track(&server, "big", &data)]);
-    let mut changes = fixture.library.subscribe();
-    let counter = Arc::new(AtomicUsize::new(0));
-    let seen = counter.clone();
-    let watcher = fixture.runtime.spawn(async move {
-        while changes.changed().await.is_ok() {
-            seen.fetch_add(1, Ordering::AcqRel);
-        }
-    });
+    let before = *fixture.library.subscribe().borrow();
     let started = std::time::Instant::now();
     fixture.ensure(Kind::Music, "big").unwrap();
     let elapsed = started.elapsed();
-    std::thread::sleep(Duration::from_millis(50));
-    watcher.abort();
-    let notified = counter.load(Ordering::Acquire);
+    // Read straight after: the last notification may land later, which
+    // only makes the count smaller.
+    let notified = fixture.library.subscribe().borrow().wrapping_sub(before) as usize;
     assert!(notified >= 2, "start and finish at least ({notified})");
     let ceiling = (elapsed.as_millis() / 50) as usize + 4;
     assert!(
@@ -1013,4 +1049,81 @@ fn restore_without_a_connection_stops_early_and_tries_again_next_launch() {
         })
         .count();
     assert_eq!(failed, 3, "stopped after three offline files");
+}
+
+#[test]
+fn download_all_right_after_cancel_still_fetches_everything() {
+    let server = Server::start();
+    let items: Vec<(String, Vec<u8>)> = (0..4)
+        .map(|index| (format!("again{index}"), body(300_000, 60 + index as u8)))
+        .collect();
+    for (id, data) in &items {
+        server.route(
+            id,
+            vec![Response {
+                delay: Duration::from_millis(20),
+                ..Response::ok(data)
+            }],
+        );
+    }
+    let fixture = Fixture::new(
+        &server,
+        items
+            .iter()
+            .map(|(id, data)| track(&server, id, data))
+            .collect(),
+    );
+    fixture.library.download_all(Kind::Music);
+    fixture.wait_until(|library| {
+        (0..4).any(|index| {
+            matches!(
+                library.status(Kind::Music, &format!("again{index}")),
+                ItemStatus::Downloading(fraction) if fraction > 0.
+            )
+        })
+    });
+    fixture.library.cancel_all(Kind::Music);
+    fixture.library.download_all(Kind::Music);
+    fixture.wait_until(|library| library.summary(Kind::Music).bulk.is_none());
+
+    assert_eq!(fixture.library.summary(Kind::Music).missing, 0);
+    for (id, data) in &items {
+        assert_eq!(
+            std::fs::read(fixture.root.join(format!("music/{id}.mp3"))).unwrap(),
+            *data
+        );
+    }
+    assert!(staging_files(&fixture.root).is_empty());
+}
+
+#[test]
+fn a_cancelled_export_stops_waiting_for_its_wallpaper() {
+    let server = Server::start();
+    let data = body(2_000_000, 70);
+    server.route(
+        "stalls",
+        vec![Response {
+            delay: Duration::from_millis(50),
+            ..Response::ok(&data)
+        }],
+    );
+    let fixture = Fixture::new(&server, vec![track(&server, "stalls", &data)]);
+    let rx = match fixture.library.begin(Kind::Music, "stalls") {
+        Begin::Waiting(rx) => rx,
+        _ => panic!("expected a download"),
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let flag = cancel.clone();
+    let result = fixture.runtime.block_on(async move {
+        let waiting = super::wait_unless_cancelled(rx, Some(&flag));
+        flag.store(true, Ordering::Release);
+        tokio::time::timeout(Duration::from_secs(5), waiting).await
+    });
+    assert_eq!(result, Ok(Err(FetchError::Cancelled)));
+    // The shared download is not stopped by one caller giving up.
+    assert!(matches!(
+        fixture.library.status(Kind::Music, "stalls"),
+        ItemStatus::Downloading(_)
+    ));
+    let _ = cancel;
 }

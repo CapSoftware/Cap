@@ -538,13 +538,7 @@ impl Library {
                 .for_each_concurrent(BULK_CONCURRENCY, |(kind, id)| {
                     let (this, cancel, failed) = (this.clone(), cancel.clone(), failed.clone());
                     async move {
-                        if cancel.load(Ordering::Acquire) {
-                            return;
-                        }
-                        if let Begin::Waiting(rx) = this.begin_with(kind, id, Some(cancel), false)
-                            && let Ok(Err(error)) = rx.await
-                            && error != FetchError::Cancelled
-                        {
+                        if this.fetch_unless(kind, id, &cancel).await.is_err() {
                             failed.fetch_add(1, Ordering::AcqRel);
                         }
                     }
@@ -565,6 +559,31 @@ impl Library {
             drop(hub);
             this.notify();
         });
+    }
+
+    /// One item for a batch: `Ok` when it is here or the batch was
+    /// cancelled. A transfer that an earlier, cancelled batch started is
+    /// joined, comes back `Cancelled` and is started again.
+    async fn fetch_unless(
+        self: &Arc<Self>,
+        kind: Kind,
+        id: &'static str,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<(), FetchError> {
+        loop {
+            if cancel.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let result = match self.begin_with(kind, id, Some(cancel.clone()), false) {
+                Begin::Ready(_) | Begin::Unknown => return Ok(()),
+                Begin::Waiting(rx) => rx.await.unwrap_or(Err(FetchError::Cancelled)),
+            };
+            match result {
+                Ok(_) => return Ok(()),
+                Err(FetchError::Cancelled) => continue,
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub fn cancel_all(&self, kind: Kind) {
@@ -590,13 +609,12 @@ impl Library {
 
     // -- Projects -----------------------------------------------------------
 
-    /// The catalogue wallpaper a project's background names but which is
-    /// not on disk, if any.
-    pub fn missing_project_wallpaper(
-        &self,
-        project: &ProjectConfiguration,
-    ) -> Option<&'static str> {
-        let BackgroundSource::Wallpaper { path: Some(path) } = &project.background.source else {
+    /// A wallpaper `source` names that is not on disk: `Ok(id)` for one in
+    /// the catalogue, `Err(tail)` for a catalogue-shaped path this catalogue
+    /// does not list (yet). `None` when it is here or is not a catalogue
+    /// wallpaper at all.
+    fn missing_wallpaper(&self, source: &BackgroundSource) -> Option<Result<&'static str, String>> {
+        let BackgroundSource::Wallpaper { path: Some(path) } = source else {
             return None;
         };
         cap_rendering::clean_background_path(path)
@@ -604,7 +622,27 @@ impl Library {
             .then_some(())?;
         let tail = asset_paths::catalogue_wallpaper_tail(path)?;
         let id = tail.strip_suffix(".jpg")?;
-        self.catalog().item(Kind::Wallpaper, id).map(|item| item.id)
+        Some(match self.catalog().item(Kind::Wallpaper, id) {
+            Some(item) => Ok(item.id),
+            None => Err(tail),
+        })
+    }
+
+    /// Every wallpaper a render of `project` can draw that is not on disk:
+    /// its background's and its style sections'.
+    pub fn missing_project_wallpapers(
+        &self,
+        project: &ProjectConfiguration,
+    ) -> Vec<Result<&'static str, String>> {
+        let mut missing = Vec::new();
+        for source in background_sources(project) {
+            if let Some(wallpaper) = self.missing_wallpaper(source)
+                && !missing.contains(&wallpaper)
+            {
+                missing.push(wallpaper);
+            }
+        }
+        missing
     }
 
     // -- State file ---------------------------------------------------------
@@ -714,9 +752,11 @@ impl Library {
             .map(|state| state.remote_checked_at)
             .unwrap_or(0);
         if !force && now_secs().saturating_sub(checked_at) < REMOTE_CHECK_INTERVAL.as_secs() {
+            self.fetch_missing_thumbnails().await;
             return;
         }
         let Some(bytes) = fetch_manifest(&self.remote_url).await else {
+            self.fetch_missing_thumbnails().await;
             return;
         };
         self.update_state(|state| state.remote_checked_at = now_secs());
@@ -739,11 +779,17 @@ impl Library {
         {
             let _ = std::fs::remove_file(&staging);
         }
-        let thumbnails: Vec<(&'static str, catalog::FileRef)> = catalog
+        self.set_catalog(catalog);
+        self.fetch_missing_thumbnails().await;
+    }
+
+    /// The thumbnails remote wallpapers need that are not on disk yet.
+    async fn fetch_missing_thumbnails(&self) {
+        let thumbnails: Vec<(&'static str, catalog::FileRef)> = self
+            .catalog()
             .items(Kind::Wallpaper)
             .filter_map(|item| Some((item.id, item.thumbnail.clone()?)))
             .collect();
-        self.set_catalog(catalog);
         for (id, thumbnail) in thumbnails {
             let path = self.downloaded_thumbnail_path(id);
             if is_file_of_size(&path, thumbnail.size) {
@@ -869,8 +915,35 @@ pub fn error_message(error: &FetchError) -> String {
     }
 }
 
-pub fn missing_project_wallpaper(project: &ProjectConfiguration) -> Option<&'static str> {
-    library().missing_project_wallpaper(project)
+/// The background and every style section's, the sources a render of
+/// `project` can draw.
+fn background_sources(project: &ProjectConfiguration) -> impl Iterator<Item = &BackgroundSource> {
+    std::iter::once(&project.background.source).chain(
+        project
+            .timeline
+            .iter()
+            .flat_map(|timeline| &timeline.style_segments)
+            .filter_map(|segment| segment.overrides.background.as_ref())
+            .map(|background| &background.source),
+    )
+}
+
+fn background_sources_mut(
+    project: &mut ProjectConfiguration,
+) -> impl Iterator<Item = &mut BackgroundSource> {
+    std::iter::once(&mut project.background.source).chain(
+        project
+            .timeline
+            .iter_mut()
+            .flat_map(|timeline| &mut timeline.style_segments)
+            .filter_map(|segment| segment.overrides.background.as_mut())
+            .map(|background| &mut background.source),
+    )
+}
+
+/// Whether a render of `project` would miss a wallpaper right now.
+pub fn project_misses_wallpaper(project: &ProjectConfiguration) -> bool {
+    !library().missing_project_wallpapers(project).is_empty()
 }
 
 /// What the editor preview renders instead of `config` while its wallpaper
@@ -879,39 +952,96 @@ pub fn missing_project_wallpaper(project: &ProjectConfiguration) -> Option<&'sta
 /// Only ever applied to the copy sent to a preview renderer, never to a
 /// saved or exported project. Returns whether it stood in.
 pub fn apply_preview_placeholder(config: &mut ProjectConfiguration) -> bool {
-    let Some(id) = missing_project_wallpaper(config) else {
-        return false;
-    };
-    if status(Kind::Wallpaper, id) == ItemStatus::Missing {
-        let _ = begin(Kind::Wallpaper, id);
-    }
-    if let Some(thumbnail) = thumbnail_path(id)
-        && thumbnail.to_string_lossy().ends_with("-thumbnail.jpg")
-    {
-        config.background.source = BackgroundSource::Wallpaper {
-            path: Some(thumbnail.to_string_lossy().into_owned()),
+    let library = library();
+    let mut stood_in = false;
+    for source in background_sources_mut(config) {
+        let Some(missing) = library.missing_wallpaper(source) else {
+            continue;
         };
+        stood_in = true;
+        let Ok(id) = missing else {
+            continue;
+        };
+        if library.status(Kind::Wallpaper, id) == ItemStatus::Missing {
+            let _ = library.begin(Kind::Wallpaper, id);
+        }
+        if let Some(thumbnail) = library.thumbnail_path(id)
+            && thumbnail.to_string_lossy().ends_with("-thumbnail.jpg")
+        {
+            *source = BackgroundSource::Wallpaper {
+                path: Some(thumbnail.to_string_lossy().into_owned()),
+            };
+        }
     }
-    true
+    stood_in
 }
 
-/// Makes sure the files a render of `project` needs are on disk. An export
-/// fails here rather than quietly rendering a white background.
-pub async fn ensure_for_project(project: &ProjectConfiguration) -> Result<(), String> {
-    let Some(id) = missing_project_wallpaper(project) else {
-        return Ok(());
-    };
-    tracing::info!(id, "downloading the project's wallpaper before rendering");
-    ensure(Kind::Wallpaper, id)
-        .await
-        .map(|_| ())
-        .map_err(|error| {
+/// Makes sure the wallpapers a render of `project` needs are on disk. An
+/// export fails here rather than quietly rendering a white background. A
+/// wallpaper this catalogue does not list (added remotely, on another
+/// machine) refreshes the catalogue first; one that is still unknown renders
+/// as it always has. `cancel` stops the wait, not a shared download.
+pub async fn ensure_for_project(
+    project: &ProjectConfiguration,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    let library = library().clone();
+    let mut missing = library.missing_project_wallpapers(project);
+    if missing.iter().any(Result::is_err) {
+        let (tx, rx) = oneshot::channel();
+        let remote = library.clone();
+        library.spawn(async move {
+            remote.refresh_remote(true).await;
+            let _ = tx.send(());
+        });
+        let _ = rx.await;
+        missing = library.missing_project_wallpapers(project);
+    }
+    for wallpaper in missing {
+        let id = match wallpaper {
+            Ok(id) => id,
+            Err(tail) => {
+                tracing::warn!(tail, "a wallpaper this catalogue does not list is missing");
+                continue;
+            }
+        };
+        tracing::info!(id, "downloading a project wallpaper before rendering");
+        let result = match library.begin(Kind::Wallpaper, id) {
+            Begin::Ready(_) | Begin::Unknown => Ok(()),
+            Begin::Waiting(rx) => wait_unless_cancelled(rx, cancel).await,
+        };
+        result.map_err(|error| {
             format!(
                 "{} {}",
                 tr::assets::error::background(),
                 error_message(&error)
             )
-        })
+        })?;
+    }
+    Ok(())
+}
+
+/// `rx`, or `Cancelled` as soon as `cancel` is set. Polling the flag needs
+/// a tokio timer, so a caller without one passes `None`.
+async fn wait_unless_cancelled(
+    mut rx: oneshot::Receiver<Result<PathBuf, FetchError>>,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), FetchError> {
+    let Some(cancel) = cancel else {
+        return rx.await.unwrap_or(Err(FetchError::Cancelled)).map(|_| ());
+    };
+    loop {
+        let tick = std::pin::pin!(tokio::time::sleep(Duration::from_millis(100)));
+        match futures_util::future::select(&mut rx, tick).await {
+            futures_util::future::Either::Left((result, _)) => {
+                return result.unwrap_or(Err(FetchError::Cancelled)).map(|_| ());
+            }
+            futures_util::future::Either::Right(_) if cancel.load(Ordering::Acquire) => {
+                return Err(FetchError::Cancelled);
+            }
+            futures_util::future::Either::Right(_) => {}
+        }
+    }
 }
 
 /// Calls `on_change` on the view after each [`subscribe`] notification, for
@@ -995,10 +1125,8 @@ async fn restore<Pause: std::future::Future>(
         while recording() {
             pause(Duration::from_secs(5)).await;
         }
-        let result = match library.begin_with(kind, id, None, false) {
-            Begin::Ready(_) | Begin::Unknown => Ok(()),
-            Begin::Waiting(rx) => rx.await.unwrap_or(Err(FetchError::Cancelled)).map(|_| ()),
-        };
+        let never = Arc::new(AtomicBool::new(false));
+        let result = library.fetch_unless(kind, id, &never).await;
         match result {
             Ok(()) => offline_in_a_row = 0,
             Err(error) => {

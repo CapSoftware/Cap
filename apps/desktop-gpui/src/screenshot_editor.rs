@@ -1530,7 +1530,7 @@ impl ScreenshotEditorWindow {
         // lands. Straight to the renderer: the gate only admits changes to
         // the project, and the project did not change.
         if self.preview_placeholder
-            && asset_library::missing_project_wallpaper(&self.project).is_none()
+            && !asset_library::project_misses_wallpaper(&self.project)
             && let Some(config_tx) = &self.config_tx
         {
             self.preview_placeholder = false;
@@ -2024,7 +2024,7 @@ impl ScreenshotEditorWindow {
                 config: config.clone(),
                 reply: reply_tx,
             };
-            let assets = crate::asset_library::ensure_for_project(&config).await;
+            let assets = crate::asset_library::ensure_for_project(&config, None).await;
             let rendered = if let Err(error) = assets {
                 Err(error)
             } else if export_tx.send(request).await.is_ok() {
@@ -2305,7 +2305,7 @@ impl ScreenshotEditorWindow {
                 config: config.clone(),
                 reply: reply_tx,
             };
-            let assets = crate::asset_library::ensure_for_project(&config).await;
+            let assets = crate::asset_library::ensure_for_project(&config, None).await;
             let rendered = if let Err(error) = assets {
                 Err(error)
             } else if export_tx.send(request).await.is_ok() {

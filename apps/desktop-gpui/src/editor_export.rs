@@ -4928,9 +4928,13 @@ pub(crate) async fn run_export(
     if cancel.load(Ordering::Relaxed) {
         return Err("Export cancelled".into());
     }
-    crate::asset_library::ensure_for_project(&project).await?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err("Export cancelled".into());
+    // A cursor-only export drops the background, so it needs no wallpaper.
+    if !cursor_only {
+        let assets = crate::asset_library::ensure_for_project(&project, Some(&cancel)).await;
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Export cancelled".into());
+        }
+        assets?;
     }
     let mut builder = ExporterBase::builder(project_path).with_force_ffmpeg_decoder(force);
     if cursor_only {

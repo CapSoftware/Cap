@@ -4096,7 +4096,7 @@ impl EditorWindow {
     fn assets_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Once, when the wallpaper the preview stood a thumbnail in for lands.
         if self.preview_placeholder.get()
-            && crate::asset_library::missing_project_wallpaper(&self.project).is_none()
+            && !crate::asset_library::project_misses_wallpaper(&self.project)
         {
             self.publish_project();
         }
