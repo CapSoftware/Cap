@@ -293,6 +293,64 @@ fn source(id: &str, url: String) -> CalendarSource {
     }
 }
 
+/// Answers each connection in turn with (status, content type, ETag, body),
+/// for refreshes that use the feed's validators.
+fn serve_with_etags(responses: Vec<(u16, &'static str, &'static str, String)>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for (status, kind, etag, body) in responses {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut buffer = [0u8; 4096];
+            let _ = stream.read(&mut buffer);
+            let reply = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\nETag: {etag}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    format!("http://{address}/feed.ics")
+}
+
+#[test]
+fn a_feed_that_once_answered_with_a_web_page_recovers_on_not_modified() {
+    // The feed works, then answers one refresh with a web page (an outage or
+    // sign-in page), then is healthy again and says nothing changed since the
+    // last calendar the app kept. The app must read that calendar again, not
+    // the web page.
+    let dir = tempfile::tempdir().unwrap();
+    let start = Utc::now() + Duration::hours(5);
+    let url = serve_with_etags(vec![
+        (200, "text/calendar", "\"v1\"", ics("u1", "Planning", start)),
+        (
+            200,
+            "text/html",
+            "\"page\"",
+            "<html>Down for maintenance</html>".into(),
+        ),
+        (304, "text/calendar", "\"v1\"", String::new()),
+    ]);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut state = CalendarState::in_dir(dir.path().to_path_buf());
+    state.sources.push(source("feed", url));
+    let mut errors = Vec::new();
+    for _ in 0..3 {
+        let results = runtime.block_on(refresh_in(dir.path().to_path_buf(), state.sources.clone()));
+        state.apply(results);
+        errors.push(state.sources[0].status.error_kind);
+    }
+    assert_eq!(errors, vec![None, Some(SyncErrorKind::NotCalendar), None]);
+    assert_eq!(state.events().len(), 1);
+    assert_eq!(state.events()[0].title, "Planning");
+}
+
 #[test]
 fn a_feed_refresh_reports_success_and_each_failure_in_its_own_kind() {
     let dir = tempfile::tempdir().unwrap();

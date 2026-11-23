@@ -668,7 +668,8 @@ async fn refresh_ics(
     };
     let etag = header("etag");
     let last_modified = header("last-modified");
-    let bytes = if status == reqwest::StatusCode::NOT_MODIFIED && have_raw {
+    let cached = status == reqwest::StatusCode::NOT_MODIFIED && have_raw;
+    let bytes = if cached {
         fs::read(&raw).map_err(|e| SyncError::new(SyncErrorKind::Other, e.to_string()))?
     } else if status.is_success() {
         let mut body = Vec::new();
@@ -683,9 +684,6 @@ async fn refresh_ics(
             }
             body.extend_from_slice(&chunk);
         }
-        if let Err(error) = persist::atomic_write(&raw, &body) {
-            tracing::warn!(%error, "could not cache the calendar feed");
-        }
         body
     } else {
         let kind = match status.as_u16() {
@@ -698,10 +696,25 @@ async fn refresh_ics(
         ));
     };
     let id = source.id.clone();
-    let (events, name) = tokio::task::spawn_blocking(move || parse(&id, &bytes))
+    let (parsed, bytes) = tokio::task::spawn_blocking(move || (parse(&id, &bytes), bytes))
         .await
-        .map_err(|e| SyncError::new(SyncErrorKind::Other, e.to_string()))?
-        .map_err(|e| SyncError::new(SyncErrorKind::NotCalendar, e))?;
+        .map_err(|e| SyncError::new(SyncErrorKind::Other, e.to_string()))?;
+    // Only a calendar is kept for the next "not modified": a web page or a
+    // broken answer cached here would be read back until the feed changed.
+    let (events, name) = match parsed {
+        Ok(parsed) => {
+            if !cached && let Err(error) = persist::atomic_write(&raw, &bytes) {
+                tracing::warn!(%error, "could not cache the calendar feed");
+            }
+            parsed
+        }
+        Err(error) => {
+            if cached {
+                let _ = fs::remove_file(&raw);
+            }
+            return Err(SyncError::new(SyncErrorKind::NotCalendar, error));
+        }
+    };
     Ok(Fetched {
         events,
         name,
