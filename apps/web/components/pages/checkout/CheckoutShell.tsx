@@ -111,13 +111,7 @@ export function CheckoutShell({
 								</div>
 								<h1
 									key={title}
-									className={classNames(
-										H_HERO,
-										"text-balance text-[clamp(38px,5.2vw,64px)]",
-										fade,
-										capFriday &&
-											"!text-[#F5F1EA] animate-bf-rise motion-reduce:animate-none",
-									)}
+									className={`${H_HERO} text-balance text-[clamp(38px,5.2vw,64px)] ${fade} ${capFriday ? "!text-[#F5F1EA] animate-bf-rise motion-reduce:animate-none" : ""}`}
 								>
 									{title}
 								</h1>
