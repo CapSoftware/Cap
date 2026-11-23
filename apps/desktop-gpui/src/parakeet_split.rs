@@ -235,6 +235,13 @@ fn needs_split_above(dir: &Path, above: u64) -> bool {
     std::fs::metadata(dir.join(ENCODER)).is_ok_and(|m| m.len() > above)
 }
 
+/// Whether the encoder in `dir` is installed and still holds its weights (a
+/// model from before splits ran after downloads), without waiting for a
+/// split already under way.
+pub fn needs_split(dir: &Path) -> bool {
+    needs_split_above(dir, EMBEDDED_ABOVE)
+}
+
 /// One lock per model folder: a split of one model (say right after its
 /// download) never makes another model's load wait for it.
 fn folder_lock(dir: &Path) -> Arc<Mutex<()>> {

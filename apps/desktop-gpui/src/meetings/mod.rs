@@ -831,6 +831,7 @@ impl Meetings {
 
         if enabled && !self.calendar_active {
             speakers::ensure_model(&gpui_tokio::Tokio::handle(cx));
+            crate::transcription::split_installed_in_background();
             self.calendar_active = true;
             self.calendar.ensure_loaded();
             self.push_calendar_to_planner(cx);

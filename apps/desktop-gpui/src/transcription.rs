@@ -2022,6 +2022,28 @@ fn split_after_download(dir: PathBuf) -> bool {
         .is_ok()
 }
 
+/// A Parakeet model installed before splits ran after downloads (for editor
+/// captions, or by an older Cap) still holds its weights in the encoder, so
+/// the first meeting split it inside its load: a minute and a half with no
+/// captions on a slow Windows disk. Meetings starting up split it at low
+/// priority instead, under the same per-folder lock a meeting's load waits
+/// on. A meeting already running leaves it to the next load, as before. True
+/// when a split started.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+pub fn split_installed_in_background() -> bool {
+    split_installed_dir_in_background(model_path("best"))
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn split_installed_dir_in_background(dir: PathBuf) -> bool {
+    crate::parakeet_split::needs_split(&dir) && split_after_download(dir)
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+pub fn split_installed_in_background() -> bool {
+    false
+}
+
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 fn decode_parakeet(
     parakeet: &mut ParakeetTDT,
@@ -3860,6 +3882,33 @@ mod tests {
         assert!(parakeet_model_installed(&full));
         std::fs::remove_file(full.join("encoder-model.onnx.data")).unwrap();
         assert!(!parakeet_model_installed(&full));
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn an_installed_model_is_split_in_the_background_only_when_it_needs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            !split_installed_dir_in_background(dir.path().to_path_buf()),
+            "no model, nothing to split"
+        );
+        std::fs::write(
+            dir.path().join(crate::parakeet_split::ENCODER),
+            b"a split graph",
+        )
+        .unwrap();
+        assert!(
+            !split_installed_dir_in_background(dir.path().to_path_buf()),
+            "a small graph is already split"
+        );
+        let _meeting = LiveMeeting::start();
+        let big = std::fs::File::create(dir.path().join(crate::parakeet_split::ENCODER)).unwrap();
+        big.set_len(256 * 1024 * 1024).unwrap();
+        assert!(crate::parakeet_split::needs_split(dir.path()));
+        assert!(
+            !split_installed_dir_in_background(dir.path().to_path_buf()),
+            "never during a meeting"
+        );
     }
 
     #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
