@@ -149,9 +149,18 @@ struct RecordView: View {
             Spacer(minLength: 12)
 
             if mode.recordsScreen {
-                // In the same column as the list above, so the two never overlap.
-                ScreenModePanel(recorder: screen, mode: mode, bubble: bubble, compact: !recent.items.isEmpty)
-                    .transition(.opacity)
+                // In the same column as the list above, so the two never overlap. At accessibility text sizes on an
+                // iPhone SE the steps outgrow the screen; they scroll then, so close and record stay on screen.
+                ViewThatFits(in: .vertical) {
+                    screenPanel
+                    ScrollView {
+                        screenPanel
+                            .padding(.vertical, 8)
+                    }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollIndicators(.hidden)
+                }
+                .transition(.opacity)
                 Spacer(minLength: 12)
             }
 
@@ -231,6 +240,10 @@ struct RecordView: View {
         .animation(.spring(duration: 0.35), value: recent.items)
     }
 
+    private var screenPanel: some View {
+        ScreenModePanel(recorder: screen, mode: mode, bubble: bubble, compact: !recent.items.isEmpty)
+    }
+
     private func blocked(title: String, message: String, systemImage: String, action: (String, () -> Void)?) -> some View {
         ContentUnavailableView {
             Label(title, systemImage: systemImage)
@@ -258,14 +271,11 @@ private struct CaptureModeSwitch: View {
         HStack(spacing: 2) {
             ForEach(CaptureMode.allCases) { option in
                 if option.isAvailable {
-                    Label(option.title, systemImage: option.systemImage)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .padding(.horizontal, 12)
-                        .frame(height: 36)
-                        .background(Capsule().fill(.white.opacity(0.22)))
-                        .accessibilityElement(children: .combine)
-                        .accessibilityAddTraits(.isSelected)
+                    // 375 pt wide phones can't fit "Instant Mode" between the close button and its spacer.
+                    ViewThatFits(in: .horizontal) {
+                        current(option, title: option.title)
+                        current(option, title: option.shortTitle)
+                    }
                 } else {
                     Button {
                         comingSoon = option
@@ -308,6 +318,19 @@ private struct CaptureModeSwitch: View {
             guard !Task.isCancelled else { return }
             comingSoon = nil
         }
+    }
+
+    private func current(_ option: CaptureMode, title: String) -> some View {
+        Label(title, systemImage: option.systemImage)
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            .background(Capsule().fill(.white.opacity(0.22)))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(option.title)
+            .accessibilityAddTraits(.isSelected)
     }
 }
 

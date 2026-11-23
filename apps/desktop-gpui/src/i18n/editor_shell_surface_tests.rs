@@ -1555,6 +1555,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             tr::editor::timeline::picker::shape(),
             "Draw arrows, boxes, circles and highlights over your recording.",
         ),
+        (
+            tr::editor::export::audio::failed_title(),
+            "Couldn't save the audio",
+        ),
+        (
+            tr::editor::export::audio::failed_message(),
+            "Try again, or save it somewhere else.",
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(translated, literal);

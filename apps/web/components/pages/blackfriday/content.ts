@@ -2,6 +2,8 @@ import { PRICING } from "@/data/pricing";
 
 export const CODE = "BLACKFRIDAY";
 
+export const PLAN_PATH = "/blackfriday/plan";
+
 // 11:59:59 pm Pacific on Cyber Monday.
 export const ENDS_AT = Date.parse("2026-12-01T07:59:59Z");
 export const ENDS_LABEL = "Cyber Monday, December 1";
@@ -112,18 +114,15 @@ export const FAQ = [
 			"Yes. Pick how many seats you need and every seat on the yearly plan is half price.",
 	},
 	{
-		question: "I'm already on Cap Pro Yearly. Can I get it too?",
+		question: "I'm already on Cap Pro. Can I get it too?",
 		answer:
-			"Yes. Email hello@cap.so before the offer ends and we'll lock in another year for you at the Black Friday price.",
+			"Yes. Sign in and enter BLACKFRIDAY on your plan. On yearly, you pay for your next year now at half price and it's covered the day you renew. On monthly, you move to yearly today with the first year at half price, less what's left of this month.",
 	},
 	{
 		question: "When does it end?",
 		answer: `The offer closes at the end of ${ENDS_LABEL}, Pacific time.`,
 	},
 ] as const;
-
-export const RENEWAL_MAIL =
-	"mailto:hello@cap.so?subject=Black%20Friday%3A%20lock%20in%20another%20year";
 
 export const LOOM_MAIL =
 	"mailto:hello@cap.so?subject=Black%20Friday%3A%20migrate%20us%20from%20Loom";

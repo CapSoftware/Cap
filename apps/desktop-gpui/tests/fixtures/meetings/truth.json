@@ -1,0 +1,161 @@
+{
+	"you": "4446",
+	"remote": ["1995", "5142"],
+	"duration_ms": 120000,
+	"utterances": [
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 1000,
+			"end_ms": 5260,
+			"text": "SO I WILL GIVE OUT THIS LAW THAT MY MEN SHALL NEVER LEAVE YOU ALONE"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 5553,
+			"end_ms": 10608,
+			"text": "BUT THIS SUBJECT WILL BE MORE PROPERLY DISCUSSED WHEN WE TREAT OF THE DIFFERENT RACES OF MANKIND"
+		},
+		{
+			"track": "mic",
+			"spk": "you-4446",
+			"start_ms": 12151,
+			"end_ms": 15036,
+			"text": "ALEXANDER WENT OVER AND OPENED THE WINDOW FOR HER"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 16449,
+			"end_ms": 21794,
+			"text": "I STOOD WITH MY BACK TO THE WALL FOR I WANTED NO SWORD REACHING OUT OF THE DARK FOR ME"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 22015,
+			"end_ms": 27210,
+			"text": "SOFT HEART HE SAID GENTLY TO HER THEN TO THORKEL WELL LET HIM GO THORKEL"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 27490,
+			"end_ms": 29725,
+			"text": "HE ACTS AS THOUGH HE HAD NOT EXPECTED US"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 31229,
+			"end_ms": 35974,
+			"text": "I SUPPOSE THOUGH IT'S TOO EARLY FOR THEM THEN CAME THE EXPLOSION"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 37144,
+			"end_ms": 39589,
+			"text": "AT ANY RATE I SAY GO"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 41058,
+			"end_ms": 43273,
+			"text": "SO IT IS WITH THE LOWER ANIMALS"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 44359,
+			"end_ms": 50359,
+			"text": "AT LAST THE COTTON COMBINE WAS TO ALL APPEARANCES AN ASSURED FACT AND HE WAS SLATED FOR THE SENATE"
+		},
+		{
+			"track": "mic",
+			"spk": "you-4446",
+			"start_ms": 51795,
+			"end_ms": 59470,
+			"text": "ALEXANDER PACED UP AND DOWN THE HALLWAY BUTTONING AND UNBUTTONING HIS OVERCOAT UNTIL SHE RETURNED AND TOOK HIM UP TO HILDA'S LIVING ROOM"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 60620,
+			"end_ms": 67980,
+			"text": "THE REVELATION OF HIS LOVE LIGHTED AND BRIGHTENED SLOWLY TILL IT FLAMED LIKE A SUNRISE OVER HIM AND LEFT HIM IN BURNING WONDER"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 68300,
+			"end_ms": 73680,
+			"text": "HE SAT DOWN WEAK BEWILDERED AND ONE THOUGHT WAS UPPERMOST ZORA"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 74794,
+			"end_ms": 79089,
+			"text": "HE IS NOT WELL HE HAS COME OVER THE OCEAN FOR REST AND CHANGE OF SCENE"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 80126,
+			"end_ms": 83886,
+			"text": "THE LAGOON HAD BEEN LEVEL WITH THE DYKES A WEEK AGO AND NOW"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 84146,
+			"end_ms": 88631,
+			"text": "THE SQUARES OF COTTON SHARP EDGED HEAVY WERE JUST ABOUT TO BURST TO BOLLS"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 90014,
+			"end_ms": 94354,
+			"text": "OUR FIRST IMPRESSIONS OF PEOPLE ARE IN NINE CASES OUT OF TEN THE RIGHT IMPRESSIONS"
+		},
+		{
+			"track": "system",
+			"spk": "r-5142",
+			"start_ms": 94569,
+			"end_ms": 98239,
+			"text": "TWO HUNDRED WARRIORS FEASTED IN HIS HALL AND FOLLOWED HIM TO BATTLE"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 99285,
+			"end_ms": 103150,
+			"text": "HE KNEW THE SILVER FLEECE HIS AND ZORA'S MUST BE RUINED"
+		},
+		{
+			"track": "mic",
+			"spk": "you-4446",
+			"start_ms": 104338,
+			"end_ms": 107898,
+			"text": "SHE MUST CARE ABOUT THE THEATRE A GREAT DEAL MORE THAN SHE USED TO"
+		},
+		{
+			"track": "mic",
+			"spk": "you-4446",
+			"start_ms": 108156,
+			"end_ms": 109951,
+			"text": "THERE JUST IN FRONT"
+		},
+		{
+			"track": "system",
+			"spk": "r-1995",
+			"start_ms": 111179,
+			"end_ms": 118369,
+			"text": "FOR ONE LONG MOMENT HE PAUSED STUPID AGAPE WITH UTTER AMAZEMENT THEN LEANED DIZZILY AGAINST A TREE"
+		}
+	]
+}

@@ -1,0 +1,184 @@
+{
+	"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('me%40contoso.example')/calendarView(id,subject,body,start,end)",
+	"@odata.nextLink": "https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=2026-03-01T00%3a00%3a00Z&endDateTime=2026-04-01T00%3a00%3a00Z&%24select=id%2csubject&%24top=250&%24skip=250",
+	"value": [
+		{
+			"@odata.etag": "W/\"DwAAABYAAAA\"",
+			"id": "AAMkAGI2TG93AAA=",
+			"subject": "Design review",
+			"bodyPreview": "Microsoft Teams meeting",
+			"body": {
+				"contentType": "html",
+				"content": "<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\"><style>p{margin:0}</style></head><body><div>Please review the mocks.</div><div style=\"width:100%\"><span>Microsoft Teams meeting</span><div><a href=\"https://teams.microsoft.com/l/meetup-join/19%3ameeting_NjE2ODk3%40thread.v2/0?context=%7b%22Tid%22%3a%2272f988bf%22%7d\" target=\"_blank\">Join the meeting now</a></div><div>Meeting ID: 245 678 901 234</div><a href=\"https://teams.microsoft.com/meetingOptions/?organizerId=abc\">Meeting options</a></div></body></html>"
+			},
+			"start": { "dateTime": "2026-03-10T17:00:00.0000000", "timeZone": "UTC" },
+			"end": { "dateTime": "2026-03-10T18:00:00.0000000", "timeZone": "UTC" },
+			"isAllDay": false,
+			"isCancelled": false,
+			"isOnlineMeeting": true,
+			"onlineMeetingProvider": "teamsForBusiness",
+			"onlineMeetingUrl": null,
+			"onlineMeeting": {
+				"joinUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_NjE2ODk3%40thread.v2/0?context=%7b%22Tid%22%3a%2272f988bf%22%7d",
+				"conferenceId": "245678901",
+				"tollNumber": "+1 555 0100"
+			},
+			"location": {
+				"displayName": "Microsoft Teams Meeting",
+				"locationType": "default",
+				"uniqueIdType": "unknown"
+			},
+			"locations": [
+				{ "displayName": "Microsoft Teams Meeting", "locationType": "default" }
+			],
+			"responseStatus": {
+				"response": "accepted",
+				"time": "2026-03-01T10:00:00Z"
+			},
+			"organizer": {
+				"emailAddress": {
+					"name": "Dana Ruiz",
+					"address": "dana@contoso.example"
+				}
+			},
+			"attendees": [
+				{
+					"type": "required",
+					"status": { "response": "accepted", "time": "2026-03-01T10:00:00Z" },
+					"emailAddress": {
+						"name": "Me Myself",
+						"address": "me@contoso.example"
+					}
+				},
+				{
+					"type": "optional",
+					"status": { "response": "none", "time": "0001-01-01T00:00:00Z" },
+					"emailAddress": { "name": "Lee", "address": "lee@contoso.example" }
+				},
+				{
+					"type": "resource",
+					"status": { "response": "accepted" },
+					"emailAddress": {
+						"name": "Conf Room 7",
+						"address": "room7@contoso.example"
+					}
+				}
+			],
+			"type": "occurrence",
+			"seriesMasterId": "AAMkAGI2SERIES=",
+			"webLink": "https://outlook.office365.com/owa/?itemid=AAMkAGI2TG93AAA%3D&exvsurl=1&path=/calendar/item",
+			"showAs": "busy"
+		},
+		{
+			"id": "AAMkAGI2HOLIDAY=",
+			"subject": "Company holiday",
+			"body": { "contentType": "text", "content": "" },
+			"start": { "dateTime": "2026-03-20T00:00:00.0000000", "timeZone": "UTC" },
+			"end": { "dateTime": "2026-03-21T00:00:00.0000000", "timeZone": "UTC" },
+			"isAllDay": true,
+			"isCancelled": false,
+			"showAs": "free",
+			"responseStatus": { "response": "organizer" },
+			"organizer": {
+				"emailAddress": { "name": "Me Myself", "address": "me@contoso.example" }
+			},
+			"attendees": [],
+			"type": "singleInstance"
+		},
+		{
+			"id": "AAMkAGI2PACIFIC=",
+			"subject": "West coast sync",
+			"body": { "contentType": "text", "content": "Agenda: roadmap" },
+			"start": {
+				"dateTime": "2026-03-12T09:00:00.0000000",
+				"timeZone": "Pacific Standard Time"
+			},
+			"end": {
+				"dateTime": "2026-03-12T09:30:00.0000000",
+				"timeZone": "Pacific Standard Time"
+			},
+			"isAllDay": false,
+			"isCancelled": false,
+			"location": { "displayName": "https://meet.google.com/qrs-tuvw-xyz" },
+			"responseStatus": { "response": "tentativelyAccepted" },
+			"organizer": {
+				"emailAddress": { "name": "Sam", "address": "sam@partner.example" }
+			},
+			"attendees": [
+				{
+					"type": "required",
+					"status": { "response": "tentativelyAccepted" },
+					"emailAddress": {
+						"name": "Me Myself",
+						"address": "me@contoso.example"
+					}
+				}
+			],
+			"type": "singleInstance"
+		},
+		{
+			"id": "AAMkAGI2ZOOMBODY=",
+			"subject": "Vendor demo",
+			"body": {
+				"contentType": "html",
+				"content": "<html><body><p>Join Zoom Meeting<br><a href=\"https://eur02.safelinks.protection.outlook.com/?url=https%3A%2F%2Fus02web.zoom.us%2Fj%2F81234567890%3Fpwd%3DZmFrZQ.1&amp;data=05%7C02%7C&amp;sdata=x&amp;reserved=0\" originalsrc=\"https://us02web.zoom.us/j/81234567890?pwd=ZmFrZQ.1\">https://us02web.zoom.us/j/81234567890?pwd=ZmFrZQ.1</a></p></body></html>"
+			},
+			"start": { "dateTime": "2026-03-13T15:00:00.0000000", "timeZone": "UTC" },
+			"end": { "dateTime": "2026-03-13T15:30:00.0000000", "timeZone": "UTC" },
+			"isAllDay": false,
+			"isCancelled": false,
+			"isOnlineMeeting": false,
+			"onlineMeeting": null,
+			"location": { "displayName": "" },
+			"responseStatus": { "response": "notResponded" },
+			"organizer": {
+				"emailAddress": { "name": "Vendor", "address": "sales@vendor.example" }
+			},
+			"attendees": [
+				{
+					"type": "required",
+					"status": { "response": "none" },
+					"emailAddress": {
+						"name": "Me Myself",
+						"address": "me@contoso.example"
+					}
+				},
+				{
+					"type": "required",
+					"status": { "response": "accepted" },
+					"emailAddress": {
+						"name": "Vendor",
+						"address": "sales@vendor.example"
+					}
+				}
+			],
+			"type": "singleInstance"
+		},
+		{
+			"id": "AAMkAGI2CANCELLED=",
+			"subject": "Canceled: Weekly ops",
+			"start": { "dateTime": "2026-03-16T14:00:00.0000000", "timeZone": "UTC" },
+			"end": { "dateTime": "2026-03-16T14:30:00.0000000", "timeZone": "UTC" },
+			"isCancelled": true,
+			"type": "occurrence",
+			"seriesMasterId": "AAMkAGI2OPS="
+		},
+		{
+			"id": "AAMkAGI2DECLINED=",
+			"subject": "Optional town hall",
+			"start": { "dateTime": "2026-03-17T16:00:00.0000000", "timeZone": "UTC" },
+			"end": { "dateTime": "2026-03-17T17:00:00.0000000", "timeZone": "UTC" },
+			"responseStatus": { "response": "declined" },
+			"organizer": {
+				"emailAddress": { "name": "Comms", "address": "comms@contoso.example" }
+			},
+			"onlineMeetingUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_VE9XTkhBTEw%40thread.v2/0",
+			"type": "singleInstance"
+		},
+		{
+			"id": "AAMkAGI2NOSTART=",
+			"subject": "Corrupt",
+			"start": null
+		}
+	]
+}
