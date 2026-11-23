@@ -119,8 +119,12 @@ esac
 result() { printf '%s=%s\n' "$1" "$2" >>"$out/result.txt"; }
 : >"$out/result.txt"
 for layout in shipped fixed; do
+  # A launcher that hung is not the expected failure: it must not pass the
+  # control.
   if grep -q "^exit $layout=0" "$out/appimage-pipewire.log"; then
     result "${layout}_connects" yes
+  elif grep -q "^exit $layout=124" "$out/appimage-pipewire.log"; then
+    result "${layout}_connects" timeout
   else
     result "${layout}_connects" no
   fi
