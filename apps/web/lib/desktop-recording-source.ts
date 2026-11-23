@@ -212,6 +212,9 @@ type SourceContext = {
 	reuseVerifiedPages?: boolean;
 	// Cap's own bucket lists sizes and ETags, so a commit can check every fragment with a few listings.
 	listed?: boolean;
+	// Cap's own bucket honours If-None-Match on copies and keeps the source's content ETag, so a copy can
+	// live at a key named after its original and be found again without listing.
+	stableCopies?: boolean;
 };
 type TreeKind = "plan" | "objects" | "parts";
 
@@ -283,6 +286,7 @@ function sourceLimits([bucket, customBucket]: RecordingStorageAccess) {
 			concurrency: SOURCE_COMMIT_AWS_CONCURRENCY,
 			pageSize: SOURCE_COMMIT_AWS_PAGE_SIZE,
 			listed: true,
+			stableCopies: true,
 		};
 	if (bucket.provider === "googleDrive")
 		return {
@@ -907,7 +911,8 @@ async function reusableCopy(
 		);
 		for (const candidate of listing.Contents ?? []) {
 			const key = candidate.Key;
-			if (!key || !/\.(mp4|m4s)$/.test(key)) continue;
+			// Stable keys are only reused through their content ETag, which a listing cannot vouch for here.
+			if (!key || !/\.(mp4|m4s)$/.test(key) || isStableCopyKey(key)) continue;
 			assertContextKey(context, key);
 			const receiptKey = `${objectDirectory(key)}/receipt.json`;
 			const content = await context.run(context.bucket.getObject(receiptKey));
@@ -958,6 +963,10 @@ function newCopyKey(
 	return `${context.prefix}/copies/${position}/${randomUUID()}/${original.track}/${original.index}${original.index === 0 ? ".mp4" : ".m4s"}`;
 }
 
+function isStableCopyKey(key: string) {
+	return /\/copies\/\d+\/[0-9a-f]{32}\/(?:video|audio)\//.test(key);
+}
+
 // Names the copy after the exact original version it holds, so a retry finds it by key instead of listing.
 function stableCopyKey(
 	context: SourceContext,
@@ -1002,6 +1011,7 @@ async function reuseStableCopy(
 ) {
 	if (
 		head.ContentLength !== original.size ||
+		head.ETag !== original.originalIdentity ||
 		Object.entries(copyMetadata(original)).some(
 			([name, value]) => head.Metadata?.[name] !== value,
 		)
@@ -1049,6 +1059,8 @@ async function copyToNewKey(
 // S3 answers a conditional copy onto an existing key and a copy of a changed original with the same 412, so a
 // 412 HEADs the stable key: a copy carrying this original's metadata is reused, a missing one means the
 // original changed, and anything else there falls back to a fresh key rather than blocking the snapshot.
+// A stable copy is only kept when its ETag is the original's content ETag: a provider that ignores
+// If-None-Match may let a late duplicate copy replace it, and only then does that leave its identity unchanged.
 async function copyToStableKey(
 	context: SourceContext,
 	original: OriginalObject,
@@ -1069,7 +1081,10 @@ async function copyToStableKey(
 		await checkOriginal(context, original);
 		throw error;
 	}
-	return saveObjectReceipt(context, await checkCopy(context, original, key));
+	const copy = await checkCopy(context, original, key);
+	if (copy.objectIdentity !== original.originalIdentity)
+		return copyToNewKey(context, original, position);
+	return saveObjectReceipt(context, copy);
 }
 
 async function findStableCopy(
@@ -1088,7 +1103,8 @@ async function copySmallObject(
 	position: number,
 	prepared = false,
 ) {
-	const stable = context.bucket.provider === "s3";
+	const stable =
+		context.stableCopies === true && context.bucket.provider === "s3";
 	// Every reuse and every new copy ends in checkCopy, which re-checks the original, so the
 	// original is checked up front only when a copy fails and its error needs classifying.
 	if (prepared && original.index > 0) {
@@ -1348,6 +1364,7 @@ export async function prepareDesktopRecordingSegments(
 		prefix: sourcePrefix(video).slice(0, -1),
 		concurrency: SOURCE_COMMIT_CONCURRENCY,
 		pageSize: SOURCE_COMMIT_PAGE_SIZE,
+		stableCopies: bucket.provider === "s3" && Option.isNone(customBucket),
 	};
 	const videoCopies: SourceObject[] = [];
 	const unique = [
