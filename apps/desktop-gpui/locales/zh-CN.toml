@@ -2555,6 +2555,8 @@ upload_failed = "无法上传录制"
 cta = "导出音频"
 exported = "音频已导出"
 exporting = "正在导出音频"
+failed_message = "请重试，或保存到其他位置。"
+failed_title = "无法保存音频"
 file_type = "文件类型"
 format = "音频"
 mp3_description = "体积小，随处可播放。192 kb/s 立体声。"
@@ -3970,6 +3972,14 @@ trash = "移到废纸篓"
 restore = "恢复"
 delete_forever = "永久删除"
 delete_folder = "删除文件夹"
+
+[documents.audio]
+no_audio_title = "没有音频"
+no_audio_message = "这条笔记没有音频。"
+unreadable_title = "无法读取音频"
+unreadable_message = "Cap 无法读取这条笔记的音频文件。"
+not_ready_title = "无法准备音频"
+not_ready_message = "请检查磁盘的可用空间，然后重试。"
 
 [documents.confirm]
 delete_forever = { other = "要永久删除 {count} 条笔记吗？" }

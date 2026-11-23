@@ -2555,6 +2555,8 @@ upload_failed = "録画をアップロードできませんでした"
 cta = "音声を書き出す"
 exported = "音声を書き出しました"
 exporting = "音声を書き出しています"
+failed_message = "もう一度試すか、別の場所に保存してください。"
+failed_title = "音声を保存できませんでした"
 file_type = "ファイル形式"
 format = "音声"
 mp3_description = "軽量で、どこでも再生できます。192 kb/s ステレオ。"
@@ -3970,6 +3972,14 @@ trash = "ゴミ箱に移動"
 restore = "元に戻す"
 delete_forever = "完全に削除"
 delete_folder = "フォルダを削除"
+
+[documents.audio]
+no_audio_title = "音声がありません"
+no_audio_message = "このメモには音声がありません。"
+unreadable_title = "音声を読み込めませんでした"
+unreadable_message = "このメモの音声ファイルを読み込めませんでした。"
+not_ready_title = "音声を準備できませんでした"
+not_ready_message = "ディスクの空き容量を確認して、もう一度お試しください。"
 
 [documents.confirm]
 delete_forever = { other = "{count}件のメモを完全に削除しますか？" }

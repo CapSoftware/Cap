@@ -2555,6 +2555,8 @@ upload_failed = "Impossible de mettre en ligne l'enregistrement"
 cta = "Exporter l'audio"
 exported = "Audio exporté"
 exporting = "Export de l'audio"
+failed_message = "Réessayez, ou enregistrez-le ailleurs."
+failed_title = "Impossible d'enregistrer l'audio"
 file_type = "Type de fichier"
 format = "Audio"
 mp3_description = "Léger et lisible partout. 192 kb/s en stéréo."
@@ -3970,6 +3972,14 @@ trash = "Mettre à la corbeille"
 restore = "Restaurer"
 delete_forever = "Supprimer définitivement"
 delete_folder = "Supprimer le dossier"
+
+[documents.audio]
+no_audio_title = "Pas d'audio"
+no_audio_message = "Cette note n'a pas d'audio."
+unreadable_title = "Impossible de lire l'audio"
+unreadable_message = "Cap n'a pas pu lire les fichiers audio de cette note."
+not_ready_title = "Impossible de préparer l'audio"
+not_ready_message = "Vérifiez l'espace libre sur votre disque, puis réessayez."
 
 [documents.confirm]
 delete_forever = { one = "Supprimer définitivement cette note ?", other = "Supprimer définitivement {count} notes ?" }

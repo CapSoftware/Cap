@@ -2555,6 +2555,8 @@ upload_failed = "रिकॉर्डिंग अपलोड नहीं ह
 cta = "ऑडियो एक्सपोर्ट करें"
 exported = "ऑडियो एक्सपोर्ट हो गया"
 exporting = "ऑडियो एक्सपोर्ट हो रहा है"
+failed_message = "फिर से कोशिश करें, या इसे किसी और जगह सेव करें।"
+failed_title = "ऑडियो सेव नहीं हो सका"
 file_type = "फ़ाइल का प्रकार"
 format = "ऑडियो"
 mp3_description = "छोटी फ़ाइल, हर जगह चलती है। 192 kb/s स्टीरियो।"
@@ -3970,6 +3972,14 @@ trash = "ट्रैश में ले जाएँ"
 restore = "वापस लाएँ"
 delete_forever = "हमेशा के लिए हटाएँ"
 delete_folder = "फ़ोल्डर हटाएँ"
+
+[documents.audio]
+no_audio_title = "कोई ऑडियो नहीं"
+no_audio_message = "इस नोट में ऑडियो नहीं है।"
+unreadable_title = "ऑडियो पढ़ा नहीं जा सका"
+unreadable_message = "Cap इस नोट की ऑडियो फ़ाइलें नहीं पढ़ सका।"
+not_ready_title = "ऑडियो तैयार नहीं हो सका"
+not_ready_message = "अपनी डिस्क में खाली जगह जाँचें और फिर से कोशिश करें।"
 
 [documents.confirm]
 delete_forever = { one = "इस नोट को हमेशा के लिए हटाएँ?", other = "{count} नोट हमेशा के लिए हटाएँ?" }

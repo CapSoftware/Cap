@@ -11,6 +11,30 @@ use gpui::{App, Window};
 
 use crate::{app_windows, i18n::tr, platform};
 
+/// A failure to show as it is: both lines are already in the person's
+/// language, and whatever explains it went to the log.
+pub struct Shown {
+    pub title: &'static str,
+    pub message: &'static str,
+}
+
+impl Shown {
+    fn show(&self) {
+        platform::alert_dialog(self.title, self.message);
+    }
+}
+
+enum OpenFailure {
+    Shown(Shown),
+    Other(String),
+}
+
+impl From<String> for OpenFailure {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
 /// Builds an audio-only project from `sources` in the recordings folder and
 /// opens it in the editor. The work runs off the UI thread; a failure is
 /// reported in a dialog.
@@ -23,12 +47,12 @@ pub fn open_audio_in_editor(sources: AudioProjectSources, pretty_name: String, c
 /// what it returns beside the sources (a scratch folder, say) is dropped once
 /// the project has its own copies.
 pub fn open_prepared_audio_in_editor<Keep: Send + 'static>(
-    prepare: impl FnOnce() -> Result<(AudioProjectSources, Keep), String> + Send + 'static,
+    prepare: impl FnOnce() -> Result<(AudioProjectSources, Keep), Shown> + Send + 'static,
     pretty_name: String,
     cx: &mut App,
 ) {
     let created = cx.background_executor().spawn(async move {
-        let (sources, _keep) = prepare()?;
+        let (sources, _keep) = prepare().map_err(OpenFailure::Shown)?;
         let recordings_dir = crate::recording::recordings_dir();
         std::fs::create_dir_all(&recordings_dir).map_err(|error| error.to_string())?;
         let folder = sanitize_filename::sanitize(&pretty_name);
@@ -42,7 +66,7 @@ pub fn open_prepared_audio_in_editor<Keep: Send + 'static>(
             match create_audio_only_project(&project_path, &pretty_name, &sources) {
                 Ok(_) => break Ok(project_path),
                 Err(AudioProjectError::Exists(_)) if attempts < 8 => attempts += 1,
-                Err(error) => break Err(error.to_string()),
+                Err(error) => break Err(OpenFailure::Other(error.to_string())),
             }
         }
     });
@@ -54,7 +78,8 @@ pub fn open_prepared_audio_in_editor<Keep: Send + 'static>(
                 app_windows::open_editor(project_path, cx);
             });
         }
-        Err(error) => {
+        Err(OpenFailure::Shown(shown)) => shown.show(),
+        Err(OpenFailure::Other(error)) => {
             tracing::error!(error, "could not create an audio-only project");
             crate::import::show_error_dialog(tr::import::audio_failed(&error));
         }
@@ -76,7 +101,7 @@ pub fn save_audio_as(project_path: PathBuf, window: &mut Window, cx: &mut App) {
 /// returns beside the project path is kept until the file is written.
 pub fn save_prepared_audio_as<Keep: Send + 'static>(
     pretty_name: String,
-    prepare: impl FnOnce() -> Result<(PathBuf, Keep), String> + Send + 'static,
+    prepare: impl FnOnce() -> Result<(PathBuf, Keep), Shown> + Send + 'static,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -108,9 +133,8 @@ pub fn save_prepared_audio_as<Keep: Send + 'static>(
             };
             let (project_path, _keep) = match prepared.await {
                 Ok(prepared) => prepared,
-                Err(error) => {
-                    tracing::error!(error, "could not prepare audio to save");
-                    crate::import::show_error_dialog(error);
+                Err(shown) => {
+                    shown.show();
                     return;
                 }
             };
@@ -136,7 +160,11 @@ pub fn save_prepared_audio_as<Keep: Send + 'static>(
                 }
                 Ok(Err(error)) => {
                     tracing::error!(%error, "could not save project audio");
-                    crate::import::show_error_dialog(error.to_string());
+                    Shown {
+                        title: tr::editor::export::audio::failed_title(),
+                        message: tr::editor::export::audio::failed_message(),
+                    }
+                    .show();
                 }
                 Err(error) => {
                     tracing::error!(%error, "the audio save task ended without a result")

@@ -2555,6 +2555,8 @@ upload_failed = "Aufnahme konnte nicht hochgeladen werden"
 cta = "Audio exportieren"
 exported = "Audio exportiert"
 exporting = "Audio wird exportiert"
+failed_message = "Versuchen Sie es erneut oder speichern Sie es an einem anderen Ort."
+failed_title = "Audio konnte nicht gespeichert werden"
 file_type = "Dateityp"
 format = "Audio"
 mp3_description = "Klein und überall abspielbar. 192 kb/s Stereo."
@@ -3970,6 +3972,14 @@ trash = "In den Papierkorb legen"
 restore = "Wiederherstellen"
 delete_forever = "Endgültig löschen"
 delete_folder = "Ordner löschen"
+
+[documents.audio]
+no_audio_title = "Kein Audio"
+no_audio_message = "Diese Notiz hat kein Audio."
+unreadable_title = "Audio konnte nicht gelesen werden"
+unreadable_message = "Cap konnte die Audiodateien dieser Notiz nicht lesen."
+not_ready_title = "Audio konnte nicht vorbereitet werden"
+not_ready_message = "Prüfen Sie den freien Speicherplatz und versuchen Sie es erneut."
 
 [documents.confirm]
 delete_forever = { one = "Diese Notiz endgültig löschen?", other = "{count} Notizen endgültig löschen?" }

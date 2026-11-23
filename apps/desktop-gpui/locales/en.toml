@@ -2557,6 +2557,8 @@ upload_failed = "Failed to upload recording"
 cta = "Export Audio"
 exported = "Audio exported"
 exporting = "Exporting audio"
+failed_message = "Try again, or save it somewhere else."
+failed_title = "Couldn't save the audio"
 file_type = "File type"
 format = { text = "Audio", context = "Export format: the sound alone as one MP3 or WAV file." }
 mp3_description = "Small and plays everywhere. 192 kb/s stereo."
@@ -3972,6 +3974,14 @@ trash = "Move to trash"
 restore = "Restore"
 delete_forever = "Delete permanently"
 delete_folder = "Delete folder"
+
+[documents.audio]
+no_audio_title = "No audio"
+no_audio_message = "This note has no audio."
+unreadable_title = "Couldn't read the audio"
+unreadable_message = "Cap couldn't read this note's audio files."
+not_ready_title = "Couldn't prepare the audio"
+not_ready_message = "Check the free space on your disk and try again."
 
 [documents.confirm]
 delete_forever = { one = "Delete this note permanently?", other = "Delete {count} notes permanently?" }

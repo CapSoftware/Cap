@@ -18,6 +18,7 @@ use ffmpeg::{
 use gpui::{App, Entity, Window};
 
 use super::{export, player, player::Part, store::DocStore};
+use crate::{audio_project::Shown, i18n::tr};
 
 const RATE: u32 = crate::meetings::timeline::RATE;
 
@@ -40,7 +41,7 @@ pub fn open_in_editor(store: &Entity<DocStore>, meta: &DocMeta, cx: &mut App) {
     };
     crate::audio_project::open_prepared_audio_in_editor(
         move || {
-            let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let scratch = tempfile::tempdir().map_err(AudioError::NotReady)?;
             let sources = sources(&parts, scratch.path())?;
             Ok((sources, scratch))
         },
@@ -58,11 +59,11 @@ pub fn download(store: &Entity<DocStore>, meta: &DocMeta, window: &mut Window, c
     crate::audio_project::save_prepared_audio_as(
         pretty_name,
         move || {
-            let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let scratch = tempfile::tempdir().map_err(AudioError::NotReady)?;
             let sources = sources(&parts, scratch.path())?;
             let project = scratch.path().join("note.cap");
             create_audio_only_project(&project, &title, &sources)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| AudioError::NotReady(std::io::Error::other(error.to_string())))?;
             Ok((project, scratch))
         },
         window,
@@ -70,12 +71,46 @@ pub fn download(store: &Entity<DocStore>, meta: &DocMeta, window: &mut Window, c
     );
 }
 
+/// Why a note's sound could not be handed on. The dialog says it in the
+/// person's language; the detail, with file names, stays in the log.
+#[derive(Debug)]
+pub enum AudioError {
+    NoAudio,
+    Unreadable { file: String, error: String },
+    NotReady(std::io::Error),
+}
+
+impl From<AudioError> for Shown {
+    fn from(error: AudioError) -> Self {
+        match error {
+            AudioError::NoAudio => Shown {
+                title: tr::documents::audio::no_audio_title(),
+                message: tr::documents::audio::no_audio_message(),
+            },
+            AudioError::Unreadable { file, error } => {
+                tracing::warn!(file, error, "could not read a note's audio");
+                Shown {
+                    title: tr::documents::audio::unreadable_title(),
+                    message: tr::documents::audio::unreadable_message(),
+                }
+            }
+            AudioError::NotReady(error) => {
+                tracing::warn!(%error, "could not prepare a note's audio");
+                Shown {
+                    title: tr::documents::audio::not_ready_title(),
+                    message: tr::documents::audio::not_ready_message(),
+                }
+            }
+        }
+    }
+}
+
 /// One file per side of the call. A side recorded in one piece from the
 /// start is used as it is; a side in several pieces (the note was recorded
 /// into again later) is laid out on one WAV at the pieces' offsets, with
 /// silence between them, written under `scratch`.
-pub fn sources(parts: &[Part], scratch: &Path) -> Result<AudioProjectSources, String> {
-    let side = |source: Source, name: &str| -> Result<Option<PathBuf>, String> {
+pub fn sources(parts: &[Part], scratch: &Path) -> Result<AudioProjectSources, AudioError> {
+    let side = |source: Source, name: &str| -> Result<Option<PathBuf>, AudioError> {
         let pieces: Vec<&Part> = parts.iter().filter(|p| p.source == source).collect();
         match pieces.as_slice() {
             [] => Ok(None),
@@ -92,30 +127,43 @@ pub fn sources(parts: &[Part], scratch: &Path) -> Result<AudioProjectSources, St
         system_audio: side(Source::System, "system.wav")?,
     };
     if sources.microphone.is_none() && sources.system_audio.is_none() {
-        return Err("This note has no audio".into());
+        return Err(AudioError::NoAudio);
     }
     Ok(sources)
 }
 
-fn stitch(pieces: &[&Part], output: &Path) -> Result<(), String> {
+fn stitch(pieces: &[&Part], output: &Path) -> Result<(), AudioError> {
     let mut pieces = pieces.to_vec();
     pieces.sort_by_key(|p| p.offset_ms);
-    let mut wav = WavWriter::create(output).map_err(|error| error.to_string())?;
+    let mut wav = WavWriter::create(output).map_err(AudioError::NotReady)?;
     for piece in pieces {
         let start = piece.offset_ms * u64::from(RATE) / 1000;
         if start > wav.samples {
             wav.silence(start - wav.samples)
-                .map_err(|error| error.to_string())?;
+                .map_err(AudioError::NotReady)?;
         }
         let mut skip = wav.samples.saturating_sub(start);
-        decode(&piece.path, |samples| {
+        let mut written = Ok(());
+        let decoded = decode(&piece.path, |samples| {
             let take = skip.min(samples.len() as u64) as usize;
             skip -= take as u64;
-            wav.samples(&samples[take..])
-        })
-        .map_err(|error| format!("Could not read {}: {error}", piece.path.display()))?;
+            written = wav.samples(&samples[take..]);
+            written
+                .as_ref()
+                .map(|_| ())
+                .map_err(|_| std::io::ErrorKind::Other.into())
+        });
+        written.map_err(AudioError::NotReady)?;
+        decoded.map_err(|error| AudioError::Unreadable {
+            file: piece
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            error,
+        })?;
     }
-    wav.finish().map_err(|error| error.to_string())
+    wav.finish().map_err(AudioError::NotReady)
 }
 
 fn decode(path: &Path, mut sink: impl FnMut(&[f32]) -> std::io::Result<()>) -> Result<(), String> {
@@ -329,7 +377,38 @@ mod tests {
     #[test]
     fn a_note_without_audio_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(sources(&[], dir.path()).is_err());
+        let shown = Shown::from(sources(&[], dir.path()).unwrap_err());
+        assert_eq!(shown.title, tr::documents::audio::no_audio_title());
+        assert_eq!(shown.message, tr::documents::audio::no_audio_message());
+    }
+
+    /// The dialog says what happened in the person's language; the file
+    /// name and the decoder's own words stay in the log.
+    #[test]
+    fn a_damaged_piece_is_reported_without_paths_or_decoder_text() {
+        assert!(ffmpeg::init().is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("a.ogg");
+        let damaged = dir.path().join("b.ogg");
+        tone(&good, 1.0, 0.5);
+        std::fs::write(&damaged, b"not audio at all").unwrap();
+        let error = sources(
+            &[
+                part(&good, Source::Mic, 0, 1000),
+                part(&damaged, Source::Mic, 2000, 1000),
+            ],
+            dir.path(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, AudioError::Unreadable { file, .. } if file == "b.ogg"),
+            "{error:?}"
+        );
+        let shown = Shown::from(error);
+        assert_eq!(shown.title, tr::documents::audio::unreadable_title());
+        assert_eq!(shown.message, tr::documents::audio::unreadable_message());
+        let path = dir.path().to_string_lossy();
+        assert!(!shown.message.contains(path.as_ref()) && !shown.message.contains("b.ogg"));
     }
 
     #[test]
