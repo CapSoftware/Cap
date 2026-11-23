@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
 	headObject: vi.fn(),
 	deleteObject: vi.fn(),
 	reserveBytes: vi.fn(),
+	reserveObjects: vi.fn(),
+	createUploadTarget: vi.fn(),
+	createMultipart: vi.fn(),
 }));
 
 const video = { id: "video-1", ownerId: "owner-1" };
@@ -65,9 +68,15 @@ vi.mock("@cap/web-backend", () => ({
 			Effect.succeed([
 				{
 					provider: "aws",
-					multipart: { complete: mocks.complete, abort: mocks.abort },
+					multipart: {
+						complete: mocks.complete,
+						abort: mocks.abort,
+						create: mocks.createMultipart,
+					},
 					headObject: mocks.headObject,
 					deleteObject: mocks.deleteObject,
+					listObjects: () => Effect.succeed({ Contents: [] }),
+					createUploadTarget: mocks.createUploadTarget,
 				},
 			]),
 	},
@@ -78,12 +87,12 @@ vi.mock("@/lib/media-comments", () => ({
 vi.mock("@/lib/comment-media-quota", () => ({
 	MAX_MEDIA_OBJECT_BYTES: 2 * 1024 * 1024 * 1024,
 	MAX_MEDIA_OBJECTS_PER_VIDEO: 400,
-	reserveCommentMediaObjects: vi.fn(),
+	reserveCommentMediaObjects: mocks.reserveObjects,
 	reserveCommentMediaBytes: mocks.reserveBytes,
 }));
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: { COMMENT_MEDIA_UPLOAD: "rl_comment_media_upload" },
-	isRateLimited: vi.fn(),
+	isRateLimited: vi.fn(async () => false),
 }));
 vi.mock("@/lib/server", () => ({ runPromise: Effect.runPromise }));
 
@@ -109,6 +118,13 @@ beforeEach(() => {
 	mocks.abort.mockReturnValue(Effect.void);
 	mocks.deleteObject.mockReturnValue(Effect.void);
 	mocks.reserveBytes.mockResolvedValue(true);
+	mocks.reserveObjects.mockResolvedValue(true);
+	mocks.createUploadTarget.mockImplementation((key: string) =>
+		Effect.succeed({ url: `https://upload.test/${key}` }),
+	);
+	mocks.createMultipart.mockReturnValue(
+		Effect.succeed({ UploadId: "upload-1" }),
+	);
 });
 
 describe("comment media complete size", () => {
@@ -129,6 +145,7 @@ describe("comment media complete size", () => {
 			videoId: "video-1",
 			userId: "viewer-1",
 			bytes: 12_000_000,
+			objectKey: key,
 		});
 	});
 
@@ -172,5 +189,114 @@ describe("comment media complete size", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({ size: 5_000_000 });
 		expect(mocks.deleteObject).not.toHaveBeenCalled();
+	});
+});
+
+const initiate = (body: Record<string, unknown>) =>
+	app.request("/initiate", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ videoId: "video-1", ...body }),
+	});
+
+describe("comment media initiate size", () => {
+	it("signs a voice note upload for its exact size and charges it", async () => {
+		const response = await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+			size: 40_000,
+		});
+
+		expect(response.status).toBe(200);
+		expect(mocks.createUploadTarget).toHaveBeenCalledExactlyOnceWith(
+			expect.stringMatching(/\/media\.webm$/),
+			expect.objectContaining({
+				contentLength: 40_000,
+				enforceContentLength: true,
+			}),
+		);
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: 40_000,
+		});
+	});
+
+	it("refuses a direct upload without a size", async () => {
+		const response = await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+		});
+
+		expect(response.status).toBe(400);
+		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
+	});
+
+	it("refuses a direct upload over the per-object limit", async () => {
+		const response = await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+			size: 3 * GIB,
+		});
+
+		expect(response.status).toBe(413);
+		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
+	});
+
+	it("refuses a direct upload past the viewer byte budget", async () => {
+		mocks.reserveBytes.mockResolvedValue(false);
+
+		const response = await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+			size: 40_000,
+		});
+
+		expect(response.status).toBe(413);
+		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
+	});
+
+	it("signs the thumbnail for its size and leaves the recording to /complete", async () => {
+		const response = await initiate({
+			kind: "video",
+			contentType: "video/webm",
+			mode: "multipart",
+			size: 12_000_000,
+			withThumbnail: true,
+			thumbnailSize: 90_000,
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ uploadId: "upload-1" });
+		expect(mocks.createUploadTarget).toHaveBeenCalledExactlyOnceWith(
+			expect.stringMatching(/\/thumbnail\.jpg$/),
+			expect.objectContaining({
+				contentLength: 90_000,
+				enforceContentLength: true,
+			}),
+		);
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: 90_000,
+		});
+	});
+
+	it("skips the optional thumbnail when its size is missing", async () => {
+		const response = await initiate({
+			kind: "video",
+			contentType: "video/webm",
+			mode: "multipart",
+			withThumbnail: true,
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ thumbnailUpload: null });
+		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
+		expect(mocks.reserveBytes).not.toHaveBeenCalled();
 	});
 });

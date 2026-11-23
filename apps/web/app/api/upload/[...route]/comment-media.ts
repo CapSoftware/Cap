@@ -52,6 +52,8 @@ app.post(
 			contentType: z.string(),
 			mode: z.enum(["single", "multipart"]),
 			withThumbnail: z.boolean().optional(),
+			size: z.number().int().nonnegative().optional(),
+			thumbnailSize: z.number().int().nonnegative().optional(),
 		}),
 	),
 	async (c) => {
@@ -59,8 +61,23 @@ app.post(
 			videoId: videoIdRaw,
 			kind,
 			mode,
-			withThumbnail,
+			size,
+			thumbnailSize,
 		} = c.req.valid("json");
+		// Direct uploads are signed for their exact size; without one there is
+		// no thumbnail target (it is optional) and no single upload.
+		const withThumbnail =
+			c.req.valid("json").withThumbnail === true &&
+			thumbnailSize !== undefined &&
+			thumbnailSize <= MAX_MEDIA_OBJECT_BYTES;
+		if (mode === "single" && size === undefined)
+			return c.json({ error: "Missing upload size" }, 400);
+		if (
+			mode === "single" &&
+			size !== undefined &&
+			size > MAX_MEDIA_OBJECT_BYTES
+		)
+			return c.json({ error: "Recording is too large" }, 413);
 		const user = c.get("user");
 		const videoId = Video.VideoId.make(videoIdRaw);
 
@@ -154,12 +171,31 @@ app.post(
 				});
 			}
 
+			const directBytes =
+				(mode === "single" ? (size ?? 0) : 0) +
+				(thumbnailKey ? (thumbnailSize ?? 0) : 0);
+			if (directBytes > 0) {
+				const withinBudget = yield* Effect.tryPromise(() =>
+					reserveCommentMediaBytes({
+						videoId: video.id,
+						userId: user.id,
+						bytes: directBytes,
+					}),
+				);
+				if (!withinBudget) {
+					c.status(413);
+					return c.json({ error: "Recording is too large" });
+				}
+			}
+
 			// Drive rejects presigned POST, so upload targets are always PUT-style;
 			// createUploadTarget returns the provider-appropriate target shape.
 			const thumbnailUpload = thumbnailKey
 				? yield* bucket.createUploadTarget(thumbnailKey, {
 						contentType: "image/jpeg",
 						method: "put",
+						contentLength: thumbnailSize,
+						enforceContentLength: true,
 					})
 				: null;
 
@@ -179,6 +215,8 @@ app.post(
 				const upload = yield* bucket.createUploadTarget(key, {
 					contentType,
 					method: "put",
+					contentLength: size,
+					enforceContentLength: true,
 				});
 				return c.json({ commentId, key, uploadToken, upload, thumbnailUpload });
 			}
@@ -368,6 +406,7 @@ app.post(
 					videoId: claims.videoId,
 					userId: claims.userId,
 					bytes: size,
+					objectKey: claims.key,
 				}),
 			);
 			if (!withinBudget) {

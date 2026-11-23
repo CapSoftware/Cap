@@ -66,8 +66,10 @@ vi.mock("@/lib/media-comments", () => ({
 	canUseMediaComments: async () => true,
 }));
 vi.mock("@/lib/comment-media-quota", () => ({
+	MAX_MEDIA_OBJECT_BYTES: 2 * 1024 * 1024 * 1024,
 	MAX_MEDIA_OBJECTS_PER_VIDEO: 400,
 	reserveCommentMediaObjects: mocks.reserve,
+	reserveCommentMediaBytes: async () => true,
 }));
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: { COMMENT_MEDIA_UPLOAD: "rl_comment_media_upload" },
@@ -87,6 +89,8 @@ const initiate = (body: Record<string, unknown> = {}) =>
 			contentType: "video/webm",
 			mode: "single",
 			withThumbnail: true,
+			size: 1_000_000,
+			thumbnailSize: 50_000,
 			...body,
 		}),
 	});

@@ -32,6 +32,8 @@ async function initiate(input: {
 	contentType: string;
 	mode: "single" | "multipart";
 	withThumbnail?: boolean;
+	size: number;
+	thumbnailSize?: number;
 }): Promise<InitiateResponse> {
 	const response = await fetch(`${COMMENT_MEDIA_BASE}/initiate`, {
 		method: "POST",
@@ -78,6 +80,8 @@ export async function uploadCommentMedia(input: CommentMediaUploadInput) {
 		contentType: input.mime,
 		mode: isVideo ? "multipart" : "single",
 		withThumbnail: isVideo && Boolean(input.thumbnailBlob),
+		size: input.blob.size,
+		thumbnailSize: input.thumbnailBlob?.size,
 	});
 
 	if (isVideo) {

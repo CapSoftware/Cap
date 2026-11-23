@@ -25,15 +25,24 @@ async function reserveInWindows(input: {
 	amount: number;
 	alreadyUsed: number;
 	limit: number;
+	/** Charges this id at most once, so a retried request is not charged again. */
+	chargeOnceFor?: string;
 	now?: Date;
 }) {
 	const now = (input.now ?? new Date()).getTime();
 	const windowIndex = Math.floor(now / COMMENT_MEDIA_RESERVATION_WINDOW_MS);
 	const currentKey = reservationKey(input.scope, windowIndex);
-	const windows = Array.from({ length: COUNTED_WINDOWS }, (_, age) => ({
-		id: reservationKey(input.scope, windowIndex - age),
-		index: windowIndex - age,
-	})).sort((left, right) => left.id.localeCompare(right.id));
+	const chargeKey =
+		input.chargeOnceFor === undefined
+			? null
+			: reservationKey(["comment-media-charge", input.chargeOnceFor], 0);
+	const windows = [
+		...Array.from({ length: COUNTED_WINDOWS }, (_, age) => ({
+			id: reservationKey(input.scope, windowIndex - age),
+			index: windowIndex - age,
+		})),
+		...(chargeKey ? [{ id: chargeKey, index: windowIndex }] : []),
+	].sort((left, right) => left.id.localeCompare(right.id));
 
 	return db().transaction(async (tx) => {
 		await tx
@@ -65,7 +74,12 @@ async function reserveInWindows(input: {
 		if (locked.length !== windows.length)
 			throw new Error("Comment media quota is unavailable");
 
-		const reserved = locked.reduce((sum, row) => sum + row.reservedBytes, 0);
+		const charge = locked.find((row) => row.id === chargeKey);
+		if (charge && charge.reservedBytes > 0) return true;
+
+		const reserved = locked
+			.filter((row) => row.id !== chargeKey)
+			.reduce((sum, row) => sum + row.reservedBytes, 0);
 		if (input.alreadyUsed + reserved + input.amount > input.limit) return false;
 
 		await tx
@@ -73,7 +87,12 @@ async function reserveInWindows(input: {
 			.set({
 				reservedBytes: sql`${mediaProcessingBudgets.reservedBytes} + ${input.amount}`,
 			})
-			.where(inArray(mediaProcessingBudgets.id, [currentKey]));
+			.where(
+				inArray(
+					mediaProcessingBudgets.id,
+					chargeKey ? [currentKey, chargeKey] : [currentKey],
+				),
+			);
 		return true;
 	});
 }
@@ -97,6 +116,7 @@ export function reserveCommentMediaBytes(input: {
 	videoId: string;
 	userId: string;
 	bytes: number;
+	objectKey?: string;
 	now?: Date;
 }) {
 	return reserveInWindows({
@@ -104,6 +124,7 @@ export function reserveCommentMediaBytes(input: {
 		amount: input.bytes,
 		alreadyUsed: 0,
 		limit: MAX_MEDIA_BYTES_PER_VIEWER,
+		chargeOnceFor: input.objectKey,
 		now: input.now,
 	});
 }

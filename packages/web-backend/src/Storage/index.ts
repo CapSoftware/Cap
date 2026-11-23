@@ -45,6 +45,8 @@ import { StorageRepo } from "./StorageRepo.ts";
 type UploadTargetInput = {
 	contentType: string;
 	contentLength?: number;
+	/** Sign contentLength into S3 PUT targets so storage rejects any other size. */
+	enforceContentLength?: boolean;
 	fields?: Record<string, string>;
 	method?: "post" | "put";
 	videoTitle?: string;
@@ -522,7 +524,13 @@ const makeS3Access = (s3: S3BucketAccess) => ({
 				const url = yield* s3
 					.getPresignedPutUrl(
 						key,
-						{ ContentType: input.contentType },
+						{
+							ContentType: input.contentType,
+							...(input.enforceContentLength &&
+							input.contentLength !== undefined
+								? { ContentLength: input.contentLength }
+								: {}),
+						},
 						{ expiresIn: 1800 },
 					)
 					.pipe(mapStorageError);

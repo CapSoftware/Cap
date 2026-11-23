@@ -222,6 +222,30 @@ describe("comment media viewer byte budget", () => {
 		await expect(reserve()).resolves.toBe(true);
 	});
 
+	it("charges a retried completion of the same object only once", async () => {
+		await reserveBytes({ bytes: MAX_MEDIA_BYTES_PER_VIEWER - GIB });
+		await expect(reserveBytes({ objectKey: "a/media.webm" })).resolves.toBe(
+			true,
+		);
+		await expect(reserveBytes({ objectKey: "a/media.webm" })).resolves.toBe(
+			true,
+		);
+		await expect(reserveBytes({ objectKey: "b/media.webm" })).resolves.toBe(
+			false,
+		);
+	});
+
+	it("charges concurrent completions of one object once", async () => {
+		const results = await Promise.all(
+			Array.from({ length: 5 }, () =>
+				reserveBytes({ bytes: 4 * GIB, objectKey: "a/media.webm" }),
+			),
+		);
+		expect(results.every(Boolean)).toBe(true);
+		await expect(reserveBytes({ bytes: 6 * GIB })).resolves.toBe(true);
+		await expect(reserveBytes({ bytes: 1 })).resolves.toBe(false);
+	});
+
 	it("frees the budget once its windows pass", async () => {
 		const W = COMMENT_MEDIA_RESERVATION_WINDOW_MS;
 		await reserveBytes({ bytes: MAX_MEDIA_BYTES_PER_VIEWER, now: new Date(W) });
