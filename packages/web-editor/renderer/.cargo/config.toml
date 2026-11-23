@@ -1,0 +1,3 @@
+# WebCodecs `VideoFrame` bindings (web-sys and wgpu) are behind this cfg.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]

@@ -1,0 +1,401 @@
+/*
+ * responsive-layout.ts sets these <html> attributes only in the web editor
+ * below 1024px, so nothing here reaches the desktop app or the wide layout.
+ * The sheet covers the strip and timeline rather than the preview so edits
+ * stay visible while settings change.
+ */
+
+html[data-web-editor] [data-editor-timeline],
+html[data-web-editor] [data-preview-stage] {
+	/* touch-mouse-bridge.ts owns these gestures; the page mustn't pan or zoom. */
+	touch-action: none;
+}
+
+html[data-editor-compact] [data-editor-grid] {
+	--sheet-bar: 52px;
+	--sheet-ease: cubic-bezier(0.32, 0.72, 0, 1);
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows:
+		minmax(var(--player-min, 180px), 1fr)
+		auto
+		clamp(132px, var(--timeline-hug, 196px), 46%)
+		var(--sheet-bar);
+	padding-inline: 8px;
+}
+
+html[data-editor-compact] [data-editor-player-row] {
+	display: contents;
+}
+
+html[data-editor-compact] [data-editor-player] {
+	grid-area: 1 / 1;
+	min-height: 0;
+}
+
+html[data-editor-compact] [data-editor-clip-strip] {
+	grid-area: 2 / 1;
+	padding-inline: 0;
+}
+
+html[data-editor-compact] [data-editor-timeline] {
+	grid-area: 3 / 1;
+	padding-inline: 0;
+	min-height: 0;
+}
+
+html[data-editor-compact] [data-editor-timeline-resize],
+html[data-editor-compact] [data-editor-split-handle] {
+	display: none;
+}
+
+html[data-editor-compact] [data-editor-transcript] {
+	grid-area: 2 / 1 / 5 / 2;
+	z-index: 40;
+	/* Overlays: they fill the rows they span without sizing them. */
+	contain: size;
+}
+
+html[data-editor-compact] [data-editor-sheet] {
+	grid-area: 2 / 1 / 5 / 2;
+	z-index: 40;
+	margin: 0;
+	width: auto;
+	min-width: 0;
+	overflow: visible;
+	contain: size;
+	/* At rest only the tab bar (the sheet's top edge) shows, in the bottom
+	   row. Moving and clipping rather than resizing keeps the slide on the
+	   compositor; the panel's contents never re-lay out mid-slide. */
+	transform: translate3d(0, calc(100% - var(--sheet-bar)), 0);
+	clip-path: inset(
+		-24px -1px calc(100% - var(--sheet-bar) - 1px) -1px round 13px
+	);
+	transition:
+		transform 380ms var(--sheet-ease),
+		clip-path 380ms var(--sheet-ease);
+}
+
+html[data-editor-compact] [data-editor-sheet][data-open] {
+	transform: none;
+	clip-path: inset(-32px -32px -32px -32px round 13px);
+}
+
+html[data-editor-compact] [data-editor-sheet] > *,
+html[data-editor-compact] [data-editor-sheet] [data-sidebar-root] {
+	max-width: none;
+}
+
+html[data-editor-compact] [data-editor-sheet][data-open] [data-sidebar-root] {
+	box-shadow: var(--ed-pop-shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-editor-compact] [data-editor-sheet] {
+		transition: none;
+	}
+}
+
+/* Tablets: settings keep a readable measure in the full-width sheet. */
+@media (min-width: 640px) {
+	html[data-editor-compact] [data-sheet-content] > * {
+		width: 100%;
+		max-width: 600px;
+		margin-inline: auto;
+	}
+}
+
+/* A stacked timeline would leave the preview no height on a short screen. */
+@media (min-aspect-ratio: 5 / 4) {
+	html[data-editor-compact] [data-editor-grid] {
+		grid-template-columns: minmax(0, 1.25fr) minmax(300px, 1fr);
+		grid-template-rows: auto minmax(0, 1fr) var(--sheet-bar);
+	}
+
+	html[data-editor-compact] [data-editor-player] {
+		grid-area: 1 / 1 / 4 / 2;
+	}
+
+	html[data-editor-compact] [data-editor-clip-strip] {
+		grid-area: 1 / 2;
+	}
+
+	html[data-editor-compact] [data-editor-timeline] {
+		grid-area: 2 / 2;
+	}
+
+	html[data-editor-compact] [data-editor-sheet],
+	html[data-editor-compact] [data-editor-transcript] {
+		grid-area: 1 / 2 / 4 / 3;
+	}
+}
+
+html[data-editor-compact] [data-editor-root][data-focused] [data-editor-grid] {
+	grid-template-columns: minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr) auto;
+}
+
+html[data-editor-compact]
+	[data-editor-root][data-focused]
+	[data-editor-player] {
+	grid-area: 1 / 1;
+}
+
+html[data-editor-compact]
+	[data-editor-root][data-focused]
+	[data-editor-timeline] {
+	grid-area: 2 / 1;
+}
+
+html[data-editor-compact] [data-editor-header] {
+	display: flex;
+	height: 52px;
+	padding-right: 8px;
+}
+
+html[data-editor-compact] [data-header-actions] {
+	gap: 2px;
+}
+
+html[data-editor-compact] [data-header-actions] button:not([data-save-button]) {
+	min-width: 40px;
+	height: 40px;
+	justify-content: center;
+}
+
+html[data-editor-compact] [data-save-button] {
+	height: 36px;
+	min-width: 72px;
+}
+
+html[data-editor-phone] [data-header-extension],
+html[data-editor-phone] [data-header-delete] {
+	display: none;
+}
+
+html[data-editor-phone] [data-editor-header] {
+	height: 48px;
+}
+
+html[data-editor-compact] [data-transport-controls] {
+	gap: 4px;
+}
+
+html[data-editor-compact] [data-transport-controls] > button,
+html[data-editor-compact] [data-transport-tools] button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	min-width: 40px;
+	height: 40px;
+}
+
+html[data-editor-compact] [data-transport-controls] > div > button {
+	width: 40px;
+	height: 40px;
+}
+
+html[data-editor-compact] [data-transport-controls] > div > button svg {
+	width: 14px;
+	height: 14px;
+}
+
+html[data-editor-compact] [data-player-toolbar] button {
+	min-height: 36px;
+}
+
+html[data-editor-phone] [data-player-toolbar],
+html[data-editor-phone] [data-player-zoom] {
+	display: none;
+}
+
+html[data-editor-phone] [data-player-time] {
+	font-size: 12px;
+}
+
+html[data-editor-phone] [data-clip-strip-label] {
+	display: none;
+}
+
+html[data-editor-phone] [data-track-label],
+html[data-editor-phone] [data-add-track-label] {
+	display: none;
+}
+
+html[data-editor-phone] [data-add-track] {
+	height: 28px;
+	width: 28px;
+	justify-content: center;
+	padding: 0;
+	border-radius: 8px;
+}
+
+html[data-editor-compact] .cap-track-tray {
+	max-width: var(--kb-popper-content-available-width, calc(100vw - 16px));
+}
+
+html[data-editor-compact] .cap-track-tray > div:first-child {
+	flex-wrap: wrap;
+}
+
+[data-sheet-closed] [data-sheet-bar] [role="tab"][data-selected] {
+	background-color: transparent;
+	color: var(--ed-text-2);
+}
+
+[data-sheet-tools] button {
+	min-width: 38px;
+	height: 40px;
+	gap: 0;
+	padding-inline: 0;
+	justify-content: center;
+}
+
+/* Icons only in the bar: the menus' chevrons don't fit a narrow phone. */
+[data-sheet-tools] button > span.text-ed-text-3 {
+	display: none;
+}
+
+[data-sheet-bar] [role="tab"] {
+	flex: 0 1 40px;
+	min-width: 34px;
+}
+
+html[data-editor-phone] [data-track-type] > :first-child > button {
+	justify-content: center;
+	padding-left: 0;
+}
+
+[data-sheet-bar] > [role="tablist"] {
+	max-width: 440px;
+	margin-inline: auto;
+}
+
+/* Fingers need more than the 20px trim handle a cursor gets. */
+html[data-editor-compact] [data-editor-timeline]
+	.cursor-col-resize[data-compact] {
+	width: 32px;
+}
+
+@media (pointer: coarse) {
+	html[data-web-editor]
+		[data-editor-timeline]
+		.cursor-col-resize[data-compact] {
+		width: 32px;
+	}
+}
+
+html[data-editor-phone] .cap-empty-lane {
+	padding-inline: 10px;
+}
+
+html[data-editor-phone] .cap-empty-lane > span {
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+html[data-editor-phone] .cap-empty-lane > .cap-empty-lane-action {
+	flex-shrink: 0;
+}
+
+/* Menus and popovers never run off a short screen (a phone on its side):
+   they stop at the room Kobalte measured and scroll inside. */
+html[data-editor-compact] [data-popper-positioner] > :not([role="tooltip"]) {
+	max-height: var(--kb-popper-content-available-height, 100vh);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+html[data-editor-compact] [data-export-body] {
+	flex-direction: column;
+}
+
+html[data-editor-compact] [data-export-preview] {
+	flex: none;
+	height: clamp(220px, 42%, 460px);
+	padding: 12px 16px 14px;
+}
+
+html[data-editor-compact] [data-export-stats] {
+	min-width: 0;
+	width: 100%;
+	max-width: 560px;
+}
+
+html[data-editor-compact] [data-export-stats] > * {
+	min-width: 0;
+	padding-inline: 10px;
+}
+
+html[data-editor-compact] [data-export-settings] {
+	flex: 1;
+	width: auto;
+	min-height: 0;
+	border-left: 0;
+	border-top: 1px solid var(--ed-line);
+}
+
+html[data-editor-phone] [data-export-stats] {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	height: auto;
+}
+
+html[data-editor-phone] [data-export-stats] > * {
+	padding-block: 7px;
+}
+
+html[data-editor-phone] [data-export-stats] > :nth-child(odd) {
+	border-left: 0;
+}
+
+html[data-editor-phone] [data-export-stats] > :nth-child(n + 3) {
+	border-top: 1px solid var(--ed-line);
+}
+
+@media (min-aspect-ratio: 5 / 4) {
+	html[data-editor-compact] [data-export-body] {
+		flex-direction: row;
+	}
+
+	html[data-editor-compact] [data-export-preview] {
+		flex: 1;
+		height: auto;
+	}
+
+	html[data-editor-compact] [data-export-settings] {
+		flex: none;
+		width: min(400px, 46%);
+		border-top: 0;
+		border-left: 1px solid var(--ed-line);
+	}
+}
+
+html[data-editor-compact] [role="dialog"]:not([data-popper-positioner] > *) {
+	max-height: calc(100dvh - 16px);
+	overflow-y: auto;
+}
+
+html[data-editor-compact] [data-crop-body] {
+	flex-direction: column;
+	align-items: stretch;
+	padding-inline: 12px;
+}
+
+html[data-editor-compact] [data-crop-panel] {
+	width: auto;
+}
+
+@media (min-aspect-ratio: 5 / 4) {
+	html[data-editor-compact] [data-crop-body] {
+		flex-direction: row;
+		align-items: flex-start;
+	}
+
+	html[data-editor-compact] [data-crop-panel] {
+		width: 260px;
+	}
+}

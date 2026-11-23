@@ -1,0 +1,2391 @@
+import { createElementBounds } from "@solid-primitives/bounds";
+import {
+	createEventListener,
+	createEventListenerMap,
+} from "@solid-primitives/event-listener";
+import { cx } from "cva";
+import {
+	batch,
+	createEffect,
+	createMemo,
+	createRoot,
+	createSignal,
+	For,
+	Index,
+	type JSX,
+	Match,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	Switch,
+	untrack,
+} from "solid-js";
+import { produce } from "solid-js/store";
+import toast from "solid-toast";
+import IconLucideAudioWaveform from "~icons/lucide/audio-waveform";
+import IconLucidePalette from "~icons/lucide/palette";
+import { stylesRevealCamera } from "../style";
+import { FOLLOW_STEPS, nextFollowAnchor } from "./follow-anchor";
+import { ImageTrack } from "./image-track";
+import {
+	playheadMotion,
+	playheadMotionOffsetMs,
+	playheadMotionX,
+} from "./playhead-motion";
+import { type OverlayDragState, StyleTrack } from "./style-track";
+import { WaveformTrack } from "./waveform-track";
+import { pinchZoomFactor } from "./zoom";
+
+import "./styles.css";
+
+import { defaultCaptionSettings } from "~/store/captions";
+import { defaultKeyboardSettings } from "~/store/keyboard";
+import { showContextMenu } from "../../../../engine/context-menu";
+import { commands } from "../../../../engine/editor-api";
+import { isApplePlatform } from "../../../../engine/platform";
+import { audioVisualizerSupported } from "../../../../engine/renderer-backend";
+import type { AudioTrackSegment } from "../audio";
+import {
+	applyCaptionResultToProject,
+	getCaptionGenerationErrorMessage,
+	getSelectedTranscriptionLanguage,
+	transcribeEditorCaptions,
+} from "../captions";
+import { clipDuration, clipTimelineOffsets } from "../clip-transitions";
+import { FPS, type TimelineTrackType, useEditorContext } from "../context";
+import { defaultMaskSegment, type MaskSegment } from "../masks";
+import { editorLayout } from "../responsive-layout";
+import { autoTextColorAt, defaultTextSegment, type TextSegment } from "../text";
+import { effectiveToOutput, holdWindows } from "../timeline-holds";
+import {
+	getOverlayTrackRows,
+	getSegmentTrack,
+	getTrackRowsWithCount,
+	getUsedTrackCount,
+	isOverlayTrackKind,
+	moveOverlayTrack,
+	moveTrackLane,
+	type OverlayTrack,
+	placeSegmentAtTime,
+	removeOverlayTrack,
+	sameOverlayTrack,
+	sortTrackSegments,
+	trackInsertionIndex,
+} from "../timelineTracks";
+import { formatTime } from "../utils";
+import { type AudioSegmentDragState, AudioTrack } from "./AudioTrack";
+import { type CaptionSegmentDragState, CaptionsTrack } from "./CaptionsTrack";
+import { ClipTrack } from "./ClipTrack";
+import { TimelineContextProvider, useTimelineContext } from "./context";
+import { type MaskSegmentDragState, MaskTrack } from "./MaskTrack";
+import { Minimap } from "./Minimap";
+import { PlaybackFollow } from "./playback-follow";
+import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
+import { type TextSegmentDragState, TextTrack } from "./TextTrack";
+import { type ThreeDSegmentDragState, ThreeDTrack } from "./ThreeDTrack";
+import { TrackIcon, TrackManager } from "./TrackManager";
+import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
+
+// 104 is the narrowest gutter that fits the "Add track" pill without truncating
+// its label on Segoe UI (Windows), the widest system UI font.
+const TRACK_GUTTER = 120;
+const PLAYHEAD_STALL_MS = 250;
+const PLAYHEAD_SETTLE_MS = 300;
+const TRACK_GUTTER_INSET = 4;
+const PHONE_TRACK_GUTTER = 40;
+const trackGutter = () =>
+	editorLayout().phone() ? PHONE_TRACK_GUTTER : TRACK_GUTTER;
+const TIMELINE_HEADER_HEIGHT = 26;
+const TIMELINE_HEADER_GAP = 4;
+const PLAYHEAD_TOP_OFFSET = TIMELINE_HEADER_HEIGHT - 12;
+const TRACK_ROW_HEIGHT = 48;
+const TRACK_ROW_GAP = 8;
+const TRACK_HEIGHT = `${TRACK_ROW_HEIGHT}px`;
+const START_SNAP_PX = 10;
+const RULER_SCRUB_OVERHANG_PX = 4;
+
+const trackIcons: Record<TimelineTrackType, () => JSX.Element> = {
+	style: () => <IconLucidePalette class="size-3" />,
+	image: () => <IconCapImage class="size-3" />,
+	clip: () => <IconLucideClapperboard class="size-3" />,
+	caption: () => <IconCapCaptions class="size-3" />,
+	keyboard: () => <IconLucideKeyboard class="size-3" />,
+	text: () => <IconLucideType class="size-3" />,
+	mask: () => <IconLucideBoxSelect class="size-3" />,
+	zoom: () => <IconLucideSearch class="size-3" />,
+	scene: () => <IconLucideVideo class="size-3" />,
+	audio: () => <IconLucideMusic class="size-3" />,
+	waveform: () => <IconLucideAudioWaveform class="size-3" />,
+	"3d": () => <IconLucideRotate3d class="size-3" />,
+};
+
+type TrackDefinition = {
+	type: TimelineTrackType;
+	label: string;
+	icon: () => JSX.Element;
+	locked: boolean;
+};
+
+const trackDefinitions: TrackDefinition[] = [
+	{ type: "style", label: "Style", icon: trackIcons.style, locked: false },
+	{ type: "image", label: "Image", icon: trackIcons.image, locked: false },
+	{
+		type: "clip",
+		label: "Clip",
+		icon: trackIcons.clip,
+		locked: true,
+	},
+	{
+		type: "caption",
+		label: "Captions",
+		icon: trackIcons.caption,
+		locked: false,
+	},
+	{
+		type: "keyboard",
+		label: "Keyboard",
+		icon: trackIcons.keyboard,
+		locked: false,
+	},
+	{
+		type: "text",
+		label: "Text",
+		icon: trackIcons.text,
+		locked: false,
+	},
+	{
+		type: "mask",
+		label: "Mask",
+		icon: trackIcons.mask,
+		locked: false,
+	},
+	{
+		type: "audio",
+		label: "Audio",
+		icon: trackIcons.audio,
+		locked: false,
+	},
+	{
+		type: "waveform",
+		label: "Audio waveform",
+		icon: trackIcons.waveform,
+		locked: false,
+	},
+	{
+		type: "zoom",
+		label: "Zoom",
+		icon: trackIcons.zoom,
+		locked: true,
+	},
+	{
+		type: "scene",
+		label: "Scene",
+		icon: trackIcons.scene,
+		locked: false,
+	},
+	{
+		type: "3d",
+		label: "3D",
+		icon: trackIcons["3d"],
+		locked: false,
+	},
+];
+
+const availableTrackDefinitions = trackDefinitions.filter(
+	(definition) => definition.type !== "keyboard",
+);
+const captionsAllowed = () =>
+	(window as Window & { capWebEditorCaptionsEnabled?: boolean })
+		.capWebEditorCaptionsEnabled === true;
+
+function deleteTrackLane<T extends { track?: number }>(
+	segments: T[],
+	laneIndex: number,
+) {
+	return segments
+		.filter((segment) => (segment.track ?? 0) !== laneIndex)
+		.map<T>((segment) => {
+			const track = segment.track ?? 0;
+			if (track <= laneIndex) return segment;
+			return { ...segment, track: track - 1 };
+		});
+}
+
+export function Timeline(props: {
+	onViewportOverflowChange?: (value: {
+		overflow: number;
+		visibleTrackCount: number;
+	}) => void;
+	onContentHeightChange?: (height: number) => void;
+}) {
+	const {
+		project,
+		setProject,
+		editorInstance,
+		projectHistory,
+		setEditorState,
+		totalDuration,
+		editorState,
+		projectActions,
+		meta,
+		previewResolutionBase,
+		canvasControls,
+		playbackIntent,
+	} = useEditorContext();
+
+	const duration = () => editorInstance.recordingDuration;
+	const transform = () => editorState.timeline.transform;
+
+	const [timelineContainerRef, setTimelineContainerRef] =
+		createSignal<HTMLDivElement>();
+	const [timelineScrollRef, setTimelineScrollRef] =
+		createSignal<HTMLDivElement>();
+	const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
+	const timelineBounds = createElementBounds(timelineRef, {
+		trackMutation: false,
+	});
+
+	const secsPerPixel = () => transform().zoom / (timelineBounds.width ?? 1);
+	const playheadX = createMemo(() => {
+		const dpr = window.devicePixelRatio || 1;
+		const x = Math.min(
+			(editorState.playbackTime - transform().position) / secsPerPixel(),
+			timelineBounds.width ?? 0,
+		);
+		return Math.round(x * dpr) / dpr;
+	});
+	// During playback the compositor moves the playhead: restyling it each time
+	// it moves a pixel costs the page a compositing update, the most expensive
+	// thing it does per frame. The animation is re-aimed whenever it drifts
+	// from the playback time, and a stalled playback stops it where it is.
+	let playheadRef: HTMLDivElement | undefined;
+	const [playheadRestX, setPlayheadRestX] = createSignal(0);
+	let playheadAnimation: {
+		animation: Animation;
+		motion: NonNullable<ReturnType<typeof playheadMotion>>;
+		position: number;
+		secsPerPixel: number;
+	} | null = null;
+	let playheadStallCheck: ReturnType<typeof setInterval> | undefined;
+	let playheadMovedAt = 0;
+	let playheadPreviousPosition = Number.NaN;
+	let playingSince = 0;
+	let playheadClock: { at: number; time: number; rate: number } | null = null;
+	const stopPlayheadAnimation = () => {
+		playheadAnimation?.animation.cancel();
+		playheadAnimation = null;
+		clearInterval(playheadStallCheck);
+		playheadStallCheck = undefined;
+	};
+	onCleanup(stopPlayheadAnimation);
+	createEffect(() => {
+		void editorState.playbackTime;
+		playheadMovedAt = performance.now();
+	});
+	createEffect(() => {
+		const x = playheadX();
+		const playing = editorState.playing;
+		const position = transform().position;
+		const pixelSecs = secsPerPixel();
+		const width = timelineBounds.width ?? 0;
+		untrack(() => {
+			if (!playing) playingSince = 0;
+			else if (playingSince === 0) playingSince = performance.now();
+			const scrolled = position !== playheadPreviousPosition;
+			playheadPreviousPosition = position;
+			const dpr = window.devicePixelRatio || 1;
+			const current = playheadAnimation;
+			if (
+				playing &&
+				!scrolled &&
+				current &&
+				current.position === position &&
+				current.secsPerPixel === pixelSecs &&
+				Math.abs(
+					playheadMotionX(
+						current.motion,
+						Number(current.animation.currentTime ?? 0),
+						dpr,
+					) - x,
+				) <=
+					1 / dpr + 1e-6
+			)
+				return;
+			const now = performance.now();
+			const time = editorState.playbackTime;
+			if (!playing || scrolled) playheadClock = null;
+			else if (playheadClock && now - playheadClock.at >= 1000) {
+				const rate =
+					(time - playheadClock.time) / ((now - playheadClock.at) / 1000);
+				playheadClock = {
+					at: now,
+					time,
+					rate: rate > 0.9 && rate < 1.1 ? rate : playheadClock.rate,
+				};
+			} else playheadClock ??= { at: now, time, rate: 1 };
+			stopPlayheadAnimation();
+			setPlayheadRestX(x);
+			if (
+				!playing ||
+				scrolled ||
+				performance.now() - playingSince < PLAYHEAD_SETTLE_MS ||
+				typeof playheadRef?.animate !== "function"
+			)
+				return;
+			const planned = playheadMotion(x, width, pixelSecs, dpr);
+			if (!planned) return;
+			const motion = {
+				...planned,
+				durationMs: planned.durationMs / (playheadClock?.rate ?? 1),
+			};
+			const animation = playheadRef.animate(
+				[
+					{ transform: `translateX(${motion.from}px)` },
+					{ transform: `translateX(${motion.to}px)` },
+				],
+				{
+					duration: motion.durationMs,
+					easing: `steps(${motion.steps}, end)`,
+					fill: "forwards",
+				},
+			);
+			animation.currentTime = playheadMotionOffsetMs(
+				motion,
+				(time - position) / pixelSecs,
+				dpr,
+			);
+			playheadAnimation = {
+				animation,
+				motion,
+				position,
+				secsPerPixel: pixelSecs,
+			};
+			playheadStallCheck = setInterval(() => {
+				if (performance.now() - playheadMovedAt < PLAYHEAD_STALL_MS) return;
+				stopPlayheadAnimation();
+				setPlayheadRestX(untrack(playheadX));
+			}, PLAYHEAD_STALL_MS);
+		});
+	});
+	const playbackFollow = new PlaybackFollow();
+	const playbackDuration = createMemo(totalDuration);
+	let timelinePointerDown = false;
+
+	const [followAnchor, setFollowAnchor] = createSignal<number | null>(null);
+	const renderPosition = () => followAnchor() ?? transform().position;
+	const followExtent = () =>
+		followAnchor() === null ? 0 : transform().zoom / FOLLOW_STEPS;
+	let followZoom = Number.NaN;
+	let followPrevious = Number.NaN;
+	createEffect(() => {
+		const { position, zoom } = transform();
+		const playing = editorState.playing;
+		untrack(() => {
+			const scrolled =
+				!Number.isNaN(followPrevious) && position !== followPrevious;
+			followPrevious = position;
+			const zoomChanged = zoom !== followZoom;
+			followZoom = zoom;
+			setFollowAnchor(
+				nextFollowAnchor({
+					anchor: followAnchor(),
+					position,
+					zoom,
+					playing,
+					scrolled,
+					zoomChanged,
+				}),
+			);
+		});
+	});
+	// Set every frame rather than animated: a compositor animation runs
+	// smoothly between the playback updates the content otherwise steps with.
+	const setFollowShift = (root: HTMLElement, shift: number | null) => {
+		const transform = shift === null ? "" : `translateX(${-shift}px)`;
+		for (const wrapper of root.getElementsByClassName(
+			"timeline-follow-shift",
+		) as HTMLCollectionOf<HTMLElement>)
+			if (wrapper.style.transform !== transform)
+				wrapper.style.transform = transform;
+	};
+	createEffect(() => {
+		const root = timelineContainerRef();
+		if (!root) return;
+		const anchor = followAnchor();
+		setFollowShift(
+			root,
+			anchor === null ? null : (transform().position - anchor) / secsPerPixel(),
+		);
+	});
+	onCleanup(() => {
+		const root = timelineContainerRef();
+		if (root) setFollowShift(root, null);
+	});
+	const settleFollow = (event: Event) => {
+		if (
+			followAnchor() !== null &&
+			event.target instanceof Node &&
+			timelineContainerRef()?.contains(event.target)
+		)
+			setFollowAnchor(null);
+	};
+	createEventListenerMap(
+		window,
+		{ pointerdown: settleFollow, wheel: settleFollow },
+		{ capture: true, passive: true },
+	);
+
+	createEventListener(
+		window,
+		"mousedown",
+		(event) => {
+			if (event.button === 0 && event.target instanceof Node) {
+				timelinePointerDown =
+					timelineContainerRef()?.contains(event.target) ?? false;
+			}
+		},
+		{ capture: true },
+	);
+	createEventListenerMap(window, {
+		mouseup: () => {
+			timelinePointerDown = false;
+		},
+		blur: () => {
+			timelinePointerDown = false;
+		},
+	});
+
+	createEffect(
+		on(
+			[() => editorState.playing, () => editorState.playbackTime],
+			([playing, playbackTime]) => {
+				if (!playing) {
+					playbackFollow.reset();
+					return;
+				}
+				if (!timelineBounds.width) return;
+				const viewport = untrack(transform);
+				const position = playbackFollow.update(
+					{ position: viewport.position, zoom: viewport.zoom },
+					playbackTime,
+					untrack(playbackDuration),
+					performance.now(),
+					timelinePointerDown,
+				);
+				if (position !== viewport.position) {
+					setEditorState("timeline", "transform", "position", position);
+				}
+			},
+		),
+	);
+
+	const openAudioPicker = (laneIndex: number) => {
+		batch(() => {
+			setEditorState("timeline", "selection", null);
+			setEditorState("timeline", "audioPicker", laneIndex);
+		});
+	};
+
+	const trackState = () => editorState.timeline.tracks;
+	const [captionPlanAllowed, setCaptionPlanAllowed] = createSignal(
+		captionsAllowed(),
+	);
+	createEventListener(window, "cap-web-editor-captions-plan", () =>
+		setCaptionPlanAllowed(captionsAllowed()),
+	);
+	const sceneAvailable = () =>
+		meta().hasCamera &&
+		(!project.camera.hide ||
+			stylesRevealCamera(project.timeline?.styleSegments ?? []) ||
+			!!project.timeline?.sceneSegments?.length);
+	const captionTrackVisible = () =>
+		captionPlanAllowed() && trackState().caption;
+	const threeDTrackVisible = () => trackState()["3d"];
+	const trackOptions = createMemo(() =>
+		availableTrackDefinitions
+			.filter(
+				(definition) =>
+					definition.type !== "waveform" || audioVisualizerSupported(),
+			)
+			.map((definition) => ({
+				...definition,
+				active:
+					definition.type === "style" ||
+					definition.type === "image" ||
+					definition.type === "waveform"
+						? trackState()[definition.type] > 0
+						: definition.type === "caption"
+							? trackState().caption
+							: definition.type === "keyboard"
+								? trackState().keyboard
+								: definition.type === "scene"
+									? trackState().scene
+									: definition.type === "3d"
+										? trackState()["3d"]
+										: definition.type === "mask"
+											? trackState().mask > 0
+											: definition.type === "text"
+												? trackState().text > 0
+												: definition.type === "audio"
+													? trackState().audio > 0
+													: true,
+				available:
+					definition.type === "caption"
+						? captionPlanAllowed()
+						: definition.type === "scene"
+							? sceneAvailable()
+							: true,
+				supportsMultiple:
+					definition.type === "style" ||
+					definition.type === "image" ||
+					definition.type === "waveform" ||
+					definition.type === "mask" ||
+					definition.type === "text" ||
+					definition.type === "audio",
+				count:
+					definition.type === "style" ||
+					definition.type === "image" ||
+					definition.type === "waveform"
+						? trackState()[definition.type]
+						: definition.type === "mask"
+							? trackState().mask
+							: definition.type === "text"
+								? trackState().text
+								: definition.type === "audio"
+									? trackState().audio
+									: 0,
+			})),
+	);
+	const sceneTrackVisible = () => trackState().scene && sceneAvailable();
+	const styleTrackRows = createMemo(() =>
+		getTrackRowsWithCount(
+			project.timeline?.styleSegments ?? [],
+			trackState().style,
+		).reverse(),
+	);
+	const overlayTrackRows = createMemo<OverlayTrack[]>((previous) =>
+		getOverlayTrackRows(project, trackState()).map(
+			(row) => previous?.find((item) => sameOverlayTrack(item, row)) ?? row,
+		),
+	);
+	const audioTrackRows = createMemo(() =>
+		getTrackRowsWithCount(
+			project.timeline?.audioSegments ?? [],
+			trackState().audio,
+		).reverse(),
+	);
+	const zoomTrackVisible = () => !meta().audioOnly;
+	const visibleTrackCount = createMemo(
+		() =>
+			1 +
+			(zoomTrackVisible() ? 1 : 0) +
+			styleTrackRows().length +
+			overlayTrackRows().length +
+			(captionTrackVisible() ? 1 : 0) +
+			audioTrackRows().length +
+			(threeDTrackVisible() ? 1 : 0) +
+			(sceneTrackVisible() ? 1 : 0),
+	);
+
+	const contentHeight = createMemo(() => {
+		const rows = Math.max(visibleTrackCount(), 1);
+		return (
+			TIMELINE_HEADER_HEIGHT +
+			TIMELINE_HEADER_GAP +
+			rows * TRACK_ROW_HEIGHT +
+			(rows - 1) * TRACK_ROW_GAP
+		);
+	});
+
+	createEffect(() => {
+		props.onContentHeightChange?.(contentHeight());
+	});
+
+	createEffect(() => {
+		const visibleTracks = visibleTrackCount();
+		const scrollContainer = timelineScrollRef();
+		if (!scrollContainer) return;
+
+		const frame = requestAnimationFrame(() => {
+			const currentScrollContainer = timelineScrollRef();
+			if (!currentScrollContainer) return;
+			props.onViewportOverflowChange?.({
+				visibleTrackCount: visibleTracks,
+				overflow: Math.ceil(
+					Math.max(
+						currentScrollContainer.scrollHeight -
+							currentScrollContainer.clientHeight,
+						0,
+					),
+				),
+			});
+		});
+
+		onCleanup(() => cancelAnimationFrame(frame));
+	});
+
+	function handleToggleTrack(type: TimelineTrackType, next: boolean) {
+		if (type === "caption") {
+			if (!captionsAllowed()) return;
+			batch(() => {
+				if (!project.captions) {
+					setProject("captions", {
+						segments: [],
+						settings: { ...defaultCaptionSettings, enabled: next },
+					});
+				} else {
+					setProject("captions", "settings", "enabled", next);
+				}
+				setEditorState("timeline", "tracks", "caption", next);
+				if (!next && editorState.timeline.selection?.type === "caption") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
+			return;
+		}
+
+		if (type === "keyboard") {
+			batch(() => {
+				if (!project.keyboard) {
+					setProject("keyboard", {
+						settings: { ...defaultKeyboardSettings, enabled: next },
+					});
+				} else {
+					setProject("keyboard", "settings", "enabled", next);
+				}
+				setEditorState("timeline", "tracks", "keyboard", next);
+				if (!next && editorState.timeline.selection?.type === "keyboard") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
+			return;
+		}
+
+		if (type === "scene") {
+			setEditorState("timeline", "tracks", "scene", next);
+			return;
+		}
+
+		if (type === "3d") {
+			batch(() => {
+				setEditorState("timeline", "tracks", "3d", next);
+				if (!next && editorState.timeline.selection?.type === "3d") {
+					setEditorState("timeline", "selection", null);
+				}
+			});
+			return;
+		}
+
+		if (type === "text") {
+			setEditorState(
+				"timeline",
+				"tracks",
+				"text",
+				next
+					? Math.max(getUsedTrackCount(project.timeline?.textSegments ?? []), 1)
+					: 0,
+			);
+			if (!next && editorState.timeline.selection?.type === "text") {
+				setEditorState("timeline", "selection", null);
+			}
+			return;
+		}
+
+		if (type === "mask") {
+			setEditorState(
+				"timeline",
+				"tracks",
+				"mask",
+				next
+					? Math.max(getUsedTrackCount(project.timeline?.maskSegments ?? []), 1)
+					: 0,
+			);
+			if (!next && editorState.timeline.selection?.type === "mask") {
+				setEditorState("timeline", "selection", null);
+			}
+		}
+	}
+
+	function handleAddTrack(type: TimelineTrackType) {
+		if (type === "style" || type === "image") {
+			const segments =
+				(type === "style"
+					? project.timeline?.styleSegments
+					: project.timeline?.imageSegments) ?? [];
+			const lane = Math.max(
+				getUsedTrackCount<{ start: number; end: number; track?: number }>(
+					segments,
+				),
+				trackState()[type],
+			);
+			if (type === "style") projectActions.addStyleSegment(lane);
+			else void projectActions.importImageSegment(lane);
+			return;
+		}
+
+		if (type === "waveform") {
+			const segments = project.timeline?.waveformSegments ?? [];
+			const laneCount = Math.max(
+				trackState().waveform,
+				getUsedTrackCount(segments),
+			);
+			let lane = laneCount;
+			for (let i = 0; i < laneCount; i++) {
+				if (!segments.some((segment) => getSegmentTrack(segment) === i)) {
+					lane = i;
+					break;
+				}
+			}
+			projectActions.addWaveformSegment(lane);
+			return;
+		}
+
+		if (type === "audio") {
+			const segments = project.timeline?.audioSegments ?? [];
+			const laneCount = Math.max(
+				trackState().audio,
+				getUsedTrackCount<{ start: number; end: number; track?: number }>(
+					segments,
+				),
+			);
+			let lane = laneCount;
+			for (let i = 0; i < laneCount; i++) {
+				if (!segments.some((segment) => getSegmentTrack(segment) === i)) {
+					lane = i;
+					break;
+				}
+			}
+			batch(() => {
+				setEditorState(
+					"timeline",
+					"tracks",
+					"audio",
+					Math.max(laneCount, lane + 1),
+				);
+				openAudioPicker(lane);
+			});
+			return;
+		}
+
+		if (type !== "text" && type !== "mask") return;
+
+		const segments: Array<{ start: number; end: number; track?: number }> =
+			(type === "text"
+				? project.timeline?.textSegments
+				: project.timeline?.maskSegments) ?? [];
+		const length = Math.min(Math.max(1, secsPerPixel() * 80), totalDuration());
+		const time = editorState.playbackTime ?? 0;
+		const laneCount = Math.max(
+			trackState()[type],
+			getUsedTrackCount<{ start: number; end: number; track?: number }>(
+				segments,
+			),
+		);
+
+		let lane = laneCount;
+		let placement: { start: number; end: number } | null = null;
+		for (let i = 0; i < laneCount; i++) {
+			const candidate = placeSegmentAtTime(
+				segments.filter((segment) => getSegmentTrack(segment) === i),
+				time,
+				length,
+				totalDuration(),
+			);
+			if (candidate) {
+				lane = i;
+				placement = candidate;
+				break;
+			}
+		}
+		placement ??= placeSegmentAtTime([], time, length, totalDuration());
+		if (!placement) {
+			setEditorState("timeline", "tracks", type, trackState()[type] + 1);
+			return;
+		}
+		const { start, end } = placement;
+
+		batch(() => {
+			setEditorState("timeline", "tracks", type, Math.max(laneCount, lane + 1));
+			if (type === "text") {
+				setProject(
+					"timeline",
+					"textSegments",
+					produce((segments) => {
+						segments ??= [];
+						segments.push({
+							...defaultTextSegment(start, end),
+							color: autoTextColorAt(canvasControls()),
+							track: lane,
+						});
+						sortTrackSegments(segments);
+					}),
+				);
+			} else {
+				setProject(
+					"timeline",
+					"maskSegments",
+					produce((segments) => {
+						segments ??= [];
+						segments.push({ ...defaultMaskSegment(start, end), track: lane });
+						sortTrackSegments(segments);
+					}),
+				);
+			}
+
+			const updated: Array<{ start: number; end: number; track?: number }> =
+				(type === "text"
+					? project.timeline?.textSegments
+					: project.timeline?.maskSegments) ?? [];
+			const newIndex = updated.findIndex(
+				(segment) =>
+					segment.start === start && getSegmentTrack(segment) === lane,
+			);
+			if (newIndex === -1) return;
+
+			setEditorState("timeline", "selection", { type, indices: [newIndex] });
+			if (type === "text") {
+				setEditorState("timeline", "pendingTextEdit", newIndex);
+			}
+
+			// Clear any stale hover-scrub time: overlay visibility keys off previewTime
+			// first, and a leftover value could hide the segment just selected.
+			const pad = Math.min(0.15, length / 4);
+			const target = Math.min(Math.max(time, start + pad), end - pad);
+			if (target !== time) setEditorState("playbackTime", target);
+			setEditorState("previewTime", null);
+		});
+	}
+
+	function handleDeleteTrackLane(
+		type: "text" | "mask" | "audio" | "style" | "image" | "waveform",
+		laneIndex: number,
+	) {
+		if (type === "style" || type === "image" || type === "waveform") {
+			const resumeHistory = projectHistory.pause();
+			const segments: Array<{ track: number }> =
+				(type === "style"
+					? project.timeline?.styleSegments
+					: type === "image"
+						? project.timeline?.imageSegments
+						: project.timeline?.waveformSegments) ?? [];
+			projectActions.deleteOverlaySegments(
+				type,
+				segments.flatMap((segment, index) =>
+					segment.track === laneIndex ? [index] : [],
+				),
+			);
+			setProject(
+				produce((project) => {
+					const remaining: Array<{ track: number }> | undefined =
+						type === "style"
+							? project.timeline?.styleSegments
+							: type === "image"
+								? project.timeline?.imageSegments
+								: project.timeline?.waveformSegments;
+					for (const segment of remaining ?? [])
+						if (segment.track > laneIndex) segment.track -= 1;
+					if (type !== "style")
+						project.overlayOrder = removeOverlayTrack(
+							project.overlayOrder,
+							type,
+							laneIndex,
+						);
+				}),
+			);
+			setEditorState(
+				"timeline",
+				"tracks",
+				type,
+				Math.max(0, trackState()[type] - 1),
+			);
+			resumeHistory();
+			return;
+		}
+		const resumeHistory = projectHistory.pause();
+		const currentTrackCount = trackState()[type];
+		const nextTextSegments =
+			type === "text"
+				? deleteTrackLane<TextSegment>(
+						project.timeline?.textSegments ?? [],
+						laneIndex,
+					)
+				: null;
+		const nextMaskSegments =
+			type === "mask"
+				? deleteTrackLane<MaskSegment>(
+						project.timeline?.maskSegments ?? [],
+						laneIndex,
+					)
+				: null;
+		const nextAudioSegments =
+			type === "audio"
+				? deleteTrackLane<AudioTrackSegment>(
+						project.timeline?.audioSegments ?? [],
+						laneIndex,
+					)
+				: null;
+		const usedTrackCount =
+			type === "text"
+				? getUsedTrackCount(nextTextSegments ?? [])
+				: type === "mask"
+					? getUsedTrackCount(nextMaskSegments ?? [])
+					: getUsedTrackCount(nextAudioSegments ?? []);
+		const nextTrackCount = Math.max(usedTrackCount, currentTrackCount - 1, 0);
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
+				setEditorState("timeline", "selection", null);
+			}
+
+			setProject(
+				produce((project) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+
+					if (type === "text" && nextTextSegments) {
+						timeline.textSegments = nextTextSegments;
+					} else if (type === "mask" && nextMaskSegments) {
+						timeline.maskSegments = nextMaskSegments;
+					} else if (nextAudioSegments) {
+						timeline.audioSegments = nextAudioSegments;
+					}
+					if (isOverlayTrackKind(type))
+						project.overlayOrder = removeOverlayTrack(
+							project.overlayOrder,
+							type,
+							laneIndex,
+						);
+				}),
+			);
+			setEditorState("timeline", "tracks", type, nextTrackCount);
+		});
+
+		resumeHistory();
+	}
+
+	function handleDeleteSingleTrack(type: "caption" | "keyboard") {
+		const resumeHistory = projectHistory.pause();
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
+				setEditorState("timeline", "selection", null);
+			}
+
+			if (type === "caption") {
+				setProject(
+					produce((project) => {
+						if (project.captions) {
+							project.captions.segments = [];
+							project.captions.settings = {
+								...defaultCaptionSettings,
+								...project.captions.settings,
+								enabled: false,
+							};
+						}
+						project.timeline ??= {
+							segments: [{ start: 0, end: duration(), timescale: 1 }],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
+							captionSegments: [],
+							keyboardSegments: [],
+							camera3dSegments: [],
+							transitions: [],
+						};
+						project.timeline.captionSegments = [];
+					}),
+				);
+				setEditorState("timeline", "tracks", "caption", false);
+			} else {
+				setProject(
+					produce((project) => {
+						if (project.keyboard) {
+							project.keyboard.settings = {
+								...defaultKeyboardSettings,
+								...project.keyboard.settings,
+								enabled: false,
+							};
+						}
+						project.timeline ??= {
+							segments: [{ start: 0, end: duration(), timescale: 1 }],
+							zoomSegments: [],
+							sceneSegments: [],
+							maskSegments: [],
+							textSegments: [],
+							styleSegments: [],
+							imageSegments: [],
+							captionSegments: [],
+							keyboardSegments: [],
+							camera3dSegments: [],
+							transitions: [],
+						};
+						project.timeline.keyboardSegments = [];
+					}),
+				);
+				setEditorState("timeline", "tracks", "keyboard", false);
+			}
+		});
+
+		resumeHistory();
+	}
+
+	function handleClearTrackSegments(type: "zoom" | "scene" | "3d") {
+		const resumeHistory = projectHistory.pause();
+
+		batch(() => {
+			if (editorState.timeline.selection?.type === type) {
+				setEditorState("timeline", "selection", null);
+			}
+
+			setProject(
+				produce((project) => {
+					const timeline = project.timeline;
+					if (!timeline) return;
+					if (type === "zoom") timeline.zoomSegments = [];
+					else if (type === "3d") timeline.camera3dSegments = [];
+					else timeline.sceneSegments = [];
+				}),
+			);
+		});
+
+		resumeHistory();
+	}
+
+	async function handleOpenTrackMenu(
+		e: MouseEvent,
+		type: "text" | "mask" | "audio" | "style" | "image" | "waveform",
+		laneIndex: number,
+	) {
+		e.preventDefault();
+		e.stopPropagation();
+
+		showContextMenu(
+			[
+				{
+					text: `Delete ${type} track`,
+					action: () => handleDeleteTrackLane(type, laneIndex),
+				},
+			],
+			{ x: e.clientX, y: e.clientY },
+		);
+	}
+
+	onMount(() => {
+		if (!project.timeline) {
+			const resume = projectHistory.pause();
+			setProject("timeline", {
+				segments: [
+					{
+						timescale: 1,
+						start: 0,
+						end: duration(),
+					},
+				],
+				zoomSegments: [],
+				sceneSegments: [],
+				maskSegments: [],
+				textSegments: [],
+				styleSegments: [],
+				imageSegments: [],
+				captionSegments: [],
+				keyboardSegments: [],
+				camera3dSegments: [],
+				transitions: [],
+			});
+			resume();
+		}
+	});
+
+	if (
+		!project.timeline?.zoomSegments ||
+		project.timeline.zoomSegments.length < 1 ||
+		!project.timeline?.maskSegments ||
+		!project.timeline?.textSegments ||
+		!project.timeline?.camera3dSegments
+	) {
+		setProject(
+			produce((project) => {
+				project.timeline ??= {
+					segments: [
+						{
+							start: 0,
+							end: duration(),
+							timescale: 1,
+						},
+					],
+					zoomSegments: [],
+					sceneSegments: [],
+					maskSegments: [],
+					textSegments: [],
+					styleSegments: [],
+					imageSegments: [],
+					captionSegments: [],
+					keyboardSegments: [],
+					camera3dSegments: [],
+					transitions: [],
+				};
+				project.timeline.sceneSegments ??= [];
+				project.timeline.captionSegments ??= [];
+				project.timeline.keyboardSegments ??= [];
+				project.timeline.maskSegments ??= [];
+				project.timeline.textSegments ??= [];
+				project.timeline.zoomSegments ??= [];
+				project.timeline.camera3dSegments ??= [];
+				project.timeline.styleSegments ??= [];
+				project.timeline.imageSegments ??= [];
+			}),
+		);
+	}
+
+	let styleSegmentDragState: OverlayDragState = { type: "idle" };
+	let imageSegmentDragState: OverlayDragState = { type: "idle" };
+	let waveformSegmentDragState: OverlayDragState = { type: "idle" };
+	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
+	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
+	let maskSegmentDragState = { type: "idle" } as MaskSegmentDragState;
+	let textSegmentDragState = { type: "idle" } as TextSegmentDragState;
+	let audioSegmentDragState = { type: "idle" } as AudioSegmentDragState;
+	let captionSegmentDragState = { type: "idle" } as CaptionSegmentDragState;
+	let threeDSegmentDragState = { type: "idle" } as ThreeDSegmentDragState;
+
+	let pendingZoomFactor = 1;
+	let pendingZoomOrigin: number | null = null;
+	let zoomRafId: number | null = null;
+
+	let pendingScrollDelta = 0;
+	let scrollRafId: number | null = null;
+
+	function flushPendingZoom() {
+		if (pendingZoomFactor === 1 || pendingZoomOrigin === null) {
+			zoomRafId = null;
+			return;
+		}
+
+		transform().updateZoom(
+			transform().zoom * pendingZoomFactor,
+			pendingZoomOrigin,
+		);
+
+		pendingZoomFactor = 1;
+		pendingZoomOrigin = null;
+		zoomRafId = null;
+	}
+
+	function flushPendingScroll() {
+		if (pendingScrollDelta === 0) {
+			scrollRafId = null;
+			return;
+		}
+
+		const newPosition = transform().position + pendingScrollDelta;
+		transform().setPosition(newPosition);
+
+		pendingScrollDelta = 0;
+		scrollRafId = null;
+	}
+
+	function scheduleZoomUpdate(factor: number, origin: number) {
+		pendingZoomFactor *= factor;
+		pendingZoomOrigin = origin;
+
+		if (zoomRafId === null) {
+			zoomRafId = requestAnimationFrame(flushPendingZoom);
+		}
+	}
+
+	function scheduleScrollUpdate(delta: number) {
+		pendingScrollDelta += delta;
+
+		if (scrollRafId === null) {
+			scrollRafId = requestAnimationFrame(flushPendingScroll);
+		}
+	}
+
+	function getTimelineContentMetrics() {
+		const container = timelineContainerRef();
+		if (!container) return null;
+
+		const rect = container.getBoundingClientRect();
+
+		return {
+			left: rect.left + trackGutter(),
+			width: Math.max(timelineBounds.width ?? rect.width - trackGutter(), 0),
+		};
+	}
+
+	function timelineTimeFromClientX(clientX: number) {
+		const metrics = getTimelineContentMetrics();
+		if (!metrics) return null;
+		const rawTime =
+			secsPerPixel() * (clientX - metrics.left) + transform().position;
+		const snappedTime = rawTime / secsPerPixel() <= START_SNAP_PX ? 0 : rawTime;
+		return Math.min(Math.max(0, snappedTime), totalDuration());
+	}
+
+	async function seekPlayheadTo(newTime: number) {
+		if (editorState.playing) {
+			try {
+				await commands.stopPlayback();
+
+				const targetFrame = Math.round(newTime * FPS);
+				await commands.seekTo(targetFrame);
+
+				if (!editorState.playing) {
+					setEditorState("playbackTime", newTime);
+					return;
+				}
+
+				await commands.startPlayback(FPS, previewResolutionBase());
+				setEditorState("playing", true);
+			} catch (err) {
+				console.error("Failed to seek during playback:", err);
+			}
+		}
+
+		setEditorState("playbackTime", newTime);
+	}
+
+	async function handleUpdatePlayhead(e: MouseEvent) {
+		if (
+			styleSegmentDragState.type !== "moving" &&
+			imageSegmentDragState.type !== "moving" &&
+			waveformSegmentDragState.type !== "moving" &&
+			zoomSegmentDragState.type !== "moving" &&
+			sceneSegmentDragState.type !== "moving" &&
+			maskSegmentDragState.type !== "moving" &&
+			textSegmentDragState.type !== "moving" &&
+			audioSegmentDragState.type !== "moving" &&
+			captionSegmentDragState.type !== "moving" &&
+			threeDSegmentDragState.type !== "moving"
+		) {
+			const newTime = timelineTimeFromClientX(e.clientX);
+			if (newTime === null) return;
+			await seekPlayheadTo(newTime);
+		}
+	}
+
+	function seekPlayheadWithKeyboard(event: KeyboardEvent) {
+		const step = event.shiftKey ? 1 : 1 / FPS;
+		const current = editorState.playbackTime;
+		const next =
+			event.key === "ArrowLeft"
+				? current - step
+				: event.key === "ArrowRight"
+					? current + step
+					: event.key === "Home"
+						? 0
+						: event.key === "End"
+							? totalDuration()
+							: null;
+		if (next === null) return;
+		event.preventDefault();
+		event.stopPropagation();
+		void seekPlayheadTo(Math.min(totalDuration(), Math.max(0, next)));
+	}
+
+	function beginRulerScrub(downEvent: MouseEvent) {
+		if (downEvent.button !== 0) return;
+		downEvent.stopPropagation();
+
+		let lastClientX = downEvent.clientX;
+		let seekInFlight = false;
+		let seekQueued = false;
+		let panRafId: number | null = null;
+
+		const contentEdges = () => {
+			const metrics = getTimelineContentMetrics();
+			if (!metrics || metrics.width <= 0) return null;
+			return { left: metrics.left, right: metrics.left + metrics.width };
+		};
+
+		// While playing, each seek is a stop/seek/restart round-trip, so scrub
+		// updates are coalesced to one in-flight seek with the latest position
+		// applied once it settles.
+		const applyScrub = () => {
+			const edges = contentEdges();
+			const clientX = edges
+				? Math.min(Math.max(lastClientX, edges.left), edges.right)
+				: lastClientX;
+			const newTime = timelineTimeFromClientX(clientX);
+			if (newTime === null) return;
+			if (seekInFlight) {
+				seekQueued = true;
+				return;
+			}
+			seekInFlight = true;
+			void seekPlayheadTo(newTime).finally(() => {
+				seekInFlight = false;
+				if (seekQueued) {
+					seekQueued = false;
+					applyScrub();
+				}
+			});
+		};
+
+		const stepEdgePan = () => {
+			panRafId = null;
+			const edges = contentEdges();
+			if (!edges) return;
+			const overshoot =
+				lastClientX < edges.left
+					? lastClientX - edges.left
+					: lastClientX > edges.right
+						? lastClientX - edges.right
+						: 0;
+			if (overshoot === 0) return;
+			const panPx =
+				Math.sign(overshoot) * Math.min(Math.abs(overshoot) * 0.2, 12);
+			transform().setPosition(transform().position + panPx * secsPerPixel());
+			applyScrub();
+			panRafId = requestAnimationFrame(stepEdgePan);
+		};
+
+		const ensureEdgePan = () => {
+			if (panRafId === null) panRafId = requestAnimationFrame(stepEdgePan);
+		};
+
+		applyScrub();
+		ensureEdgePan();
+
+		createRoot((dispose) => {
+			onCleanup(() => {
+				if (panRafId !== null) {
+					cancelAnimationFrame(panRafId);
+					panRafId = null;
+				}
+			});
+			createEventListenerMap(window, {
+				mousemove: (event) => {
+					lastClientX = event.clientX;
+					applyScrub();
+					ensureEdgePan();
+				},
+				mouseup: () => {
+					batch(() => {
+						setEditorState("timeline", "selection", null);
+						setEditorState("timeline", "audioPicker", null);
+					});
+					dispose();
+				},
+				blur: () => dispose(),
+			});
+		});
+	}
+
+	createEventListener(window, "keydown", (e) => {
+		if (e.defaultPrevented) return;
+		const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+
+		if (
+			document.activeElement instanceof HTMLInputElement ||
+			document.activeElement instanceof HTMLTextAreaElement
+		) {
+			return;
+		}
+
+		if (e.code === "Backspace" || (e.code === "Delete" && hasNoModifiers)) {
+			const selection = editorState.timeline.selection;
+			if (!selection) return;
+
+			if (
+				selection.type === "style" ||
+				selection.type === "image" ||
+				selection.type === "waveform"
+			) {
+				projectActions.deleteOverlaySegments(selection.type, selection.indices);
+			} else if (selection.type === "zoom") {
+				projectActions.deleteZoomSegments(selection.indices);
+			} else if (selection.type === "caption") {
+				projectActions.deleteCaptionSegments(selection.indices);
+			} else if (selection.type === "keyboard") {
+				projectActions.deleteKeyboardSegments(selection.indices);
+			} else if (selection.type === "mask") {
+				projectActions.deleteMaskSegments(selection.indices);
+			} else if (selection.type === "text") {
+				projectActions.deleteTextSegments(selection.indices);
+			} else if (selection.type === "audio") {
+				projectActions.deleteAudioSegments(selection.indices);
+			} else if (selection.type === "3d") {
+				projectActions.deleteCamera3DSegments(selection.indices);
+			} else if (selection.type === "transition") {
+				projectActions.deleteClipTransition(selection.index);
+			} else if (selection.type === "clip") {
+				[...selection.indices]
+					.sort((a, b) => b - a)
+					.forEach((idx) => {
+						projectActions.deleteClipSegment(idx);
+					});
+			} else if (selection.type === "scene") {
+				[...selection.indices]
+					.sort((a, b) => b - a)
+					.forEach((idx) => {
+						projectActions.deleteSceneSegment(idx);
+					});
+			}
+		} else if (e.code === "KeyC" && hasNoModifiers) {
+			const time = editorState.previewTime ?? editorState.playbackTime;
+			if (time === null || time === undefined) return;
+
+			const selection = editorState.timeline.selection;
+			if (
+				selection?.type === "style" ||
+				selection?.type === "image" ||
+				selection?.type === "waveform"
+			) {
+				const type = selection.type;
+				const resumeHistory = projectHistory.pause();
+				for (const index of [...selection.indices].sort((a, b) => b - a))
+					projectActions.splitOverlaySegment(type, index, time);
+				resumeHistory();
+			} else if (selection?.type === "3d") {
+				const segments = project.timeline?.camera3dSegments ?? [];
+				const index = [...selection.indices]
+					.sort((a, b) => b - a)
+					.find((idx) => {
+						const segment = segments[idx];
+						return !!segment && time > segment.start && time < segment.end;
+					});
+				const segment = index === undefined ? undefined : segments[index];
+				if (index !== undefined && segment)
+					projectActions.splitCamera3DSegment(index, time - segment.start);
+				else projectActions.splitClipSegment(time);
+			} else projectActions.splitClipSegment(time);
+		} else if (e.code === "Escape" && hasNoModifiers) {
+			setEditorState("timeline", "selection", null);
+			setEditorState("timeline", "audioPicker", null);
+		} else if (
+			e.code === "KeyA" &&
+			(e.metaKey || e.ctrlKey) &&
+			!e.shiftKey &&
+			!e.altKey
+		) {
+			const selection = editorState.timeline.selection;
+			if (!selection || selection.type === "transition") return;
+
+			const timeline = project.timeline;
+			const segmentCount = {
+				style: timeline?.styleSegments?.length ?? 0,
+				image: timeline?.imageSegments?.length ?? 0,
+				waveform: timeline?.waveformSegments?.length ?? 0,
+				clip: timeline?.segments.length ?? 0,
+				zoom: timeline?.zoomSegments?.length ?? 0,
+				scene: timeline?.sceneSegments?.length ?? 0,
+				mask: timeline?.maskSegments?.length ?? 0,
+				caption: timeline?.captionSegments?.length ?? 0,
+				keyboard: timeline?.keyboardSegments?.length ?? 0,
+				text: timeline?.textSegments?.length ?? 0,
+				audio: timeline?.audioSegments?.length ?? 0,
+				"3d": timeline?.camera3dSegments?.length ?? 0,
+			}[selection.type];
+			if (!segmentCount) return;
+
+			e.preventDefault();
+			setEditorState("timeline", "selection", {
+				type: selection.type,
+				indices: Array.from({ length: segmentCount }, (_, i) => i),
+			});
+		}
+	});
+
+	const generateCaptionsFromTrack = async () => {
+		if (!editorInstance) return;
+
+		setEditorState("captions", "isGenerating", true);
+
+		try {
+			const result = await transcribeEditorCaptions(
+				editorInstance.path,
+				getSelectedTranscriptionLanguage(),
+			);
+
+			if (result.segments.length < 1) {
+				toast.error(
+					"No captions were generated. The audio might be too quiet or unclear.",
+				);
+				return;
+			}
+
+			setProject(
+				produce((p) => {
+					applyCaptionResultToProject(
+						p,
+						result.segments,
+						editorInstance.recordings.segments,
+						duration(),
+					);
+				}),
+			);
+
+			setEditorState("timeline", "tracks", "caption", true);
+			setEditorState("captions", "isStale", false);
+			toast.success("Captions generated successfully!");
+		} catch (error) {
+			console.error("Error generating captions:", error);
+			const errorMessage = getCaptionGenerationErrorMessage(error);
+			toast.error(`Failed to generate captions: ${errorMessage}`);
+		} finally {
+			setEditorState("captions", "isGenerating", false);
+		}
+	};
+
+	const split = () => editorState.timeline.interactMode === "split";
+
+	return (
+		<TimelineContextProvider
+			duration={duration()}
+			secsPerPixel={secsPerPixel()}
+			timelineBounds={timelineBounds}
+			renderPosition={renderPosition()}
+			followExtent={followExtent()}
+		>
+			<div
+				ref={setTimelineContainerRef}
+				role="application"
+				aria-label="Timeline"
+				class="relative overflow-hidden flex flex-col gap-1 h-full"
+				style={{ "--track-height": TRACK_HEIGHT }}
+				onMouseDown={(e) => {
+					createRoot((dispose) => {
+						createEventListener(e.currentTarget, "mouseup", () => {
+							handleUpdatePlayhead(e);
+							if (zoomSegmentDragState.type === "idle") {
+								setEditorState("timeline", "selection", null);
+								setEditorState("timeline", "audioPicker", null);
+							}
+						});
+						createEventListener(window, "mouseup", () => {
+							dispose();
+						});
+					});
+				}}
+				onMouseMove={(e) => {
+					const metrics = getTimelineContentMetrics();
+					if (playbackIntent()) return;
+					if (!metrics || metrics.width <= 0) return;
+					const offsetX = e.clientX - metrics.left;
+					if (offsetX < 0 || offsetX > metrics.width) {
+						setEditorState("previewTime", null);
+						return;
+					}
+					const hoverTime = transform().position + secsPerPixel() * offsetX;
+					setEditorState(
+						"previewTime",
+						hoverTime / secsPerPixel() <= START_SNAP_PX
+							? 0
+							: Math.min(hoverTime, totalDuration()),
+					);
+				}}
+				onMouseEnter={() => setEditorState("timeline", "hoveredTrack", null)}
+				onMouseLeave={() => {
+					setEditorState("previewTime", null);
+				}}
+				onWheel={(e) => {
+					e.preventDefault();
+					if (e.ctrlKey) {
+						const origin = editorState.previewTime ?? editorState.playbackTime;
+						scheduleZoomUpdate(pinchZoomFactor(e.deltaY), origin);
+					} else {
+						let delta: number = 0;
+
+						if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 0.5) {
+							delta = e.deltaX;
+						} else if (isApplePlatform()) {
+							delta = e.shiftKey ? e.deltaX : e.deltaY;
+						} else {
+							delta = e.deltaY;
+						}
+
+						scheduleScrollUpdate(secsPerPixel() * delta);
+					}
+				}}
+			>
+				<div class="absolute bottom-0 right-0 z-30 h-1 w-[78px]">
+					<Minimap />
+				</div>
+				<div
+					class="relative z-20 shrink-0"
+					style={{ height: `${TIMELINE_HEADER_HEIGHT}px` }}
+				>
+					<div class="absolute inset-0 flex items-end">
+						<TimelineMarkings />
+					</div>
+					<div
+						class="absolute inset-y-0 left-0 z-30 flex items-center"
+						style={{
+							width: `${trackGutter()}px`,
+							"padding-left": `${TRACK_GUTTER_INSET}px`,
+						}}
+					>
+						<TrackManager
+							options={trackOptions()}
+							onToggle={handleToggleTrack}
+							onAdd={handleAddTrack}
+						/>
+					</div>
+					{/* Scrub surface for the ruler. It overhangs the timeline origin so
+					    the snap-to-zero zone places the playhead instead of hitting the
+					    "Add track" trigger beneath, without swallowing that trigger. */}
+					<div
+						role="slider"
+						tabIndex={0}
+						aria-label="Playhead"
+						aria-valuemin={0}
+						aria-valuemax={Math.round(totalDuration() * 100) / 100}
+						aria-valuenow={Math.round(editorState.playbackTime * 100) / 100}
+						aria-valuetext={formatTime(editorState.playbackTime)}
+						class="absolute inset-y-0 right-0 z-40 outline-hidden focus-visible:ring-2 focus-visible:ring-ed-accent focus-visible:rounded-md"
+						style={{ left: `${trackGutter() - RULER_SCRUB_OVERHANG_PX}px` }}
+						onMouseDown={beginRulerScrub}
+						onKeyDown={seekPlayheadWithKeyboard}
+					/>
+				</div>
+				<Show
+					when={
+						!playbackIntent() &&
+						editorState.previewTime !== null &&
+						editorState.timeline.splitPreview === null
+							? { time: editorState.previewTime }
+							: null
+					}
+				>
+					{(preview) => (
+						<div
+							class="absolute bottom-0 z-20 w-px pointer-events-none bg-ed-text-3/50"
+							style={{
+								left: `${trackGutter()}px`,
+								top: `${PLAYHEAD_TOP_OFFSET}px`,
+								transform: `translateX(${
+									((preview().time ?? 0) - transform().position) /
+									secsPerPixel()
+								}px)`,
+							}}
+						>
+							<div class="absolute top-0 left-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ed-text-3/50" />
+						</div>
+					)}
+				</Show>
+				<div
+					class={cx(
+						"absolute bottom-0 z-20 w-px pointer-events-none bg-ed-playhead",
+						split() && "opacity-50",
+					)}
+					style={{
+						left: `${trackGutter()}px`,
+						top: `${PLAYHEAD_TOP_OFFSET}px`,
+						transform: `translateX(${playheadRestX()}px)`,
+					}}
+					ref={playheadRef}
+				>
+					<div class="size-3 rounded-full bg-ed-playhead ring-2 ring-ed-window -mt-1.5 -ml-[5.5px]" />
+				</div>
+				<Show when={split() ? editorState.timeline.splitPreview : null}>
+					{(preview) => (
+						<div
+							class={cx(
+								"absolute bottom-0 z-20 w-px pointer-events-none",
+								preview().snapped ? "bg-ed-accent" : "bg-ed-text-3/70",
+							)}
+							style={{
+								left: `${trackGutter()}px`,
+								top: `${PLAYHEAD_TOP_OFFSET}px`,
+								transform: `translateX(${
+									(preview().time - transform().position) / secsPerPixel()
+								}px)`,
+							}}
+						>
+							<Show when={preview().snapped}>
+								<div class="absolute top-0 left-1/2 size-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] bg-ed-accent" />
+							</Show>
+						</div>
+					)}
+				</Show>
+				<div class="overflow-hidden relative flex-1 min-h-0">
+					<div
+						ref={setTimelineScrollRef}
+						data-track-scroll
+						class="absolute inset-0 overflow-y-auto overflow-x-hidden pr-1"
+						onWheel={(e) => {
+							if (!e.ctrlKey && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+								e.stopPropagation();
+							}
+						}}
+					>
+						<div class="flex flex-col gap-1.5 min-h-full">
+							<TrackRow icon={trackIcons.clip} label="Video" type="clip">
+								<ClipTrack
+									ref={setTimelineRef}
+									handleUpdatePlayhead={handleUpdatePlayhead}
+								/>
+							</TrackRow>
+							<Show when={captionTrackVisible()}>
+								<TrackRow
+									icon={trackIcons.caption}
+									label="Captions"
+									type="caption"
+									onDelete={() => handleDeleteSingleTrack("caption")}
+								>
+									<CaptionsTrack
+										onDragStateChanged={(v) => {
+											captionSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+										onGenerate={generateCaptionsFromTrack}
+										isGenerating={editorState.captions.isGenerating}
+									/>
+								</TrackRow>
+							</Show>
+							<For each={styleTrackRows()}>
+								{(laneIndex) => (
+									<TrackRow
+										icon={trackIcons.style}
+										label={`Style ${laneIndex + 1}`}
+										type="style"
+										laneIndex={laneIndex}
+										onDelete={() => handleDeleteTrackLane("style", laneIndex)}
+										onContextMenu={(event) =>
+											handleOpenTrackMenu(event, "style", laneIndex)
+										}
+									>
+										<StyleTrack
+											laneIndex={laneIndex}
+											onDragStateChanged={(value) => {
+												styleSegmentDragState = value;
+											}}
+											handleUpdatePlayhead={handleUpdatePlayhead}
+										/>
+									</TrackRow>
+								)}
+							</For>
+							<For each={overlayTrackRows()}>
+								{(row) => (
+									<TrackRow
+										icon={trackIcons[row.kind]}
+										label={`${row.kind[0].toUpperCase()}${row.kind.slice(1)} ${row.track + 1}`}
+										type={row.kind}
+										laneIndex={row.track}
+										onDelete={() => handleDeleteTrackLane(row.kind, row.track)}
+										onContextMenu={(event) =>
+											handleOpenTrackMenu(event, row.kind, row.track)
+										}
+									>
+										<Switch>
+											<Match when={row.kind === "image"}>
+												<ImageTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														imageSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+											<Match when={row.kind === "waveform"}>
+												<WaveformTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														waveformSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+											<Match when={row.kind === "text"}>
+												<TextTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														textSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+											<Match when={row.kind === "mask"}>
+												<MaskTrack
+													laneIndex={row.track}
+													onDragStateChanged={(value) => {
+														maskSegmentDragState = value;
+													}}
+													handleUpdatePlayhead={handleUpdatePlayhead}
+												/>
+											</Match>
+										</Switch>
+									</TrackRow>
+								)}
+							</For>
+							<For each={audioTrackRows()}>
+								{(laneIndex) => (
+									<TrackRow
+										icon={trackIcons.audio}
+										label={`Audio ${laneIndex + 1}`}
+										type="audio"
+										laneIndex={laneIndex}
+										onDelete={() => handleDeleteTrackLane("audio", laneIndex)}
+										onContextMenu={(e) =>
+											handleOpenTrackMenu(e, "audio", laneIndex)
+										}
+									>
+										<AudioTrack
+											laneIndex={laneIndex}
+											onDragStateChanged={(v) => {
+												audioSegmentDragState = v;
+											}}
+											handleUpdatePlayhead={handleUpdatePlayhead}
+											onRequestAdd={openAudioPicker}
+										/>
+									</TrackRow>
+								)}
+							</For>
+							<Show when={zoomTrackVisible()}>
+								<TrackRow
+									icon={trackIcons.zoom}
+									label="Zoom"
+									type="zoom"
+									onDelete={
+										(project.timeline?.zoomSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("zoom")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all zoom segments"
+								>
+									<ZoomTrack
+										onDragStateChanged={(v) => {
+											zoomSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+							<Show when={threeDTrackVisible()}>
+								<TrackRow
+									icon={trackIcons["3d"]}
+									label="3D"
+									type="3d"
+									onDelete={
+										(project.timeline?.camera3dSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("3d")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all 3D shots"
+								>
+									<ThreeDTrack
+										onDragStateChanged={(v) => {
+											threeDSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+							<Show when={sceneTrackVisible()}>
+								<TrackRow
+									icon={trackIcons.scene}
+									label="Scene"
+									type="scene"
+									onDelete={
+										(project.timeline?.sceneSegments?.length ?? 0) > 0
+											? () => handleClearTrackSegments("scene")
+											: undefined
+									}
+									deleteLabel="Clear all"
+									deleteTitle="Delete all scene segments"
+								>
+									<SceneTrack
+										onDragStateChanged={(v) => {
+											sceneSegmentDragState = v;
+										}}
+										handleUpdatePlayhead={handleUpdatePlayhead}
+									/>
+								</TrackRow>
+							</Show>
+						</div>
+					</div>
+				</div>
+			</div>
+		</TimelineContextProvider>
+	);
+}
+
+function TrackRow(props: {
+	icon: () => JSX.Element;
+	label?: string;
+	type: TimelineTrackType;
+	laneIndex?: number;
+	children: JSX.Element;
+	onDelete?: () => void;
+	deleteLabel?: string;
+	deleteTitle?: string;
+	onContextMenu?: (e: MouseEvent) => void;
+}) {
+	const { project, setProject, editorState, setEditorState } =
+		useEditorContext();
+	const [row, setRow] = createSignal<HTMLDivElement>();
+	createEventListener(row, "contextmenu", (event: MouseEvent) => {
+		if ((event.target as Element | null)?.closest("[data-timeline-segment]"))
+			return;
+		props.onContextMenu?.(event);
+	});
+	const [dragging, setDragging] = createSignal(false);
+	let suppressClick = false;
+	let finishDrag: (() => void) | undefined;
+	onCleanup(() => finishDrag?.());
+	const overlayRows = () =>
+		getOverlayTrackRows(project, editorState.timeline.tracks);
+	const moveToSlot = (slot: number) => {
+		const from = props.laneIndex;
+		if (from === undefined) return;
+		if (isOverlayTrackKind(props.type)) {
+			const order = overlayRows();
+			const source = { kind: props.type, track: from };
+			if (order.findIndex((item) => sameOverlayTrack(item, source)) === slot)
+				return;
+			setProject("overlayOrder", moveOverlayTrack(order, source, slot));
+			return;
+		}
+		const to = laneCount() - 1 - slot;
+		if (from === to) return;
+		setProject(
+			"timeline",
+			produce((timeline) => {
+				if (!timeline) return;
+				if (props.type === "style")
+					moveTrackLane(timeline.styleSegments, from, to);
+				else if (props.type === "audio")
+					moveTrackLane(timeline.audioSegments ?? [], from, to);
+			}),
+		);
+	};
+	const trackSegments = (): Array<{
+		start: number;
+		end: number;
+		track?: number;
+	}> => {
+		const timeline = project.timeline;
+		switch (props.type) {
+			case "style":
+				return timeline?.styleSegments ?? [];
+			case "image":
+				return timeline?.imageSegments ?? [];
+			case "waveform":
+				return timeline?.waveformSegments ?? [];
+			case "text":
+				return timeline?.textSegments ?? [];
+			case "mask":
+				return timeline?.maskSegments ?? [];
+			case "audio":
+				return timeline?.audioSegments ?? [];
+			case "caption":
+				return timeline?.captionSegments ?? [];
+			case "keyboard":
+				return timeline?.keyboardSegments ?? [];
+			case "zoom":
+				return timeline?.zoomSegments ?? [];
+			case "3d":
+				return timeline?.camera3dSegments ?? [];
+			case "scene":
+				return timeline?.sceneSegments ?? [];
+			case "clip": {
+				const segments = timeline?.segments ?? [];
+				const offsets = clipTimelineOffsets(
+					segments,
+					timeline?.transitions ?? [],
+				);
+				const holds = holdWindows(timeline?.textSegments);
+				return segments.map((segment, index) => ({
+					start: effectiveToOutput(holds, offsets[index]),
+					end: effectiveToOutput(holds, offsets[index] + clipDuration(segment)),
+				}));
+			}
+		}
+	};
+	const laneCount = () => {
+		const count = editorState.timeline.tracks[props.type];
+		return Math.max(
+			typeof count === "number" ? count : 0,
+			getUsedTrackCount(trackSegments()),
+		);
+	};
+	const active = () => {
+		const selection = editorState.timeline.selection;
+		if (
+			!selection ||
+			selection.type !== props.type ||
+			!("indices" in selection)
+		)
+			return false;
+		if (props.laneIndex === undefined) return true;
+		const segments = trackSegments();
+		return selection.indices.some((index) => {
+			const segment = segments[index];
+			return (
+				segment !== undefined && getSegmentTrack(segment) === props.laneIndex
+			);
+		});
+	};
+	const selectTrack = () => {
+		const segments = trackSegments();
+		const items = segments
+			.map((segment, index) => ({ segment, index }))
+			.filter(
+				({ segment }) =>
+					props.laneIndex === undefined ||
+					getSegmentTrack(segment) === props.laneIndex,
+			);
+		const time = editorState.playbackTime;
+		const activeItems = props.type === "clip" ? [...items].reverse() : items;
+		const item =
+			activeItems.find(
+				({ segment }) => time >= segment.start && time < segment.end,
+			) ?? items[0];
+		batch(() => {
+			setEditorState("timeline", "audioPicker", null);
+			setEditorState("timeline", "audioReplace", null);
+			setEditorState(
+				"timeline",
+				"selection",
+				item ? { type: props.type, indices: [item.index] } : null,
+			);
+			if (item) {
+				setEditorState("previewTime", null);
+				setEditorState(
+					"playbackTime",
+					Math.max(
+						item.segment.start,
+						Math.min(time, item.segment.end - 0.001),
+					),
+				);
+			}
+		});
+	};
+
+	const canReorder = () =>
+		props.laneIndex !== undefined &&
+		(isOverlayTrackKind(props.type) ? overlayRows().length : laneCount()) > 1;
+	const reorderWithKeyboard = (event: KeyboardEvent) => {
+		if (
+			!canReorder() ||
+			!event.altKey ||
+			!["ArrowUp", "ArrowDown"].includes(event.key)
+		)
+			return;
+		event.preventDefault();
+		event.stopPropagation();
+		const kind = props.type;
+		const visual = isOverlayTrackKind(kind);
+		const count = visual ? overlayRows().length : laneCount();
+		const from = visual
+			? overlayRows().findIndex(
+					(item) => item.kind === kind && item.track === props.laneIndex,
+				)
+			: count - 1 - (props.laneIndex ?? 0);
+		const to = Math.max(
+			0,
+			Math.min(count - 1, from + (event.key === "ArrowUp" ? -1 : 1)),
+		);
+		const rows = (event.currentTarget as HTMLElement).closest(
+			"[data-track-lane]",
+		)?.parentElement;
+		moveToSlot(to);
+		if (!visual)
+			rows
+				?.querySelector<HTMLButtonElement>(
+					`[data-track-type="${kind}"][data-track-lane="${count - 1 - to}"] [data-track-reorder]`,
+				)
+				?.focus();
+	};
+	const startReorder = (event: MouseEvent) => {
+		if (event.button !== 0) return;
+		event.preventDefault();
+		event.stopPropagation();
+		(event.currentTarget as HTMLElement).focus({ preventScroll: true });
+		if (!canReorder()) return;
+		finishDrag?.();
+		suppressClick = false;
+		const header = event.currentTarget as HTMLElement;
+		const row = header.closest<HTMLElement>("[data-track-lane]");
+		const scroll = row?.closest<HTMLElement>("[data-track-scroll]");
+		if (!row || !scroll) return;
+		const visual = isOverlayTrackKind(props.type);
+		const allRows = Array.from(
+			row.parentElement?.querySelectorAll<HTMLElement>("[data-track-lane]") ??
+				[],
+		).filter((item) =>
+			visual
+				? isOverlayTrackKind(item.dataset.trackType ?? "")
+				: item.dataset.trackType === props.type,
+		);
+		const rows = allRows.filter((item) => item !== row);
+		let target: number | null = null;
+		let pointer = { x: event.clientX, y: event.clientY };
+		let ghost: HTMLElement | undefined;
+		let indicator: HTMLElement | undefined;
+		let frame = 0;
+		let lastFrame = 0;
+		const previousCursor = document.body.style.cursor;
+		const updateTarget = () => {
+			if (!ghost || !indicator) return;
+			ghost.style.transform = `translate(${pointer.x + 14}px, ${pointer.y - 22}px)`;
+			const bounds = scroll.getBoundingClientRect();
+			const hoveredRow = document
+				.elementFromPoint(pointer.x, pointer.y)
+				?.closest<HTMLElement>("[data-track-type]");
+			if (
+				(hoveredRow && !allRows.includes(hoveredRow)) ||
+				allRows.some((item) => !item.isConnected) ||
+				pointer.x < bounds.left ||
+				pointer.x > bounds.right ||
+				pointer.y < bounds.top ||
+				pointer.y > bounds.bottom
+			) {
+				target = null;
+				indicator.style.display = "none";
+				return;
+			}
+			const rects = rows.map((item) => item.getBoundingClientRect());
+			target = trackInsertionIndex(
+				rects.map((rect) => rect.top + rect.height / 2),
+				pointer.y,
+			);
+			const after = rects[target];
+			const before = rects[target - 1];
+			const top = after
+				? before
+					? (before.bottom + after.top) / 2
+					: after.top - 4
+				: before.bottom + 4;
+			indicator.style.display = "block";
+			indicator.style.left = `${bounds.left}px`;
+			indicator.style.top = `${Math.max(bounds.top + 1, Math.min(bounds.bottom - 3, top - 1))}px`;
+			indicator.style.width = `${bounds.width - 4}px`;
+			indicator.textContent = visual
+				? target === 0
+					? "Front"
+					: target === rows.length
+						? "Back"
+						: "Place here"
+				: "Place here";
+		};
+		const tick = (now: number) => {
+			const bounds = scroll.getBoundingClientRect();
+			const elapsed = Math.min(32, lastFrame ? now - lastFrame : 16);
+			lastFrame = now;
+			if (
+				pointer.x >= bounds.left &&
+				pointer.x <= bounds.right &&
+				pointer.y >= bounds.top - 24 &&
+				pointer.y <= bounds.bottom + 24
+			) {
+				const edge = Math.min(40, bounds.height / 3);
+				const velocity =
+					pointer.y < bounds.top + edge
+						? -Math.min(1, (bounds.top + edge - pointer.y) / edge)
+						: pointer.y > bounds.bottom - edge
+							? Math.min(1, (pointer.y - bounds.bottom + edge) / edge)
+							: 0;
+				scroll.scrollTop += velocity * elapsed * 0.55;
+			}
+			updateTarget();
+			frame = requestAnimationFrame(tick);
+		};
+		const move = (next: MouseEvent) => {
+			pointer = { x: next.clientX, y: next.clientY };
+			if (
+				!dragging() &&
+				Math.hypot(pointer.x - event.clientX, pointer.y - event.clientY) < 4
+			)
+				return;
+			next.preventDefault();
+			next.stopPropagation();
+			if (!dragging()) {
+				setDragging(true);
+				suppressClick = true;
+				document.body.style.cursor = "grabbing";
+				ghost = header.cloneNode(true) as HTMLElement;
+				ghost.removeAttribute("data-track-reorder");
+				ghost.setAttribute("aria-hidden", "true");
+				ghost.style.cssText = `position:fixed;left:0;top:0;width:${header.offsetWidth}px;pointer-events:none;z-index:2147483647;opacity:.95;filter:drop-shadow(0 8px 16px #0006);`;
+				indicator = document.createElement("div");
+				indicator.style.cssText =
+					"position:fixed;height:2px;background:var(--blue-9);color:var(--blue-9);font-size:10px;font-weight:600;line-height:22px;pointer-events:none;z-index:2147483646;text-align:right;";
+				document.body.append(ghost, indicator);
+				frame = requestAnimationFrame(tick);
+			}
+			updateTarget();
+		};
+		const finish = (commit: boolean) => {
+			window.removeEventListener("mousemove", move, true);
+			window.removeEventListener("mouseup", drop, true);
+			window.removeEventListener("blur", cancel);
+			window.removeEventListener("keydown", keydown, true);
+			cancelAnimationFrame(frame);
+			ghost?.remove();
+			indicator?.remove();
+			document.body.style.cursor = previousCursor;
+			const shouldCommit =
+				commit &&
+				dragging() &&
+				target !== null &&
+				allRows.every((item) => item.isConnected);
+			setDragging(false);
+			finishDrag = undefined;
+			if (shouldCommit && target !== null) moveToSlot(target);
+		};
+		const drop = (next: MouseEvent) => {
+			move(next);
+			finish(true);
+		};
+		const cancel = () => finish(false);
+		const keydown = (next: KeyboardEvent) => {
+			if (next.key === "Escape") {
+				next.preventDefault();
+				next.stopImmediatePropagation();
+				cancel();
+			}
+		};
+		finishDrag = cancel;
+		window.addEventListener("mousemove", move, true);
+		window.addEventListener("mouseup", drop, true);
+		window.addEventListener("blur", cancel);
+		window.addEventListener("keydown", keydown, true);
+	};
+
+	return (
+		<div
+			class={cx(
+				"group/row ed-fade relative flex items-stretch rounded-lg",
+				active() ? "bg-ed-ctl-hover" : "bg-ed-ctl hover:bg-ed-ctl-hover",
+			)}
+			classList={{ "opacity-35": dragging() }}
+			data-track-type={props.type}
+			data-track-lane={props.laneIndex}
+			ref={setRow}
+		>
+			<div
+				class="group/icon relative shrink-0"
+				style={{ width: `${trackGutter()}px` }}
+			>
+				<button
+					type="button"
+					class="relative flex h-full w-full items-center gap-2 rounded-md pl-1 text-left focus-visible:outline-2 focus-visible:outline-ed-accent"
+					classList={{ "cursor-grab active:cursor-grabbing": canReorder() }}
+					data-track-reorder={canReorder() ? "" : undefined}
+					title={
+						canReorder()
+							? "Drag this header to reorder. Higher visual layers appear in front. Alt + Up or Down also moves the track."
+							: undefined
+					}
+					onMouseDown={startReorder}
+					onKeyDown={reorderWithKeyboard}
+					aria-label={`Select ${props.label ?? props.type} track`}
+					onClick={(event) => {
+						event.stopPropagation();
+						if (suppressClick) {
+							suppressClick = false;
+							return;
+						}
+						selectTrack();
+					}}
+				>
+					<TrackIcon
+						icon={props.icon()}
+						showGrip={canReorder()}
+						type={props.type}
+					/>
+					<Show when={props.label}>
+						<span
+							data-track-label
+							class={cx(
+								"min-w-0 flex-1 truncate text-[13px] leading-none transition-[padding,color] duration-150",
+								active()
+									? "text-ed-text-1"
+									: "text-ed-text-2 group-hover/row:text-ed-text-1",
+							)}
+							classList={{ "group-hover/icon:pr-5": !!props.onDelete }}
+						>
+							{props.label}
+						</span>
+					</Show>
+				</button>
+				<Show when={props.onDelete}>
+					<button
+						type="button"
+						class="absolute right-0 top-1/2 z-30 flex size-5 -translate-y-1/2 items-center justify-center rounded-md text-ed-text-3 opacity-0 transition-opacity hover:bg-ed-ctl-active hover:text-red-9 group-hover/icon:opacity-100 focus-visible:opacity-100"
+						aria-label={props.deleteTitle ?? "Delete track"}
+						onClick={(e) => {
+							e.stopPropagation();
+							props.onDelete?.();
+						}}
+						onMouseDown={(e) => e.stopPropagation()}
+						title={props.deleteTitle ?? "Delete track"}
+					>
+						<IconCapTrash class="size-3.5" />
+					</button>
+				</Show>
+			</div>
+			<div class="flex-1 relative overflow-hidden min-w-0 rounded-r-lg">
+				{props.children}
+			</div>
+		</div>
+	);
+}
+
+function TimelineMarkings() {
+	const { editorState } = useEditorContext();
+	const { secsPerPixel, markingResolution, renderPosition, followExtent } =
+		useTimelineContext();
+	const transform = () => editorState.timeline.transform;
+
+	const markingCount = () =>
+		Math.ceil(
+			2 + (transform().zoom + followExtent() + 5) / markingResolution(),
+		);
+
+	const markingOffset = () => renderPosition() % markingResolution();
+
+	const getMarkingTime = (index: number) =>
+		renderPosition() - markingOffset() + index * markingResolution();
+
+	return (
+		<div
+			class="relative flex-1 h-full overflow-hidden"
+			style={{ "margin-left": `${trackGutter()}px` }}
+		>
+			<div class="timeline-follow-shift absolute inset-0">
+				<Index each={Array.from({ length: markingCount() })}>
+					{(_, index) => {
+						const second = () => getMarkingTime(index);
+						const isVisible = () => second() >= 0;
+						const isMajor = () => second() % 1 === 0;
+						const translateX = () =>
+							(second() - renderPosition()) / secsPerPixel();
+
+						return (
+							<div
+								class={cx(
+									"absolute left-0 bottom-0 w-px bg-ed-line-strong",
+									isMajor() ? "h-2" : "h-[5px]",
+								)}
+								style={{
+									transform: `translateX(${translateX()}px)`,
+									visibility: isVisible() ? "visible" : "hidden",
+								}}
+							>
+								<Show when={isMajor()}>
+									<div
+										class={cx(
+											"absolute bottom-2.5 left-0 text-[11px] leading-none tabular-nums whitespace-nowrap text-ed-text-2",
+											second() !== 0 && "-translate-x-1/2",
+										)}
+									>
+										{formatTime(second())}
+									</div>
+								</Show>
+							</div>
+						);
+					}}
+				</Index>
+			</div>
+		</div>
+	);
+}

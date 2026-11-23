@@ -1,0 +1,990 @@
+import {
+	createEventListener,
+	createEventListenerMap,
+} from "@solid-primitives/event-listener";
+import { throttle } from "@solid-primitives/scheduled";
+import { cx } from "cva";
+import {
+	batch,
+	createEffect,
+	createMemo,
+	createRoot,
+	createSignal,
+	For,
+	Index,
+	on,
+	onCleanup,
+	Show,
+} from "solid-js";
+import type { FrameLayoutEvent } from "../../../engine/types";
+import { FPS, useEditorContext } from "./context";
+import {
+	chromeInsets,
+	evenResize,
+	proportionalResize,
+	resizedDisplay,
+} from "./display-resize";
+import {
+	arrowStep,
+	type DragPoint,
+	runSteppedDrag,
+	type Vec,
+} from "./keyboard-steps";
+import {
+	buildSnapTargets,
+	type NormRect,
+	SNAP_PX,
+	type SnapTargets,
+	snapMovingRect,
+	snapResizeCorner,
+} from "./snapping";
+
+type Size = { width: number; height: number };
+
+type CanvasDrag = {
+	onMouseDown: (e: MouseEvent) => void;
+	onStep: (step: Vec) => void;
+};
+
+const clamp = (value: number, min: number, max: number) =>
+	min > max ? (min + max) / 2 : Math.min(Math.max(value, min), max);
+
+function normRect(
+	bounds: [number, number, number, number],
+	layout: FrameLayoutEvent,
+): NormRect {
+	return {
+		x: bounds[0] / layout.output_width,
+		y: bounds[1] / layout.output_height,
+		w: (bounds[2] - bounds[0]) / layout.output_width,
+		h: (bounds[3] - bounds[1]) / layout.output_height,
+	};
+}
+
+// The renderer's classic camera inset (CAMERA_PADDING px at 1080p), exposed
+// as snap lines so a freely-dragged camera can land back on the stock look.
+function classicMargin(layout: FrameLayoutEvent) {
+	const padPx = 50 * (layout.output_height / 1080);
+	return { x: padPx / layout.output_width, y: padPx / layout.output_height };
+}
+
+type SnapExclude =
+	| "display"
+	| "camera"
+	| { text: number }
+	| { mask: number }
+	| { image: number }
+	| { waveform: number }
+	| null;
+
+export function useCanvasSnapTargets() {
+	const { project, editorState, latestFrameLayout } = useEditorContext();
+	const time = () => editorState.previewTime ?? editorState.playbackTime ?? 0;
+
+	return (exclude: SnapExclude): SnapTargets => {
+		const rects: NormRect[] = [];
+		const layout = latestFrameLayout();
+
+		if (layout) {
+			if (exclude !== "display" && !project.hideDisplay)
+				rects.push(normRect(layout.display, layout));
+			if (layout.camera && exclude !== "camera")
+				rects.push(normRect(layout.camera, layout));
+		}
+
+		const t = time();
+		project.timeline?.textSegments?.forEach((segment, index) => {
+			if (
+				typeof exclude === "object" &&
+				exclude !== null &&
+				"text" in exclude &&
+				exclude.text === index
+			)
+				return;
+			if (!(t >= segment.start && t < segment.end)) return;
+			if (segment.enabled === false) return;
+			const center = segment.center ?? { x: 0.5, y: 0.5 };
+			const size = segment.size ?? { x: 0.35, y: 0.2 };
+			rects.push({
+				x: center.x - size.x / 2,
+				y: center.y - size.y / 2,
+				w: size.x,
+				h: size.y,
+			});
+		});
+		project.timeline?.maskSegments?.forEach((segment, index) => {
+			if (
+				typeof exclude === "object" &&
+				exclude !== null &&
+				"mask" in exclude &&
+				exclude.mask === index
+			)
+				return;
+			if (!(t >= segment.start && t < segment.end)) return;
+			rects.push({
+				x: segment.center.x - segment.size.x / 2,
+				y: segment.center.y - segment.size.y / 2,
+				w: segment.size.x,
+				h: segment.size.y,
+			});
+		});
+
+		project.timeline?.imageSegments?.forEach((segment, index) => {
+			if (
+				typeof exclude === "object" &&
+				exclude !== null &&
+				"image" in exclude &&
+				exclude.image === index
+			)
+				return;
+			if (!segment.enabled || t < segment.start || t >= segment.end) return;
+			const angle = (segment.rotation * Math.PI) / 180;
+			const outputWidth = layout?.output_width ?? 1920;
+			const outputHeight = layout?.output_height ?? 1080;
+			const w =
+				(Math.abs(segment.size.x * outputWidth * Math.cos(angle)) +
+					Math.abs(segment.size.y * outputHeight * Math.sin(angle))) /
+				outputWidth;
+			const h =
+				(Math.abs(segment.size.x * outputWidth * Math.sin(angle)) +
+					Math.abs(segment.size.y * outputHeight * Math.cos(angle))) /
+				outputHeight;
+			rects.push({
+				x: segment.center.x - w / 2,
+				y: segment.center.y - h / 2,
+				w,
+				h,
+			});
+		});
+		project.timeline?.waveformSegments?.forEach((segment, index) => {
+			if (
+				typeof exclude === "object" &&
+				exclude !== null &&
+				"waveform" in exclude &&
+				exclude.waveform === index
+			)
+				return;
+			if (!segment.enabled || t < segment.start || t >= segment.end) return;
+			rects.push({
+				x: segment.center.x - segment.size.x / 2,
+				y: segment.center.y - segment.size.y / 2,
+				w: segment.size.x,
+				h: segment.size.y,
+			});
+		});
+		// The classic camera-inset margin lines only make sense for the camera
+		// and display; for text/mask boxes they just cause spurious re-snaps
+		// right next to the frame-edge lines.
+		const wantsMargin = exclude === "camera" || exclude === "display";
+		return buildSnapTargets(rects, {
+			margin: layout && wantsMargin ? classicMargin(layout) : undefined,
+		});
+	};
+}
+
+export function SnapGuidesOverlay(props: { size: Size }) {
+	const { snapGuides } = useEditorContext();
+	return (
+		<div class="overflow-hidden absolute inset-0 pointer-events-none">
+			<For each={snapGuides()}>
+				{(guide) => (
+					<div
+						class="absolute bg-[#FF3B6B]"
+						style={
+							guide.axis === "v"
+								? {
+										left: `${guide.pos * props.size.width}px`,
+										top: `${guide.start * props.size.height}px`,
+										width: "1px",
+										height: `${(guide.end - guide.start) * props.size.height}px`,
+									}
+								: {
+										top: `${guide.pos * props.size.height}px`,
+										left: `${guide.start * props.size.width}px`,
+										height: "1px",
+										width: `${(guide.end - guide.start) * props.size.width}px`,
+									}
+						}
+					/>
+				)}
+			</For>
+		</div>
+	);
+}
+
+export function CanvasElementsOverlay(props: { size: Size }) {
+	const {
+		styleProject: project,
+		setStyleProject: setProject,
+		selectedStyle,
+		toggleStyleGroup,
+		styleScopeToken,
+		editorState,
+		setEditorState,
+		projectHistory,
+		latestFrameLayout,
+		setSnapGuides,
+	} = useEditorContext();
+
+	const snapTargetsFor = useCanvasSnapTargets();
+
+	const time = () => editorState.previewTime ?? editorState.playbackTime ?? 0;
+
+	const sceneModeAt = (t: number) =>
+		project.timeline?.sceneSegments?.find((s) => t >= s.start && t < s.end)
+			?.mode ?? "default";
+
+	const activeZoomIndex = () => {
+		const t = time();
+		const index = (project.timeline?.zoomSegments ?? []).findIndex(
+			(s) => t >= s.start && t < s.end,
+		);
+		return index === -1 ? null : index;
+	};
+	const zoomActive = () => activeZoomIndex() !== null;
+
+	const selectActiveZoom = () => {
+		const index = activeZoomIndex();
+		if (index === null) return;
+		batch(() => {
+			setEditorState("canvasSelection", null);
+			setEditorState("timeline", "selection", {
+				type: "zoom",
+				indices: [index],
+			});
+		});
+	};
+
+	const [dragRects, setDragRects] = createSignal<{
+		display?: NormRect;
+		camera?: NormRect;
+	} | null>(null);
+	let dragging = false;
+	let finishCanvasDrag: (() => void) | undefined;
+	onCleanup(() => finishCanvasDrag?.());
+
+	createEffect(
+		on(
+			latestFrameLayout,
+			() => {
+				if (!dragging) setDragRects(null);
+			},
+			{ defer: true },
+		),
+	);
+
+	const displayRect = createMemo<NormRect | null>(() => {
+		const optimistic = dragRects()?.display;
+		if (optimistic) return optimistic;
+		const layout = latestFrameLayout();
+		return layout ? normRect(layout.display, layout) : null;
+	});
+
+	const cameraRect = createMemo<NormRect | null>(() => {
+		const optimistic = dragRects()?.camera;
+		if (optimistic) return optimistic;
+		const layout = latestFrameLayout();
+		return layout?.camera ? normRect(layout.camera, layout) : null;
+	});
+
+	const overlayVisible = () => !editorState.playing && !!latestFrameLayout();
+	const paneScene = () => {
+		const mode = sceneModeAt(time());
+		return mode === "splitScreen" || mode === "floating";
+	};
+	const showDisplay = () =>
+		overlayVisible() &&
+		!project.hideDisplay &&
+		!paneScene() &&
+		sceneModeAt(time()) !== "cameraOnly";
+	const showCamera = () => overlayVisible() && !paneScene();
+	// The rendered display rect is zoom-transformed while a zoom segment is
+	// active, but drags write base-layout config — lock it to avoid a
+	// mismatched pointer feel. Camera placement is not zoom-transformed.
+	const displayDraggable = () =>
+		!zoomActive() &&
+		(!selectedStyle() || selectedStyle()?.overrides.background != null);
+	const cameraDraggable = () =>
+		!selectedStyle() || selectedStyle()?.overrides.camera != null;
+	const cameraResizable = () => !zoomActive() && cameraDraggable();
+
+	const selection = () => editorState.canvasSelection;
+	const select = (type: "display" | "camera") =>
+		batch(() => {
+			setEditorState("canvasSelection", { type });
+			if (!selectedStyle()) setEditorState("timeline", "selection", null);
+		});
+
+	createEffect(
+		on(
+			() => editorState.timeline.selection,
+			(timelineSelection) => {
+				if (timelineSelection) setEditorState("canvasSelection", null);
+			},
+			{ defer: true },
+		),
+	);
+
+	const thresholds = () => ({
+		x: SNAP_PX / Math.max(props.size.width, 1),
+		y: SNAP_PX / Math.max(props.size.height, 1),
+	});
+
+	function createCanvasDrag<T extends { moved: boolean }>(
+		setup: () => T | null,
+		update: (
+			e: DragPoint,
+			value: T,
+			initialMouse: { x: number; y: number },
+		) => void,
+	): CanvasDrag {
+		const onStep = (step: Vec) => {
+			if (finishCanvasDrag) return;
+			runSteppedDrag(
+				step,
+				setup,
+				(point, value, origin) => {
+					value.moved = true;
+					update(point, value, origin);
+				},
+				projectHistory.pause,
+			);
+			setSnapGuides([]);
+		};
+		const onMouseDown = (downEvent: MouseEvent) => {
+			if (downEvent.button !== 0) return;
+			finishCanvasDrag?.();
+			const initial = setup();
+			if (!initial) return;
+			const state = initial;
+			const scopeToken = styleScopeToken();
+
+			downEvent.preventDefault();
+			downEvent.stopPropagation();
+
+			const initialMouse = { x: downEvent.clientX, y: downEvent.clientY };
+			const resumeHistory = projectHistory.pause();
+			dragging = true;
+
+			function handleUpdate(event: MouseEvent) {
+				if (scopeToken !== styleScopeToken()) return;
+				// A plain click must not write config (it would e.g. convert a
+				// preset camera position into a manual one).
+				if (
+					!state.moved &&
+					Math.hypot(
+						event.clientX - initialMouse.x,
+						event.clientY - initialMouse.y,
+					) < 2
+				)
+					return;
+				state.moved = true;
+				update(event, state, initialMouse);
+			}
+
+			const throttledUpdate = throttle(handleUpdate, 1000 / FPS);
+
+			function finish(finalEvent?: MouseEvent) {
+				if (!finishCanvasDrag) return;
+				finishCanvasDrag = undefined;
+				throttledUpdate.clear();
+				if (finalEvent) handleUpdate(finalEvent);
+				resumeHistory();
+				setSnapGuides([]);
+				dragging = false;
+				dispose();
+			}
+
+			const dispose = createRoot((dispose) => {
+				createEventListenerMap(window, {
+					mousemove: throttledUpdate,
+					mouseup: finish,
+					blur: () => finish(),
+				});
+				return dispose;
+			});
+			finishCanvasDrag = finish;
+		};
+		return { onMouseDown, onStep };
+	}
+
+	const moveHandler = (element: "display" | "camera") =>
+		createCanvasDrag(
+			() => {
+				const rect = element === "display" ? displayRect() : cameraRect();
+				if (!rect) return null;
+				if (element === "display" && !displayDraggable()) return null;
+				if (element === "camera" && !cameraDraggable()) return null;
+				return { rect, targets: snapTargetsFor(element), moved: false };
+			},
+			(e, state, initialMouse) => {
+				const raw = {
+					...state.rect,
+					x: state.rect.x + (e.clientX - initialMouse.x) / props.size.width,
+					y: state.rect.y + (e.clientY - initialMouse.y) / props.size.height,
+				};
+
+				let dx = 0;
+				let dy = 0;
+				if (e.shiftKey) {
+					setSnapGuides([]);
+				} else {
+					const snap = snapMovingRect(
+						raw,
+						state.targets,
+						thresholds().x,
+						thresholds().y,
+					);
+					dx = snap.dx;
+					dy = snap.dy;
+					setSnapGuides(snap.guides);
+				}
+
+				const isDisplay = element === "display";
+				const x = isDisplay
+					? clamp(raw.x + dx, -raw.w / 2, 1 - raw.w / 2)
+					: clamp(raw.x + dx, 0, Math.max(0, 1 - raw.w));
+				const y = isDisplay
+					? clamp(raw.y + dy, -raw.h / 2, 1 - raw.h / 2)
+					: clamp(raw.y + dy, 0, Math.max(0, 1 - raw.h));
+				const center = { x: x + raw.w / 2, y: y + raw.h / 2 };
+
+				setDragRects((prev) => ({ ...prev, [element]: { ...raw, x, y } }));
+				if (element === "display") {
+					setProject("background", "displayPosition", center);
+				} else {
+					setProject("camera", "manualPosition", center);
+				}
+			},
+		);
+
+	const onDisplayMove = moveHandler("display");
+	const onCameraMove = moveHandler("camera");
+
+	const resolveScale = (
+		e: DragPoint,
+		state: { rect: NormRect; targets: SnapTargets },
+		initialMouse: { x: number; y: number },
+		dirX: 1 | -1,
+		dirY: 1 | -1,
+		anchor: { x: number; y: number },
+	) => {
+		const dxN = (e.clientX - initialMouse.x) / props.size.width;
+		const dyN = (e.clientY - initialMouse.y) / props.size.height;
+		const outward = dxN * dirX + dyN * dirY;
+		let scale = 1 + (2 * outward) / (state.rect.w + state.rect.h);
+
+		if (e.shiftKey) {
+			setSnapGuides([]);
+		} else {
+			const corner0 = {
+				x: state.rect.x + (dirX > 0 ? state.rect.w : 0),
+				y: state.rect.y + (dirY > 0 ? state.rect.h : 0),
+			};
+			const rawCorner = {
+				x: anchor.x + (corner0.x - anchor.x) * scale,
+				y: anchor.y + (corner0.y - anchor.y) * scale,
+			};
+			const snap = snapResizeCorner(
+				rawCorner,
+				state.targets,
+				thresholds().x,
+				thresholds().y,
+			);
+			if (snap.axis === "x" && Math.abs(corner0.x - anchor.x) > 1e-6) {
+				scale = (snap.x - anchor.x) / (corner0.x - anchor.x);
+			} else if (snap.axis === "y" && Math.abs(corner0.y - anchor.y) > 1e-6) {
+				scale = (snap.y - anchor.y) / (corner0.y - anchor.y);
+			}
+			setSnapGuides(snap.guides);
+		}
+
+		return Math.max(scale, 0.05);
+	};
+
+	const cameraResizeHandler = (dirX: 1 | -1, dirY: 1 | -1) =>
+		createCanvasDrag(
+			() => {
+				const rect = cameraRect();
+				const layout = latestFrameLayout();
+				if (!rect || !layout || !cameraResizable()) return null;
+				select("camera");
+				return {
+					rect,
+					layout,
+					manual: project.camera.manualPosition,
+					enumPos: { ...project.camera.position },
+					targets: snapTargetsFor("camera"),
+					moved: false,
+				};
+			},
+			(e, state, initialMouse) => {
+				const anchor = state.manual
+					? {
+							x: state.rect.x + state.rect.w / 2,
+							y: state.rect.y + state.rect.h / 2,
+						}
+					: {
+							x:
+								state.enumPos.x === "left"
+									? state.rect.x
+									: state.enumPos.x === "center"
+										? state.rect.x + state.rect.w / 2
+										: state.rect.x + state.rect.w,
+							y:
+								state.enumPos.y === "top"
+									? state.rect.y
+									: state.rect.y + state.rect.h,
+						};
+				const scale = resolveScale(e, state, initialMouse, dirX, dirY, anchor);
+
+				const { output_width: W, output_height: H } = state.layout;
+				const minAxis = Math.min(W, H);
+				const camPad = 50 * (H / 1080);
+				const minDim0 = Math.min(state.rect.w * W, state.rect.h * H);
+				const newSize = clamp(
+					(((minDim0 * scale - camPad) / minAxis) * 100) as number,
+					20,
+					80,
+				);
+				setProject("camera", "size", newSize);
+
+				const applied = ((newSize / 100) * minAxis + camPad) / minDim0;
+				const w = state.rect.w * applied;
+				const h = state.rect.h * applied;
+				const x = clamp(
+					anchor.x - (anchor.x - state.rect.x) * applied,
+					0,
+					Math.max(0, 1 - w),
+				);
+				const y = clamp(
+					anchor.y - (anchor.y - state.rect.y) * applied,
+					0,
+					Math.max(0, 1 - h),
+				);
+				setDragRects((prev) => ({ ...prev, camera: { x, y, w, h } }));
+			},
+		);
+
+	const displayResizeHandler = (dirX: 1 | -1, dirY: 1 | -1) =>
+		createCanvasDrag(
+			() => {
+				const rect = displayRect();
+				const layout = latestFrameLayout();
+				if (!rect || !layout || !displayDraggable()) return null;
+				select("display");
+				const output = {
+					width: layout.output_width,
+					height: layout.output_height,
+				};
+				const fixedAspect = !!project.aspectRatio;
+				return {
+					rect,
+					targets: snapTargetsFor("display"),
+					resize:
+						project.background.paddingMode === "even"
+							? evenResize(
+									rect,
+									output,
+									fixedAspect,
+									!!selectedStyle(),
+									chromeInsets(project.background.frame?.style),
+								)
+							: proportionalResize(rect, output, fixedAspect),
+					moved: false,
+				};
+			},
+			(e, state, initialMouse) => {
+				const anchor = {
+					x: state.rect.x + state.rect.w / 2,
+					y: state.rect.y + state.rect.h / 2,
+				};
+				const scale = resolveScale(e, state, initialMouse, dirX, dirY, anchor);
+				const { rect, padding } = resizedDisplay(
+					state.rect,
+					scale,
+					state.resize,
+				);
+				setProject("background", "padding", padding);
+				setDragRects((prev) => ({ ...prev, display: rect }));
+			},
+		);
+
+	// Scoped here rather than in useEditorShortcuts so held arrow keys repeat.
+	createEventListener(document, "keydown", (e: KeyboardEvent) => {
+		const selected = selection();
+		if (!selected || !overlayVisible()) return;
+		const target = e.target as HTMLElement | null;
+		if (
+			target &&
+			(target.tagName === "INPUT" ||
+				target.tagName === "TEXTAREA" ||
+				target.isContentEditable)
+		)
+			return;
+
+		if (e.key === "Escape") {
+			setEditorState("canvasSelection", null);
+			return;
+		}
+
+		const arrows: Record<string, [number, number]> = {
+			ArrowLeft: [-1, 0],
+			ArrowRight: [1, 0],
+			ArrowUp: [0, -1],
+			ArrowDown: [0, 1],
+		};
+		const dir = arrows[e.key];
+		if (!dir || e.defaultPrevented) return;
+
+		const isDisplay = selected.type === "display";
+		if (isDisplay && (!showDisplay() || !displayDraggable())) return;
+		if (!isDisplay && (!showCamera() || !cameraDraggable())) return;
+		const rect = isDisplay ? displayRect() : cameraRect();
+		if (!rect) return;
+
+		e.preventDefault();
+		const px = e.shiftKey ? 10 : 1;
+		const x = clamp(
+			rect.x + (dir[0] * px) / props.size.width,
+			isDisplay ? -rect.w / 2 : 0,
+			isDisplay ? 1 - rect.w / 2 : Math.max(0, 1 - rect.w),
+		);
+		const y = clamp(
+			rect.y + (dir[1] * px) / props.size.height,
+			isDisplay ? -rect.h / 2 : 0,
+			isDisplay ? 1 - rect.h / 2 : Math.max(0, 1 - rect.h),
+		);
+		const center = { x: x + rect.w / 2, y: y + rect.h / 2 };
+		if (isDisplay) setProject("background", "displayPosition", center);
+		else setProject("camera", "manualPosition", center);
+	});
+
+	return (
+		<div
+			class="absolute inset-0 isolate pointer-events-none"
+			style={{ opacity: "var(--preview-controls-opacity, 1)" }}
+		>
+			<Show when={overlayVisible()}>
+				<Show when={selection() || editorState.timeline.selection}>
+					<button
+						type="button"
+						tabIndex={-1}
+						aria-label="Clear selection"
+						class="absolute inset-0 size-full pointer-events-auto cursor-default"
+						onMouseDown={(e) => {
+							if (e.button !== 0) return;
+							batch(() => {
+								setEditorState("canvasSelection", null);
+								setEditorState("timeline", "selection", null);
+							});
+						}}
+					/>
+				</Show>
+				<Show when={showDisplay() && displayRect()}>
+					{(rect) => (
+						<ElementBox
+							size={props.size}
+							rect={rect()}
+							label="Screen"
+							selected={selection()?.type === "display"}
+							draggable={displayDraggable()}
+							resizable={displayDraggable()}
+							locked={
+								selectedStyle() && selectedStyle()?.overrides.background == null
+									? {
+											message:
+												"Enable a Background override to edit this Style's screen",
+											actionLabel: "Enable override",
+											onAction: () => toggleStyleGroup("background", true),
+										}
+									: displayDraggable()
+										? null
+										: {
+												message: "Screen is locked while a zoom is active",
+												actionLabel: "Edit zoom",
+												onAction: selectActiveZoom,
+											}
+							}
+							onMouseDown={(e) => {
+								if (e.button !== 0) return;
+								if (selection()?.type !== "display") select("display");
+								onDisplayMove.onMouseDown(e);
+							}}
+							onFocus={() => {
+								if (selection()?.type !== "display") select("display");
+							}}
+							onStep={onDisplayMove.onStep}
+							resizeHandler={displayResizeHandler}
+						/>
+					)}
+				</Show>
+				<Show when={showCamera() && cameraRect()}>
+					{(rect) => (
+						<ElementBox
+							size={props.size}
+							rect={rect()}
+							label="Camera"
+							selected={selection()?.type === "camera"}
+							draggable={cameraDraggable()}
+							resizable={cameraResizable()}
+							locked={
+								selectedStyle() && selectedStyle()?.overrides.camera == null
+									? {
+											message:
+												"Enable a Camera override to edit this Style's camera",
+											actionLabel: "Enable override",
+											onAction: () => toggleStyleGroup("camera", true),
+										}
+									: cameraResizable()
+										? null
+										: {
+												message: "Camera size follows the zoom — drag to move",
+												actionLabel: "Edit zoom",
+												onAction: selectActiveZoom,
+											}
+							}
+							onMouseDown={(e) => {
+								if (e.button !== 0) return;
+								if (selection()?.type !== "camera") select("camera");
+								onCameraMove.onMouseDown(e);
+							}}
+							onFocus={() => {
+								if (selection()?.type !== "camera") select("camera");
+							}}
+							onStep={onCameraMove.onStep}
+							resizeHandler={cameraResizeHandler}
+						/>
+					)}
+				</Show>
+			</Show>
+		</div>
+	);
+}
+
+function ElementBox(props: {
+	size: Size;
+	rect: NormRect;
+	label: string;
+	selected: boolean;
+	draggable: boolean;
+	resizable: boolean;
+	locked?: {
+		message: string;
+		actionLabel: string;
+		onAction: () => void;
+	} | null;
+	onMouseDown: (e: MouseEvent) => void;
+	onFocus: () => void;
+	onStep: (step: Vec) => void;
+	resizeHandler: (dirX: 1 | -1, dirY: 1 | -1) => CanvasDrag;
+}) {
+	// The letterbox wrapper has `contain: strict`, so anything positioned
+	// outside the canvas is clipped — keep the label and the corner handles
+	// inside the visible area when the box touches (or overhangs) an edge.
+	const labelStyle = () => {
+		const leftPx = props.rect.x * props.size.width;
+		const topPx = props.rect.y * props.size.height;
+		return {
+			left: `${Math.max(6, 6 - leftPx)}px`,
+			top: topPx >= 28 ? "-24px" : `${Math.max(6, 6 - topPx)}px`,
+		};
+	};
+
+	// Pinned to the canvas rather than the box: small boxes (camera) can't fit the
+	// text, and edge-hugging boxes would push it into the letterbox clip.
+	const lockedBannerStyle = () => ({
+		left: `${props.size.width / 2 - props.rect.x * props.size.width}px`,
+		top: `${10 - props.rect.y * props.size.height}px`,
+	});
+
+	const flush = () => ({
+		left: props.rect.x * props.size.width <= 6,
+		top: props.rect.y * props.size.height <= 6,
+		right:
+			(props.rect.x + props.rect.w) * props.size.width >= props.size.width - 6,
+		bottom:
+			(props.rect.y + props.rect.h) * props.size.height >=
+			props.size.height - 6,
+	});
+
+	const corners = () => {
+		const f = flush();
+		return [
+			{
+				dirX: -1 as const,
+				dirY: -1 as const,
+				cursor: "cursor-nw-resize",
+				name: "top left",
+				class: cx(
+					"top-0 left-0",
+					!f.left && "-translate-x-1/2",
+					!f.top && "-translate-y-1/2",
+				),
+			},
+			{
+				dirX: 1 as const,
+				dirY: -1 as const,
+				cursor: "cursor-ne-resize",
+				name: "top right",
+				class: cx(
+					"top-0 right-0",
+					!f.right && "translate-x-1/2",
+					!f.top && "-translate-y-1/2",
+				),
+			},
+			{
+				dirX: -1 as const,
+				dirY: 1 as const,
+				cursor: "cursor-sw-resize",
+				name: "bottom left",
+				class: cx(
+					"bottom-0 left-0",
+					!f.left && "-translate-x-1/2",
+					!f.bottom && "translate-y-1/2",
+				),
+			},
+			{
+				dirX: 1 as const,
+				dirY: 1 as const,
+				cursor: "cursor-se-resize",
+				name: "bottom right",
+				class: cx(
+					"bottom-0 right-0",
+					!f.right && "translate-x-1/2",
+					!f.bottom && "translate-y-1/2",
+				),
+			},
+		];
+	};
+
+	const [hovered, setHovered] = createSignal(false);
+	const showHandles = () => props.selected || hovered();
+
+	const onBoxKeyDown = (e: KeyboardEvent) => {
+		const step = arrowStep(e);
+		if (!step) return;
+		e.preventDefault();
+		props.onStep(step);
+	};
+
+	return (
+		<div
+			class="absolute pointer-events-auto"
+			style={{
+				left: `${props.rect.x * props.size.width}px`,
+				top: `${props.rect.y * props.size.height}px`,
+				width: `${props.rect.w * props.size.width}px`,
+				height: `${props.rect.h * props.size.height}px`,
+			}}
+			onPointerEnter={() => setHovered(true)}
+			onPointerLeave={() => setHovered(false)}
+		>
+			<button
+				type="button"
+				aria-label={
+					props.draggable
+						? `${props.label}. Arrow keys move it, with Shift in bigger steps.`
+						: `${props.label} (locked)`
+				}
+				aria-pressed={props.selected}
+				class="peer absolute inset-0 size-full outline-hidden"
+				classList={{
+					"cursor-move": props.draggable,
+					"cursor-default": !props.draggable,
+				}}
+				onMouseDown={props.onMouseDown}
+				onFocus={props.onFocus}
+				onKeyDown={onBoxKeyDown}
+			/>
+			<div
+				class="absolute inset-0 border-2 transition-colors rounded-md pointer-events-none peer-focus-visible:ring-2 peer-focus-visible:ring-blue-9/60"
+				classList={{
+					"border-blue-9": props.selected,
+					"border-blue-6": !props.selected && hovered(),
+					"border-transparent": !props.selected && !hovered(),
+				}}
+			/>
+			<Show when={props.selected || hovered()}>
+				<div
+					class="absolute flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium text-white bg-blue-9 rounded pointer-events-none select-none"
+					style={labelStyle()}
+				>
+					{props.label}
+					<Show when={props.locked}>
+						<IconLucideLock class="size-2.5" />
+					</Show>
+				</div>
+			</Show>
+			<Show when={props.selected || hovered() ? props.locked : null}>
+				{(locked) => (
+					<div
+						role="note"
+						class="absolute z-10 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-lg bg-black/80 py-1.5 pr-1.5 pl-3 text-xs text-white shadow-md pointer-events-auto select-none"
+						style={lockedBannerStyle()}
+						onMouseDown={(e) => e.stopPropagation()}
+					>
+						<IconLucideLock class="size-3 shrink-0 opacity-80" />
+						<span>{locked().message}</span>
+						<button
+							type="button"
+							class="rounded-md bg-white/15 px-2 py-0.5 font-semibold transition-colors hover:bg-white/25 active:bg-white/30"
+							onClick={locked().onAction}
+						>
+							{locked().actionLabel}
+						</button>
+					</div>
+				)}
+			</Show>
+			<Show when={showHandles()}>
+				<Index each={corners()}>
+					{(corner) => (
+						// The hit target must not change size on hover — the grow
+						// effect lives on an inner, pointer-events-none span,
+						// otherwise the handle scales out from under the cursor and
+						// hover flickers in a mouseenter/leave loop.
+						<button
+							type="button"
+							aria-label={`Resize ${props.label.toLowerCase()} from the ${corner().name} corner. Arrow keys move the corner, with Shift in bigger steps.`}
+							aria-disabled={!props.resizable}
+							class={cx(
+								"absolute w-3 h-3 group/handle outline-hidden focus-visible:ring-2 focus-visible:ring-blue-9/60",
+								props.selected && "z-10",
+								props.resizable ? corner().cursor : "cursor-not-allowed",
+								corner().class,
+							)}
+							onMouseDown={(e) => {
+								if (!props.resizable) {
+									e.preventDefault();
+									e.stopPropagation();
+									return;
+								}
+								props
+									.resizeHandler(corner().dirX, corner().dirY)
+									.onMouseDown(e);
+							}}
+							onKeyDown={(e) => {
+								const step = arrowStep(e);
+								if (!step) return;
+								e.preventDefault();
+								if (props.resizable)
+									props
+										.resizeHandler(corner().dirX, corner().dirY)
+										.onStep(step);
+							}}
+						>
+							<span
+								class={cx(
+									"block size-full rounded-full border border-white shadow-xs pointer-events-none",
+									props.resizable
+										? "bg-blue-9 transition-transform group-hover/handle:scale-125"
+										: "bg-gray-8 opacity-60",
+								)}
+							/>
+						</button>
+					)}
+				</Index>
+			</Show>
+		</div>
+	);
+}
