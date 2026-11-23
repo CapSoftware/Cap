@@ -552,7 +552,7 @@ pub(crate) fn shape(input: ShapeInput<'_>, window: &mut Window) -> BlockLayout {
     let marked = key.marked.clone();
     let text: SharedString = match &marked {
         Some(marked) => {
-            let at = marked.at.min(block.text.len());
+            let at = crate::editor::floor_char_boundary(&block.text, marked.at);
             let mut virtual_text = String::with_capacity(block.text.len() + marked.text.len());
             virtual_text.push_str(&block.text[..at]);
             virtual_text.push_str(&marked.text);
@@ -561,9 +561,12 @@ pub(crate) fn shape(input: ShapeInput<'_>, window: &mut Window) -> BlockLayout {
         }
         None => block.text.clone().into(),
     };
-    let marked_span = marked
-        .as_ref()
-        .map(|marked| (marked.at.min(block.text.len()), marked.text.len()));
+    let marked_span = marked.as_ref().map(|marked| {
+        (
+            crate::editor::floor_char_boundary(&block.text, marked.at),
+            marked.text.len(),
+        )
+    });
 
     let mut runs: Vec<TextRun> = Vec::new();
     let mut decor: Vec<(Range<usize>, Decor)> = Vec::new();

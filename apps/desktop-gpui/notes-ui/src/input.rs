@@ -26,7 +26,7 @@ impl NotesEditor {
             .map_or("", |b| b.text.as_str());
         match &self.composition {
             Some(c) => {
-                let at = c.at.min(text.len());
+                let at = crate::editor::floor_char_boundary(text, c.at);
                 format!("{}{}{}", &text[..at], c.text, &text[at..])
             }
             None => text.to_string(),

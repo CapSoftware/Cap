@@ -70,6 +70,16 @@ pub(crate) struct SourceHover {
 /// caret stays in view, for an editor laid out at its full height.
 pub type RevealHost = Rc<dyn Fn(f32, &mut App)>;
 
+/// The nearest char boundary at or before `at`, so a stale offset can never
+/// split a character.
+pub(crate) fn floor_char_boundary(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Composition {
     pub block: usize,
@@ -767,6 +777,11 @@ impl NotesEditor {
         self.editor.set_document(next_doc);
         self.editor
             .set_selection(self.editor.clamp_selection(selection));
+        // Marked text is not in the document, so its offset into a re-parsed
+        // block no longer means anything.
+        if self.composition.as_ref().is_some_and(|c| c.block >= start) {
+            self.composition = None;
+        }
         {
             let mut store = self.store.borrow_mut();
             if store.slots.len() == len {

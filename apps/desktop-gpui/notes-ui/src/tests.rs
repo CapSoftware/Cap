@@ -1308,3 +1308,46 @@ fn a_fit_page_is_as_tall_as_its_text_and_asks_its_host_to_scroll(cx: &mut TestAp
     let scroll = editor.read_with(cx, |e, _| e.store.borrow().scroll_y());
     assert_eq!(scroll, 0., "a fit page never scrolls itself");
 }
+
+#[gpui::test]
+fn marked_text_survives_a_summary_streaming_into_its_block(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, "");
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("x **日本語", cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(texts(&editor, cx), vec!["x **日本語"]);
+    // Composing after 日 while the bold is still open.
+    caret(&editor, cx, Pos::new(0, "x **日".len()));
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| {
+            e.replace_and_mark_text_in_range(None, "に", None, window, cx)
+        })
+    });
+    // Closing the bold drops two bytes ahead of the composition, which then
+    // pointed inside 本.
+    editor.update(cx, |e, cx| {
+        e.append_markdown_streaming("**", cap_notes::Origin::Generated, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(texts(&editor, cx), vec!["x 日本語"]);
+    cx.update(|window, cx| {
+        editor.update(cx, |e, cx| {
+            let len = e.document().blocks[0].text.encode_utf16().count() + 4;
+            let _ = e.text_for_range(0..len, &mut None, window, cx);
+            let _ = e.marked_text_range(window, cx);
+        })
+    });
+    cx.run_until_parked();
+}
+
+#[test]
+fn floor_char_boundary_never_splits_a_character() {
+    use crate::editor::floor_char_boundary;
+    let text = "x 日本";
+    assert_eq!(floor_char_boundary(text, 2), 2);
+    assert_eq!(floor_char_boundary(text, 3), 2);
+    assert_eq!(floor_char_boundary(text, 4), 2);
+    assert_eq!(floor_char_boundary(text, 5), 5);
+    assert_eq!(floor_char_boundary(text, 99), text.len());
+}
