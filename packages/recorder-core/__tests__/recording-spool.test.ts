@@ -748,4 +748,23 @@ describe("RecordingSpool", () => {
 		);
 		expect(ids.size).toBe(64);
 	});
+
+	it("creates unique session ids where randomUUID is missing outside a secure context", () => {
+		Object.defineProperty(crypto, "randomUUID", {
+			configurable: true,
+			value: undefined,
+		});
+		try {
+			const ids = new Set(
+				Array.from({ length: 64 }, () => createRecordingSessionId()),
+			);
+			expect(ids.size).toBe(64);
+			for (const id of ids) expect(id).toMatch(/^recording-\d+-[0-9a-f]{32}$/);
+		} finally {
+			Reflect.deleteProperty(crypto, "randomUUID");
+		}
+		expect(createRecordingSessionId()).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+		);
+	});
 });

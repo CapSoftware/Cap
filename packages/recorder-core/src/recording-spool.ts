@@ -98,14 +98,15 @@ const transactionToPromise = (transaction: IDBTransaction) =>
 	});
 
 export const createRecordingSessionId = () => {
-	if (
-		typeof crypto !== "undefined" &&
-		typeof crypto.randomUUID === "function"
-	) {
+	if (typeof crypto.randomUUID === "function") {
 		return crypto.randomUUID();
 	}
 
-	return `recording-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	const random = Array.from(
+		crypto.getRandomValues(new Uint8Array(16)),
+		(byte) => byte.toString(16).padStart(2, "0"),
+	).join("");
+	return `recording-${Date.now()}-${random}`;
 };
 
 export class RecordingSpoolStalledError extends Error {
