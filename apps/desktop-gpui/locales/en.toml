@@ -1300,6 +1300,12 @@ blur_light = "Light. Click for a heavier blur."
 blur_heavy_then_cutout = "Heavy. Click to remove the background."
 blur_heavy_then_off = "Heavy. Click to turn it off."
 blur_cutout = "Background removed. Click to turn it off."
+picture = "Use a picture"
+picture_body = "Show a still picture instead of your camera."
+change_picture = "Change picture"
+change_picture_body = "Choose another picture to show."
+use_camera = "Use your camera"
+use_camera_body = "Show your camera again instead of the picture."
 
 [camera.blur]
 light = { text = "Light", context = "Tiny 7px label under the background blur button in the camera preview. Keep it to one short word." }

@@ -1298,6 +1298,12 @@ blur_light = "弱。クリックすると強くぼかします。"
 blur_heavy_then_cutout = "強。クリックすると背景を消します。"
 blur_heavy_then_off = "強。クリックするとオフにします。"
 blur_cutout = "背景を消しています。クリックするとオフにします。"
+picture = "画像を使う"
+picture_body = "カメラの代わりに静止画を表示します。"
+change_picture = "画像を変更"
+change_picture_body = "表示する別の画像を選びます。"
+use_camera = "カメラを使う"
+use_camera_body = "画像の代わりにカメラを再び表示します。"
 
 [camera.blur]
 light = "弱"

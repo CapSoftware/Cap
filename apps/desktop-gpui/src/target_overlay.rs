@@ -2354,7 +2354,9 @@ impl OverlayWindow {
             if let Err(error) = main.update(cx, |view, window, cx| match choice {
                 OverlayDeviceChoice::Camera(camera) => view.set_camera_selection(camera, cx),
                 OverlayDeviceChoice::CameraPicture => {
-                    view.pick_or_select_camera_picture(window, cx)
+                    if view.device_changes_allowed(cx) {
+                        crate::camera_picture::select_or_choose(window, cx);
+                    }
                 }
                 OverlayDeviceChoice::Microphone(mic) => view.set_microphone_selection(mic, cx),
                 OverlayDeviceChoice::Access(_) => {}
@@ -2412,7 +2414,7 @@ impl OverlayWindow {
                 choices.push(OverlayDeviceChoice::Camera(Some(camera.clone())));
             }
             items.push(crate::ui::MenuItem::new(
-                if view.remembered_camera_picture().is_some() {
+                if view.has_remembered_camera_picture(cx) {
                     tr::main::device::picture::label()
                 } else {
                     tr::main::device::picture::choose()

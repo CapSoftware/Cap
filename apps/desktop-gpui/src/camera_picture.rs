@@ -151,6 +151,99 @@ pub(crate) fn import_into_project(project: &Path, source: &Path) -> Result<Strin
     Ok(relative)
 }
 
+/// Whether the camera can change now: only between recordings.
+pub(crate) fn can_change(cx: &gpui::App) -> bool {
+    crate::session::RecordingSession::try_global(cx)
+        .is_none_or(|session| session.read(cx).phase == crate::session::Phase::Idle)
+}
+
+/// Shows the normalized picture at `path` as the camera, decoded off the main
+/// thread. A picture that can no longer be read is forgotten.
+pub(crate) fn select(path: PathBuf, cx: &mut gpui::App) {
+    cx.spawn(async move |cx| {
+        let loaded = cx
+            .background_executor()
+            .spawn({
+                let path = path.clone();
+                async move { load(&path) }
+            })
+            .await;
+        cx.update(|cx| {
+            let feeds = crate::feeds::Feeds::global(cx);
+            match loaded {
+                Ok(picture) if can_change(cx) => feeds.update(cx, |feeds, cx| {
+                    feeds.set_camera_picture(Some(Arc::new(picture)), cx)
+                }),
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "The camera picture could not be loaded");
+                    feeds.update(cx, |feeds, cx| feeds.forget_camera_picture(cx));
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// The remembered picture when there is one, else [`choose`].
+pub(crate) fn select_or_choose(window: &mut gpui::Window, cx: &mut gpui::App) {
+    match crate::feeds::Feeds::global(cx)
+        .read(cx)
+        .remembered_camera_picture
+        .clone()
+    {
+        Some(path) => select(path, cx),
+        None => choose(window, cx),
+    }
+}
+
+/// Asks for a picture file, normalizes it and shows it as the camera.
+pub(crate) fn choose(window: &mut gpui::Window, cx: &mut gpui::App) {
+    let feeds = crate::feeds::Feeds::global(cx);
+    if feeds.read(cx).picking_camera_picture || !can_change(cx) {
+        return;
+    }
+    feeds.update(cx, |feeds, _| feeds.picking_camera_picture = true);
+    window
+        .spawn(cx, async move |cx| {
+            #[cfg(target_os = "linux")]
+            let picked = crate::platform::open_file_panel_async(
+                &[(crate::i18n::tr::main::device::picture::filter(), EXTENSIONS)],
+                None,
+                cx,
+            )
+            .await;
+            #[cfg(not(target_os = "linux"))]
+            let picked = cx
+                .update(|_, _| crate::platform::open_image_panel(EXTENSIONS))
+                .ok()
+                .flatten();
+            let loaded = match picked {
+                Some(source) => Some(
+                    cx.background_executor()
+                        .spawn(async move { load(&save_for_recording(&source)?) })
+                        .await,
+                ),
+                None => None,
+            };
+            cx.update(|_, cx| {
+                let feeds = crate::feeds::Feeds::global(cx);
+                feeds.update(cx, |feeds, _| feeds.picking_camera_picture = false);
+                match loaded {
+                    Some(Ok(picture)) if can_change(cx) => feeds.update(cx, |feeds, cx| {
+                        feeds.set_camera_picture(Some(Arc::new(picture)), cx)
+                    }),
+                    Some(Ok(_)) | None => {}
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "The camera picture could not be used");
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+}
+
 /// Decodes a normalized picture for the bubble and the menus.
 pub(crate) fn load(path: &Path) -> Result<CameraPicture, String> {
     let rgba = image::open(path)

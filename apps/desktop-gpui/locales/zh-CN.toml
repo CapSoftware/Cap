@@ -1298,6 +1298,12 @@ blur_light = "轻度。点击加强模糊。"
 blur_heavy_then_cutout = "强。点击移除背景。"
 blur_heavy_then_off = "强。点击关闭。"
 blur_cutout = "已移除背景。点击关闭。"
+picture = "使用图片"
+picture_body = "用一张静态图片代替你的摄像头。"
+change_picture = "更换图片"
+change_picture_body = "选择另一张要显示的图片。"
+use_camera = "使用摄像头"
+use_camera_body = "重新显示你的摄像头，而不是图片。"
 
 [camera.blur]
 light = "轻"

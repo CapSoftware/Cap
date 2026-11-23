@@ -752,6 +752,13 @@ pub struct Feeds {
     /// A still picture standing in for the camera. Never set together with
     /// `camera`: choosing either one clears the other.
     pub camera_picture: Option<Arc<crate::camera_picture::CameraPicture>>,
+    /// The picture last used as the camera, offered again by the camera menu
+    /// and the bubble.
+    pub remembered_camera_picture: Option<std::path::PathBuf>,
+    /// A picture file dialog is open, from the menu or the bubble.
+    pub picking_camera_picture: bool,
+    /// The camera a picture replaced, which the bubble can switch back to.
+    pub previous_camera: Option<SelectedCamera>,
     /// Selected microphone name.
     pub microphone: Option<String>,
     mic_level: Entity<MicLevel>,
@@ -841,6 +848,12 @@ impl Feeds {
             microphone_ready: None,
             camera: None,
             camera_picture: None,
+            remembered_camera_picture: crate::store::load()
+                .camera_picture
+                .map(|choice| choice.path)
+                .filter(|path| path.is_file()),
+            picking_camera_picture: false,
+            previous_camera: None,
             microphone: None,
             mic_level,
             mic_level_shown: Arc::new(std::sync::atomic::AtomicU64::new((-96.0f64).to_bits())),
@@ -981,8 +994,11 @@ impl Feeds {
         self.camera_epoch += 1;
         self.camera_input_epoch
             .store(self.camera_epoch, Ordering::Release);
-        if selection.is_some() && self.camera_picture.take().is_some() {
-            persist_camera_picture(None, cx);
+        if selection.is_some() {
+            self.previous_camera = None;
+            if self.camera_picture.take().is_some() {
+                persist_camera_picture(None, cx);
+            }
         }
         self.camera = selection.clone();
         self.camera_ready = None;
@@ -1023,9 +1039,15 @@ impl Feeds {
         if same {
             return;
         }
-        if picture.is_some() && self.camera.is_some() {
+        if picture.is_some()
+            && let Some(camera) = self.camera.clone()
+        {
             self.camera_picture = picture.clone();
             self.set_camera_with_settings(None, None, cx);
+            self.previous_camera = Some(camera);
+        }
+        if let Some(picture) = &picture {
+            self.remembered_camera_picture = Some(picture.path.clone());
         }
         let had_picture = self.camera_picture.is_some();
         self.camera_picture = picture.clone();
@@ -1041,6 +1063,20 @@ impl Feeds {
                 cx.defer(app_windows::close_camera_window);
             }
             None => {}
+        }
+    }
+
+    /// Drops a remembered picture that can no longer be read.
+    pub fn forget_camera_picture(&mut self, cx: &mut Context<Self>) {
+        if self.remembered_camera_picture.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Goes back to the camera a picture replaced.
+    pub fn use_previous_camera(&mut self, cx: &mut Context<Self>) {
+        if let Some(camera) = self.previous_camera.clone() {
+            self.set_camera(Some(camera), cx);
         }
     }
 

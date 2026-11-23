@@ -163,17 +163,22 @@ mod inline_preview_tests {
     #[test]
     fn a_shrunk_preview_fits_its_toolbar_inside_it() {
         // Not shrunk: the size-driven scale and every button.
-        assert_eq!(toolbar_fit(0.85, None), (0.85, 5));
+        assert_eq!(toolbar_fit(0.85, None, 5), (0.85, 5));
         // Wide enough: unchanged.
-        assert_eq!(toolbar_fit(0.7, Some(300.)), (0.7, 5));
-        for width in [81., 100., 120., 144., 160., 200.] {
-            let (scale, buttons) = toolbar_fit(1., Some(width));
-            let drawn = (42. * buttons as f32 + 4.) * scale + 2.;
-            assert!(drawn <= width - 8. + 0.01, "{width}: {drawn}");
-            assert!(scale >= 0.4);
+        assert_eq!(toolbar_fit(0.7, Some(300.), 5), (0.7, 5));
+        for most in [3, 4, 5, 6] {
+            for width in [81., 100., 120., 144., 150., 160., 200., 230.] {
+                let (scale, buttons) = toolbar_fit(1., Some(width), most);
+                let drawn = (42. * buttons as f32 + 4.) * scale + 2.;
+                assert!(drawn <= width - 8. + 0.01, "{width}: {drawn}");
+                assert!(scale >= 0.4);
+                assert!((3..=most).contains(&buttons));
+            }
         }
         // A portrait sliver keeps close, size and shape.
-        assert_eq!(toolbar_fit(1., Some(81.)).1, 3);
+        assert_eq!(toolbar_fit(1., Some(81.), 6).1, 3);
+        // The default bubble has room for all six.
+        assert_eq!(toolbar_fit(0.753, Some(230.), 6), (0.753, 6));
     }
 
     #[test]
@@ -226,14 +231,14 @@ fn normalized_size(state: &CameraWindowState) -> f32 {
 /// The fit uses each button's footprint (a 22px icon in 8px padding, 4px
 /// apart, in a 4px-padded strip with a 1px border). The preview-only blur,
 /// then mirror, buttons go first, before the rest get too small to hit.
-fn toolbar_fit(base_scale: f32, width: Option<f32>) -> (f32, usize) {
+fn toolbar_fit(base_scale: f32, width: Option<f32>, most: usize) -> (f32, usize) {
     const SMALLEST_COMFORTABLE: f32 = 0.6;
     const SMALLEST: f32 = 0.4;
     let Some(width) = width else {
-        return (base_scale, 5);
+        return (base_scale, most);
     };
     let fit = |buttons: usize| (width - 10.) / (42. * buttons as f32 + 4.);
-    for buttons in [5, 4] {
+    for buttons in (4..=most).rev() {
         let scale = base_scale.min(fit(buttons));
         if scale >= SMALLEST_COMFORTABLE {
             return (scale, buttons);
@@ -1779,6 +1784,9 @@ pub struct CameraWindow {
     /// camera; it sizes the bubble like a frame would.
     picture_aspect: Option<f32>,
     _feeds_subscription: Subscription,
+    /// No recording is running, so the camera may change from the bubble.
+    camera_changes_allowed: bool,
+    _session_subscription: Option<Subscription>,
     frame_dims: Option<(usize, usize)>,
     retained_aspect: Option<f32>,
     // Cadence instrumentation: proves the preview stays live (delivered) and
@@ -1977,6 +1985,18 @@ impl CameraWindow {
             .camera_picture
             .as_ref()
             .map(|picture| picture.aspect());
+        let camera_changes_allowed = crate::camera_picture::can_change(cx);
+        let session_subscription =
+            crate::session::RecordingSession::try_global(cx).map(|session| {
+                cx.observe(&session, |this: &mut Self, _, cx| {
+                    let allowed = crate::camera_picture::can_change(cx);
+                    if this.camera_changes_allowed != allowed {
+                        this.camera_changes_allowed = allowed;
+                        this.hints.dismiss();
+                        cx.notify();
+                    }
+                })
+            });
         let feeds_subscription = cx.observe_in(&feeds, window, |this, feeds, window, cx| {
             let aspect = feeds
                 .read(cx)
@@ -2024,6 +2044,8 @@ impl CameraWindow {
             toolbar,
             picture_aspect,
             _feeds_subscription: feeds_subscription,
+            camera_changes_allowed,
+            _session_subscription: session_subscription,
             frame_dims: None,
             retained_aspect,
             frames_in_window: 0,
@@ -2426,11 +2448,14 @@ impl CameraWindow {
         }
     }
 
-    fn toolbar_fit(&self) -> (f32, usize) {
-        toolbar_fit(
-            0.7 + normalized_size(&self.state) * 0.3,
-            self.picker_size.map(|(width, _)| width),
-        )
+    /// Up to `most` buttons at the size-driven scale, fewer and smaller when
+    /// the bubble is too narrow for them.
+    fn toolbar_fit(&self, most: usize) -> (f32, usize) {
+        let width = self.picker_size.map_or_else(
+            || bubble_dimensions(&self.state, self.bubble_aspect()).0,
+            |(width, _)| width,
+        );
+        toolbar_fit(0.7 + normalized_size(&self.state) * 0.3, Some(width), most)
     }
 
     /// Pushes the chrome inputs the preview renders with (its own notify is
@@ -2690,13 +2715,23 @@ impl CameraWindow {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let (scale, buttons) = self.toolbar_fit();
-        // A picture has nothing to mirror or blur.
-        let buttons = if self.picture_aspect.is_some() {
-            buttons.min(3)
-        } else {
-            buttons
+        let picture = self.picture_aspect.is_some();
+        // Switching between camera and picture is for setting up, never mid
+        // recording, and the picker's Camera Only view needs a real camera.
+        let switching = self.camera_changes_allowed && !self.inline;
+        let back_to_camera = picture && Feeds::global(cx).read(cx).previous_camera.is_some();
+        // Beyond close, size and shape, in the order they give way when the
+        // bubble is narrow (last first). A picture has nothing to mirror or
+        // blur.
+        let extras: &[&str] = match (picture, switching) {
+            (false, true) => &["picture", "mirror", "blur"],
+            (false, false) => &["mirror", "blur"],
+            (true, true) if back_to_camera => &["change-picture", "use-camera"],
+            (true, true) => &["change-picture"],
+            (true, false) => &[],
         };
+        let (scale, buttons) = self.toolbar_fit(3 + extras.len());
+        let extras = &extras[..buttons.saturating_sub(3)];
         #[cfg(target_os = "macos")]
         let (mirror_failed, blur_failed) = (self.effect_failures.mirror, self.effect_failures.blur);
         #[cfg(not(target_os = "macos"))]
@@ -2783,45 +2818,98 @@ impl CameraWindow {
                             })
                         },
                     ))
-                    // Preview-only, like both Tauri paths (the WGSL UV flip /
-                    // the legacy `scaleX(-1)`); the recorded camera track is
-                    // never mirrored by either app.
-                    .when(buttons >= 4, |this| {
-                        this.child(self.toolbar_button(
-                            "mirror",
-                            "icons/arrows.svg",
-                            self.state.mirrored && !mirror_failed,
-                            scale,
-                            mirror_failed.then_some("!"),
-                            hints.mirror,
-                            cx,
-                            |this, window, cx| {
-                                this.mutate_state(window, cx, |state| {
-                                    state.mirrored = !state.mirrored;
-                                })
-                            },
-                        ))
-                    })
-                    .when(buttons >= 5, |this| {
-                        this.child(self.toolbar_button(
-                            "blur",
-                            "icons/person-standing.svg",
-                            self.state.background_blur != BlurMode::Off && !blur_failed,
-                            scale,
-                            if blur_failed {
-                                Some("!")
-                            } else {
-                                self.state.background_blur.label()
-                            },
-                            hints.blur,
-                            cx,
-                            |this, window, cx| {
-                                this.mutate_state(window, cx, |state| {
-                                    state.background_blur = state.background_blur.cycle();
-                                })
-                            },
-                        ))
-                    }),
+                    .children(extras.iter().map(|extra| {
+                        match *extra {
+                            "picture" => self
+                                .toolbar_button(
+                                    "picture",
+                                    "icons/image.svg",
+                                    false,
+                                    scale,
+                                    None,
+                                    hints.picture.clone(),
+                                    cx,
+                                    |this, window, cx| {
+                                        this.hints.dismiss();
+                                        crate::camera_picture::select_or_choose(window, cx);
+                                    },
+                                )
+                                .into_any_element(),
+                            "change-picture" => self
+                                .toolbar_button(
+                                    "change-picture",
+                                    "icons/image.svg",
+                                    true,
+                                    scale,
+                                    None,
+                                    hints.change_picture.clone(),
+                                    cx,
+                                    |this, window, cx| {
+                                        this.hints.dismiss();
+                                        crate::camera_picture::choose(window, cx);
+                                    },
+                                )
+                                .into_any_element(),
+                            "use-camera" => self
+                                .toolbar_button(
+                                    "use-camera",
+                                    "icons/camera.svg",
+                                    false,
+                                    scale,
+                                    None,
+                                    hints.use_camera.clone(),
+                                    cx,
+                                    |this, _, cx| {
+                                        this.hints.dismiss();
+                                        if crate::camera_picture::can_change(cx) {
+                                            Feeds::global(cx).update(cx, |feeds, cx| {
+                                                feeds.use_previous_camera(cx)
+                                            });
+                                        }
+                                    },
+                                )
+                                .into_any_element(),
+                            // Preview-only, like both Tauri paths (the WGSL UV
+                            // flip / the legacy `scaleX(-1)`); the recorded camera
+                            // track is never mirrored by either app.
+                            "mirror" => self
+                                .toolbar_button(
+                                    "mirror",
+                                    "icons/arrows.svg",
+                                    self.state.mirrored && !mirror_failed,
+                                    scale,
+                                    mirror_failed.then_some("!"),
+                                    hints.mirror.clone(),
+                                    cx,
+                                    |this, window, cx| {
+                                        this.mutate_state(window, cx, |state| {
+                                            state.mirrored = !state.mirrored;
+                                        })
+                                    },
+                                )
+                                .into_any_element(),
+                            _ => self
+                                .toolbar_button(
+                                    "blur",
+                                    "icons/person-standing.svg",
+                                    self.state.background_blur != BlurMode::Off && !blur_failed,
+                                    scale,
+                                    if blur_failed {
+                                        Some("!")
+                                    } else {
+                                        self.state.background_blur.label()
+                                    },
+                                    hints.blur.clone(),
+                                    cx,
+                                    |this, window, cx| {
+                                        this.mutate_state(window, cx, |state| {
+                                            state.background_blur = state.background_blur.cycle();
+                                        })
+                                    },
+                                )
+                                .into_any_element(),
+                        }
+                    })),
             )
     }
 
@@ -3053,6 +3141,9 @@ struct ToolbarHints {
     shape: Hint,
     mirror: Hint,
     blur: Hint,
+    picture: Hint,
+    change_picture: Hint,
+    use_camera: Hint,
 }
 
 fn toolbar_hints(
@@ -3094,6 +3185,11 @@ fn toolbar_hints(
         })
     };
     ToolbarHints {
+        picture: hint(tr::camera::toolbar::picture()).body(tr::camera::toolbar::picture_body()),
+        change_picture: hint(tr::camera::toolbar::change_picture())
+            .body(tr::camera::toolbar::change_picture_body()),
+        use_camera: hint(tr::camera::toolbar::use_camera())
+            .body(tr::camera::toolbar::use_camera_body()),
         close: hint(tr::camera::toolbar::close()),
         size: hint(size).body(tr::camera::toolbar::size_body()),
         shape: hint(tr::camera::toolbar::shape()).body(shape),

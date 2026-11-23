@@ -1298,6 +1298,12 @@ blur_light = "Leicht. Klicken für stärkere Unschärfe."
 blur_heavy_then_cutout = "Stark. Klicken, um den Hintergrund zu entfernen."
 blur_heavy_then_off = "Stark. Klicken zum Ausschalten."
 blur_cutout = "Hintergrund entfernt. Klicken zum Ausschalten."
+picture = "Bild verwenden"
+picture_body = "Ein Standbild statt Ihrer Kamera zeigen."
+change_picture = "Bild ändern"
+change_picture_body = "Ein anderes Bild auswählen."
+use_camera = "Kamera verwenden"
+use_camera_body = "Wieder Ihre Kamera statt des Bildes zeigen."
 
 [camera.blur]
 light = "Leicht"
