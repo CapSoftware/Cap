@@ -1295,29 +1295,36 @@ describe("free plan duration limit at processing", () => {
 			"media-secret",
 			freePlanSearch,
 		);
-		expect(await response.json()).toEqual({ success: true, status: "stale" });
+		expect(await response.json()).toEqual({
+			success: true,
+			status: "no-upload",
+		});
 		expect(mocks.deleteObjects).not.toHaveBeenCalled();
 		expect(database.mutations).toEqual([]);
 	});
 
-	it("ignores a late refusal after the owner upgrades", async () => {
+	it("retries a refusal without the limit after the owner upgrades", async () => {
 		const database = freeUpload();
 		mocks.freePlanLimit.mockResolvedValue(null);
+		const error =
+			"media-length-limit-exceeded: the source runs longer than 330 seconds";
 		const response = await request(
-			{
-				jobId: "media-job-old",
-				videoId,
-				phase: "error",
-				progress: 5,
-				error:
-					"media-length-limit-exceeded: the source runs longer than 330 seconds",
-			},
+			{ jobId: "media-job-old", videoId, phase: "error", progress: 5, error },
 			"media-secret",
 			freePlanSearch,
 		);
-		expect(await response.json()).toEqual({ success: true, status: "stale" });
+		expect(await response.json()).toEqual({ success: true });
 		expect(mocks.deleteObjects).not.toHaveBeenCalled();
-		expect(database.mutations).toEqual([]);
+		expect(uploadWrites(database.mutations)).toEqual([
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: expect.objectContaining({
+					phase: "processing",
+					processingError: error,
+				}),
+			},
+		]);
 	});
 
 	it("publishes a late over-limit completion after the owner upgrades", async () => {

@@ -14,15 +14,16 @@ import { decodeStorageVideo } from "@/lib/video-storage";
 // upload is failed first, with the message multipart completion returns, so
 // processing stops; then its output, previews and raw upload are removed. The
 // raw key is only cleared once they are gone, so a retried callback still
-// finds a source stored under any supported extension. A late callback is
-// ignored once the upload is gone or the plan no longer limits the video, so
-// it cannot remove a newer, published result.
+// finds a source stored under any supported extension. Nothing is removed
+// once the upload is gone, so a late callback cannot delete a newer, published
+// result, or once the plan no longer limits the video, so the caller can treat
+// the refusal as an ordinary, retryable failure.
 export async function rejectFreePlanOverLimitVideo(
 	video: typeof videos.$inferSelect,
 	upload: { rawFileKey: string | null } | undefined,
-): Promise<"rejected" | "stale"> {
-	if (!upload || (await getFreePlanDurationLimit(video)) === null)
-		return "stale";
+): Promise<"rejected" | "no-upload" | "not-limited"> {
+	if (!upload) return "no-upload";
+	if ((await getFreePlanDurationLimit(video)) === null) return "not-limited";
 	const rawFileKey = upload.rawFileKey;
 	await db()
 		.update(videoUploads)

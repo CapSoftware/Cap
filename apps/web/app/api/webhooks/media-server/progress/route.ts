@@ -220,8 +220,9 @@ export async function POST(request: NextRequest) {
 				.where(eq(videoUploads.videoId, payload.videoId as Video.VideoId));
 			const status = currentVideo
 				? await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)
-				: "stale";
-			return NextResponse.json({ success: true, status });
+				: "no-upload";
+			if (status !== "not-limited")
+				return NextResponse.json({ success: true, status });
 		}
 
 		if (dbPhase === "complete") {
