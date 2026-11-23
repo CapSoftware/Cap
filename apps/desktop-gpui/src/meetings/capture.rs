@@ -1151,8 +1151,49 @@ impl SystemPlatform {
     }
 }
 
+/// Windows: computer audio from the default output, or, when the default
+/// communications device is another device (Teams and Zoom play calls
+/// there), from both outputs mixed.
 #[cfg(windows)]
-struct SystemPlatform {
+enum SystemPlatform {
+    Default(DefaultLoopback),
+    Both(BothOutputs),
+}
+
+#[cfg(windows)]
+impl SystemPlatform {
+    fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
+        if cap_meeting_platform::separate_comms_output() {
+            match BothOutputs::start() {
+                Ok((both, rx)) => return Ok((Self::Both(both), rx)),
+                Err(issue) => tracing::warn!(
+                    ?issue,
+                    "could not record both outputs; recording the default output"
+                ),
+            }
+        }
+        DefaultLoopback::start().map(|(default, rx)| (Self::Default(default), rx))
+    }
+
+    fn counters(&self) -> Option<TapCounters> {
+        match self {
+            Self::Default(default) => default.counters(),
+            Self::Both(both) => both.counters(),
+        }
+    }
+
+    fn restart(&self) {
+        match self {
+            Self::Default(default) => default.restart(),
+            Self::Both(both) => both.restart(),
+        }
+    }
+}
+
+/// Windows, one output for everything (most computers): the default
+/// output looped back, as it always was.
+#[cfg(windows)]
+struct DefaultLoopback {
     stop: Option<flume::Sender<()>>,
     thread: Option<JoinHandle<()>>,
     dropped: Arc<AtomicU64>,
@@ -1164,7 +1205,7 @@ struct SystemPlatform {
 }
 
 #[cfg(windows)]
-impl SystemPlatform {
+impl DefaultLoopback {
     fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
         use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -1302,12 +1343,63 @@ impl SystemPlatform {
 }
 
 #[cfg(windows)]
-impl Drop for SystemPlatform {
+impl Drop for DefaultLoopback {
     fn drop(&mut self) {
         drop(self.stop.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+/// Windows with a separate communications device: the default and the
+/// communications outputs mixed (`cap_meeting_platform::SystemLoopback`).
+#[cfg(windows)]
+struct BothOutputs {
+    loopback: cap_meeting_platform::SystemLoopback,
+    dropped: Arc<AtomicU64>,
+}
+
+#[cfg(windows)]
+impl BothOutputs {
+    fn start() -> Result<(Self, flume::Receiver<SystemChunk>), HealthIssue> {
+        let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let loopback = cap_meeting_platform::SystemLoopback::start({
+            let dropped = dropped.clone();
+            move |chunk| {
+                let message = SystemChunk::Samples {
+                    samples: chunk.samples.to_vec(),
+                    sample_rate: cap_meeting_platform::LOOPBACK_RATE,
+                    synthetic: false,
+                    received: Instant::now(),
+                };
+                if tx.try_send(message).is_err() {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        })
+        .map_err(|error| {
+            if error.contains("no audio output") {
+                HealthIssue::NoInputDevice
+            } else {
+                HealthIssue::Failed(format!("Computer audio capture failed: {error}"))
+            }
+        })?;
+        Ok((Self { loopback, dropped }, rx))
+    }
+
+    fn counters(&self) -> Option<TapCounters> {
+        Some(TapCounters {
+            callbacks: self.loopback.callbacks(),
+            dropped: self.dropped.load(Ordering::Relaxed),
+            restarts: self.loopback.restarts(),
+            ..TapCounters::default()
+        })
+    }
+
+    fn restart(&self) {
+        self.loopback.restart();
     }
 }
 
@@ -1411,11 +1503,11 @@ pub const OUTPUT_IDENTITY_ASKS: bool = cfg!(windows);
 pub fn output_identity(seen: Option<String>) -> Option<String> {
     #[cfg(windows)]
     {
-        use cpal::traits::{DeviceTrait, HostTrait};
+        // The default and the communications output: Teams and Zoom play a
+        // call to the latter.
         let _ = seen;
-        cpal::default_host()
-            .default_output_device()
-            .and_then(|device| device.name().ok())
+        let ids = cap_meeting_platform::default_outputs();
+        (!ids.is_empty()).then(|| ids.join(" + "))
     }
     #[cfg(not(windows))]
     {

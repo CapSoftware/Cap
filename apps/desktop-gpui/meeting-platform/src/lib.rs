@@ -32,6 +32,10 @@ pub struct BrowserProbe {
 #[cfg(target_os = "macos")]
 pub use macos::browser_probe::{accessibility_trusted, probe_browser};
 #[cfg(windows)]
+pub use windows::loopback::{
+    LOOPBACK_RATE, LoopbackChunk, SystemLoopback, default_outputs, separate_comms_output,
+};
+#[cfg(windows)]
 pub use windows::uia::probe_browser;
 
 /// Only macOS puts reading other apps behind a permission; elsewhere there is
