@@ -1108,10 +1108,10 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								1,
 								endController.signal,
 							);
-							await new Promise((resolve) => setTimeout(resolve, 100));
 							const endHold = {
 								currentTime: endVideo.currentTime,
 								duration: endVideo.duration,
+								paused: endVideo.paused,
 							};
 							playback.pool.pause();
 							await playback.seek(0.1);
@@ -1576,8 +1576,9 @@ async function replay(forceWebGl, forceWebGpu = false) {
 				`Slow HTML playback sought too often or its pause redraw hung: ${JSON.stringify(result.slowHtmlPlayback)}`,
 			);
 			assert(
-				result.slowHtmlPlayback.endHold.currentTime >=
-					result.slowHtmlPlayback.endHold.duration - 0.05,
+				result.slowHtmlPlayback.endHold.paused &&
+					result.slowHtmlPlayback.endHold.currentTime >=
+						result.slowHtmlPlayback.endHold.duration - 0.05,
 				`A video that ended restarted when playback asked for its last frame: ${JSON.stringify(result.slowHtmlPlayback.endHold)}`,
 			);
 		}
