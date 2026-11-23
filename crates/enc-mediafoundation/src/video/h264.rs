@@ -386,6 +386,7 @@ impl H264Encoder {
             MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
             output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+            crate::color::set_bt709_limited(&output_type)?;
             transform.SetOutputType(output_stream_id, &output_type, 0)?;
             Ok(output_type)
         })()
@@ -405,6 +406,7 @@ impl H264Encoder {
                 let attributes: IMFAttributes = input_type.cast()?;
                 input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                 input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+                crate::color::set_bt709_limited(&input_type)?;
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,

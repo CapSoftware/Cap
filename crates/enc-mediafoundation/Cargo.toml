@@ -53,5 +53,9 @@ cap-d3d-adapter = { path = "../d3d-adapter" }
 scap-targets = { path = "../scap-targets" }
 clap = { version = "4.5.46", features = ["derive"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+ffmpeg = { workspace = true }
+cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
+
 [lints]
 workspace = true

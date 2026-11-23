@@ -4,14 +4,42 @@ pub(crate) struct ProcessorColorWords {
     pub stream: u32,
 }
 
+const USAGE_VIDEO_PROCESSING: u32 = 1;
+const MATRIX_BT709: u32 = 1 << 2;
+const NOMINAL_SHIFT: u32 = 4;
+const NOMINAL_STUDIO: u32 = 1;
+const NOMINAL_FULL: u32 = 2;
+
 pub(crate) fn bt709_processor_color_words(input_full_range: bool) -> ProcessorColorWords {
-    let _ = input_full_range;
+    let nominal = if input_full_range {
+        NOMINAL_FULL
+    } else {
+        NOMINAL_STUDIO
+    };
     ProcessorColorWords {
-        output: 1 | 2,
-        stream: 1 | 1,
+        output: USAGE_VIDEO_PROCESSING | MATRIX_BT709 | (NOMINAL_STUDIO << NOMINAL_SHIFT),
+        stream: USAGE_VIDEO_PROCESSING | MATRIX_BT709 | (nominal << NOMINAL_SHIFT),
     }
 }
 
+#[cfg(windows)]
+pub(crate) fn set_bt709_limited(
+    media_type: &windows::Win32::Media::MediaFoundation::IMFMediaType,
+) -> windows::core::Result<()> {
+    use windows::Win32::Media::MediaFoundation::{
+        MF_MT_TRANSFER_FUNCTION, MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_VIDEO_PRIMARIES,
+        MF_MT_YUV_MATRIX, MFNominalRange_16_235, MFVideoPrimaries_BT709, MFVideoTransFunc_709,
+        MFVideoTransferMatrix_BT709,
+    };
+    unsafe {
+        media_type.SetUINT32(&MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_709.0 as u32)?;
+        media_type.SetUINT32(&MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235.0 as u32)
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn bt709_limited_yuv(rgb: [u8; 3]) -> [u8; 3] {
     const Y: [i32; 3] = [11966, 40254, 4064];
     const CB: [i32; 3] = [-6596, -22189, 28785];
@@ -23,6 +51,7 @@ pub(crate) fn bt709_limited_yuv(rgb: [u8; 3]) -> [u8; 3] {
     [luma, cb, cr]
 }
 
+#[cfg(test)]
 fn fixed_16(row: [i32; 3], r: i32, g: i32, b: i32) -> i32 {
     (row[0] * r + row[1] * g + row[2] * b + (1 << 15)) >> 16
 }

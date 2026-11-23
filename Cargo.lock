@@ -1420,7 +1420,9 @@ version = "0.1.0"
 dependencies = [
  "cap-d3d-adapter",
  "cap-media-info",
+ "cap-mediafoundation-ffmpeg",
  "clap",
+ "ffmpeg-next",
  "futures",
  "scap-direct3d",
  "scap-targets",
