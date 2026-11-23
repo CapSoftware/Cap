@@ -39,7 +39,8 @@ const RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 const SETTLE: Duration = Duration::from_millis(50);
 const WORKED: Duration = Duration::from_micros(200);
 const MIN_IDLE_STEP: Duration = Duration::from_millis(1);
-const MAX_IDLE_STEP: Duration = Duration::from_millis(64);
+// Caps how far virtual time can pass an app-side wake during a quiet step.
+const MAX_IDLE_STEP: Duration = Duration::from_millis(8);
 
 #[derive(Default)]
 struct Activity {
