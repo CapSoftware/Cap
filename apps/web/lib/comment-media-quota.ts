@@ -128,3 +128,28 @@ export function reserveCommentMediaBytes(input: {
 		now: input.now,
 	});
 }
+
+/** Gives back a byte charge taken at `now` for an upload that never started. */
+export async function releaseCommentMediaBytes(input: {
+	videoId: string;
+	userId: string;
+	bytes: number;
+	now: Date;
+}) {
+	const windowIndex = Math.floor(
+		input.now.getTime() / COMMENT_MEDIA_RESERVATION_WINDOW_MS,
+	);
+	await db()
+		.update(mediaProcessingBudgets)
+		.set({
+			reservedBytes: sql`${mediaProcessingBudgets.reservedBytes} - LEAST(${mediaProcessingBudgets.reservedBytes}, ${input.bytes})`,
+		})
+		.where(
+			inArray(mediaProcessingBudgets.id, [
+				reservationKey(
+					["comment-media-bytes", input.videoId, input.userId],
+					windowIndex,
+				),
+			]),
+		);
+}

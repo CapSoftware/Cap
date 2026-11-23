@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 	deleteObject: vi.fn(),
 	reserveBytes: vi.fn(),
 	reserveObjects: vi.fn(),
+	releaseBytes: vi.fn(),
 	createUploadTarget: vi.fn(),
 	createMultipart: vi.fn(),
 }));
@@ -89,6 +90,7 @@ vi.mock("@/lib/comment-media-quota", () => ({
 	MAX_MEDIA_OBJECTS_PER_VIDEO: 400,
 	reserveCommentMediaObjects: mocks.reserveObjects,
 	reserveCommentMediaBytes: mocks.reserveBytes,
+	releaseCommentMediaBytes: mocks.releaseBytes,
 }));
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: { COMMENT_MEDIA_UPLOAD: "rl_comment_media_upload" },
@@ -119,6 +121,7 @@ beforeEach(() => {
 	mocks.deleteObject.mockReturnValue(Effect.void);
 	mocks.reserveBytes.mockResolvedValue(true);
 	mocks.reserveObjects.mockResolvedValue(true);
+	mocks.releaseBytes.mockResolvedValue(undefined);
 	mocks.createUploadTarget.mockImplementation((key: string) =>
 		Effect.succeed({ url: `https://upload.test/${key}` }),
 	);
@@ -216,11 +219,13 @@ describe("comment media initiate size", () => {
 				enforceContentLength: true,
 			}),
 		);
-		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
-			videoId: "video-1",
-			userId: "viewer-1",
-			bytes: 40_000,
-		});
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				videoId: "video-1",
+				userId: "viewer-1",
+				bytes: 40_000,
+			}),
+		);
 	});
 
 	it("refuses a direct upload without a size", async () => {
@@ -286,11 +291,13 @@ describe("comment media initiate size", () => {
 				enforceContentLength: true,
 			}),
 		);
-		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
-			videoId: "video-1",
-			userId: "viewer-1",
-			bytes: 12_090_000,
-		});
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				videoId: "video-1",
+				userId: "viewer-1",
+				bytes: 12_090_000,
+			}),
+		);
 		expect(mocks.createMultipart).not.toHaveBeenCalled();
 	});
 
@@ -306,11 +313,63 @@ describe("comment media initiate size", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({ thumbnailUpload: null });
 		expect(mocks.createUploadTarget).toHaveBeenCalledOnce();
-		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
-			videoId: "video-1",
-			userId: "viewer-1",
-			bytes: 12_000_000,
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				videoId: "video-1",
+				userId: "viewer-1",
+				bytes: 12_000_000,
+			}),
+		);
+	});
+
+	it("keeps the charge for an upload it issued", async () => {
+		await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+			size: 40_000,
 		});
+
+		expect(mocks.releaseBytes).not.toHaveBeenCalled();
+	});
+
+	it("refunds the charge when the video is out of slots", async () => {
+		mocks.reserveObjects.mockResolvedValue(false);
+
+		const response = await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+			size: 40_000,
+		});
+
+		expect(response.status).toBe(429);
+		expect(mocks.releaseBytes).toHaveBeenCalledExactlyOnceWith(
+			expect.objectContaining({
+				videoId: "video-1",
+				userId: "viewer-1",
+				bytes: 40_000,
+			}),
+		);
+		expect(mocks.releaseBytes.mock.calls[0]?.[0].now).toBe(
+			mocks.reserveBytes.mock.calls[0]?.[0].now,
+		);
+	});
+
+	it("refunds the charge when the upload target cannot be created", async () => {
+		mocks.createUploadTarget.mockReturnValue(
+			Effect.fail(new Error("storage down")),
+		);
+
+		const response = await initiate({
+			kind: "audio",
+			contentType: "audio/webm",
+			mode: "single",
+			size: 40_000,
+		});
+
+		expect(response.status).toBe(500);
+		expect(mocks.releaseBytes).toHaveBeenCalledOnce();
 	});
 
 	it("no longer starts multipart uploads", async () => {

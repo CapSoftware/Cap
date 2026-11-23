@@ -20,6 +20,7 @@ import { commentMediaKeys } from "@/lib/comment-media";
 import {
 	MAX_MEDIA_OBJECT_BYTES,
 	MAX_MEDIA_OBJECTS_PER_VIDEO,
+	releaseCommentMediaBytes,
 	reserveCommentMediaBytes,
 	reserveCommentMediaObjects,
 } from "@/lib/comment-media-quota";
@@ -146,15 +147,25 @@ app.post(
 			const { contentType, key, thumbnailKey } = keys;
 
 			// The viewer's own byte budget goes first, so a viewer at their limit
-			// cannot take the video's shared object slots.
+			// cannot take the video's shared object slots. The charge is refunded
+			// if the upload is refused or fails after this point.
 			const directBytes = size + (thumbnailKey ? (thumbnailSize ?? 0) : 0);
+			const chargedAt = new Date();
+			const charge = {
+				videoId: video.id,
+				userId: user.id,
+				bytes: directBytes,
+				now: chargedAt,
+			};
+			const refund =
+				directBytes > 0
+					? Effect.tryPromise(() => releaseCommentMediaBytes(charge)).pipe(
+							Effect.catchAll(Effect.logError),
+						)
+					: Effect.void;
 			if (directBytes > 0) {
 				const withinBudget = yield* Effect.tryPromise(() =>
-					reserveCommentMediaBytes({
-						videoId: video.id,
-						userId: user.id,
-						bytes: directBytes,
-					}),
+					reserveCommentMediaBytes(charge),
 				);
 				if (!withinBudget) {
 					c.status(413);
@@ -168,18 +179,21 @@ app.post(
 			// actually landed in the owner's (possibly BYO) bucket. Uploads that
 			// have not landed yet are counted through a reservation taken under a
 			// row lock, so concurrent initiates cannot all pass the same snapshot.
-			const existingObjects = yield* bucket.listObjects({
-				prefix: `${video.ownerId}/${video.id}/comments/`,
-				maxKeys: MAX_MEDIA_OBJECTS_PER_VIDEO,
-			});
-			const reserved = yield* Effect.tryPromise(() =>
-				reserveCommentMediaObjects({
-					videoId: video.id,
-					objects: thumbnailKey ? 2 : 1,
-					storedObjects: existingObjects.Contents?.length ?? 0,
-				}),
-			);
+			const reserved = yield* Effect.gen(function* () {
+				const existingObjects = yield* bucket.listObjects({
+					prefix: `${video.ownerId}/${video.id}/comments/`,
+					maxKeys: MAX_MEDIA_OBJECTS_PER_VIDEO,
+				});
+				return yield* Effect.tryPromise(() =>
+					reserveCommentMediaObjects({
+						videoId: video.id,
+						objects: thumbnailKey ? 2 : 1,
+						storedObjects: existingObjects.Contents?.length ?? 0,
+					}),
+				);
+			}).pipe(Effect.tapError(() => refund));
 			if (!reserved) {
+				yield* refund;
 				c.status(429);
 				return c.json({
 					error: "This video has reached its media comment limit",
@@ -189,12 +203,14 @@ app.post(
 			// Drive rejects presigned POST, so upload targets are always PUT-style;
 			// createUploadTarget returns the provider-appropriate target shape.
 			const thumbnailUpload = thumbnailKey
-				? yield* bucket.createUploadTarget(thumbnailKey, {
-						contentType: "image/jpeg",
-						method: "put",
-						contentLength: thumbnailSize,
-						enforceContentLength: true,
-					})
+				? yield* bucket
+						.createUploadTarget(thumbnailKey, {
+							contentType: "image/jpeg",
+							method: "put",
+							contentLength: thumbnailSize,
+							enforceContentLength: true,
+						})
+						.pipe(Effect.tapError(() => refund))
 				: null;
 
 			const uploadToken = createCommentMediaUploadToken({
@@ -209,12 +225,14 @@ app.post(
 
 			// Deliberately no Db.videoUploads row: that table drives the parent
 			// video's "uploading" UI state and the stale-upload cron.
-			const upload = yield* bucket.createUploadTarget(key, {
-				contentType,
-				method: "put",
-				contentLength: size,
-				enforceContentLength: true,
-			});
+			const upload = yield* bucket
+				.createUploadTarget(key, {
+					contentType,
+					method: "put",
+					contentLength: size,
+					enforceContentLength: true,
+				})
+				.pipe(Effect.tapError(() => refund));
 			return c.json({ commentId, key, uploadToken, upload, thumbnailUpload });
 		}).pipe(
 			Effect.tapError(Effect.logError),

@@ -70,6 +70,7 @@ vi.mock("@/lib/comment-media-quota", () => ({
 	MAX_MEDIA_OBJECTS_PER_VIDEO: 400,
 	reserveCommentMediaObjects: mocks.reserve,
 	reserveCommentMediaBytes: async () => true,
+	releaseCommentMediaBytes: async () => {},
 }));
 vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: { COMMENT_MEDIA_UPLOAD: "rl_comment_media_upload" },

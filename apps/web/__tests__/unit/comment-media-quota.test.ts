@@ -3,6 +3,7 @@ import {
 	COMMENT_MEDIA_RESERVATION_WINDOW_MS,
 	MAX_MEDIA_BYTES_PER_VIEWER,
 	MAX_MEDIA_OBJECTS_PER_VIDEO,
+	releaseCommentMediaBytes,
 	reserveCommentMediaBytes,
 	reserveCommentMediaObjects,
 } from "@/lib/comment-media-quota";
@@ -30,8 +31,27 @@ vi.mock("drizzle-orm", () => ({
 	inArray: (_column: unknown, ids: string[]) => ids,
 	sql: (_strings: TemplateStringsArray, ...values: unknown[]) => values,
 }));
+const applyUpdate = () => ({
+	set: (values: { reservedBytes: unknown[] }) => ({
+		where: async (ids: string[]) => {
+			await pause();
+			for (const id of ids) {
+				const row = state.rows.get(id);
+				if (!row) continue;
+				// sql`col + n` arrives as [col, n]; sql`col - LEAST(col, n)` as [col, col, n].
+				const amount = values.reservedBytes.at(-1) as number;
+				row.reservedBytes +=
+					values.reservedBytes.length === 3
+						? -Math.min(row.reservedBytes, amount)
+						: amount;
+			}
+		},
+	}),
+});
+
 vi.mock("@cap/database", () => ({
 	db: () => ({
+		update: applyUpdate,
 		transaction: async (run: (tx: unknown) => Promise<boolean>) => {
 			const releases: (() => void)[] = [];
 			const acquire = async (id: string) => {
@@ -75,17 +95,7 @@ vi.mock("@cap/database", () => ({
 							}),
 						}),
 					}),
-					update: () => ({
-						set: (values: { reservedBytes: [unknown, number] }) => ({
-							where: async (ids: string[]) => {
-								await pause();
-								for (const id of ids) {
-									const row = state.rows.get(id);
-									if (row) row.reservedBytes += values.reservedBytes[1];
-								}
-							},
-						}),
-					}),
+					update: applyUpdate,
 				});
 			} finally {
 				for (const release of releases) release();
@@ -243,6 +253,35 @@ describe("comment media viewer byte budget", () => {
 		);
 		expect(results.every(Boolean)).toBe(true);
 		await expect(reserveBytes({ bytes: 6 * GIB })).resolves.toBe(true);
+		await expect(reserveBytes({ bytes: 1 })).resolves.toBe(false);
+	});
+
+	it("gives a refunded charge back to the viewer", async () => {
+		await reserveBytes({ bytes: MAX_MEDIA_BYTES_PER_VIEWER });
+		await expect(reserveBytes({ bytes: 1 })).resolves.toBe(false);
+
+		await releaseCommentMediaBytes({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: 2 * GIB,
+			now,
+		});
+
+		await expect(reserveBytes({ bytes: 2 * GIB })).resolves.toBe(true);
+		await expect(reserveBytes({ bytes: 1 })).resolves.toBe(false);
+	});
+
+	it("never refunds below zero", async () => {
+		await reserveBytes({ bytes: GIB });
+		await releaseCommentMediaBytes({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: 5 * GIB,
+			now,
+		});
+		await expect(
+			reserveBytes({ bytes: MAX_MEDIA_BYTES_PER_VIEWER }),
+		).resolves.toBe(true);
 		await expect(reserveBytes({ bytes: 1 })).resolves.toBe(false);
 	});
 
