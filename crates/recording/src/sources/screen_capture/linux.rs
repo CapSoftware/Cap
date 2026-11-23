@@ -1904,6 +1904,8 @@ impl AudioSource for SystemAudioSource {
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         drop(self.monitor_route.take());
+        // Stop waits until held samples have been handed to the muxer.
+        // Killing the feed first drops that flush on a dead actor.
         self.inner.stop().await?;
         self.feed.actor.kill();
         self.feed.actor.wait_for_stop().await;
@@ -2520,16 +2522,20 @@ fn inspect_system_audio_source_output(
 }
 
 // Samples stay here until a later source read still sees a sink monitor.
-// A read that sees anything else drops every sample not yet released,
-// including audio captured on the monitor in the moment before the move.
-// Releasing that audio would write the microphone into the system track.
+// `unsafe_cutoff` is the latest instant that was not a proven monitor, so
+// audio captured at or before it is dropped even when the callback arrives
+// late. `proven_until` is only the last successful check: a chunk captured
+// before that check, but after `unsafe_cutoff`, stays queued for the next
+// check instead of being discarded. A non-monitor read drops every sample
+// not yet released, including audio captured on the monitor just before the
+// move. Releasing that audio would write the microphone into the system track.
 pub(crate) const SYSTEM_AUDIO_STAGING_HOLD: Duration = Duration::from_secs(2);
 const SYSTEM_AUDIO_STAGING_LIMIT: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SystemAudioRouteCheck {
     OnMonitor { check_started: Instant },
-    NotOnMonitor,
+    NotOnMonitor { observed_at: Instant },
 }
 
 struct StagedSystemAudio<T> {
@@ -2540,6 +2546,7 @@ struct StagedSystemAudio<T> {
 pub(crate) struct SystemAudioStaging<T> {
     pending: std::collections::VecDeque<StagedSystemAudio<T>>,
     proven_until: Option<Instant>,
+    unsafe_cutoff: Option<Instant>,
     max_hold: Duration,
 }
 
@@ -2548,6 +2555,7 @@ impl<T> SystemAudioStaging<T> {
         Self {
             pending: std::collections::VecDeque::new(),
             proven_until: None,
+            unsafe_cutoff: None,
             max_hold,
         }
     }
@@ -2555,54 +2563,95 @@ impl<T> SystemAudioStaging<T> {
     pub(crate) fn clear(&mut self) {
         self.pending.clear();
         self.proven_until = None;
+        self.unsafe_cutoff = None;
+    }
+
+    fn mark_unsafe(&mut self, at: Instant) {
+        let cutoff = self
+            .unsafe_cutoff
+            .map(|existing| existing.max(at))
+            .unwrap_or(at);
+        self.unsafe_cutoff = Some(cutoff);
+        self.pending.retain(|chunk| chunk.captured_at > cutoff);
+        self.proven_until = None;
     }
 
     /// `at` is the instant the capture was placed on a monitor. Samples
     /// captured at or before that instant are not released by a later check.
     pub(crate) fn note_attached(&mut self, at: Instant) {
-        self.pending.retain(|chunk| chunk.captured_at > at);
+        self.mark_unsafe(at);
         self.proven_until = Some(at);
     }
 
     pub(crate) fn push(&mut self, captured_at: Instant, value: T) -> bool {
-        if self.proven_until.is_some_and(|until| captured_at <= until) {
+        if self
+            .unsafe_cutoff
+            .is_some_and(|cutoff| captured_at <= cutoff)
+        {
             return false;
         }
         self.pending
             .push_back(StagedSystemAudio { captured_at, value });
-        let newest = captured_at;
-        while self.pending.len() > SYSTEM_AUDIO_STAGING_LIMIT
-            || self.pending.front().is_some_and(|chunk| {
-                newest.saturating_duration_since(chunk.captured_at) > self.max_hold
-            })
-        {
-            self.pending.pop_front();
-        }
+        self.trim();
         true
+    }
+
+    fn trim(&mut self) {
+        while self.pending.len() > SYSTEM_AUDIO_STAGING_LIMIT || self.held_too_long() {
+            let Some(index) = self.oldest_index() else {
+                break;
+            };
+            self.pending.remove(index);
+        }
+    }
+
+    fn oldest_index(&self) -> Option<usize> {
+        self.pending
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, chunk)| chunk.captured_at)
+            .map(|(index, _)| index)
+    }
+
+    fn held_too_long(&self) -> bool {
+        let Some(oldest) = self.pending.iter().map(|chunk| chunk.captured_at).min() else {
+            return false;
+        };
+        let Some(newest) = self.pending.iter().map(|chunk| chunk.captured_at).max() else {
+            return false;
+        };
+        newest.saturating_duration_since(oldest) > self.max_hold
     }
 
     pub(crate) fn observe(&mut self, check: SystemAudioRouteCheck) -> Vec<T> {
         match check {
-            SystemAudioRouteCheck::NotOnMonitor => {
-                self.clear();
+            SystemAudioRouteCheck::NotOnMonitor { observed_at } => {
+                self.mark_unsafe(observed_at);
                 Vec::new()
             }
             SystemAudioRouteCheck::OnMonitor { check_started } => {
                 let Some(proven_until) = self.proven_until else {
-                    self.note_attached(check_started);
+                    self.mark_unsafe(check_started);
+                    self.proven_until = Some(check_started);
                     return Vec::new();
                 };
                 if check_started < proven_until {
                     return Vec::new();
                 }
+                let cutoff = self.unsafe_cutoff;
                 let mut released = Vec::new();
-                while self
-                    .pending
-                    .front()
-                    .is_some_and(|chunk| chunk.captured_at <= check_started)
-                {
-                    released.push(self.pending.pop_front().expect("front").value);
+                let mut kept = std::collections::VecDeque::new();
+                while let Some(chunk) = self.pending.pop_front() {
+                    if cutoff.is_some_and(|cutoff| chunk.captured_at <= cutoff) {
+                        continue;
+                    }
+                    if chunk.captured_at <= check_started {
+                        released.push(chunk.value);
+                    } else {
+                        kept.push_back(chunk);
+                    }
                 }
+                self.pending = kept;
                 self.proven_until = Some(check_started);
                 released
             }
@@ -3878,7 +3927,9 @@ mod system_audio_tests {
         assert!(staging.push(started + Duration::from_millis(10), "monitor"));
         assert!(staging.push(started + Duration::from_millis(20), "microphone"));
 
-        let released = staging.observe(SystemAudioRouteCheck::NotOnMonitor);
+        let released = staging.observe(SystemAudioRouteCheck::NotOnMonitor {
+            observed_at: started + Duration::from_millis(25),
+        });
         assert!(released.is_empty());
         assert_eq!(staging.pending_len(), 0);
 
@@ -3891,6 +3942,65 @@ mod system_audio_tests {
         assert!(
             released.is_empty(),
             "microphone audio was forwarded: {released:?}"
+        );
+    }
+
+    #[test]
+    fn system_audio_samples_staged_before_lock_are_released_by_a_monitor_check() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(2));
+        staging.note_attached(started);
+        assert!(staging.push(started + Duration::from_millis(5), "startup"));
+
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(15),
+        });
+        assert_eq!(released, vec!["startup"]);
+    }
+
+    #[test]
+    fn system_audio_delayed_chunk_after_a_monitor_check_is_kept_for_the_next_check() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(2));
+        staging.note_attached(started);
+        assert!(staging.push(started + Duration::from_millis(10), "live"));
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(30),
+        });
+        assert_eq!(released, vec!["live"]);
+
+        assert!(
+            staging.push(started + Duration::from_millis(60), "later"),
+            "audio captured after the check was discarded"
+        );
+        assert!(
+            staging.push(started + Duration::from_millis(20), "delayed"),
+            "a safe chunk captured before the check was discarded when it arrived late"
+        );
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(50),
+        });
+        assert_eq!(released, vec!["delayed"]);
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(80),
+        });
+        assert_eq!(released, vec!["later"]);
+    }
+
+    #[test]
+    fn system_audio_late_chunk_from_before_a_microphone_reroute_is_dropped() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(2));
+        staging.note_attached(started);
+        assert!(staging.push(started + Duration::from_millis(10), "monitor"));
+        let released = staging.observe(SystemAudioRouteCheck::NotOnMonitor {
+            observed_at: started + Duration::from_millis(40),
+        });
+        assert!(released.is_empty());
+        assert_eq!(staging.pending_len(), 0);
+        assert!(
+            !staging.push(started + Duration::from_millis(20), "during microphone"),
+            "audio captured before the reroute was staged"
         );
     }
 

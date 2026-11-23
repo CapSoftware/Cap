@@ -29,6 +29,8 @@ const MIC_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
 // monitor that returns is accepted instead of ending an Audio Only take.
 #[cfg(target_os = "linux")]
 const SYSTEM_AUDIO_RECONNECT_GRACE: Duration = Duration::from_secs(3);
+#[cfg(target_os = "linux")]
+const SYSTEM_AUDIO_STOP_FLUSH: Duration = Duration::from_secs(2);
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
@@ -204,6 +206,8 @@ pub struct Microphone {
     capture_scope: crate::output_pipeline::PipelineBuildScope,
     #[cfg(target_os = "linux")]
     required_health: Option<RequiredMicrophoneHealth>,
+    #[cfg(target_os = "linux")]
+    capture_task: Option<tokio::task::JoinHandle<()>>,
     info: AudioInfo,
     // Holds the current feed lock for the source's lifetime; Windows also
     // reads it to retire the current subscription.
@@ -246,6 +250,21 @@ impl Drop for Microphone {
             self.capture_scope.fail_required(error);
         }
         self.cancel.cancel();
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn await_capture_stop(task: Option<tokio::task::JoinHandle<()>>) {
+    let Some(mut task) = task else {
+        return;
+    };
+    match tokio::time::timeout(SYSTEM_AUDIO_STOP_FLUSH, &mut task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => warn!("System audio capture task stopped with a panic"),
+        Err(_) => {
+            task.abort();
+            warn!("Timed out waiting for system audio to flush on stop");
+        }
     }
 }
 
@@ -617,7 +636,7 @@ impl Microphone {
 
             let recording_muted = feed_lock.recording_muted_handle();
 
-            crate::output_pipeline::spawn_capture_task({
+            let capture_task = crate::output_pipeline::spawn_capture_task({
                 let frame_counter = mic_frame_counter.clone();
                 let drop_counter = mic_drop_counter.clone();
                 let silence_counter = mic_silence_counter.clone();
@@ -654,7 +673,10 @@ impl Microphone {
                     // switched-to one delivers its first frame.
                     let mut switched_from: Option<cap_timestamp::Timestamp> = None;
                     let mut logged_current_source: Option<(u32, u16, SampleFormat)> = None;
+                    #[cfg(target_os = "linux")]
                     let mut system_stop_flushed = false;
+                    #[cfg(not(target_os = "linux"))]
+                    let system_stop_flushed = false;
 
                     loop {
                         #[cfg(windows)]
@@ -1223,6 +1245,8 @@ impl Microphone {
 
             #[cfg(windows)]
             drop(setup_cancel.disarm());
+            #[cfg(not(target_os = "linux"))]
+            drop(capture_task);
             Ok(Self {
                 #[cfg(windows)]
                 capture_scope,
@@ -1230,6 +1254,8 @@ impl Microphone {
                 _binding: binding,
                 #[cfg(target_os = "linux")]
                 required_health,
+                #[cfg(target_os = "linux")]
+                capture_task: Some(capture_task),
                 cancel,
             })
         };
@@ -1281,11 +1307,15 @@ impl AudioSource for Microphone {
         self.cancel.cancel();
         #[cfg(windows)]
         let scope = self.capture_scope.clone();
+        #[cfg(target_os = "linux")]
+        let capture_task = self.capture_task.take();
         async move {
             #[cfg(windows)]
             {
                 finish_recording_subscription(&scope, &feed, subscription).await
             }
+            #[cfg(target_os = "linux")]
+            await_capture_stop(capture_task).await;
             #[cfg(not(windows))]
             {
                 Ok(())
@@ -1401,6 +1431,25 @@ fn silence_frame_payload(frame: &mut ffmpeg::frame::Audio) {
 mod tests {
     use super::*;
     use cap_media_info::{Sample, Type};
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn system_audio_stop_delivers_held_audio_before_the_feed_is_killed() {
+        let killed = Arc::new(AtomicBool::new(false));
+        let seen = killed.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            assert!(
+                !seen.load(Ordering::SeqCst),
+                "the feed was killed before held system audio was delivered"
+            );
+            tx.send("held").expect("stop dropped the held audio");
+        });
+        await_capture_stop(Some(task)).await;
+        killed.store(true, Ordering::SeqCst);
+        assert_eq!(rx.await.expect("held audio missing"), "held");
+    }
 
     #[tokio::test]
     async fn ready_success_without_frames_retries_only_after_existing_backoff() {
