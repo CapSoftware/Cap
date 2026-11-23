@@ -282,9 +282,17 @@ pub fn notes_retry_wait(attempt: usize, error: &NotesError) -> Duration {
 /// What puts one speaker rename back exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenameUndo {
-    line: LogLine,
+    back: RenameBack,
     pub from: String,
     pub to: String,
+}
+
+/// How a rename is taken back: a line for a name or a track, or only the
+/// change it made to the voice names, so later edits stay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RenameBack {
+    Line(LogLine),
+    Names(ChoiceUndo),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -386,6 +394,15 @@ impl ChoiceMade {
 /// always before its undo runs there.
 #[derive(Clone, Debug, Default)]
 pub struct ChoiceUndo(std::sync::Arc<std::sync::Mutex<Option<ChoiceMade>>>);
+
+/// The same undo, not an equal one.
+impl PartialEq for ChoiceUndo {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ChoiceUndo {}
 
 impl ChoiceUndo {
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<ChoiceMade>> {
@@ -3451,6 +3468,38 @@ impl Meetings {
     ) -> Option<RenameUndo> {
         let from = self.speaker_label(doc_id, &speaker);
         let to = to.trim().to_string();
+        if let SpeakerRef::Id(id) = speaker {
+            // Renamed on the latest names, like a voice choice, so it never
+            // undoes another edit or the after-Stop labels still queued.
+            let attendee = self
+                .library()
+                .and_then(|l| l.load(doc_id).ok())
+                .and_then(|meta| speakers::other_attendee(&meta));
+            let undo = ChoiceUndo::default();
+            let taken = undo.clone();
+            let name = to.clone();
+            self.rewrite_transcript(
+                doc_id,
+                move |transcript| {
+                    let before = transcript
+                        .names()
+                        .cloned()
+                        .unwrap_or_else(|| cap_diarize::SpeakerNames::new(attendee));
+                    let mut after = before.clone();
+                    after.rename(cap_diarize::SpeakerId(id), &name);
+                    if after == before {
+                        return None;
+                    }
+                    *taken.lock() = Some(ChoiceMade::Names {
+                        before,
+                        after: after.clone(),
+                    });
+                    Some(LogLine::SpeakerNames { names: after })
+                },
+                cx,
+            );
+            return self.renamed(doc_id, from, to, RenameBack::Names(undo), cx);
+        }
         let (line, undo_line) = match speaker {
             SpeakerRef::Source(source) => {
                 let before = self
@@ -3477,35 +3526,27 @@ impl Meetings {
                     to: from,
                 },
             ),
-            SpeakerRef::Id(id) => {
-                let attendee = self
-                    .library()
-                    .and_then(|l| l.load(doc_id).ok())
-                    .and_then(|meta| speakers::other_attendee(&meta));
-                let before = self
-                    .transcript(doc_id)
-                    .and_then(|t| t.names().cloned())
-                    .unwrap_or_else(|| cap_diarize::SpeakerNames::new(attendee));
-                let mut names = before.clone();
-                names.rename(cap_diarize::SpeakerId(id), &to);
-                (
-                    LogLine::SpeakerNames { names },
-                    LogLine::SpeakerNames { names: before },
-                )
-            }
+            SpeakerRef::Id(_) => return None,
         };
         self.edit_transcript(doc_id, line, cx);
+        self.renamed(doc_id, from, to, RenameBack::Line(undo_line), cx)
+    }
+
+    fn renamed(
+        &mut self,
+        doc_id: &str,
+        from: Option<String>,
+        to: String,
+        back: RenameBack,
+        cx: &mut Context<Self>,
+    ) -> Option<RenameUndo> {
         let from = from.filter(|f| !f.is_empty() && *f != to && !to.is_empty())?;
         cx.emit(MeetingEvent::SpeakerRenamed {
             doc_id: doc_id.to_string(),
             from: from.clone(),
             to: to.clone(),
         });
-        Some(RenameUndo {
-            line: undo_line,
-            from,
-            to,
-        })
+        Some(RenameUndo { back, from, to })
     }
 
     /// "Just this line": these lines were said by `to`, without renaming the
@@ -3684,7 +3725,10 @@ impl Meetings {
     /// Put a rename back: the transcript's names as they were, and the
     /// summary's name back to the label it had.
     pub fn undo_rename(&mut self, doc_id: &str, undo: RenameUndo, cx: &mut Context<Self>) {
-        self.edit_transcript(doc_id, undo.line, cx);
+        match undo.back {
+            RenameBack::Line(line) => self.edit_transcript(doc_id, line, cx),
+            RenameBack::Names(names) => self.undo_speaker_choice(doc_id, names, cx),
+        }
         cx.emit(MeetingEvent::SpeakerRenamed {
             doc_id: doc_id.to_string(),
             from: undo.to,
@@ -3909,73 +3953,29 @@ impl Meetings {
         let Some(library) = self.library().cloned() else {
             return;
         };
-        let Ok(path) = library.transcript_path(doc_id) else {
-            return;
-        };
-        let (transcript, _) = match Transcript::load_jsonl(&path) {
-            Ok(loaded) => loaded,
-            Err(error) => {
-                tracing::warn!(%error, doc_id, "Nemotron after Stop: could not read the transcript");
+        // On the documents writer after every edit already queued: the labels
+        // land on the latest names, so a rename or voice choice made while
+        // Nemotron ran stays, and edits queued after build on them.
+        let doc = doc_id.to_string();
+        let (done, labelled) = flume::bounded(1);
+        {
+            let doc = doc.clone();
+            crate::meetings_ui::documents::queue_after_saves(move || {
+                let _ = done.send(late_labels(&library, &doc, late));
+            });
+        }
+        cx.spawn(async move |this, cx| {
+            let Ok(Some(renames)) = labelled.recv_async().await else {
                 return;
-            }
-        };
-        let voices::LateResult { voices, expect } = late;
-        let voices::FinalVoices { mut assign, mut pass } = voices;
-        let now: HashMap<&str, Option<u32>> = transcript
-            .utterances()
-            .iter()
-            .map(|u| (u.id.as_str(), u.speaker_id))
-            .collect();
-        let expected: HashMap<&str, Option<u32>> =
-            expect.iter().map(|(id, was)| (id.as_str(), *was)).collect();
-        let offered = assign.len();
-        assign.retain(|(id, _)| {
-            expected
-                .get(id.as_str())
-                .is_some_and(|was| now.get(id.as_str()) == Some(was))
-        });
-        if assign.is_empty() {
-            tracing::info!(offered, "Nemotron after Stop: nothing left to move");
-            return;
-        }
-        let mut relabelled = transcript.clone();
-        relabelled.assign_speakers(&assign);
-        pass.speakers = speakers_with_lines(&pass.speakers, &relabelled);
-        if pass.user.is_none() {
-            pass.user = transcript.names().and_then(|n| n.user());
-        }
-        let mut names = transcript.names().cloned().unwrap_or_else(|| {
-            cap_diarize::SpeakerNames::new(
-                library
-                    .load(doc_id)
-                    .ok()
-                    .and_then(|meta| speakers::other_attendee(&meta)),
-            )
-        });
-        let changes = names.apply_late(&pass);
-        tracing::info!(
-            relabelled = assign.len(),
-            skipped = offered - assign.len(),
-            voices = pass.speakers.len(),
-            renamed = changes.len(),
-            "Nemotron after Stop moved lines"
-        );
-        let mut after = relabelled;
-        after.set_names(names.clone());
-        let self_name = library
-            .load(doc_id)
-            .ok()
-            .and_then(|meta| Self::self_name(&meta));
-        let renames =
-            late_summary_renames(&transcript, &after, &pass.merged, self_name.as_deref());
-        let lines = vec![LogLine::Speakers { assign }, LogLine::SpeakerNames { names }];
-        if let Err(error) = append_jsonl(&path, &lines) {
-            tracing::warn!(%error, "could not add Nemotron's labels to the meeting transcript");
-            return;
-        }
-        self.dirty_transcripts.insert(doc_id.to_string());
-        self.schedule_notify(cx);
-        self.follow_late_renames(doc_id, renames, cx);
+            };
+            this.update(cx, |this, cx| {
+                this.dirty_transcripts.insert(doc.clone());
+                this.schedule_notify(cx);
+                this.follow_late_renames(&doc, renames, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// A summary written before a late speaker correction names the voices
@@ -5131,6 +5131,83 @@ fn speakers_with_lines(
         });
     }
     speakers
+}
+
+/// Nemotron's after-Stop labels applied to the meeting's transcript as it
+/// is on disk now: only lines still on the voice the final pass gave them
+/// move, the person's renames and voice choices stay, and nobody is
+/// renumbered. Returns the labels a summary written before should follow;
+/// None when nothing moved.
+fn late_labels(
+    library: &Library,
+    doc_id: &str,
+    late: voices::LateResult,
+) -> Option<Vec<(String, String)>> {
+    let Ok(path) = library.transcript_path(doc_id) else {
+        return None;
+    };
+    let (transcript, _) = match Transcript::load_jsonl(&path) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            tracing::warn!(%error, doc_id, "Nemotron after Stop: could not read the transcript");
+            return None;
+        }
+    };
+    let voices::LateResult { voices, expect } = late;
+    let voices::FinalVoices { mut assign, mut pass } = voices;
+    let now: HashMap<&str, Option<u32>> = transcript
+        .utterances()
+        .iter()
+        .map(|u| (u.id.as_str(), u.speaker_id))
+        .collect();
+    let expected: HashMap<&str, Option<u32>> =
+        expect.iter().map(|(id, was)| (id.as_str(), *was)).collect();
+    let offered = assign.len();
+    assign.retain(|(id, _)| {
+        expected
+            .get(id.as_str())
+            .is_some_and(|was| now.get(id.as_str()) == Some(was))
+    });
+    if assign.is_empty() {
+        tracing::info!(offered, "Nemotron after Stop: nothing left to move");
+        return None;
+    }
+    let mut relabelled = transcript.clone();
+    relabelled.assign_speakers(&assign);
+    pass.speakers = speakers_with_lines(&pass.speakers, &relabelled);
+    if pass.user.is_none() {
+        pass.user = transcript.names().and_then(|n| n.user());
+    }
+    let mut names = transcript.names().cloned().unwrap_or_else(|| {
+        cap_diarize::SpeakerNames::new(
+            library
+                .load(doc_id)
+                .ok()
+                .and_then(|meta| speakers::other_attendee(&meta)),
+        )
+    });
+    let changes = names.apply_late(&pass);
+    tracing::info!(
+        relabelled = assign.len(),
+        skipped = offered - assign.len(),
+        voices = pass.speakers.len(),
+        renamed = changes.len(),
+        "Nemotron after Stop moved lines"
+    );
+    let mut after = relabelled;
+    after.set_names(names.clone());
+    let self_name = library
+        .load(doc_id)
+        .ok()
+        .and_then(|meta| Meetings::self_name(&meta));
+    let renames =
+        late_summary_renames(&transcript, &after, &pass.merged, self_name.as_deref());
+    let lines = vec![LogLine::Speakers { assign }, LogLine::SpeakerNames { names }];
+    if let Err(error) = append_jsonl(&path, &lines) {
+        tracing::warn!(%error, "could not add Nemotron's labels to the meeting transcript");
+        return None;
+    }
+    Some(renames)
 }
 
 /// What a late speaker correction renames in a summary already written: each

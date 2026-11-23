@@ -2115,3 +2115,77 @@ fn ask_leaves_out_a_summary_and_answers_older_than_the_choice(cx: &mut gpui::Tes
         persist::NOTES_STALE_KEY
     ));
 }
+
+/// Nemotron's after-Stop labels land on the latest names, on the documents
+/// writer: a rename made while it ran stays, and a voice choice made after
+/// builds on its labels instead of undoing them.
+#[gpui::test]
+fn after_stop_labels_keep_edits_made_meanwhile(cx: &mut gpui::TestAppContext) {
+    use cap_diarize::{FinalPass, SpeakerId, SpeakerInfo, Track};
+    let (meetings, doc, _dir) = voice_choice_meeting(cx);
+    let library = meetings.read_with(cx, |m, _| m.library.clone().unwrap());
+    append_jsonl(
+        &library.transcript_path(&doc).unwrap(),
+        &[LogLine::Upsert {
+            utterance: Utterance {
+                speaker_id: Some(2),
+                ..utterance("m3", Source::Mic, 6_000, "I'll take the notes.")
+            },
+        }],
+    )
+    .unwrap();
+    let voice = |id: u32, first_ms: u64, is_user: bool| SpeakerInfo {
+        id: SpeakerId(id),
+        track: Track::Mic,
+        first_ms,
+        speech_ms: 1_000,
+        is_user,
+    };
+    let late = super::voices::LateResult {
+        voices: super::voices::FinalVoices {
+            assign: vec![("m3".into(), 3)],
+            pass: FinalPass {
+                speakers: vec![
+                    voice(1, 0, true),
+                    voice(2, 4_000, false),
+                    voice(3, 6_000, false),
+                ],
+                user: Some(SpeakerId(1)),
+                ..FinalPass::default()
+            },
+        },
+        expect: vec![("m3".into(), Some(2))],
+    };
+
+    crate::meetings_ui::documents::hold_writer();
+    meetings.update(cx, |m, cx| {
+        m.rename_speaker(&doc, super::SpeakerRef::Id(2), "Dana", cx)
+    });
+    meetings.update(cx, |m, cx| m.apply_late_voices(&doc, late, cx));
+    meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Id(3), true, cx)
+        })
+        .expect("voice 3 was in the notes");
+    crate::meetings_ui::documents::release_writer();
+    let t = saved_transcript(&meetings, &doc, cx);
+    cx.run_until_parked();
+
+    assert_eq!(
+        t.get("m3").unwrap().speaker_id,
+        Some(3),
+        "the late pass moved it"
+    );
+    assert_eq!(t.label(Source::Mic, None, Some(2), None), "Dana");
+    assert!(
+        t.label(Source::Mic, None, Some(3), None)
+            .starts_with("Person ")
+    );
+    let names = t.names().unwrap();
+    assert!(names.is_left_out(SpeakerId(3)));
+    let prompt = t.labelled_for_prompt(usize::MAX, None).text;
+    assert!(
+        prompt.contains("Dinner") && !prompt.contains("take the notes"),
+        "{prompt}"
+    );
+}
