@@ -353,6 +353,14 @@ impl Default for SegmentedVideoEncoderConfig {
     }
 }
 
+#[cfg(windows)]
+fn flush_video_encoder(
+    encoder: &mut H264Encoder,
+    mux: &mut MuxSink<SegmentMux>,
+) -> Result<(), ffmpeg::Error> {
+    encoder.flush_to(mux)
+}
+
 impl SegmentedVideoEncoder {
     pub fn init(
         base_path: PathBuf,
@@ -629,9 +637,20 @@ impl SegmentedVideoEncoder {
         if !self.encoder.is_d3d11_hw_input() {
             return false;
         }
+        let encoder_name = self.encoder.codec_name();
+        if let Err(error) = flush_video_encoder(&mut self.encoder, &mut self.mux) {
+            tracing::error!(
+                encoder = %encoder_name,
+                %error,
+                "D3D11 texture input stopped before its queued frames could be written; those frames are lost"
+            );
+        }
         match self.encoder.replace_with_software() {
             Ok(()) => {
-                tracing::warn!("D3D11 texture input stopped; later frames use the CPU path");
+                tracing::warn!(
+                    encoder = %encoder_name,
+                    "D3D11 texture input stopped; later frames use the CPU path"
+                );
                 true
             }
             Err(error) => {

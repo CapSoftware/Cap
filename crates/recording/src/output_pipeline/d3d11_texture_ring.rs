@@ -276,6 +276,10 @@ impl GpuTextureRing {
         self.copy_from(src, width, height)?.into_submit()
     }
 
+    pub fn resubmit_last(&mut self) -> Option<(*mut c_void, D3d11TextureLifetime)> {
+        self.repeat_last()?.into_submit()
+    }
+
     pub(crate) fn copy_from(
         &mut self,
         src: &ID3D11Texture2D,

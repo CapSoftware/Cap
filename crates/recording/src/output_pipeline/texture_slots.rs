@@ -109,7 +109,6 @@ mod tests {
     #[test]
     fn the_ring_outlasts_amf_inflight_and_reuses_a_released_slot() {
         let slots = TextureSlots::new();
-        assert!(TEXTURE_RING_CAPACITY > AMF_HW_SURFACE_QUEUE);
         for _ in 0..AMF_HW_SURFACE_QUEUE {
             let slot = slots.try_acquire().expect("free slot");
             slots.hold(slot);

@@ -716,6 +716,8 @@ impl H264EncoderBuilder {
                     continue;
                 }
             };
+            let hardware_session =
+                is_hardware_h264(&codec_name).then(|| HardwareEncoderSession::begin(&codec_name));
             match open_d3d11_encoder(
                 D3d11EncoderTarget {
                     frames_ctx,
@@ -758,10 +760,11 @@ impl H264EncoderBuilder {
                         software_fallback: Some(software_fallback),
                         #[cfg(test)]
                         injected_failure: None,
-                        hardware_session: Some(HardwareEncoderSession::begin(&codec_name)),
+                        hardware_session,
                     });
                 }
                 Err(error) => {
+                    drop(hardware_session);
                     hw_frames.clear_qsv();
                     let text = match &error {
                         H264EncoderError::FFmpeg(inner) => inner.to_string(),

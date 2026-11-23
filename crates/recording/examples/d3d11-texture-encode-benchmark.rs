@@ -38,6 +38,8 @@ mod windows {
     const FRAMES: usize = 300;
     const RUNS: usize = 5;
     const SOURCES: usize = 4;
+    const FPS: u32 = 60;
+    const FRAME_TICK_US: u64 = 1_000_000 / 60;
 
     #[repr(C)]
     struct Filetime {
@@ -76,6 +78,21 @@ mod windows {
         let ticks = (u64::from(kernel.high) << 32 | u64::from(kernel.low))
             + (u64::from(user.high) << 32 | u64::from(user.low));
         Duration::from_nanos(ticks.saturating_mul(100))
+    }
+
+    fn frame_timestamp(index: usize) -> Duration {
+        Duration::from_micros(index as u64 * FRAME_TICK_US)
+    }
+
+    fn repeats_previous(index: usize) -> bool {
+        index % 2 == 1
+    }
+
+    fn reference_frame(frame: &ffmpeg::frame::Video) -> ffmpeg::frame::Video {
+        let mut reference = ffmpeg::frame::Video::empty();
+        let status = unsafe { ffmpeg::ffi::av_frame_ref(reference.as_mut_ptr(), frame.as_ptr()) };
+        assert!(status >= 0, "av_frame_ref {status}");
+        reference
     }
 
     fn median(values: &mut [u128]) -> u128 {
@@ -305,39 +322,28 @@ mod windows {
         let encoder_name = encoder.codec_name();
         let mut reusable =
             ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
+        let mut last = ffmpeg::frame::Video::empty();
         for i in 0..WARMUP {
-            readback(
-                &device.context,
-                &sources[i % SOURCES],
-                staging,
-                &mut reusable,
-                info.width,
-                info.height,
-            );
-            let mut owned =
-                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
-            std::mem::swap(&mut owned, &mut reusable);
+            let frame = readback_frame(device, sources, staging, info, &mut reusable, &mut last, i);
             encoder
-                .queue_frame(owned, Duration::from_millis(i as u64 * 33))
+                .queue_frame(frame, frame_timestamp(i))
                 .expect("warmup readback");
         }
         let wall_start = Instant::now();
         let cpu_start = process_cpu();
         for i in 0..FRAMES {
             let index = WARMUP + i;
-            readback(
-                &device.context,
-                &sources[index % SOURCES],
+            let frame = readback_frame(
+                device,
+                sources,
                 staging,
+                info,
                 &mut reusable,
-                info.width,
-                info.height,
+                &mut last,
+                index,
             );
-            let mut owned =
-                ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
-            std::mem::swap(&mut owned, &mut reusable);
             encoder
-                .queue_frame(owned, Duration::from_millis(index as u64 * 33))
+                .queue_frame(frame, frame_timestamp(index))
                 .expect("readback frame");
         }
         let wall = wall_start.elapsed();
@@ -353,6 +359,33 @@ mod windows {
             ring_capacity: None,
             ring_high_water: None,
         }
+    }
+
+    fn readback_frame(
+        device: &Device,
+        sources: &[ID3D11Texture2D],
+        staging: &ID3D11Texture2D,
+        info: VideoInfo,
+        reusable: &mut ffmpeg::frame::Video,
+        last: &mut ffmpeg::frame::Video,
+        index: usize,
+    ) -> ffmpeg::frame::Video {
+        if repeats_previous(index) {
+            return reference_frame(last);
+        }
+        readback(
+            &device.context,
+            &sources[index % SOURCES],
+            staging,
+            reusable,
+            info.width,
+            info.height,
+        );
+        let mut owned =
+            ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
+        std::mem::swap(&mut owned, reusable);
+        *last = owned;
+        reference_frame(last)
     }
 
     fn texture_refusal(ring: &GpuTextureRing, encoder: &str, sw: &str, reason: &str) -> String {
@@ -387,39 +420,28 @@ mod windows {
         let mut ring = GpuTextureRing::new(device.device.clone())
             .ok_or_else(|| "no immediate context".to_string())?;
         for i in 0..WARMUP {
-            let submitted = ring.submit_from(&sources[i % SOURCES], info.width, info.height);
-            let (texture, lifetime) = submitted
-                .ok_or_else(|| texture_refusal(&ring, &encoder_name, &sw, ring.refusal()))?;
-            unsafe {
-                encoder
-                    .queue_d3d11_texture(
-                        texture,
-                        Duration::from_millis(i as u64 * 33),
-                        Some(lifetime),
-                    )
-                    .map_err(|error| {
-                        texture_refusal(&ring, &encoder_name, &sw, &error.to_string())
-                    })?;
-            }
+            queue_texture(
+                &mut encoder,
+                &mut ring,
+                sources,
+                info,
+                &encoder_name,
+                &sw,
+                i,
+            )?;
         }
         let wall_start = Instant::now();
         let cpu_start = process_cpu();
         for i in 0..FRAMES {
-            let index = WARMUP + i;
-            let submitted = ring.submit_from(&sources[index % SOURCES], info.width, info.height);
-            let (texture, lifetime) = submitted
-                .ok_or_else(|| texture_refusal(&ring, &encoder_name, &sw, ring.refusal()))?;
-            unsafe {
-                encoder
-                    .queue_d3d11_texture(
-                        texture,
-                        Duration::from_millis(index as u64 * 33),
-                        Some(lifetime),
-                    )
-                    .map_err(|error| {
-                        texture_refusal(&ring, &encoder_name, &sw, &error.to_string())
-                    })?;
-            }
+            queue_texture(
+                &mut encoder,
+                &mut ring,
+                sources,
+                info,
+                &encoder_name,
+                &sw,
+                WARMUP + i,
+            )?;
         }
         let wall = wall_start.elapsed();
         let cpu = process_cpu().saturating_sub(cpu_start);
@@ -436,6 +458,30 @@ mod windows {
             ring_capacity: Some(ring.capacity()),
             ring_high_water: Some(ring.high_water()),
         })
+    }
+
+    fn queue_texture(
+        encoder: &mut SegmentedVideoEncoder,
+        ring: &mut GpuTextureRing,
+        sources: &[ID3D11Texture2D],
+        info: VideoInfo,
+        encoder_name: &str,
+        sw: &str,
+        index: usize,
+    ) -> Result<(), String> {
+        let submitted = if repeats_previous(index) {
+            ring.resubmit_last()
+        } else {
+            ring.submit_from(&sources[index % SOURCES], info.width, info.height)
+        };
+        let (texture, lifetime) =
+            submitted.ok_or_else(|| texture_refusal(ring, encoder_name, sw, ring.refusal()))?;
+        unsafe {
+            encoder
+                .queue_d3d11_texture(texture, frame_timestamp(index), Some(lifetime))
+                .map_err(|error| texture_refusal(ring, encoder_name, sw, &error.to_string()))?;
+        }
+        Ok(())
     }
 
     fn report(label: &str, path: &str, runs: &[Run]) {
@@ -470,9 +516,11 @@ mod windows {
         let expected = WARMUP + FRAMES;
         let mut failed = false;
         println!("adapter: {}", adapter_description(&device.device));
-        println!("frames {FRAMES} warmup {WARMUP} runs {RUNS} expected decoded {expected}");
+        println!(
+            "frames {FRAMES} warmup {WARMUP} runs {RUNS} fps {FPS} tick {FRAME_TICK_US}us repeat every other frame expected decoded {expected}"
+        );
         for (width, height) in [(1920u32, 1080u32), (3840, 2160)] {
-            let info = VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30);
+            let info = VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, FPS);
             let sources: Vec<_> = (0..SOURCES)
                 .map(|index| {
                     let texture = rgba_texture(&device.device, width, height, false);
