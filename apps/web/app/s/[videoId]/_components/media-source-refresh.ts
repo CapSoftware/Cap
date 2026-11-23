@@ -212,18 +212,30 @@ export type SourceRefreshBudget = ReturnType<typeof createSourceRefreshBudget>;
 
 // Loading a new source resets the element to the start, paused, at the
 // default rate. This puts it back where the viewer was once the new source
-// has metadata.
+// has metadata. A paused viewer stays paused even when the element has
+// autoplay, and a pause once the new source starts loading (the viewer, or
+// another player taking over) cancels the resume; the browser's own pause for
+// a failed load arrives before that.
 export function restorePlaybackOnLoad(
 	media: HTMLMediaElement,
 	snapshot: PlaybackSnapshot,
 ): () => void {
 	let finished = false;
+	let resume = snapshot.wasPlaying;
+	let loadStarted = false;
+	if (!resume) media.autoplay = false;
 	const finish = () => {
 		if (finished) return;
 		finished = true;
 		cleanup();
 		media.playbackRate = snapshot.playbackRate;
-		if (snapshot.wasPlaying) void media.play().catch(() => undefined);
+		if (resume) void media.play().catch(() => undefined);
+	};
+	const handleLoadStart = () => {
+		loadStarted = true;
+	};
+	const handlePause = () => {
+		if (loadStarted) resume = false;
 	};
 	const handleLoadedMetadata = () => {
 		const duration = media.duration;
@@ -241,9 +253,13 @@ export function restorePlaybackOnLoad(
 		}
 	};
 	const cleanup = () => {
+		media.removeEventListener("loadstart", handleLoadStart);
+		media.removeEventListener("pause", handlePause);
 		media.removeEventListener("loadedmetadata", handleLoadedMetadata);
 		media.removeEventListener("seeked", finish);
 	};
+	media.addEventListener("loadstart", handleLoadStart);
+	media.addEventListener("pause", handlePause);
 	media.addEventListener("loadedmetadata", handleLoadedMetadata);
 	media.addEventListener("seeked", finish);
 	return () => {

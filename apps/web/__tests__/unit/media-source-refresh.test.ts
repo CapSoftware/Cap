@@ -22,7 +22,8 @@ function fakeMedia() {
 		paused: true,
 		error: null as { code: number } | null,
 	};
-	const load = vi.fn();
+	const loadCalled = Promise.withResolvers<void>();
+	const load = vi.fn(() => loadCalled.resolve());
 	const play = vi.fn(async () => {
 		state.paused = false;
 	});
@@ -49,7 +50,7 @@ function fakeMedia() {
 		state.error = { code };
 		media.dispatchEvent(new Event("error"));
 	};
-	return { media, state, load, play, fail };
+	return { media, state, load, loadCalled: loadCalled.promise, play, fail };
 }
 
 describe("media source refresh", () => {
@@ -144,6 +145,47 @@ describe("media source refresh", () => {
 		media.dispatchEvent(new Event("seeked"));
 		expect(state.currentTime).toBe(12);
 		expect(play).toHaveBeenCalledOnce();
+		stop();
+	});
+
+	it("keeps a paused autoplay element paused", () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(0);
+		const { media, state, load, play, fail } = fakeMedia();
+		media.autoplay = true;
+		const stop = watchExpiredMediaSource(media);
+		media.dispatchEvent(new Event("loadeddata"));
+		state.currentTime = 20;
+		now.mockReturnValue(30 * MINUTE);
+
+		fail();
+		expect(load).toHaveBeenCalledOnce();
+		expect(media.autoplay).toBe(false);
+		media.dispatchEvent(new Event("loadedmetadata"));
+		media.dispatchEvent(new Event("seeked"));
+		expect(play).not.toHaveBeenCalled();
+		stop();
+	});
+
+	it("does not resume when paused while the fresh source loads", () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(0);
+		const { media, state, load, play, fail } = fakeMedia();
+		const stop = watchExpiredMediaSource(media);
+		media.dispatchEvent(new Event("loadeddata"));
+		state.paused = false;
+		media.dispatchEvent(new Event("play"));
+		state.currentTime = 20;
+		now.mockReturnValue(30 * MINUTE);
+
+		fail();
+		media.dispatchEvent(new Event("pause"));
+		expect(load).toHaveBeenCalledOnce();
+		state.error = null;
+		media.dispatchEvent(new Event("loadstart"));
+		media.dispatchEvent(new Event("pause"));
+		media.dispatchEvent(new Event("loadedmetadata"));
+		media.dispatchEvent(new Event("seeked"));
+		expect(state.currentTime).toBe(20);
+		expect(play).not.toHaveBeenCalled();
 		stop();
 	});
 
@@ -301,16 +343,16 @@ describe("media source refresh", () => {
 
 		it("reloads a route source before its signed URL expires", async () => {
 			const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-			const { media, state, load, play } = fakeMedia();
+			const { media, state, load, loadCalled, play } = fakeMedia();
 			const stop = watchExpiredMediaSource(media);
 			state.paused = false;
 			media.dispatchEvent(new Event("play"));
 			state.currentTime = 8;
-			load.mockClear();
 
 			clock.mockReturnValue(now + 22 * HOUR);
 			media.dispatchEvent(new Event("waiting"));
-			await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+			await loadCalled;
+			expect(load).toHaveBeenCalledOnce();
 			state.currentTime = 0;
 			media.dispatchEvent(new Event("loadedmetadata"));
 			media.dispatchEvent(new Event("seeked"));
