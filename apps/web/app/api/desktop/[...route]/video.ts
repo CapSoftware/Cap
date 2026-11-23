@@ -1,4 +1,5 @@
 import { db } from "@cap/database";
+import { isCrossSiteRequest } from "@cap/database/auth/request-site";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
@@ -92,6 +93,8 @@ app.get(
 		}),
 	),
 	async (c) => {
+		if (isCrossSiteRequest(c.req.raw))
+			return c.json({ error: "forbidden" }, { status: 403 });
 		try {
 			const {
 				recordingMode,
