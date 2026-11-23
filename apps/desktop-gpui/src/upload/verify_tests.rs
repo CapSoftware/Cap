@@ -38,6 +38,9 @@ const RETRY_WINDOW: Duration = Duration::from_secs(5 * 60);
 
 const SETTLE: Duration = Duration::from_millis(50);
 const WORKED: Duration = Duration::from_micros(200);
+const MIN_IDLE_STEP: Duration = Duration::from_millis(1);
+// Caps how far virtual time can pass an app-side wake during a quiet step.
+const MAX_IDLE_STEP: Duration = Duration::from_millis(8);
 
 #[derive(Default)]
 struct Activity {
@@ -94,15 +97,24 @@ pub(super) fn virtual_time<F: Future>(future: F) -> F::Output {
         .unwrap()
         .block_on(async {
             let ticker = tokio::spawn(async move {
+                // A 1 ms tick costs ~35 us of real time on the macOS CI VMs
+                // (~1.3 us on Linux), so hour-long windows took minutes.
+                // Timers still fire at their exact deadlines; only quiet
+                // stretches advance in longer steps.
+                let mut idle_step = MIN_IDLE_STEP;
                 loop {
                     if activity.busy() {
+                        idle_step = MIN_IDLE_STEP;
                         std::thread::sleep(Duration::from_micros(50));
                         tokio::task::yield_now().await;
                     } else {
                         let step = std::time::Instant::now();
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        tokio::time::sleep(idle_step).await;
                         if step.elapsed() > WORKED {
                             activity.touch();
+                            idle_step = MIN_IDLE_STEP;
+                        } else {
+                            idle_step = (idle_step * 2).min(MAX_IDLE_STEP);
                         }
                     }
                 }
@@ -209,7 +221,10 @@ struct MockState {
     confirmations: Vec<Value>,
     deletes: u32,
     created: Vec<String>,
+    created_orgs: Vec<Option<String>>,
     deleted: Vec<String>,
+    deleted_on_web: Vec<String>,
+    delete_on_completion: Vec<String>,
     problems: Vec<String>,
 }
 
@@ -444,8 +459,26 @@ impl MockCap {
         self.lock().created.clone()
     }
 
+    #[cfg(target_os = "macos")]
+    pub(super) fn created_orgs(&self) -> Vec<Option<String>> {
+        self.lock().created_orgs.clone()
+    }
+
     pub(super) fn deleted(&self) -> Vec<String> {
         self.lock().deleted.clone()
+    }
+
+    /// Deletes the cap on the web, as its owner can at any time: the server
+    /// then answers its upload URL and completion calls with 404 "Video not
+    /// found".
+    pub(super) fn delete_on_web(&self, video_id: &str) {
+        self.lock().deleted_on_web.push(video_id.to_string());
+    }
+
+    /// Deletes the cap on the web just before its first completion call, after
+    /// every upload URL was issued and the media uploaded.
+    pub(super) fn delete_on_web_before_completion(&self, video_id: &str) {
+        self.lock().delete_on_completion.push(video_id.to_string());
     }
 
     pub(super) fn deletes(&self) -> u32 {
@@ -816,6 +849,7 @@ impl Server {
                     format!("verifyvideo{:04}", state.next_id)
                 });
                 state.created.push(id.clone());
+                state.created_orgs.push(query.get("orgId").cloned());
                 reply(200, json!({ "id": id }))
             }
             ("POST", "/api/upload/multipart/initiate") => {
@@ -900,6 +934,9 @@ impl Server {
                 reply(200, json!({ "success": true }))
             }
             ("POST", "/api/upload/signed") => {
+                if state.deleted_on_web.contains(&text(&request, "videoId")) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
                 let url = format!(
                     "{}/s3/{}/{}",
                     self.url,
@@ -913,6 +950,9 @@ impl Server {
             }
             ("POST", "/api/upload/signed/batch") => {
                 let video_id = text(&request, "videoId");
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
                 let urls = request
                     .get("subpaths")
                     .and_then(Value::as_array)
@@ -930,8 +970,16 @@ impl Server {
             }
             ("POST", "/api/recording/prepare") => reply(404, json!({ "error": "not found" })),
             ("POST", "/api/upload/recording-complete") => {
-                state.confirmations.push(request.clone());
                 let video_id = text(&request, "videoId");
+                if state.delete_on_completion.contains(&video_id)
+                    && !state.deleted_on_web.contains(&video_id)
+                {
+                    state.deleted_on_web.push(video_id.clone());
+                }
+                if state.deleted_on_web.contains(&video_id) {
+                    return reply(404, json!({ "error": "Video not found" }));
+                }
+                state.confirmations.push(request.clone());
                 let Some(verification) = request.get("verification") else {
                     return reply(200, json!({ "success": true }));
                 };

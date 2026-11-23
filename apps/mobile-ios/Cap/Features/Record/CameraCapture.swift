@@ -22,6 +22,20 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
     /// Sharp for faces and light enough to upload while recording on cellular.
     static let format = SegmentWriter.VideoFormat(width: 1080, height: 1920, fps: 30, bitrate: 4_000_000)
 
+    /// Upright frames are 1080×1920 at 90° or 270°, and 1920×1080 at 0° or 180° (the open iPhone Duo held sideways).
+    static func format(rotationAngle: CGFloat) -> SegmentWriter.VideoFormat {
+        guard isLandscape(rotationAngle) else { return format }
+        return SegmentWriter.VideoFormat(width: format.height, height: format.width, fps: format.fps, bitrate: format.bitrate)
+    }
+
+    static func isLandscape(_ rotationAngle: CGFloat) -> Bool {
+        Int(rotationAngle.rounded()) % 180 == 0
+    }
+
+    static func sameShape(_ angle: CGFloat, _ other: CGFloat) -> Bool {
+        isLandscape(angle) == isLandscape(other)
+    }
+
     struct Configuration: Sendable {
         let preset: AVCaptureSession.Preset
         let mirrored: Bool
@@ -44,6 +58,7 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
     // sessionQueue
     private var videoInput: AVCaptureDeviceInput?
     private var configured = false
+    private var rotationAngle: CGFloat = 90
     private var observers: [NSObjectProtocol] = []
     #if DEBUG
     private var fileSource: DebugFileSource?
@@ -162,7 +177,7 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
 
     private func orientVideoConnection() {
         guard let connection = videoOutput.connection(with: .video) else { return }
-        if connection.isVideoRotationAngleSupported(90) { connection.videoRotationAngle = 90 }
+        if connection.isVideoRotationAngleSupported(rotationAngle) { connection.videoRotationAngle = rotationAngle }
         // Recorded the way viewers see the person, so text held up to the camera reads correctly.
         if connection.isVideoMirroringSupported {
             connection.automaticallyAdjustsVideoMirroring = false
@@ -170,6 +185,15 @@ nonisolated final class CameraCapture: NSObject, @unchecked Sendable, AVCaptureV
         }
         if connection.isVideoStabilizationSupported {
             connection.preferredVideoStabilizationMode = .standard
+        }
+    }
+
+    /// While recording, only an angle that keeps the frame's shape belongs here.
+    func setRotationAngle(_ angle: CGFloat) {
+        sessionQueue.async { [self] in
+            guard rotationAngle != angle else { return }
+            rotationAngle = angle
+            orientVideoConnection()
         }
     }
 

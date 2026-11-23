@@ -3185,3 +3185,250 @@ fn mcp_upload_announces_the_video_id_before_a_cancelled_wait() {
     );
     assert_eq!(mcp_payload(&resumed)["video"]["status"], "processing");
 }
+
+#[cfg(target_os = "linux")]
+struct RecordingServer {
+    url: String,
+    address: std::net::SocketAddr,
+    requests: Arc<std::sync::Mutex<Vec<String>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl RecordingServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = format!("http://{address}");
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let log = requests.clone();
+        let stopped = stop.clone();
+        let thread = thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stopped.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut length = 0_usize;
+                let mut authorization = String::new();
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap_or(0);
+                        } else if name.eq_ignore_ascii_case("authorization") {
+                            authorization = value.trim().to_string();
+                        }
+                    }
+                }
+                let mut body = vec![0; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().unwrap_or_default().to_string();
+                let target = parts.next().unwrap_or_default().to_string();
+                log.lock()
+                    .unwrap()
+                    .push(format!("{method} {target} [{authorization}]"));
+                let (status, payload) = if method == "GET" && target.starts_with("/api/v1/caps?") {
+                    (200, r#"{"caps":[],"nextCursor":null}"#.to_string())
+                } else {
+                    (
+                        404,
+                        r#"{"code":"NOT_FOUND","message":"Not found","retryable":false,"requestId":"req_stub"}"#
+                            .to_string(),
+                    )
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} Stub\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = stream.flush();
+            }
+        });
+        Self {
+            url,
+            address,
+            requests,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RecordingServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = std::net::TcpStream::connect(self.address);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn scratch_cap(home: &Path, env: &[(&str, &str)], args: &[&str]) -> Output {
+    let mut command = cap();
+    command
+        .args(args)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("XDG_RUNTIME_DIR", home.join("runtime"))
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .stdin(Stdio::null());
+    for name in ["CAP_API_KEY", "CAP_AGENT_TOKEN", "CAP_SERVER_URL"] {
+        command.env_remove(name);
+    }
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    command.output().expect("failed to spawn cap binary")
+}
+
+#[cfg(target_os = "linux")]
+fn scratch_home_with_stored_login(stored_server: &str) -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join("config").join("cap");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::create_dir_all(home.path().join("runtime")).unwrap();
+    std::fs::write(
+        config.join("agent-credentials.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "accessToken": "cap_cli_stored_login",
+            "expiresAt": "2099-01-01T00:00:00.000Z",
+            "scopes": ["caps:read", "caps:write"],
+            "server": stored_server,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    home
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auth_status_and_caps_with_legacy_key_never_reach_the_stored_logins_server() {
+    let stored = RecordingServer::start();
+    let requested = RecordingServer::start();
+    let home = scratch_home_with_stored_login(&stored.url);
+    let env = [
+        ("CAP_SERVER_URL", requested.url.as_str()),
+        ("CAP_API_KEY", "legacy-test-key"),
+    ];
+    let list = scratch_cap(home.path(), &env, &["caps", "list", "--json"]);
+    let delete = scratch_cap(
+        home.path(),
+        &env,
+        &["caps", "delete", "stubcap123", "--yes", "--json"],
+    );
+    let status = scratch_cap(home.path(), &env, &["auth", "status", "--json"]);
+    eprintln!("stored login server requests: {:?}", stored.requests());
+    eprintln!("CAP_SERVER_URL server requests: {:?}", requested.requests());
+    assert!(list.status.success(), "stderr: {}", stderr(&list));
+    assert!(!delete.status.success());
+    assert!(stored.requests().is_empty(), "{:?}", stored.requests());
+    let status = parse_json(&status);
+    assert_eq!(status["source"], "env");
+    assert_eq!(status["server"], requested.url.as_str());
+    let requests = requested.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("GET /api/v1/caps?")),
+        "{requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("DELETE /api/v1/caps/stubcap123")),
+        "{requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.ends_with("[Bearer legacy-test-key]")),
+        "{requests:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auth_status_and_caps_refuse_a_stored_login_for_another_server() {
+    let stored = RecordingServer::start();
+    let requested = RecordingServer::start();
+    let home = scratch_home_with_stored_login(&stored.url);
+    let env = [("CAP_SERVER_URL", requested.url.as_str())];
+    let list = scratch_cap(home.path(), &env, &["caps", "list", "--json"]);
+    let delete = scratch_cap(
+        home.path(),
+        &env,
+        &["caps", "delete", "stubcap123", "--yes", "--json"],
+    );
+    let status = scratch_cap(home.path(), &env, &["auth", "status", "--json"]);
+    eprintln!("stored login server requests: {:?}", stored.requests());
+    eprintln!("CAP_SERVER_URL server requests: {:?}", requested.requests());
+    assert!(stored.requests().is_empty(), "{:?}", stored.requests());
+    for output in [&list, &delete] {
+        assert!(!output.status.success());
+        assert!(
+            stderr(output).contains(&format!("CAP_SERVER_URL is {}", requested.url)),
+            "stderr: {}",
+            stderr(output)
+        );
+    }
+    assert!(
+        requested.requests().is_empty(),
+        "{:?}",
+        requested.requests()
+    );
+    let status = parse_json(&status);
+    assert_eq!(status["authenticated"], false);
+    assert_eq!(status["source"], "none");
+    assert_eq!(status["server"], requested.url.as_str());
+    assert!(
+        status["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains(&stored.url)),
+        "{status}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auth_status_and_caps_keep_using_the_stored_login_without_env() {
+    let stored = RecordingServer::start();
+    let home = scratch_home_with_stored_login(&stored.url);
+    let list = scratch_cap(home.path(), &[], &["caps", "list", "--json"]);
+    let status = scratch_cap(home.path(), &[], &["auth", "status", "--json"]);
+    eprintln!("stored login server requests: {:?}", stored.requests());
+    assert!(list.status.success(), "stderr: {}", stderr(&list));
+    let requests = stored.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("GET /api/v1/caps?")
+                && request.ends_with("[Bearer cap_cli_stored_login]")),
+        "{requests:?}"
+    );
+    let status = parse_json(&status);
+    assert_eq!(status["source"], "file");
+    assert_eq!(status["server"], stored.url.as_str());
+}

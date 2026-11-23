@@ -14,6 +14,7 @@ cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
 cap-editor = { path = "../editor" }
 cap-export = { path = "../export" }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 
 anyhow.workspace = true
 base64 = "0.22.1"
@@ -25,6 +26,10 @@ wgpu.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+libc = "0.2"
+tempfile = "3"
 
 [lints]
 workspace = true

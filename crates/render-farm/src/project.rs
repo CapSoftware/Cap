@@ -1,11 +1,33 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY};
-use cap_rendering::{ProjectRecordingsMeta, ProjectUniforms, RenderOptions};
+use cap_rendering::{ProjectRecordingsMeta, ProjectUniforms, RenderOptions, Video};
 use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+/// Largest source frame a cloud export accepts, the same limit the media
+/// server holds uploads to. Recordings are uploaded by users, and decoding
+/// allocates per pixel, so one oversized stream could exhaust a shared worker.
+pub const MAX_SOURCE_PIXELS: u64 = 40_000_000;
+pub const MAX_SOURCE_SIDE: u32 = 16_384;
+/// FFmpeg checks whole macroblock rows and 64-byte aligned widths against
+/// `max_pixels`, up to `(width + 63) * (height + 15)` for an accepted source.
+pub const DECODE_MAX_PIXELS: i64 = MAX_SOURCE_PIXELS as i64 + 80 * MAX_SOURCE_SIDE as i64 + 1024;
+
+fn check_source_size(kind: &str, clip: usize, video: &Video) -> Result<()> {
+    let pixels = u64::from(video.width) * u64::from(video.height);
+    if pixels > MAX_SOURCE_PIXELS || video.width.max(video.height) > MAX_SOURCE_SIDE {
+        bail!(
+            "the {kind} video of clip {} is {}x{}, larger than cloud export supports ({MAX_SOURCE_PIXELS} pixels, {MAX_SOURCE_SIDE} on a side)",
+            clip + 1,
+            video.width,
+            video.height
+        );
+    }
+    Ok(())
+}
 
 /// Everything a chunk needs to agree on with every other chunk of the same
 /// export: the prepared config, the recording, and the frame count. Loading
@@ -32,7 +54,20 @@ impl LoadedProject {
             ProjectRecordingsMeta::new(&recording_meta.project_path, &studio_meta)
                 .map_err(|error| anyhow!("recordings: {error}"))?,
         );
+        for (clip, segment) in recordings.segments.iter().enumerate() {
+            check_source_size("screen", clip, &segment.display)?;
+            if let Some(camera) = &segment.camera {
+                check_source_size("camera", clip, camera)?;
+            }
+        }
         cap_export::synthesize_default_timeline(&mut config, &recordings);
+        cap_project::migrate_late_audio_alignment(&mut config, &studio_meta, || {
+            recordings
+                .segments
+                .iter()
+                .map(|segment| segment.display.duration)
+                .collect()
+        });
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut config);
         cap_project::synchronize_captions(
             &mut config,

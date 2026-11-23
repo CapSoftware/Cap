@@ -150,12 +150,34 @@ export const validateMcpAuthorizationRequest = async (
 	return { ...parsed, clientName: client.clientName };
 };
 
+type Transaction = Parameters<
+	Parameters<ReturnType<typeof db>["transaction"]>[0]
+>[0];
+
+// Every path that issues MCP credentials takes this lock first. "Sign out of
+// all devices" bumps the same row, so issuing and signing out never interleave.
+const lockAccount = async (
+	tx: Transaction,
+	userId: typeof users.$inferSelect.id,
+) => {
+	const [account] = await tx
+		.select({ authSessionVersion: users.authSessionVersion })
+		.from(users)
+		.where(eq(users.id, userId))
+		.limit(1)
+		.for("update");
+	return account ?? null;
+};
+
 export const createMcpAuthorizationCode = async (
-	userId: typeof mcpOAuthCodes.$inferInsert.userId,
+	user: Pick<typeof users.$inferSelect, "id" | "authSessionVersion">,
 	request: McpAuthorizationRequest,
 ) => {
 	const code = token("cap_mcp_code_");
 	await db().transaction(async (tx) => {
+		const account = await lockAccount(tx, user.id);
+		if (account?.authSessionVersion !== user.authSessionVersion)
+			throw new Error("Session expired");
 		const activated = await tx
 			.update(mcpOAuthClients)
 			.set({ activatedAt: new Date() })
@@ -164,7 +186,7 @@ export const createMcpAuthorizationCode = async (
 			throw new Error("Client registration expired");
 		await tx.insert(mcpOAuthCodes).values({
 			id: nanoId(),
-			userId,
+			userId: user.id,
 			clientId: request.clientId,
 			codeHash: hashAgentSecret(code),
 			codeChallenge: request.codeChallenge,
@@ -182,7 +204,7 @@ const affectedRows = (result: unknown) => {
 };
 
 const mintMcpTokens = async (
-	tx: Parameters<Parameters<ReturnType<typeof db>["transaction"]>[0]>[0],
+	tx: Transaction,
 	input: {
 		userId: typeof mcpOAuthTokens.$inferInsert.userId;
 		clientId: string;
@@ -245,6 +267,7 @@ export const exchangeMcpCode = async (params: URLSearchParams) => {
 			!verifyAgentCodeChallenge(verifier, grant.codeChallenge)
 		)
 			return null;
+		if (!(await lockAccount(tx, grant.userId))) return null;
 		const now = new Date();
 		const consumed = await tx
 			.update(mcpOAuthCodes)
@@ -293,6 +316,7 @@ export const refreshMcpTokens = async (params: URLSearchParams) => {
 			return null;
 		}
 		if (row.refreshExpiresAt.getTime() <= Date.now()) return null;
+		if (!(await lockAccount(tx, row.userId))) return null;
 		const now = new Date();
 		const revoked = await tx
 			.update(mcpOAuthTokens)

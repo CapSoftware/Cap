@@ -1,0 +1,243 @@
+use gpui::{Action, KeyBinding, actions};
+
+actions!(
+    cap_notes,
+    [
+        Backspace,
+        DeleteForward,
+        DeleteWordLeft,
+        DeleteWordRight,
+        DeleteToLineStart,
+        DeleteToLineEnd,
+        Newline,
+        Indent,
+        Outdent,
+        ToggleCheckbox,
+        MoveBlockUp,
+        MoveBlockDown,
+        Undo,
+        Redo,
+        Cut,
+        Copy,
+        Paste,
+        PastePlain,
+        SelectAll,
+        ToggleBold,
+        ToggleItalic,
+        ToggleUnderline,
+        ToggleStrikethrough,
+        ToggleCode,
+        ToggleHighlight,
+        Heading1,
+        Heading2,
+        Heading3,
+        Paragraph,
+        OrderedList,
+        BulletList,
+        TaskList,
+        Quote,
+        CodeBlock,
+        EditLink,
+        MoveLeft,
+        MoveRight,
+        MoveUp,
+        MoveDown,
+        MoveWordLeft,
+        MoveWordRight,
+        MoveToLineStart,
+        MoveToLineEnd,
+        MoveToStart,
+        MoveToEnd,
+        PageUp,
+        PageDown,
+        SelectLeft,
+        SelectRight,
+        SelectUp,
+        SelectDown,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectToLineStart,
+        SelectToLineEnd,
+        SelectToStart,
+        SelectToEnd,
+        SelectPageUp,
+        SelectPageDown,
+        ScrollToStart,
+        ScrollToEnd,
+        Find,
+        FindNext,
+        FindPrevious,
+        Cancel,
+        ShowCharacterPalette,
+    ]
+);
+
+pub const KEY_CONTEXT: &str = "NotesEditor";
+pub const FIELD_CONTEXT: &str = "NotesField";
+
+fn bind<A: Action>(keys: &str, action: A, context: &str) -> KeyBinding {
+    KeyBinding::new(keys, action, Some(context))
+}
+
+pub fn bindings() -> Vec<KeyBinding> {
+    let mut out = editor_bindings();
+    out.extend(field_bindings());
+    out
+}
+
+fn editor_bindings() -> Vec<KeyBinding> {
+    let c = KEY_CONTEXT;
+    let mut out = vec![
+        bind("backspace", Backspace, c),
+        bind("shift-backspace", Backspace, c),
+        bind("delete", DeleteForward, c),
+        bind("enter", Newline, c),
+        bind("shift-enter", Newline, c),
+        bind("tab", Indent, c),
+        bind("shift-tab", Outdent, c),
+        bind("escape", Cancel, c),
+        bind("left", MoveLeft, c),
+        bind("right", MoveRight, c),
+        bind("up", MoveUp, c),
+        bind("down", MoveDown, c),
+        bind("pageup", PageUp, c),
+        bind("pagedown", PageDown, c),
+        bind("shift-left", SelectLeft, c),
+        bind("shift-right", SelectRight, c),
+        bind("shift-up", SelectUp, c),
+        bind("shift-down", SelectDown, c),
+        bind("shift-pageup", SelectPageUp, c),
+        bind("shift-pagedown", SelectPageDown, c),
+        bind("secondary-b", ToggleBold, c),
+        bind("secondary-i", ToggleItalic, c),
+        bind("secondary-u", ToggleUnderline, c),
+        bind("secondary-shift-s", ToggleStrikethrough, c),
+        bind("secondary-e", ToggleCode, c),
+        bind("secondary-shift-h", ToggleHighlight, c),
+        bind("secondary-alt-1", Heading1, c),
+        bind("secondary-alt-2", Heading2, c),
+        bind("secondary-alt-3", Heading3, c),
+        bind("secondary-alt-0", Paragraph, c),
+        bind("secondary-shift-7", OrderedList, c),
+        bind("secondary-shift-8", BulletList, c),
+        bind("secondary-shift-9", TaskList, c),
+        bind("secondary-shift-.", Quote, c),
+        bind("secondary-alt-c", CodeBlock, c),
+        bind("secondary-k", EditLink, c),
+        bind("secondary-enter", ToggleCheckbox, c),
+        bind("secondary-z", Undo, c),
+        bind("secondary-shift-z", Redo, c),
+        bind("secondary-x", Cut, c),
+        bind("secondary-c", Copy, c),
+        bind("secondary-v", Paste, c),
+        bind("secondary-shift-v", PastePlain, c),
+        bind("secondary-a", SelectAll, c),
+        bind("secondary-f", Find, c),
+        bind("secondary-g", FindNext, c),
+        bind("secondary-shift-g", FindPrevious, c),
+    ];
+    if cfg!(target_os = "macos") {
+        out.extend([
+            bind("alt-backspace", DeleteWordLeft, c),
+            bind("alt-delete", DeleteWordRight, c),
+            bind("cmd-backspace", DeleteToLineStart, c),
+            bind("cmd-delete", DeleteToLineEnd, c),
+            bind("alt-left", MoveWordLeft, c),
+            bind("alt-right", MoveWordRight, c),
+            bind("cmd-left", MoveToLineStart, c),
+            bind("cmd-right", MoveToLineEnd, c),
+            bind("ctrl-a", MoveToLineStart, c),
+            bind("ctrl-e", MoveToLineEnd, c),
+            bind("cmd-up", MoveToStart, c),
+            bind("cmd-down", MoveToEnd, c),
+            bind("home", ScrollToStart, c),
+            bind("end", ScrollToEnd, c),
+            bind("alt-shift-left", SelectWordLeft, c),
+            bind("alt-shift-right", SelectWordRight, c),
+            bind("cmd-shift-left", SelectToLineStart, c),
+            bind("cmd-shift-right", SelectToLineEnd, c),
+            bind("cmd-shift-up", SelectToStart, c),
+            bind("cmd-shift-down", SelectToEnd, c),
+            bind("shift-home", SelectToStart, c),
+            bind("shift-end", SelectToEnd, c),
+            bind("ctrl-cmd-up", MoveBlockUp, c),
+            bind("ctrl-cmd-down", MoveBlockDown, c),
+            bind("ctrl-cmd-space", ShowCharacterPalette, c),
+        ]);
+    } else {
+        out.extend([
+            bind("ctrl-backspace", DeleteWordLeft, c),
+            bind("ctrl-delete", DeleteWordRight, c),
+            bind("ctrl-shift-backspace", DeleteToLineStart, c),
+            bind("ctrl-shift-delete", DeleteToLineEnd, c),
+            bind("ctrl-left", MoveWordLeft, c),
+            bind("ctrl-right", MoveWordRight, c),
+            bind("home", MoveToLineStart, c),
+            bind("end", MoveToLineEnd, c),
+            bind("ctrl-home", MoveToStart, c),
+            bind("ctrl-end", MoveToEnd, c),
+            bind("ctrl-shift-left", SelectWordLeft, c),
+            bind("ctrl-shift-right", SelectWordRight, c),
+            bind("shift-home", SelectToLineStart, c),
+            bind("shift-end", SelectToLineEnd, c),
+            bind("ctrl-shift-home", SelectToStart, c),
+            bind("ctrl-shift-end", SelectToEnd, c),
+            bind("alt-up", MoveBlockUp, c),
+            bind("alt-down", MoveBlockDown, c),
+            bind("ctrl-y", Redo, c),
+        ]);
+    }
+    out
+}
+
+fn field_bindings() -> Vec<KeyBinding> {
+    let c = FIELD_CONTEXT;
+    let mut out = vec![
+        bind("backspace", Backspace, c),
+        bind("shift-backspace", Backspace, c),
+        bind("delete", DeleteForward, c),
+        bind("enter", Newline, c),
+        bind("shift-enter", FindPrevious, c),
+        bind("escape", Cancel, c),
+        bind("left", MoveLeft, c),
+        bind("right", MoveRight, c),
+        bind("shift-left", SelectLeft, c),
+        bind("shift-right", SelectRight, c),
+        bind("secondary-a", SelectAll, c),
+        bind("secondary-c", Copy, c),
+        bind("secondary-x", Cut, c),
+        bind("secondary-v", Paste, c),
+        bind("secondary-g", FindNext, c),
+        bind("secondary-shift-g", FindPrevious, c),
+    ];
+    if cfg!(target_os = "macos") {
+        out.extend([
+            bind("alt-backspace", DeleteWordLeft, c),
+            bind("cmd-backspace", DeleteToLineStart, c),
+            bind("alt-left", MoveWordLeft, c),
+            bind("alt-right", MoveWordRight, c),
+            bind("alt-shift-left", SelectWordLeft, c),
+            bind("alt-shift-right", SelectWordRight, c),
+            bind("cmd-left", MoveToLineStart, c),
+            bind("cmd-right", MoveToLineEnd, c),
+            bind("home", MoveToLineStart, c),
+            bind("end", MoveToLineEnd, c),
+            bind("cmd-shift-left", SelectToLineStart, c),
+            bind("cmd-shift-right", SelectToLineEnd, c),
+            bind("ctrl-cmd-space", ShowCharacterPalette, c),
+        ]);
+    } else {
+        out.extend([
+            bind("ctrl-backspace", DeleteWordLeft, c),
+            bind("ctrl-left", MoveWordLeft, c),
+            bind("ctrl-right", MoveWordRight, c),
+            bind("ctrl-shift-left", SelectWordLeft, c),
+            bind("ctrl-shift-right", SelectWordRight, c),
+            bind("home", MoveToLineStart, c),
+            bind("end", MoveToLineEnd, c),
+            bind("shift-home", SelectToLineStart, c),
+            bind("shift-end", SelectToLineEnd, c),
+        ]);
+    }
+    out
+}

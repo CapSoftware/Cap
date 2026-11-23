@@ -94,6 +94,10 @@ vi.mock(
 	() => ({ ShareableLinkIcon: () => null }),
 );
 vi.mock(
+	"@/app/(org)/dashboard/settings/organization/components/ShareableLinkBrandColor",
+	() => ({ ShareableLinkBrandColor: () => null }),
+);
+vi.mock(
 	"@/app/(org)/dashboard/settings/organization/components/AccessEmailDomain",
 	() => ({ default: () => null }),
 );
@@ -141,7 +145,13 @@ const switchOrganization = async () => {
 	await render();
 };
 const openRemove = () =>
-	click(host.querySelector('[title="Remove custom domain"] > div'));
+	click(
+		host.querySelector<HTMLElement>('[title="Remove custom domain"] > button'),
+	);
+const status = (text: string) =>
+	Array.from(host.querySelectorAll("span")).find(
+		(element) => element.textContent === text && element.children.length === 0,
+	) ?? null;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -197,11 +207,11 @@ describe("organization settings ownership", () => {
 
 	it("initializes verification status from the new organization", async () => {
 		await render();
-		expect(host.querySelector('[title="Verified"]')).not.toBeNull();
+		expect(status("Verified")).not.toBeNull();
 		mocks.verified = false;
 		await switchOrganization();
-		expect(host.querySelector('[title="Verified"]')).toBeNull();
-		expect(host.querySelector('[title="Setup not complete"]')).not.toBeNull();
+		expect(status("Verified")).toBeNull();
+		expect(status("Setup not complete")).not.toBeNull();
 	});
 
 	it("closes a removal confirmation before another organization can be removed", async () => {
@@ -216,7 +226,7 @@ describe("organization settings ownership", () => {
 	it("closes the previous organization's domain setup flow", async () => {
 		mocks.verified = false;
 		await render();
-		await click(button("Setup"));
+		await click(button("Set up"));
 		expect(host.querySelector("[data-domain-setup]")).not.toBeNull();
 		await switchOrganization();
 		expect(host.querySelector("[data-domain-setup]")).toBeNull();
@@ -234,7 +244,7 @@ describe("organization settings ownership", () => {
 			pending.resolve();
 			await pending.promise;
 		});
-		expect(host.querySelector('[title="Verified"]')).not.toBeNull();
-		expect(host.querySelector('[title="Setup not complete"]')).toBeNull();
+		expect(status("Verified")).not.toBeNull();
+		expect(status("Setup not complete")).toBeNull();
 	});
 });

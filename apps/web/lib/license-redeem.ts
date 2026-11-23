@@ -250,3 +250,37 @@ export function retryAfterText(seconds: number): string {
 	const hours = Math.ceil(minutes / 60);
 	return hours === 1 ? "an hour" : `${hours} hours`;
 }
+
+const csvCell = (value: string) =>
+	/[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+
+// Claimed gifts belong to their recipient, so their key and link stay blank.
+export function licensesCsv({
+	origin,
+	gift,
+	duration,
+	licenses,
+}: {
+	origin: string;
+	gift: boolean;
+	duration: LicenseDuration;
+	licenses: PurchasedLicense[];
+}): string {
+	const type = duration === "lifetime" ? "Lifetime" : "Yearly";
+	const header = gift
+		? ["License", "Gift link", "License key", "Type", "Status"]
+		: ["License", "License key", "Type"];
+	const rows = licenses.map((license) => {
+		const key = license.licenseKey ?? "";
+		return gift
+			? [
+					String(license.position),
+					license.licenseKey ? giftLink(origin, license.licenseKey) : "",
+					key,
+					type,
+					license.redeemed ? "Claimed" : "Unclaimed",
+				]
+			: [String(license.position), key, type];
+	});
+	return `${[header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n")}\r\n`;
+}

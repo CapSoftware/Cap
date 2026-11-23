@@ -10,21 +10,34 @@ import {
 import { seoPages } from "../lib/seo-pages";
 import robots from "./robots";
 
-// Routes with a page file that only redirects: /c, /s and /embed to the
-// homepage, /verify-otp to /login without a pending code, and
-// /docs/s3-config to /docs (next.config.mjs).
-const REDIRECT_ONLY_ROUTES = new Set([
-	"/c",
-	"/docs/s3-config",
-	"/embed",
-	"/s",
-	"/verify-otp",
-]);
-
 async function getDisallowedPrefixes() {
 	const { rules } = await robots();
 	return (Array.isArray(rules) ? rules : [rules]).flatMap(
 		({ disallow }) => disallow ?? [],
+	);
+}
+
+const NON_INDEXABLE_PATHS = new Set([
+	"/home",
+	"/c",
+	"/s",
+	"/embed",
+	"/messenger",
+	"/login",
+	"/signup",
+	"/verify-otp",
+	"/onboarding",
+	"/checkout",
+	"/checkout/complete",
+	"/download/started",
+	"/redeem",
+]);
+const NON_INDEXABLE_PREFIXES = ["/admin", "/cli", "/mcp"];
+
+function isIndexablePath(routePath: string) {
+	if (NON_INDEXABLE_PATHS.has(routePath)) return false;
+	return !NON_INDEXABLE_PREFIXES.some(
+		(prefix) => routePath === prefix || routePath.startsWith(`${prefix}/`),
 	);
 }
 
@@ -73,7 +86,6 @@ async function getPagePaths(
 		if (
 			entry.isDirectory() &&
 			entry.name !== "dashboard" &&
-			entry.name !== "admin" &&
 			entry.name !== "blog" &&
 			!entry.name.startsWith("[")
 		) {
@@ -129,7 +141,7 @@ export default async function sitemap() {
 	// Add docs routes
 	const docs = getDocs();
 	const docsRoutes = docs.map((doc) => ({
-		path: `/docs/${doc.slug}`,
+		path: doc.slug === "introduction" ? "/docs" : `/docs/${doc.slug}`,
 		lastModified: new Date().toISOString(), // You might want to add a publishedAt to doc metadata
 	}));
 
@@ -158,17 +170,16 @@ export default async function sitemap() {
 	// Crawlers match a robots.txt rule as a plain prefix, so /login also
 	// covers /login-anything.
 	const disallowed = await getDisallowedPrefixes();
-	const isListed = (routePath: string) =>
-		!disallowed.some((prefix) => routePath.startsWith(prefix)) &&
-		!REDIRECT_ONLY_ROUTES.has(routePath);
+	const isBlockedByRobots = (routePath: string) =>
+		disallowed.some((prefix) => routePath.startsWith(prefix));
 	const uniqueByPath = new Map<
 		string,
 		{ path: string; lastModified?: string }
 	>();
 	for (const route of combined) {
 		if (
-			route.path !== "/home" &&
-			isListed(route.path) &&
+			isIndexablePath(route.path) &&
+			!isBlockedByRobots(route.path) &&
 			!uniqueByPath.has(route.path)
 		) {
 			uniqueByPath.set(route.path, route);

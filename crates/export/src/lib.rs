@@ -1,9 +1,12 @@
+pub mod audio;
+pub mod audio_project;
 pub mod estimates;
 pub mod gif;
 pub mod mov;
 pub mod mp4;
 pub mod preview;
 pub mod settings;
+pub mod tracks;
 
 use cap_editor::{ExportAudioPreparation, ExportAudioRenderer, SegmentMedia};
 use cap_project::{
@@ -68,6 +71,7 @@ pub struct ExporterBuilder {
     config: Option<ProjectConfiguration>,
     output_path: Option<PathBuf>,
     force_ffmpeg_decoder: bool,
+    screen_enhancement: Option<bool>,
 }
 
 impl ExporterBuilder {
@@ -83,6 +87,14 @@ impl ExporterBuilder {
 
     pub fn with_force_ffmpeg_decoder(mut self, force: bool) -> Self {
         self.force_ffmpeg_decoder = force;
+        self
+    }
+
+    /// Enhances the screen recording in this export (the export page's
+    /// option). Without it a config passed to `with_config` keeps its own
+    /// choice; a project loaded from disk is never enhanced.
+    pub fn with_screen_enhancement(mut self, enhance: bool) -> Self {
+        self.screen_enhancement = Some(enhance);
         self
     }
 
@@ -122,6 +134,13 @@ impl ExporterBuilder {
 
         cap_editor::release_playback_audio_caches();
         let mut project_config = self.load_project_config()?;
+        if let Some(enhance) = self.screen_enhancement {
+            project_config.screen_enhancement = if enhance {
+                cap_project::ScreenEnhancement::on()
+            } else {
+                Default::default()
+            };
+        }
 
         let recording_meta =
             RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
@@ -139,15 +158,23 @@ impl ExporterBuilder {
             &mut project_config,
             &recording_meta.project_path,
             studio_meta,
-        );
-
-        cap_project::clamp_timeline_to_sources(
-            &mut project_config,
             &recordings
                 .segments
                 .iter()
                 .map(|segment| segment.display.duration)
                 .collect::<Vec<_>>(),
+        );
+
+        cap_project::clamp_timeline_to_sources(
+            &mut project_config,
+            &cap_project::late_audio_trim_limits(
+                studio_meta,
+                &recordings
+                    .segments
+                    .iter()
+                    .map(|segment| segment.display.duration)
+                    .collect::<Vec<_>>(),
+            ),
         );
         cap_project::synchronize_legacy_keyboard(&recording_meta, &mut project_config);
         cap_project::synchronize_captions(
@@ -189,6 +216,20 @@ impl ExporterBuilder {
             .await
             .map_err(Error::RendererSetup)?,
         );
+        if studio_meta.is_audio_only()
+            && project_config
+                .audio_visuals
+                .as_ref()
+                .is_some_and(|visuals| visuals.enabled)
+        {
+            let levels = Box::pin(load_audio_levels(
+                recording_meta.clone(),
+                studio_meta.clone(),
+                cancellation.clone().unwrap_or_default(),
+            ))
+            .await?;
+            render_constants.set_audio_levels(Some(Arc::new(levels)));
+        }
 
         let user_cancellation = cancellation.clone();
         let audio_cancellation = if stream_audio {
@@ -264,6 +305,22 @@ impl ExporterBuilder {
             turbo_chunk_failure: None,
         })
     }
+}
+
+// Boxed at the call site: this runs only for audio-only exports with visuals,
+// and keeping its state off `build_inner`'s future keeps every other export's
+// future as small as it was.
+async fn load_audio_levels(
+    recording: RecordingMeta,
+    studio: StudioRecordingMeta,
+    cancel: Arc<AtomicBool>,
+) -> Result<cap_rendering::AudioLevels, ExporterBuildError> {
+    tokio::task::spawn_blocking(move || {
+        cap_editor::compute_audio_levels(&recording, &studio, &cancel)
+    })
+    .await
+    .map_err(|error| ExporterBuildError::MediaLoad(error.to_string()))?
+    .map_err(ExporterBuildError::MediaLoad)
 }
 
 async fn finish_audio_preparation(
@@ -547,6 +604,7 @@ impl ExporterBase {
             config: None,
             output_path: None,
             force_ffmpeg_decoder: false,
+            screen_enhancement: None,
         }
     }
 }
@@ -839,12 +897,16 @@ mod forward_read_tests {
 /// editor fills them in from the tracks' start times (and the devices'
 /// calibration) when it first opens the project. An export of a project the
 /// editor never opened would otherwise play every audio track from its own
-/// start, late against the screen by how much earlier it started.
+/// start, late against the screen by how much earlier it started. A project
+/// saved before late audio stopped setting a segment's start is first moved
+/// onto the current segment clock, the way the editor does on open.
 fn fill_clip_offsets(
     config: &mut ProjectConfiguration,
     project_path: &std::path::Path,
     studio_meta: &StudioRecordingMeta,
+    recording_durations: &[f64],
 ) {
+    cap_project::migrate_late_audio_alignment(config, studio_meta, || recording_durations.to_vec());
     if config.clips.is_empty() {
         config.clips = cap_editor::initial_clip_configuration(project_path, studio_meta);
     }
@@ -882,9 +944,12 @@ mod clip_offset_tests {
                     cursor: None,
                     keyboard: None,
                     display_notch: None,
+                    cursor_shape_version: None,
                 }],
                 cursors: Cursors::default(),
                 status: None,
+                cursor_shape_version: 0,
+                audio_only: false,
             },
         }
     }
@@ -895,7 +960,7 @@ mod clip_offset_tests {
         let meta = camera_recording();
         let mut config = ProjectConfiguration::default();
         assert!(config.clips.is_empty());
-        fill_clip_offsets(&mut config, dir.path(), &meta);
+        fill_clip_offsets(&mut config, dir.path(), &meta, &[10.0]);
         let offsets = config.clips[0].offsets;
         assert!((offsets.mic - 0.1695).abs() < 1e-4, "mic {}", offsets.mic);
         assert!(
@@ -921,8 +986,103 @@ mod clip_offset_tests {
             }],
             ..Default::default()
         };
-        fill_clip_offsets(&mut config, dir.path(), &camera_recording());
+        fill_clip_offsets(&mut config, dir.path(), &camera_recording(), &[10.0]);
         assert_eq!(config.clips[0].offsets.mic, 0.5);
+    }
+
+    fn late_mic_recording(mic_start: f64) -> StudioRecordingMeta {
+        let mut meta = camera_recording();
+        let StudioRecordingMeta::MultipleSegments { inner } = &mut meta else {
+            unreachable!()
+        };
+        inner.segments[0].mic.as_mut().unwrap().start_time = Some(mic_start);
+        meta
+    }
+
+    fn auto_clip(mic: f32, system_audio: f32, auto: bool) -> ProjectConfiguration {
+        ProjectConfiguration {
+            clips: vec![ClipConfiguration {
+                index: 0,
+                offsets: ClipOffsets {
+                    camera: 0.0,
+                    mic,
+                    system_audio,
+                },
+                offsets_auto_calculated: auto,
+            }],
+            clip_alignment_version: 0,
+            ..Default::default()
+        }
+    }
+
+    // Offsets saved while a late mic set the segment's start (mic 0, system
+    // audio late - 0) move to the screen's start.
+    #[test]
+    fn saved_auto_offsets_of_a_late_mic_are_recomputed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(0.0, 5.2026, true);
+        fill_clip_offsets(
+            &mut config,
+            dir.path(),
+            &late_mic_recording(5.2026),
+            &[10.0],
+        );
+        let offsets = config.clips[0].offsets;
+        assert!((offsets.mic - -5.0).abs() < 1e-4, "mic {}", offsets.mic);
+        assert!((offsets.system_audio - 0.2026).abs() < 1e-4);
+        assert_eq!(offsets.camera, 0.0);
+        assert!(config.clips[0].offsets_auto_calculated);
+    }
+
+    // Offsets set by hand keep the sync the user chose against the video.
+    #[test]
+    fn user_offsets_of_a_late_mic_keep_their_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(0.25, 5.2026, false);
+        fill_clip_offsets(
+            &mut config,
+            dir.path(),
+            &late_mic_recording(5.2026),
+            &[10.0],
+        );
+        let offsets = config.clips[0].offsets;
+        assert!((offsets.mic - -4.75).abs() < 1e-4, "mic {}", offsets.mic);
+        assert!((offsets.system_audio - 0.2026).abs() < 1e-4);
+        assert!(!config.clips[0].offsets_auto_calculated);
+    }
+
+    // A project saved by this version is already on the current clock.
+    #[test]
+    fn current_projects_are_not_moved_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(-5.0, 0.2026, true);
+        config.clip_alignment_version = cap_project::CLIP_ALIGNMENT_VERSION;
+        fill_clip_offsets(
+            &mut config,
+            dir.path(),
+            &late_mic_recording(5.2026),
+            &[10.0],
+        );
+        assert_eq!(config.clips[0].offsets.mic.to_bits(), (-5.0f32).to_bits());
+        assert_eq!(
+            config.clips[0].offsets.system_audio.to_bits(),
+            0.2026f32.to_bits()
+        );
+    }
+
+    // Only segments with late audio are touched: saved automatic offsets of
+    // a normal recording stay bit-identical even if they differ from a fresh
+    // computation (for example a calibration made after they were saved).
+    #[test]
+    fn saved_auto_offsets_of_a_normal_recording_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = auto_clip(0.123, 0.456, true);
+        fill_clip_offsets(&mut config, dir.path(), &camera_recording(), &[10.0]);
+        assert_eq!(config.clips[0].offsets.mic.to_bits(), 0.123f32.to_bits());
+        assert_eq!(
+            config.clips[0].offsets.system_audio.to_bits(),
+            0.456f32.to_bits()
+        );
     }
 }
 

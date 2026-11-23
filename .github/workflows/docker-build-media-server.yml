@@ -1,6 +1,7 @@
 name: "Docker Build Media Server"
 
 on:
+  merge_group:
   workflow_dispatch:
     inputs:
       tag:
@@ -32,7 +33,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # GitHub ignores paths filters in the merge queue, so the queue run applies
+  # this workflow's pull_request paths to the queued change itself.
+  scope:
+    name: Scope
+    if: github.event_name == 'merge_group'
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.queue.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          filter: blob:none
+          sparse-checkout: |
+            .github/workflows
+            scripts/ci
+      - name: Merge queue scope
+        id: queue
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: python3 scripts/ci/merge_queue.py scope --workflow .github/workflows/docker-build-media-server.yml --base "$BASE" --head "$HEAD" >> "$GITHUB_OUTPUT"
+
   audio-metrics:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
     name: Audio intelligibility alignment
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -50,7 +78,27 @@ jobs:
           "$RUNNER_TEMP/audio-metrics/bin/python" -m pip install --disable-pip-version-check --no-input --only-binary=:all: numpy==2.4.1 scipy==1.18.1 pystoi==0.4.1
           "$RUNNER_TEMP/audio-metrics/bin/python" scripts/test-audio-intelligibility.py
 
+  railway-dockerfile:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
+    # The Railway media server builds apps/media-server/Dockerfile, whose test
+    # chain differs from Dockerfile.standalone. Building it here keeps that
+    # chain from failing unnoticed.
+    name: Build Railway Dockerfile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build apps/media-server/Dockerfile with its tests
+        run: docker build --progress=plain -f apps/media-server/Dockerfile -t cap-media-server:railway-check .
+
   build:
+    needs: scope
+    if: ${{ !cancelled() && needs.scope.outputs.run != 'false' }}
     name: Build Docker Image (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
@@ -74,7 +122,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: (github.event_name != 'pull_request' && github.event_name != 'merge_group')
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -92,16 +140,16 @@ jobs:
           context: ./apps/media-server
           file: ./apps/media-server/Dockerfile.standalone
           platforms: linux/${{ matrix.platform }}
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
-          tags: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || '' }}
-          outputs: ${{ github.event_name != 'pull_request' && format('type=image,name=ghcr.io/{0}/cap-media-server,push-by-digest=true', env.REPOSITORY_OWNER) || '' }}
+          push: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') }}
+          load: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+          tags: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'cap-media-server:verification' || '' }}
+          outputs: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') && format('type=image,name=ghcr.io/{0}/cap-media-server,push-by-digest=true', env.REPOSITORY_OWNER) || '' }}
           cache-from: type=gha,scope=media-server-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=media-server-${{ matrix.platform }}
 
       - name: Verify recording decode in the production image
         env:
-          MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
+          MEDIA_IMAGE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
         run: |
           docker run --rm --network none --entrypoint bun "$MEDIA_IMAGE" test \
             src/__tests__/lib/audio-quality-policy.test.ts \
@@ -160,7 +208,7 @@ jobs:
 
       - name: Verify the server runs without root in the production image
         env:
-          MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
+          MEDIA_IMAGE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
         run: |
           test "$(docker run --rm --network none "$MEDIA_IMAGE" id -u)" = 1000
           docker volume create media-gpu-cache
@@ -175,7 +223,7 @@ jobs:
 
       - name: Verify long recording performance in the production image
         env:
-          MEDIA_IMAGE: ${{ github.event_name == 'pull_request' && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
+          MEDIA_IMAGE: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'cap-media-server:verification' || format('ghcr.io/{0}/cap-media-server@{1}', env.REPOSITORY_OWNER, steps.build.outputs.digest) }}
         run: |
           docker run --rm --network none --cpus 2 --memory 2g \
             -e MEDIA_SERVER_RECORDING_PERFORMANCE_TESTS=1 \
@@ -189,14 +237,14 @@ jobs:
             src/__tests__/lib/drive-resumable-upload.test.ts
 
       - name: Export Digest
-        if: github.event_name != 'pull_request'
+        if: (github.event_name != 'pull_request' && github.event_name != 'merge_group')
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload Digest
-        if: github.event_name != 'pull_request'
+        if: (github.event_name != 'pull_request' && github.event_name != 'merge_group')
         uses: actions/upload-artifact@v4
         with:
           name: digests-media-server-${{ matrix.platform }}
@@ -207,7 +255,7 @@ jobs:
   merge:
     name: Create Multi-Architecture Manifest
     needs: build
-    if: github.event_name != 'pull_request'
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group')
     runs-on: ubuntu-latest
     permissions:
       contents: read

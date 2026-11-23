@@ -3,10 +3,11 @@ import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
 import { Effect, Option, Schema } from "effect";
 import { runPromise } from "@/lib/server";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
 
 type SharePlaybackVideo = Omit<
 	typeof videos.$inferSelect,
-	"folderId" | "password" | "settings" | "ownerId"
+	"folderId" | "password" | "settings" | "ownerId" | "archivedAt"
 > & { owner: { id: User.UserId } };
 
 export type SharePlaybackSource = {
@@ -31,13 +32,35 @@ export const getSharePlaybackSource = (
 			yield* Storage.getAccessForVideo(loadedVideo);
 		const source = Video.Video.getSource(loadedVideo);
 		if (!(source instanceof Video.Mp4Source)) return null;
-		const url = yield* bucket.getSignedObjectUrl(source.getFileKey());
+		const url = yield* bucket.getSignedObjectUrl(
+			source.getFileKey(),
+			playbackUrlValidity(),
+		);
 		return {
 			url,
 			defaultStorage:
 				Option.isNone(customBucket) &&
 				Option.isNone(loadedVideo.storageIntegrationId),
 		};
+	})
+		.pipe(runPromise)
+		.catch(() => null);
+
+export const getCustomThumbnailUrl = (
+	video: SharePlaybackVideo,
+	key: string,
+): Promise<string | null> =>
+	Effect.gen(function* () {
+		const loadedVideo = yield* Schema.decodeUnknown(Video.Video)({
+			...video,
+			ownerId: video.owner.id,
+			bucketId: video.bucket,
+			folderId: null,
+			createdAt: video.createdAt.toISOString(),
+			updatedAt: video.updatedAt.toISOString(),
+		});
+		const [bucket] = yield* Storage.getAccessForVideo(loadedVideo);
+		return yield* bucket.getSignedObjectUrl(key);
 	})
 		.pipe(runPromise)
 		.catch(() => null);

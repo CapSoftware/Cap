@@ -10,7 +10,10 @@ import { toast } from "sonner";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
 import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
-import { CapCard } from "../../../caps/components/CapCard/CapCard";
+import {
+	CapCard,
+	type CapCardReorderActions,
+} from "../../../caps/components/CapCard/CapCard";
 
 interface SharedCapCardProps {
 	cap: {
@@ -56,8 +59,10 @@ interface SharedCapCardProps {
 	currentFolderId?: Folder.FolderId | null;
 	isSelected?: boolean;
 	anyCapSelected?: boolean;
-	onSelectToggle?: () => void;
+	onSelectToggle?: (options?: { shiftKey?: boolean }) => void;
 	selectedIds?: Video.VideoId[];
+	href?: string;
+	reorder?: CapCardReorderActions;
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
@@ -78,6 +83,8 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	anyCapSelected,
 	onSelectToggle,
 	selectedIds,
+	href,
+	reorder,
 }) => {
 	const displayCount =
 		analytics === 0
@@ -113,24 +120,34 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 				anyCapSelected={anyCapSelected}
 				onSelectToggle={onSelectToggle}
 				selectedIds={selectedIds}
+				href={href}
+				reorder={reorder}
 				onDelete={isOwner ? () => deleteCap.mutateAsync(cap.id) : undefined}
 			>
-				<div className="mb-2 space-y-1">
+				<div className="flex flex-col gap-1 -mt-1 min-w-0">
 					{cap.ownerName && (
-						<div className="flex gap-2 items-center">
-							<FontAwesomeIcon icon={faUser} className="text-gray-10 size-3" />
-							<span className="text-sm text-gray-10">{cap.ownerName}</span>
+						<div className="flex gap-2 items-center min-w-0">
+							<FontAwesomeIcon
+								icon={faUser}
+								className="text-gray-9 size-2.5 shrink-0"
+							/>
+							<span className="text-[13px] truncate text-gray-10">
+								{cap.ownerName}
+							</span>
 						</div>
 					)}
 					{isOwner && (
-						<div className="flex gap-2 items-center">
+						<div className="flex gap-2 items-center min-w-0">
 							<FontAwesomeIcon
 								icon={faBuilding}
-								className="text-gray-10 size-2.5"
+								className="text-gray-9 size-2.5 shrink-0"
 							/>
-							<p className="text-sm pointer-events-none text-gray-10">
+							<p
+								title={spaceName || organizationName}
+								className="text-[13px] truncate pointer-events-none text-gray-10"
+							>
 								Shared with{" "}
-								<span className="text-sm font-medium text-gray-12">
+								<span className="font-medium text-gray-11">
 									{spaceName || organizationName}
 								</span>
 							</p>
