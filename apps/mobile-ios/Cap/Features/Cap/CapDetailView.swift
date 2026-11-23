@@ -288,6 +288,8 @@ struct CapDetailView: View {
                                 }
                             }
                             .padding(.horizontal, CapTheme.spacing)
+                            // With a single section there's no picker to carry the scroll target.
+                            .id(available.count > 1 ? "section-content" : "sections")
                         } header: {
                             if available.count > 1, let current {
                                 Picker("Section", selection: Binding(get: { current }, set: { section = $0 })) {
