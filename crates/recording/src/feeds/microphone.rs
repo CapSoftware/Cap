@@ -501,6 +501,37 @@ fn enqueue_microphone_samples(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn release_staged_system_audio(
+    staging: &Arc<
+        std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+    >,
+    event: crate::sources::screen_capture::SystemAudioWatch,
+) -> Vec<MicrophoneSamples> {
+    use crate::sources::screen_capture::{
+        SystemAudioRouteCheck, SystemAudioRoutePlan, SystemAudioWatch,
+    };
+    let mut staging = staging.lock().unwrap();
+    match event {
+        SystemAudioWatch::Checked {
+            plan: SystemAudioRoutePlan::Keep,
+            check_started,
+        } => staging.observe(SystemAudioRouteCheck::OnMonitor { check_started }),
+        SystemAudioWatch::Checked {
+            plan: SystemAudioRoutePlan::Reattach | SystemAudioRoutePlan::Lost,
+            ..
+        } => staging.observe(SystemAudioRouteCheck::NotOnMonitor),
+        SystemAudioWatch::Checked {
+            plan: SystemAudioRoutePlan::Ignore,
+            ..
+        } => Vec::new(),
+        SystemAudioWatch::Reattached { at } => {
+            staging.note_attached(at);
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(any(target_os = "linux", windows))]
 struct StreamHealth {
     id: u32,
@@ -1099,6 +1130,12 @@ pub struct MicrophoneFeed {
     #[cfg(target_os = "linux")]
     system_capture_gate: Arc<std::sync::Mutex<Arc<SystemCaptureGate>>>,
     #[cfg(target_os = "linux")]
+    system_audio_staging: Option<
+        Arc<
+            std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+        >,
+    >,
+    #[cfg(target_os = "linux")]
     route_watch_cancel: tokio_util::sync::CancellationToken,
     input_id_counter: u32,
     lock_generation: u64,
@@ -1388,6 +1425,8 @@ impl MicrophoneFeed {
                 SystemCaptureGate::open(),
             ))),
             #[cfg(target_os = "linux")]
+            system_audio_staging: None,
+            #[cfg(target_os = "linux")]
             route_watch_cancel: tokio_util::sync::CancellationToken::new(),
             #[cfg(any(target_os = "linux", windows))]
             stream_health: std::collections::HashMap::new(),
@@ -1414,25 +1453,53 @@ impl MicrophoneFeed {
     pub(crate) fn new_system_audio(error_sender: flume::Sender<StreamError>) -> Self {
         let mut feed = Self::new(error_sender);
         feed.pulse_input_role = crate::sources::screen_capture::PulseInputRole::SystemAudio;
+        feed.system_audio_staging = Some(Arc::new(std::sync::Mutex::new(
+            crate::sources::screen_capture::SystemAudioStaging::new(
+                crate::sources::screen_capture::SYSTEM_AUDIO_STAGING_HOLD,
+            ),
+        )));
         feed
     }
 
     #[cfg(target_os = "linux")]
-    fn start_system_audio_route_watch(&mut self) {
+    fn start_system_audio_route_watch(&mut self, actor: ActorRef<Self>) {
         let Some(health) = self.recording_health.clone() else {
+            return;
+        };
+        let Some(staging) = self.system_audio_staging.clone() else {
             return;
         };
         self.route_watch_cancel.cancel();
         self.route_watch_cancel = tokio_util::sync::CancellationToken::new();
         let cancel = self.route_watch_cancel.clone();
         let route = self.system_capture_route.clone();
+        let dropped = self.dropped_message_count.clone();
         let _ = std::thread::Builder::new()
             .name("system-audio-route".into())
             .spawn(move || {
                 crate::sources::screen_capture::watch_system_audio_route(
                     cancel,
                     route,
-                    move |stream_id, plan| health.apply_system_audio_route(stream_id, plan),
+                    move |stream_id, event| {
+                        let released = release_staged_system_audio(&staging, event);
+                        for sample in released {
+                            enqueue_microphone_samples(&actor, &dropped, sample);
+                        }
+                        use crate::sources::screen_capture::{
+                            SystemAudioRoutePlan, SystemAudioWatch,
+                        };
+                        match event {
+                            SystemAudioWatch::Checked { plan, .. } => {
+                                health.apply_system_audio_route(stream_id, plan);
+                            }
+                            SystemAudioWatch::Reattached { .. } => {
+                                health.apply_system_audio_route(
+                                    stream_id,
+                                    SystemAudioRoutePlan::Keep,
+                                );
+                            }
+                        }
+                    },
                 );
             });
     }
@@ -1532,6 +1599,8 @@ impl MicrophoneFeed {
             system_capture_gate,
             #[cfg(target_os = "linux")]
             system_capture_route,
+            #[cfg(target_os = "linux")]
+            system_audio_staging,
             id,
             label,
             settings,
@@ -1675,6 +1744,10 @@ impl MicrophoneFeed {
                         let system_stream_cancel = system_stream_cancel.clone();
                         #[cfg(target_os = "linux")]
                         let system_capture_gate = system_capture_gate.clone();
+                        #[cfg(target_os = "linux")]
+                        let system_audio_staging = system_audio_staging.clone();
+                        #[cfg(target_os = "linux")]
+                        let mut pending_capture = VecDeque::new();
                         let mut callback_count = 0u64;
                         move |data, info| {
                             #[cfg(target_os = "linux")]
@@ -1722,6 +1795,7 @@ impl MicrophoneFeed {
                             #[cfg(target_os = "linux")]
                             if !capture_gate.open.load(Ordering::Acquire) {
                                 pending_samples.clear();
+                                pending_capture.clear();
                                 return;
                             }
                             #[cfg(target_os = "linux")]
@@ -1731,6 +1805,7 @@ impl MicrophoneFeed {
                                 || capture_gate.epoch.load(Ordering::Acquire) != capture_epoch
                             {
                                 pending_samples.clear();
+                                pending_capture.clear();
                                 return;
                             }
                             #[cfg(target_os = "linux")]
@@ -1743,6 +1818,14 @@ impl MicrophoneFeed {
                             ) {
                                 return;
                             }
+                            #[cfg(target_os = "linux")]
+                            let captured_at = input_timestamp
+                                .callback
+                                .duration_since(&input_timestamp.capture)
+                                .and_then(|delay| callback_received.checked_sub(delay))
+                                .unwrap_or(callback_received);
+                            #[cfg(not(target_os = "linux"))]
+                            let captured_at = Instant::now();
                             #[cfg(not(target_os = "linux"))]
                             let capture_epoch = 0;
                             #[cfg(windows)]
@@ -1765,17 +1848,35 @@ impl MicrophoneFeed {
                                 capture_epoch,
                             };
 
+                            let forward = |captured_at: Instant, samples: MicrophoneSamples| {
+                                #[cfg(target_os = "linux")]
+                                if let Some(staging) = &system_audio_staging {
+                                    let _ = staging.lock().unwrap().push(captured_at, samples);
+                                    return;
+                                }
+                                #[cfg(not(target_os = "linux"))]
+                                let _ = captured_at;
+                                enqueue_microphone_samples(
+                                    &actor_ref,
+                                    &dropped_message_count,
+                                    samples,
+                                );
+                            };
+
                             if !effective_sample_rate.settled {
                                 pending_samples.push_back(samples);
+                                #[cfg(target_os = "linux")]
+                                pending_capture.push_back(captured_at);
                                 if pending_samples.len() >= SAMPLE_RATE_ESTIMATE_MAX_PENDING {
                                     let sample_rate = sample_rate_estimator.force_current();
                                     prepare_pending_samples(&mut pending_samples, sample_rate);
                                     while let Some(pending) = pending_samples.pop_front() {
-                                        enqueue_microphone_samples(
-                                            &actor_ref,
-                                            &dropped_message_count,
-                                            pending,
-                                        );
+                                        #[cfg(target_os = "linux")]
+                                        let pending_at =
+                                            pending_capture.pop_front().unwrap_or(captured_at);
+                                        #[cfg(not(target_os = "linux"))]
+                                        let pending_at = captured_at;
+                                        forward(pending_at, pending);
                                     }
                                 }
                                 return;
@@ -1786,18 +1887,14 @@ impl MicrophoneFeed {
                                 effective_sample_rate.sample_rate,
                             );
                             while let Some(pending) = pending_samples.pop_front() {
-                                enqueue_microphone_samples(
-                                    &actor_ref,
-                                    &dropped_message_count,
-                                    pending,
-                                );
+                                #[cfg(target_os = "linux")]
+                                let pending_at = pending_capture.pop_front().unwrap_or(captured_at);
+                                #[cfg(not(target_os = "linux"))]
+                                let pending_at = captured_at;
+                                forward(pending_at, pending);
                             }
 
-                            enqueue_microphone_samples(
-                                &actor_ref,
-                                &dropped_message_count,
-                                samples,
-                            );
+                            forward(captured_at, samples);
                         }
                     },
                     microphone_stream_error_handler(error_sender, {
@@ -1847,6 +1944,9 @@ impl MicrophoneFeed {
                                     stream_id: id,
                                     source_output,
                                 });
+                            if let Some(staging) = &system_audio_staging {
+                                staging.lock().unwrap().note_attached(Instant::now());
+                            }
                         }
                         Ok(_) => {}
                         Err(error) => {
@@ -2098,12 +2198,45 @@ fn latency_ms_to_frames(sample_rate: u32, milliseconds: u32) -> u32 {
     frames.max(1) as u32
 }
 
+#[cfg(target_os = "linux")]
+struct SystemAudioHold {
+    staging: Arc<
+        std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+    >,
+    route: Arc<std::sync::Mutex<Option<crate::sources::screen_capture::SystemAudioCaptureRoute>>>,
+}
+
+#[cfg(target_os = "linux")]
+impl SystemAudioHold {
+    fn flush_confirmed(&self) -> Vec<MicrophoneSamples> {
+        use crate::sources::screen_capture::{
+            SystemAudioRouteCheck, system_audio_output_is_monitor,
+        };
+        let check_started = Instant::now();
+        let source_output = self
+            .route
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|route| route.source_output);
+        let on_monitor = source_output.is_some_and(system_audio_output_is_monitor);
+        let check = if on_monitor {
+            SystemAudioRouteCheck::OnMonitor { check_started }
+        } else {
+            SystemAudioRouteCheck::NotOnMonitor
+        };
+        self.staging.lock().unwrap().observe(check)
+    }
+}
+
 #[derive(Reply)]
 pub struct MicrophoneFeedLock {
     #[cfg(windows)]
     generation: u64,
     #[cfg(target_os = "linux")]
     source_health: RecordingSourceHealth,
+    #[cfg(target_os = "linux")]
+    system_audio_hold: Option<Arc<SystemAudioHold>>,
     actor: ActorRef<MicrophoneFeed>,
     config: SupportedStreamConfig,
     audio_info: AudioInfo,
@@ -2177,6 +2310,24 @@ impl MicrophoneFeedLock {
     #[cfg(target_os = "linux")]
     pub(crate) fn source_health(&self) -> RecordingSourceHealth {
         self.source_health.clone()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn has_system_audio_hold(&self) -> bool {
+        self.system_audio_hold.is_some()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) async fn flush_confirmed_system_audio(&self) {
+        let Some(hold) = self.system_audio_hold.clone() else {
+            return;
+        };
+        let released = tokio::task::spawn_blocking(move || hold.flush_confirmed())
+            .await
+            .unwrap_or_default();
+        for sample in released {
+            let _ = self.actor.tell(sample).await;
+        }
     }
 
     pub fn config(&self) -> &SupportedStreamConfig {
@@ -2344,6 +2495,12 @@ struct StreamSpawnParams {
     #[cfg(target_os = "linux")]
     system_capture_route:
         Arc<std::sync::Mutex<Option<crate::sources::screen_capture::SystemAudioCaptureRoute>>>,
+    #[cfg(target_os = "linux")]
+    system_audio_staging: Option<
+        Arc<
+            std::sync::Mutex<crate::sources::screen_capture::SystemAudioStaging<MicrophoneSamples>>,
+        >,
+    >,
     id: u32,
     label: String,
     settings: Option<MicrophoneDeviceSettings>,
@@ -2435,8 +2592,12 @@ impl MicrophoneFeed {
                     pulse_input_role: self.pulse_input_role,
                     #[cfg(target_os = "linux")]
                     system_stream_cancel: self.system_stream_cancel.clone(),
+                    #[cfg(target_os = "linux")]
                     system_capture_gate: self.system_capture_gate.clone(),
+                    #[cfg(target_os = "linux")]
                     system_capture_route: self.system_capture_route.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_audio_staging: self.system_audio_staging.clone(),
                     id,
                     label: label.clone(),
                     settings: msg.settings,
@@ -2571,8 +2732,12 @@ impl MicrophoneFeed {
                     pulse_input_role: self.pulse_input_role,
                     #[cfg(target_os = "linux")]
                     system_stream_cancel: self.system_stream_cancel.clone(),
+                    #[cfg(target_os = "linux")]
                     system_capture_gate: self.system_capture_gate.clone(),
+                    #[cfg(target_os = "linux")]
                     system_capture_route: self.system_capture_route.clone(),
+                    #[cfg(target_os = "linux")]
+                    system_audio_staging: self.system_audio_staging.clone(),
                     id: new_id,
                     label: label.clone(),
                     settings: msg.settings,
@@ -3057,24 +3222,29 @@ impl Message<Lock> for MicrophoneFeed {
         }
         let generation = self.lock_generation;
         #[cfg(target_os = "linux")]
-        let capture_gate = Arc::new(SystemCaptureGate::open());
-        *self.system_capture_gate.lock().unwrap() = capture_gate.clone();
-        let source_health = RecordingSourceHealth::with_capture_gate(
-            generation,
-            self.stream_health
-                .get(&attached.id)
-                .cloned()
-                .unwrap_or_else(|| Arc::new(StreamHealth::new(attached.id))),
-            capture_gate,
-        );
-        #[cfg(target_os = "linux")]
-        {
+        let (source_health, system_audio_hold) = {
+            let capture_gate = Arc::new(SystemCaptureGate::open());
+            *self.system_capture_gate.lock().unwrap() = capture_gate.clone();
+            let source_health = RecordingSourceHealth::with_capture_gate(
+                generation,
+                self.stream_health
+                    .get(&attached.id)
+                    .cloned()
+                    .unwrap_or_else(|| Arc::new(StreamHealth::new(attached.id))),
+                capture_gate,
+            );
             self.recording_health = Some(source_health.clone());
-            if self.pulse_input_role == crate::sources::screen_capture::PulseInputRole::SystemAudio
-            {
-                self.start_system_audio_route_watch();
+            let system_audio_hold = self.system_audio_staging.clone().map(|staging| {
+                Arc::new(SystemAudioHold {
+                    staging,
+                    route: self.system_capture_route.clone(),
+                })
+            });
+            if system_audio_hold.is_some() {
+                self.start_system_audio_route_watch(ctx.actor_ref());
             }
-        }
+            (source_health, system_audio_hold)
+        };
         let token = Arc::new(());
         let token_weak = Arc::downgrade(&token);
 
@@ -3104,6 +3274,8 @@ impl Message<Lock> for MicrophoneFeed {
             generation,
             #[cfg(target_os = "linux")]
             source_health,
+            #[cfg(target_os = "linux")]
+            system_audio_hold,
             audio_info,
             actor: ctx.actor_ref(),
             config,
@@ -3447,6 +3619,9 @@ impl Message<Unlock> for MicrophoneFeed {
             self.route_watch_cancel.cancel();
             self.system_reconnect = None;
             *self.system_capture_gate.lock().unwrap() = Arc::new(SystemCaptureGate::open());
+            if let Some(staging) = &self.system_audio_staging {
+                staging.lock().unwrap().clear();
+            }
         }
         replace_with_or_abort(&mut self.state, |state| {
             if let State::Locked { inner, .. } = state {

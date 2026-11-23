@@ -654,6 +654,7 @@ impl Microphone {
                     // switched-to one delivers its first frame.
                     let mut switched_from: Option<cap_timestamp::Timestamp> = None;
                     let mut logged_current_source: Option<(u32, u16, SampleFormat)> = None;
+                    let mut system_stop_flushed = false;
 
                     loop {
                         #[cfg(windows)]
@@ -670,7 +671,15 @@ impl Microphone {
                         }
                         let recv_result = tokio::select! {
                             biased;
-                            _ = cancel.cancelled() => break,
+                            _ = cancel.cancelled(), if !system_stop_flushed => {
+                                #[cfg(target_os = "linux")]
+                                if feed_lock.has_system_audio_hold() {
+                                    system_stop_flushed = true;
+                                    feed_lock.flush_confirmed_system_audio().await;
+                                    continue;
+                                }
+                                break;
+                            }
                             request = next_switch_request(&mut switch_requests) => {
                                 let Some(MicrophoneSwitchRequest { lock: next, reply }) = request else {
                                     continue;
@@ -762,6 +771,7 @@ impl Microphone {
                                 continue;
                             }
                             r = tokio::time::timeout(silence_timeout, rx.recv_async()) => r,
+                            _ = tokio::time::sleep(Duration::from_millis(50)), if system_stop_flushed => break,
                         };
                         match recv_result {
                             Ok(Ok(frame)) => {

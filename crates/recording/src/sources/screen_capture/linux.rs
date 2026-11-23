@@ -2519,21 +2519,150 @@ fn inspect_system_audio_source_output(
     (plan, monitor)
 }
 
-pub(crate) fn watch_system_audio_route(
-    cancel: CancellationToken,
-    route: Arc<std::sync::Mutex<Option<SystemAudioCaptureRoute>>>,
-    mut on_plan: impl FnMut(u32, SystemAudioRoutePlan),
-) {
+// Samples stay here until a later source read still sees a sink monitor.
+// A read that sees anything else drops every sample not yet released,
+// including audio captured on the monitor in the moment before the move.
+// Releasing that audio would write the microphone into the system track.
+pub(crate) const SYSTEM_AUDIO_STAGING_HOLD: Duration = Duration::from_secs(2);
+const SYSTEM_AUDIO_STAGING_LIMIT: usize = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SystemAudioRouteCheck {
+    OnMonitor { check_started: Instant },
+    NotOnMonitor,
+}
+
+struct StagedSystemAudio<T> {
+    captured_at: Instant,
+    value: T,
+}
+
+pub(crate) struct SystemAudioStaging<T> {
+    pending: std::collections::VecDeque<StagedSystemAudio<T>>,
+    proven_until: Option<Instant>,
+    max_hold: Duration,
+}
+
+impl<T> SystemAudioStaging<T> {
+    pub(crate) fn new(max_hold: Duration) -> Self {
+        Self {
+            pending: std::collections::VecDeque::new(),
+            proven_until: None,
+            max_hold,
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.pending.clear();
+        self.proven_until = None;
+    }
+
+    /// `at` is the instant the capture was placed on a monitor. Samples
+    /// captured at or before that instant are not released by a later check.
+    pub(crate) fn note_attached(&mut self, at: Instant) {
+        self.pending.retain(|chunk| chunk.captured_at > at);
+        self.proven_until = Some(at);
+    }
+
+    pub(crate) fn push(&mut self, captured_at: Instant, value: T) -> bool {
+        if self.proven_until.is_some_and(|until| captured_at <= until) {
+            return false;
+        }
+        self.pending
+            .push_back(StagedSystemAudio { captured_at, value });
+        let newest = captured_at;
+        while self.pending.len() > SYSTEM_AUDIO_STAGING_LIMIT
+            || self.pending.front().is_some_and(|chunk| {
+                newest.saturating_duration_since(chunk.captured_at) > self.max_hold
+            })
+        {
+            self.pending.pop_front();
+        }
+        true
+    }
+
+    pub(crate) fn observe(&mut self, check: SystemAudioRouteCheck) -> Vec<T> {
+        match check {
+            SystemAudioRouteCheck::NotOnMonitor => {
+                self.clear();
+                Vec::new()
+            }
+            SystemAudioRouteCheck::OnMonitor { check_started } => {
+                let Some(proven_until) = self.proven_until else {
+                    self.note_attached(check_started);
+                    return Vec::new();
+                };
+                if check_started < proven_until {
+                    return Vec::new();
+                }
+                let mut released = Vec::new();
+                while self
+                    .pending
+                    .front()
+                    .is_some_and(|chunk| chunk.captured_at <= check_started)
+                {
+                    released.push(self.pending.pop_front().expect("front").value);
+                }
+                self.proven_until = Some(check_started);
+                released
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+}
+
+pub(crate) const SYSTEM_AUDIO_ROUTE_POLL: Duration = Duration::from_millis(40);
+const SYSTEM_AUDIO_SUBSCRIBE_RESTART: Duration = Duration::from_millis(200);
+const SYSTEM_AUDIO_SUBSCRIBE_BACKOFF_MAX: Duration = Duration::from_secs(2);
+
+/// How long to wait after `pactl subscribe` closes, and the next backoff.
+/// A closed subscription makes `recv_timeout` return immediately, so the
+/// wait is what keeps the inspection from spinning. A live subscription is
+/// polled sooner than this floor, so held audio is confirmed before the
+/// capture loop treats the gap as a stall.
+pub(crate) fn route_watch_after_disconnect(backoff: Duration) -> (Duration, Duration) {
+    let wait = backoff.max(SYSTEM_AUDIO_SUBSCRIBE_RESTART);
+    let next = wait
+        .saturating_mul(2)
+        .min(SYSTEM_AUDIO_SUBSCRIBE_BACKOFF_MAX);
+    (wait, next)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SystemAudioWatch {
+    Checked {
+        plan: SystemAudioRoutePlan,
+        check_started: Instant,
+    },
+    Reattached {
+        at: Instant,
+    },
+}
+
+fn wait_for_route_poll(cancel: &CancellationToken, wait: Duration) {
+    let deadline = Instant::now() + wait;
+    while !cancel.is_cancelled() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(50)));
+    }
+}
+
+fn spawn_route_subscribe() -> (std::sync::mpsc::Receiver<()>, Option<std::process::Child>) {
     let (wake_tx, wake_rx) = std::sync::mpsc::channel();
-    let mut subscribe = Command::new("pactl")
+    let mut child = Command::new("pactl")
         .arg("subscribe")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok();
-    if let Some(child) = subscribe.as_mut()
-        && let Some(stdout) = child.stdout.take()
-    {
+    if let Some(stdout) = child.as_mut().and_then(|child| child.stdout.take()) {
         let _ = std::thread::Builder::new()
             .name("system-audio-subscribe".into())
             .spawn(move || {
@@ -2553,21 +2682,51 @@ pub(crate) fn watch_system_audio_route(
                 }
             });
     }
+    (wake_rx, child)
+}
 
+fn stop_route_subscribe(child: &mut Option<std::process::Child>) {
+    if let Some(mut child) = child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+pub(crate) fn watch_system_audio_route(
+    cancel: CancellationToken,
+    route: Arc<std::sync::Mutex<Option<SystemAudioCaptureRoute>>>,
+    mut on_watch: impl FnMut(u32, SystemAudioWatch),
+) {
+    let (mut wake_rx, mut subscribe) = spawn_route_subscribe();
     let mut announced = None;
+    let mut backoff = SYSTEM_AUDIO_SUBSCRIBE_RESTART;
     while !cancel.is_cancelled() {
         let current = route.lock().unwrap().as_ref().copied();
         if let Some(current) = current
             && !cancel.is_cancelled()
         {
+            let check_started = Instant::now();
             let (plan, monitor) = inspect_system_audio_source_output(current.source_output);
             let resolved = match plan {
                 SystemAudioRoutePlan::Reattach => {
-                    on_plan(current.stream_id, SystemAudioRoutePlan::Reattach);
+                    on_watch(
+                        current.stream_id,
+                        SystemAudioWatch::Checked {
+                            plan: SystemAudioRoutePlan::Reattach,
+                            check_started,
+                        },
+                    );
                     match monitor {
                         Some(monitor) => {
                             match move_pactl_source_output(current.source_output, &monitor) {
-                                Ok(()) => SystemAudioRoutePlan::Keep,
+                                Ok(()) => {
+                                    let at = Instant::now();
+                                    on_watch(
+                                        current.stream_id,
+                                        SystemAudioWatch::Reattached { at },
+                                    );
+                                    SystemAudioRoutePlan::Keep
+                                }
                                 Err(error) => {
                                     if announced != Some(SystemAudioRoutePlan::Lost) {
                                         tracing::warn!(
@@ -2575,14 +2734,39 @@ pub(crate) fn watch_system_audio_route(
                                             "Could not move system audio back onto an output monitor"
                                         );
                                     }
+                                    on_watch(
+                                        current.stream_id,
+                                        SystemAudioWatch::Checked {
+                                            plan: SystemAudioRoutePlan::Lost,
+                                            check_started,
+                                        },
+                                    );
                                     SystemAudioRoutePlan::Lost
                                 }
                             }
                         }
-                        None => SystemAudioRoutePlan::Lost,
+                        None => {
+                            on_watch(
+                                current.stream_id,
+                                SystemAudioWatch::Checked {
+                                    plan: SystemAudioRoutePlan::Lost,
+                                    check_started,
+                                },
+                            );
+                            SystemAudioRoutePlan::Lost
+                        }
                     }
                 }
-                other => other,
+                other => {
+                    on_watch(
+                        current.stream_id,
+                        SystemAudioWatch::Checked {
+                            plan: other,
+                            check_started,
+                        },
+                    );
+                    other
+                }
             };
             if announced != Some(resolved) {
                 match resolved {
@@ -2602,17 +2786,35 @@ pub(crate) fn watch_system_audio_route(
                 }
                 announced = Some(resolved);
             }
-            if !cancel.is_cancelled() {
-                on_plan(current.stream_id, resolved);
+        }
+        if cancel.is_cancelled() {
+            break;
+        }
+        match wake_rx.recv_timeout(SYSTEM_AUDIO_ROUTE_POLL) {
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                backoff = SYSTEM_AUDIO_SUBSCRIBE_RESTART;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let (wait, next) = route_watch_after_disconnect(backoff);
+                backoff = next;
+                stop_route_subscribe(&mut subscribe);
+                wait_for_route_poll(&cancel, wait);
+                if cancel.is_cancelled() {
+                    break;
+                }
+                (wake_rx, subscribe) = spawn_route_subscribe();
             }
         }
-        let _ = wake_rx.recv_timeout(Duration::from_millis(200));
     }
 
-    if let Some(mut child) = subscribe {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    stop_route_subscribe(&mut subscribe);
+}
+
+pub(crate) fn system_audio_output_is_monitor(source_output: u32) -> bool {
+    matches!(
+        inspect_system_audio_source_output(source_output).0,
+        SystemAudioRoutePlan::Keep
+    )
 }
 
 fn pactl_default_sink() -> Option<String> {
@@ -3549,10 +3751,11 @@ fn x11_source_pixel(
 #[cfg(test)]
 mod system_audio_tests {
     use super::{
-        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, SystemAudioRoutePlan,
-        newly_created_source_output, pactl_monitor_preference, pactl_source_index,
-        plan_system_audio_route, preferred_system_audio_device, previous_source_destination,
-        process_source_output_ids, pulse_input_route_destination, retry_system_audio_connection,
+        OwnedSystemAudioFeed, PactlSourceOutput, PulseInputRole, SystemAudioRouteCheck,
+        SystemAudioRoutePlan, SystemAudioStaging, newly_created_source_output,
+        pactl_monitor_preference, pactl_source_index, plan_system_audio_route,
+        preferred_system_audio_device, previous_source_destination, process_source_output_ids,
+        pulse_input_route_destination, retry_system_audio_connection, route_watch_after_disconnect,
         source_output_needs_move, source_output_route_matches, started_input_source_output,
         uses_default_pulse_input, wait_for_audio_after_route, wait_for_started_source_output,
     };
@@ -3664,6 +3867,99 @@ mod system_audio_tests {
                 Some("Output Monitor")
             ),
             SystemAudioRoutePlan::Lost
+        );
+    }
+
+    #[test]
+    fn system_audio_chunks_before_a_microphone_reroute_are_never_forwarded() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(2));
+        staging.note_attached(started);
+        assert!(staging.push(started + Duration::from_millis(10), "monitor"));
+        assert!(staging.push(started + Duration::from_millis(20), "microphone"));
+
+        let released = staging.observe(SystemAudioRouteCheck::NotOnMonitor);
+        assert!(released.is_empty());
+        assert_eq!(staging.pending_len(), 0);
+
+        let reattached = started + Duration::from_millis(30);
+        staging.note_attached(reattached);
+        assert!(!staging.push(started + Duration::from_millis(20), "late microphone"));
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(80),
+        });
+        assert!(
+            released.is_empty(),
+            "microphone audio was forwarded: {released:?}"
+        );
+    }
+
+    #[test]
+    fn system_audio_confirmed_monitor_releases_only_chunks_from_before_the_check() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(2));
+        staging.note_attached(started);
+        assert!(staging.push(started + Duration::from_millis(10), "before"));
+        assert!(staging.push(started + Duration::from_millis(50), "during"));
+
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(30),
+        });
+        assert_eq!(released, vec!["before"]);
+
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(80),
+        });
+        assert_eq!(released, vec!["during"]);
+    }
+
+    #[test]
+    fn system_audio_staging_drops_audio_held_longer_than_the_bound() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(1));
+        staging.note_attached(started);
+        assert!(staging.push(started + Duration::from_millis(10), "old"));
+        assert!(staging.push(started + Duration::from_secs(2), "new"));
+        assert_eq!(staging.pending_len(), 1);
+
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_secs(3),
+        });
+        assert_eq!(released, vec!["new"]);
+    }
+
+    #[test]
+    fn system_audio_first_monitor_read_does_not_release_unproven_chunks() {
+        let started = Instant::now();
+        let mut staging = SystemAudioStaging::new(Duration::from_secs(2));
+        assert!(staging.push(started + Duration::from_millis(10), "unproven"));
+        let released = staging.observe(SystemAudioRouteCheck::OnMonitor {
+            check_started: started + Duration::from_millis(20),
+        });
+        assert!(released.is_empty());
+        assert_eq!(staging.pending_len(), 0);
+    }
+
+    #[test]
+    fn closed_system_audio_subscription_waits_instead_of_spinning() {
+        let mut backoff = Duration::from_millis(200);
+        let mut previous = Duration::ZERO;
+        for _ in 0..6 {
+            let (wait, next) = route_watch_after_disconnect(backoff);
+            assert!(wait >= Duration::from_millis(200));
+            assert!(wait >= previous);
+            assert!(wait > Duration::ZERO);
+            previous = wait;
+            backoff = next;
+        }
+        assert_eq!(backoff, Duration::from_secs(2));
+        assert_eq!(
+            route_watch_after_disconnect(backoff).1,
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            route_watch_after_disconnect(Duration::ZERO).0,
+            Duration::from_millis(200)
         );
     }
 

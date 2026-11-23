@@ -157,7 +157,7 @@ impl Drop for Tone {
     }
 }
 
-fn sine_wav(path: &Path) {
+fn sine_wav(path: &Path, frequency: u32) {
     let status = Command::new("ffmpeg")
         .args([
             "-y",
@@ -167,7 +167,7 @@ fn sine_wav(path: &Path) {
             "-f",
             "lavfi",
             "-i",
-            "sine=frequency=440:sample_rate=48000:duration=0.4",
+            &format!("sine=frequency={frequency}:sample_rate=48000:duration=0.4"),
             "-c:a",
             "pcm_s16le",
             &path.to_string_lossy(),
@@ -175,6 +175,68 @@ fn sine_wav(path: &Path) {
         .status()
         .expect("ffmpeg");
     assert!(status.success(), "ffmpeg could not write the test tone");
+}
+
+fn decode_f32_mono(path: &Path) -> Vec<f32> {
+    let output = Command::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-i",
+            &path.to_string_lossy(),
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-f",
+            "f32le",
+            "-",
+        ])
+        .output()
+        .expect("ffmpeg");
+    assert!(
+        output.status.success(),
+        "{} did not decode: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+        .stdout
+        .chunks_exact(4)
+        .map(|sample| f32::from_le_bytes(sample.try_into().expect("f32")))
+        .collect()
+}
+
+fn tone_power(pcm: &[f32], frequency: f32) -> f32 {
+    let sample_rate = 48_000.0;
+    let omega = std::f32::consts::TAU * frequency / sample_rate;
+    let coeff = 2.0 * omega.cos();
+    let mut first = 0.0;
+    let mut second = 0.0;
+    for &sample in pcm {
+        let next = sample + coeff * first - second;
+        second = first;
+        first = next;
+    }
+    first * first + second * second - coeff * first * second
+}
+
+fn assert_tail_is_frequency(path: &Path, frequency: f32) {
+    let pcm = decode_f32_mono(path);
+    let tail_samples = (48_000.0 * 0.4) as usize;
+    assert!(
+        pcm.len() > tail_samples + (48_000.0 * 0.3) as usize,
+        "system audio is too short to contain audio from after the reload ({})",
+        pcm.len()
+    );
+    let tail = &pcm[pcm.len() - tail_samples..];
+    let wanted = tone_power(tail, frequency);
+    let other = tone_power(tail, if frequency == 880.0 { 440.0 } else { 880.0 });
+    assert!(
+        wanted > other * 4.0 && wanted > 1.0,
+        "the end of {} is not {frequency} Hz (wanted={wanted}, other={other})",
+        path.display()
+    );
 }
 
 fn playable_seconds(path: &Path) -> f64 {
@@ -240,7 +302,7 @@ async fn unloading_a_null_monitor_ends_audio_only_and_keeps_the_mic() {
     let sink = NullSink::start("cap_loss_permanent");
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("tone.wav");
-    sine_wav(&wav);
+    sine_wav(&wav, 440);
     let mut tone = Tone::start(&sink.name, wav);
     tokio::time::sleep(Duration::from_millis(300)).await;
     let mic = SyntheticMicrophone::spawn("test-mic", 48_000, 1);
@@ -293,11 +355,14 @@ async fn unloading_a_null_monitor_ends_audio_only_and_keeps_the_mic() {
 async fn reloading_a_null_monitor_keeps_audio_only_running() {
     let _guard = pulse_lock().lock().await;
     pactl(&["info"]);
+    let _only_this_sink = NoPulseMonitor::enforce();
     let mut sink = NullSink::start("cap_loss_transient");
     let temp = tempfile::tempdir().unwrap();
-    let wav = temp.path().join("tone.wav");
-    sine_wav(&wav);
-    let mut tone = Tone::start(&sink.name, wav);
+    let before = temp.path().join("tone-440.wav");
+    let after = temp.path().join("tone-880.wav");
+    sine_wav(&before, 440);
+    sine_wav(&after, 880);
+    let mut tone = Tone::start(&sink.name, before);
     tokio::time::sleep(Duration::from_millis(300)).await;
     let project = temp.path().join("project");
     let handle = Actor::builder(project.clone(), ScreenCaptureTarget::AudioOnly)
@@ -305,8 +370,11 @@ async fn reloading_a_null_monitor_keeps_audio_only_running() {
         .build()
         .await
         .expect("audio-only recording did not start against the null sink");
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    tone.stop();
     sink.reload();
+    let mut tone = Tone::start(&sink.name, after);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     let still_running = tokio::time::timeout(Duration::from_secs(4), handle.done_fut()).await;
     assert!(
         still_running.is_err(),
@@ -317,6 +385,7 @@ async fn reloading_a_null_monitor_keeps_audio_only_running() {
         .await
         .expect("stop hung after the monitor was reloaded");
     assert_saved_audio(&project, &stop_result, false);
+    assert_tail_is_frequency(&segment_file(&project, "system_audio.m4a"), 880.0);
 }
 
 fn assert_saved_audio(
