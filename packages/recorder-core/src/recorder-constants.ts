@@ -91,6 +91,16 @@ export const MP4_MIME_TYPES = {
 	],
 } as const;
 
+// High profile at level 4.2; recorder-encoding raises the level when the
+// capture is larger, since some encoders refuse a level below the frame size.
+export const STREAMING_MP4_MIME_TYPES = {
+	withAudio: [
+		'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+		'video/mp4;codecs="avc1.64002A,opus"',
+	],
+	videoOnly: ['video/mp4;codecs="avc1.64002A"'],
+} as const;
+
 export const WEBM_MIME_TYPES = {
 	withAudio: ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus"],
 	videoOnly: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"],

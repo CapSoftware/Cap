@@ -1,6 +1,7 @@
 import {
 	describeRecordingCodecs,
 	openShareUrlInNewTab,
+	selectAudioRecordingPipelineFromSupport,
 	selectRecordingPipelineFromSupport,
 	shouldPreferStreamingUpload,
 } from "@cap/recorder-core/recorder-utils";
@@ -98,6 +99,121 @@ describe("selectRecordingPipelineFromSupport", () => {
 
 	it("returns null when no supported recorder mime type is available", () => {
 		expect(selectRecordingPipelineFromSupport(true, () => false)).toBeNull();
+	});
+
+	it("streams fragmented H.264 MP4 when asked for MP4 and the browser can", () => {
+		const supportedTypes = new Set([
+			"video/webm;codecs=vp9,opus",
+			'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+		]);
+
+		expect(
+			selectRecordingPipelineFromSupport(
+				true,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: true, preferMp4: true },
+			),
+		).toEqual({
+			mode: "streaming-mp4",
+			mimeType: 'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+			fileExtension: "mp4",
+			supportsProgressiveUpload: true,
+		});
+	});
+
+	it("picks the video-only MP4 type first for a track without audio", () => {
+		const supportedTypes = new Set([
+			'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+			'video/mp4;codecs="avc1.64002A"',
+		]);
+
+		expect(
+			selectRecordingPipelineFromSupport(
+				false,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: true, preferMp4: true },
+			)?.mimeType,
+		).toBe('video/mp4;codecs="avc1.64002A"');
+	});
+
+	it("falls back to streaming WebM when the browser can't stream MP4", () => {
+		const supportedTypes = new Set([
+			"video/webm;codecs=vp8,opus",
+			'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+		]);
+
+		expect(
+			selectRecordingPipelineFromSupport(
+				true,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: true, preferMp4: true },
+			),
+		).toEqual({
+			mode: "streaming-webm",
+			mimeType: "video/webm;codecs=vp8,opus",
+			fileExtension: "webm",
+			supportsProgressiveUpload: true,
+		});
+	});
+
+	it("keeps buffered capture where streaming isn't preferred, even when MP4 is asked for", () => {
+		const supportedTypes = new Set([
+			'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+			'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+		]);
+
+		expect(
+			selectRecordingPipelineFromSupport(
+				true,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: false, preferMp4: true },
+			),
+		).toEqual({
+			mode: "buffered-raw",
+			mimeType: 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+			fileExtension: "mp4",
+			supportsProgressiveUpload: false,
+		});
+	});
+
+	it("never picks streaming MP4 unless asked, so Instant recordings keep WebM", () => {
+		const supportedTypes = new Set([
+			"video/webm;codecs=vp9,opus",
+			'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+		]);
+
+		expect(
+			selectRecordingPipelineFromSupport(
+				true,
+				(candidate) => supportedTypes.has(candidate),
+				{ preferStreamingUpload: true },
+			)?.mode,
+		).toBe("streaming-webm");
+	});
+});
+
+describe("selectAudioRecordingPipelineFromSupport", () => {
+	it("prefers Opus in WebM", () => {
+		expect(selectAudioRecordingPipelineFromSupport(() => true)).toEqual({
+			mimeType: "audio/webm;codecs=opus",
+			fileExtension: "webm",
+		});
+	});
+
+	it("uses AAC in MP4 where WebM audio can't be recorded", () => {
+		const supportedTypes = new Set(["audio/mp4", "audio/mp4;codecs=mp4a.40.2"]);
+		expect(
+			selectAudioRecordingPipelineFromSupport((candidate) =>
+				supportedTypes.has(candidate),
+			),
+		).toEqual({
+			mimeType: "audio/mp4;codecs=mp4a.40.2",
+			fileExtension: "mp4",
+		});
+	});
+
+	it("returns null when no audio type is supported", () => {
+		expect(selectAudioRecordingPipelineFromSupport(() => false)).toBeNull();
 	});
 });
 

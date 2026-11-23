@@ -25,6 +25,7 @@ const isWhitelisted = (el: Element, dialogContent: HTMLElement | null) => {
 	if (el.closest("[data-radix-select-viewport]")) return true;
 	if (el.closest("[data-radix-select-item]")) return true;
 	if (el.closest("[data-camera-preview]")) return true;
+	if (el.closest("[data-recorder-menu]")) return true;
 	return false;
 };
 

@@ -3,6 +3,7 @@ import { handle } from "hono/vercel";
 
 import { corsMiddleware } from "../../utils";
 
+import * as abandon from "./abandon";
 import * as commentMedia from "./comment-media";
 import * as multipart from "./multipart";
 import * as recordingComplete from "./recording-complete";
@@ -11,6 +12,7 @@ import * as signed from "./signed";
 const app = new Hono()
 	.basePath("/api/upload")
 	.use(corsMiddleware)
+	.route("/abandon", abandon.app)
 	.route("/comment-media", commentMedia.app)
 	.route("/multipart", multipart.app)
 	.route("/signed", signed.app)
