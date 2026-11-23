@@ -1357,15 +1357,27 @@ describe("placements", () => {
 		return { j, state };
 	}
 
-	const answered = (poll: Promise<Response>) =>
-		Promise.race([
-			poll.then(() => "answered"),
-			Bun.sleep(20).then(() => "waiting"),
-		]);
+	// A /work poll that finds nothing it may take is parked with a 20 s
+	// timeout, armed right after the coordinator has looked through the queue.
+	async function parkedPoll(
+		h: ReturnType<typeof harness>,
+		body: Record<string, unknown>,
+	) {
+		const parkedPolls = () =>
+			h.timerDelays.filter((delay) => delay === 20_000).length;
+		const before = parkedPolls();
+		let settled = false;
+		const poll = call(h, "/work", body);
+		void poll.then(() => {
+			settled = true;
+		});
+		await h.when(() => parkedPolls() > before);
+		return { answered: () => settled };
+	}
 
 	test("a task with a prefix only goes to a worker that takes prefixes", async () => {
 		const h = harness();
-		void call(h, "/work", {
+		await parkedPoll(h, {
 			worker: "gpu-new-audio",
 			slots: 1,
 			cpus: 8,
@@ -1373,14 +1385,14 @@ describe("placements", () => {
 			features: ["prefix"],
 		});
 		const { state } = prefixedTask(h);
-		const old = call(h, "/work", {
+		const old = await parkedPoll(h, {
 			worker: "gpu-old",
 			slots: 1,
 			cpus: 8,
 			kinds: ["video"],
 		});
-		expect(await answered(old)).toBe("waiting");
 		expect(state.state).toBe("queued");
+		expect(state.worker).toBeUndefined();
 		const work = (await (
 			await call(h, "/work", {
 				worker: "gpu-new",
@@ -1392,6 +1404,7 @@ describe("placements", () => {
 		).json()) as { task: protocol.VideoTask };
 		expect(work.task.taskId).toBe(state.task.taskId);
 		expect(state.worker).toBe("gpu-new");
+		expect(old.answered()).toBe(false);
 	});
 
 	test("an older worker is not sent a hedge of a task with a prefix", async () => {
@@ -1418,13 +1431,12 @@ describe("placements", () => {
 			at: 0,
 			advancedAt: Number.NEGATIVE_INFINITY,
 		};
-		const old = call(h, "/work", {
+		const old = await parkedPoll(h, {
 			worker: "gpu-old",
 			slots: 1,
 			cpus: 8,
 			kinds: ["video"],
 		});
-		expect(await answered(old)).toBe("waiting");
 		expect(original.duplicated).toBeFalsy();
 		const work = (await (
 			await call(h, "/work", {
@@ -1439,6 +1451,7 @@ describe("placements", () => {
 			original.task.kind === "video" ? original.task.chunk : -1,
 		);
 		expect(original.duplicated).toBe(true);
+		expect(old.answered()).toBe(false);
 	});
 
 	async function runWatchdogs(h: ReturnType<typeof harness>) {
