@@ -227,6 +227,7 @@ struct MockState {
     deleted_on_web: Vec<String>,
     delete_on_completion: Vec<String>,
     replaced: Vec<String>,
+    identities: BTreeMap<String, String>,
     problems: Vec<String>,
 }
 
@@ -944,9 +945,9 @@ impl Server {
                 if upload.replacement && !state.replaced.contains(&upload.video_id) {
                     state.replaced.push(upload.video_id.clone());
                 }
-                state
-                    .objects
-                    .insert(format!("{}/result.mp4", upload.video_id), object);
+                let key = format!("{}/result.mp4", upload.video_id);
+                state.identities.insert(key.clone(), identity.clone());
+                state.objects.insert(key, object);
                 state.uploads.get_mut(&upload_id).unwrap().completed = true;
                 reply(200, json!({ "success": true, "objectIdentity": identity }))
             }
@@ -1066,16 +1067,17 @@ impl MockState {
         let UploadArtifact::Mp4 {
             file_size,
             duration,
-            ..
+            object_identity,
         } = &claimed.artifact
         else {
             return Err("verification is not an MP4 artifact".into());
         };
+        let key = format!("{video_id}/result.mp4");
         let stored = self
             .objects
-            .get(&format!("{video_id}/result.mp4"))
+            .get(&key)
             .ok_or("verification without a stored recording")?;
-        if stored.len() as u64 != *file_size {
+        if stored.len() as u64 != *file_size || self.identities.get(&key) != Some(object_identity) {
             return Err("verification does not match the stored recording".into());
         }
         Ok(json!({
