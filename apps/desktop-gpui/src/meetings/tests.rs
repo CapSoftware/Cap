@@ -1706,6 +1706,98 @@ fn an_automatic_start_that_fails_is_reported_but_an_accept_is_not(cx: &mut gpui:
     assert!(meetings.read_with(cx, |m, _| m.recording.is_none()));
 }
 
+/// "Leave this voice out of the notes" and "That's not me" through
+/// Meetings on a finished meeting: each choice is saved in the meeting's
+/// transcript, the transcript keeps every line, the next notes and Ask
+/// requests leave the voice out, and undo puts things back.
+#[gpui::test]
+fn speaker_voice_choices_reach_the_notes_and_undo(cx: &mut gpui::TestAppContext) {
+    use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = cap_meetings::settings::MeetingSettings::default();
+    settings.enabled = true;
+    let meetings = cx
+        .update(|cx| super::Meetings::install_for_tests(settings, dir.path().join("calendar"), cx));
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 5).unwrap();
+    meta.meeting = Some(MeetingDetails {
+        started_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    });
+    library.save(&meta).unwrap();
+    let mut names = SpeakerNames::new(None);
+    let voice = |id: u32, first_ms: u64, is_user: bool| SpeakerInfo {
+        id: SpeakerId(id),
+        track: Track::Mic,
+        first_ms,
+        speech_ms: 1_000,
+        is_user,
+    };
+    names.observe(&[voice(1, 0, true), voice(2, 4_000, false)]);
+    append_jsonl(
+        &library.transcript_path(&meta.id).unwrap(),
+        &[
+            LogLine::SpeakerNames { names },
+            LogLine::Upsert {
+                utterance: Utterance {
+                    speaker_id: Some(1),
+                    ..utterance("m1", Source::Mic, 0, "Let's go over the budget.")
+                },
+            },
+            LogLine::Upsert {
+                utterance: Utterance {
+                    speaker_id: Some(2),
+                    ..utterance("m2", Source::Mic, 4_000, "Dinner is ready, come and eat!")
+                },
+            },
+        ],
+    )
+    .unwrap();
+    let doc = meta.id.clone();
+    meetings.update(cx, |m, _| m.library = Some(library));
+    let saved = |cx: &mut gpui::TestAppContext| {
+        assert!(crate::meetings_ui::documents::flush_writer(
+            std::time::Duration::from_secs(5)
+        ));
+        meetings.update(cx, |m, _| m.transcript(&doc).unwrap().into_owned())
+    };
+    let prompt = |t: &Transcript| t.labelled_for_prompt(usize::MAX, None).text;
+
+    let undo = meetings
+        .update(cx, |m, cx| {
+            m.leave_out_speaker(&doc, super::SpeakerRef::Id(2), true, cx)
+        })
+        .expect("the voice was in the notes");
+    let t = saved(cx);
+    assert_eq!(t.len(), 2, "every line stays in the transcript");
+    assert!(
+        prompt(&t).contains("budget") && !prompt(&t).contains("Dinner"),
+        "{}",
+        prompt(&t)
+    );
+    let ask = generate::ask_body(&doc, "Budget", &t, "", "What was said?", &[], None, &[]).unwrap();
+    assert!(!ask["transcript"].as_str().unwrap().contains("Dinner"));
+    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, undo, cx));
+    assert!(prompt(&saved(cx)).contains("Dinner"));
+
+    let undo = meetings
+        .update(cx, |m, cx| m.set_not_me(&doc, 1, true, cx))
+        .expect("the voice was the user");
+    let t = saved(cx);
+    let names = t.names().unwrap();
+    assert_eq!(names.user(), None);
+    assert!(names.is_not_user(SpeakerId(1)));
+    assert!(prompt(&t).starts_with("Person "), "{}", prompt(&t));
+    assert!(
+        meetings
+            .update(cx, |m, cx| m.set_not_me(&doc, 1, true, cx))
+            .is_none(),
+        "nothing to do twice"
+    );
+    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, undo, cx));
+    assert_eq!(saved(cx).names().unwrap().user(), Some(SpeakerId(1)));
+}
+
 /// `write` runs on another thread while this one holds the meta lock between
 /// its own load and save, as the notes window's writer does when a rename
 /// lands. A writer that takes the lock waits, then reads the rename; one that

@@ -4005,6 +4005,9 @@ export_failed = "Couldn't export the file"
 moved_to_trash = { one = "Moved to the trash", other = "{count} notes moved to the trash" }
 deleted_lines = { one = "Deleted 1 line", other = "Deleted {count} lines" }
 undo = "Undo"
+left_out = { text = "Left out of the notes", context = "Toast after leaving a voice out of the notes." }
+back_in = { text = "Back in the notes", context = "Toast after putting a voice back in the notes." }
+now_you = { text = "Marked as you", context = "Toast after saying a voice is the user after all." }
 
 [documents.header]
 ends = "Ends"
@@ -4117,6 +4120,11 @@ always_spell = { text = "Always spell “{word}” as", context = "Title of the 
 spell_note = "Fixed here and from now on"
 spell_save = "Save"
 spelled = { text = "Cap spells it “{word}” from now on", context = "Toast after Always spell as. {word} is the new spelling." }
+not_me = { text = "That's not me", context = "In the speaker popover of a meeting transcript, on the voice shown as the user: this voice is someone else." }
+is_me = { text = "That's me", context = "In the speaker popover, on a voice the user said was not them: take that back." }
+leave_out = { text = "Leave this voice out of the notes", context = "In the speaker popover: keep this voice's lines in the transcript but not in the AI summary or answers." }
+include = { text = "Put this voice back in the notes", context = "In the speaker popover, on a voice left out of the notes: include it again." }
+left_out = { text = "Left out of notes", context = "Small note beside the time of a dimmed transcript line whose voice is left out of the notes." }
 
 [documents.bar]
 record = "Record"

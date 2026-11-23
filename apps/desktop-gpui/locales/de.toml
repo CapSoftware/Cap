@@ -4003,6 +4003,9 @@ export_failed = "Die Datei konnte nicht exportiert werden"
 moved_to_trash = { one = "In den Papierkorb gelegt", other = "{count} Notizen in den Papierkorb gelegt" }
 deleted_lines = { one = "1 Zeile gelöscht", other = "{count} Zeilen gelöscht" }
 undo = "Widerrufen"
+left_out = "Aus den Notizen weggelassen"
+back_in = "Wieder in den Notizen"
+now_you = "Als Ihre Stimme markiert"
 
 [documents.header]
 ends = "Ende"
@@ -4115,6 +4118,11 @@ always_spell = "„{word}“ immer schreiben als"
 spell_note = "Hier und ab jetzt korrigiert"
 spell_save = "Speichern"
 spelled = "Cap schreibt es ab jetzt „{word}“"
+not_me = "Das bin ich nicht"
+is_me = "Das bin ich"
+leave_out = "Diese Stimme aus den Notizen weglassen"
+include = "Diese Stimme wieder in die Notizen aufnehmen"
+left_out = "Nicht in den Notizen"
 
 [documents.bar]
 record = "Aufnehmen"

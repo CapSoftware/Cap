@@ -3451,6 +3451,97 @@ impl Meetings {
         }
     }
 
+    /// The meeting's names for its voices as saved, or fresh ones.
+    fn names_for_edit(&mut self, doc_id: &str) -> cap_diarize::SpeakerNames {
+        let attendee = self
+            .library()
+            .and_then(|l| l.load(doc_id).ok())
+            .and_then(|meta| speakers::other_attendee(&meta));
+        self.transcript(doc_id)
+            .and_then(|t| t.names().cloned())
+            .unwrap_or_else(|| cap_diarize::SpeakerNames::new(attendee))
+    }
+
+    /// "Leave this voice out of the notes" (or back in): the lines stay in
+    /// the transcript; the next summary and Ask leave them out. Returns the
+    /// line that undoes it.
+    pub fn leave_out_speaker(
+        &mut self,
+        doc_id: &str,
+        speaker: SpeakerRef,
+        out: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<LogLine> {
+        use cap_meetings::transcript::Voice;
+        let (line, undo) = match speaker {
+            SpeakerRef::Id(id) => {
+                let before = self.names_for_edit(doc_id);
+                let mut names = before.clone();
+                names.set_left_out(cap_diarize::SpeakerId(id), out);
+                if names == before {
+                    return None;
+                }
+                (
+                    LogLine::SpeakerNames { names },
+                    LogLine::SpeakerNames { names: before },
+                )
+            }
+            SpeakerRef::Named(name) => (
+                LogLine::LeaveOut {
+                    voice: Voice::Named(name.clone()),
+                    out,
+                },
+                LogLine::LeaveOut {
+                    voice: Voice::Named(name),
+                    out: !out,
+                },
+            ),
+            SpeakerRef::Source(source) => (
+                LogLine::LeaveOut {
+                    voice: Voice::Source(source),
+                    out,
+                },
+                LogLine::LeaveOut {
+                    voice: Voice::Source(source),
+                    out: !out,
+                },
+            ),
+        };
+        self.edit_transcript(doc_id, line, cx);
+        Some(undo)
+    }
+
+    /// "That's not me" on the voice shown as the user: it becomes someone
+    /// else (the next "Person n"), here only. The saved voice profile is
+    /// never changed, and this meeting never teaches it this voice.
+    /// `me == true` is "That's me", which takes it back. Returns the line
+    /// that undoes it.
+    pub fn set_not_me(
+        &mut self,
+        doc_id: &str,
+        id: u32,
+        not_me: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<LogLine> {
+        let before = self.names_for_edit(doc_id);
+        let mut names = before.clone();
+        if not_me {
+            names.not_user(cap_diarize::SpeakerId(id));
+        } else {
+            names.claim_user(cap_diarize::SpeakerId(id));
+        }
+        if names == before {
+            return None;
+        }
+        self.edit_transcript(doc_id, LogLine::SpeakerNames { names }, cx);
+        Some(LogLine::SpeakerNames { names: before })
+    }
+
+    /// Puts back a line `leave_out_speaker` or `set_not_me` returned.
+    pub fn undo_speaker_choice(&mut self, doc_id: &str, undo: LogLine, cx: &mut Context<Self>) {
+        self.edit_transcript(doc_id, undo, cx);
+    }
+
     /// Put a rename back: the transcript's names as they were, and the
     /// summary's name back to the label it had.
     pub fn undo_rename(&mut self, doc_id: &str, undo: RenameUndo, cx: &mut Context<Self>) {
@@ -3548,8 +3639,18 @@ impl Meetings {
         cx: &mut Context<Self>,
     ) {
         let voices::FinalVoices { assign, mut pass } = final_voices;
+        // A voice the person said was not them is never learnt as theirs.
+        let disowned = pass.user.is_some_and(|user| {
+            self.live_transcript(doc_id)
+                .and_then(|(t, _)| t.names().map(|n| n.disowns(user, &pass.merged)))
+                .unwrap_or(false)
+        });
+        if disowned {
+            tracing::info!("not learning the voice: the person said it was not them");
+        }
         if let Some(enrolment) = pass.enrolment.take()
             && self.settings.transcription.learn_voice
+            && !disowned
         {
             cx.background_executor()
                 .spawn(async move {

@@ -4003,6 +4003,9 @@ export_failed = "Impossible d'exporter le fichier"
 moved_to_trash = { one = "Mise à la corbeille", other = "{count} notes mises à la corbeille" }
 deleted_lines = { one = "{count} ligne supprimée", other = "{count} lignes supprimées" }
 undo = "Annuler"
+left_out = "Exclu des notes"
+back_in = "De retour dans les notes"
+now_you = "Marqué comme vous"
 
 [documents.header]
 ends = "Fin"
@@ -4115,6 +4118,11 @@ always_spell = "Toujours écrire « {word} » ainsi"
 spell_note = "Corrigé ici et désormais"
 spell_save = "Enregistrer"
 spelled = "Cap l'écrira désormais « {word} »"
+not_me = "Ce n'est pas moi"
+is_me = "C'est moi"
+leave_out = "Exclure cette voix des notes"
+include = "Remettre cette voix dans les notes"
+left_out = "Exclu des notes"
 
 [documents.bar]
 record = "Enregistrer"

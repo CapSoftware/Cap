@@ -61,7 +61,9 @@ pub fn queue_after_saves(job: impl FnOnce() + Send + 'static) {
 }
 
 #[cfg(test)]
-pub(crate) use writer::{hold as hold_writer, release as release_writer};
+pub(crate) use writer::{
+    flush_blocking as flush_writer, hold as hold_writer, release as release_writer,
+};
 
 actions!(
     cap_documents,

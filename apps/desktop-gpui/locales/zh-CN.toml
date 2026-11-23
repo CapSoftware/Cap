@@ -4003,6 +4003,9 @@ export_failed = "无法导出文件"
 moved_to_trash = { other = "已将 {count} 条笔记移到废纸篓" }
 deleted_lines = { other = "已删除 {count} 行" }
 undo = "撤销"
+left_out = "已从笔记中排除"
+back_in = "已放回笔记"
+now_you = "已标记为你"
 
 [documents.header]
 ends = "结束"
@@ -4115,6 +4118,11 @@ always_spell = "始终把“{word}”写成"
 spell_note = "此处及今后都会更正"
 spell_save = "保存"
 spelled = "Cap 今后会写成“{word}”"
+not_me = "这不是我"
+is_me = "这是我"
+leave_out = "笔记中不包含这个声音"
+include = "把这个声音放回笔记"
+left_out = "不在笔记中"
 
 [documents.bar]
 record = "录制"

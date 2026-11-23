@@ -4003,6 +4003,9 @@ export_failed = "फ़ाइल एक्सपोर्ट नहीं हो
 moved_to_trash = { one = "ट्रैश में ले जाया गया", other = "{count} नोट ट्रैश में ले जाए गए" }
 deleted_lines = { one = "{count} पंक्ति हटाई गई", other = "{count} पंक्तियाँ हटाई गईं" }
 undo = "पहले जैसा करें"
+left_out = "नोट्स से बाहर रखा गया"
+back_in = "फिर से नोट्स में"
+now_you = "आपके रूप में चिह्नित"
 
 [documents.header]
 ends = "समाप्त"
@@ -4115,6 +4118,11 @@ always_spell = "“{word}” को हमेशा ऐसे लिखें"
 spell_note = "यहाँ और अब से ठीक"
 spell_save = "सहेजें"
 spelled = "Cap अब से इसे “{word}” लिखेगा"
+not_me = "यह मैं नहीं हूँ"
+is_me = "यह मैं हूँ"
+leave_out = "इस आवाज़ को नोट्स से बाहर रखें"
+include = "इस आवाज़ को फिर से नोट्स में शामिल करें"
+left_out = "नोट्स से बाहर"
 
 [documents.bar]
 record = "रिकॉर्ड करें"

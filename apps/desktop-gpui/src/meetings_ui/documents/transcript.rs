@@ -50,6 +50,12 @@ pub struct TurnRow {
     pub text: String,
     pub partial: bool,
     pub ids: Vec<String>,
+    /// The voice is shown as the user's, so "That's not me" can be offered.
+    pub you: bool,
+    /// The person said this voice was not them ("That's me" takes it back).
+    pub disowned: bool,
+    /// Left out of the notes: shown dimmed, never in a summary or Ask.
+    pub left_out: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,6 +109,19 @@ pub fn build_rows(
                 SpeakerLabel::Person(_) | SpeakerLabel::Others => true,
             };
             let color = colours.of(&turn, &who);
+            let voice = turn
+                .speaker
+                .as_deref()
+                .is_none_or(|n| n.trim().is_empty())
+                .then_some(turn.speaker_id)
+                .flatten()
+                .map(SpeakerId);
+            let names = transcript.names();
+            let you = voice.is_some_and(|id| {
+                names.and_then(|n| n.label(id)) == Some(cap_diarize::Label::User)
+            });
+            let disowned = voice.is_some_and(|id| names.is_some_and(|n| n.is_not_user(id)));
+            let left_out = transcript.turn_left_out(&turn);
             rows.push(TRow::Turn(TurnRow {
                 source: turn.source,
                 speaker: turn.speaker.clone(),
@@ -117,6 +136,9 @@ pub fn build_rows(
                     .any(|id| partial.contains(id.as_str())),
                 text: turn.text,
                 ids: turn.utterance_ids,
+                you,
+                disowned,
+                left_out,
             }));
         }
     }
@@ -471,6 +493,9 @@ struct Rename {
     at: gpui::Point<Pixels>,
     /// Only the clicked line moves to the typed name; the voice keeps its own.
     line_only: bool,
+    /// "That's not me" and "Leave this voice out of the notes", reached
+    /// with Tab from the name field.
+    choices: [FocusHandle; 2],
     _subscription: Subscription,
 }
 
@@ -1283,6 +1308,67 @@ impl TranscriptView {
                     this.changed(cx);
                 }
             }));
+        let choice = |id: &'static str, focus: &FocusHandle, text: &'static str| {
+            let ring = super::glass::focus_ring(&palette);
+            div()
+                .id(id)
+                .track_focus(focus)
+                .h(px(30.))
+                .px(px(8.))
+                .mx(px(-4.))
+                .flex()
+                .items_center()
+                .rounded(px(7.))
+                .text_size(px(13.))
+                .text_color(palette.muted)
+                .cursor_pointer()
+                .hover(move |s| s.bg(palette.hover).text_color(palette.text))
+                .focus_visible(move |s| s.shadow(ring).text_color(palette.text))
+                .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+                .child(text)
+        };
+        let me_choice = (!line_only && (turn.you || turn.disowned)).then(|| {
+            let disowned = turn.disowned;
+            choice(
+                "speaker-not-me",
+                &rename.choices[0],
+                if disowned {
+                    tr::documents::transcript::is_me()
+                } else {
+                    tr::documents::transcript::not_me()
+                },
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.choose_not_me(!disowned, cx);
+                cx.stop_propagation();
+            }))
+        });
+        let out_choice = (!line_only).then(|| {
+            let left_out = turn.left_out;
+            choice(
+                "speaker-leave-out",
+                &rename.choices[1],
+                if left_out {
+                    tr::documents::transcript::include()
+                } else {
+                    tr::documents::transcript::leave_out()
+                },
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.choose_left_out(!left_out, cx);
+                cx.stop_propagation();
+            }))
+        });
+        let choices = (me_choice.is_some() || out_choice.is_some()).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .pt(px(6.))
+                .border_t_1()
+                .border_color(palette.hairline)
+                .children(me_choice)
+                .children(out_choice)
+        });
         let apply = style::ink_pill(&palette, "speaker-apply")
             .h(px(28.))
             .px(px(12.))
@@ -1309,6 +1395,7 @@ impl TranscriptView {
                 .flex_col()
                 .gap(px(12.))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_rename(cx)))
+                .on_key_down(cx.listener(Self::rename_key))
                 .child(
                     div()
                         .h(px(34.))
@@ -1328,6 +1415,7 @@ impl TranscriptView {
                 )
                 .children(suggested_row)
                 .children(others_row)
+                .children(choices)
                 .child(
                     div()
                         .flex()
@@ -1530,9 +1618,173 @@ impl TranscriptView {
             input,
             at,
             line_only: false,
+            choices: [cx.focus_handle(), cx.focus_handle()],
             _subscription: subscription,
         });
         self.changed(cx);
+    }
+
+    /// Tab from the name field steps onto the popover's choices ("That's not
+    /// me", "Leave this voice out of the notes") and back; Shift+Tab walks
+    /// back. Enter or Space presses the focused choice.
+    fn rename_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(rename) = self.renaming.as_ref() else {
+            return;
+        };
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.platform || keystroke.modifiers.control {
+            return;
+        }
+        let focused = rename.choices.iter().position(|h| h.is_focused(window));
+        if let Some(at) = focused {
+            let turn = &rename.turn;
+            match keystroke.key.as_str() {
+                "enter" | "space" => {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    if at == 0 {
+                        let not_me = !turn.disowned;
+                        self.choose_not_me(not_me, cx);
+                    } else {
+                        let out = !turn.left_out;
+                        self.choose_left_out(out, cx);
+                    }
+                    return;
+                }
+                "escape" => {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    self.finish_rename(None, cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if keystroke.key != "tab" {
+            return;
+        }
+        let turn = &rename.turn;
+        let shown: Vec<FocusHandle> = [
+            (!rename.line_only && (turn.you || turn.disowned)).then(|| rename.choices[0].clone()),
+            (!rename.line_only).then(|| rename.choices[1].clone()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if shown.is_empty() {
+            return;
+        }
+        let field = rename.input.read(cx).focus_handle();
+        let mut ring = vec![field];
+        ring.extend(shown);
+        let at = ring.iter().position(|h| h.is_focused(window)).unwrap_or(0);
+        let next = if keystroke.modifiers.shift {
+            (at + ring.len() - 1) % ring.len()
+        } else {
+            (at + 1) % ring.len()
+        };
+        window.focus(&ring[next], cx);
+        window.prevent_default();
+        cx.stop_propagation();
+        self.changed(cx);
+    }
+
+    /// "That's not me" on the voice shown as the user (or "That's me" to take
+    /// it back): this meeting only, with an undo.
+    fn choose_not_me(&mut self, not_me: bool, cx: &mut Context<Self>) {
+        let Some(rename) = self.renaming.take() else {
+            return;
+        };
+        self.changed(cx);
+        let (Some(doc), Some(meetings), Some(id)) = (
+            self.doc_id.clone(),
+            Meetings::try_global(cx),
+            rename.turn.speaker_id,
+        ) else {
+            return;
+        };
+        let Some(undo) = meetings.update(cx, |m, cx| m.set_not_me(&doc, id, not_me, cx)) else {
+            return;
+        };
+        let name = meetings.update(cx, |m, _| {
+            m.transcript(&doc)
+                .map(|t| export::word_speaker(&t.speaker(Source::System, None, Some(id)), None))
+        });
+        let action: super::window::ToastAction = Rc::new(move |_, cx| {
+            let undo = undo.clone();
+            if let Some(meetings) = Meetings::try_global(cx) {
+                meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, undo, cx));
+            }
+        });
+        let message: SharedString = if not_me {
+            tr::documents::toast::moved_line(&name.unwrap_or_default()).into()
+        } else {
+            tr::documents::toast::now_you().into()
+        };
+        self.root
+            .update(cx, |root, cx| {
+                root.show_toast(
+                    message,
+                    Some((tr::documents::toast::undo().into(), action)),
+                    None,
+                    cx,
+                )
+            })
+            .ok();
+    }
+
+    /// "Leave this voice out of the notes" (or back in). The lines stay
+    /// here, dimmed; the next summary and Ask leave them out. When the note
+    /// already has a summary, the toast offers to write it again.
+    fn choose_left_out(&mut self, out: bool, cx: &mut Context<Self>) {
+        let Some(rename) = self.renaming.take() else {
+            return;
+        };
+        self.changed(cx);
+        let (Some(doc), Some(meetings)) = (self.doc_id.clone(), Meetings::try_global(cx)) else {
+            return;
+        };
+        let speaker = rename_target(&rename.turn);
+        let Some(undo) = meetings.update(cx, |m, cx| m.leave_out_speaker(&doc, speaker, out, cx))
+        else {
+            return;
+        };
+        let root = self.root.clone();
+        let has_summary = root
+            .upgrade()
+            .is_some_and(|root| root.read(cx).pane.read(cx).has_enhanced());
+        let message = if out {
+            tr::documents::toast::left_out()
+        } else {
+            tr::documents::toast::back_in()
+        };
+        let action: (SharedString, super::window::ToastAction) = if has_summary {
+            let root = root.clone();
+            let update: super::window::ToastAction = Rc::new(move |_, cx| {
+                if let Some(root) = root.upgrade() {
+                    let pane = root.read(cx).pane.clone();
+                    pane.update(cx, |pane, cx| pane.write_notes(None, cx));
+                }
+            });
+            (tr::documents::notes::update_notes().into(), update)
+        } else {
+            let undo: super::window::ToastAction = Rc::new(move |_, cx| {
+                let undo = undo.clone();
+                if let Some(meetings) = Meetings::try_global(cx) {
+                    meetings.update(cx, |m, cx| m.undo_speaker_choice(&doc, undo, cx));
+                }
+            });
+            (tr::documents::toast::undo().into(), undo)
+        };
+        root.update(cx, |root, cx| {
+            root.show_toast(message, Some(action), None, cx)
+        })
+        .ok();
     }
 
     fn finish_rename(&mut self, name: Option<String>, cx: &mut Context<Self>) {
@@ -2043,14 +2295,27 @@ impl TranscriptView {
                                 .items_center()
                                 .gap(px(8.))
                                 .child(label)
-                                .child(stamp),
+                                .child(stamp)
+                                .when(turn.left_out, |el| {
+                                    el.child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .text_color(palette.faint)
+                                            .child(tr::documents::transcript::left_out()),
+                                    )
+                                }),
                         )
                         .child(
                             div()
                                 .text_size(px(14.))
                                 .line_height(px(22.))
-                                .text_color(palette.text)
+                                .text_color(if turn.left_out {
+                                    palette.muted
+                                } else {
+                                    palette.text
+                                })
                                 .when(turn.partial, |el| el.opacity(0.5))
+                                .when(turn.left_out && !turn.partial, |el| el.opacity(0.7))
                                 .child(text),
                         );
                 let row = match lit {

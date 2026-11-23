@@ -2317,3 +2317,53 @@ fn a_failed_start_names_the_reason_cap_can_tell() {
     );
     assert_eq!(reason(&MeetingError::NotFound), None);
 }
+
+/// A transcript row knows whether its voice is shown as the user's (so the
+/// speaker popover offers "That's not me"), was disowned ("That's me"), or
+/// is left out of the notes (dimmed, with its note).
+#[test]
+fn transcript_rows_carry_the_voice_choices() {
+    use cap_diarize::{SpeakerId, SpeakerInfo, SpeakerNames, Track};
+    let mut transcript = Transcript::new();
+    for (id, voice, start) in [("a", 1, 0), ("b", 2, 4_000)] {
+        transcript.upsert(Utterance {
+            id: id.into(),
+            source: Source::Mic,
+            speaker_id: Some(voice),
+            start_ms: start,
+            end_ms: start + 1_000,
+            text: format!("line {id}"),
+            is_final: true,
+            ..Utterance::default()
+        });
+    }
+    let mut names = SpeakerNames::new(None);
+    let voice = |id: u32, is_user: bool| SpeakerInfo {
+        id: SpeakerId(id),
+        track: Track::Mic,
+        first_ms: u64::from(id) * 4_000,
+        speech_ms: 1_000,
+        is_user,
+    };
+    names.observe(&[voice(1, true), voice(2, false)]);
+    names.set_left_out(SpeakerId(2), true);
+    transcript.set_names(names.clone());
+    let turns = |t: &Transcript| -> Vec<TurnRow> {
+        transcript_rows(t, None, None, &HashSet::new())
+            .into_iter()
+            .filter_map(|row| match row {
+                TRow::Turn(turn) => Some(turn),
+                TRow::Minute { .. } => None,
+            })
+            .collect()
+    };
+    let rows = turns(&transcript);
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].you && !rows[0].disowned && !rows[0].left_out);
+    assert!(!rows[1].you && rows[1].left_out);
+
+    names.not_user(SpeakerId(1));
+    transcript.set_names(names);
+    let rows = turns(&transcript);
+    assert!(!rows[0].you && rows[0].disowned);
+}

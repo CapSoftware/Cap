@@ -4003,6 +4003,9 @@ export_failed = "ファイルを書き出せませんでした"
 moved_to_trash = { other = "{count}件をゴミ箱に移動しました" }
 deleted_lines = { other = "{count}行を削除しました" }
 undo = "取り消す"
+left_out = "メモから除外しました"
+back_in = "メモに戻しました"
+now_you = "あなたとして設定しました"
 
 [documents.header]
 ends = "終了"
@@ -4115,6 +4118,11 @@ always_spell = "「{word}」をいつもこう書く"
 spell_note = "ここと今後の文字起こしで修正"
 spell_save = "保存"
 spelled = "今後は「{word}」と書きます"
+not_me = "これは自分ではない"
+is_me = "これは自分"
+leave_out = "この声をメモに含めない"
+include = "この声をメモに戻す"
+left_out = "メモに含めない"
 
 [documents.bar]
 record = "録音"
