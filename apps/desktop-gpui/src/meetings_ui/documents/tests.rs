@@ -2273,3 +2273,47 @@ fn the_start_menu_replaces_a_recording_meeting_only_on_the_second_pick(cx: &mut 
         vec![StartChoice::Record, StartChoice::Blank, StartChoice::Record]
     );
 }
+
+/// A failed automatic start's notification says why when Cap can tell: a
+/// full disk, a notes folder it cannot write to (or one that became a file),
+/// or no audio. The reason comes from the system's error code, which stays
+/// the same in every language; anything else says only that it failed.
+#[test]
+fn a_failed_start_names_the_reason_cap_can_tell() {
+    use crate::i18n::tr;
+    use crate::meetings::MeetingError;
+    let reason = super::start_failure_reason;
+    let library = |detail: &str| MeetingError::Library(detail.to_string());
+    #[cfg(windows)]
+    let (full, denied, not_folder) = (
+        "io error: There is not enough space on the disk. (os error 112)",
+        "io error: Access is denied. (os error 5)",
+        "io error: The directory name is invalid. (os error 267)",
+    );
+    #[cfg(not(windows))]
+    let (full, denied, not_folder) = (
+        "io error: No space left on device (os error 28)",
+        "io error: Permission denied (os error 13)",
+        "io error: Not a directory (os error 20)",
+    );
+    let disk = tr::documents::audio::not_ready_message().to_string();
+    let folder = tr::documents::bar::error_folder().to_string();
+    assert_eq!(reason(&library(full)), Some(disk));
+    assert_eq!(reason(&library(denied)), Some(folder.clone()));
+    assert_eq!(reason(&library(not_folder)), Some(folder));
+    assert_eq!(reason(&library("the library is unavailable")), None);
+    assert_eq!(reason(&library("io error: odd (os error 99999)")), None);
+    assert_eq!(
+        reason(&MeetingError::NoAudioSource(
+            "no audio source is available".into()
+        )),
+        Some(tr::documents::bar::error_audio().to_string())
+    );
+    assert_eq!(
+        reason(&MeetingError::NoAudioSource(
+            crate::meetings::STILL_STARTING.into()
+        )),
+        None
+    );
+    assert_eq!(reason(&MeetingError::NotFound), None);
+}

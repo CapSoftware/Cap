@@ -281,11 +281,16 @@ objc2-core-graphics = { version = "0.3.2", features = ["CGColor"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = { version = "0.3.2", features = [
+    "NSBundle",
+    "NSError",
     "NSNotification",
     "NSOperation",
     "NSString",
     "block2",
 ] }
+# Asks for notification permission when Cap first needs it (a failed automatic
+# start). Already in the tree through gpui_macos, so this adds nothing to the build.
+objc2-user-notifications = "0.3.2"
 block2 = "0.6"
 raw-window-handle = "0.6"
 core-foundation = "0.10"

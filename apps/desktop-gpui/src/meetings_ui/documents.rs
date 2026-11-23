@@ -29,7 +29,7 @@ mod window;
 pub use window::{TITLE, TRAFFIC_LIGHTS};
 mod writer;
 
-use gpui::{App, KeyBinding, actions};
+use gpui::{App, KeyBinding, SharedString, actions};
 
 /// The note the documents window has open, which cleanup leaves alone.
 pub fn open_doc_ids(cx: &App) -> Vec<String> {
@@ -188,4 +188,156 @@ pub fn start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
         _ => crate::i18n::tr::documents::bar::error_start(),
     };
     window::open_with_message(message, cx);
+}
+
+/// Why a start failed, in the person's words, when Cap can tell: a full
+/// disk, a notes folder Cap cannot write to (or one that became a file), or
+/// no audio to record. `None` for anything else.
+pub fn start_failure_reason(error: &crate::meetings::MeetingError) -> Option<String> {
+    use crate::i18n::tr;
+    use crate::meetings::MeetingError;
+    match error {
+        MeetingError::Library(detail) => match os_error(detail)? {
+            OsFailure::DiskFull => Some(tr::documents::audio::not_ready_message().to_string()),
+            OsFailure::Folder => Some(tr::documents::bar::error_folder().to_string()),
+        },
+        MeetingError::NoAudioSource(detail) if detail != crate::meetings::STILL_STARTING => {
+            Some(tr::documents::bar::error_audio().to_string())
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OsFailure {
+    DiskFull,
+    Folder,
+}
+
+/// The operating system's error code in an I/O error's text ("... (os
+/// error 28)"), which stays the same whatever language the system speaks.
+fn os_error(detail: &str) -> Option<OsFailure> {
+    let code: i32 = detail
+        .rsplit_once("(os error ")?
+        .1
+        .split(')')
+        .next()?
+        .trim()
+        .parse()
+        .ok()?;
+    #[cfg(windows)]
+    let (disk, folder): (&[i32], &[i32]) = (
+        // ERROR_HANDLE_DISK_FULL, ERROR_DISK_FULL, ERROR_DISK_QUOTA_EXCEEDED
+        &[39, 112, 1295],
+        // ACCESS_DENIED, PATH_NOT_FOUND, WRITE_PROTECT, ALREADY_EXISTS,
+        // DIRECTORY (not a folder)
+        &[3, 5, 19, 183, 267],
+    );
+    #[cfg(target_os = "macos")]
+    let (disk, folder): (&[i32], &[i32]) = (
+        // ENOSPC, EDQUOT
+        &[28, 69],
+        // EPERM, EACCES, EEXIST, ENOTDIR, EISDIR, EROFS
+        &[1, 13, 17, 20, 21, 30],
+    );
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let (disk, folder): (&[i32], &[i32]) = (
+        // ENOSPC, EDQUOT
+        &[28, 122],
+        // EPERM, EACCES, EEXIST, ENOTDIR, EISDIR, EROFS
+        &[1, 13, 17, 20, 21, 30],
+    );
+    if disk.contains(&code) {
+        Some(OsFailure::DiskFull)
+    } else if folder.contains(&code) {
+        Some(OsFailure::Folder)
+    } else {
+        None
+    }
+}
+
+/// Tags the notification for a failed automatic start, so a click on it is
+/// told apart from any other.
+#[cfg(target_os = "macos")]
+const START_FAILED_TAG: &str = "cap-notes-start-failed";
+
+/// A recording Cap started by itself (a detected call, a scheduled meeting)
+/// could not start, and no window was there to say so. A system notification
+/// says "Recording couldn't start." and why when Cap can tell; clicking it
+/// opens the notes window with the same message. When Cap's notifications
+/// are off, macOS does not allow them, or the system cannot show one, the
+/// window opens with the message instead.
+pub fn auto_start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
+    use crate::meetings::MeetingError;
+    tracing::warn!(%error, "an automatic meeting start failed");
+    let title: SharedString = match error {
+        MeetingError::Disabled | MeetingError::PromptGone => return,
+        MeetingError::NotFound => crate::i18n::tr::documents::bar::error_not_found().into(),
+        _ => crate::i18n::tr::documents::bar::error_start().into(),
+    };
+    let body: SharedString = start_failure_reason(&error).unwrap_or_default().into();
+    if !crate::notifications::enabled() {
+        window::open_with_message(title, cx);
+        return;
+    }
+    notify_start_failure(title, body, cx);
+}
+
+#[cfg(target_os = "macos")]
+fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
+    let permission = crate::notifications::request_permission();
+    cx.spawn(async move |cx| {
+        let allowed = permission.recv_async().await.unwrap_or(false);
+        cx.update(|cx| {
+            if !allowed {
+                tracing::info!("notifications are not allowed; opening the notes window");
+                window::open_with_message(title, cx);
+                return;
+            }
+            let message = title.clone();
+            cx.on_system_notification_response(move |response, cx| {
+                if response.tag.as_ref() == START_FAILED_TAG {
+                    window::open_with_message(message.clone(), cx);
+                }
+            });
+            cx.show_system_notification(gpui::SystemNotification {
+                tag: START_FAILED_TAG.into(),
+                title,
+                body,
+                actions: Vec::new(),
+            });
+        });
+    })
+    .detach();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
+    use crate::notifications::Outcome;
+    let (tx, rx) = flume::bounded(1);
+    let open = crate::i18n::tr::documents::bar::show().to_string();
+    let (shown_title, shown_body) = (title.to_string(), body.to_string());
+    let spawned = std::thread::Builder::new()
+        .name("notes-start-failed".into())
+        .spawn(move || {
+            tx.send(crate::notifications::show_and_wait(
+                &shown_title,
+                &shown_body,
+                &open,
+            ))
+            .ok();
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "could not show the notification; opening the notes window");
+        window::open_with_message(title, cx);
+        return;
+    }
+    cx.spawn(async move |cx| {
+        let outcome = rx.recv_async().await.unwrap_or(Outcome::NotShown);
+        tracing::info!(?outcome, "start failure notification");
+        if outcome != Outcome::Closed {
+            cx.update(|cx| window::open_with_message(title, cx));
+        }
+    })
+    .detach();
 }

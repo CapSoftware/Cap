@@ -120,6 +120,10 @@ pub enum StartSource {
     },
 }
 
+/// Why a start was refused while an earlier one is still under way (not a
+/// problem with the audio).
+pub const STILL_STARTING: &str = "a recording is still starting";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MeetingError {
     Disabled,
@@ -326,6 +330,12 @@ pub enum MeetingEvent {
     WantsAttention {
         reason: AttentionReason,
     },
+    /// A recording Cap started by itself (a detected call, a scheduled
+    /// meeting, a prompt's countdown) could not start, so nobody pressed
+    /// anything that could say so.
+    AutoStartFailed {
+        error: MeetingError,
+    },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -499,6 +509,9 @@ pub struct Meetings {
     /// Why a start the prompt planner asked for failed, for the accept that
     /// asked (`start_internal` consumes `last_start_error` itself).
     prompt_start_error: Option<MeetingError>,
+    /// An accept is starting the prompt's recording: its failure goes back
+    /// to the accept, not to a system notification.
+    accepting: bool,
     pending_restore_mic: Option<(Option<String>, Option<String>)>,
     #[cfg(debug_assertions)]
     pub(crate) dev_mic: Option<flume::Receiver<capture::RawBatch>>,
@@ -731,6 +744,7 @@ impl Meetings {
             repair_queue: VecDeque::new(),
             last_start_error: None,
             prompt_start_error: None,
+            accepting: false,
             pending_restore_mic: None,
             #[cfg(debug_assertions)]
             dev_mic: None,
@@ -1139,6 +1153,11 @@ impl Meetings {
                     let origin = self.origin_for(&source);
                     if let Err(error) = self.start_internal(origin, cx) {
                         tracing::warn!(%error, "could not start the meeting recording");
+                        if !self.accepting {
+                            cx.emit(MeetingEvent::AutoStartFailed {
+                                error: error.clone(),
+                            });
+                        }
                         self.prompt_start_error = Some(error);
                         let actions = self
                             .planner
@@ -1190,7 +1209,9 @@ impl Meetings {
     pub fn accept_prompt(&mut self, id: u64, cx: &mut Context<Self>) -> Result<(), MeetingError> {
         self.prompt_start_error = None;
         let actions = self.planner.accept(self.now_pair(), id);
+        self.accepting = true;
         self.apply_prompt_actions(actions, cx);
+        self.accepting = false;
         self.rearm(cx);
         match self.prompt_start_error.take() {
             Some(error) => Err(error),
@@ -1306,9 +1327,7 @@ impl Meetings {
             self.apply_session_actions(actions, cx);
         }
         if self.session.state() != SessionState::Idle {
-            return Err(MeetingError::NoAudioSource(
-                "a recording is still starting".into(),
-            ));
+            return Err(MeetingError::NoAudioSource(STILL_STARTING.into()));
         }
         if let Some(active) = &self.active
             && active.state == ActiveState::ResumeOffered

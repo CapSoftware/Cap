@@ -4136,6 +4136,8 @@ record_more = "Record more"
 set_up = "Set up"
 error_start = "Recording couldn't start."
 error_not_found = "This meeting no longer exists."
+error_folder = { text = "Cap can't save to your notes folder.", context = "Body of a system notification under Recording couldn't start., when the notes folder is not writable or is no longer a folder." }
+error_audio = { text = "Cap couldn't open a microphone or the computer's audio.", context = "Body of a system notification under Recording couldn't start., when no microphone and no system audio could be opened." }
 
 [documents.health]
 system_permission = "Cap can't hear the other people on the call yet. Allow audio capture to include them."

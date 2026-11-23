@@ -4134,6 +4134,8 @@ record_more = "続けて録音"
 set_up = "設定する"
 error_start = "録音を開始できませんでした。"
 error_not_found = "このミーティングはもう存在しません。"
+error_folder = "Cap はメモのフォルダに保存できません。"
+error_audio = "Cap はマイクもコンピュータの音声も開けませんでした。"
 
 [documents.health]
 system_permission = "Capには通話相手の声がまだ聞こえていません。相手の声も含めるには音声の取り込みを許可してください。"

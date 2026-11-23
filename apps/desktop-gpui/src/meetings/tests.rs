@@ -1636,6 +1636,76 @@ fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContex
     assert_eq!(accepted, Ok(()));
 }
 
+/// A start Cap made by itself (a scheduled meeting's auto record) that fails
+/// says so through `AutoStartFailed`, so the app can show a notification. A
+/// failed accept reports to its caller instead and raises no such event.
+#[gpui::test]
+fn an_automatic_start_that_fails_is_reported_but_an_accept_is_not(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = cap_meetings::settings::MeetingSettings::default();
+    settings.enabled = true;
+    settings.notifications.scheduled = true;
+    settings.notifications.lead_secs = 60;
+    let meetings = cx
+        .update(|cx| super::Meetings::install_for_tests(settings, dir.path().join("calendar"), cx));
+    // The notes library's folder became a file: no new note can be saved.
+    let root = dir.path().join("documents");
+    let library = cap_meetings::library::Library::open(&root).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::write(&root, b"not a folder").unwrap();
+    let failures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let _subscription = cx.update(|cx| {
+        let failures = failures.clone();
+        cx.subscribe(&meetings, move |_, event: &super::MeetingEvent, _| {
+            if let super::MeetingEvent::AutoStartFailed { error } = event {
+                failures.borrow_mut().push(error.clone());
+            }
+        })
+    });
+    let prompt = meetings.update(cx, |m, cx| {
+        m.library = Some(library);
+        let soon = Utc::now() + chrono::Duration::seconds(30);
+        let event = cap_meetings::prompt::EventInfo {
+            id: "planning".into(),
+            title: "Planning".into(),
+            start: soon,
+            end: soon + chrono::Duration::minutes(30),
+            has_link: true,
+            link_provider_name: Some("Zoom".into()),
+            attendee_count: 3,
+        };
+        let actions = m.planner.set_events(m.now_pair(), vec![event]);
+        m.apply_prompt_actions(actions, cx);
+        m.prompts.first().map(|p| p.id)
+    });
+    let prompt = prompt.expect("a prompt for the meeting about to start");
+
+    let accepted = meetings.update(cx, |m, cx| m.accept_prompt(prompt, cx));
+    assert!(accepted.is_err(), "{accepted:?}");
+    cx.run_until_parked();
+    assert!(
+        failures.borrow().is_empty(),
+        "an accept tells its caller, not a notification"
+    );
+
+    meetings.update(cx, |m, cx| {
+        let start = cap_meetings::prompt::PromptAction::StartRecording {
+            source: cap_meetings::prompt::RecordSource::Scheduled {
+                event_id: "planning".into(),
+            },
+        };
+        m.apply_prompt_actions(vec![start], cx);
+    });
+    cx.run_until_parked();
+    let failures = failures.borrow();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        matches!(failures[0], super::MeetingError::Library(_)),
+        "{failures:?}"
+    );
+    assert!(meetings.read_with(cx, |m, _| m.recording.is_none()));
+}
+
 /// `write` runs on another thread while this one holds the meta lock between
 /// its own load and save, as the notes window's writer does when a rename
 /// lands. A writer that takes the lock waits, then reads the rename; one that

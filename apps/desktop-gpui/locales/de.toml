@@ -4134,6 +4134,8 @@ record_more = "Mehr aufnehmen"
 set_up = "Einrichten"
 error_start = "Die Aufnahme konnte nicht starten."
 error_not_found = "Dieses Meeting gibt es nicht mehr."
+error_folder = "Cap kann nicht in Ihren Notizenordner speichern."
+error_audio = "Cap konnte weder ein Mikrofon noch den Ton des Computers öffnen."
 
 [documents.health]
 system_permission = "Cap hört die anderen Personen im Anruf noch nicht. Erlauben Sie die Audioaufnahme, um sie einzubeziehen."

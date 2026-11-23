@@ -1631,6 +1631,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "objc2-user-notifications",
  "ort",
  "parakeet-rs",
  "raw-window-handle",

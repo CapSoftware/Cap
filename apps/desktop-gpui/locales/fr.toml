@@ -4134,6 +4134,8 @@ record_more = "Enregistrer la suite"
 set_up = "Configurer"
 error_start = "L'enregistrement n'a pas pu démarrer."
 error_not_found = "Cette réunion n'existe plus."
+error_folder = "Cap ne peut pas enregistrer dans votre dossier de notes."
+error_audio = "Cap n'a pu ouvrir ni un micro ni le son de l'ordinateur."
 
 [documents.health]
 system_permission = "Cap n'entend pas encore les autres participants. Autorisez la capture audio pour les inclure."

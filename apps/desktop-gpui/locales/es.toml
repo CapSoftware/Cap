@@ -4134,6 +4134,8 @@ record_more = "Grabar más"
 set_up = "Configurar"
 error_start = "No se pudo iniciar la grabación."
 error_not_found = "Esta reunión ya no existe."
+error_folder = "Cap no puede guardar en tu carpeta de notas."
+error_audio = "Cap no pudo abrir un micrófono ni el audio del ordenador."
 
 [documents.health]
 system_permission = "Cap aún no oye a las demás personas de la llamada. Permite la captura de audio para incluirlas."

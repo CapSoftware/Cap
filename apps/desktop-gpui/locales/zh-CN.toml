@@ -4134,6 +4134,8 @@ record_more = "继续录制"
 set_up = "设置"
 error_start = "无法开始录制。"
 error_not_found = "这个会议已不存在。"
+error_folder = "Cap 无法保存到你的笔记文件夹。"
+error_audio = "Cap 无法打开麦克风或电脑的音频。"
 
 [documents.health]
 system_permission = "Cap 还听不到通话中的其他人。允许捕获音频即可录入他们的声音。"

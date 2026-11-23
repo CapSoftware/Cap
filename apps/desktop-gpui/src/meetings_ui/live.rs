@@ -168,6 +168,10 @@ impl Live {
                 cx.emit(LiveEvent::Attention(reason.clone()));
                 cx.defer(bring_note_forward);
             }
+            MeetingEvent::AutoStartFailed { error } => {
+                let error = error.clone();
+                cx.defer(move |cx| crate::meetings_ui::documents::auto_start_failed(error, cx));
+            }
             MeetingEvent::NotesProgress { .. }
             | MeetingEvent::LibraryChanged
             | MeetingEvent::TranscriptChanged { .. }
