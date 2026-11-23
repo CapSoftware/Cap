@@ -71,7 +71,7 @@ static PHONE_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
     )
 });
 static ACCOUNT_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
-    re(r"(?i)\b(?:account|acct|a/c|routing|sort\s*code|bsb|aba|swift|bic|iban|bank)\b")
+    re(r"(?i)\b(?:account|acct|a/c|routing|sort\s*code|bsb|aba|swift|bic|iban|bank)")
 });
 static SWIFT: LazyLock<Regex> =
     LazyLock::new(|| re(r"\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b"));
@@ -139,7 +139,7 @@ static COMMIT_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
         r"(?i)\b(?:commit|merge|head is now at|sha|revision|rev|checkout|cherry-pick|revert|tag|build|digest|sha1|sha256|md5|checksum)\b[: ]*$",
     )
 });
-static TOKENISH: LazyLock<Regex> = LazyLock::new(|| re(r"[A-Za-z0-9+/_\-.~]{20,}={0,2}"));
+static TOKENISH: LazyLock<Regex> = LazyLock::new(|| re(r"[A-Za-z0-9+/_\-.~|]{20,}={0,2}"));
 static HEX_ONLY: LazyLock<Regex> = LazyLock::new(|| re(r"^[0-9a-fA-F]+$"));
 static UUID: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -261,6 +261,7 @@ pub fn classify_frame(lines: &[LineContext<'_>]) -> Vec<Vec<Finding>> {
         .iter()
         .map(|line| classify_line(line.text))
         .collect::<Vec<_>>();
+    join_wrapped_lines(lines, &mut results);
     for (label_index, label) in lines.iter().enumerate() {
         if !LABEL_ONLY.is_match(label.text) {
             continue;
@@ -303,6 +304,56 @@ pub fn classify_frame(lines: &[LineContext<'_>]) -> Vec<Vec<Finding>> {
         }
     }
     results
+}
+
+/// A string wrapped onto the next line ("+1 (436)" / "519-9838", "4013
+/// Pine Court, Suite" / "754, Columbus, OH 26159") is only recognisable
+/// whole: each line followed by the one right under it at the same left
+/// edge is classified joined, and a finding across the join is split back
+/// onto both lines.
+fn join_wrapped_lines(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
+    for (upper_index, upper) in lines.iter().enumerate() {
+        let Some((lower_index, lower)) = lines.iter().enumerate().find(|(index, line)| {
+            *index != upper_index
+                && line.y > upper.y
+                && line.y - (upper.y + upper.h) < upper.h * 0.8
+                && (line.x - upper.x).abs() < upper.h * 1.5
+                && (line.h - upper.h).abs() < upper.h * 0.35
+        }) else {
+            continue;
+        };
+        let upper_len = upper.text.chars().count();
+        let joined = format!("{} {}", upper.text, lower.text);
+        for finding in classify_line(&joined) {
+            if finding.start >= upper_len || finding.end <= upper_len + 1 {
+                continue;
+            }
+            let already = |found: &[Finding], start: usize, end: usize| {
+                found
+                    .iter()
+                    .any(|f| f.category == finding.category && f.start <= start && f.end >= end)
+            };
+            let (upper_start, upper_end) = (finding.start, upper_len);
+            let (lower_start, lower_end) = (0, finding.end - upper_len - 1);
+            if !already(&results[upper_index], upper_start, upper_end) {
+                results[upper_index].push(Finding {
+                    category: finding.category,
+                    start: upper_start,
+                    end: upper_end,
+                });
+            }
+            if !already(&results[lower_index], lower_start, lower_end) {
+                results[lower_index].push(Finding {
+                    category: finding.category,
+                    start: lower_start,
+                    end: lower_end,
+                });
+            }
+        }
+    }
+    for found in results.iter_mut() {
+        *found = resolve_overlaps(std::mem::take(found));
+    }
 }
 
 fn looks_like_value(text: &str) -> bool {

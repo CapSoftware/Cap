@@ -86,6 +86,7 @@ fn ibans_and_bank_numbers() {
         "sort code 12-34-56",
     );
     has("Routing 021000021", Card, "Routing 021000021");
+    has("pay by card using ABA075617479", Card, "ABA075617479");
     none_of("GB82 WEST 1234 5698 7654 33", Card);
 }
 
@@ -315,6 +316,42 @@ fn split_tokens_are_glued_back() {
         "sk_1ive_51HxQp L2eZvKY1o2C8nT0aB7d",
     );
     none_of("call me now please", Secret);
+}
+
+#[test]
+fn wrapped_strings_are_found_on_both_lines() {
+    let line = |text, y| LineContext {
+        text,
+        x: 0.1,
+        y,
+        w: 0.2,
+        h: 0.02,
+    };
+    let lines = [
+        line("Call our billing team on +1 (436)", 0.10),
+        line("519-9838 any weekday.", 0.125),
+        line("Ship to 4013 Pine Court, Suite", 0.30),
+        line("754, Columbus, OH 26159", 0.325),
+    ];
+    let results = classify_frame(&lines);
+    let text = |index: usize, category: RedactCategory| {
+        results[index]
+            .iter()
+            .filter(|f| f.category == category)
+            .map(|f| {
+                lines[index]
+                    .text
+                    .chars()
+                    .skip(f.start)
+                    .take(f.end - f.start)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(text(0, Phone), vec!["+1 (436)"]);
+    assert_eq!(text(1, Phone), vec!["519-9838"]);
+    assert!(!text(2, Address).is_empty());
+    assert!(!text(3, Address).is_empty());
 }
 
 #[test]

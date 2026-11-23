@@ -195,6 +195,11 @@ const CONTEXT: [&str; 19] = [
     "owner", "assignee", "reviewer", "contact", "signed", "by", "with",
 ];
 
+/// Titles that introduce a name and are hidden with it.
+const TITLES: [&str; 9] = [
+    "mr", "mrs", "ms", "miss", "mx", "dr", "prof", "sir", "madam",
+];
+
 fn is_capitalized_word(word: &str) -> bool {
     let mut chars = word.chars();
     let Some(first) = chars.next() else {
@@ -232,7 +237,13 @@ fn words(text: &str) -> Vec<Word<'_>> {
     let mut start: Option<(usize, usize)> = None;
     let mut char_index = 0;
     for (byte, ch) in text.char_indices() {
-        let part = ch.is_alphanumeric() || ch == '\'' || ch == '-' || ch == '.';
+        // A '.' straight before a capital ends the word: the recogniser
+        // drops the space in "office.Jeanna Lavallee".
+        let next_upper = text[byte + ch.len_utf8()..]
+            .chars()
+            .next()
+            .is_some_and(char::is_uppercase);
+        let part = ch.is_alphanumeric() || ch == '\'' || ch == '-' || (ch == '.' && !next_upper);
         match (part, start) {
             (true, None) => start = Some((byte, char_index)),
             (false, Some((byte_start, char_start))) => {
@@ -360,14 +371,18 @@ pub fn find_names(text: &str) -> Vec<(usize, usize)> {
                 First::Ambiguous => (has_surname && second_common) || after_context,
                 First::No => false,
             };
+            let titled = previous
+                .filter(|p| TITLES.contains(&p.text.trim_end_matches('.').to_lowercase().as_str()));
+            let accept = accept || (titled.is_some() && kind != First::No);
             if accept {
+                let start = titled.map_or(word.start, |title| title.start);
                 let last = &words[end_index];
                 let end = if has_surname || end_index == index {
                     last.end
                 } else {
                     word.end
                 };
-                spans.push((word.start, end));
+                spans.push((start, end));
                 index = end_index + 1;
                 continue;
             }
@@ -398,6 +413,8 @@ mod tests {
         assert_eq!(names("Hi Priya, thanks"), vec!["Priya"]);
         assert_eq!(names("Name: Olusegun Obasanjo"), vec!["Olusegun Obasanjo"]);
         assert_eq!(names("Will Smith joined"), vec!["Will Smith"]);
+        assert_eq!(names("Contact Mrs. Ryan Dover"), vec!["Mrs. Ryan Dover"]);
+        assert_eq!(names("the office.Jeanna Lavallee"), vec!["Jeanna Lavallee"]);
     }
 
     #[test]

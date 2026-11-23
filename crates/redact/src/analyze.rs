@@ -667,8 +667,8 @@ impl SegmentState {
                 let end = finding.end.min(rec.spans.len());
                 let x0 = rec.spans[finding.start].0;
                 let x1 = rec.spans[end - 1].1;
-                let pad_x = line.h * 0.3;
-                let pad_y = line.h * 0.12;
+                let pad_x = line.h * 0.6;
+                let pad_y = line.h * 0.15;
                 let rect = Rect::new(
                     (x0 - pad_x).max(line.x - pad_x),
                     line.y - pad_y,
