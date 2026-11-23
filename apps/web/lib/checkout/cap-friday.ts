@@ -483,14 +483,12 @@ async function prepayYearly(
 		return { ok: false, message: CHANGED };
 	}
 
-	const [paid] = await Promise.all([
-		stripe()
-			.invoices.pay(invoice.id, { off_session: true })
-			.catch(() => stripe().invoices.retrieve(invoice.id)),
-		stripe().customers.update(customer.id, {
-			metadata: { [CAP_FRIDAY_INVOICE_KEY]: invoice.id },
-		}),
-	]);
+	await stripe().customers.update(customer.id, {
+		metadata: { [CAP_FRIDAY_INVOICE_KEY]: invoice.id },
+	});
+	const paid = await stripe()
+		.invoices.pay(invoice.id, { off_session: true })
+		.catch(() => stripe().invoices.retrieve(invoice.id));
 	if (paid.status !== "paid") {
 		if (paid.hosted_invoice_url) {
 			return { ok: false, payUrl: paid.hosted_invoice_url };
