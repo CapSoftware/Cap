@@ -3,7 +3,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { collect, RELEASE_BASE, releaseName, render } from "./desktop-assets.mjs";
+import {
+	collect,
+	RELEASE_BASE,
+	releaseName,
+	render,
+} from "./desktop-assets.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),

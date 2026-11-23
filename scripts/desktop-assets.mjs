@@ -56,7 +56,9 @@ export async function collect() {
 		.sort();
 	for (const theme of themes) {
 		const names = (await fs.readdir(path.join(backgrounds, theme)))
-			.filter((name) => name.endsWith(".jpg") && !name.endsWith("-thumbnail.jpg"))
+			.filter(
+				(name) => name.endsWith(".jpg") && !name.endsWith("-thumbnail.jpg"),
+			)
 			.sort();
 		for (const name of names) {
 			const id = `${theme}/${name.slice(0, -".jpg".length)}`;
