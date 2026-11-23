@@ -586,6 +586,11 @@ async function withIdempotencyRetry<T>(request: () => Promise<T>): Promise<T> {
 	}
 }
 
+const postedAmount = (invoice: Stripe.Invoice, key: string) => {
+	const amount = Number(invoice.metadata?.[key]?.split(":")[1]);
+	return Number.isFinite(amount) ? amount : 0;
+};
+
 export type CapFridayReversal = "none" | "reversed" | "awaiting_grant";
 
 export async function reverseCapFridayCredit(
@@ -617,37 +622,60 @@ export async function reverseCapFridayCredit(
 
 	// Each slice belongs to one refund or dispute and is derived only from the
 	// charge's refund history, so concurrent webhooks compute the same slices
-	// and the same idempotency keys instead of racing on a running total.
+	// and the same idempotency keys instead of racing on a running total. A
+	// refund that fails after its slice was posted gets that slice undone, so
+	// a later dispute never takes back more than the credit.
 	const refunds = await stripe()
 		.refunds.list({ charge: charge.id, limit: 100 })
 		.autoPagingToArray({ limit: 1000 });
-	const slices: { id: string; amount: number }[] = [];
+	const live = (refund: Stripe.Refund) =>
+		refund.status !== "failed" && refund.status !== "canceled";
+	const slices: { id: string; amount: number; key: string; label: string }[] =
+		[];
 	let refunded = 0;
 	for (const refund of refunds
-		.filter(
-			(refund) => refund.status !== "failed" && refund.status !== "canceled",
-		)
+		.filter(live)
 		.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id))) {
 		const before = Math.round((credit * refunded) / charge.amount);
 		refunded = Math.min(charge.amount, refunded + refund.amount);
 		const after = Math.round((credit * refunded) / charge.amount);
-		slices.push({ id: refund.id, amount: after - before });
+		slices.push({
+			id: refund.id,
+			amount: after - before,
+			key: `cfRev_${refund.id}`,
+			label: "after a refund",
+		});
+	}
+	const counted = slices.reduce((total, slice) => total + slice.amount, 0);
+	for (const refund of refunds.filter((refund) => !live(refund))) {
+		const posted = postedAmount(invoice, `cfRev_${refund.id}`);
+		if (posted > 0) {
+			slices.push({
+				id: `${refund.id}-undo`,
+				amount: -posted,
+				key: `cfUnrev_${refund.id}`,
+				label: "restored after a refund failed",
+			});
+		}
 	}
 	if (source.object === "dispute") {
-		const reversed = slices.reduce((total, slice) => total + slice.amount, 0);
-		slices.push({ id: source.id, amount: credit - reversed });
+		slices.push({
+			id: source.id,
+			amount: credit - counted,
+			key: `cfRev_${source.id}`,
+			label: "after a dispute",
+		});
 	}
 
 	for (const slice of slices) {
-		const key = `capFridayRev_${slice.id}`;
-		if (slice.amount <= 0 || invoice.metadata?.[key]) continue;
+		if (slice.amount === 0 || invoice.metadata?.[slice.key]) continue;
 		const transaction = await withIdempotencyRetry(() =>
 			stripe().customers.createBalanceTransaction(
 				customerId,
 				{
 					amount: slice.amount,
 					currency: invoice.currency,
-					description: `Cap Friday: prepaid renewal credit reversed after a ${slice.id === source.id && source.object === "dispute" ? "dispute" : "refund"} (invoice ${invoice.number ?? invoice.id})`,
+					description: `Cap Friday: prepaid renewal credit ${slice.amount > 0 ? "reversed" : "restored"} ${slice.label} (invoice ${invoice.number ?? invoice.id})`,
 					metadata: {
 						[CAP_FRIDAY_METADATA]: "reversal",
 						invoiceId: invoice.id,
@@ -658,7 +686,7 @@ export async function reverseCapFridayCredit(
 			),
 		);
 		await stripe().invoices.update(invoice.id, {
-			metadata: { [key]: transaction.id },
+			metadata: { [slice.key]: `${transaction.id}:${slice.amount}` },
 		});
 	}
 	return "reversed";
