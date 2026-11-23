@@ -62,9 +62,12 @@ docker run --rm -v "$work":/work -w /work ubuntu:24.04 bash -euc '
 # lifts GitHub's anonymous rate limit on the nixpkgs fetch.
 nix_image=nixos/nix:2.36.0@sha256:746280551ddc1c72177d1a597c05eacac86dfaa18d5d649bf86411278bcd5470
 nixpkgs=github:NixOS/nixpkgs/619c39f6eac5d1ed6b8f073a9414baf7034b2356
+# Named, so a deadline that stops the docker client also removes the
+# container it started.
+container_name="cap-appimage-nixos-$$"
 set +e
-timeout --kill-after=30 1500 docker run --rm --privileged -e PIPEWIRE_DEBUG -e SHOW_LINES -e NIX_GITHUB_TOKEN \
-  -e NIXPKGS="$nixpkgs" -v "$work":/work:ro "$nix_image" bash -c '
+timeout --kill-after=30 1500 docker run --rm --name "$container_name" --privileged -e PIPEWIRE_DEBUG -e SHOW_LINES \
+  -e NIX_GITHUB_TOKEN -e NIXPKGS="$nixpkgs" -v "$work":/work:ro "$nix_image" bash -c '
   export NIX_CONFIG="experimental-features = nix-command flakes
 sandbox = false
 filter-syscalls = false"
@@ -96,6 +99,7 @@ access-tokens = github.com=$NIX_GITHUB_TOKEN"
   done
 ' 2>&1 | tee "$out/appimage-pipewire.log"
 container=${PIPESTATUS[0]}
+docker rm -f "$container_name" >/dev/null 2>&1
 set -e
 case $container in
 0) ;;
