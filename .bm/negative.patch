@@ -1,0 +1,18 @@
+diff --git a/apps/desktop-gpui/src/transcription.rs b/apps/desktop-gpui/src/transcription.rs
+index e87ba54e12..3bc139bc22 100644
+--- a/apps/desktop-gpui/src/transcription.rs
++++ b/apps/desktop-gpui/src/transcription.rs
+@@ -2595,7 +2595,12 @@ pub(crate) fn caption_corrector() -> cap_meetings::dictionary::Corrector {
+ 
+ /// `caption_corrector` with the meetings settings read from `dir`.
+ fn caption_corrector_in(dir: &Path) -> cap_meetings::dictionary::Corrector {
+-    cap_meetings::dictionary::Corrector::new(&crate::meetings::persist::caption_entries(dir))
++    let _ = dir;
++    cap_meetings::dictionary::Corrector::new(
++        crate::meetings::persist::load_settings()
++            .transcription
++            .entries(),
++    )
+ }
+ 
+ /// Spell caption words with the dictionary. Words keep their own times
