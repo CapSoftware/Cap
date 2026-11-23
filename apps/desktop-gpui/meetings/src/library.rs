@@ -25,6 +25,10 @@ pub const TRANSCRIPT_FILE: &str = "transcript.jsonl";
 pub const AUDIO_DIR: &str = "audio";
 pub const ATTACHMENTS_DIR: &str = "attachments";
 pub const FOLDERS_FILE: &str = "folders.json";
+/// A doc.json that could not be read, kept when the doc is saved again.
+pub const DAMAGED_DOC_FILE: &str = "doc.json.damaged";
+/// Set (in [`DocMeta::extra`]) on a doc whose doc.json could not be read.
+pub const DAMAGED_KEY: &str = "damaged";
 pub const TRASH_RETENTION_DAYS: i64 = 30;
 
 /// What a cleanup removed, and the documents it could not touch (a file in
@@ -466,9 +470,60 @@ impl Library {
     pub fn save(&self, meta: &DocMeta) -> Result<()> {
         let dir = self.doc_dir(&meta.id)?;
         fs::create_dir_all(&dir)?;
-        let bytes = serde_json::to_vec_pretty(meta)?;
-        atomic_write(&dir.join(DOC_FILE), &bytes)?;
+        let path = dir.join(DOC_FILE);
+        let bytes = if meta.extra.contains_key(DAMAGED_KEY) {
+            // The first save of a recovered doc keeps the unreadable details
+            // next to it, once, so nothing that was on disk is lost.
+            let kept = dir.join(DAMAGED_DOC_FILE);
+            if path.exists() && !kept.exists() {
+                fs::copy(&path, &kept)?;
+            }
+            let mut clean = meta.clone();
+            clean.extra.remove(DAMAGED_KEY);
+            serde_json::to_vec_pretty(&clean)?
+        } else {
+            serde_json::to_vec_pretty(meta)?
+        };
+        atomic_write(&path, &bytes)?;
         Ok(())
+    }
+
+    /// The doc's saved details or, when its doc.json can't be read as one (cut
+    /// short, empty, overwritten), the details its folder still shows: when it
+    /// was made, its audio and whether it has a transcript. Such a doc carries
+    /// [`DAMAGED_KEY`] so it can be shown and opened instead of vanishing.
+    pub fn load_or_recover(&self, id: &str) -> Result<DocMeta> {
+        match self.load(id) {
+            Err(LibraryError::Json(_)) => self.recover(id),
+            other => other,
+        }
+    }
+
+    fn recover(&self, id: &str) -> Result<DocMeta> {
+        let dir = self.doc_dir(id)?;
+        let created_at = created_at_from_id(id)
+            .or_else(|| {
+                fs::metadata(dir.join(DOC_FILE))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(DateTime::<Utc>::from)
+            })
+            .unwrap_or_default();
+        let audio = recovered_audio(&dir.join(AUDIO_DIR));
+        let transcript_chars = fs::metadata(dir.join(TRANSCRIPT_FILE)).map_or(0, |m| m.len());
+        let kind = if transcript_chars > 0 || !audio.is_empty() {
+            DocKind::Meeting
+        } else {
+            DocKind::Note
+        };
+        let mut meta = DocMeta::new(id.to_string(), kind, created_at);
+        if let Some(meeting) = meta.meeting.as_mut() {
+            meeting.started_at = Some(created_at);
+            meeting.transcript_chars = transcript_chars;
+            meeting.audio = audio;
+        }
+        meta.extra.insert(DAMAGED_KEY.into(), Value::Bool(true));
+        Ok(meta)
     }
 
     pub fn list(&self, filter: &ListFilter) -> Result<Listing> {
@@ -1015,6 +1070,43 @@ pub fn new_id(now: DateTime<Utc>, entropy: u64) -> String {
         .map(|i| ID_ALPHABET[((entropy >> (i * 5)) & 31) as usize] as char)
         .collect();
     format!("{}-{suffix}", now.format("%Y%m%dT%H%M%S%3fZ"))
+}
+
+/// When a doc was made, from its id ("20261118T215402519Z-0y136b").
+fn created_at_from_id(id: &str) -> Option<DateTime<Utc>> {
+    let stamp = id.get(..18)?;
+    let at = NaiveDateTime::parse_from_str(stamp.get(..15)?, "%Y%m%dT%H%M%S").ok()?;
+    let millis: i64 = stamp.get(15..18)?.parse().ok()?;
+    (id.as_bytes().get(18) == Some(&b'Z'))
+        .then(|| at.and_utc() + chrono::Duration::milliseconds(millis))
+}
+
+/// The meeting audio files in `dir`, as the app names them (system audio
+/// files start with "others", the microphone's with "you").
+fn recovered_audio(dir: &Path) -> Vec<AudioTrack> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".ogg") && !n.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|name| AudioTrack {
+            source: if name.starts_with("others") {
+                Source::System
+            } else {
+                Source::Mic
+            },
+            file: format!("{AUDIO_DIR}/{name}"),
+            codec: "opus".into(),
+            duration_ms: 0,
+        })
+        .collect()
 }
 
 pub fn is_valid_id(id: &str) -> bool {

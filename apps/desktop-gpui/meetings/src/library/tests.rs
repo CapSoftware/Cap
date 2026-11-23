@@ -964,3 +964,77 @@ fn local_days_follow_each_dates_own_offset() {
         ]
     );
 }
+
+#[test]
+fn an_unreadable_doc_json_is_recovered_from_its_folder_and_kept_on_save() {
+    let (_dir, lib) = lib();
+    let made = Utc.with_ymd_and_hms(2026, 11, 18, 21, 54, 2).unwrap() + Duration::milliseconds(519);
+    let id = "20261118T215402519Z-0y136b";
+    let mut meta = DocMeta::new(id.into(), DocKind::Meeting, made);
+    meta.title = "Weekly sync".into();
+    lib.save(&meta).unwrap();
+    let dir = lib.doc_dir(id).unwrap();
+    fs::write(lib.transcript_path(id).unwrap(), "{\"op\":\"upsert\"}\n").unwrap();
+    fs::create_dir_all(dir.join(AUDIO_DIR)).unwrap();
+    fs::write(dir.join(AUDIO_DIR).join("you.ogg"), b"x").unwrap();
+    fs::write(dir.join(AUDIO_DIR).join("others.ogg"), b"x").unwrap();
+
+    for damage in [
+        b"{\"id\": \"2026".to_vec(),
+        Vec::new(),
+        vec![0xff, 0xfe, 0x00, 0x13],
+    ] {
+        fs::write(dir.join(DOC_FILE), &damage).unwrap();
+        assert!(matches!(lib.load(id), Err(LibraryError::Json(_))));
+        let recovered = lib.load_or_recover(id).unwrap();
+        assert_eq!(recovered.kind, DocKind::Meeting);
+        assert_eq!(recovered.created_at, made);
+        assert_eq!(recovered.extra.get(DAMAGED_KEY), Some(&Value::Bool(true)));
+        let meeting = recovered.meeting.as_ref().unwrap();
+        assert_eq!(meeting.started_at, Some(made));
+        assert!(meeting.transcript_chars > 0);
+        let files: Vec<(&str, Source)> = meeting
+            .audio
+            .iter()
+            .map(|a| (a.file.as_str(), a.source))
+            .collect();
+        assert_eq!(
+            files,
+            vec![
+                ("audio/others.ogg", Source::System),
+                ("audio/you.ogg", Source::Mic)
+            ]
+        );
+    }
+
+    // The first save keeps what could not be read and writes clean details.
+    let mut recovered = lib.load_or_recover(id).unwrap();
+    recovered.title = "Renamed".into();
+    lib.save(&recovered).unwrap();
+    assert_eq!(
+        fs::read(dir.join(DAMAGED_DOC_FILE)).unwrap(),
+        vec![0xff, 0xfe, 0x00, 0x13]
+    );
+    let saved = lib.load(id).unwrap();
+    assert_eq!(saved.title, "Renamed");
+    assert!(!saved.extra.contains_key(DAMAGED_KEY));
+}
+
+#[test]
+fn a_missing_or_unrecoverable_doc_is_still_not_found() {
+    let (_dir, lib) = lib();
+    let id = "20261118T215402519Z-0y136b";
+    fs::create_dir_all(lib.doc_dir(id).unwrap()).unwrap();
+    assert!(matches!(
+        lib.load_or_recover(id),
+        Err(LibraryError::NotFound(_))
+    ));
+    // A folder without a time in its name still recovers, as a note.
+    let odd = "imported-note";
+    let dir = lib.doc_dir(odd).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(DOC_FILE), "nope").unwrap();
+    let recovered = lib.load_or_recover(odd).unwrap();
+    assert_eq!(recovered.kind, DocKind::Note);
+    assert!(recovered.meeting.is_none());
+}

@@ -31,6 +31,32 @@ fn meta(id: &str, kind: DocKind, at: chrono::DateTime<Utc>) -> DocMeta {
 }
 
 #[test]
+fn a_meeting_with_unreadable_details_stays_listed() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path()).unwrap();
+    let at = Utc.with_ymd_and_hms(2026, 11, 20, 9, 0, 0).unwrap();
+    let healthy = library.create(DocKind::Meeting, at, 1).unwrap();
+    let damaged = library
+        .create(DocKind::Meeting, at + ChronoDuration::hours(1), 2)
+        .unwrap();
+    std::fs::write(library.transcript_path(&damaged.id).unwrap(), "{}\n").unwrap();
+    let doc_json = library.doc_dir(&damaged.id).unwrap().join("doc.json");
+    let bytes = std::fs::read(&doc_json).unwrap();
+    std::fs::write(&doc_json, &bytes[..bytes.len() / 2]).unwrap();
+
+    let snapshot = super::store::load_snapshot(&library);
+    let ids: Vec<&str> = snapshot.docs.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, vec![damaged.id.as_str(), healthy.id.as_str()]);
+    let recovered = &snapshot.docs[0];
+    assert_eq!(recovered.kind, DocKind::Meeting);
+    assert!(
+        recovered
+            .extra
+            .contains_key(cap_meetings::library::DAMAGED_KEY)
+    );
+}
+
+#[test]
 fn a_summer_meeting_after_midnight_keeps_its_own_day_in_winter() {
     // London, read in November (GMT): 23:30 UTC on 9 July was 00:30 on
     // 10 July (BST), the day the Library and the row's time show.
