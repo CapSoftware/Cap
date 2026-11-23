@@ -500,12 +500,21 @@ pub fn name_guesses(
 
 /// Keep the meeting app's weaker suggestions with the meeting, so the
 /// transcript can offer them for one click.
+/// Read again under the meta lock: the meta the speaker pass started from
+/// can be older than an edit made since.
 pub fn remember_suggestions(
-    meta: &mut DocMeta,
+    doc_id: &str,
     offered: &[(u32, String)],
     library: Option<&cap_meetings::library::Library>,
 ) {
-    let (Some(library), Some(meeting)) = (library, meta.meeting.as_mut()) else {
+    let Some(library) = library else {
+        return;
+    };
+    let _lock = cap_meetings::library::lock_meta();
+    let Ok(mut meta) = library.load(doc_id) else {
+        return;
+    };
+    let Some(meeting) = meta.meeting.as_mut() else {
         return;
     };
     let map: serde_json::Map<String, Value> = offered
@@ -515,7 +524,7 @@ pub fn remember_suggestions(
     meeting
         .extra
         .insert(APP_NAMES_KEY.into(), Value::Object(map));
-    if let Err(error) = library.save(meta) {
+    if let Err(error) = library.save(&meta) {
         tracing::warn!(%error, "could not keep the meeting app's speaker names");
     }
 }

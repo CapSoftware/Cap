@@ -1,5 +1,5 @@
 use cap_meetings::{
-    library::{Attendee, DocKind, EventSnapshot, Library, MeetingDetails},
+    library::{Attendee, DocKind, DocMeta, EventSnapshot, Library, MeetingDetails},
     templates::built_in_templates,
     transcript::{LogLine, Source, Transcript, Utterance, Word, append_jsonl},
 };
@@ -1569,4 +1569,74 @@ fn accepting_a_prompt_whose_start_fails_reports_why(cx: &mut gpui::TestAppContex
         m.accept_prompt(prompt + 1000, cx)
     });
     assert_eq!(accepted, Ok(()));
+}
+
+/// `write` runs on another thread while this one holds the meta lock between
+/// its own load and save, as the notes window's writer does when a rename
+/// lands. A writer that takes the lock waits, then reads the rename; one that
+/// does not finishes first and the rename's save undoes its change.
+fn writes_under_the_meta_lock(write: impl FnOnce(Library, String) + Send + 'static) -> DocMeta {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let mut meta = library.create(DocKind::Meeting, Utc::now(), 11).unwrap();
+    meta.title = "Zoom at 9:30 AM".into();
+    meta.title_is_auto = true;
+    meta.meeting = Some(MeetingDetails {
+        started_at: Some(Utc::now()),
+        ..MeetingDetails::default()
+    });
+    library.save(&meta).unwrap();
+
+    let lock = cap_meetings::library::lock_meta();
+    let mut renamed = library.load(&meta.id).unwrap();
+    let (done, finished) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn({
+        let (library, id) = (library.clone(), meta.id.clone());
+        move || {
+            write(library, id);
+            let _ = done.send(());
+        }
+    });
+    assert!(
+        finished
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "the writer saved while another held the meta lock"
+    );
+    renamed.title = "Pricing review".into();
+    renamed.title_is_auto = false;
+    library.save(&renamed).unwrap();
+    drop(lock);
+    writer.join().unwrap();
+    library.load(&meta.id).unwrap()
+}
+
+#[test]
+fn a_call_joined_mid_meeting_keeps_a_rename_made_at_the_same_moment() {
+    let saved = writes_under_the_meta_lock(|library, id| {
+        super::save_meeting_app(&library, &id, Some("zoom".into()), Some("Zoom".into()));
+    });
+    assert_eq!(saved.title, "Pricing review");
+    assert!(!saved.title_is_auto, "the person's title stays theirs");
+    assert_eq!(
+        saved.meeting.unwrap().app_name.as_deref(),
+        Some("Zoom"),
+        "and the call is still recorded"
+    );
+}
+
+#[test]
+fn speaker_suggestions_keep_a_rename_made_at_the_same_moment() {
+    let saved = writes_under_the_meta_lock(|library, id| {
+        speakers::remember_suggestions(&id, &[(2, "Ana".into())], Some(&library));
+    });
+    assert_eq!(saved.title, "Pricing review");
+    assert!(
+        saved
+            .meeting
+            .unwrap()
+            .extra
+            .contains_key(speakers::APP_NAMES_KEY),
+        "and the suggestions are kept"
+    );
 }

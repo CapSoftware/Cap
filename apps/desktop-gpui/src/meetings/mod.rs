@@ -1430,24 +1430,9 @@ impl Meetings {
         let Some(library) = self.library().cloned() else {
             return;
         };
-        let Ok(mut meta) = library.load(&doc_id) else {
+        let Some(meta) = save_meeting_app(&library, &doc_id, app_id, app_name.clone()) else {
             return;
         };
-        let meeting = meta.meeting.get_or_insert_with(MeetingDetails::default);
-        meeting.app_id = app_id;
-        meeting.app_name = app_name.clone();
-        if meta.title_is_auto && meeting.event.is_none() {
-            let started = meeting
-                .started_at
-                .unwrap_or_else(Utc::now)
-                .with_timezone(&chrono::Local)
-                .naive_local();
-            meta.title =
-                crate::meetings_ui::documents::format::meeting_title(app_name.as_deref(), started);
-        }
-        if let Err(error) = library.save(&meta) {
-            tracing::warn!(%error, "could not save the meeting's call");
-        }
         if let Some(active) = self.active.as_mut().filter(|a| a.doc_id == doc_id) {
             active.app_name = app_name;
             active.title = meta.title.clone();
@@ -3493,7 +3478,7 @@ impl Meetings {
                 }
             }
             if !offered.is_empty() {
-                speakers::remember_suggestions(&mut meta.clone(), &offered, library.as_ref());
+                speakers::remember_suggestions(doc_id, &offered, library.as_ref());
             }
         }
         tracing::info!(
@@ -4752,4 +4737,35 @@ fn rename_in_saved_summary(json: &str, renames: &[(String, String)]) -> Option<S
     }
     let after = editor.into_document().to_json();
     (after != before).then_some(after)
+}
+
+/// Writes the meeting's call app (and the automatic title that follows it)
+/// under the meta lock, so a rename, folder or trash queued at that moment is
+/// kept.
+fn save_meeting_app(
+    library: &Library,
+    doc_id: &str,
+    app_id: Option<String>,
+    app_name: Option<String>,
+) -> Option<DocMeta> {
+    let _lock = lock_meta();
+    let mut meta = library.load(doc_id).ok()?;
+    let meeting = meta.meeting.get_or_insert_with(MeetingDetails::default);
+    meeting.app_id = app_id;
+    meeting.app_name = app_name;
+    if meta.title_is_auto && meeting.event.is_none() {
+        let started = meeting
+            .started_at
+            .unwrap_or_else(Utc::now)
+            .with_timezone(&chrono::Local)
+            .naive_local();
+        meta.title = crate::meetings_ui::documents::format::meeting_title(
+            meeting.app_name.as_deref(),
+            started,
+        );
+    }
+    if let Err(error) = library.save(&meta) {
+        tracing::warn!(%error, "could not save the meeting's call");
+    }
+    Some(meta)
 }
