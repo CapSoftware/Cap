@@ -2689,6 +2689,12 @@ async function runPreviewGifAttempt(
 			attempt.startTime.toString(),
 			"-t",
 			attempt.duration.toString(),
+			// Untagged video defaults to BT.601 in FFmpeg but plays as BT.709 in
+			// browsers. These only apply when the input carries no colour tags.
+			"-colorspace",
+			"bt709",
+			"-color_range",
+			"tv",
 			"-i",
 			inputPath,
 			"-an",
