@@ -6060,6 +6060,22 @@ impl EditorWindow {
                     &theme,
                     SharedString::from(tr::editor::panel::caption::title(index + 1)),
                 )
+                // How every caption looks lives in the Captions tab, one click
+                // away from any caption.
+                .value(
+                    ui::Button::editor(
+                        &theme,
+                        SharedString::from(format!("caption-style-{index}")),
+                        ui::ButtonVariant::Gray,
+                        ui::ButtonSize::Sm,
+                    )
+                    .icon("icons/captions.svg")
+                    .label(tr::editor::tabs::captions::caption_style())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_caption_style(window, cx);
+                    }))
+                    .into_any_element(),
+                )
                 .child(self.render_field_input(FieldKey::CaptionText(index), Some(96.))),
             )
             .child(self.timing_field(

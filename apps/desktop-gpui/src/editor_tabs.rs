@@ -4632,7 +4632,18 @@ impl EditorWindow {
         ui::Field::section(&theme, tr::editor::tabs::captions::title())
             .badge(tr::editor::tabs::captions::beta())
             .child(transcription)
-            .child(style.mt(px(8.)))
+            .child(style.mt(px(8.)).relative().child({
+                // Where the block lands, for the Caption Style jump.
+                let top = self.sidebar.caption_style_top.clone();
+                gpui::canvas(
+                    move |bounds, _, _| top.set(Some(bounds.origin.y)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size(px(1.))
+            }))
             .into_any_element()
     }
 

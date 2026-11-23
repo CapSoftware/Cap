@@ -599,6 +599,7 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
             "Background Settings",
         ),
         (tr::editor::tabs::captions::beta(), "Beta"),
+        (tr::editor::tabs::captions::caption_style(), "Caption Style"),
         (tr::editor::tabs::captions::delete(), "Delete"),
         (tr::editor::tabs::captions::deleting(), "Deleting..."),
         (

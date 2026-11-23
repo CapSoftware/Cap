@@ -827,6 +827,10 @@ pub struct SidebarState {
     /// The scroll body's offset, so a tab switch can put it back to the top
     /// (`:647-649`).
     pub scroll: gpui::ScrollHandle,
+    /// Where the Captions tab's Style block was last drawn, so a selected
+    /// caption's Caption Style button lands on it instead of the model picker
+    /// above.
+    pub caption_style_top: std::rc::Rc<std::cell::Cell<Option<Pixels>>>,
 
     /// `KCollapsible open={...}` for Border and MacBook notch (both driven by
     /// their own toggle) and `ShadowSettings`' own `isOpen` signal.
@@ -941,6 +945,7 @@ impl SidebarState {
             tab: SidebarTab::Background,
             source_tab: initial_source_tab(config),
             wallpaper_theme: 0,
+            caption_style_top: Default::default(),
             scroll: gpui::ScrollHandle::new(),
             border_open: CollapsibleState::new(
                 config.background.border.as_ref().is_some_and(|b| b.enabled),
@@ -1106,6 +1111,27 @@ impl EditorWindow {
         self.sidebar.scroll.set_offset(gpui::point(px(0.), px(0.)));
         cx.notify();
         window.refresh();
+    }
+
+    /// A selected caption's Caption Style button: open the Captions tab
+    /// scrolled to its Style block.
+    pub(crate) fn open_caption_style(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = SidebarTab::ALL
+            .iter()
+            .position(|tab| *tab == SidebarTab::Captions)
+        else {
+            return;
+        };
+        self.select_sidebar_tab(index, window, cx);
+        self.sidebar.caption_style_top.set(None);
+        settle_caption_style_scroll(
+            self.sidebar.caption_style_top.clone(),
+            self.sidebar.scroll.clone(),
+            None,
+            0,
+            CAPTION_STYLE_SETTLE_FRAMES,
+            window,
+        );
     }
 
     /// Re-sync the source tab after a write that did not come from the tab row
@@ -2863,6 +2889,48 @@ impl EditorWindow {
     ) -> AnyElement {
         self.render_segment_panel(selection, cx)
     }
+}
+
+/// The longest the Caption Style jump keeps following the Style block, in
+/// frames, while the model status above it is still filling in.
+const CAPTION_STYLE_SETTLE_FRAMES: u32 = 90;
+
+/// Scroll the sidebar so the Captions tab's Style block sits at the top, and
+/// keep it there frame by frame until the block has held still for a few
+/// frames: the rows above it can still be growing when the tab first draws.
+fn settle_caption_style_scroll(
+    top: std::rc::Rc<std::cell::Cell<Option<Pixels>>>,
+    scroll: gpui::ScrollHandle,
+    last: Option<Pixels>,
+    still: u32,
+    frames_left: u32,
+    window: &mut Window,
+) {
+    window.on_next_frame(move |window, _| {
+        let mut last = last;
+        let mut still = still;
+        if let Some(drawn_top) = top.get() {
+            let offset = scroll.offset();
+            let content_top = drawn_top - offset.y;
+            // Leave the title the breathing room the tab's first section gets.
+            let target = (scroll.bounds().top() + px(18.) - content_top)
+                .max(-scroll.max_offset().y)
+                .min(px(0.));
+            if (offset.y - target).abs() > px(0.5) {
+                scroll.set_offset(gpui::point(px(0.), target));
+            }
+            still = if last == Some(content_top) {
+                still + 1
+            } else {
+                0
+            };
+            last = Some(content_top);
+        }
+        if still < 4 && frames_left > 0 {
+            window.refresh();
+            settle_caption_style_scroll(top, scroll, last, still, frames_left - 1, window);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
