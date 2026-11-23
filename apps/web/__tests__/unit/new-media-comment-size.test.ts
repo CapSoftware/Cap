@@ -56,7 +56,7 @@ vi.mock("@cap/web-backend", () => ({
 	},
 }));
 vi.mock("@/lib/comment-media-quota", () => ({
-	MAX_MEDIA_OBJECT_BYTES: 2 * GIB,
+	MAX_MEDIA_OBJECT_BYTES: 2 * 1024 * 1024 * 1024,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/comment-media", () => ({ sanitizeWaveform: () => undefined }));

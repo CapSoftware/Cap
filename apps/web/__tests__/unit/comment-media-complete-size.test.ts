@@ -258,6 +258,7 @@ describe("comment media initiate size", () => {
 
 		expect(response.status).toBe(413);
 		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
+		expect(mocks.reserveObjects).not.toHaveBeenCalled();
 	});
 
 	it("signs a video and its thumbnail for their sizes and charges both", async () => {

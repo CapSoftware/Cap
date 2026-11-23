@@ -145,6 +145,23 @@ app.post(
 			}
 			const { contentType, key, thumbnailKey } = keys;
 
+			// The viewer's own byte budget goes first, so a viewer at their limit
+			// cannot take the video's shared object slots.
+			const directBytes = size + (thumbnailKey ? (thumbnailSize ?? 0) : 0);
+			if (directBytes > 0) {
+				const withinBudget = yield* Effect.tryPromise(() =>
+					reserveCommentMediaBytes({
+						videoId: video.id,
+						userId: user.id,
+						bytes: directBytes,
+					}),
+				);
+				if (!withinBudget) {
+					c.status(413);
+					return c.json({ error: "Recording is too large" });
+				}
+			}
+
 			// The comment-row throttle above only counts finished comments; an
 			// initiate-and-PUT loop that never creates rows would bypass it. The
 			// object count under the comments prefix is the ground truth for bytes
@@ -167,21 +184,6 @@ app.post(
 				return c.json({
 					error: "This video has reached its media comment limit",
 				});
-			}
-
-			const directBytes = size + (thumbnailKey ? (thumbnailSize ?? 0) : 0);
-			if (directBytes > 0) {
-				const withinBudget = yield* Effect.tryPromise(() =>
-					reserveCommentMediaBytes({
-						videoId: video.id,
-						userId: user.id,
-						bytes: directBytes,
-					}),
-				);
-				if (!withinBudget) {
-					c.status(413);
-					return c.json({ error: "Recording is too large" });
-				}
 			}
 
 			// Drive rejects presigned POST, so upload targets are always PUT-style;
