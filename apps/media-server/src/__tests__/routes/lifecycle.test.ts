@@ -15,6 +15,7 @@ import {
 	cleanupExpiredJobs,
 	createJob,
 	deleteJob,
+	generateJobId,
 	getActiveVideoProcessCount,
 	getJob,
 	type VideoMetadata,
@@ -177,19 +178,94 @@ describe("draining", () => {
 		expect((await health.json()).status).toBe("draining");
 
 		const status = await app.fetch(
-			new Request(`http://localhost/video/process/${job.jobId}/status`),
+			new Request(`http://localhost/video/process/${job.jobId}/status`, {
+				headers: AUTH_HEADERS,
+			}),
 		);
 		expect(status.status).toBe(200);
 		expect((await status.json()).jobId).toBe(job.jobId);
 
 		const serverStatus = await app.fetch(
-			new Request("http://localhost/video/status"),
+			new Request("http://localhost/video/status", { headers: AUTH_HEADERS }),
 		);
 		expect(serverStatus.status).toBe(200);
 	});
 });
 
 describe("status access", () => {
+	test("requires the secret by default", async () => {
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+		for (const path of ["/video/status", "/video/process/job-missing/status"]) {
+			const anonymous = await app.fetch(new Request(`http://localhost${path}`));
+			expect(anonymous.status).toBe(401);
+		}
+	});
+
+	test("serves status publicly only when explicitly enabled", async () => {
+		process.env.MEDIA_SERVER_PUBLIC_STATUS = "true";
+		const job = createJob("job_public_status", "video-public", "user-id");
+		createdJobs.push(job.jobId);
+		const anonymous = await app.fetch(
+			new Request("http://localhost/video/status"),
+		);
+		expect(anonymous.status).toBe(200);
+		const body = await anonymous.json();
+		expect(body.jobs).toBeUndefined();
+		expect(body.runtime).toBeUndefined();
+
+		const jobStatus = await app.fetch(
+			new Request(`http://localhost/video/process/${job.jobId}/status`),
+		);
+		expect(await jobStatus.json()).toEqual({
+			jobId: job.jobId,
+			phase: job.phase,
+			progress: job.progress,
+		});
+	});
+
+	test("keeps existing jobs private without the secret, over JSON and SSE", async () => {
+		delete process.env.MEDIA_SERVER_PUBLIC_STATUS;
+		const job = createJob("job_private_status", "video-private", "user-id");
+		createdJobs.push(job.jobId);
+		const path = `http://localhost/video/process/${job.jobId}/status`;
+		for (const headers of [
+			{} as Record<string, string>,
+			{ Accept: "text/event-stream" },
+		]) {
+			const anonymous = await app.fetch(new Request(path, { headers }));
+			expect(anonymous.status).toBe(401);
+		}
+
+		const json = await app.fetch(new Request(path, { headers: AUTH_HEADERS }));
+		expect(json.status).toBe(200);
+		expect((await json.json()).videoId).toBe("video-private");
+
+		const controller = new AbortController();
+		const sse = await app.fetch(
+			new Request(path, {
+				headers: { ...AUTH_HEADERS, Accept: "text/event-stream" },
+				signal: controller.signal,
+			}),
+		);
+		expect(sse.headers.get("content-type")).toBe("text/event-stream");
+		const reader = sse.body?.getReader();
+		const first = await reader?.read();
+		controller.abort();
+		const event = new TextDecoder().decode(first?.value);
+		expect(JSON.parse(event.replace(/^data: /, "")).videoId).toBe(
+			"video-private",
+		);
+	});
+
+	test("issues job ids that are not guessable", () => {
+		const ids = new Set(Array.from({ length: 50 }, () => generateJobId()));
+		expect(ids.size).toBe(50);
+		for (const id of ids)
+			expect(id).toMatch(
+				/^job_\d+_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+			);
+	});
+
 	test("requires the secret when public status is disabled", async () => {
 		process.env.MEDIA_SERVER_PUBLIC_STATUS = "false";
 		for (const path of [

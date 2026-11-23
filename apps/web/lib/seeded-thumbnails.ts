@@ -1,6 +1,6 @@
 import { makeCurrentUserLayer, Videos } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { Effect, Option } from "effect";
+import { Effect, Exit, Option } from "effect";
 import type { SeededThumbnails } from "@/components/VideoThumbnail";
 import { runPromise } from "@/lib/server";
 
@@ -17,17 +17,15 @@ export function seedThumbnailUrls(
 
 	const urls = Effect.gen(function* () {
 		const videos = yield* Videos;
-		const results = yield* Effect.forEach(
-			videoIds,
-			(videoId) => videos.getThumbnailURL(videoId).pipe(Effect.option),
-			{ concurrency: 10 },
-		);
+		const results = yield* videos.getThumbnailURLs(videoIds);
 
 		const seeded: Record<string, string> = {};
 		results.forEach((result, index) => {
-			const url = Option.flatten(result);
 			const videoId = videoIds[index];
-			if (videoId && Option.isSome(url)) seeded[videoId] = url.value;
+			if (!videoId || !Exit.isSuccess(result) || Option.isNone(result.value)) {
+				return;
+			}
+			seeded[videoId] = result.value.value;
 		});
 		return seeded;
 	}).pipe(Effect.provide(makeCurrentUserLayer(user)), runPromise);

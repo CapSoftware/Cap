@@ -528,7 +528,7 @@ fn open_input(
             }
             return Err(Error::from(opened).to_string());
         }
-        let probed = ffmpeg::ffi::avformat_find_stream_info(context, ptr::null_mut());
+        let probed = cap_enc_ffmpeg::decode_limit::find_stream_info(context);
         if probed < 0 {
             ffmpeg::ffi::avformat_close_input(&mut context);
             return Err(Error::from(probed).to_string());

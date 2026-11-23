@@ -188,6 +188,12 @@ pub enum NewVideoEncoderError {
     OutputType(windows::core::Error),
     #[error("InputType: {0}")]
     InputType(windows::core::Error),
+    #[error("{encoder} does not take {width}x{height} frames")]
+    UnsupportedFrameSize {
+        encoder: String,
+        width: i32,
+        height: i32,
+    },
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -263,14 +269,27 @@ impl H264Encoder {
         // Match `cap_frame_converter::GpuVendor::from_id`: AMD reports either PCI ID.
         let is_amd = matches!(adapter.VendorId, 0x1002 | 0x1022);
 
-        let transform =
+        let device =
             EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
                 .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
                 .first()
                 .cloned()
-                .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?
-                .create_transform()
-                .map_err(NewVideoEncoderError::EncoderTransform)?;
+                .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?;
+        if cap_media_info::is_intel_h264_mft(device.display_name())
+            && !cap_media_info::intel_h264_mft_accepts_frame_size(
+                output_resolution.Width.max(0) as u32,
+                output_resolution.Height.max(0) as u32,
+            )
+        {
+            return Err(NewVideoEncoderError::UnsupportedFrameSize {
+                encoder: device.display_name().to_owned(),
+                width: output_resolution.Width,
+                height: output_resolution.Height,
+            });
+        }
+        let transform = device
+            .create_transform()
+            .map_err(NewVideoEncoderError::EncoderTransform)?;
 
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),

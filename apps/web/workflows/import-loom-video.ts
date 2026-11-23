@@ -16,6 +16,7 @@ import {
 	getLoomDownloadUrl,
 	getReusableLoomDownloadUrl,
 	LoomDownloadTemporaryError,
+	LoomDownloadUnavailableError,
 } from "@/lib/loom-download-url";
 import { cleanupLoomFileSource } from "@/lib/loom-file-cleanup";
 import { getLoomImportSignalToken } from "@/lib/loom-import-signal-token";
@@ -28,6 +29,7 @@ import {
 	isLoomMediaJobFailed,
 	recordLoomMediaDispatch,
 } from "@/lib/loom-media-dispatch";
+import { getMediaProcessingRejection } from "@/lib/media-processing-policy";
 import {
 	createMediaServerCapacityError,
 	isMediaServerCapacityError,
@@ -95,6 +97,9 @@ async function fetchFreshLoomDownloadUrl(
 			throw new RetryableError(error.message, {
 				retryAfter: error.retryAfterMs,
 			});
+		}
+		if (error instanceof LoomDownloadUnavailableError) {
+			throw new FatalError(error.message);
 		}
 		throw error;
 	}
@@ -555,6 +560,15 @@ async function processVideoOnMediaServer(
 		}
 		if (video.ownerId !== userId) {
 			return yield* Effect.fail(new FatalError("Loom import owner changed"));
+		}
+		const rejection = yield* Effect.promise(() =>
+			getMediaProcessingRejection({
+				ownerId: video.ownerId,
+				rawFileKey: loomSourceUrl ? null : rawFileKey,
+			}),
+		);
+		if (rejection) {
+			return yield* Effect.fail(new FatalError(rejection));
 		}
 		const videoDomain = Video.Video.decodeSync({
 			...video,

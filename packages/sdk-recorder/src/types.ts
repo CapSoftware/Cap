@@ -11,10 +11,16 @@ export type RecorderPhase =
 	| "complete"
 	| "error";
 
+export interface RecorderUpload {
+	videoId: string;
+	token: string;
+	shareUrl: string;
+	embedUrl: string;
+}
+
 export interface RecorderOptions {
-	publicKey: string;
+	createUpload: () => Promise<RecorderUpload>;
 	apiBase?: string;
-	userId?: string;
 	mode?: RecordingMode;
 	camera?: { deviceId?: string; enabled?: boolean };
 	microphone?: { deviceId?: string; enabled?: boolean };

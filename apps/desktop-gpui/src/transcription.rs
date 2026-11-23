@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, Mutex, PoisonError,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -53,6 +53,61 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 use crate::i18n::tr;
 use crate::{editor_timeline::clip_timeline_offsets, store};
+
+mod align;
+mod refine;
+mod verbatim;
+
+pub use refine::{
+    RefinedCaptions, RefinementRequest, apply_refined_captions, clear_refinement_request,
+    lower_thread_priority, refine_blocking, refinement_request, save_refinement_request,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VerbatimOptions {
+    pub parakeet_subword_words: bool,
+    pub whisper_filler_prompt: bool,
+    pub recover_speech: bool,
+    pub split_stutters: bool,
+    pub align_words: bool,
+    pub snap_to_pauses: bool,
+}
+
+impl VerbatimOptions {
+    /// The steps that run before the transcript is shown. They cost nothing
+    /// over plain recognition; the rest wait for [`refine_blocking`].
+    pub fn first_pass(self) -> Self {
+        Self {
+            recover_speech: false,
+            align_words: false,
+            snap_to_pauses: false,
+            ..self
+        }
+    }
+
+    #[cfg(test)]
+    pub const BASELINE: Self = Self {
+        parakeet_subword_words: false,
+        whisper_filler_prompt: false,
+        recover_speech: false,
+        split_stutters: false,
+        align_words: false,
+        snap_to_pauses: false,
+    };
+}
+
+impl Default for VerbatimOptions {
+    fn default() -> Self {
+        Self {
+            parakeet_subword_words: true,
+            whisper_filler_prompt: true,
+            recover_speech: true,
+            split_stutters: true,
+            align_words: true,
+            snap_to_pauses: true,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Model catalogue & shared paths
@@ -141,16 +196,29 @@ fn model_files_present(model: &str) -> bool {
     if !is_parakeet_model(model) {
         return path.exists();
     }
-    if !supports_parakeet() || !path.is_dir() {
-        return false;
-    }
-    let has_vocab = path.join("vocab.txt").exists();
-    let has_full_model = path.join("encoder-model.onnx").exists()
-        && path.join("encoder-model.onnx.data").exists()
-        && path.join("decoder_joint-model.onnx").exists();
-    let has_int8_model = path.join("encoder-model.int8.onnx").exists()
-        && path.join("decoder_joint-model.int8.onnx").exists();
-    has_vocab && (has_full_model || has_int8_model)
+    supports_parakeet() && parakeet_model_installed(&path)
+}
+
+/// Every file the directory's download writes is there. A `parakeet-best`
+/// directory holding only the older encoder, whose dynamically quantized
+/// activations lose short clips, is not an installed model.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn parakeet_model_installed(dir: &Path) -> bool {
+    parakeet_model_files_for_dir(dir)
+        .iter()
+        .all(|(filename, _)| dir.join(filename).is_file())
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn parakeet_model_installed(_dir: &Path) -> bool {
+    false
+}
+
+/// A download from before the Recommended model's encoder changed: the old
+/// int8 encoder is there and the current files are not. Only these installs
+/// are asked to download again.
+fn parakeet_model_outdated(dir: &Path) -> bool {
+    dir.join("encoder-model.int8.onnx").is_file() && !parakeet_model_installed(dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -179,9 +247,15 @@ struct Hub {
     download: Option<ModelDownload>,
     /// `None` until the first disk scan.
     downloaded: Option<HashSet<String>>,
+    /// The disk holds the Recommended model from before its encoder changed.
+    recommended_outdated: bool,
     deleting: Option<String>,
     generating: HashSet<PathBuf>,
     generation_errors: HashMap<PathBuf, String>,
+    /// Projects whose last transcription worked but heard no words.
+    no_speech: HashSet<PathBuf>,
+    /// Word-timing refinements running, with the flag that stops each.
+    refining: HashMap<PathBuf, Arc<AtomicBool>>,
 }
 
 impl Hub {
@@ -210,9 +284,13 @@ fn hub() -> std::sync::MutexGuard<'static, Hub> {
 pub struct CaptionsUiSnapshot {
     pub download: Option<ModelDownload>,
     pub downloaded: HashSet<String>,
+    /// [`parakeet_model_outdated`] for the Recommended model.
+    pub recommended_outdated: bool,
     pub deleting: Option<String>,
     pub generating: bool,
     pub generation_error: Option<String>,
+    pub no_speech: bool,
+    pub refining: bool,
 }
 
 pub fn ui_snapshot(project_path: &Path) -> CaptionsUiSnapshot {
@@ -220,9 +298,12 @@ pub fn ui_snapshot(project_path: &Path) -> CaptionsUiSnapshot {
     CaptionsUiSnapshot {
         download: hub.download.clone(),
         downloaded: hub.downloaded.clone().unwrap_or_default(),
+        recommended_outdated: hub.recommended_outdated,
         deleting: hub.deleting.clone(),
         generating: hub.generating.contains(project_path),
         generation_error: hub.generation_errors.get(project_path).cloned(),
+        no_speech: hub.no_speech.contains(project_path),
+        refining: hub.refining.contains_key(project_path),
     }
 }
 
@@ -245,7 +326,10 @@ pub fn refresh_downloaded_models() {
         .filter(|model| model_files_present(model))
         .map(|model| (*model).to_string())
         .collect();
-    hub().downloaded = Some(downloaded);
+    let recommended_outdated = supports_parakeet() && parakeet_model_outdated(&model_path("best"));
+    let mut hub = hub();
+    hub.downloaded = Some(downloaded);
+    hub.recommended_outdated = recommended_outdated;
 }
 
 pub fn begin_download(model: &str) -> bool {
@@ -323,6 +407,7 @@ pub fn run_model_delete(model: &str) {
     if let Err(error) = delete_model_files(model) {
         tracing::warn!(model, "failed to delete caption model: {error}");
     }
+    remove_word_aligner_if_unused();
     {
         let mut hub = hub();
         if hub.deleting.as_deref() == Some(model) {
@@ -360,7 +445,11 @@ pub fn begin_generation(project_path: &Path) -> bool {
     if hub.generating.contains(project_path) {
         return false;
     }
+    if let Some(stop) = hub.refining.remove(project_path) {
+        stop.store(true, Ordering::Relaxed);
+    }
     hub.generation_errors.remove(project_path);
+    hub.no_speech.remove(project_path);
     hub.generating.insert(project_path.to_path_buf());
     true
 }
@@ -368,6 +457,7 @@ pub fn begin_generation(project_path: &Path) -> bool {
 pub fn finish_generation(project_path: &Path, error: Option<String>) {
     let mut hub = hub();
     hub.generating.remove(project_path);
+    hub.no_speech.remove(project_path);
     match error {
         Some(message) => {
             hub.generation_errors
@@ -378,6 +468,50 @@ pub fn finish_generation(project_path: &Path, error: Option<String>) {
         }
     }
 }
+
+/// A transcription that worked but heard no words: an empty state, not an
+/// error.
+pub fn finish_generation_without_speech(project_path: &Path) {
+    let mut hub = hub();
+    hub.generating.remove(project_path);
+    hub.generation_errors.remove(project_path);
+    hub.no_speech.insert(project_path.to_path_buf());
+}
+
+/// Claims the project's one refinement slot; `None` while one already runs.
+pub fn begin_refinement(project_path: &Path) -> Option<Arc<AtomicBool>> {
+    let mut hub = hub();
+    if hub.refining.contains_key(project_path) || hub.generating.contains(project_path) {
+        return None;
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    hub.refining
+        .insert(project_path.to_path_buf(), Arc::clone(&stop));
+    Some(stop)
+}
+
+pub fn finish_refinement(project_path: &Path, stop: &Arc<AtomicBool>) {
+    let mut hub = hub();
+    if hub
+        .refining
+        .get(project_path)
+        .is_some_and(|current| Arc::ptr_eq(current, stop))
+    {
+        hub.refining.remove(project_path);
+    }
+}
+
+/// Stops a running refinement, for a closed editor or a deleted project. The
+/// request stays on disk, so it resumes when the project opens again.
+pub fn cancel_refinement(project_path: &Path) {
+    if let Some(stop) = hub().refining.remove(project_path) {
+        stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Threads each refinement model gets: fewer than recognition's four, so the
+/// editor stays smooth while it runs.
+const REFINEMENT_THREADS: usize = 2;
 
 // ---------------------------------------------------------------------------
 // Downloads
@@ -509,13 +643,18 @@ async fn total_content_length(urls: &[&str]) -> u64 {
     total
 }
 
-/// `PARAKEET_TDT_INT8_MODEL_FILES` (`captions.rs:2249-2268`).
+/// The Recommended model. Its encoder keeps 8-bit block-wise weights
+/// (`MatMulNBits`) with float activations: the v1 `encoder-model.int8.onnx`
+/// also quantized every activation tensor to 8 bits with one dynamic scale,
+/// which moved its output far from the full model's and made it hear nothing
+/// on some short clips. It is named `encoder-model.onnx` because Parakeet
+/// loads that name first.
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 const PARAKEET_TDT_INT8_MODEL_FILES: &[(&str, &[&str])] = &[
     (
-        "encoder-model.int8.onnx",
+        "encoder-model.onnx",
         &[
-            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v1/encoder-model.int8.onnx",
+            "https://github.com/CapSoftware/transcription-models/releases/download/parakeet-tdt-v2/encoder-model.q8.onnx",
         ],
     ),
     (
@@ -577,7 +716,7 @@ const PARAKEET_MODEL_CLEANUP_FILES: &[&str] = &[
 /// `PARAKEET_KNOWN_PART_SIZES` (`captions.rs:2308-2316`).
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
 const PARAKEET_KNOWN_PART_SIZES: &[(&str, u64)] = &[
-    ("encoder-model.int8.onnx", 652_183_999),
+    ("encoder-model.q8.onnx", 895_802_223),
     ("decoder_joint-model.int8.onnx", 18_202_004),
     ("encoder-model.onnx", 41_770_866),
     ("encoder-model.onnx.data.part0", 1_300_000_000),
@@ -797,6 +936,136 @@ async fn download_parakeet_model(_model: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Word aligner
+// ---------------------------------------------------------------------------
+
+/// wav2vec2-base-960h (Apache-2.0) as an int8 ONNX export, pinned to a commit
+/// and checked by hash. It only refines the timing of words an engine already
+/// heard, in English, so a missing or failed download just keeps the engine's
+/// own timings.
+const ALIGNER_FILE: &str = "word-aligner-wav2vec2-base-960h-int8.onnx";
+const ALIGNER_URL: &str = "https://huggingface.co/Xenova/wav2vec2-base-960h/resolve/a19f851b3d42865797e410752b4c570c871e4825/onnx/model_quantized.onnx";
+const ALIGNER_SHA256: &str = "cd5040c147381580ed73258143dd8e0c28e800a09e74ee42ee2b3e8cb4d760a3";
+const ALIGNER_BYTES: u64 = 95_286_046;
+const ALIGNER_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+static ALIGNER_DOWNLOAD: Mutex<()> = Mutex::new(());
+
+fn aligner_path() -> PathBuf {
+    models_dir().join(ALIGNER_FILE)
+}
+
+fn aligner_installed(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.len() == ALIGNER_BYTES)
+}
+
+async fn download_aligner(path: &Path) -> Result<(), String> {
+    use sha2::Digest as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {parent:?}: {e}"))?;
+    }
+    let staging = path.with_extension("onnx.downloading");
+    let result = async {
+        let response = HTTP
+            .get(ALIGNER_URL)
+            .timeout(ALIGNER_DOWNLOAD_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download the word aligner: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download the word aligner: HTTP {}",
+                response.status()
+            ));
+        }
+        let mut file =
+            File::create(&staging).map_err(|e| format!("Failed to create {staging:?}: {e}"))?;
+        let mut hasher = sha2::Sha256::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("Error while downloading: {e}"))?;
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .map_err(|e| format!("Error while writing the word aligner: {e}"))?;
+        }
+        file.flush()
+            .map_err(|e| format!("Failed to flush the word aligner: {e}"))?;
+        let digest = hasher.finalize();
+        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        if hex != ALIGNER_SHA256 {
+            return Err(format!(
+                "The word aligner download is corrupt (sha256 {hex})"
+            ));
+        }
+        std::fs::rename(&staging, path)
+            .map_err(|e| format!("Failed to install the word aligner: {e}"))
+    }
+    .await;
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staging);
+    }
+    result
+}
+
+/// The aligner, downloaded on first use. `None` when it cannot be had now:
+/// offline, no async runtime to download on, or a platform without ONNX
+/// Runtime.
+fn load_word_aligner(runtime: Option<&tokio::runtime::Handle>) -> Option<align::Acoustic> {
+    if !supports_parakeet() {
+        return None;
+    }
+    let path = aligner_path();
+    {
+        let _download = ALIGNER_DOWNLOAD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !aligner_installed(&path) {
+            tracing::info!("Downloading the word aligner");
+            if let Err(error) = runtime?.block_on(download_aligner(&path)) {
+                tracing::warn!("{error}");
+                return None;
+            }
+        }
+    }
+    align::Acoustic::load(&path, REFINEMENT_THREADS)
+        .inspect_err(|error| tracing::warn!("{error}"))
+        .ok()
+}
+
+fn aligns_words_in(language: &str, groups: &[Vec<CaptionWord>]) -> bool {
+    match language {
+        "en" => true,
+        "auto" => {
+            let words: Vec<CaptionWord> = groups.iter().flatten().cloned().collect();
+            cap_project::caption_words::reads_as_english(&words)
+        }
+        _ => false,
+    }
+}
+
+/// Whether a transcript's hesitation fillers are English ones. A language
+/// picked as something else never is, however English its words look ("Er
+/// ist in Berlin").
+fn transcript_is_english<'a>(
+    language: &str,
+    words: impl IntoIterator<Item = &'a CaptionWord>,
+) -> bool {
+    matches!(language, "en" | "auto") && cap_project::caption_words::reads_as_english(words)
+}
+
+fn remove_word_aligner_if_unused() {
+    if MODEL_NAMES.iter().any(|model| model_files_present(model)) {
+        return;
+    }
+    let path = aligner_path();
+    if path.exists()
+        && let Err(error) = std::fs::remove_file(&path)
+    {
+        tracing::warn!("Failed to delete the word aligner: {error}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Engine contexts
 // ---------------------------------------------------------------------------
 
@@ -989,6 +1258,16 @@ fn decode_transcription_source(
 
 /// `normalize_audio_for_transcription` (`captions.rs:885-915`).
 fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
+    let gain = transcription_gain(samples);
+    if (gain - 1.0).abs() > 0.01 {
+        for sample in samples {
+            *sample = (*sample * gain).clamp(-0.98, 0.98);
+        }
+    }
+    gain
+}
+
+fn transcription_gain(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 1.0;
     }
@@ -1009,15 +1288,7 @@ fn normalize_audio_for_transcription(samples: &mut [f32]) -> f32 {
     let target_rms = 0.08_f32;
     let desired_gain = (target_rms / rms).clamp(1.0, 8.0);
     let peak_limited_gain = 0.98 / peak;
-    let gain = desired_gain.min(peak_limited_gain);
-
-    if (gain - 1.0).abs() > 0.01 {
-        for sample in samples {
-            *sample = (*sample * gain).clamp(-0.98, 0.98);
-        }
-    }
-
-    gain
+    desired_gain.min(peak_limited_gain)
 }
 
 fn extract_project_audio(
@@ -1090,6 +1361,57 @@ fn extract_project_audio(
         final_samples.truncate(initial_len);
     }
     Ok(any_audio)
+}
+
+/// The samples of a 16 kHz mono 16-bit PCM WAV, read past its header and any
+/// extra chunks so the first sample lands at time zero.
+fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>, String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|e| format!("Failed to open audio file: {e} at path: {path:?}"))?
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read audio file: {e}"))?;
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(format!("{} is not a WAV file", path.display()));
+    }
+    let mut offset = 12;
+    let mut format = None;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        let body = offset + 8;
+        if id == b"fmt " && body + 16 <= bytes.len() {
+            let channels = u16::from_le_bytes([bytes[body + 2], bytes[body + 3]]);
+            let rate = u32::from_le_bytes([
+                bytes[body + 4],
+                bytes[body + 5],
+                bytes[body + 6],
+                bytes[body + 7],
+            ]);
+            let bits = u16::from_le_bytes([bytes[body + 14], bytes[body + 15]]);
+            format = Some((channels, rate, bits));
+        }
+        if id == b"data" {
+            if format != Some((1, WHISPER_SAMPLE_RATE, 16)) {
+                return Err(format!(
+                    "Expected 16 kHz mono 16-bit audio in {}, got {format:?}",
+                    path.display()
+                ));
+            }
+            let end = body.saturating_add(size).min(bytes.len());
+            return Ok(bytes[body..end]
+                .chunks_exact(2)
+                .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0)
+                .collect());
+        }
+        offset = body.saturating_add(size).saturating_add(size & 1);
+    }
+    Err(format!("{} has no audio data", path.display()))
 }
 
 /// The WAV encode half of the recording-directory arm
@@ -1203,6 +1525,24 @@ fn write_wav_16k_mono(mixed_samples: &[f32], output_path: &Path) -> Result<(), S
 // Whisper
 // ---------------------------------------------------------------------------
 
+/// Whisper copies the style of its prompt, and without a disfluent one it
+/// writes clean prose: fillers and repeats disappear and can never be offered
+/// for removal. One short sentence with its fillers in the middle: a longer
+/// prompt made Whisper medium decode about 7% slower, and fillers at the start
+/// of the prompt made it invent them at the start of fluent sentences.
+const VERBATIM_PROMPT: &str = "So, um, I think, uh, we should start.";
+
+fn whisper_prompt(transcription_hints: &[String], verbatim: bool) -> Option<String> {
+    let hints = build_initial_prompt(transcription_hints);
+    if !verbatim {
+        return hints;
+    }
+    Some(match hints {
+        Some(hints) => format!("{hints}. {VERBATIM_PROMPT}"),
+        None => VERBATIM_PROMPT.to_string(),
+    })
+}
+
 /// `build_initial_prompt` (`captions.rs:1181-1200`).
 fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
     let mut normalized = Vec::new();
@@ -1225,6 +1565,12 @@ fn build_initial_prompt(transcription_hints: &[String]) -> Option<String> {
     }
 }
 
+fn default_transcription_hints() -> Vec<String> {
+    ["Cap", "TypeScript", "My Brand Name", "mywebsite.com"]
+        .map(str::to_string)
+        .to_vec()
+}
+
 /// `general_settings.transcriptionHints`, with the Rust store's own default
 /// list when the key is absent (`general_settings.rs:286-293`).
 fn transcription_hints() -> Vec<String> {
@@ -1235,12 +1581,7 @@ fn transcription_hints() -> Vec<String> {
             .filter_map(|value| value.as_str())
             .map(str::to_string)
             .collect(),
-        None => vec![
-            "Cap".to_string(),
-            "TypeScript".to_string(),
-            "My Brand Name".to_string(),
-            "mywebsite.com".to_string(),
-        ],
+        None => default_transcription_hints(),
     }
 }
 
@@ -1257,13 +1598,55 @@ fn is_special_token(token_text: &str) -> bool {
         || trimmed.contains("<|")
 }
 
+fn detect_whisper_language(
+    context: &WhisperContext,
+    samples: &[f32],
+) -> Result<&'static str, String> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_language(Some("auto"));
+    params.set_detect_language(true);
+    let mut state = context
+        .create_state()
+        .map_err(|e| format!("Failed to create Whisper state: {e}"))?;
+    let window = samples.len().min(30 * WHISPER_SAMPLE_RATE as usize);
+    state
+        .full(params, &samples[..window])
+        .map_err(|e| format!("Failed to detect the spoken language: {e}"))?;
+    let id = state
+        .full_lang_id_from_state()
+        .map_err(|e| format!("Failed to read the detected language: {e}"))?;
+    whisper_rs::get_lang_str(id).ok_or_else(|| format!("Unknown Whisper language id {id}"))
+}
+
 /// `process_with_whisper` (`captions.rs:917-1179`).
 fn process_with_whisper(
-    audio_path: &Path,
+    samples: &[f32],
     context: Arc<WhisperContext>,
     language: &str,
     transcription_hints: &[String],
-) -> Result<Vec<CaptionSegment>, String> {
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let audio_data_f32: std::borrow::Cow<'_, [f32]> =
+        if (transcription_gain(samples) - 1.0).abs() > 0.01 {
+            let mut boosted = samples.to_vec();
+            let gain = normalize_audio_for_transcription(&mut boosted);
+            tracing::info!("Applied Whisper input gain: {gain:.2}x");
+            boosted.into()
+        } else {
+            samples.into()
+        };
+    let language =
+        if options.whisper_filler_prompt && language == "auto" && !audio_data_f32.is_empty() {
+            let detected = detect_whisper_language(&context, &audio_data_f32)?;
+            tracing::info!("Whisper detected language: {detected}");
+            detected
+        } else {
+            language
+        };
+
     let mut params = FullParams::new(SamplingStrategy::BeamSearch {
         beam_size: 5,
         patience: 1.0,
@@ -1277,24 +1660,9 @@ fn process_with_whisper(
     params.set_language(Some(if language == "auto" { "auto" } else { language }));
     params.set_max_len(i32::MAX);
 
-    if let Some(initial_prompt) = build_initial_prompt(transcription_hints) {
+    let verbatim = options.whisper_filler_prompt && language == "en";
+    if let Some(initial_prompt) = whisper_prompt(transcription_hints, verbatim) {
         params.set_initial_prompt(&initial_prompt);
-    }
-
-    let mut audio_data = Vec::new();
-    File::open(audio_path)
-        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?
-        .read_to_end(&mut audio_data)
-        .map_err(|e| format!("Failed to read audio file: {e}"))?;
-
-    let mut audio_data_f32: Vec<f32> = audio_data
-        .chunks_exact(2)
-        .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0)
-        .collect();
-
-    let gain = normalize_audio_for_transcription(&mut audio_data_f32);
-    if (gain - 1.0).abs() > 0.01 {
-        tracing::info!("Applied Whisper input gain: {gain:.2}x");
     }
 
     tracing::info!(
@@ -1316,18 +1684,14 @@ fn process_with_whisper(
         .full_n_segments()
         .map_err(|e| format!("Failed to get number of segments: {e}"))?;
 
-    let mut segments = Vec::new();
+    let mut groups = Vec::new();
 
     for i in 0..num_segments {
         let start_i64 = state
             .full_get_segment_t0(i)
             .map_err(|e| format!("Failed to get segment start time: {e}"))?;
-        let end_i64 = state
-            .full_get_segment_t1(i)
-            .map_err(|e| format!("Failed to get segment end time: {e}"))?;
 
         let start_time = (start_i64 as f32) / 100.0;
-        let end_time = (end_i64 as f32) / 100.0;
 
         let mut words = Vec::new();
         let num_tokens = state
@@ -1384,35 +1748,18 @@ fn process_with_whisper(
         }
 
         let words = normalize_caption_words(words);
-        if words.is_empty() {
-            continue;
-        }
-
-        for (chunk_idx, chunk_words) in caption_word_chunks(&words).into_iter().enumerate() {
-            let segment_text = caption_text_from_words(chunk_words);
-            let segment_start = chunk_words
-                .first()
-                .map(|word| word.start)
-                .unwrap_or(start_time);
-            let segment_end = chunk_words.last().map(|word| word.end).unwrap_or(end_time);
-
-            segments.push(CaptionSegment {
-                id: format!("segment-{i}-{chunk_idx}"),
-                start: segment_start,
-                end: segment_end,
-                text: segment_text,
-                words: chunk_words.to_vec(),
-            });
+        if !words.is_empty() {
+            groups.push(words);
         }
     }
 
     tracing::info!(
-        "Whisper produced {} caption segments ({} words)",
-        segments.len(),
-        segments.iter().map(|s| s.words.len()).sum::<usize>()
+        "Whisper produced {} segments ({} words)",
+        groups.len(),
+        groups.iter().map(Vec::len).sum::<usize>()
     );
 
-    Ok(segments)
+    Ok(groups)
 }
 
 // ---------------------------------------------------------------------------
@@ -1451,12 +1798,8 @@ fn parakeet_chunk_ranges(samples: &[f32], sample_rate: usize) -> Vec<std::ops::R
     ranges
 }
 
-/// `process_with_parakeet` (`captions.rs:1202-1302`).
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-fn process_with_parakeet(
-    audio_path: &Path,
-    model_dir: &str,
-) -> Result<Vec<CaptionSegment>, String> {
+fn cached_parakeet(model_dir: &str) -> Result<Arc<Mutex<ParakeetTDT>>, String> {
     let cached_model = {
         let guard = PARAKEET_CONTEXT
             .lock()
@@ -1470,116 +1813,315 @@ fn process_with_parakeet(
         })
     };
 
-    let model_arc = if let Some(model) = cached_model {
+    if let Some(model) = cached_model {
         tracing::info!("Reusing cached Parakeet TDT model");
-        model
-    } else {
-        tracing::info!("Loading Parakeet TDT model from: {model_dir}");
-        cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
-        let model = ParakeetTDT::from_pretrained(model_dir, None).map_err(|e| format!("{e}"))?;
-        let loaded_model = Arc::new(Mutex::new(model));
-
-        let mut guard = PARAKEET_CONTEXT
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(cached) = guard
-            .as_ref()
-            .filter(|cached| cached.model_dir == model_dir)
-        {
-            Arc::clone(&cached.model)
-        } else {
-            *guard = Some(CachedParakeetContext {
-                model_dir: model_dir.to_string(),
-                model: Arc::clone(&loaded_model),
-            });
-            loaded_model
-        }
-    };
-
-    let mut reader = hound::WavReader::open(audio_path)
-        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
-    let spec = reader.spec();
-    if spec.channels != 1 || spec.sample_rate != WHISPER_SAMPLE_RATE {
-        return Err(format!(
-            "Expected 16 kHz mono audio, got {} Hz with {} channels",
-            spec.sample_rate, spec.channels
-        ));
+        return Ok(model);
     }
-    let sample_rate = spec.sample_rate;
-    let samples = reader
-        .samples::<i16>()
-        .map(|sample| sample.map(|sample| f32::from(sample) / 32768.0))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read audio file: {e}"))?;
+    tracing::info!("Loading Parakeet TDT model from: {model_dir}");
+    let loaded_model = Arc::new(Mutex::new(load_parakeet(model_dir, None)?));
+    let mut guard = PARAKEET_CONTEXT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(cached) = guard
+        .as_ref()
+        .filter(|cached| cached.model_dir == model_dir)
+    {
+        Ok(Arc::clone(&cached.model))
+    } else {
+        *guard = Some(CachedParakeetContext {
+            model_dir: model_dir.to_string(),
+            model: Arc::clone(&loaded_model),
+        });
+        Ok(loaded_model)
+    }
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn load_parakeet(model_dir: &str, threads: Option<usize>) -> Result<ParakeetTDT, String> {
+    cap_camera_effects::initialize_onnx_runtime().map_err(|error| format!("{error:#}"))?;
+    let config =
+        threads.map(|threads| parakeet_rs::ExecutionConfig::default().with_intra_threads(threads));
+    ParakeetTDT::from_pretrained(model_dir, config).map_err(|e| format!("{e}"))
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn decode_parakeet(
+    parakeet: &mut ParakeetTDT,
+    samples: &[f32],
+    range: Range<usize>,
+    padding: usize,
+    subwords: bool,
+) -> Result<Vec<CaptionWord>, String> {
+    let rate = WHISPER_SAMPLE_RATE as usize;
+    let mode = if subwords {
+        TimestampMode::Tokens
+    } else {
+        TimestampMode::Words
+    };
+    let mut audio = Vec::with_capacity(range.len() + 2 * padding);
+    audio.resize(padding, 0.0);
+    audio.extend_from_slice(&samples[range.clone()]);
+    audio.resize(audio.len() + padding, 0.0);
+    let offset = (range.start as f32 - padding as f32) / rate as f32;
+    let result = parakeet
+        .transcribe_samples(audio, WHISPER_SAMPLE_RATE, 1, Some(mode))
+        .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
+    let timed = result.tokens.into_iter().map(|token| CaptionWord {
+        text: token.text,
+        start: token.start + offset,
+        end: token.end + offset,
+    });
+    Ok(if subwords {
+        verbatim::words_from_subword_tokens(timed)
+    } else {
+        timed.collect()
+    })
+}
+
+/// `process_with_parakeet` (`captions.rs:1202-1302`).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn process_with_parakeet(
+    samples: &[f32],
+    model_dir: &str,
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let model_arc = cached_parakeet(model_dir)?;
     if samples.is_empty() {
         return Ok(Vec::new());
     }
-
-    let mut tokens = Vec::new();
-    {
-        let mut parakeet = model_arc
-            .lock()
-            .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
-        for range in parakeet_chunk_ranges(&samples, sample_rate as usize) {
-            let offset = range.start as f32 / sample_rate as f32;
-            let result = parakeet
-                .transcribe_samples(
-                    samples[range].to_vec(),
-                    sample_rate,
-                    1,
-                    Some(TimestampMode::Words),
-                )
-                .map_err(|e| format!("Parakeet transcription failed: {e}"))?;
-            tokens.extend(result.tokens.into_iter().map(|token| CaptionWord {
-                text: token.text,
-                start: token.start + offset,
-                end: token.end + offset,
-            }));
-        }
+    let mut parakeet = model_arc
+        .lock()
+        .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
+    let mut words = Vec::new();
+    for range in parakeet_chunk_ranges(samples, WHISPER_SAMPLE_RATE as usize) {
+        words.extend(decode_parakeet(
+            &mut parakeet,
+            samples,
+            range,
+            0,
+            options.parakeet_subword_words,
+        )?);
     }
-
-    tracing::info!("Parakeet produced {} timed tokens", tokens.len());
-
-    Ok(caption_segments_from_tokens(tokens))
+    tracing::info!("Parakeet produced {} words", words.len());
+    Ok(vec![words])
 }
 
-/// Parakeet's timed word tokens -> caption segments: drop empty tokens,
-/// normalize the words and chunk them.
-#[cfg(any(test, not(all(target_os = "macos", target_arch = "x86_64"))))]
+/// When the first decode hears nothing at all, which the int8 model does on
+/// some recordings that start after a pause, the re-decoding that normally
+/// waits for the refinement runs now: otherwise there is no transcript to
+/// refine.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn recover_empty_first_pass(
+    samples: &[f32],
+    model_dir: &str,
+    options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    let model = cached_parakeet(model_dir)?;
+    let mut parakeet = model
+        .lock()
+        .map_err(|e| format!("Failed to lock Parakeet model: {e}"))?;
+    let mut words = Vec::new();
+    recover_unheard_speech(
+        samples,
+        &mut words,
+        &mut parakeet,
+        options.parakeet_subword_words,
+        &AtomicBool::new(false),
+    );
+    Ok(vec![words])
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn recover_empty_first_pass(
+    _samples: &[f32],
+    _model_dir: &str,
+    _options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
+    Ok(Vec::new())
+}
+
+/// The int8 Parakeet model can stop emitting after a pause and lose the rest
+/// of a chunk. Sound no word covers is decoded again on its own, in bounded
+/// chunks; a failed span keeps the words already heard.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn recover_unheard_speech(
+    samples: &[f32],
+    words: &mut Vec<CaptionWord>,
+    parakeet: &mut ParakeetTDT,
+    subwords: bool,
+    stop: &AtomicBool,
+) {
+    let rate = WHISPER_SAMPLE_RATE as usize;
+    let before = words.len();
+    let loudness = verbatim::Loudness::new(samples, WHISPER_SAMPLE_RATE);
+    for span in verbatim::uncovered_speech(words, &loudness) {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let first = ((span.0 * rate as f64) as usize).min(samples.len());
+        let last = ((span.1 * rate as f64) as usize).min(samples.len());
+        if last <= first {
+            continue;
+        }
+        let Some(voiced) = verbatim::span_voicing(samples, WHISPER_SAMPLE_RATE, span) else {
+            continue;
+        };
+        let mut found = Vec::new();
+        for part in parakeet_chunk_ranges(&samples[first..last], rate) {
+            match decode_parakeet(
+                parakeet,
+                samples,
+                first + part.start..first + part.end,
+                rate / 2,
+                subwords,
+            ) {
+                Ok(part_words) => found.extend(part_words),
+                Err(error) => tracing::warn!("Re-decoding unheard speech failed: {error}"),
+            }
+        }
+        verbatim::insert_recovered(words, found, span, voiced);
+    }
+    tracing::info!(
+        "Recovered {} words from unheard speech",
+        words.len().saturating_sub(before)
+    );
+}
+
+#[cfg(test)]
 fn caption_segments_from_tokens(
     tokens: impl IntoIterator<Item = CaptionWord>,
 ) -> Vec<CaptionSegment> {
-    let words = normalize_caption_words(
-        tokens
-            .into_iter()
-            .filter(|token| !token.text.trim().is_empty())
-            .map(|token| CaptionWord {
-                text: token.text.trim().to_string(),
-                start: token.start,
-                end: token.end,
-            })
-            .collect(),
-    );
+    caption_segments_from_groups(vec![tokens.into_iter().collect()], "auto")
+}
 
+/// Each group (a Whisper segment, or everything Parakeet heard) is
+/// normalized and chunked on its own, so a caption never spans two groups.
+fn caption_segments_from_groups(
+    groups: Vec<Vec<CaptionWord>>,
+    language: &str,
+) -> Vec<CaptionSegment> {
+    let single = groups.len() == 1;
+    let groups: Vec<Vec<CaptionWord>> = groups
+        .into_iter()
+        .map(|group| {
+            normalize_caption_words(
+                group
+                    .into_iter()
+                    .filter(|token| !token.text.trim().is_empty())
+                    .collect(),
+            )
+        })
+        .collect();
+    let english = transcript_is_english(language, groups.iter().flatten());
     let mut segments = Vec::new();
-    for (chunk_idx, chunk) in caption_word_chunks(&words).into_iter().enumerate() {
-        segments.push(CaptionSegment {
-            id: format!("segment-{chunk_idx}"),
-            start: chunk.first().map_or(0.0, |word| word.start),
-            end: chunk.last().map_or(0.0, |word| word.end),
-            text: caption_text_from_words(chunk),
-            words: chunk.to_vec(),
-        });
+    for (group_index, words) in groups.into_iter().enumerate() {
+        let chunks = if english {
+            caption_word_chunks_skipping_fillers(&words)
+        } else {
+            caption_word_chunks(&words)
+        };
+        for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
+            segments.push(CaptionSegment {
+                id: if single {
+                    format!("segment-{chunk_idx}")
+                } else {
+                    format!("segment-{group_index}-{chunk_idx}")
+                },
+                start: chunk.first().map_or(0.0, |word| word.start),
+                end: chunk.last().map_or(0.0, |word| word.end),
+                text: caption_text_from_words(chunk),
+                words: chunk.to_vec(),
+                recording_clip: None,
+            });
+        }
     }
-
     segments
+}
+
+#[cfg(test)]
+fn finish_words(
+    groups: Vec<Vec<CaptionWord>>,
+    samples: &[f32],
+    options: &VerbatimOptions,
+    aligner: Option<&mut dyn align::Emissions>,
+) -> Vec<Vec<CaptionWord>> {
+    finish_words_tuned(
+        groups,
+        samples,
+        options,
+        aligner,
+        &TUNING,
+        &AtomicBool::new(false),
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tuning {
+    snap: verbatim::SnapSettings,
+}
+
+const TUNING: Tuning = Tuning {
+    snap: verbatim::SNAP,
+};
+
+fn finish_words_tuned(
+    groups: Vec<Vec<CaptionWord>>,
+    samples: &[f32],
+    options: &VerbatimOptions,
+    aligner: Option<&mut dyn align::Emissions>,
+    tuning: &Tuning,
+    stop: &AtomicBool,
+) -> Vec<Vec<CaptionWord>> {
+    let groups: Vec<Vec<CaptionWord>> = groups
+        .into_iter()
+        .map(|group| {
+            normalize_caption_words(
+                group
+                    .into_iter()
+                    .filter(|token| !token.text.trim().is_empty())
+                    .collect(),
+            )
+        })
+        .filter(|group| !group.is_empty())
+        .collect();
+    let groups: Vec<Vec<CaptionWord>> = if options.split_stutters {
+        groups.into_iter().map(verbatim::split_stutters).collect()
+    } else {
+        groups
+    };
+    let lengths: Vec<usize> = groups.iter().map(Vec::len).collect();
+    let mut words: Vec<CaptionWord> = groups.into_iter().flatten().collect();
+    if let Some(acoustic) = aligner.filter(|_| options.align_words)
+        && let Err(error) = align::align(&mut words, samples, WHISPER_SAMPLE_RATE, acoustic, stop)
+        && error != align::STOPPED
+    {
+        tracing::warn!("Word alignment failed, keeping engine timings: {error}");
+    }
+    if options.snap_to_pauses {
+        let loudness = verbatim::Loudness::with_thresholds(
+            samples,
+            WHISPER_SAMPLE_RATE,
+            tuning.snap.above_floor_db,
+            tuning.snap.below_peak_db,
+        );
+        verbatim::snap_to_pauses(&mut words, &loudness, tuning.snap);
+    }
+    if options.snap_to_pauses || options.align_words {
+        align::keep_order(&mut words);
+    }
+    let mut words = words.into_iter();
+    lengths
+        .into_iter()
+        .map(|length| words.by_ref().take(length).collect())
+        .collect()
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn process_with_parakeet(
-    _audio_path: &Path,
+    _samples: &[f32],
     _model_dir: &str,
-) -> Result<Vec<CaptionSegment>, String> {
+    _options: &VerbatimOptions,
+) -> Result<Vec<Vec<CaptionWord>>, String> {
     Err(PARAKEET_UNSUPPORTED_MESSAGE.to_string())
 }
 
@@ -1654,7 +2196,7 @@ pub fn transcribe_blocking(
     language: &str,
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
-) -> Result<Vec<CaptionSegment>, String> {
+) -> Result<Transcript, String> {
     let requested = model;
     // A model being downloaded should not be selected as a fallback, even
     // if an older copy still exists at its final path.
@@ -1679,34 +2221,82 @@ pub fn transcribe_blocking(
     }
 
     let _guard = lock_transcription_worker_slot();
-    let result =
-        transcribe_project_with(project_path, timeline, recording_durations, |audio_path| {
-            if is_parakeet_model(model) {
-                tracing::info!("Using Parakeet TDT engine");
-                process_with_parakeet(audio_path, model_file.to_string_lossy().as_ref())
-            } else {
-                tracing::info!("Using Whisper engine");
-                let hints = transcription_hints();
-                let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
-                process_with_whisper(audio_path, context, language, &hints)
-            }
-        });
+    let result = transcribe_project_first_pass(
+        project_path,
+        model,
+        &model_file,
+        language,
+        timeline,
+        recording_durations,
+    );
     if is_parakeet_model(model) {
         schedule_parakeet_release();
     } else {
         release_whisper_context_after_transcription();
     }
-    result
+    Ok(Transcript {
+        segments: result?,
+        refinement: RefinementRequest::new(
+            model,
+            language,
+            &cap_project::transcription_source_ranges(timeline, recording_durations),
+        ),
+    })
 }
 
-/// Extracts the project's transcription audio to a temporary 16 kHz mono WAV
-/// and runs `engine` on it.
-fn transcribe_project_with(
+fn transcribe_project_first_pass(
     project_path: &Path,
+    model: &str,
+    model_file: &Path,
+    language: &str,
     timeline: Option<&TimelineConfiguration>,
     recording_durations: &[f64],
-    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
 ) -> Result<Vec<CaptionSegment>, String> {
+    transcribe_project_with(project_path, timeline, recording_durations, |audio_path| {
+        let samples = read_wav_16k_mono(audio_path)?;
+        let options = VerbatimOptions::default().first_pass();
+        let groups = if is_parakeet_model(model) {
+            tracing::info!("Using Parakeet TDT engine");
+            let model_dir = model_file.to_string_lossy();
+            let groups = process_with_parakeet(&samples, &model_dir, &options)?;
+            if groups.iter().all(Vec::is_empty) {
+                recover_empty_first_pass(&samples, &model_dir, &options)?
+            } else {
+                groups
+            }
+        } else {
+            tracing::info!("Using Whisper engine");
+            let hints = transcription_hints();
+            let context = get_whisper_context(model_file.to_string_lossy().as_ref())?;
+            process_with_whisper(&samples, context, language, &hints, &options)?
+        };
+        let groups = finish_words_tuned(
+            groups,
+            &samples,
+            &options,
+            None,
+            &TUNING,
+            &AtomicBool::new(false),
+        );
+        Ok(caption_segments_from_groups(groups, language))
+    })
+}
+
+/// The first pass's captions, shown at once, and what refines them.
+pub struct Transcript {
+    pub segments: Vec<CaptionSegment>,
+    pub refinement: RefinementRequest,
+}
+
+/// Extracts `ranges` of the project's audio, as one 16 kHz mono WAV, and runs
+/// `engine` on it with where each range landed.
+fn with_transcription_audio<T>(
+    project_path: &Path,
+    ranges: &[Range<f64>],
+    recording_durations: &[f64],
+    stop: &AtomicBool,
+    engine: impl FnOnce(&Path, &[TranscriptionAudioOffset]) -> Result<T, String>,
+) -> Result<T, String> {
     ffmpeg::init().map_err(|e| format!("Failed to initialise ffmpeg: {e}"))?;
     let meta = RecordingMeta::load_for_project(project_path)
         .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
@@ -1726,7 +2316,10 @@ fn transcribe_project_with(
     let result = (|| {
         let mut samples = Vec::new();
         let mut offsets = Vec::new();
-        for range in cap_project::transcription_source_ranges(timeline, recording_durations) {
+        for range in ranges.iter().cloned() {
+            if stop.load(Ordering::Relaxed) {
+                return Err("Audio extraction stopped".to_string());
+            }
             let start = samples.len();
             if !extract_project_audio(
                 &meta,
@@ -1752,14 +2345,33 @@ fn transcribe_project_with(
         }
         write_wav_16k_mono(&samples, &audio_path)?;
         drop(samples);
-        Ok(restore_source_timestamps(engine(&audio_path)?, &offsets))
+        engine(&audio_path, &offsets)
     })();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+    result
+}
 
-    let segments = result?;
+pub const NO_SPEECH: &str = "No speech detected in the audio";
+
+/// [`with_transcription_audio`] over the timeline's ranges, with `engine`'s
+/// segments moved back to source time.
+fn transcribe_project_with(
+    project_path: &Path,
+    timeline: Option<&TimelineConfiguration>,
+    recording_durations: &[f64],
+    engine: impl FnOnce(&Path) -> Result<Vec<CaptionSegment>, String>,
+) -> Result<Vec<CaptionSegment>, String> {
+    let ranges = cap_project::transcription_source_ranges(timeline, recording_durations);
+    let segments = with_transcription_audio(
+        project_path,
+        &ranges,
+        recording_durations,
+        &AtomicBool::new(false),
+        |path, offsets| Ok(restore_source_timestamps(engine(path)?, offsets)),
+    )?;
     if segments.is_empty() {
-        return Err("No speech detected in the audio".to_string());
+        return Err(NO_SPEECH.to_string());
     }
     Ok(segments)
 }
@@ -1770,7 +2382,7 @@ fn transcribe_project_with(
 
 use cap_project::caption_words::{
     MAX_CAPTION_WORD_DURATION, caption_text_from_words, caption_word_chunks,
-    normalize_caption_words,
+    caption_word_chunks_skipping_fillers, normalize_caption_words,
 };
 
 // ---------------------------------------------------------------------------
@@ -1844,32 +2456,88 @@ fn held_time_before(holds: &[(f64, f64)], time: f64) -> f64 {
 /// preference -- the mode the caption override panel uses. The `"incoming"`
 /// arm serves only the legacy non-source-timed inversion, which this build
 /// never produces.
+///
+/// `recording_clip` is the clip a caption is tied to
+/// (`CaptionSegment::recording_clip`): where its clip overlaps another, as in
+/// a crossfade, the time maps through that clip, the only one it shows in.
+/// A clip trimmed past its media end (a held tail) counts toward
+/// `source_range` only up to that end: past it the source clock is the next
+/// clip's, as in caption projection.
+/// Returns the source time and the recording clip it was mapped through.
 pub fn map_edited_time_to_source(
     edited_time: f64,
     timeline: &TimelineConfiguration,
     recording_durations: &[f64],
     source_range: Option<(f64, f64)>,
-) -> Option<f64> {
+    recording_clip: Option<u32>,
+) -> Option<(f64, u32)> {
+    map_edited_time_to_piece(
+        edited_time,
+        timeline,
+        recording_durations,
+        source_range,
+        recording_clip,
+    )
+    .map(|(time, piece)| (time, timeline.segments[piece].recording_clip))
+}
+
+/// Where recording clip `clip`'s media ends on the shared source clock, when
+/// another clip follows it there (past it the clock is that clip's).
+fn media_end_before_next_clip(clip: u32, recording_durations: &[f64]) -> Option<f64> {
+    let clip = clip as usize;
+    (clip + 1 < recording_durations.len()).then(|| recording_durations[..=clip].iter().sum::<f64>())
+}
+
+/// [`map_edited_time_to_source`], returning the index of the timeline
+/// segment the time was mapped through instead of its recording clip.
+fn map_edited_time_to_piece(
+    edited_time: f64,
+    timeline: &TimelineConfiguration,
+    recording_durations: &[f64],
+    source_range: Option<(f64, f64)>,
+    recording_clip: Option<u32>,
+) -> Option<(f64, usize)> {
     let edited_time = edited_time - held_time_before(&timeline.hold_windows(), edited_time);
-    let mut fallback = None;
-    for mapping in build_source_to_edited_mappings(timeline, recording_durations) {
+    let media_end = |clip: u32| media_end_before_next_clip(clip, recording_durations);
+    // Best first: a piece of the tied clip overlapping `source_range`, any
+    // piece of the tied clip (a clip can be cut into pieces that overlap in
+    // a crossfade), any piece overlapping `source_range`, then any piece.
+    let mut best: Option<(u8, (f64, usize))> = None;
+    for (piece, (mapping, segment)) in
+        build_source_to_edited_mappings(timeline, recording_durations)
+            .into_iter()
+            .zip(&timeline.segments)
+            .enumerate()
+    {
         let edited_end =
             mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
         if edited_time >= mapping.edited_start && edited_time <= edited_end {
-            let source_time =
-                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale;
-            if let Some((range_start, range_end)) = source_range
-                && range_start < mapping.source_end
-                && range_end > mapping.source_start
-            {
-                return Some(source_time);
-            }
-            if fallback.is_none() {
-                fallback = Some(source_time);
+            let hit = (
+                mapping.source_start + (edited_time - mapping.edited_start) * mapping.timescale,
+                piece,
+            );
+            let tied = recording_clip == Some(segment.recording_clip);
+            // A tied caption lives in its clip's held tail; any other reaches
+            // a clip only up to its media end.
+            let reach_end = match media_end(segment.recording_clip) {
+                Some(end) if !tied => mapping.source_end.min(end),
+                _ => mapping.source_end,
+            };
+            let overlaps = source_range.is_some_and(|(range_start, range_end)| {
+                range_start < reach_end && range_end > mapping.source_start
+            });
+            let rank = match (tied, overlaps) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            };
+            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                best = Some((rank, hit));
             }
         }
     }
-    fallback
+    best.map(|(_, hit)| hit)
 }
 
 /// `syncCaptionWordsWithText` (`captions.ts:593-632`): keep word timings when
@@ -1916,6 +2584,112 @@ pub fn sync_caption_words_with_text(
         .collect()
 }
 
+/// `effective_to_output` / `effective_to_output_end` in caption projection:
+/// where gapless time `effective` lands in output time once fullscreen text
+/// holds are put back, as a range's start (`at_end` false) or its end.
+fn effective_to_output(holds: &[(f64, f64)], effective: f64, at_end: bool) -> f64 {
+    let mut output = effective;
+    for (start, end) in holds {
+        if output > *start || (!at_end && output == *start) {
+            output += end - start;
+        } else {
+            break;
+        }
+    }
+    output
+}
+
+/// Shortest output length, in seconds, a tied caption is clamped to; less
+/// and the edit leaves its timing where it was.
+pub const MIN_TIED_CAPTION_SECS: f64 = 1e-3;
+
+fn f32_at_or_after(time: f64) -> f32 {
+    let rounded = time as f32;
+    if f64::from(rounded) < time {
+        rounded.next_up()
+    } else {
+        rounded
+    }
+}
+
+fn f32_at_or_before(time: f64) -> f32 {
+    let rounded = time as f32;
+    if f64::from(rounded) > time {
+        rounded.next_down()
+    } else {
+        rounded
+    }
+}
+
+/// The timeline piece caption track item `item_id` is drawn through, and
+/// that piece's output range, when `caption` is tied to a clip. Projection
+/// draws a tied caption through each piece of its clip its text or words
+/// overlap, in timeline order, and names the n-th item `<id>::edl<n>` (no
+/// suffix when there is one), so the id says which piece it is. A tied caption
+/// reads only its own clip, so it stays inside this piece: a resize or move
+/// stops at its edges instead of reaching another clip.
+fn tied_caption_piece(
+    timeline: &TimelineConfiguration,
+    recording_durations: &[f64],
+    caption: &CaptionSegment,
+    item_id: &str,
+) -> Option<((f64, f64), usize)> {
+    let clip = caption.recording_clip?;
+    let nth = item_id
+        .rsplit_once("::edl")
+        .and_then(|(_, index)| index.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mappings = build_source_to_edited_mappings(timeline, recording_durations);
+    let (piece, mapping) = mappings
+        .iter()
+        .enumerate()
+        .filter(|(piece, mapping)| {
+            let overlaps = |start: f64, end: f64| {
+                start.max(mapping.source_start) < end.min(mapping.source_end)
+            };
+            timeline.segments[*piece].recording_clip == clip
+                && if caption.words.is_empty() {
+                    overlaps(f64::from(caption.start), f64::from(caption.end))
+                } else {
+                    caption.words.iter().any(|word| {
+                        let end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
+                        overlaps(f64::from(word.start), f64::from(end))
+                    })
+                }
+        })
+        .nth(nth)?;
+    let holds = timeline.hold_windows();
+    let edited_end =
+        mapping.edited_start + (mapping.source_end - mapping.source_start) / mapping.timescale;
+    Some((
+        (
+            effective_to_output(&holds, mapping.edited_start, false),
+            effective_to_output(&holds, edited_end, true),
+        ),
+        piece,
+    ))
+}
+
+/// The output range caption track item `index` may be dragged within: the
+/// piece of its clip it is drawn through, when its caption is tied to a clip.
+/// `None` for an untied caption, which may go anywhere.
+pub fn tied_caption_window(
+    project: &ProjectConfiguration,
+    index: usize,
+    recording_durations: &[f64],
+) -> Option<(f64, f64)> {
+    let timeline = project.timeline.as_ref()?;
+    let item = timeline.caption_segments.get(index)?;
+    let source_id = source_caption_id(&item.id);
+    let caption = project
+        .captions
+        .as_ref()?
+        .segments
+        .iter()
+        .find(|segment| segment.id == source_id)?;
+    tied_caption_piece(timeline, recording_durations, caption, &item.id).map(|(window, _)| window)
+}
+
 /// `updateSelectedCaption`'s source write-through (`CaptionsTab.tsx:257-315`):
 /// after a track segment's start/end/text was edited in output time, route
 /// the timing and content back onto the source-time caption master so the
@@ -1932,7 +2706,8 @@ pub fn write_caption_edit_to_source(
     let Some(track_segment) = timeline.caption_segments.get(index) else {
         return;
     };
-    let source_id = source_caption_id(&track_segment.id).to_string();
+    let track_id = track_segment.id.clone();
+    let source_id = source_caption_id(&track_id).to_string();
     let (track_start, track_end, track_text) = (
         track_segment.start,
         track_segment.end,
@@ -1954,25 +2729,88 @@ pub fn write_caption_edit_to_source(
         return;
     };
 
-    let source_range = Some((f64::from(source.start), f64::from(source.end)));
-    if let Some(start) =
-        map_edited_time_to_source(track_start, timeline, recording_durations, source_range)
-    {
-        source.start = start as f32;
-    }
-    if let Some(end) =
-        map_edited_time_to_source(track_end, timeline, recording_durations, source_range)
-    {
-        source.end = end as f32;
+    if source.recording_clip.is_some() {
+        // A tied caption stays on the piece of its clip this item is drawn
+        // through and keeps its tie, so neither it nor its words ever show
+        // over another clip. The editor stops a drag at the piece's edges;
+        // anything past them is clamped.
+        if let Some(((window_start, window_end), piece)) =
+            tied_caption_piece(timeline, recording_durations, source, &track_id)
+        {
+            let (start, end) = (
+                track_start.clamp(window_start, window_end),
+                track_end.clamp(window_start, window_end),
+            );
+            let holds = timeline.hold_windows();
+            let mapping = &build_source_to_edited_mappings(timeline, recording_durations)[piece];
+            let to_source = |time: f64| {
+                let effective = time - held_time_before(&holds, time);
+                mapping.source_start + (effective - mapping.edited_start) * mapping.timescale
+            };
+            // Rounded to f32 inward, so it never crosses the piece's edge
+            // and peeks out over the piece beyond.
+            let (start, end) = (
+                f32_at_or_after(to_source(start)),
+                f32_at_or_before(to_source(end)),
+            );
+            // Clamped to nothing (dragged wholly past its piece), it stays.
+            if f64::from(end - start) / mapping.timescale > MIN_TIED_CAPTION_SECS {
+                (source.start, source.end) = (start, end);
+            }
+        }
+    } else {
+        let source_range = Some((f64::from(source.start), f64::from(source.end)));
+        let map = |time| {
+            map_edited_time_to_piece(time, timeline, recording_durations, source_range, None)
+        };
+        let (start, end) = (map(track_start), map(track_end));
+        let clip_of = |piece: usize| timeline.segments[piece].recording_clip;
+        // Moved across clips so its end maps onto an earlier source clock
+        // (out of a held tail, or onto a clip placed before this one), it
+        // would be saved reversed; it ends where its start's piece does.
+        let end = match (start, end) {
+            (Some((start, start_piece)), Some((end, end_piece)))
+                if clip_of(start_piece) != clip_of(end_piece) && end <= start =>
+            {
+                build_source_to_edited_mappings(timeline, recording_durations)
+                    .get(start_piece)
+                    .map(|mapping| (mapping.source_end, start_piece))
+            }
+            _ => end,
+        };
+        if let Some((start, _)) = start {
+            source.start = start as f32;
+        }
+        if let Some((end, piece)) = end {
+            source.end = end as f32;
+            // Over a clip's held tail (past its media end) the source clock
+            // already belongs to the next clip, so the caption is tied to the
+            // clip its end was mapped through.
+            source.recording_clip = cap_project::held_tail_clip(
+                clip_of(piece),
+                f64::from(source.end),
+                recording_durations,
+            );
+        }
     }
     source.text = track_text;
-    source.words = sync_caption_words_with_text(
-        &source.text,
-        &source.words,
-        f64::from(source.start),
-        f64::from(source.end),
-    );
+    if !is_manual_caption(source) {
+        source.words = sync_caption_words_with_text(
+            &source.text,
+            &source.words,
+            f64::from(source.start),
+            f64::from(source.end),
+        );
+    }
 }
+
+/// A caption typed in by hand rather than transcribed: no word timings, and
+/// the `caption-` id both this app and the 0.6.0 editor give one.
+pub fn is_manual_caption(segment: &CaptionSegment) -> bool {
+    segment.words.is_empty() && segment.id.starts_with(MANUAL_CAPTION_PREFIX)
+}
+
+pub const MANUAL_CAPTION_PREFIX: &str = "caption-";
 
 /// `applyCaptionResultToProject` (`captions.ts:469-527`): set the captions
 /// block (enabled, preserving existing style settings), mark it source-timed,
@@ -1980,11 +2818,15 @@ pub fn write_caption_edit_to_source(
 pub fn apply_caption_result(
     project: &mut ProjectConfiguration,
     segments: Vec<CaptionSegment>,
+    language: &str,
     recording_durations: &[f64],
     recording_duration: f64,
 ) {
+    let english =
+        transcript_is_english(language, segments.iter().flat_map(|segment| &segment.words));
     let settings = CaptionSettings {
         enabled: true,
+        filler_language: english.then(|| "en".to_string()),
         ..project
             .captions
             .as_ref()
@@ -2002,6 +2844,7 @@ pub fn apply_caption_result(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                voice_eq: None,
                 volume: None,
             }],
             transitions: Vec::new(),
@@ -2015,12 +2858,29 @@ pub fn apply_caption_result(
             camera3d_segments: Vec::new(),
             style_segments: Vec::new(),
             image_segments: Vec::new(),
+            shape_segments: Vec::new(),
         });
     }
     let timeline = project
         .timeline
         .as_mut()
         .expect("timeline was just created");
+
+    let mut segments = segments;
+    if let Some(previous) = project
+        .captions
+        .as_ref()
+        .filter(|captions| captions.source_timed)
+    {
+        segments.extend(
+            previous
+                .segments
+                .iter()
+                .filter(|segment| is_manual_caption(segment))
+                .cloned(),
+        );
+        segments.sort_by(|a, b| a.start.total_cmp(&b.start));
+    }
 
     timeline.caption_segments =
         derive_caption_track_segments(&segments, timeline, recording_durations);
@@ -2054,6 +2914,10 @@ pub fn caption_generation_error_message(message: &str) -> String {
 
 #[cfg(test)]
 mod download_tests;
+#[cfg(test)]
+mod eval;
+#[cfg(test)]
+mod fixture_tests;
 #[cfg(test)]
 mod verify_tests;
 
@@ -2134,12 +2998,15 @@ mod tests {
         let model = std::env::var("CAP_PARAKEET_BENCH_MODEL").expect("CAP_PARAKEET_BENCH_MODEL");
         let wav =
             PathBuf::from(std::env::var("CAP_PARAKEET_BENCH_WAV").expect("CAP_PARAKEET_BENCH_WAV"));
+        let samples = read_wav_16k_mono(&wav).expect("16 kHz mono WAV");
         let started = std::time::Instant::now();
-        let result = process_with_parakeet(&wav, &model);
+        let options = VerbatimOptions::default();
+        let result = process_with_parakeet(&samples, &model, &options)
+            .map(|groups| finish_words(groups, &samples, &options, None));
         let seconds = started.elapsed().as_secs_f64();
         match result {
-            Ok(segments) => {
-                let words: Vec<&CaptionWord> = segments.iter().flat_map(|s| &s.words).collect();
+            Ok(groups) => {
+                let words: Vec<&CaptionWord> = groups.iter().flatten().collect();
                 println!("parakeet_seconds={seconds:.2} words={}", words.len());
                 if let Ok(path) = std::env::var("CAP_PARAKEET_BENCH_WORDS") {
                     let dump: String = words
@@ -2180,6 +3047,7 @@ mod tests {
             end,
             text: caption_text_from_words(&words),
             words,
+            recording_clip: None,
         }
     }
 
@@ -2408,6 +3276,63 @@ mod tests {
         assert_eq!(model_path("medium"), base.join("medium.bin"));
     }
 
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn recommended_parakeet_needs_the_float_activation_encoder() {
+        let root = tempfile::tempdir().unwrap();
+        let install = |dir: &str, files: &[&str]| {
+            let dir = root.path().join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in files {
+                std::fs::write(dir.join(file), b"x").unwrap();
+            }
+            dir
+        };
+
+        let dynamic_int8 = install(
+            "old/parakeet-best",
+            &[
+                "encoder-model.int8.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt",
+            ],
+        );
+        assert!(!parakeet_model_installed(&dynamic_int8));
+
+        let recommended = install(
+            "new/parakeet-best",
+            &[
+                "encoder-model.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt",
+            ],
+        );
+        assert!(parakeet_model_installed(&recommended));
+        let encoder_urls = PARAKEET_TDT_INT8_MODEL_FILES
+            .iter()
+            .find(|(file, _)| *file == "encoder-model.onnx")
+            .map(|(_, urls)| *urls)
+            .unwrap();
+        assert!(
+            encoder_urls
+                .iter()
+                .all(|url| parakeet_known_part_size(url).is_some() && !url.contains(".int8."))
+        );
+
+        let full = install(
+            "full/parakeet-best-max",
+            &[
+                "encoder-model.onnx",
+                "encoder-model.onnx.data",
+                "decoder_joint-model.onnx",
+                "vocab.txt",
+            ],
+        );
+        assert!(parakeet_model_installed(&full));
+        std::fs::remove_file(full.join("encoder-model.onnx.data")).unwrap();
+        assert!(!parakeet_model_installed(&full));
+    }
+
     #[test]
     fn only_the_model_being_downloaded_counts_as_downloading() {
         let mut state = Hub::default();
@@ -2614,6 +3539,1178 @@ mod tests {
     // -- applyCaptionResultToProject ------------------------------------------
 
     #[test]
+    fn a_new_transcript_keeps_captions_typed_in_by_hand() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![
+                    caption("segment-0", 1.0, 2.0, &[("old", 1.0, 2.0)]),
+                    caption("caption-1-a", 5.0, 7.0, &[]),
+                    caption("segment-legacy", 8.0, 9.0, &[]),
+                ],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        project.captions.as_mut().unwrap().segments[1].text = "Chapter two".into();
+        project.captions.as_mut().unwrap().segments[2].text = "legacy".into();
+
+        apply_caption_result(
+            &mut project,
+            vec![
+                caption("segment-0", 0.5, 1.5, &[("hello", 0.5, 1.5)]),
+                caption("segment-1", 6.0, 6.5, &[("world", 6.0, 6.5)]),
+            ],
+            "en",
+            &[10.0],
+            10.0,
+        );
+
+        let ids: Vec<&str> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.id.as_str())
+            .collect();
+        assert_eq!(ids, ["segment-0", "caption-1-a", "segment-1"]);
+        let track: Vec<&str> = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect();
+        assert_eq!(track, ["hello", "Chapter two", "world"]);
+    }
+
+    #[test]
+    fn editing_a_caption_typed_in_by_hand_keeps_it_out_of_the_transcript() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption("caption-1-a", 5.0, 7.0, &[])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+        track.text = "Step one: open settings".into();
+        track.end = 8.0;
+
+        write_caption_edit_to_source(&mut project, 0, &durations);
+
+        let source = &project.captions.as_ref().unwrap().segments[0];
+        assert_eq!(source.text, "Step one: open settings");
+        assert_eq!((source.start, source.end), (5.0, 8.0));
+        assert!(source.words.is_empty());
+        assert!(
+            crate::transcript::model::flatten_words(project.captions.as_ref().unwrap()).is_empty()
+        );
+    }
+
+    // A migrated late-audio clip trimmed to 4..14 of its 10 s media (a held
+    // tail from 10 s), then another 10 s clip. A caption dragged onto the held
+    // tail is tied to its clip so it stays there instead of showing on the
+    // next clip; dragged back over the media it stays tied, on its clip.
+    #[test]
+    fn a_caption_moved_onto_a_held_tail_stays_on_its_clip() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption("caption-1-a", 6.0, 7.0, &[])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0, 10.0];
+        let track = |project: &mut ProjectConfiguration| {
+            cap_project::synchronize_captions(project, &durations);
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| (segment.start, segment.end))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(track(&mut project), [(2.0, 3.0)]);
+        let moved = |project: &mut ProjectConfiguration, start: f64, end: f64| {
+            let item = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+            (item.start, item.end) = (start, end);
+            write_caption_edit_to_source(project, 0, &durations);
+            project.captions.as_ref().unwrap().segments[0].recording_clip
+        };
+        assert_eq!(moved(&mut project, 8.0, 9.0), Some(0));
+        assert_eq!(track(&mut project), [(8.0, 9.0)]);
+        assert_eq!(moved(&mut project, 1.0, 2.0), Some(0));
+        assert_eq!(track(&mut project), [(1.0, 2.0)]);
+    }
+
+    // Greptile's crossfade case: clips 4..14 (a held tail from 10 s) and
+    // 0..10 of two 10 s recordings, with a 1 s crossfade. A caption tied to
+    // the first clip and one of the second clip both show at 9.2..9.8, inside
+    // the fade. Retyping either keeps it on its own clip and moment.
+    #[test]
+    fn retyping_a_caption_inside_a_crossfade_keeps_its_clip() {
+        let mut tied = caption("caption-tail", 13.2, 13.8, &[]);
+        tied.recording_clip = Some(0);
+        tied.text = "typed".into();
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "transitions": [{ "segmentIndex": 1, "type": "cross-fade", "duration": 1.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![tied, caption("next", 10.2, 10.8, &[("next", 10.2, 10.8)])],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0, 10.0];
+        let track = |project: &mut ProjectConfiguration| {
+            cap_project::synchronize_captions(project, &durations);
+            project
+                .timeline
+                .as_ref()
+                .unwrap()
+                .caption_segments
+                .iter()
+                .map(|segment| {
+                    let near = |time: f64| (time * 1000.0).round() / 1000.0;
+                    (segment.text.clone(), near(segment.start), near(segment.end))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut before = track(&mut project);
+        before.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            before,
+            [
+                ("next".to_string(), 9.2, 9.8),
+                ("typed".to_string(), 9.2, 9.8)
+            ]
+        );
+        let retype = |project: &mut ProjectConfiguration, id: &str, text: &str| {
+            let timeline = project.timeline.as_mut().unwrap();
+            let index = timeline
+                .caption_segments
+                .iter()
+                .position(|item| source_caption_id(&item.id) == id)
+                .unwrap();
+            timeline.caption_segments[index].text = text.to_string();
+            write_caption_edit_to_source(project, index, &durations);
+            let source = project
+                .captions
+                .as_ref()
+                .unwrap()
+                .segments
+                .iter()
+                .find(|segment| segment.id == id)
+                .unwrap();
+            let near = |time: f32| (f64::from(time) * 1000.0).round() / 1000.0;
+            (near(source.start), near(source.end), source.recording_clip)
+        };
+        assert_eq!(
+            retype(&mut project, "caption-tail", "tail"),
+            (13.2, 13.8, Some(0))
+        );
+        assert_eq!(retype(&mut project, "next", "after"), (10.2, 10.8, None));
+        let mut after = track(&mut project);
+        after.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            after,
+            [
+                ("after".to_string(), 9.2, 9.8),
+                ("tail".to_string(), 9.2, 9.8)
+            ]
+        );
+    }
+
+    // Resizes caption track item `index` to `start..end` and returns what the
+    // caption track then draws, as (text, start, end) to 0.001 s.
+    fn resize_caption(
+        project: &mut ProjectConfiguration,
+        index: usize,
+        start: f64,
+        end: f64,
+        durations: &[f64],
+    ) -> Vec<(String, f64, f64)> {
+        let item = &mut project.timeline.as_mut().unwrap().caption_segments[index];
+        (item.start, item.end) = (start, end);
+        write_caption_edit_to_source(project, index, durations);
+        cap_project::synchronize_captions(project, durations);
+        let near = |time: f64| (time * 1000.0).round() / 1000.0;
+        project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), near(segment.start), near(segment.end)))
+            .collect()
+    }
+
+    fn held_tail_project(
+        timeline_json: serde_json::Value,
+        captions: Vec<CaptionSegment>,
+    ) -> ProjectConfiguration {
+        ProjectConfiguration {
+            timeline: Some(timeline(timeline_json)),
+            captions: Some(CaptionsData {
+                segments: captions,
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // A typed caption tied to its clip stops at the edge of that clip's piece
+    // when resized past it, from either side and across held tails. Each row:
+    // timeline, the tied caption's clip and source range, the resize, then
+    // where it is drawn and saved.
+    #[test]
+    fn a_tied_caption_resized_past_its_clip_stops_at_the_edge() {
+        let held = |clip: u32, start: f64, end: f64| serde_json::json!({ "recordingSegment": clip, "timescale": 1.0, "start": start, "end": end });
+        let cases = [
+            // Into the next clip: two 10 s recordings at 4..14 and 0..10.
+            (
+                vec![held(0, 4.0, 14.0), held(1, 0.0, 10.0)],
+                0,
+                (12.0, 13.0),
+                (8.0, 11.0),
+                (8.0, 10.0),
+                (12.0, 14.0),
+            ),
+            // Back into the clip before, from a middle clip's held tail.
+            (
+                vec![held(0, 0.0, 10.0), held(1, 4.0, 14.0), held(2, 0.0, 10.0)],
+                1,
+                (22.0, 23.0),
+                (9.0, 19.0),
+                (10.0, 19.0),
+                (14.0, 23.0),
+            ),
+            // Across another clip's held tail.
+            (
+                vec![held(0, 4.0, 14.0), held(1, 4.0, 14.0), held(2, 0.0, 10.0)],
+                0,
+                (12.0, 13.0),
+                (8.0, 21.0),
+                (8.0, 10.0),
+                (12.0, 14.0),
+            ),
+            // Back across another clip's held tail.
+            (
+                vec![held(0, 0.0, 10.0), held(1, 4.0, 14.0), held(2, 4.0, 14.0)],
+                2,
+                (32.0, 33.0),
+                (9.0, 29.0),
+                (20.0, 29.0),
+                (24.0, 33.0),
+            ),
+        ];
+        let durations = [10.0, 10.0, 10.0];
+        for (segments, clip, (start, end), (drag_start, drag_end), shown, saved) in cases {
+            let durations = &durations[..segments.len().max(2)];
+            let mut tied = caption("caption-tail", start, end, &[]);
+            tied.recording_clip = Some(clip);
+            tied.text = "typed".into();
+            let mut project = held_tail_project(
+                serde_json::json!({ "segments": segments, "zoomSegments": [] }),
+                vec![tied],
+            );
+            cap_project::synchronize_captions(&mut project, durations);
+            let track = resize_caption(&mut project, 0, drag_start, drag_end, durations);
+            assert_eq!(track, [("typed".to_string(), shown.0, shown.1)], "{clip}");
+            let sources: Vec<_> = project
+                .captions
+                .as_ref()
+                .unwrap()
+                .segments
+                .iter()
+                .map(|segment| (segment.start, segment.end, segment.recording_clip))
+                .collect();
+            assert_eq!(sources, [(saved.0, saved.1, Some(clip))], "{clip}");
+        }
+    }
+
+    // A transcribed caption draws only its words, so one tied to a held tail
+    // stays on its clip and words when its end is dragged into the next clip,
+    // as an untied one shows nothing new past its last word.
+    #[test]
+    fn a_tied_transcribed_caption_resized_into_the_next_clip_keeps_its_words() {
+        let durations = [10.0, 10.0];
+        let mut tied = caption("tail", 12.0, 13.0, &[("held", 12.2, 12.8)]);
+        tied.recording_clip = Some(0);
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = resize_caption(&mut project, 0, 8.0, 11.0, &durations);
+        assert_eq!(track, [("held".to_string(), 8.2, 8.8)]);
+        let source = &project.captions.as_ref().unwrap().segments;
+        assert_eq!(source.len(), 1);
+        assert_eq!(source[0].recording_clip, Some(0));
+    }
+
+    // Untied captions resize across clips exactly as before: one source
+    // caption on the shared clock, drawn once per clip it covers. Expected
+    // values are main's output for the same edits.
+    #[test]
+    fn an_untied_caption_resized_across_clips_is_unchanged() {
+        let durations = [10.0, 10.0];
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 2.0, "end": 8.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![
+                caption("caption-typed", 6.0, 7.0, &[]),
+                caption("spoken", 13.0, 14.0, &[("spoken", 13.0, 14.0)]),
+            ],
+        );
+        project.captions.as_mut().unwrap().segments[0].text = "typed".into();
+        cap_project::synchronize_captions(&mut project, &durations);
+        assert_eq!(
+            resize_caption(&mut project, 0, 4.0, 7.0, &durations),
+            [
+                ("typed".to_string(), 4.0, 6.0),
+                ("typed".to_string(), 6.0, 7.0),
+                ("spoken".to_string(), 9.0, 10.0)
+            ]
+        );
+        assert_eq!(
+            resize_caption(&mut project, 2, 5.0, 10.0, &durations),
+            [
+                ("typed".to_string(), 4.0, 6.0),
+                ("typed".to_string(), 6.0, 7.0),
+                ("spoken".to_string(), 9.0, 10.0)
+            ]
+        );
+        let sources = serde_json::to_value(&project.captions.as_ref().unwrap().segments).unwrap();
+        assert_eq!(
+            sources,
+            serde_json::json!([
+                { "id": "caption-typed", "start": 6.0, "end": 11.0, "text": "typed", "words": [] },
+                { "id": "spoken", "start": 7.0, "end": 14.0, "text": "spoken",
+                  "words": [{ "text": "spoken", "start": 13.0, "end": 14.0 }] }
+            ])
+        );
+    }
+
+    // capy-ai's case: recordings trimmed to 4..14 (a held tail from 10 s),
+    // 0..10 and 0..10. An untied caption dragged to 9.5..10.5 starts in the
+    // first clip's held tail (source 13.5) and ends on the second clip's
+    // clock (source 10.5). It is not saved reversed: it ends where the held
+    // tail does, tied to its clip. One tied to the third clip never leaves
+    // it, so a drag onto other clips leaves it where it was.
+    #[test]
+    fn a_caption_dragged_out_of_a_held_tail_is_not_saved_reversed() {
+        for (tie, start, end, saved, shown) in [
+            (None, 8.0, 9.0, (13.5, 14.0, Some(0)), (9.5, 10.0)),
+            (Some(2), 25.0, 26.0, (25.0, 26.0, Some(2)), (25.0, 26.0)),
+        ] {
+            let mut moved = caption("caption-moved", start, end, &[]);
+            moved.recording_clip = tie;
+            moved.text = "typed".into();
+            let mut project = ProjectConfiguration {
+                timeline: Some(timeline(serde_json::json!({
+                    "segments": [
+                        { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                        { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                        { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                    ],
+                    "zoomSegments": []
+                }))),
+                captions: Some(CaptionsData {
+                    segments: vec![moved],
+                    source_timed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let durations = [10.0, 10.0, 10.0];
+            let track = |project: &mut ProjectConfiguration| {
+                cap_project::synchronize_captions(project, &durations);
+                project
+                    .timeline
+                    .as_ref()
+                    .unwrap()
+                    .caption_segments
+                    .iter()
+                    .map(|segment| (segment.start, segment.end))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(track(&mut project).len(), 1, "{tie:?}");
+            let item = &mut project.timeline.as_mut().unwrap().caption_segments[0];
+            (item.start, item.end) = (9.5, 10.5);
+            write_caption_edit_to_source(&mut project, 0, &durations);
+            let saved_now = |project: &ProjectConfiguration| -> Vec<(f32, f32, Option<u32>)> {
+                project
+                    .captions
+                    .as_ref()
+                    .unwrap()
+                    .segments
+                    .iter()
+                    .map(|segment| (segment.start, segment.end, segment.recording_clip))
+                    .collect()
+            };
+            assert_eq!(saved_now(&project), [saved], "{tie:?}");
+            assert_eq!(track(&mut project), [shown], "{tie:?}");
+        }
+    }
+
+    // Greptile's case: two 10 s recordings, recording 0 trimmed to 4..14 (a
+    // held tail from 10 s), then recording 1 twice at 0..10. A typed caption
+    // tied to recording 0, extended from output 8..9 to 8..22, stops where
+    // its clip ends instead of replaying over both copies of recording 1.
+    #[test]
+    fn a_tied_caption_resized_over_a_repeated_clip_stays_inside_the_drag() {
+        let durations = [10.0, 10.0];
+        let mut tied = caption("caption-tail", 12.0, 13.0, &[]);
+        tied.recording_clip = Some(0);
+        tied.text = "typed".into();
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let track = resize_caption(&mut project, 0, 8.0, 22.0, &durations);
+        assert_eq!(track, [("typed".to_string(), 8.0, 10.0)]);
+        let sources: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| (segment.start, segment.end, segment.recording_clip))
+            .collect();
+        assert_eq!(sources, [(12.0, 14.0, Some(0))]);
+    }
+
+    // capy-ai's case: one 10 s recording split at 3.7 s, which f32 cannot
+    // hold exactly. A typed caption tied to it at 1..3, dragged to end at 6,
+    // stops at the split: one caption, never two blocks with the same text.
+    #[test]
+    fn a_tied_caption_resized_across_its_own_split_stops_at_the_split() {
+        let durations = [10.0];
+        let mut tied = caption("caption-split", 1.0, 3.0, &[]);
+        tied.recording_clip = Some(0);
+        tied.text = "typed".into();
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 3.7 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 3.7, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        assert_eq!(
+            tied_caption_window(&project, 0, &durations),
+            Some((0.0, 3.7))
+        );
+        let track = resize_caption(&mut project, 0, 1.0, 6.0, &durations);
+        assert_eq!(track, [("typed".to_string(), 1.0, 3.7)]);
+        let sources: Vec<_> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| {
+                (
+                    segment.id.as_str(),
+                    segment.start,
+                    segment.end,
+                    segment.recording_clip,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sources,
+            [("caption-split", 1.0, 3.7_f32.next_down(), Some(0))]
+        );
+    }
+
+    // Greptile's case: two 10 s recordings, the first held to 14 s and split
+    // at its media end into 4..10 and 10..14, then the second at 0..10. A
+    // transcribed caption tied to the first with a word at source 9..11 shows
+    // at output 5..6 and 6..7. Dragging the first item's end to 6.5 stops at
+    // the split, and the word stays on the first recording's held tail
+    // instead of moving to 10..11 on the next recording.
+    #[test]
+    fn a_tied_transcribed_caption_resized_across_its_split_keeps_its_words_on_its_clip() {
+        let durations = [10.0, 10.0];
+        let mut tied = caption("spoken", 9.0, 11.0, &[("held", 9.0, 11.0)]);
+        tied.recording_clip = Some(0);
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 4.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 10.0, "end": 14.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 10.0 }
+                ],
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let shown = [
+            ("held".to_string(), 5.0, 6.0),
+            ("held".to_string(), 6.0, 7.0),
+        ];
+        let near = |time: f64| (time * 1000.0).round() / 1000.0;
+        let track: Vec<_> = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .map(|segment| (segment.text.clone(), near(segment.start), near(segment.end)))
+            .collect();
+        assert_eq!(track, shown);
+        assert_eq!(resize_caption(&mut project, 0, 5.0, 6.5, &durations), shown);
+        let source = &project.captions.as_ref().unwrap().segments;
+        assert_eq!(source.len(), 1);
+        assert_eq!(
+            (source[0].start, source[0].end, source[0].recording_clip),
+            (9.0, 10.0, Some(0))
+        );
+    }
+
+    /// splitmix64, as `cap_verify::fixture::Rng`.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn unit(&mut self) -> f64 {
+            (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+        }
+
+        fn between(&mut self, low: f64, high: f64) -> f64 {
+            low + (high - low) * self.unit()
+        }
+
+        fn below(&mut self, count: usize) -> usize {
+            (self.next_u64() % count as u64) as usize
+        }
+
+        fn chance(&mut self, probability: f64) -> bool {
+            self.unit() < probability
+        }
+    }
+
+    /// One timeline piece as the property oracle sees it: its recording, its
+    /// range on the shared source clock and where it sits in output time.
+    struct OraclePiece {
+        recording: usize,
+        source_start: f64,
+        source_end: f64,
+        output_start: f64,
+        output_end: f64,
+        timescale: f64,
+    }
+
+    impl OraclePiece {
+        fn source_at(&self, output: f64) -> f64 {
+            self.source_start + (output - self.output_start) * self.timescale
+        }
+    }
+
+    fn oracle_pieces(timeline: &TimelineConfiguration, durations: &[f64]) -> Vec<OraclePiece> {
+        let mut output = 0.0;
+        timeline
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                output -= timeline
+                    .effective_transition(index)
+                    .map_or(0.0, |transition| transition.duration);
+                let recording = segment.recording_clip as usize;
+                let offset: f64 = durations[..recording].iter().sum();
+                let piece = OraclePiece {
+                    recording,
+                    source_start: offset + segment.start,
+                    source_end: offset + segment.end,
+                    output_start: output,
+                    output_end: output + segment.duration(),
+                    timescale: segment.timescale,
+                };
+                output = piece.output_end;
+                piece
+            })
+            .collect()
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum CaptionDrag {
+        Start,
+        End,
+        Move,
+    }
+
+    struct DragCase {
+        durations: Vec<f64>,
+        project: ProjectConfiguration,
+        id: String,
+        tie: u32,
+        typed: bool,
+        index: usize,
+        /// The item's place before the drag and where the pointer took it.
+        before: (f64, f64),
+        dragged: (f64, f64),
+        /// A timeline drag (clamped as it goes), or times written straight
+        /// through, as typed-in times are.
+        drag: Option<CaptionDrag>,
+    }
+
+    /// A random timeline of one to four recordings (random trims, held tails
+    /// past the media end, clips split at the playhead, repeated and
+    /// reordered pieces, crossfades, other speeds) with a caption tied to one
+    /// of its pieces, and a random drag of one of the places it shows.
+    fn random_drag_case(rng: &mut Rng) -> Option<DragCase> {
+        // Times on a 1/8 s grid (exact in f32), on a 0.1 s grid (as a
+        // playhead split at 3.7 s is, not exact in f32), or anywhere.
+        let grid = rng.below(3);
+        let snap = |time: f64| match grid {
+            0 => (time * 8.0).round() / 8.0,
+            1 => (time * 10.0).round() / 10.0,
+            _ => time,
+        };
+        let recordings = 1 + rng.below(4);
+        let durations: Vec<f64> = (0..recordings)
+            .map(|_| snap(rng.between(2.0, 12.0)))
+            .collect();
+        let mut segments: Vec<(usize, f64, f64, f64)> = Vec::new();
+        for _ in 0..1 + rng.below(5) {
+            if !segments.is_empty() && rng.chance(0.25) {
+                let copy = segments[rng.below(segments.len())];
+                segments.push(copy);
+                continue;
+            }
+            let recording = rng.below(recordings);
+            let duration = durations[recording];
+            let start = snap(rng.between(0.0, duration - 1.0));
+            let end = if rng.chance(0.4) {
+                snap(duration + rng.between(0.5, 6.0))
+            } else {
+                snap(rng.between(start + 0.5, duration))
+            };
+            if end <= start {
+                return None;
+            }
+            let timescale = if rng.chance(0.15) {
+                [0.5, 2.0][rng.below(2)]
+            } else {
+                1.0
+            };
+            segments.push((recording, start, end, timescale));
+        }
+        if rng.chance(0.5) {
+            segments.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        }
+        // A clip split in two at the playhead.
+        if rng.chance(0.4) {
+            let index = rng.below(segments.len());
+            let (recording, start, end, timescale) = segments[index];
+            let split = snap(rng.between(start + 0.1, end - 0.1));
+            if start < split && split < end {
+                segments[index].2 = split;
+                segments.insert(index + 1, (recording, split, end, timescale));
+            }
+        }
+        let mut transitions = Vec::new();
+        for index in 1..segments.len() {
+            if rng.chance(0.25) {
+                transitions.push(serde_json::json!({
+                    "segmentIndex": index,
+                    "type": "cross-fade",
+                    "duration": snap(rng.between(0.25, 1.5))
+                }));
+            }
+        }
+
+        let (recording, piece_start, piece_end, _) = segments[rng.below(segments.len())];
+        let offset: f64 = durations[..recording].iter().sum();
+        let start = snap(rng.between(piece_start, piece_end - 0.25));
+        let end = snap((start + rng.between(0.2, 2.0)).min(piece_end));
+        if end <= start {
+            return None;
+        }
+        let (start, end) = ((offset + start) as f32, (offset + end) as f32);
+        let typed = rng.chance(0.7);
+        let mut tied = if typed {
+            let mut segment = caption("caption-tied", start, end, &[]);
+            segment.text = "typed".into();
+            segment
+        } else {
+            let count = 1 + rng.below(3);
+            let step = (end - start) / count as f32;
+            let words: Vec<_> = (0..count)
+                .map(|index| {
+                    let word_start = start + step * index as f32;
+                    ("spoken", word_start + step * 0.1, word_start + step * 0.9)
+                })
+                .collect();
+            caption("spoken", start, end, &words)
+        };
+        tied.recording_clip = Some(recording as u32);
+        let id = tied.id.clone();
+
+        let mut project = held_tail_project(
+            serde_json::json!({
+                "segments": segments
+                    .iter()
+                    .map(|(recording, start, end, timescale)| serde_json::json!({
+                        "recordingSegment": recording,
+                        "timescale": timescale,
+                        "start": start,
+                        "end": end
+                    }))
+                    .collect::<Vec<_>>(),
+                "transitions": transitions,
+                "zoomSegments": []
+            }),
+            vec![tied],
+        );
+        cap_project::synchronize_captions(&mut project, &durations);
+        let timeline = project.timeline.as_ref()?;
+        let shown: Vec<usize> = timeline
+            .caption_segments
+            .iter()
+            .enumerate()
+            // Long enough to grab: f32 rounding can leave a sliver where a
+            // caption's end peeks past a piece's edge.
+            .filter(|(_, item)| source_caption_id(&item.id) == id && item.end - item.start > 0.01)
+            .map(|(index, _)| index)
+            .collect();
+        if shown.is_empty() {
+            return None;
+        }
+        let index = shown[rng.below(shown.len())];
+        let item = &timeline.caption_segments[index];
+        let before = (item.start, item.end);
+        let total = timeline.duration();
+        let (drag, dragged) = match rng.below(4) {
+            0 => (
+                CaptionDrag::Start,
+                (snap(rng.between(0.0, before.1 - 0.05)), before.1),
+            ),
+            1 => (
+                CaptionDrag::End,
+                (before.0, snap(rng.between(before.0 + 0.05, total))),
+            ),
+            2 => {
+                let shift = snap(rng.between(-before.0, total - before.1));
+                (CaptionDrag::Move, (before.0 + shift, before.1 + shift))
+            }
+            _ => {
+                let start = snap(rng.between(0.0, total - 0.1));
+                (
+                    CaptionDrag::Move,
+                    (start, snap(rng.between(start + 0.05, total))),
+                )
+            }
+        };
+        if dragged.0 >= dragged.1 {
+            return None;
+        }
+        Some(DragCase {
+            durations,
+            project,
+            id,
+            tie: recording as u32,
+            typed,
+            index,
+            before,
+            dragged,
+            drag: rng.chance(0.75).then_some(drag),
+        })
+    }
+
+    /// Where the timeline drag leaves the item: its bounds narrowed to the
+    /// tied caption's clip piece, as `EditorWindow` arms them, otherwise free.
+    fn dragged_item(case: &DragCase, project: &ProjectConfiguration) -> (f64, f64) {
+        let (Some(drag), Some(window)) = (
+            case.drag,
+            tied_caption_window(project, case.index, &case.durations),
+        ) else {
+            return case.dragged;
+        };
+        let free = crate::editor_edits::DragBounds {
+            min: -1e9,
+            max: 1e9,
+        };
+        let (before, dragged) = (case.before, case.dragged);
+        match drag {
+            CaptionDrag::Start => (
+                crate::editor_edits::window_trim_start_bounds(window, free).clamp(dragged.0),
+                before.1,
+            ),
+            CaptionDrag::End => (
+                before.0,
+                crate::editor_edits::window_trim_end_bounds(window, free).clamp(dragged.1),
+            ),
+            CaptionDrag::Move => {
+                let shift = crate::editor_edits::window_move_bounds(window, before, free)
+                    .clamp(dragged.0 - before.0);
+                (before.0 + shift, before.1 + shift)
+            }
+        }
+    }
+
+    /// Drags the case's caption and checks the result against an oracle
+    /// built from the timeline alone:
+    /// 1. it stays one caption, tied to its clip, never saved reversed or
+    ///    empty;
+    /// 2. it is saved at the drag clamped to the piece of its clip the item
+    ///    was drawn through (found by where that piece shows the caption);
+    ///    clamped to nothing, it stays where it was;
+    /// 3. it shows only over its own recording, there where the clamped
+    ///    drag is, and elsewhere only where its own footage repeats;
+    /// 4. every word keeps showing over the recording it did.
+    fn check_tied_drag(case: &DragCase) -> Result<(), String> {
+        const TOLERANCE: f64 = 2e-3;
+        let durations = &case.durations[..];
+        let mut project = case.project.clone();
+        let timeline = project.timeline.clone().unwrap();
+        let pieces = oracle_pieces(&timeline, durations);
+        let source = project.captions.as_ref().unwrap().segments[0].clone();
+        let own: Vec<&OraclePiece> = pieces
+            .iter()
+            .filter(|piece| piece.recording == case.tie as usize)
+            .collect();
+        // The piece the dragged item is drawn through: the one of its clip
+        // that shows the saved caption (its text range, or its words) right
+        // where the item was.
+        let near = |a: f64, b: f64| (a - b).abs() <= TOLERANCE;
+        let spans: Vec<(f64, f64)> = if source.words.is_empty() {
+            vec![(f64::from(source.start), f64::from(source.end))]
+        } else {
+            source
+                .words
+                .iter()
+                .map(|word| {
+                    let end = word.end.min(word.start + MAX_CAPTION_WORD_DURATION);
+                    (f64::from(word.start), f64::from(end))
+                })
+                .collect()
+        };
+        let (before, dragged) = (case.before, case.dragged);
+        // Two pieces can draw it at the same place (repeated footage meeting
+        // in a crossfade); either one is the item's.
+        let drawn: Vec<&OraclePiece> = own
+            .iter()
+            .copied()
+            .filter(|piece| {
+                let output =
+                    |time: f64| piece.output_start + (time - piece.source_start) / piece.timescale;
+                let shown: Vec<(f64, f64)> = spans
+                    .iter()
+                    .map(|&(start, end)| (start.max(piece.source_start), end.min(piece.source_end)))
+                    .filter(|(start, end)| start < end)
+                    .collect();
+                match (shown.first(), shown.last()) {
+                    (Some(first), Some(last)) => {
+                        near(output(first.0), before.0) && near(output(last.1), before.1)
+                    }
+                    _ => false,
+                }
+            })
+            .collect();
+        let clamp_to =
+            |piece: &OraclePiece, time: f64| time.clamp(piece.output_start, piece.output_end);
+        let expect = |piece: &OraclePiece| {
+            Some(match case.drag {
+                Some(CaptionDrag::Start) => (clamp_to(piece, dragged.0), before.1),
+                Some(CaptionDrag::End) => (before.0, clamp_to(piece, dragged.1)),
+                Some(CaptionDrag::Move) => {
+                    let shift = (dragged.0 - before.0)
+                        .max(piece.output_start - before.0)
+                        .min(piece.output_end - before.1);
+                    (before.0 + shift, before.1 + shift)
+                }
+                None => (clamp_to(piece, dragged.0), clamp_to(piece, dragged.1)),
+            })
+            .filter(|(start, end)| end - start > MIN_TIED_CAPTION_SECS + 1e-6)
+        };
+
+        let item = dragged_item(case, &project);
+        let edited = &mut project.timeline.as_mut().unwrap().caption_segments[case.index];
+        (edited.start, edited.end) = item;
+        write_caption_edit_to_source(&mut project, case.index, durations);
+        cap_project::synchronize_captions(&mut project, durations);
+
+        let part_prefix = format!("{}-", case.id);
+        let saved: Vec<&CaptionSegment> = project
+            .captions
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .filter(|segment| segment.id == case.id || segment.id.starts_with(&part_prefix))
+            .collect();
+        let [caption] = saved[..] else {
+            return Err(format!("1: saved as {} captions", saved.len()));
+        };
+        if caption.recording_clip != Some(case.tie) {
+            return Err(format!(
+                "1: tie {:?}, was {}",
+                caption.recording_clip, case.tie
+            ));
+        }
+        if caption.start >= caption.end || caption.start.is_nan() || caption.end.is_nan() {
+            return Err(format!("1: saved reversed {caption:?}"));
+        }
+
+        let (saved_start, saved_end) = (f64::from(caption.start), f64::from(caption.end));
+        let unchanged = (caption.start, caption.end) == (source.start, source.end);
+        let matches = |piece: &OraclePiece| match expect(piece) {
+            Some((start, end)) => {
+                near(saved_start, piece.source_at(start)) && near(saved_end, piece.source_at(end))
+            }
+            None => unchanged,
+        };
+        let expected = match drawn.iter().copied().find(|piece| matches(piece)) {
+            Some(piece) => expect(piece),
+            None if drawn.is_empty() && unchanged => None,
+            None => {
+                let wanted: Vec<_> = drawn.iter().map(|piece| expect(piece)).collect();
+                return Err(format!(
+                    "2: saved {saved_start:.4}..{saved_end:.4}, drag clamped to {wanted:?}"
+                ));
+            }
+        };
+
+        let shown: Vec<(f64, f64)> = project
+            .timeline
+            .as_ref()
+            .unwrap()
+            .caption_segments
+            .iter()
+            .filter(|item| source_caption_id(&item.id) == case.id)
+            .map(|item| (item.start, item.end))
+            .collect();
+        for &(start, end) in &shown {
+            let on_own = own.iter().any(|piece| {
+                piece.output_start - TOLERANCE <= start && end <= piece.output_end + TOLERANCE
+            });
+            if !on_own {
+                return Err(format!(
+                    "3: shown at {start:.4}..{end:.4} off its recording"
+                ));
+            }
+        }
+        if case.typed
+            && let Some((start, end)) = expected
+            && !shown
+                .iter()
+                .any(|&(shown_start, shown_end)| near(shown_start, start) && near(shown_end, end))
+        {
+            return Err(format!(
+                "3: not shown at the clamped drag {start:.4}..{end:.4}: {shown:?}"
+            ));
+        }
+
+        let word_recordings = |word: &CaptionWord, tie: Option<u32>| {
+            let (start, end) = (f64::from(word.start), f64::from(word.end));
+            pieces
+                .iter()
+                .filter(|piece| {
+                    let reach_end = match tie {
+                        Some(tie) if tie as usize == piece.recording => piece.source_end,
+                        Some(_) => return false,
+                        None if piece.recording + 1 < durations.len() => {
+                            let media_end: f64 = durations[..=piece.recording].iter().sum();
+                            piece.source_end.min(media_end)
+                        }
+                        None => piece.source_end,
+                    };
+                    start.max(piece.source_start) < end.min(reach_end) - 1e-6
+                })
+                .map(|piece| piece.recording)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        for word in &caption.words {
+            let Some(before) = source.words.iter().find(|before| {
+                (before.text.as_str(), before.start, before.end)
+                    == (word.text.as_str(), word.start, word.end)
+            }) else {
+                continue;
+            };
+            let (was, now) = (
+                word_recordings(before, source.recording_clip),
+                word_recordings(word, caption.recording_clip),
+            );
+            if !was.is_empty() && was != now {
+                return Err(format!("4: word {word:?} moved from {was:?} to {now:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    // Seeded random timelines, every tied caption drag checked against the
+    // oracle above. Failures print with the seed that reproduces them;
+    // CAP_TIED_DRAG_SEED dumps one case, CAP_TIED_DRAG_CASES and
+    // CAP_TIED_DRAG_BASE (hex) run more.
+    #[test]
+    fn tied_caption_drags_stay_on_their_clip_piece() {
+        let hex = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| u64::from_str_radix(value.trim_start_matches("0x"), 16).unwrap())
+        };
+        let cases = hex("CAP_TIED_DRAG_CASES").map_or(20_000, |cases| cases as usize);
+        let mut rng = Rng(hex("CAP_TIED_DRAG_BASE").unwrap_or(0x4308));
+        let (mut checked, mut failures) = (0, Vec::new());
+        while checked < cases {
+            let seed = rng.next_u64();
+            let Some(case) = random_drag_case(&mut Rng(seed)) else {
+                continue;
+            };
+            checked += 1;
+            if let Err(failure) = check_tied_drag(&case) {
+                failures.push(format!("seed {seed:#x}: {failure}"));
+            }
+        }
+        let mut kinds = std::collections::BTreeMap::<String, usize>::new();
+        for failure in &failures {
+            let kind = failure.split(": ").nth(1).unwrap_or_default();
+            *kinds.entry(kind.to_string()).or_default() += 1;
+        }
+        println!(
+            "tied drag property: {checked} cases, {} failures {kinds:?}",
+            failures.len()
+        );
+        if let Some(seed) = hex("CAP_TIED_DRAG_SEED") {
+            let case = random_drag_case(&mut Rng(seed)).unwrap();
+            let timeline = case.project.timeline.as_ref().unwrap();
+            println!(
+                "durations {:?}\nsegments {}\ntransitions {}\ncaptions {}\nitem {} {:?} drag {:?} to {:?}\n{:?}",
+                case.durations,
+                serde_json::to_string(&timeline.segments).unwrap(),
+                serde_json::to_string(&timeline.transitions).unwrap(),
+                serde_json::to_string(&case.project.captions.as_ref().unwrap().segments).unwrap(),
+                case.index,
+                case.before,
+                case.drag,
+                case.dragged,
+                check_tied_drag(&case)
+            );
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {checked} cases fail:\n{}",
+            failures.len(),
+            kinds
+                .keys()
+                .flat_map(|kind| failures
+                    .iter()
+                    .filter(|f| f.contains(kind.as_str()))
+                    .take(3))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    #[test]
+    fn retyping_a_cleared_transcribed_caption_brings_its_words_back() {
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: vec![caption(
+                    "segment-0",
+                    1.0,
+                    3.0,
+                    &[("hello", 1.0, 2.0), ("world", 2.0, 3.0)],
+                )],
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let durations = [10.0];
+        cap_project::synchronize_captions(&mut project, &durations);
+
+        project.timeline.as_mut().unwrap().caption_segments[0].text = String::new();
+        write_caption_edit_to_source(&mut project, 0, &durations);
+        assert!(
+            project.captions.as_ref().unwrap().segments[0]
+                .words
+                .is_empty()
+        );
+
+        project.timeline.as_mut().unwrap().caption_segments[0].text = "fresh take".into();
+        write_caption_edit_to_source(&mut project, 0, &durations);
+
+        let words: Vec<String> =
+            crate::transcript::model::flatten_words(project.captions.as_ref().unwrap())
+                .into_iter()
+                .map(|word| word.text)
+                .collect();
+        assert_eq!(words, ["fresh", "take"]);
+    }
+
+    #[test]
     fn apply_caption_result_enables_captions_and_derives_the_track() {
         let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
             "timeline": {
@@ -2637,6 +4734,7 @@ mod tests {
         apply_caption_result(
             &mut project,
             vec![caption("segment-0-0", 1.0, 2.0, &[("hello", 1.0, 2.0)])],
+            "auto",
             &[10.0],
             10.0,
         );
@@ -2654,6 +4752,301 @@ mod tests {
         assert_eq!(track[0].text, "hello");
     }
 
+    fn cut_project() -> ProjectConfiguration {
+        let mut project = ProjectConfiguration::default();
+        apply_caption_result(
+            &mut project,
+            vec![caption(
+                "segment-0",
+                1.0,
+                3.0,
+                &[("so", 1.0, 1.4), ("um", 1.4, 2.0), ("yes", 2.0, 3.0)],
+            )],
+            "en",
+            &[10.0],
+            10.0,
+        );
+        let timeline = project.timeline.as_mut().unwrap();
+        let mut tail = timeline.segments[0].clone();
+        timeline.segments[0].end = 1.4;
+        tail.start = 2.0;
+        timeline.segments.push(tail);
+        project
+    }
+
+    #[test]
+    fn a_refinement_landing_after_a_cut_keeps_the_cut_and_uses_the_refined_times() {
+        let mut project = cut_project();
+        let clips_before = project.timeline.as_ref().unwrap().segments.clone();
+        let input = project.captions.as_ref().unwrap().segments.clone();
+        let refined_segments = vec![caption(
+            "segment-0",
+            1.05,
+            2.6,
+            &[("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yes", 2.1, 2.6)],
+        )];
+        let refined = RefinedCaptions::new(&input, refined_segments.clone());
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let timeline = project.timeline.as_ref().unwrap();
+        assert_eq!(timeline.segments.len(), clips_before.len());
+        for (after, before) in timeline.segments.iter().zip(&clips_before) {
+            assert_eq!((after.start, after.end), (before.start, before.end));
+        }
+        let captions = &project.captions.as_ref().unwrap().segments;
+        assert_eq!(captions[0].words[0].start, 1.05);
+        assert_eq!(captions[0].words[2].end, 2.6);
+        let mut expected = timeline.clone();
+        expected.caption_segments =
+            derive_caption_track_segments(&refined_segments, timeline, &[10.0]);
+        let derived = |segments: &[cap_project::CaptionTrackSegment]| -> Vec<(String, f32, f32)> {
+            segments
+                .iter()
+                .flat_map(|segment| &segment.words)
+                .map(|word| (word.text.clone(), word.start, word.end))
+                .collect()
+        };
+        assert_eq!(
+            derived(&timeline.caption_segments),
+            derived(&expected.caption_segments)
+        );
+        assert!(
+            timeline
+                .caption_segments
+                .iter()
+                .flat_map(|segment| &segment.words)
+                .all(|word| word.text != "um"),
+            "the cut word stays cut"
+        );
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    #[test]
+    fn update_note_shows_only_for_the_old_recommended_download() {
+        let root = tempfile::tempdir().unwrap();
+        let install = |dir: &str, files: &[&str]| {
+            let dir = root.path().join(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in files {
+                std::fs::write(dir.join(file), b"x").unwrap();
+            }
+            dir
+        };
+        let old = install(
+            "old/parakeet-best",
+            &[
+                "encoder-model.int8.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt",
+            ],
+        );
+        let current = install(
+            "current/parakeet-best",
+            &[
+                "encoder-model.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt",
+            ],
+        );
+
+        assert!(parakeet_model_outdated(&old));
+        assert!(!parakeet_model_outdated(&current));
+        assert!(!parakeet_model_outdated(
+            &root.path().join("fresh/parakeet-best")
+        ));
+        assert!(!parakeet_model_outdated(&install(
+            "empty/parakeet-best",
+            &[]
+        )));
+    }
+
+    #[test]
+    fn hearing_no_speech_is_an_empty_state_not_an_error() {
+        let path = PathBuf::from("/tmp/cap-no-speech-state-test.cap");
+        assert!(begin_generation(&path));
+        finish_generation_without_speech(&path);
+        let snapshot = ui_snapshot(&path);
+        assert!(snapshot.no_speech && !snapshot.generating);
+        assert_eq!(snapshot.generation_error, None);
+
+        assert!(begin_generation(&path));
+        assert!(!ui_snapshot(&path).no_speech);
+        finish_generation(&path, Some("boom".to_string()));
+        let snapshot = ui_snapshot(&path);
+        assert!(!snapshot.no_speech);
+        assert_eq!(snapshot.generation_error.as_deref(), Some("boom"));
+        finish_generation(&path, None);
+    }
+
+    #[test]
+    fn re_transcribing_or_closing_stops_a_running_refinement() {
+        let path = PathBuf::from("/tmp/cap-refinement-cancel-test.cap");
+        let stop = begin_refinement(&path).expect("free slot");
+        assert!(
+            begin_refinement(&path).is_none(),
+            "one refinement per project"
+        );
+        assert!(ui_snapshot(&path).refining);
+        assert!(begin_generation(&path));
+        assert!(stop.load(Ordering::Relaxed));
+        assert!(!ui_snapshot(&path).refining);
+        finish_generation(&path, None);
+
+        let stop = begin_refinement(&path).expect("free again");
+        cancel_refinement(&path);
+        assert!(stop.load(Ordering::Relaxed));
+        let next = begin_refinement(&path).expect("free after cancel");
+        finish_refinement(&path, &stop);
+        assert!(
+            ui_snapshot(&path).refining,
+            "a stale finish leaves the new run alone"
+        );
+        finish_refinement(&path, &next);
+        assert!(!ui_snapshot(&path).refining);
+    }
+
+    #[test]
+    fn a_refinement_request_persists_until_it_is_cleared() {
+        let project = tempfile::tempdir().unwrap();
+        assert!(refinement_request(project.path()).is_none());
+        let request = RefinementRequest::new("best", "en", &[0.0..12.5, 20.0..30.0]);
+        save_refinement_request(project.path(), &request).unwrap();
+        assert_eq!(refinement_request(project.path()), Some(request));
+        clear_refinement_request(project.path());
+        assert!(refinement_request(project.path()).is_none());
+        clear_refinement_request(project.path());
+    }
+
+    #[test]
+    fn a_refinement_keeps_caption_edits_made_while_it_ran() {
+        let mut project = cut_project();
+        let input = project.captions.as_ref().unwrap().segments.clone();
+        project.captions.as_mut().unwrap().segments[0].words[2].text = "yeah".to_string();
+        let refined = RefinedCaptions::new(
+            &input,
+            vec![caption(
+                "segment-0",
+                0.6,
+                2.6,
+                &[
+                    ("uh", 0.6, 0.9),
+                    ("so", 1.05, 1.3),
+                    ("um", 1.5, 1.8),
+                    ("yes", 2.1, 2.6),
+                ],
+            )],
+        );
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let words = &project.captions.as_ref().unwrap().segments[0].words;
+        let words: Vec<(&str, f32, f32)> = words
+            .iter()
+            .map(|word| (word.text.as_str(), word.start, word.end))
+            .collect();
+        assert_eq!(
+            words,
+            vec![("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yeah", 2.1, 2.6)]
+        );
+    }
+
+    #[test]
+    fn a_refinement_moves_caption_words_corrected_into_one() {
+        let input = vec![caption(
+            "segment-0",
+            1.0,
+            2.3,
+            &[("so", 1.0, 1.4), ("it", 2.0, 2.1), ("'s", 2.1, 2.3)],
+        )];
+        let mut project = ProjectConfiguration {
+            timeline: Some(timeline(serde_json::json!({
+                "segments": [{ "timescale": 1.0, "start": 0.0, "end": 10.0 }],
+                "zoomSegments": []
+            }))),
+            captions: Some(CaptionsData {
+                segments: input.clone(),
+                source_timed: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let words = &mut project.captions.as_mut().unwrap().segments[0].words;
+        words.truncate(1);
+        words.push(CaptionWord {
+            text: "its".into(),
+            start: 2.0,
+            end: 2.3,
+        });
+        let refined = RefinedCaptions::new(
+            &input,
+            vec![caption(
+                "segment-0",
+                1.05,
+                2.25,
+                &[("so", 1.05, 1.3), ("it", 2.05, 2.15), ("'s", 2.15, 2.25)],
+            )],
+        );
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let words: Vec<(&str, f32, f32)> = project.captions.as_ref().unwrap().segments[0]
+            .words
+            .iter()
+            .map(|word| (word.text.as_str(), word.start, word.end))
+            .collect();
+        assert_eq!(words, [("so", 1.05, 1.3), ("its", 2.05, 2.25)]);
+    }
+
+    #[test]
+    fn a_refinement_leaves_a_word_retimed_by_hand_where_it_was_put() {
+        let mut project = cut_project();
+        let input = project.captions.as_ref().unwrap().segments.clone();
+        let word = &mut project.captions.as_mut().unwrap().segments[0].words[2];
+        (word.text, word.start, word.end) = ("yeah".to_string(), 2.2, 2.9);
+        let refined = RefinedCaptions::new(
+            &input,
+            vec![caption(
+                "segment-0",
+                0.6,
+                2.6,
+                &[("so", 1.05, 1.3), ("um", 1.5, 1.8), ("yes", 2.1, 2.6)],
+            )],
+        );
+
+        assert!(apply_refined_captions(&mut project, &refined, &[10.0]));
+
+        let last = project.captions.as_ref().unwrap().segments[0]
+            .words
+            .last()
+            .map(|word| (word.text.clone(), word.start, word.end));
+        assert_eq!(last, Some(("yeah".to_string(), 2.2, 2.9)));
+    }
+
+    #[test]
+    fn fillers_count_as_english_only_when_the_language_allows_it() {
+        let words = [
+            ("Er", 0.0, 0.3),
+            ("ist", 0.3, 0.5),
+            ("in", 0.5, 0.7),
+            ("Berlin", 0.7, 1.2),
+        ];
+        let filler_language = |language: &str| {
+            let mut project = ProjectConfiguration::default();
+            apply_caption_result(
+                &mut project,
+                vec![caption("segment-0-0", 0.0, 1.2, &words)],
+                language,
+                &[10.0],
+                10.0,
+            );
+            project.captions.unwrap().settings.filler_language
+        };
+
+        assert_eq!(filler_language("de"), None);
+        assert_eq!(filler_language("en"), Some("en".to_string()));
+    }
+
     #[test]
     fn apply_caption_result_synthesises_a_timeline_when_missing() {
         let mut project = ProjectConfiguration::default();
@@ -2661,6 +5054,7 @@ mod tests {
         apply_caption_result(
             &mut project,
             vec![caption("segment-0-0", 1.0, 2.0, &[("hello", 1.0, 2.0)])],
+            "auto",
             &[10.0],
             10.0,
         );

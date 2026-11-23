@@ -74,6 +74,19 @@ fn main() -> anyhow::Result<()> {
     let response = futures::executor::block_on(actor.rx.clone())
         .map_err(|_| anyhow::anyhow!("The cursor recorder exited without a response"))?;
 
+    // Moves that only record a new cursor shape keep the previous position.
+    let shape_only_moves = response
+        .moves
+        .windows(2)
+        .filter(|pair| pair[0].x == pair[1].x && pair[0].y == pair[1].y)
+        .count();
+    let shape_changes: Vec<String> = response
+        .moves
+        .windows(2)
+        .filter(|pair| pair[0].cursor_id != pair[1].cursor_id)
+        .map(|pair| format!("{:.0}ms {}", pair[1].time_ms, pair[1].cursor_id))
+        .collect();
+
     let keys: Vec<String> = response
         .keyboard_presses
         .iter()
@@ -89,6 +102,8 @@ fn main() -> anyhow::Result<()> {
             "cpuPercent": cpu.map(|cpu| cpu / wall.as_secs_f64() * 100.0),
             "moves": response.moves.len(),
             "clicks": response.clicks.len(),
+            "shapeOnlyMoves": shape_only_moves,
+            "shapeChanges": shape_changes,
             "keys": keys,
         })
     );

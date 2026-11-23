@@ -5,12 +5,13 @@ use gpui::{ForegroundExecutor, Window, WindowAppearance};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetForegroundWindow, GetWindowDisplayAffinity, GetWindowRect, HWND_NOTOPMOST,
-    HWND_TOP, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, PostMessageW, SW_HIDE,
-    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow,
-    SetWindowDisplayAffinity, SetWindowPos, ShowWindowAsync, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
-    WM_CLOSE, WM_NCACTIVATE,
+    DefWindowProcW, GWL_EXSTYLE, GetForegroundWindow, GetWindowDisplayAffinity, GetWindowLongPtrW,
+    GetWindowRect, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed,
+    LWA_ALPHA, PostMessageW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+    SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync,
+    WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WM_CLOSE, WM_NCACTIVATE, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
 
 use super::{ForcedAppearance, MaterialKind, PanelBehavior};
@@ -143,6 +144,10 @@ pub fn target_overlay_level() -> isize {
     1
 }
 
+pub fn recording_area_level() -> isize {
+    1
+}
+
 pub fn teleprompter_level() -> isize {
     1
 }
@@ -182,9 +187,43 @@ pub fn set_window_capture_hidden(native: &NativeWindow, hidden: bool) -> usize {
     }
 }
 
-pub fn set_window_click_through(_native: &NativeWindow, _click_through: bool) -> bool {
-    false
+/// Let the mouse fall through to whatever is under the window. Windows hit
+/// tests past a window only when it is both layered and transparent; full
+/// opacity keeps a layered window drawn exactly as before. Restyling sends
+/// the window messages, so call it with no gpui borrow held.
+pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> bool {
+    let hwnd = native.hwnd();
+    let bits = (WS_EX_LAYERED | WS_EX_TRANSPARENT) as isize;
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let wanted = if click_through {
+            style | bits
+        } else {
+            style & !bits
+        };
+        if wanted != style {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+            if click_through {
+                SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+            }
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        (style & bits == bits) == click_through
+    }
 }
+
+pub fn set_draw_cursor() {}
+
+pub fn reset_cursor() {}
 
 pub fn restore_borderless_style(_native: &NativeWindow) {}
 
@@ -471,6 +510,8 @@ pub fn order_front_native(native: &NativeWindow) {
     }
 }
 
+pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
+
 /// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
 /// after an overlay's own activation and loses to it.
 pub fn raise_panel_native(native: &NativeWindow, _level: isize) {
@@ -554,6 +595,10 @@ pub fn maximize_if_larger_than_work_area(window: &Window, cx: &gpui::App) {
 
 pub fn window_is_visible(window: &Window) -> bool {
     native_handle(window).is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd as HWND) != 0 })
+}
+
+pub fn window_is_minimized(window: &Window) -> bool {
+    native_handle(window).is_some_and(|hwnd| unsafe { IsIconic(hwnd as HWND) != 0 })
 }
 
 pub fn show_window_without_focus(window: &Window) {
@@ -787,6 +832,11 @@ pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
 
 pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
     None
+}
+
+/// macOS raises an app-control prompt; Windows has no such prompt.
+pub fn app_control_prompt_visible() -> bool {
+    false
 }
 
 pub fn system_settings_frontmost() -> bool {

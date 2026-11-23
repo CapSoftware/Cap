@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev:local": "bun --watch src/index.ts",
+		"dev:local": "MEDIA_SERVER_INTERNAL_MEDIA_HOSTS=${MEDIA_SERVER_INTERNAL_MEDIA_HOSTS:-localhost,127.0.0.1} bun --watch src/index.ts",
 		"start": "bun src/index.ts",
 		"build": "echo 'No build step needed for Bun'",
 		"test": "bun test",
@@ -11,15 +11,18 @@
 	},
 	"dependencies": {
 		"@mediabunny/server": "^1.45.2",
-		"hono": "^4.12.12",
+		"hono": "^4.13.16",
 		"mediabunny": "^1.45.2",
 		"node-av": "^5.2.4",
-		"zod": "^3.24.2"
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@types/bun": "latest"
 	},
 	"trustedDependencies": [
 		"node-av"
-	]
+	],
+	"patchedDependencies": {
+		"mediabunny@1.45.2": "patches/mediabunny@1.45.2.patch"
+	}
 }

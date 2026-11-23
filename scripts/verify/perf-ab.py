@@ -37,6 +37,15 @@ WORKLOADS = [
     ("playback-basic", "playback", "playback/basic/*", "fast", False),
 ]
 
+# CI measures each group on its own runner at the same time (perf-budget.yml);
+# a base and head pair always shares one machine. Every workload is in
+# exactly one group (test-perf-ab.py).
+GROUPS = {
+    "export": ["export-basic"],
+    "export-camera-and-seek": ["export-jitter-camera-40s", "seek-storm"],
+    "playback": ["playback-basic"],
+}
+
 FAIL_LIMIT = 0.25
 WARN_LIMIT = 0.08
 
@@ -90,7 +99,9 @@ def main():
     parser.add_argument("--out", required=True, help="use a fresh path for each comparison; existing reports are preserved")
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--summary")
+    parser.add_argument("--group", choices=sorted(GROUPS), help="measure only this group's workloads (default: all)")
     args = parser.parse_args()
+    workloads = [w for w in WORKLOADS if args.group is None or w[0] in GROUPS[args.group]]
 
     sides = {
         "base": json.loads(Path(args.base).read_text()),
@@ -114,7 +125,7 @@ def main():
         print(f"::error::{name} {label}: exit {result['exit']}, {len(result['outcomes'])} cases reported")
         print("\n".join(tail))
         return False
-    for name, target, case, tier, gated in WORKLOADS:
+    for name, target, case, tier, gated in workloads:
         # The first run of a side generates fixtures and fills caches.
         usable = True
         for label, side in sides.items():
@@ -167,7 +178,7 @@ def main():
         rows.append((name, cpu["base"], cpu["head"], wall["base"], wall["head"], verdict, cpu_delta))
 
     lines = [
-        "## Perf budget",
+        "## Perf budget" + (f" ({args.group})" if args.group else ""),
         "",
         f"{args.pairs} interleaved pairs: median test process CPU time (user + system) and wall time per side, and the median of the per-pair CPU ratios.",
         "",

@@ -184,8 +184,7 @@ const Principles = () => (
 									target="_blank"
 									rel="noopener noreferrer"
 									className={classNames(
-										MONO,
-										"mt-6 inline-flex w-fit items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[11px] uppercase leading-none tracking-[0.05em] text-[#111111] shadow-[0_0_0_1px_rgba(17,17,17,0.06)] transition-colors duration-200 hover:bg-[#EDF1F6]",
+										"mt-6 inline-flex w-fit items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[12.5px] leading-none text-[#111111] shadow-[0_0_0_1px_rgba(17,17,17,0.06)] transition-colors duration-200 hover:bg-[#EDF1F6]",
 									)}
 								>
 									{principle.link.label}
@@ -235,9 +234,7 @@ const Milestones = () => (
 				{milestones.map((milestone) => {
 					const inner = (
 						<>
-							<span
-								className={`${MONO} text-[12px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.5)] sm:pt-1.5`}
-							>
+							<span className="text-[13.5px] leading-none text-[rgba(17,17,17,0.5)] sm:pt-1.5">
 								{milestone.date}
 							</span>
 							<span className="min-w-0">
@@ -389,8 +386,7 @@ const FinalCta = ({ stars }: { stars: string }) => (
 							target="_blank"
 							rel="noopener noreferrer"
 							className={classNames(
-								MONO,
-								"inline-flex items-center gap-1 text-[11.5px] uppercase leading-none tracking-[0.05em] text-[rgba(17,17,17,0.6)] transition-colors duration-200 hover:text-[#111111]",
+								"inline-flex items-center gap-1 text-[13px] leading-none text-[rgba(17,17,17,0.6)] transition-colors duration-200 hover:text-[#111111]",
 							)}
 						>
 							{item.label}

@@ -203,12 +203,7 @@ export const agenciesContent: SeoPageContent = {
 			},
 		],
 	},
-	video: {
-		iframe: {
-			src: "https://www.rend.so/embed/10512af0-b922-4efa-8974-f8f14fc1886a?accent=3e63dd",
-			title: "Cap screen recording demo",
-		},
-	},
+	video: {},
 
 	useCasesTitle: "How Agencies Use Cap for Client Success",
 	useCasesDescription:

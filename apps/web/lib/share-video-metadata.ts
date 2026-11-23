@@ -25,6 +25,22 @@ export type ShareVideoMetadataInput = {
 	 */
 	canonicalWebUrl?: string;
 	advertiseIframelyPlayer?: boolean;
+	thumbnailVersion?: string | null;
+};
+
+export const buildVideoOgImageUrl = ({
+	videoId,
+	webUrl,
+	thumbnailVersion,
+}: {
+	videoId: string;
+	webUrl: string;
+	thumbnailVersion?: string | null;
+}) => {
+	const url = new URL("/api/video/og", webUrl);
+	url.searchParams.set("videoId", videoId);
+	if (thumbnailVersion) url.searchParams.set("v", thumbnailVersion);
+	return url.toString();
 };
 
 export const getShareVideoUrls = ({
@@ -32,9 +48,10 @@ export const getShareVideoUrls = ({
 	sourceType,
 	webUrl,
 	canonicalWebUrl = webUrl,
+	thumbnailVersion,
 }: Pick<
 	ShareVideoMetadataInput,
-	"videoId" | "sourceType" | "webUrl" | "canonicalWebUrl"
+	"videoId" | "sourceType" | "webUrl" | "canonicalWebUrl" | "thumbnailVersion"
 >) => {
 	const shareUrl = new URL(`/s/${videoId}`, webUrl).toString();
 	const canonicalShareUrl = new URL(
@@ -57,8 +74,11 @@ export const getShareVideoUrls = ({
 	const previewImageUrl = new URL("/api/video/preview", webUrl);
 	previewImageUrl.searchParams.set("videoId", videoId);
 	previewImageUrl.searchParams.set("fallback", "og");
-	const ogImageUrl = new URL("/api/video/og", webUrl);
-	ogImageUrl.searchParams.set("videoId", videoId);
+	const ogImageUrl = buildVideoOgImageUrl({
+		videoId,
+		webUrl,
+		thumbnailVersion,
+	});
 	const oEmbedUrl = new URL("/api/oembed", canonicalWebUrl);
 	oEmbedUrl.searchParams.set("url", canonicalShareUrl);
 	oEmbedUrl.searchParams.set("format", "json");
@@ -69,7 +89,7 @@ export const getShareVideoUrls = ({
 		streamUrl: streamUrl.toString(),
 		streamContentType,
 		previewImageUrl: previewImageUrl.toString(),
-		ogImageUrl: ogImageUrl.toString(),
+		ogImageUrl,
 		oEmbedUrl: oEmbedUrl.toString(),
 	};
 };
@@ -83,13 +103,21 @@ export const buildShareVideoMetadata = ({
 	advertiseIframelyPlayer = false,
 	width,
 	height,
+	thumbnailVersion,
 }: ShareVideoMetadataInput): Metadata => {
 	const urls = getShareVideoUrls({
 		videoId,
 		sourceType,
 		webUrl,
 		canonicalWebUrl,
+		thumbnailVersion,
 	});
+	const ogImage = {
+		url: urls.ogImageUrl,
+		width: 1200,
+		height: 630,
+		type: "image/png",
+	};
 	const title = `${name} | Cap Recording`;
 	const description = "Watch this video on Cap";
 	const hasDimensions =
@@ -132,20 +160,17 @@ export const buildShareVideoMetadata = ({
 			title,
 			description,
 			ttl: 300,
-			images: [
-				{
-					url: urls.previewImageUrl,
-					width: 480,
-					height: 270,
-					type: "image/gif",
-				},
-				{
-					url: urls.ogImageUrl,
-					width: 1200,
-					height: 630,
-					type: "image/png",
-				},
-			],
+			images: thumbnailVersion
+				? [ogImage]
+				: [
+						{
+							url: urls.previewImageUrl,
+							width: 480,
+							height: 270,
+							type: "image/gif",
+						},
+						ogImage,
+					],
 			videos: [
 				{
 					url: urls.streamUrl,
@@ -160,7 +185,9 @@ export const buildShareVideoMetadata = ({
 			card: "player",
 			title,
 			description,
-			images: [urls.previewImageUrl, urls.ogImageUrl],
+			images: thumbnailVersion
+				? [urls.ogImageUrl]
+				: [urls.previewImageUrl, urls.ogImageUrl],
 			players: {
 				playerUrl: urls.playerUrl,
 				streamUrl: urls.streamUrl,

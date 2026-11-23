@@ -31,17 +31,28 @@ export const parseCheckoutSeats = (value: unknown): number => {
 		: 1;
 };
 
+const PROMOTION_CODE = /^[A-Za-z0-9][A-Za-z0-9_-]{1,39}$/;
+
+export const parsePromotionCode = (value: unknown): string | null =>
+	typeof value === "string" && PROMOTION_CODE.test(value.trim())
+		? value.trim().toUpperCase()
+		: null;
+
 export const checkoutPath = ({
 	plan,
 	seats,
 	onboarding,
+	promo,
 }: {
 	plan: CheckoutPlan;
 	seats: number;
 	onboarding?: boolean;
+	promo?: string | null;
 }): string => {
 	const params = new URLSearchParams({ plan, seats: String(seats) });
 	if (onboarding) params.set("onboarding", "1");
+	const code = parsePromotionCode(promo);
+	if (code) params.set("promo", code);
 	return `/checkout?${params.toString()}`;
 };
 

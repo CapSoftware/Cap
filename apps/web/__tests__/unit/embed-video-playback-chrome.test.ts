@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { Blob as NodeBlob } from "node:buffer";
 import {
 	act,
 	type ComponentProps,
@@ -14,6 +15,7 @@ import {
 	afterAll,
 	afterEach,
 	beforeAll,
+	beforeEach,
 	describe,
 	expect,
 	it,
@@ -107,8 +109,10 @@ vi.mock("motion/react", async () => {
 	};
 });
 
+const transcript = vi.hoisted(() => ({ content: null as string | null }));
+
 vi.mock("hooks/use-transcript", () => ({
-	useTranscript: () => ({ data: null, error: null }),
+	useTranscript: () => ({ data: transcript.content, error: null }),
 }));
 
 vi.mock("@/app/s/[videoId]/_components/ProgressCircle", () => ({
@@ -143,9 +147,11 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 	const DeferredVideoPlayer = ({
 		videoRef,
 		defaultPlaybackSpeed,
+		captionsSrc,
 	}: {
 		videoRef: Ref<HTMLVideoElement>;
 		defaultPlaybackSpeed?: number;
+		captionsSrc?: string;
 	}) => {
 		const [isMounted, setIsMounted] = useState(false);
 		useEffect(() => setIsMounted(true), []);
@@ -154,6 +160,7 @@ vi.mock("@/app/s/[videoId]/_components/CapVideoPlayer", async () => {
 					ref: (video: HTMLVideoElement | null) =>
 						attachVideoRef(videoRef, video),
 					"data-default-speed": defaultPlaybackSpeed,
+					"data-captions-src": captionsSrc,
 				})
 			: null;
 	};
@@ -399,6 +406,76 @@ describe("EmbedVideo playback chrome", () => {
 		await act(async () => {
 			root.unmount();
 		});
+	});
+});
+
+describe("EmbedVideo captions", () => {
+	const createObjectURL = URL.createObjectURL;
+	const revokeObjectURL = URL.revokeObjectURL;
+	let blobs: Map<string, Blob>;
+
+	beforeAll(() => {
+		actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+	});
+
+	beforeEach(() => {
+		blobs = new Map();
+		vi.stubGlobal("Blob", NodeBlob);
+		URL.createObjectURL = (blob: Blob) => {
+			const url = `blob:captions-${blobs.size}`;
+			blobs.set(url, blob);
+			return url;
+		};
+		URL.revokeObjectURL = () => {};
+	});
+
+	afterEach(() => {
+		transcript.content = null;
+		URL.createObjectURL = createObjectURL;
+		URL.revokeObjectURL = revokeObjectURL;
+		vi.unstubAllGlobals();
+		document.body.replaceChildren();
+	});
+
+	afterAll(() => {
+		delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+	});
+
+	const renderCaptionsSrc = async () => {
+		const container = document.createElement("div");
+		document.body.append(container);
+		const root = createRoot(container);
+		const props = createProps({ type: "desktopMP4" });
+		await act(async () => {
+			root.render(
+				createElement(EmbedVideo, {
+					...props,
+					data: { ...props.data, transcriptionStatus: "COMPLETE" },
+				}),
+			);
+		});
+		const src = container.querySelector("video")?.dataset.captionsSrc;
+		await act(async () => root.unmount());
+		return src;
+	};
+
+	it("keeps each caption's own start and end time", async () => {
+		const vtt =
+			"WEBVTT\n\n1\n00:00:01.240 --> 00:00:02.880\nHi there.\n\n2\n00:00:02.950 --> 00:00:03.990\nLet's start.\n\n3\n00:00:09.700 --> 00:00:10.600\nAfter a pause.\n\n";
+		transcript.content = vtt;
+
+		const src = await renderCaptionsSrc();
+		const blob = src ? blobs.get(src) : undefined;
+		if (!blob) throw new Error("Missing captions track");
+		expect(blob.type).toBe("text/vtt");
+		expect(await blob.text()).toBe(vtt);
+	});
+
+	it("adds no captions track for a transcript without captions", async () => {
+		transcript.content = "WEBVTT\n\n";
+
+		expect(await renderCaptionsSrc()).toBe("");
+		expect(blobs.size).toBe(0);
 	});
 });
 

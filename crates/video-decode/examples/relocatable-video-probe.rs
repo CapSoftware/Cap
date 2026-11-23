@@ -170,7 +170,7 @@ fn main() -> Result<(), String> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     files.retain(|path| path.extension().is_some_and(|extension| extension == "m4s"));
-    files.sort();
+    cap_enc_ffmpeg::fragment_order::sort_fragment_paths(&mut files);
     if files.len() < 2 {
         return Err("Probe requires multiple fragments".into());
     }

@@ -33,8 +33,6 @@ Before anything else, make sure you have the following installed:
 
 ### General Setup
 
-Keep the root `react` and `react-dom` development dependencies aligned with `apps/mobile`. They keep Expo native dependencies deduplicated under Bun’s hoisted linker, while the web app retains its separately resolved React version.
-
 Run `bun install`, then run `bun run env-setup` to generate a `.env` file configured for your environment.
 It will ask you which apps you intend to run, whether you'd like to use Docker to run S3 (MinIO) and MySQL locally,
 and allow you to provide overrides as needed.
@@ -43,6 +41,7 @@ Then run `bun run cap-setup` to install native dependencies such as FFmpeg.
 
 On Windows, llvm, clang, and VCPKG must be installed.
 On MacOS, cmake must be installed.
+On Linux, `unzip` must be installed.
 `bun run cap-setup` does not yet install these dependencies for you.
 
 To run both `@cap/desktop` and `@cap/web` together, use `bun run dev`.

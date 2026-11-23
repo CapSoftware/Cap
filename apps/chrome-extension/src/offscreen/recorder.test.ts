@@ -501,3 +501,32 @@ describe("capture device acquisition", () => {
 		expect(cameraAttempts).toBe(2);
 	});
 });
+
+describe("tab capture size", () => {
+	it("lets the frame follow the tab's shape instead of letterboxing it", async () => {
+		const requests: MediaStreamConstraints[] = [];
+		vi.stubGlobal("navigator", {
+			userAgent: "Chrome/152.0.0.0",
+			mediaDevices: {
+				getUserMedia: async (constraints: MediaStreamConstraints) => {
+					requests.push(constraints);
+					return new Stream([new Track("video")]);
+				},
+				getDisplayMedia: async () => new Stream([new Track("video")]),
+			},
+		});
+
+		const started = await start(
+			{
+				microphone: { enabled: false, deviceId: null },
+				systemAudio: { enabled: false },
+			},
+			"tab",
+		);
+		expect(started).toMatchObject({ ok: true });
+
+		expect(requests[0]?.video).toMatchObject({
+			mandatory: { minWidth: 2, minHeight: 2, maxWidth: 1920, maxHeight: 1080 },
+		});
+	});
+});
