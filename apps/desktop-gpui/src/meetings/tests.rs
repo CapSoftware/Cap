@@ -1466,3 +1466,17 @@ fn each_resume_of_a_meeting_without_kept_audio_gets_its_own_files() {
     }
     assert_eq!(persist::resume_suffix(&MeetingDetails::default()), "-2");
 }
+
+#[test]
+fn a_failed_start_is_reported_once() {
+    // An accepted prompt reads why its start failed. The error is taken, so an
+    // older failure can never be shown again for a later start that worked.
+    let mut meetings = super::Meetings::new(cap_meetings::settings::MeetingSettings::default());
+    assert_eq!(meetings.take_start_error(), None);
+    meetings.last_start_error = Some(super::MeetingError::Library("denied".into()));
+    assert_eq!(
+        meetings.take_start_error(),
+        Some(super::MeetingError::Library("denied".into()))
+    );
+    assert_eq!(meetings.take_start_error(), None);
+}

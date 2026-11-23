@@ -172,6 +172,20 @@ pub fn start_listening(source: crate::meetings::StartSource, cx: &mut App) {
     }
     match crate::meetings_ui::live::start(source, cx) {
         Ok(doc_id) => window::open_to_type(doc_id, cx),
-        Err(error) => tracing::warn!(%error, "meeting notes did not start"),
+        Err(error) => start_failed(error, cx),
     }
+}
+
+/// A start that failed outside the notes window (the main window, the tray,
+/// a hotkey): the window opens and says so, so it never looks as if notes
+/// were being taken.
+pub fn start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
+    use crate::meetings::MeetingError;
+    tracing::warn!(%error, "meeting notes did not start");
+    let message = match error {
+        MeetingError::Disabled => return crate::meetings_ui::setup::open(cx),
+        MeetingError::NotFound => crate::i18n::tr::documents::bar::error_not_found(),
+        _ => crate::i18n::tr::documents::bar::error_start(),
+    };
+    window::open_with_message(message, cx);
 }

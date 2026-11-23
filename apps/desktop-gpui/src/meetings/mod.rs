@@ -1138,6 +1138,12 @@ impl Meetings {
         self.rearm(cx);
     }
 
+    /// Why the last start failed, once: for entry points (an accepted
+    /// prompt) that start through the session rather than `start_recording`.
+    pub fn take_start_error(&mut self) -> Option<MeetingError> {
+        self.last_start_error.take()
+    }
+
     pub fn dismiss_prompt(&mut self, id: u64, cx: &mut Context<Self>) {
         let actions = self.planner.dismiss(self.now_pair(), id);
         self.apply_prompt_actions(actions, cx);

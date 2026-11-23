@@ -172,6 +172,23 @@ fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
     open_new(doc_id, type_into, cx);
 }
 
+/// Open the notes window and say `message` there, for something that went
+/// wrong where no window was showing (a start from the tray or a hotkey).
+pub fn open_with_message(message: impl Into<SharedString>, cx: &mut App) {
+    open(None, cx);
+    let Some(handle) = MeetingWindows::get(cx).documents else {
+        return;
+    };
+    let message = message.into();
+    handle
+        .update(cx, |root, _, cx| {
+            if let Ok(root) = root.downcast::<DocumentsWindow>() {
+                root.update(cx, |root, cx| root.show_toast(message, None, None, cx));
+            }
+        })
+        .ok();
+}
+
 /// Open the notes window on a new, plain note: no recording, no setup.
 pub fn new_note(cx: &mut App) {
     open(None, cx);
@@ -961,6 +978,25 @@ mod tests {
         }
         assert_eq!(notes_windows(cx), 1);
         assert_eq!(cx.update(|cx| MeetingWindows::get(cx).documents), first);
+    }
+
+    /// A start that fails from the tray or a hotkey, with no window showing,
+    /// opens the notes window and says so instead of doing nothing.
+    #[gpui::test]
+    fn a_failed_start_from_outside_the_window_says_so(cx: &mut TestAppContext) {
+        assert_eq!(notes_windows(cx), 0);
+        cx.update(|cx| super::open_with_message("Recording couldn't start.", cx));
+        cx.run_until_parked();
+        assert_eq!(notes_windows(cx), 1);
+        let handle = cx.update(|cx| MeetingWindows::get(cx).documents).unwrap();
+        let shown = handle
+            .update(cx, |root, _, cx| {
+                root.downcast::<super::DocumentsWindow>()
+                    .ok()
+                    .and_then(|root| root.read(cx).toast.as_ref().map(|t| t.message.clone()))
+            })
+            .unwrap();
+        assert_eq!(shown.as_deref(), Some("Recording couldn't start."));
     }
 
     /// A notes window that goes away clears only its own slot, so a newer
