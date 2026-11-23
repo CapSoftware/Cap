@@ -85,27 +85,48 @@ const postParent = (event: CameraPreviewEvent) => {
 };
 
 let frameCanvas: HTMLCanvasElement | null = null;
+let lastCapturedTime = -1;
+let lastCapturedTimestamp = 0;
 
 const captureVideoFrame = (
 	video: HTMLVideoElement,
 ): WebcamPreviewFrame | null => {
-	if (video.videoWidth <= 0 || video.videoHeight <= 0) return null;
+	if (
+		video.videoWidth <= 0 ||
+		video.videoHeight <= 0 ||
+		video.paused ||
+		video.ended ||
+		video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+	) {
+		return null;
+	}
+	if (typeof document !== "undefined" && document.hidden) {
+		return null;
+	}
+	// Avoid redundant canvas redraw and base64 serialization if video playback has not progressed
+	if (video.currentTime === lastCapturedTime && lastCapturedTimestamp > 0) {
+		return null;
+	}
 	frameCanvas ??= document.createElement("canvas");
 	const scale = Math.min(1, FRAME_CAPTURE_MAX_WIDTH / video.videoWidth);
 	const width = Math.max(1, Math.round(video.videoWidth * scale));
 	const height = Math.max(1, Math.round(video.videoHeight * scale));
-	frameCanvas.width = width;
-	frameCanvas.height = height;
+	if (frameCanvas.width !== width || frameCanvas.height !== height) {
+		frameCanvas.width = width;
+		frameCanvas.height = height;
+	}
 	const context = frameCanvas.getContext("2d");
 	if (!context) return null;
 	context.drawImage(video, 0, 0, width, height);
+	lastCapturedTime = video.currentTime;
+	lastCapturedTimestamp = Date.now();
 	return {
 		dataUrl: frameCanvas.toDataURL("image/jpeg", 0.72),
 		dimensions: {
 			width: video.videoWidth,
 			height: video.videoHeight,
 		},
-		capturedAt: Date.now(),
+		capturedAt: lastCapturedTimestamp,
 	};
 };
 
@@ -244,6 +265,9 @@ function App() {
 		streamRef.current = null;
 		activeDeviceRef.current = null;
 		sessionIdRef.current = null;
+		lastCapturedTime = -1;
+		lastCapturedTimestamp = 0;
+		frameCanvas = null;
 		videoRef.current?.removeAttribute("src");
 		if (videoRef.current) {
 			videoRef.current.srcObject = null;
