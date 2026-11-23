@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localS3, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
 import {
 	canRemux,
 	downloadSource,
@@ -134,34 +135,45 @@ describe("source size", () => {
 });
 
 describe("downloadSource", () => {
+	afterEach(stopLocalS3);
+
+	const source = (data: Uint8Array<ArrayBuffer>) => {
+		const ranges: string[] = [];
+		const bucket = memoryBucket("bucket", {
+			before: (request) => {
+				const range = request.headers.get("range");
+				if (range) ranges.push(range);
+				return undefined;
+			},
+		});
+		bucket.objects.set("k", { body: data, contentType: null });
+		return { s3: localS3(bucket.handle), bucket, ranges };
+	};
+
 	test("reassembles a source from parallel ranged reads", async () => {
 		const data = new Uint8Array(1000).map((_, index) => index % 251);
-		const reads: [number, number][] = [];
+		const { s3, ranges } = source(data);
 		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
-		const size = await downloadSource(
-			{
-				head: async () => ({ size: data.byteLength }),
-				getRange: async (_key, start, end) => {
-					reads.push([start, end]);
-					return data.slice(start, end + 1);
-				},
-			},
-			"k",
-			path,
-			{ piece: 128, concurrency: 3 },
-		);
+		const size = await downloadSource(s3, "k", path, {
+			piece: 128,
+			concurrency: 3,
+		});
 		expect(size).toBe(1000);
 		expect(new Uint8Array(readFileSync(path))).toEqual(data);
-		expect(reads).toHaveLength(8);
+		expect(ranges.sort()).toEqual(
+			Array.from(
+				{ length: 8 },
+				(_, index) =>
+					`bytes=${index * 128}-${Math.min(1000, index * 128 + 128) - 1}`,
+			).sort(),
+		);
 	});
 
 	test("reports progress as each range lands", async () => {
+		const { s3 } = source(new Uint8Array(300));
 		const progress: number[] = [];
 		await downloadSource(
-			{
-				head: async () => ({ size: 300 }),
-				getRange: async (_key, start, end) => new Uint8Array(end - start + 1),
-			},
+			s3,
 			"k",
 			join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source"),
 			{
@@ -174,16 +186,16 @@ describe("downloadSource", () => {
 	});
 
 	test("refuses a short read", async () => {
+		const bucket = memoryBucket("bucket", {
+			before: (request) =>
+				request.method === "GET"
+					? new Response(new Uint8Array(10), { status: 206 })
+					: undefined,
+		});
+		bucket.objects.set("k", { body: new Uint8Array(100), contentType: null });
 		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
 		await expect(
-			downloadSource(
-				{
-					head: async () => ({ size: 100 }),
-					getRange: async () => new Uint8Array(10),
-				},
-				"k",
-				path,
-			),
+			downloadSource(localS3(bucket.handle), "k", path),
 		).rejects.toThrow("short read");
 	});
 });

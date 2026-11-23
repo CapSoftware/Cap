@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localS3, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
 import { type FileSpec, ProjectCache } from "./materialize";
 import { S3 } from "./s3";
 
@@ -172,19 +173,33 @@ describe("ProjectCache lifecycle", () => {
 });
 
 describe("prefixed files", () => {
-	test("are their prefix, then the source shifted by it", async () => {
-		const objects = new Map<string, Uint8Array>([
-			["prefix", Uint8Array.from({ length: 100 }, (_, index) => index + 1)],
-			[
-				"source",
-				Uint8Array.from({ length: 10 << 20 }, (_, index) => (index % 250) + 1),
-			],
-		]);
+	afterEach(stopLocalS3);
+
+	function bucketCache(concurrency = 1) {
 		const reads: string[] = [];
-		const { cache, root } = harness(async (key, start, endInclusive) => {
-			reads.push(`${key}:${start}-${endInclusive}`);
-			return (objects.get(key) as Uint8Array).slice(start, endInclusive + 1);
-		}, 12);
+		const bucket = memoryBucket("bucket", {
+			before: (request, key) => {
+				const range = request.headers.get("range");
+				if (range) reads.push(`${key}:${range.slice("bytes=".length)}`);
+				return undefined;
+			},
+		});
+		const root = mkdtempSync(join(tmpdir(), "cap-project-cache-"));
+		roots.push(root);
+		const cache = new ProjectCache(localS3(bucket.handle), root, concurrency);
+		caches.push(cache);
+		return { bucket, cache, root, reads };
+	}
+
+	test("are their prefix, then the source shifted by it", async () => {
+		const { bucket, cache, root, reads } = bucketCache(12);
+		const prefix = Uint8Array.from({ length: 100 }, (_, index) => index + 1);
+		const source = Uint8Array.from(
+			{ length: 10 << 20 },
+			(_, index) => (index % 250) + 1,
+		);
+		bucket.objects.set("prefix", { body: prefix, contentType: null });
+		bucket.objects.set("source", { body: source, contentType: null });
 		const size = 100 + (10 << 20);
 		await cache.materialize([
 			{
@@ -205,10 +220,7 @@ describe("prefixed files", () => {
 		]);
 		const file = readFileSync(join(root, "display.mp4"));
 		expect(file.byteLength).toBe(size);
-		expect([...file.subarray(0, 100)]).toEqual([
-			...(objects.get("prefix") as Uint8Array),
-		]);
-		const source = objects.get("source") as Uint8Array;
+		expect([...file.subarray(0, 100)]).toEqual([...prefix]);
 		for (const at of [0, 1, PIECE - 1, PIECE, 2 * PIECE - 1]) {
 			expect(file[100 + at]).toBe(source[at] as number);
 		}
@@ -216,9 +228,7 @@ describe("prefixed files", () => {
 	});
 
 	test("are not fetched once the cache is closed", async () => {
-		const { cache } = harness(async () => {
-			throw new Error("Unexpected S3 request");
-		});
+		const { bucket, cache } = bucketCache();
 		cache.close();
 		await expect(
 			cache.materialize([
@@ -231,5 +241,6 @@ describe("prefixed files", () => {
 				},
 			]),
 		).rejects.toThrow("closed");
+		expect(bucket.requests).toEqual([]);
 	});
 });

@@ -1,20 +1,42 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { localServer, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
+import { ProjectCache } from "./materialize";
 import {
 	MIN_PART,
 	type TranscodeTask,
 	type VideoTask,
 	type WorkItem,
 } from "./protocol";
+import { mediaS3ConfigFromEnv, S3, s3ConfigFromEnv } from "./s3";
 import * as stitch from "./stitch";
 import * as transcode from "./transcode";
 
+const workDirs: string[] = [];
+
+afterAll(() => {
+	stopLocalS3();
+	for (const dir of workDirs.splice(0))
+		rmSync(dir, { recursive: true, force: true });
+});
+
+const SOURCE = Uint8Array.from({ length: 12 }, (_, index) => index + 1);
+const ENCODED = new TextEncoder().encode("encoded mp4");
+
 function harness(
 	options: {
-		presignGate?: Promise<void>;
+		headGate?: Promise<void>;
 		probeStalls?: boolean;
 		rangeGates?: Promise<void>[];
 		stashFails?: boolean;
@@ -22,10 +44,68 @@ function harness(
 ) {
 	const spawned: string[] = [];
 	const killed: string[] = [];
-	const removed: string[] = [];
 	const intervals: (() => void)[] = [];
 	const posts: { path: string; body: unknown }[] = [];
-	let uploads = 0;
+	const signals = new Map<string, () => void>();
+	const exits: number[] = [];
+	const conditions: { ready: () => boolean; resolve: () => void }[] = [];
+	const changed = () => {
+		for (const condition of [...conditions]) {
+			if (!condition.ready()) continue;
+			conditions.splice(conditions.indexOf(condition), 1);
+			condition.resolve();
+		}
+	};
+	const workDir = mkdtempSync(join(tmpdir(), "rf-worker-"));
+	workDirs.push(workDir);
+	const media = memoryBucket("media", {
+		before: async (request) => {
+			changed();
+			if (request.method === "HEAD") await options.headGate;
+			if (request.method === "GET") await options.rangeGates?.shift();
+			return undefined;
+		},
+	});
+	media.objects.set("source.webm", {
+		body: options.rangeGates
+			? SOURCE.slice(0, options.rangeGates.length * 4)
+			: SOURCE.slice(0, 4),
+		contentType: "video/webm",
+	});
+	const farm = memoryBucket("farm", {
+		before: () => {
+			changed();
+			return options.stashFails
+				? new Response(
+						"<Error><Code>AccessDenied</Code><Message>stash upload failed</Message></Error>",
+						{ status: 403 },
+					)
+				: undefined;
+		},
+	});
+	const coordinator = localServer(async (request) => {
+		const body = await request.text();
+		posts.push({
+			path: new URL(request.url).pathname,
+			body: body ? JSON.parse(body) : null,
+		});
+		changed();
+		return Response.json({ finished: [], cancel: [] });
+	});
+	const env = {
+		RF_SLOTS: "0",
+		RF_AUDIO_SLOTS: "0",
+		RF_WORK_DIR: workDir,
+		RF_COORDINATOR_URL: coordinator,
+		RF_S3_ENDPOINT: localServer(farm.handle),
+		RF_S3_BUCKET: "farm",
+		RF_S3_REGION: "us-east-1",
+		RF_S3_ACCESS_KEY_ID: "a",
+		RF_S3_SECRET_ACCESS_KEY: "b",
+		RF_S3_URL_STYLE: "path",
+		RF_MEDIA_S3_ENDPOINT: localServer(media.handle),
+		RF_MEDIA_S3_BUCKET: "media",
+	};
 	const source = readFileSync(
 		new URL("./worker.ts", import.meta.url),
 		"utf8",
@@ -39,82 +119,58 @@ function harness(
 		downloadSource: (
 			s3: transcode.RangeSource,
 			key: string,
-			_path: string,
+			path: string,
 			options: { signal?: AbortSignal; onProgress?: (bytes: number) => void },
 		) =>
-			transcode.downloadSource(
-				s3,
-				key,
-				join(mkdtempSync(join(tmpdir(), "rf-worker-")), "source"),
-				{ ...options, piece: 4, concurrency: 1 },
-			),
+			transcode.downloadSource(s3, key, path, {
+				...options,
+				piece: 4,
+				concurrency: 1,
+				onProgress: (bytes) => {
+					options.onProgress?.(bytes);
+					changed();
+				},
+			}),
 		availableParallelism: () => 1,
 		hostname: () => "worker-test",
-		mkdirSync: () => {},
-		rmSync: (path: string) => removed.push(path),
-		mediaS3ConfigFromEnv: () => ({}),
-		s3ConfigFromEnv: () => ({}),
+		mkdirSync,
+		rmSync,
+		mediaS3ConfigFromEnv: () => mediaS3ConfigFromEnv(env),
+		s3ConfigFromEnv: () => s3ConfigFromEnv(env),
 		...stitch,
 		MIN_PART,
-		ProjectCache: class {
-			root = "/work/job";
-			async materialize() {
-				return { bytes: 0, ms: 0, requests: 0 };
-			}
-			close() {}
-		},
-		S3: class {
-			async head() {
-				await options.presignGate;
-				return { size: options.rangeGates ? options.rangeGates.length * 4 : 4 };
-			}
-			async getRange() {
-				await options.rangeGates?.shift();
-				return new Uint8Array(4);
-			}
-			async uploadFile() {
-				uploads++;
-				return 42;
-			}
-			put() {
-				return options.stashFails
-					? Promise.reject(new Error("stash upload failed"))
-					: Promise.resolve();
-			}
-			async uploadPart() {
-				return "etag";
-			}
-		},
+		ProjectCache,
+		S3,
 		process: {
-			env: { RF_SLOTS: "0", RF_AUDIO_SLOTS: "0" },
-			on: () => {},
+			env,
+			on: (event: string, handler: () => void) => signals.set(event, handler),
+			exit: (code: number) => {
+				exits.push(code);
+				changed();
+			},
 		},
 		setInterval: (callback: () => void) => intervals.push(callback),
-		fetch: async (url: string, init?: { body?: string }) => {
-			posts.push({
-				path: new URL(url).pathname,
-				body: init?.body ? JSON.parse(init.body) : null,
-			});
-			return Response.json({ finished: [], cancel: [] });
-		},
 		console: { log() {}, warn() {}, error() {} },
 		Bun: {
-			spawn: ([command]: string[]) => {
-				const name = command ?? "";
+			spawn: (args: string[]) => {
+				const name = args[0] ?? "";
 				spawned.push(name);
+				const stalls = name === "ffprobe" && options.probeStalls !== false;
+				if (name === "ffmpeg") writeFileSync(args.at(-1) ?? "", ENCODED);
 				const exit = Promise.withResolvers<number>();
 				let output: ReadableStreamDefaultController<Uint8Array>;
 				let exitCode: number | null = null;
 				const stdout = new ReadableStream<Uint8Array>({
 					start(controller) {
 						output = controller;
-						if (name !== "ffprobe" || options.probeStalls === false) {
+						if (!stalls) {
 							controller.close();
 							exitCode = 0;
 							exit.resolve(0);
 						}
 					},
 				});
+				changed();
 				return {
 					stdout,
 					stderr: new Response("").body,
@@ -145,7 +201,7 @@ function harness(
 				pid: number;
 				onEvent: ((event: Record<string, unknown>) => void) | null;
 				onProgress: ((frames: number) => void) | null;
-				request: () => Promise<never>;
+				request: (kind: string, params: { out: string }) => Promise<never>;
 			},
 			queuedMs: number,
 		) => Promise<unknown>;
@@ -174,11 +230,36 @@ function harness(
 		...worker,
 		spawned,
 		killed,
-		removed,
 		intervals,
 		posts,
-		uploads: () => uploads,
+		exits,
+		media,
+		farm,
+		workDir,
+		transcodeDirs: () =>
+			readdirSync(workDir).filter((name) => name.startsWith("transcode-")),
+		signal: (name: string) => signals.get(name)?.(),
+		when: (ready: () => boolean) => {
+			if (ready()) return Promise.resolve();
+			const { promise, resolve } = Promise.withResolvers<void>();
+			conditions.push({ ready, resolve });
+			return promise;
+		},
 	};
+}
+
+/**
+ * The rejection message of `promise`. Not `expect(promise).rejects`: it waits
+ * synchronously, and once `h.when` has resumed a test from inside a local
+ * server's handler, that handler could then never send its response.
+ */
+async function failure(promise: Promise<unknown>) {
+	try {
+		await promise;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+	throw new Error("expected a rejection");
 }
 
 const task: TranscodeTask = {
@@ -189,36 +270,37 @@ const task: TranscodeTask = {
 	keyframeSeconds: 1,
 };
 
-async function until(condition: () => boolean) {
-	for (let i = 0; i < 200 && !condition(); i++) await Bun.sleep(5);
-}
-
 describe("transcode cancellation", () => {
 	test("cancelling a stalled probe kills it and prevents the encoder from starting", async () => {
 		const h = harness();
 		h.busy.set(0, task);
 		const pending = h.runTranscode(task, 0);
-		await until(() => h.spawned.length > 0);
+		await h.when(() => h.spawned.length > 0);
 		expect(h.spawned).toEqual(["ffprobe"]);
+		const [dir] = h.transcodeDirs();
+		expect([...readFileSync(join(h.workDir, dir ?? "", "source"))]).toEqual([
+			1, 2, 3, 4,
+		]);
 		h.cancel([task.taskId]);
-		await expect(pending).rejects.toThrow("transcode cancelled");
+		expect(await failure(pending)).toContain("transcode cancelled");
 		expect(h.killed).toEqual(["ffprobe:SIGKILL"]);
 		expect(h.spawned).toEqual(["ffprobe"]);
 		expect(h.transcoders.size).toBe(0);
 		expect(h.progress.size).toBe(0);
-		expect(h.removed).toHaveLength(1);
-		expect(h.uploads()).toBe(0);
+		expect(h.transcodeDirs()).toEqual([]);
+		expect(h.media.requests).toEqual(["HEAD source.webm", "GET source.webm"]);
+		expect(h.media.objects.has("source.mp4")).toBe(false);
 	});
 
 	test("the watchdog releases a stalled probe without waiting for cancellation", async () => {
 		const h = harness();
 		const pending = h.runTranscode(task, 0);
-		await until(() => h.spawned.length > 0);
+		await h.when(() => h.spawned.length > 0);
 		const progress = h.progress.get(0);
 		if (!progress) throw new Error("missing progress");
 		progress.lastProgressAt = 0;
 		h.intervals[0]?.();
-		await expect(pending).rejects.toThrow("transcode cancelled");
+		expect(await failure(pending)).toContain("transcode cancelled");
 		expect(h.killed).toEqual(["ffprobe:SIGKILL"]);
 		expect(h.spawned).toEqual(["ffprobe"]);
 		expect(h.transcoders.size).toBe(0);
@@ -228,44 +310,55 @@ describe("transcode cancellation", () => {
 		const gates = [0, 1, 2].map(() => Promise.withResolvers<void>());
 		const h = harness({ rangeGates: gates.map((gate) => gate.promise) });
 		const pending = h.runTranscode(task, 0);
-		await until(() => h.progress.has(0));
 		const progress = h.progress.get(0);
 		if (!progress) throw new Error("missing progress");
 		for (const gate of gates.slice(0, 2)) {
 			progress.lastProgressAt = 0;
 			gate.resolve();
-			await until(() => progress.lastProgressAt > 0);
+			await h.when(() => progress.lastProgressAt > 0);
 			h.intervals[0]?.();
 			expect(h.transcoders.size).toBe(1);
 		}
 		progress.lastProgressAt = 0;
 		h.intervals[0]?.();
 		gates[2]?.resolve();
-		await expect(pending).rejects.toThrow("transcode cancelled");
+		expect(await failure(pending)).toContain("transcode cancelled");
 		expect(h.spawned).toEqual([]);
 		expect(h.transcoders.size).toBe(0);
+		expect(h.media.requests).toEqual([
+			"HEAD source.webm",
+			"GET source.webm",
+			"GET source.webm",
+			"GET source.webm",
+		]);
 	});
 
 	test("cancellation while obtaining credentials prevents a later probe", async () => {
 		const gate = Promise.withResolvers<void>();
-		const h = harness({ presignGate: gate.promise });
+		const h = harness({ headGate: gate.promise });
 		h.busy.set(0, task);
 		const pending = h.runTranscode(task, 0);
+		await h.when(() => h.media.requests.length > 0);
 		h.cancel([task.taskId]);
 		gate.resolve();
-		await expect(pending).rejects.toThrow("transcode cancelled");
+		expect(await failure(pending)).toContain("transcode cancelled");
 		expect(h.spawned).toEqual([]);
 		expect(h.transcoders.size).toBe(0);
+		expect(h.media.requests).toEqual(["HEAD source.webm"]);
 	});
 
 	test("an uncancelled source still encodes, uploads and releases its process", async () => {
 		const h = harness({ probeStalls: false });
-		expect(await h.runTranscode(task, 0)).toBe(42);
+		expect(await h.runTranscode(task, 0)).toBe(ENCODED.byteLength);
 		expect(h.spawned).toEqual(["ffprobe", "ffmpeg"]);
 		expect(h.killed).toEqual([]);
-		expect(h.uploads()).toBe(1);
+		expect(h.media.objects.get("source.mp4")).toEqual({
+			body: ENCODED,
+			contentType: "video/mp4",
+		});
 		expect(h.transcoders.size).toBe(0);
 		expect(h.progress.size).toBe(0);
+		expect(h.transcodeDirs()).toEqual([]);
 	});
 });
 
@@ -288,13 +381,16 @@ describe("chunk upload", () => {
 		partTarget: MIN_PART,
 		stashKey: "stash/job/0",
 	};
-	const chunk = new Uint8Array(1024);
+	const chunk = new Uint8Array(1024).map((_, index) => index % 251);
 
 	test("a stash that failed before the final wait fails the chunk", async () => {
 		const worker = harness({ stashFails: true });
-		await expect(
-			worker.uploadLayout({ upload }, [{ bytes: chunk }], chunk.byteLength),
-		).rejects.toThrow("stash upload failed");
+		expect(
+			await failure(
+				worker.uploadLayout({ upload }, [{ bytes: chunk }], chunk.byteLength),
+			),
+		).toContain("S3 PUT stash/job/0 -> 403");
+		expect(worker.farm.objects.has("stash/job/0")).toBe(false);
 	});
 
 	test("a stored stash reports the chunk's bytes", async () => {
@@ -309,6 +405,8 @@ describe("chunk upload", () => {
 			parts: [],
 			stash: { key: "stash/job/0", bytes: chunk.byteLength },
 		});
+		expect(worker.farm.objects.get("stash/job/0")?.body).toEqual(chunk);
+		expect(worker.media.requests).toEqual([]);
 	});
 });
 
@@ -336,18 +434,23 @@ test("a failed video render removes its temporary output", async () => {
 		audio: null,
 		hls: null,
 	};
+	const outputs: string[] = [];
 	const engine = {
 		pid: 1,
 		onEvent: null,
 		onProgress: null,
-		request: () => Promise.reject(new Error("render failed")),
+		request: async (_kind: string, params: { out: string }) => {
+			outputs.push(params.out);
+			writeFileSync(params.out, "partial");
+			throw new Error("render failed");
+		},
 	};
-	await expect(worker.runVideo(task, engine, 0)).rejects.toThrow(
-		"render failed",
-	);
-	expect(worker.removed).toHaveLength(1);
-	expect(worker.removed[0]).toStartWith("/work/job/v0-");
-	expect(worker.removed[0]).toEndWith(".h264");
+	expect(await failure(worker.runVideo(task, engine, 0))).toBe("render failed");
+	expect(outputs).toHaveLength(1);
+	expect(outputs[0]).toStartWith(join(worker.workDir, "job", "v0-"));
+	expect(outputs[0]).toEndWith(".h264");
+	expect(existsSync(outputs[0] ?? "")).toBe(false);
+	expect(readdirSync(join(worker.workDir, "job"))).toEqual([]);
 });
 
 describe("chunks finishing after their render", () => {
@@ -359,17 +462,15 @@ describe("chunks finishing after their render", () => {
 		attempt: 1,
 		frames: [index * 100, index * 100 + 100],
 	});
-	const settled = (promise: Promise<unknown>) =>
-		Promise.race([promise.then(() => true), Bun.sleep(20).then(() => false)]);
 
 	test("free their slot and are reported as fully rendered", async () => {
 		const h = harness();
 		const audio = Promise.withResolvers<void>();
 		const since = Date.now() - 5000;
-		expect(
-			await settled(h.finishInBackground(0, chunk(1), since, audio.promise)),
-		).toBe(true);
+		await h.finishInBackground(0, chunk(1), since, audio.promise);
+		expect(h.finishing.size).toBe(1);
 		for (const interval of h.intervals) await interval();
+		await h.when(() => h.posts.some((post) => post.path === "/heartbeat"));
 		const heartbeat = h.posts.find((post) => post.path === "/heartbeat")
 			?.body as {
 			running: {
@@ -383,8 +484,11 @@ describe("chunks finishing after their render", () => {
 			expect.objectContaining({ taskId: "job:v1", frames: 100, total: 100 }),
 		]);
 		expect(heartbeat.running[0]?.elapsedMs).toBeGreaterThanOrEqual(5000);
+		h.signal("SIGTERM");
+		expect(h.exits).toEqual([]);
 		audio.resolve();
-		await until(() => h.finishing.size === 0);
+		await h.when(() => h.exits.length > 0);
+		expect(h.exits).toEqual([0]);
 		expect(h.finishing.size).toBe(0);
 	});
 
@@ -395,26 +499,25 @@ describe("chunks finishing after their render", () => {
 		);
 		for (let index = 0; index < 8; index++) {
 			const done = audio[index] as PromiseWithResolvers<void>;
-			expect(
-				await settled(
-					h.finishInBackground(0, chunk(index), Date.now(), done.promise),
-				),
-			).toBe(true);
+			await h.finishInBackground(0, chunk(index), Date.now(), done.promise);
 		}
-		const ninth = h.finishInBackground(
-			0,
-			chunk(8),
-			Date.now(),
-			(audio[8] as PromiseWithResolvers<void>).promise,
-		);
-		expect(await settled(ninth)).toBe(false);
-		expect(
-			await settled(
-				h.finishInBackground(1, chunk(9), Date.now(), new Promise(() => {})),
-			),
-		).toBe(true);
+		let ninthReleased = false;
+		const ninth = h
+			.finishInBackground(
+				0,
+				chunk(8),
+				Date.now(),
+				(audio[8] as PromiseWithResolvers<void>).promise,
+			)
+			.then(() => {
+				ninthReleased = true;
+			});
+		await h.finishInBackground(1, chunk(9), Date.now(), new Promise(() => {}));
+		expect(ninthReleased).toBe(false);
 		(audio[3] as PromiseWithResolvers<void>).resolve();
-		expect(await settled(ninth)).toBe(true);
+		await ninth;
+		expect(ninthReleased).toBe(true);
+		expect(h.finishing.has("job:v3")).toBe(false);
 	});
 
 	test("that fail are reported as failed", async () => {
@@ -425,7 +528,8 @@ describe("chunks finishing after their render", () => {
 			Date.now(),
 			Promise.reject(new Error("audio -> 410")),
 		);
-		await until(() => h.finishing.size === 0);
+		h.signal("SIGTERM");
+		await h.when(() => h.exits.length > 0);
 		expect(h.posts).toContainEqual({
 			path: "/tasks/job%3Av2/fail",
 			body: { worker: expect.any(String), attempt: 1, error: "audio -> 410" },
