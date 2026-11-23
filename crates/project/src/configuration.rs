@@ -3637,7 +3637,10 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let project_path = project_path.as_ref();
         let config_path = project_path.join("project-config.json");
-        let config_str = std::fs::read_to_string(&config_path)?;
+        let config_str = String::from_utf8(std::fs::read(&config_path)?).map_err(|error| {
+            keep_unreadable_config(&config_path, error.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.utf8_error())
+        })?;
         let migration_keys = serde_json::from_str::<MigrationKeys>(&config_str).ok();
         let missing_screen_motion_blur = migration_keys
             .as_ref()
@@ -3648,8 +3651,10 @@ impl ProjectConfiguration {
             .is_some_and(|camera| {
                 camera.zoom_size || camera.advanced_shadow || camera.rounding_type
             });
-        let mut config: Self = serde_json::from_str(&config_str)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let mut config: Self = serde_json::from_str(&config_str).map_err(|error| {
+            keep_unreadable_config(&config_path, config_str.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
         let screen_motion_blur = config.screen_motion_blur.clamp(0.0, 1.0);
         let needs_motion_blur_clamp = (config.cursor.motion_blur - cursor_motion_blur).abs()
@@ -3708,9 +3713,10 @@ impl ProjectConfiguration {
             }
         }
 
-        config
-            .validate()
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        config.validate().map_err(|error| {
+            keep_unreadable_config(&config_path, config_str.as_bytes());
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+        })?;
 
         if needs_camera_migration
             || needs_motion_blur_clamp
@@ -3864,10 +3870,174 @@ mod notch_tests {
     }
 }
 
+/// Callers fall back to a default configuration when the file cannot be
+/// read (written by a newer Cap, edited by hand) and save over it on the next
+/// edit. A copy named after its contents keeps the original recoverable.
+fn write_new_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+}
+
+fn keep_unreadable_config(config_path: &Path, contents: &[u8]) {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    contents.hash(&mut hasher);
+    let backup = config_path.with_file_name(format!(
+        "project-config.json.unreadable-{:016x}",
+        hasher.finish()
+    ));
+    if backup.symlink_metadata().is_ok() {
+        return;
+    }
+    // A fresh exclusively created file, never a predictable path that a
+    // project folder from elsewhere could already hold as a symlink.
+    let result = config_path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("project config has no folder"))
+        .and_then(tempfile::NamedTempFile::new_in)
+        .and_then(|mut staged| {
+            staged.write_all(contents)?;
+            match staged.persist_noclobber(&backup) {
+                Ok(_) => Ok(()),
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    Err(error.error)
+                }
+                // exFAT on macOS and some network volumes refuse the
+                // no-replace move. Claim the name with O_EXCL instead, which
+                // also never follows or replaces an existing entry.
+                Err(_) => write_new_file(&backup, contents),
+            }
+        });
+    match result {
+        Ok(()) => {
+            tracing::warn!(path = %backup.display(), "kept a copy of an unreadable project config")
+        }
+        Err(error) => {
+            tracing::warn!(path = %backup.display(), %error, "could not keep a copy of an unreadable project config");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn an_unreadable_config_is_kept_before_callers_fall_back_to_defaults() {
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("project-config.json");
+        let unreadable = r#"{"aspectRatio":"ultrawide","timeline":{"segments":[]}}"#;
+        std::fs::write(&config_path, unreadable).unwrap();
+        let backups = || {
+            let mut names: Vec<String> = std::fs::read_dir(project.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .filter(|name| name.starts_with("project-config.json.unreadable-"))
+                .collect();
+            names.sort();
+            names
+        };
+
+        for _ in 0..2 {
+            let error = ProjectConfiguration::load(project.path()).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        }
+        let kept = backups();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(
+            std::fs::read_to_string(project.path().join(&kept[0])).unwrap(),
+            unreadable
+        );
+
+        ProjectConfiguration::default()
+            .write(project.path())
+            .unwrap();
+        ProjectConfiguration::load(project.path()).unwrap();
+        assert_eq!(backups(), kept);
+        // exFAT on macOS adds `._` AppleDouble files next to each one.
+        let files = std::fs::read_dir(project.path())
+            .unwrap()
+            .filter(|entry| {
+                !entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("._")
+            })
+            .count();
+        assert_eq!(files, 2);
+    }
+
+    #[test]
+    fn a_config_that_is_not_utf8_is_kept_too() {
+        let project = tempfile::tempdir().unwrap();
+        let unreadable = b"{\"aspectRatio\":\"wide\xff\"}".to_vec();
+        std::fs::write(project.path().join("project-config.json"), &unreadable).unwrap();
+
+        let error = ProjectConfiguration::load(project.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let kept: Vec<_> = std::fs::read_dir(project.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("project-config.json.unreadable-")
+            })
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(std::fs::read(&kept[0]).unwrap(), unreadable);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_exclusive_fallback_never_replaces_or_follows_an_existing_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        assert!(write_new_file(&link, b"copy").is_err());
+        assert!(write_new_file(&victim, b"copy").is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+
+        let fresh = dir.path().join("fresh");
+        write_new_file(&fresh, b"copy").unwrap();
+        assert_eq!(std::fs::read(&fresh).unwrap(), b"copy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeping_a_copy_never_writes_through_a_symlink_in_the_project() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "keep me").unwrap();
+        for name in ["project-config.json.tmp", "project-config.tmp"] {
+            std::os::unix::fs::symlink(&victim, project.path().join(name)).unwrap();
+        }
+        std::fs::write(
+            project.path().join("project-config.json"),
+            "{\"aspectRatio\":1}",
+        )
+        .unwrap();
+
+        ProjectConfiguration::load(project.path()).unwrap_err();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+    }
 
     #[test]
     fn new_projects_use_the_newer_auto_zoom_rules_and_saved_ones_keep_theirs() {

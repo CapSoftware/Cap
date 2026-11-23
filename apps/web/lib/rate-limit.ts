@@ -194,20 +194,26 @@ export const RATE_LIMIT_IDS = {
 	/** Unauthed docs Ask AI questions (Anthropic cost). Suggested: 10 / 1m per IP. */
 	DOCS_ASK: "rl_docs_ask",
 	AUTH_SSO_START: "rl_auth_sso_start",
+	/** Passkey sign-in ceremonies, counted when one starts and when one completes. Suggested: 30 / 1m per IP. */
+	AUTH_PASSKEY: "rl_auth_passkey",
+	/** Google One Tap sign-in attempts. Suggested: 30 / 1m per IP. */
+	AUTH_GOOGLE_ONE_TAP: "rl_auth_google_one_tap",
 	MCP_CLIENT_REGISTRATION: "rl_mcp_client_registration",
 	/** Share-page video password attempts. Suggested: 20 / 10m per IP. */
 	VIDEO_PASSWORD: "rl_video_password",
-	/** Video password attempts across all clients. Suggested: 200 / 10m per key (video). */
-	VIDEO_PASSWORD_PER_VIDEO: "rl_video_password_per_video",
+	/**
+	 * Password attempts across all clients, per video or collection. Keys are
+	 * prefixed `video:` or `collection:`, so the two never share a bucket.
+	 * Suggested: 200 / 10m per key.
+	 */
+	PASSWORD_PER_RESOURCE: "rl_video_password_per_video",
 	/** Public collection password attempts. Suggested: 20 / 10m per IP. */
 	COLLECTION_PASSWORD: "rl_collection_password",
-	/** Collection password attempts across all clients. Suggested: 200 / 10m per key (collection). */
-	COLLECTION_PASSWORD_PER_COLLECTION: "rl_collection_password_per_collection",
 	/** Invite emails: organization batches per organization and per sender, and video viewer invites per owner. Suggested: 30 / 1h per key. */
 	ORGANIZATION_INVITE: "rl_organization_invite",
 	CHECKOUT: "rl_checkout",
-	VIDEO_PASSWORD_PER_VIEWER: "rl_video_password_per_viewer",
-	COLLECTION_PASSWORD_PER_VIEWER: "rl_collection_password_per_viewer",
+	/** Password attempts per video or collection and viewer, keyed like PASSWORD_PER_RESOURCE. Suggested: 1 / 1h per key. */
+	PASSWORD_PER_VIEWER: "rl_video_password_per_viewer",
 	/** Comments, replies and reactions per author. Suggested: 60 / 1m per key (user). */
 	COMMENT_CREATE: "rl_comment_create",
 	/** Comment media upload starts per viewer. Suggested: 60 / 1h per key (user). */
@@ -251,6 +257,8 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.AGENT_LOOM_IMPORT]: { limit: 20, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_OTP_VERIFY]: { limit: 20, windowMs: 10 * MINUTE_MS },
 	[RATE_LIMIT_IDS.AUTH_OTP_SEND]: { limit: 10, windowMs: 10 * MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_PASSKEY]: { limit: 30, windowMs: MINUTE_MS },
+	[RATE_LIMIT_IDS.AUTH_GOOGLE_ONE_TAP]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.LOOM_DOWNLOAD]: { limit: 10, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.TRANSLATE_TRANSCRIPT]: { limit: 30, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MESSENGER_MESSAGE]: { limit: 20, windowMs: MINUTE_MS },
@@ -266,22 +274,14 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.AUTH_SSO_START]: { limit: 100, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.MCP_CLIENT_REGISTRATION]: { limit: 60, windowMs: MINUTE_MS },
 	[RATE_LIMIT_IDS.VIDEO_PASSWORD]: { limit: 20, windowMs: 10 * MINUTE_MS },
-	[RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIDEO]: {
+	[RATE_LIMIT_IDS.PASSWORD_PER_RESOURCE]: {
 		limit: 200,
 		windowMs: 10 * MINUTE_MS,
 	},
 	[RATE_LIMIT_IDS.COLLECTION_PASSWORD]: { limit: 20, windowMs: 10 * MINUTE_MS },
-	[RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION]: {
-		limit: 200,
-		windowMs: 10 * MINUTE_MS,
-	},
 	[RATE_LIMIT_IDS.ORGANIZATION_INVITE]: { limit: 30, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.CHECKOUT]: { limit: 20, windowMs: 10 * MINUTE_MS },
-	[RATE_LIMIT_IDS.VIDEO_PASSWORD_PER_VIEWER]: {
-		limit: 1,
-		windowMs: 60 * MINUTE_MS,
-	},
-	[RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_VIEWER]: {
+	[RATE_LIMIT_IDS.PASSWORD_PER_VIEWER]: {
 		limit: 1,
 		windowMs: 60 * MINUTE_MS,
 	},

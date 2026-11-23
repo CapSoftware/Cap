@@ -5,9 +5,13 @@ import { faArrowLeft } from "@fortawesome/free-solid-svg-icons/faArrowLeft";
 import { faEnvelope } from "@fortawesome/free-solid-svg-icons/faEnvelope";
 import { faExclamationCircle } from "@fortawesome/free-solid-svg-icons/faExclamationCircle";
 import { captureException } from "@sentry/nextjs";
+import {
+	browserSupportsWebAuthn,
+	startAuthentication,
+} from "@simplewebauthn/browser";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
-import { LucideArrowUpRight } from "lucide-react";
+import { Fingerprint, LucideArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -22,11 +26,18 @@ import {
 	useTransition,
 } from "react";
 import { toast } from "sonner";
+import { getPasskeySignInOptions } from "@/actions/auth/passkeys";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
 import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { isPasskeyCancellation } from "@/lib/passkey-errors";
+import {
+	completePasskeySignIn,
+	type PasskeySignInResult,
+} from "@/lib/passkey-sign-in";
 import { usePublicEnv } from "@/utils/public-env";
 import { getEmailCodeCooldownSeconds, requestEmailCode } from "../auth-email";
+import { signInWithGoogleOneTap, useGoogleOneTap } from "../google-one-tap";
 import { getSafeNextPath } from "../safe-next";
 import { SsoErrorNotice } from "../sso-error-notice";
 
@@ -34,6 +45,18 @@ const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);
 const MotionLink = motion(Link);
 const MotionButton = motion(Button);
+
+const passkeySignInErrors: Record<
+	Exclude<PasskeySignInResult, "signed_in">,
+	string
+> = {
+	not_linked:
+		"That passkey isn't linked to a Cap account. Sign in with email, then add a passkey in your account settings.",
+	blocked:
+		"This account can't sign in. Contact support if you think this is a mistake.",
+	rate_limited: "Too many sign-in attempts. Wait a minute and try again.",
+	failed: "Could not sign in with a passkey. Try again.",
+};
 
 export function LoginForm() {
 	const searchParams = useSearchParams();
@@ -60,6 +83,9 @@ export function LoginForm() {
 	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
 		null,
 	);
+	const [passkeySupported, setPasskeySupported] = useState(false);
+	const [passkeyLoading, setPasskeyLoading] = useState(false);
+	const passkeySignInPending = useRef(false);
 	const mobileAppleSignInStarted = useRef(false);
 	const mobileGoogleSignInStarted = useRef(false);
 	const workosSignInStarted = useRef(false);
@@ -70,12 +96,43 @@ export function LoginForm() {
 		() => (next ? getSafeNextPath(next, window.location.origin) : null),
 		[next],
 	);
+	const publicEnv = usePublicEnv();
+	const handleGoogleOneTapCredential = useCallback(
+		(credential: string) => {
+			void signInWithGoogleOneTap({
+				credential,
+				nextPath: getNextPath(),
+				isSignup: false,
+				authSurface: "login",
+			});
+		},
+		[getNextPath],
+	);
+	const cancelGoogleOneTap = useGoogleOneTap({
+		clientId: publicEnv.googleAuthAvailable
+			? publicEnv.googleOneTapClientId
+			: null,
+		enabled:
+			!showOrgInput &&
+			!emailSent &&
+			!searchParams?.get("error") &&
+			!searchParams?.get("mobileProvider") &&
+			!searchParams?.get("organizationId") &&
+			!searchParams?.get("connection_id") &&
+			searchParams?.get("sso") !== "1",
+		context: "signin",
+		onCredential: handleGoogleOneTapCredential,
+	});
 
 	useEffect(() => {
 		loginFormMounted.current = true;
 		return () => {
 			loginFormMounted.current = false;
 		};
+	}, []);
+
+	useEffect(() => {
+		setPasskeySupported(browserSupportsWebAuthn());
 	}, []);
 
 	useEffect(() => {
@@ -163,6 +220,7 @@ export function LoginForm() {
 	}, [emailSent]);
 
 	const handleGoogleSignIn = useCallback(() => {
+		cancelGoogleOneTap();
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "google",
@@ -179,9 +237,10 @@ export function LoginForm() {
 				"Could not start sign-in. Check your connection and try again.",
 			);
 		});
-	}, [getNextPath]);
+	}, [cancelGoogleOneTap, getNextPath]);
 
 	const handleAppleSignIn = useCallback(() => {
+		cancelGoogleOneTap();
 		const startAppleSignIn = () => {
 			const nextPath = getNextPath();
 			trackEvent("auth_started", {
@@ -202,9 +261,59 @@ export function LoginForm() {
 			});
 		};
 		startAppleSignIn();
+	}, [cancelGoogleOneTap, getNextPath]);
+
+	const handlePasskeySignIn = useCallback(async () => {
+		if (passkeySignInPending.current) return;
+		passkeySignInPending.current = true;
+		setPasskeyLoading(true);
+		trackEvent("auth_started", {
+			method: "passkey",
+			is_signup: false,
+			auth_surface: "login",
+		});
+		let signedIn = false;
+		try {
+			const options = await getPasskeySignInOptions();
+			if (options.status !== "ok") {
+				toast.error("Too many sign-in attempts. Wait a minute and try again.");
+				return;
+			}
+			let response: Awaited<ReturnType<typeof startAuthentication>>;
+			try {
+				response = await startAuthentication({ optionsJSON: options.options });
+			} catch (error) {
+				if (!isPasskeyCancellation(error)) {
+					toast.error(
+						"Your passkey couldn't be used. Try again, or sign in with email.",
+					);
+				}
+				return;
+			}
+			const callbackUrl = getNextPath() ?? "/dashboard";
+			const result = await completePasskeySignIn(
+				JSON.stringify(response),
+				callbackUrl,
+			);
+			if (result !== "signed_in") {
+				toast.error(passkeySignInErrors[result]);
+				return;
+			}
+			signedIn = true;
+			window.location.assign(callbackUrl);
+		} catch (error) {
+			captureException(error, {
+				tags: { auth_provider: "passkey", auth_surface: "login" },
+			});
+			toast.error("Could not sign in with a passkey. Try again.");
+		} finally {
+			passkeySignInPending.current = false;
+			if (!signedIn && loginFormMounted.current) setPasskeyLoading(false);
+		}
 	}, [getNextPath]);
 
 	const handleOidcSignIn = useCallback(() => {
+		cancelGoogleOneTap();
 		const nextPath = getNextPath();
 		trackEvent("auth_started", {
 			method: "oidc",
@@ -214,12 +323,13 @@ export function LoginForm() {
 		signIn("oidc", {
 			...(nextPath ? { callbackUrl: nextPath } : {}),
 		});
-	}, [getNextPath]);
+	}, [cancelGoogleOneTap, getNextPath]);
 
 	const handleWorkosSignIn = useCallback(
 		(identifier: string, connectionId?: string) => {
 			if (workosSignInPending.current) return;
 			workosSignInPending.current = true;
+			cancelGoogleOneTap();
 			setOrganizationName(null);
 
 			startSsoTransition(async () => {
@@ -256,7 +366,7 @@ export function LoginForm() {
 				}
 			});
 		},
-		[getNextPath],
+		[cancelGoogleOneTap, getNextPath],
 	);
 
 	useEffect(() => {
@@ -420,6 +530,7 @@ export function LoginForm() {
 										noValidate
 										onSubmit={async (e) => {
 											e.preventDefault();
+											cancelGoogleOneTap();
 
 											const remainingSeconds =
 												getEmailCodeCooldownSeconds(lastEmailSentTime);
@@ -462,7 +573,10 @@ export function LoginForm() {
 										className="flex flex-col space-y-3"
 									>
 										<NormalLogin
-											setShowOrgInput={setShowOrgInput}
+											setShowOrgInput={(show) => {
+												if (show) cancelGoogleOneTap();
+												setShowOrgInput(show);
+											}}
 											email={email}
 											emailSent={emailSent}
 											setEmail={setEmail}
@@ -470,6 +584,9 @@ export function LoginForm() {
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
 											handleOidcSignIn={handleOidcSignIn}
+											passkeySupported={passkeySupported}
+											passkeyLoading={passkeyLoading}
+											handlePasskeySignIn={handlePasskeySignIn}
 										/>
 									</motion.form>
 								)}
@@ -571,6 +688,9 @@ const NormalLogin = ({
 	oauthError,
 	handleGoogleSignIn,
 	handleOidcSignIn,
+	passkeySupported,
+	passkeyLoading,
+	handlePasskeySignIn,
 }: {
 	setShowOrgInput: (show: boolean) => void;
 	email: string;
@@ -580,6 +700,9 @@ const NormalLogin = ({
 	oauthError: boolean;
 	handleGoogleSignIn: () => void;
 	handleOidcSignIn: () => void;
+	passkeySupported: boolean;
+	passkeyLoading: boolean;
+	handlePasskeySignIn: () => void;
 }) => {
 	const publicEnv = usePublicEnv();
 	const emailInputId = useId();
@@ -640,7 +763,8 @@ const NormalLogin = ({
 
 			{(publicEnv.googleAuthAvailable ||
 				publicEnv.workosAuthAvailable ||
-				publicEnv.oidcAuthAvailable) && (
+				publicEnv.oidcAuthAvailable ||
+				passkeySupported) && (
 				<>
 					<div className="flex gap-4 items-center mt-4 mb-4">
 						<span className="flex-1 h-px bg-gray-5" />
@@ -661,6 +785,21 @@ const NormalLogin = ({
 							>
 								<Image src="/google.svg" alt="Google" width={16} height={16} />
 								Login with Google
+							</MotionButton>
+						)}
+
+						{passkeySupported && (
+							<MotionButton
+								variant="gray"
+								type="button"
+								className="flex gap-2 justify-center items-center w-full text-sm"
+								layout
+								onClick={handlePasskeySignIn}
+								disabled={loading || emailSent || passkeyLoading}
+								spinner={passkeyLoading}
+							>
+								{!passkeyLoading && <Fingerprint size={16} />}
+								Login with a passkey
 							</MotionButton>
 						)}
 
