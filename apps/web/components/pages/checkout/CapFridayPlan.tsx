@@ -1,18 +1,15 @@
 "use client";
 
-import { Logo } from "@cap/ui/logo";
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
 import { Check, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
 import { claimCapFriday } from "@/actions/billing/cap-friday";
 import { trackEvent } from "@/app/utils/analytics";
-import { CapFridayMark } from "@/components/pages/blackfriday/CapFridayMark";
 import { Arrow, Sheen } from "@/components/pages/blackfriday/Claim";
 import { Countdown } from "@/components/pages/blackfriday/Countdown";
-import { CARD, CLAIM, DIM, GHOST } from "@/components/pages/blackfriday/theme";
+import { CLAIM, DIM, GHOST } from "@/components/pages/blackfriday/theme";
 import type {
 	CapFridayQuote,
 	CapFridayRedeemResult,
@@ -20,7 +17,8 @@ import type {
 } from "@/lib/checkout/cap-friday";
 import { formatAmount } from "@/utils/currency";
 
-const MANAGE_PLAN = "/checkout?plan=yearly";
+export type CapFridayView = CapFridayState | { type: "loading" };
+
 const BILLING = "/dashboard/settings/organization";
 const MAIL =
 	"mailto:hello@cap.so?subject=Cap%20Friday%3A%20lock%20in%20another%20year";
@@ -48,64 +46,141 @@ const brandName = (brand: string) =>
 	})[brand] ?? "Card";
 
 const rise = (delay: number) => ({ animationDelay: `${delay}s` });
+const RISE = "animate-bf-rise motion-reduce:animate-none";
 
-export function CapFridayPlan({ state }: { state: CapFridayState }) {
-	const router = useRouter();
-	const [result, setResult] = useState<CapFridayRedeemResult | null>(null);
+const UNAVAILABLE: Record<
+	Extract<CapFridayState, { type: "unavailable" }>["reason"],
+	{ title: string; body: string; action: { href: string; label: string } }
+> = {
+	ended: {
+		title: "Cap Friday has ended",
+		body: "Thanks for looking. Your plan carries on as normal.",
+		action: { href: "/dashboard/caps", label: "Go to your dashboard" },
+	},
+	not_owner: {
+		title: "Ask your billing owner",
+		body: "Your Cap Pro seat is billed to someone else, so they can lock in the next year from their account.",
+		action: { href: "/dashboard/caps", label: "Go to your dashboard" },
+	},
+	canceling: {
+		title: "Your plan is set to end",
+		body: "Turn renewal back on in billing settings, then come back here to lock in your next year.",
+		action: { href: BILLING, label: "Open billing settings" },
+	},
+	past_due: {
+		title: "Update your card first",
+		body: "Your last payment didn't go through. Update your card, then come back to lock in your next year.",
+		action: { href: BILLING, label: "Update payment method" },
+	},
+	no_card: {
+		title: "Add a card first",
+		body: "There's no card saved on your plan. Add one in billing settings, then come back here.",
+		action: { href: BILLING, label: "Open billing settings" },
+	},
+	custom: {
+		title: "We'll set this up for you",
+		body: "Your plan has custom billing, so we'll lock in your next year by hand. Email us before the offer ends and we'll sort it.",
+		action: { href: MAIL, label: "Email hello@cap.so" },
+	},
+};
+
+export function capFridayHeading(
+	view: CapFridayView,
+	result: CapFridayRedeemResult | null,
+): { title: string; subtitle: string } {
+	const done = result?.ok ? result : null;
+	if (done || view.type === "redeemed") {
+		const kind =
+			done?.kind ?? (view.type === "redeemed" ? view.kind : "prepay");
+		const renewsOn =
+			done?.renewsOn ?? (view.type === "redeemed" ? view.renewsOn : null);
+		const date = renewsOn ? day(renewsOn) : null;
+		return {
+			title: "Locked in",
+			subtitle:
+				kind === "prepay"
+					? date
+						? `Your renewal on ${date} is paid for.`
+						: "Your next renewal is paid for."
+					: date
+						? `You're on Cap Pro yearly. Your next renewal is ${date} at the normal price.`
+						: "You're on Cap Pro yearly.",
+		};
+	}
+	if (view.type === "awaiting_payment") {
+		return {
+			title: "Finish your payment",
+			subtitle:
+				"Your bank needs you to confirm the Cap Friday payment. Nothing changes until it's paid.",
+		};
+	}
+	if (view.type === "unavailable") {
+		const copy = UNAVAILABLE[view.reason];
+		return { title: copy.title, subtitle: copy.body };
+	}
+	if (view.type === "quote" && view.quote.kind === "monthly") {
+		return {
+			title: "Switch to yearly at half price",
+			subtitle:
+				"Move to Cap Pro yearly today with the first year 50% off. We credit what's left of this month.",
+		};
+	}
+	return {
+		title: "Lock in your next year at half price",
+		subtitle:
+			"Pay for your next year of Cap Pro now and it's covered the day it renews.",
+	};
+}
+
+export function CapFridayCard({
+	view,
+	result,
+	onResult,
+	onExit,
+}: {
+	view: CapFridayView;
+	result: CapFridayRedeemResult | null;
+	onResult: (result: CapFridayRedeemResult | null) => void;
+	onExit: () => void;
+}) {
 	const [paying, setPaying] = useState(false);
 
-	if (result?.ok) {
+	if (result?.ok || view.type === "redeemed") {
+		return <Done />;
+	}
+
+	if (view.type === "loading") {
 		return (
-			<Stage>
-				<Done
-					renewsOn={result.renewsOn}
-					kind={state.type === "quote" ? state.quote.kind : "yearly"}
-				/>
-			</Stage>
+			<div aria-busy="true" className="flex flex-col gap-4">
+				<span className="sr-only">Checking your plan</span>
+				<div className="flex items-center justify-between">
+					<div className="h-4 w-20 animate-pulse rounded-[6px] bg-[rgba(245,241,234,0.08)]" />
+					<div className="h-10 w-32 animate-pulse rounded-[8px] bg-[rgba(245,241,234,0.08)]" />
+				</div>
+				<div className="mt-4 h-4 w-full animate-pulse rounded-[6px] bg-[rgba(245,241,234,0.06)]" />
+				<div className="h-4 w-4/5 animate-pulse rounded-[6px] bg-[rgba(245,241,234,0.06)]" />
+				<div className="h-4 w-3/5 animate-pulse rounded-[6px] bg-[rgba(245,241,234,0.06)]" />
+				<div className="mt-4 h-14 w-full animate-pulse rounded-full bg-[rgba(245,241,234,0.08)]" />
+			</div>
 		);
 	}
 
-	if (state.type === "redeemed") {
+	if (view.type === "awaiting_payment") {
 		return (
-			<Stage>
-				<Heading
-					title="You've locked in Cap Friday"
-					body={
-						state.renewsOn
-							? `Your next year of Cap Pro from ${day(state.renewsOn)} is already paid for.`
-							: "Your next year of Cap Pro is already paid for."
-					}
-				/>
-				<Actions
-					primary={{ href: "/dashboard/caps", label: "Go to your dashboard" }}
-				/>
-			</Stage>
+			<Message
+				body="Confirm the payment with your bank on Stripe's secure page."
+				action={{ href: view.payUrl, label: "Confirm payment" }}
+				onExit={onExit}
+			/>
 		);
 	}
 
-	if (state.type === "awaiting_payment") {
-		return (
-			<Stage>
-				<Heading
-					title="Finish your payment"
-					body="Your bank needs you to confirm the Cap Friday payment. Nothing changes until it's paid."
-				/>
-				<Actions primary={{ href: state.payUrl, label: "Confirm payment" }} />
-			</Stage>
-		);
+	if (view.type === "unavailable") {
+		const copy = UNAVAILABLE[view.reason];
+		return <Message body={copy.body} action={copy.action} onExit={onExit} />;
 	}
 
-	if (state.type === "unavailable") {
-		const copy = UNAVAILABLE[state.reason];
-		return (
-			<Stage>
-				<Heading title={copy.title} body={copy.body} />
-				<Actions primary={copy.action} />
-			</Stage>
-		);
-	}
-
-	const { quote } = state;
+	const { quote } = view;
 	const payUrl =
 		result && !result.ok && "payUrl" in result ? result.payUrl : null;
 	const error =
@@ -114,7 +189,7 @@ export function CapFridayPlan({ state }: { state: CapFridayState }) {
 	const pay = async () => {
 		if (paying) return;
 		setPaying(true);
-		setResult(null);
+		onResult(null);
 		trackEvent("cap_friday_existing_claimed", {
 			plan: quote.kind,
 			quantity: quote.seats,
@@ -127,103 +202,95 @@ export function CapFridayPlan({ state }: { state: CapFridayState }) {
 			(): CapFridayRedeemResult => ({
 				ok: false,
 				message:
-					"Something went wrong and nothing was charged. Try again, or email hello@cap.so.",
+					"Something went wrong. Refresh to see where your plan stands, or email hello@cap.so.",
 			}),
 		);
-		setResult(next);
 		setPaying(false);
-		if (next.ok) router.refresh();
+		onResult(next);
 	};
 
 	return (
-		<Stage>
-			<Heading
-				title={
-					quote.kind === "yearly"
-						? "Lock in your next year at half price"
-						: "Switch to yearly at half price"
-				}
-				body={
-					quote.kind === "yearly"
-						? "Pay for your next year of Cap Pro now and it's covered the day it renews."
-						: "Move to Cap Pro yearly today with the first year 50% off. We credit what's left of this month."
-				}
-			/>
-
+		<div className="flex flex-col text-left">
 			<div
 				className={classNames(
-					CARD,
-					"mt-10 w-full max-w-[560px] animate-bf-rise p-6 text-left motion-reduce:animate-none sm:p-8",
+					"flex items-baseline justify-between gap-4",
+					RISE,
 				)}
-				style={rise(0.7)}
 			>
-				<div className="flex items-baseline justify-between gap-4">
-					<span className={`text-[15px] ${DIM}`}>Due today</span>
-					<DueToday cents={quote.dueToday} currency={quote.currency} />
-				</div>
-				<p className={`mt-1 text-right text-[13px] ${DIM}`}>
-					{brandName(quote.card.brand)} ending {quote.card.last4}
-				</p>
-
-				{quote.kind === "monthly" ? <Breakdown quote={quote} /> : null}
-
-				<Timeline steps={steps(quote)} />
-
-				{error ? (
-					<p
-						role="alert"
-						className="mt-6 rounded-[12px] bg-[rgba(255,77,141,0.1)] px-4 py-3 text-[14px] leading-[1.45] text-[#FFC2D6] shadow-[inset_0_0_0_1px_rgba(255,77,141,0.3)]"
-					>
-						{error}
-					</p>
-				) : null}
-
-				{payUrl ? (
-					<div className="mt-7 flex flex-col gap-3">
-						<p className="text-[14px] leading-[1.5] text-[rgba(245,241,234,0.8)]">
-							Your bank needs you to confirm this payment. Nothing changes until
-							it's paid.
-						</p>
-						<a href={payUrl} className={classNames(CLAIM, "w-full")}>
-							<Sheen />
-							Confirm payment
-							<Arrow />
-						</a>
-					</div>
-				) : (
-					<button
-						type="button"
-						onClick={pay}
-						aria-busy={paying}
-						disabled={paying}
-						className={classNames(CLAIM, "mt-8 w-full")}
-					>
-						<Sheen />
-						{paying ? (
-							<span className="inline-flex items-center gap-2">
-								<Loader2 className="size-4 animate-spin" strokeWidth={2} />
-								Paying...
-							</span>
-						) : (
-							`Pay ${money(quote.dueToday, quote.currency)} now`
-						)}
-						<Arrow />
-					</button>
-				)}
-
-				<p className={`mt-4 text-center text-[13px] leading-[1.5] ${DIM}`}>
-					Stripe emails your receipt. <Countdown />.
-				</p>
+				<span className={`text-[15px] ${DIM}`}>Due today</span>
+				<DueToday cents={quote.dueToday} currency={quote.currency} />
 			</div>
-
-			<Link
-				href={MANAGE_PLAN}
-				className={`mt-6 animate-bf-rise text-[14px] underline decoration-[rgba(245,241,234,0.25)] underline-offset-[4px] transition-colors hover:text-[#F5F1EA] motion-reduce:animate-none ${DIM}`}
-				style={rise(1.1)}
+			<p
+				className={classNames(`mt-1 text-right text-[13px] ${DIM}`, RISE)}
+				style={rise(0.05)}
 			>
-				Not now, manage my plan
-			</Link>
-		</Stage>
+				{brandName(quote.card.brand)} ending {quote.card.last4}
+			</p>
+
+			{quote.kind === "monthly" ? <Breakdown quote={quote} /> : null}
+
+			<Timeline steps={steps(quote)} />
+
+			{error ? (
+				<p
+					role="alert"
+					className="mt-6 rounded-[12px] bg-[rgba(255,77,141,0.1)] px-4 py-3 text-[14px] leading-[1.45] text-[#FFC2D6] shadow-[inset_0_0_0_1px_rgba(255,77,141,0.3)]"
+				>
+					{error}
+				</p>
+			) : null}
+
+			{payUrl ? (
+				<div className="mt-7 flex flex-col gap-3">
+					<p className="text-[14px] leading-[1.5] text-[rgba(245,241,234,0.8)]">
+						Your bank needs you to confirm this payment. Nothing changes until
+						it's paid.
+					</p>
+					<a href={payUrl} className={classNames(CLAIM, "w-full")}>
+						<Sheen />
+						Confirm payment
+						<Arrow />
+					</a>
+				</div>
+			) : (
+				<button
+					type="button"
+					onClick={pay}
+					aria-busy={paying}
+					disabled={paying}
+					className={classNames(CLAIM, "mt-8 w-full", RISE)}
+					style={rise(0.5)}
+				>
+					<Sheen />
+					{paying ? (
+						<span className="inline-flex items-center gap-2">
+							<Loader2 className="size-4 animate-spin" strokeWidth={2} />
+							Paying...
+						</span>
+					) : (
+						`Pay ${money(quote.dueToday, quote.currency)} now`
+					)}
+					<Arrow />
+				</button>
+			)}
+
+			<p
+				className={classNames(
+					`mt-4 text-center text-[13px] leading-[1.5] ${DIM}`,
+					RISE,
+				)}
+				style={rise(0.55)}
+			>
+				Stripe emails your receipt. <Countdown />.
+			</p>
+			<button
+				type="button"
+				onClick={onExit}
+				className={`mx-auto mt-3 text-[13px] underline decoration-[rgba(245,241,234,0.25)] underline-offset-[4px] transition-colors hover:text-[#F5F1EA] ${DIM}`}
+			>
+				Remove code
+			</button>
+		</div>
 	);
 }
 
@@ -293,7 +360,13 @@ function Breakdown({
 	quote: Extract<CapFridayQuote, { kind: "monthly" }>;
 }) {
 	return (
-		<dl className="mt-6 flex flex-col gap-2 border-t border-[rgba(245,241,234,0.1)] pt-5 text-[14px]">
+		<dl
+			className={classNames(
+				"mt-6 flex flex-col gap-2 border-t border-[rgba(245,241,234,0.1)] pt-5 text-[14px]",
+				RISE,
+			)}
+			style={rise(0.1)}
+		>
 			<Row
 				label={`Cap Pro yearly, ${quote.seats} ${quote.seats === 1 ? "seat" : "seats"}`}
 				value={money(quote.yearlyAmount, quote.currency)}
@@ -343,18 +416,21 @@ function Timeline({ steps }: { steps: Step[] }) {
 			<span
 				aria-hidden="true"
 				className="absolute bottom-3 left-[7px] top-9 w-px origin-top animate-bf-line bg-[linear-gradient(180deg,#FFD68C,#FF4D8D_60%,rgba(176,54,159,0.2))] motion-reduce:animate-none"
-				style={rise(0.9)}
+				style={rise(0.2)}
 			/>
 			{steps.map((step, index) => (
 				<li
 					key={step.when}
-					className="relative grid animate-bf-rise grid-cols-[15px_1fr] gap-4 motion-reduce:animate-none"
-					style={rise(0.95 + index * 0.25)}
+					className={classNames(
+						"relative grid grid-cols-[15px_1fr] gap-4",
+						RISE,
+					)}
+					style={rise(0.25 + index * 0.12)}
 				>
 					<span
 						aria-hidden="true"
-						className="relative mt-1 grid size-[15px] animate-bf-pop place-items-center rounded-full bg-[#0A0A0B] shadow-[inset_0_0_0_1.5px_#FF7A9C,0_0_14px_rgba(255,77,141,0.55)] motion-reduce:animate-none"
-						style={rise(1.05 + index * 0.25)}
+						className="relative mt-1 grid size-[15px] animate-bf-pop place-items-center rounded-full bg-[#141113] shadow-[inset_0_0_0_1.5px_#FF7A9C,0_0_14px_rgba(255,77,141,0.55)] motion-reduce:animate-none"
+						style={rise(0.3 + index * 0.12)}
 					>
 						<span className="size-[5px] rounded-full bg-[#FFD68C]" />
 					</span>
@@ -372,15 +448,14 @@ function Timeline({ steps }: { steps: Step[] }) {
 	);
 }
 
-// Counts up from zero once mounted so the amount lands with the card.
 function DueToday({ cents, currency }: { cents: number; currency: string }) {
 	const [value, setValue] = useState(0);
 	useEffect(() => {
-		const timer = window.setTimeout(() => setValue(cents / 100), 850);
+		const timer = window.setTimeout(() => setValue(cents / 100), 150);
 		return () => window.clearTimeout(timer);
 	}, [cents]);
 	return (
-		<span className="text-[44px] font-medium leading-none tracking-[-0.03em] tabular-nums text-[#F5F1EA]">
+		<span className="text-[40px] font-medium leading-none tracking-[-0.03em] tabular-nums text-[#F5F1EA]">
 			<NumberFlow
 				value={value}
 				format={{ style: "currency", currency: currency.toUpperCase() }}
@@ -391,175 +466,84 @@ function DueToday({ cents, currency }: { cents: number; currency: string }) {
 	);
 }
 
-function Done({
-	renewsOn,
-	kind,
-}: {
-	renewsOn: number;
-	kind: CapFridayQuote["kind"];
-}) {
+function Done() {
 	return (
-		<>
-			<div className="relative mt-10 grid place-items-center">
+		<div className="flex flex-col items-center py-4 text-center">
+			<div className="relative grid place-items-center">
 				<span
 					aria-hidden="true"
-					className="absolute size-24 animate-bf-ring rounded-full shadow-[0_0_0_2px_#FF4D8D,0_0_40px_rgba(255,77,141,0.6)] motion-reduce:hidden"
+					className="absolute size-20 animate-bf-ring rounded-full shadow-[0_0_0_2px_#FF4D8D,0_0_40px_rgba(255,77,141,0.6)] motion-reduce:hidden"
 				/>
 				<span
 					aria-hidden="true"
-					className="absolute size-24 animate-bf-ring rounded-full shadow-[0_0_0_2px_#FFD68C] motion-reduce:hidden"
+					className="absolute size-20 animate-bf-ring rounded-full shadow-[0_0_0_2px_#FFD68C] motion-reduce:hidden"
 					style={rise(0.25)}
 				/>
-				<span className="relative grid size-20 animate-bf-pop place-items-center rounded-full bg-[linear-gradient(180deg,#FFD68C,#FF4D8D)] text-[#141012] shadow-[0_18px_50px_-12px_rgba(255,77,141,0.8)] motion-reduce:animate-none">
-					<Check className="size-9" strokeWidth={2.5} />
+				<span className="relative grid size-16 animate-bf-pop place-items-center rounded-full bg-[linear-gradient(180deg,#FFD68C,#FF4D8D)] text-[#141012] shadow-[0_18px_50px_-12px_rgba(255,77,141,0.8)] motion-reduce:animate-none">
+					<Check className="size-8" strokeWidth={2.5} />
 				</span>
 			</div>
-			<h1
-				className="mt-8 animate-bf-rise text-balance text-[40px] font-medium leading-[1] tracking-[-0.035em] motion-reduce:animate-none sm:text-[56px]"
+			<p
+				className={classNames(`mt-6 text-[15px] leading-[1.5] ${DIM}`, RISE)}
 				style={rise(0.3)}
 			>
-				Locked in
-			</h1>
-			<p
-				className={`mt-4 max-w-[480px] animate-bf-rise text-balance text-[17px] leading-[1.5] motion-reduce:animate-none ${DIM}`}
-				style={rise(0.42)}
-			>
-				{kind === "yearly"
-					? `Your renewal on ${day(renewsOn)} is paid for. Stripe has emailed your receipt.`
-					: `You're on Cap Pro yearly. Your next renewal is ${day(renewsOn)}, and Stripe has emailed your receipt.`}
+				Stripe has emailed your receipt.
 			</p>
 			<div
-				className="mt-8 flex animate-bf-rise flex-col gap-3 motion-reduce:animate-none sm:flex-row"
-				style={rise(0.54)}
+				className={classNames("mt-6 flex w-full flex-col gap-3", RISE)}
+				style={rise(0.4)}
 			>
-				<Link href="/dashboard/caps" className={CLAIM}>
+				<Link href="/dashboard/caps" className={classNames(CLAIM, "w-full")}>
 					<Sheen />
 					Go to your dashboard
 					<Arrow />
 				</Link>
 				<Link
 					href={BILLING}
-					className={classNames(GHOST, "!h-14 !rounded-full")}
+					className={classNames(GHOST, "!h-12 w-full !rounded-full")}
 				>
 					See billing
 				</Link>
 			</div>
-		</>
-	);
-}
-
-function Heading({ title, body }: { title: string; body: string }) {
-	return (
-		<>
-			<h1
-				className="mt-6 animate-bf-rise text-balance text-[36px] font-medium leading-[1.02] tracking-[-0.035em] motion-reduce:animate-none sm:text-[54px]"
-				style={rise(0.3)}
-			>
-				{title}
-			</h1>
-			<p
-				className={`mt-4 max-w-[500px] animate-bf-rise text-balance text-[17px] leading-[1.5] motion-reduce:animate-none ${DIM}`}
-				style={rise(0.42)}
-			>
-				{body}
-			</p>
-		</>
-	);
-}
-
-function Actions({ primary }: { primary: { href: string; label: string } }) {
-	return (
-		<div
-			className="mt-8 flex animate-bf-rise flex-col items-center gap-4 motion-reduce:animate-none"
-			style={rise(0.54)}
-		>
-			<a href={primary.href} className={CLAIM}>
-				<Sheen />
-				{primary.label}
-				<Arrow />
-			</a>
-			<Link
-				href={MANAGE_PLAN}
-				className={`text-[14px] underline decoration-[rgba(245,241,234,0.25)] underline-offset-[4px] transition-colors hover:text-[#F5F1EA] ${DIM}`}
-			>
-				Manage my plan
-			</Link>
 		</div>
 	);
 }
 
-function Stage({ children }: { children: ReactNode }) {
+function Message({
+	body,
+	action,
+	onExit,
+}: {
+	body: string;
+	action: { href: string; label: string };
+	onExit: () => void;
+}) {
 	return (
-		<main className="relative isolate min-h-[100svh] overflow-hidden bg-[#0A0A0B] px-4 pb-20 pt-24 text-[#F5F1EA] sm:pt-28">
-			<header className="absolute inset-x-0 top-0 z-10 animate-bf-fade motion-reduce:animate-none">
-				<div className="mx-auto flex h-16 w-full max-w-[1184px] items-center px-5 sm:px-8">
-					<Link
-						href="/blackfriday"
-						className="group -ml-2 inline-flex items-center gap-2 rounded-full py-1.5 pl-2 pr-3 text-[14px] text-[rgba(245,241,234,0.72)] transition-colors hover:text-[#F5F1EA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5F1EA]"
-					>
-						<svg
-							viewBox="0 0 16 16"
-							aria-hidden="true"
-							className="size-3.5 transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transition-none"
-						>
-							<path
-								d="M9.75 3.75 5.5 8l4.25 4.25"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="1.6"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							/>
-						</svg>
-						<Logo white className="h-auto w-[78px]" />
-						<span className="sr-only">Back to Cap Friday</span>
-					</Link>
-				</div>
-			</header>
-			<div
-				aria-hidden="true"
-				className="absolute inset-x-0 top-0 -z-10 h-[760px] animate-bf-fade bg-[radial-gradient(60%_55%_at_50%_0%,rgba(255,111,142,0.24),rgba(255,179,107,0.08)_45%,rgba(10,10,11,0)_75%)] [animation-duration:1.4s] motion-reduce:animate-none"
-			/>
-			<div className="mx-auto flex w-full max-w-[720px] flex-col items-center text-center">
-				<CapFridayMark animate className="w-[min(72vw,380px)]" />
-				{children}
-			</div>
-		</main>
+		<div className="flex flex-col gap-6">
+			<p
+				className={classNames(
+					"text-[15px] leading-[1.55] text-[rgba(245,241,234,0.82)]",
+					RISE,
+				)}
+			>
+				{body}
+			</p>
+			<a
+				href={action.href}
+				className={classNames(CLAIM, "w-full", RISE)}
+				style={rise(0.1)}
+			>
+				<Sheen />
+				{action.label}
+				<Arrow />
+			</a>
+			<button
+				type="button"
+				onClick={onExit}
+				className={`mx-auto text-[13px] underline decoration-[rgba(245,241,234,0.25)] underline-offset-[4px] transition-colors hover:text-[#F5F1EA] ${DIM}`}
+			>
+				Remove code
+			</button>
+		</div>
 	);
 }
-
-const UNAVAILABLE: Record<
-	Extract<CapFridayState, { type: "unavailable" }>["reason"],
-	{ title: string; body: string; action: { href: string; label: string } }
-> = {
-	ended: {
-		title: "Cap Friday has ended",
-		body: "Thanks for looking. Your plan carries on as normal.",
-		action: { href: "/dashboard/caps", label: "Go to your dashboard" },
-	},
-	not_owner: {
-		title: "Ask your billing owner",
-		body: "Your Cap Pro seat is billed to someone else, so they can lock in the next year from their account.",
-		action: { href: "/dashboard/caps", label: "Go to your dashboard" },
-	},
-	canceling: {
-		title: "Your plan is set to end",
-		body: "Turn renewal back on in billing settings, then come back here to lock in your next year.",
-		action: { href: BILLING, label: "Open billing settings" },
-	},
-	past_due: {
-		title: "Update your card first",
-		body: "Your last payment didn't go through. Update your card, then come back to lock in your next year.",
-		action: { href: BILLING, label: "Update payment method" },
-	},
-	no_card: {
-		title: "Add a card first",
-		body: "There's no card saved on your plan. Add one in billing settings, then come back here.",
-		action: { href: BILLING, label: "Open billing settings" },
-	},
-	custom: {
-		title: "We'll set this up for you",
-		body: "Your plan has custom billing, so we'll lock in your next year by hand. Email us before the offer ends and we'll sort it.",
-		action: { href: MAIL, label: "Email hello@cap.so" },
-	},
-};

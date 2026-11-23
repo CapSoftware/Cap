@@ -2,10 +2,11 @@
 
 import { classNames } from "@cap/utils/helpers";
 import NumberFlow from "@number-flow/react";
-import { Check, Loader2, Minus, Plus } from "lucide-react";
+import { Check, Loader2, Minus, Plus, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { getCapFridayOffer } from "@/actions/billing/cap-friday";
 import {
 	type AddSeatsResult,
 	addSeats,
@@ -14,15 +15,20 @@ import {
 	type SeatPreviewResult,
 } from "@/actions/billing/current-plan";
 import { trackEvent } from "@/app/utils/analytics";
-import {
-	CapFridayWarp,
-	type WarpOrigin,
-} from "@/components/pages/blackfriday/CapFridayWarp";
 import { useEnded } from "@/components/pages/blackfriday/Claim";
-import { CODE, PLAN_PATH } from "@/components/pages/blackfriday/content";
+import { CODE } from "@/components/pages/blackfriday/content";
 import { BTN_PRIMARY } from "@/components/pages/HomeTwo/theme";
+import type {
+	CapFridayRedeemResult,
+	CapFridayState,
+} from "@/lib/checkout/cap-friday";
 import { parsePromotionCode } from "@/lib/checkout/plans";
 import { formatAmount } from "@/utils/currency";
+import {
+	CapFridayCard,
+	type CapFridayView,
+	capFridayHeading,
+} from "./CapFridayPlan";
 import { PlanFeatures, PlanHeading } from "./CheckoutForm";
 import { CARD, CheckoutShell } from "./CheckoutShell";
 
@@ -43,9 +49,11 @@ const STEP_BTN =
 export function ManagePlan({
 	plan,
 	requestedSeats,
+	capFriday = null,
 }: {
 	plan: CurrentPlan;
 	requestedSeats: number;
+	capFriday?: CapFridayState | null;
 }) {
 	if (plan.type === "setup") {
 		return (
@@ -145,15 +153,35 @@ export function ManagePlan({
 		);
 	}
 
-	return <AddSeats details={plan.details} requestedSeats={requestedSeats} />;
+	return (
+		<AddSeats
+			details={plan.details}
+			requestedSeats={requestedSeats}
+			capFriday={capFriday}
+		/>
+	);
+}
+
+const CARD_SURFACE =
+	"transition-[background-color,box-shadow,color] duration-700 ease-out";
+const FRIDAY_CARD =
+	"rounded-[22px] bg-[#141113] p-5 text-[#F5F1EA] shadow-[0_0_0_1px_rgba(245,241,234,0.08),0_24px_60px_-30px_rgba(255,77,141,0.45)] sm:p-8";
+
+function setPromoParam(code: string | null) {
+	const url = new URL(window.location.href);
+	if (code) url.searchParams.set("promo", code);
+	else url.searchParams.delete("promo");
+	window.history.replaceState(window.history.state, "", url);
 }
 
 function AddSeats({
 	details,
 	requestedSeats,
+	capFriday,
 }: {
 	details: Extract<CurrentPlan, { type: "managed" }>["details"];
 	requestedSeats: number;
+	capFriday: CapFridayState | null;
 }) {
 	const router = useRouter();
 	const current = details.currentQuantity;
@@ -169,6 +197,30 @@ function AddSeats({
 	const [preview, setPreview] = useState<SeatPreviewResult | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	const [result, setResult] = useState<AddSeatsResult | null>(null);
+	const [friday, setFriday] = useState<CapFridayView | null>(capFriday);
+	const [fridayResult, setFridayResult] =
+		useState<CapFridayRedeemResult | null>(null);
+	const dark = friday !== null && !result?.ok;
+
+	const applyCode = () => {
+		setFriday({ type: "loading" });
+		setFridayResult(null);
+		setPromoParam(CODE);
+		getCapFridayOffer()
+			.then(setFriday)
+			.catch(() => setFriday({ type: "unavailable", reason: "custom" }));
+	};
+
+	const removeCode = () => {
+		setFriday(null);
+		setFridayResult(null);
+		setPromoParam(null);
+	};
+
+	const onFridayResult = (next: CapFridayRedeemResult | null) => {
+		setFridayResult(next);
+		if (next?.ok) router.refresh();
+	};
 
 	useEffect(() => {
 		if (pastDue || seats <= current) return;
@@ -221,38 +273,67 @@ function AddSeats({
 
 	const summary = (
 		<>
-			<PlanHeading tag={pastDue ? "Payment due" : "Your plan"} />
+			<PlanHeading
+				tag={dark ? "Cap Friday" : pastDue ? "Payment due" : "Your plan"}
+				dark={dark}
+			/>
 			<div className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1.5">
 				<span className="whitespace-nowrap text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
 					{formatAmount(perSeatPerPeriod, details.currency)}
 				</span>
-				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
+				<span
+					className={classNames(
+						"text-[14px] transition-colors duration-700",
+						dark ? "text-[rgba(245,241,234,0.5)]" : "text-[rgba(17,17,17,0.5)]",
+					)}
+				>
 					per user, per {yearly ? "year" : "month"}
 				</span>
 			</div>
-			<dl className="mt-6 flex flex-col gap-2.5 border-t border-[#E1E7EE] pt-5 text-[14px]">
+			<dl
+				className={classNames(
+					"mt-6 flex flex-col gap-2.5 border-t pt-5 text-[14px] transition-colors duration-700",
+					dark ? "border-[rgba(245,241,234,0.1)]" : "border-[#E1E7EE]",
+				)}
+			>
 				<SummaryRow
 					label="Seats"
 					value={`${current} ${current === 1 ? "seat" : "seats"}`}
+					dark={dark}
 				/>
-				<SummaryRow label="Billing" value={yearly ? "Yearly" : "Monthly"} />
+				<SummaryRow
+					label="Billing"
+					value={yearly ? "Yearly" : "Monthly"}
+					dark={dark}
+				/>
 				<SummaryRow
 					label={details.cancelAtPeriodEnd ? "Ends on" : "Renews on"}
 					value={formatDate(details.currentPeriodEnd)}
+					dark={dark}
 				/>
 				<SummaryRow
 					label={`Every ${yearly ? "year" : "month"}`}
 					value={formatAmount(perSeatPerPeriod * current, details.currency)}
+					dark={dark}
 				/>
 			</dl>
 			<Link
 				href="/dashboard/settings/organization"
-				className="mt-5 inline-flex text-[14px] text-[rgba(17,17,17,0.6)] underline decoration-[rgba(17,17,17,0.25)] underline-offset-[4px] transition-colors duration-200 hover:text-[#111111] hover:decoration-[#111111]"
+				className={classNames(
+					"mt-5 inline-flex text-[14px] underline underline-offset-[4px] transition-colors duration-700",
+					dark
+						? "text-[rgba(245,241,234,0.6)] decoration-[rgba(245,241,234,0.25)] hover:text-[#F5F1EA]"
+						: "text-[rgba(17,17,17,0.6)] decoration-[rgba(17,17,17,0.25)] hover:text-[#111111] hover:decoration-[#111111]",
+				)}
 			>
 				Manage billing and invoices
 			</Link>
-			<CodeEntry />
-			<PlanFeatures />
+			<CodeEntry
+				applied={friday !== null}
+				onApply={applyCode}
+				onRemove={removeCode}
+			/>
+			<PlanFeatures dark={dark} />
 		</>
 	);
 
@@ -287,145 +368,173 @@ function AddSeats({
 		);
 	}
 
+	const heading = friday
+		? capFridayHeading(friday, fridayResult)
+		: {
+				title: "Add seats to Cap Pro",
+				subtitle:
+					"Bring more of your team onto Cap Pro. You only pay for what's left of this billing period.",
+			};
+
 	return (
 		<CheckoutShell
-			title="Add seats to Cap Pro"
-			subtitle="Bring more of your team onto Cap Pro. You only pay for what's left of this billing period."
+			title={heading.title}
+			subtitle={heading.subtitle}
 			summary={summary}
+			capFriday={dark}
 		>
-			<div className={classNames(CARD, "flex flex-col")}>
-				<h2 className="text-[22px] font-normal leading-[1.1] tracking-[-0.02em]">
-					Add seats
-				</h2>
-				<p className="mt-2 text-[14px] leading-[1.5] text-[rgba(17,17,17,0.6)]">
-					You have {current} {current === 1 ? "seat" : "seats"} today. Choose
-					how many you need in total.
-				</p>
-
-				<div className="mt-7 flex items-center justify-between gap-4 rounded-[16px] bg-[#F3F6FA] px-4 py-4">
-					<div>
-						<p className="text-[15px] font-medium">Total seats</p>
-						<p className="mt-0.5 text-[13px] text-[rgba(17,17,17,0.55)]">
-							{added > 0
-								? `${added} new ${added === 1 ? "seat" : "seats"}`
-								: "No change yet"}
+			<div
+				className={classNames(
+					dark ? FRIDAY_CARD : CARD,
+					CARD_SURFACE,
+					"flex flex-col",
+				)}
+			>
+				{friday ? (
+					<CapFridayCard
+						key={friday.type}
+						view={friday}
+						result={fridayResult}
+						onResult={onFridayResult}
+						onExit={removeCode}
+					/>
+				) : (
+					<>
+						<h2 className="text-[22px] font-normal leading-[1.1] tracking-[-0.02em]">
+							Add seats
+						</h2>
+						<p className="mt-2 text-[14px] leading-[1.5] text-[rgba(17,17,17,0.6)]">
+							You have {current} {current === 1 ? "seat" : "seats"} today.
+							Choose how many you need in total.
 						</p>
-					</div>
-					<div className="flex items-center gap-1.5">
-						<button
-							type="button"
-							onClick={() =>
-								setSeats((value) => Math.max(current + 1, value - 1))
-							}
-							disabled={seats <= current + 1 || submitting}
-							className={STEP_BTN}
-							aria-label="Remove a seat"
-						>
-							<Minus className="size-4" strokeWidth={2} />
-						</button>
-						<span className="w-12 text-center text-[20px] font-medium tabular-nums">
-							<NumberFlow value={seats} />
-						</span>
-						<button
-							type="button"
-							onClick={() =>
-								setSeats((value) => Math.min(MAX_SEATS, value + 1))
-							}
-							disabled={seats >= MAX_SEATS || submitting}
-							className={STEP_BTN}
-							aria-label="Add a seat"
-						>
-							<Plus className="size-4" strokeWidth={2} />
-						</button>
-					</div>
-				</div>
 
-				{pastDue ? (
-					<p
-						role="alert"
-						className="mt-6 rounded-[12px] border border-[rgba(180,50,46,0.2)] bg-[#FDF3F2] px-3.5 py-3 text-[14px] leading-[1.45] text-[#8F2724]"
-					>
-						Your last payment didn't go through. Update your card in billing
-						settings, then come back to add seats.
-					</p>
-				) : (
-					<dl className="mt-6 flex flex-col gap-2.5 text-[14px]">
-						<SummaryRow
-							label="Due today"
-							value={
-								dueToday ??
-								(preview?.ok === false ? "Unavailable" : "Calculating...")
-							}
-							strong
-						/>
-						<SummaryRow
-							label={`From ${formatDate(details.currentPeriodEnd)}`}
-							value={`${renewal} per ${yearly ? "year" : "month"}`}
-						/>
-					</dl>
-				)}
+						<div className="mt-7 flex items-center justify-between gap-4 rounded-[16px] bg-[#F3F6FA] px-4 py-4">
+							<div>
+								<p className="text-[15px] font-medium">Total seats</p>
+								<p className="mt-0.5 text-[13px] text-[rgba(17,17,17,0.55)]">
+									{added > 0
+										? `${added} new ${added === 1 ? "seat" : "seats"}`
+										: "No change yet"}
+								</p>
+							</div>
+							<div className="flex items-center gap-1.5">
+								<button
+									type="button"
+									onClick={() =>
+										setSeats((value) => Math.max(current + 1, value - 1))
+									}
+									disabled={seats <= current + 1 || submitting}
+									className={STEP_BTN}
+									aria-label="Remove a seat"
+								>
+									<Minus className="size-4" strokeWidth={2} />
+								</button>
+								<span className="w-12 text-center text-[20px] font-medium tabular-nums">
+									<NumberFlow value={seats} />
+								</span>
+								<button
+									type="button"
+									onClick={() =>
+										setSeats((value) => Math.min(MAX_SEATS, value + 1))
+									}
+									disabled={seats >= MAX_SEATS || submitting}
+									className={STEP_BTN}
+									aria-label="Add a seat"
+								>
+									<Plus className="size-4" strokeWidth={2} />
+								</button>
+							</div>
+						</div>
 
-				{details.cancelAtPeriodEnd && !pastDue ? (
-					<p className="mt-4 text-[13px] leading-[1.5] text-[rgba(17,17,17,0.55)]">
-						Your plan is set to end on {formatDate(details.currentPeriodEnd)}.
-						Adding seats keeps it renewing.
-					</p>
-				) : null}
-
-				{preview?.ok === false || result?.ok === false ? (
-					<p
-						role="alert"
-						className="mt-5 rounded-[12px] border border-[rgba(180,50,46,0.2)] bg-[#FDF3F2] px-3.5 py-3 text-[14px] leading-[1.45] text-[#8F2724]"
-					>
-						{result?.ok === false
-							? result.message
-							: preview?.ok === false
-								? preview.message
-								: null}
-					</p>
-				) : null}
-
-				{pastDue ? (
-					<Link
-						href="/dashboard/settings/organization"
-						className={classNames(BTN_PRIMARY, "mt-7 w-full")}
-					>
-						Update payment method
-					</Link>
-				) : (
-					<button
-						type="button"
-						onClick={submit}
-						disabled={submitting || !preview?.ok}
-						className={classNames(
-							BTN_PRIMARY,
-							"mt-7 w-full gap-2 disabled:cursor-not-allowed disabled:opacity-60",
-						)}
-					>
-						{submitting ? (
-							<>
-								<Loader2 className="size-4 animate-spin" strokeWidth={2} />
-								Adding seats...
-							</>
-						) : dueToday ? (
-							`Add ${added} ${added === 1 ? "seat" : "seats"} for ${dueToday}`
+						{pastDue ? (
+							<p
+								role="alert"
+								className="mt-6 rounded-[12px] border border-[rgba(180,50,46,0.2)] bg-[#FDF3F2] px-3.5 py-3 text-[14px] leading-[1.45] text-[#8F2724]"
+							>
+								Your last payment didn't go through. Update your card in billing
+								settings, then come back to add seats.
+							</p>
 						) : (
-							`Add ${added} ${added === 1 ? "seat" : "seats"}`
+							<dl className="mt-6 flex flex-col gap-2.5 text-[14px]">
+								<SummaryRow
+									label="Due today"
+									value={
+										dueToday ??
+										(preview?.ok === false ? "Unavailable" : "Calculating...")
+									}
+									strong
+								/>
+								<SummaryRow
+									label={`From ${formatDate(details.currentPeriodEnd)}`}
+									value={`${renewal} per ${yearly ? "year" : "month"}`}
+								/>
+							</dl>
 						)}
-					</button>
-				)}
 
-				<p className="mt-4 text-[12.5px] leading-[1.55] text-[rgba(17,17,17,0.55)]">
-					We charge the card on file for the prorated amount today. Need fewer
-					seats?{" "}
-					<Link
-						href="/dashboard/settings/organization"
-						className="underline underline-offset-2"
-					>
-						Change them in settings
-					</Link>
-					.
-				</p>
+						{details.cancelAtPeriodEnd && !pastDue ? (
+							<p className="mt-4 text-[13px] leading-[1.5] text-[rgba(17,17,17,0.55)]">
+								Your plan is set to end on{" "}
+								{formatDate(details.currentPeriodEnd)}. Adding seats keeps it
+								renewing.
+							</p>
+						) : null}
+
+						{preview?.ok === false || result?.ok === false ? (
+							<p
+								role="alert"
+								className="mt-5 rounded-[12px] border border-[rgba(180,50,46,0.2)] bg-[#FDF3F2] px-3.5 py-3 text-[14px] leading-[1.45] text-[#8F2724]"
+							>
+								{result?.ok === false
+									? result.message
+									: preview?.ok === false
+										? preview.message
+										: null}
+							</p>
+						) : null}
+
+						{pastDue ? (
+							<Link
+								href="/dashboard/settings/organization"
+								className={classNames(BTN_PRIMARY, "mt-7 w-full")}
+							>
+								Update payment method
+							</Link>
+						) : (
+							<button
+								type="button"
+								onClick={submit}
+								disabled={submitting || !preview?.ok}
+								className={classNames(
+									BTN_PRIMARY,
+									"mt-7 w-full gap-2 disabled:cursor-not-allowed disabled:opacity-60",
+								)}
+							>
+								{submitting ? (
+									<>
+										<Loader2 className="size-4 animate-spin" strokeWidth={2} />
+										Adding seats...
+									</>
+								) : dueToday ? (
+									`Add ${added} ${added === 1 ? "seat" : "seats"} for ${dueToday}`
+								) : (
+									`Add ${added} ${added === 1 ? "seat" : "seats"}`
+								)}
+							</button>
+						)}
+
+						<p className="mt-4 text-[12.5px] leading-[1.55] text-[rgba(17,17,17,0.55)]">
+							We charge the card on file for the prorated amount today. Need
+							fewer seats?{" "}
+							<Link
+								href="/dashboard/settings/organization"
+								className="underline underline-offset-2"
+							>
+								Change them in settings
+							</Link>
+							.
+						</p>
+					</>
+				)}
 			</div>
 		</CheckoutShell>
 	);
@@ -435,23 +544,33 @@ function SummaryRow({
 	label,
 	value,
 	strong,
+	dark,
 }: {
 	label: string;
 	value: string;
 	strong?: boolean;
+	dark?: boolean;
 }) {
 	return (
 		<div className="flex items-baseline justify-between gap-4">
 			<dt
-				className={
-					strong ? "font-medium text-[#111111]" : "text-[rgba(17,17,17,0.66)]"
-				}
+				className={classNames(
+					"transition-colors duration-700",
+					strong
+						? dark
+							? "font-medium text-[#F5F1EA]"
+							: "font-medium text-[#111111]"
+						: dark
+							? "text-[rgba(245,241,234,0.6)]"
+							: "text-[rgba(17,17,17,0.66)]",
+				)}
 			>
 				{label}
 			</dt>
 			<dd
 				className={classNames(
-					"tabular-nums text-[#111111]",
+					"tabular-nums transition-colors duration-700",
+					dark ? "text-[#F5F1EA]" : "text-[#111111]",
 					strong ? "text-[16px] font-medium" : "",
 				)}
 			>
@@ -515,21 +634,41 @@ function PlanUnavailable() {
 
 // Cap Pro subscribers never see the payment form, so the Cap Friday code is
 // entered here and opens the offer for their existing plan.
-function CodeEntry() {
-	const router = useRouter();
+function CodeEntry({
+	applied,
+	onApply,
+	onRemove,
+}: {
+	applied: boolean;
+	onApply: () => void;
+	onRemove: () => void;
+}) {
 	const ended = useEnded();
 	const [open, setOpen] = useState(false);
 	const [code, setCode] = useState("");
 	const [invalid, setInvalid] = useState(false);
-	const [warp, setWarp] = useState<WarpOrigin | null>(null);
 	const form = useRef<HTMLFormElement>(null);
-	const apply = useRef<HTMLButtonElement>(null);
-
-	useEffect(() => {
-		if (open) router.prefetch(PLAN_PATH);
-	}, [open, router]);
 
 	if (ended) return null;
+
+	if (applied) {
+		return (
+			<div className="mt-4 flex items-center gap-2">
+				<span className="inline-flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#FFD68C,#FF4D8D_60%,#B0369F)] py-1 pl-2.5 pr-1 text-[12.5px] font-medium tracking-[0.02em] text-[#141012] shadow-[0_0_20px_rgba(255,77,141,0.45)]">
+					<Check className="size-3.5" strokeWidth={2.5} />
+					{CODE}
+					<button
+						type="button"
+						onClick={onRemove}
+						aria-label={`Remove ${CODE}`}
+						className="grid size-5 place-items-center rounded-full transition-colors hover:bg-black/10"
+					>
+						<X className="size-3" strokeWidth={2.5} />
+					</button>
+				</span>
+			</div>
+		);
+	}
 
 	if (!open) {
 		return (
@@ -549,7 +688,6 @@ function CodeEntry() {
 			className="mt-4 flex flex-col gap-2"
 			onSubmit={(event) => {
 				event.preventDefault();
-				if (warp) return;
 				if (parsePromotionCode(code) !== CODE) {
 					setInvalid(true);
 					form.current?.animate(
@@ -565,12 +703,9 @@ function CodeEntry() {
 					return;
 				}
 				trackEvent("cap_friday_code_entered", { location: "manage_plan" });
-				const rect = apply.current?.getBoundingClientRect();
-				setWarp(
-					rect
-						? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-						: { x: window.innerWidth / 2, y: window.innerHeight / 2 },
-				);
+				setOpen(false);
+				setCode("");
+				onApply();
 			}}
 		>
 			<div className="flex gap-2">
@@ -586,20 +721,13 @@ function CodeEntry() {
 					autoCapitalize="characters"
 					autoComplete="off"
 					spellCheck={false}
-					readOnly={warp !== null}
 					// biome-ignore lint/a11y/noAutofocus: opened by the user on purpose
 					autoFocus
 					className="h-10 min-w-0 flex-1 rounded-[10px] bg-white px-3 text-[14px] uppercase shadow-[inset_0_0_0_1px_rgba(17,17,17,0.14)] outline-none focus-visible:shadow-[inset_0_0_0_1.5px_#111111]"
 				/>
 				<button
-					ref={apply}
 					type="submit"
-					className={classNames(
-						"h-10 rounded-[10px] px-4 text-[14px] transition-[background,color,box-shadow,opacity] duration-300 hover:opacity-85",
-						warp
-							? "bg-[linear-gradient(135deg,#FFD68C,#FF4D8D_55%,#B0369F)] text-[#141012] shadow-[0_0_24px_rgba(255,77,141,0.6)]"
-							: "bg-[#111111] text-white",
-					)}
+					className="h-10 rounded-[10px] bg-[#111111] px-4 text-[14px] text-white transition-opacity hover:opacity-85"
 				>
 					Apply
 				</button>
@@ -608,9 +736,6 @@ function CodeEntry() {
 				<p role="alert" className="text-[13px] text-[#B4322E]">
 					That code doesn't work for your plan.
 				</p>
-			) : null}
-			{warp ? (
-				<CapFridayWarp origin={warp} onCovered={() => router.push(PLAN_PATH)} />
 			) : null}
 		</form>
 	);

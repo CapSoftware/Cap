@@ -4,12 +4,12 @@ import { userIsPro } from "@cap/utils";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { preconnect } from "react-dom";
+import { getCapFridayOffer } from "@/actions/billing/cap-friday";
 import {
 	type CreateCheckoutResult,
 	createProCheckout,
 } from "@/actions/billing/checkout";
 import { getCurrentPlan } from "@/actions/billing/current-plan";
-import { PLAN_PATH } from "@/components/pages/blackfriday/content";
 import { CheckoutView } from "@/components/pages/checkout/CheckoutView";
 import { ManagePlan } from "@/components/pages/checkout/ManagePlan";
 import { capFridayLive, isCapFridayCode } from "@/lib/checkout/cap-friday";
@@ -51,8 +51,15 @@ export default async function CheckoutPage(props: {
 
 	if (user && userIsPro(user)) {
 		const promo = parsePromotionCode(first(searchParams.promo));
-		if (isCapFridayCode(promo) && capFridayLive()) redirect(PLAN_PATH);
-		return <ManagePlan plan={await getCurrentPlan()} requestedSeats={seats} />;
+		const [plan, capFriday] = await Promise.all([
+			getCurrentPlan(),
+			isCapFridayCode(promo) && capFridayLive()
+				? getCapFridayOffer()
+				: Promise.resolve(null),
+		]);
+		return (
+			<ManagePlan plan={plan} requestedSeats={seats} capFriday={capFriday} />
+		);
 	}
 
 	const requestedPlan = first(searchParams.plan);

@@ -2,7 +2,6 @@ import { PRICING } from "@/data/pricing";
 
 export const CODE = "BLACKFRIDAY";
 
-// Where people already on Cap Pro redeem the code for their own plan.
 export const PLAN_PATH = "/blackfriday/plan";
 
 // 11:59:59 pm Pacific on Cyber Monday.
