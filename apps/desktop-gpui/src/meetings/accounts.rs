@@ -622,7 +622,7 @@ pub async fn fetch(
                 ),
             }
             .map_err(shape)?;
-            events.extend(page.items);
+            events.extend(keep_for_account(calendar, email, &self_emails, page.items));
             next = page.next;
             if next.is_none() {
                 break;
@@ -635,9 +635,126 @@ pub async fn fetch(
     })
 }
 
+/// A calendar shared by someone else (a coworker's, ticked in Google's
+/// sidebar) only adds the meetings the user is on, so their private meetings
+/// never become the user's prompts or notes.
+fn keep_for_account(
+    calendar: &CalendarInfo,
+    account_email: &str,
+    self_emails: &[String],
+    events: Vec<CalendarEvent>,
+) -> Vec<CalendarEvent> {
+    if calendar.is_own(account_email) {
+        return events;
+    }
+    events
+        .into_iter()
+        .filter_map(|mut event| event.mark_self_by_email(self_emails).then_some(event))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shared_calendar_adds_only_the_meetings_the_user_is_on() {
+        use cap_calendar::{Person, Response};
+        let me = "me@example.com";
+        let selfs = vec![me.to_string()];
+        let person = |email: &str, is_self: bool, response: Response| Person {
+            name: None,
+            email: Some(email.into()),
+            is_self,
+            response,
+        };
+        let event = |id: &str, organizer: Person, attendees: Vec<Person>| CalendarEvent {
+            id: id.into(),
+            organizer: Some(organizer),
+            attendees,
+            ..CalendarEvent::default()
+        };
+        // On the boss's calendar Google marks the boss as `self`.
+        let boss = |response| person("boss@example.com", true, response);
+        let private = event("private", boss(Response::Accepted), vec![]);
+        let invited = event(
+            "invited",
+            boss(Response::Accepted),
+            vec![
+                boss(Response::Accepted),
+                person("ME@example.com", false, Response::Declined),
+            ],
+        );
+        let organized = event(
+            "organized",
+            person(me, false, Response::Unknown),
+            vec![boss(Response::Accepted)],
+        );
+        let shared = CalendarInfo {
+            id: "boss@example.com".into(),
+            access_role: Some("writer".into()),
+            owner_email: Some("boss@example.com".into()),
+            ..CalendarInfo::default()
+        };
+
+        let kept = keep_for_account(
+            &shared,
+            me,
+            &selfs,
+            vec![private.clone(), invited.clone(), organized],
+        );
+        let ids: Vec<&str> = kept.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["invited", "organized"],
+            "the boss's private meeting stays out"
+        );
+        let selves = |e: &CalendarEvent| -> Vec<bool> {
+            e.organizer
+                .iter()
+                .chain(&e.attendees)
+                .map(|p| p.is_self)
+                .collect()
+        };
+        assert_eq!(
+            selves(&kept[0]),
+            [false, false, true],
+            "the user, not the boss, is You"
+        );
+        assert_eq!(
+            kept[0].self_response,
+            Response::Declined,
+            "the user's own answer"
+        );
+        assert_eq!(selves(&kept[1]), [true, false]);
+        assert_eq!(kept[1].self_response, Response::Accepted);
+
+        let own_calendars = [
+            CalendarInfo {
+                primary: true,
+                ..shared.clone()
+            },
+            CalendarInfo {
+                access_role: Some("owner".into()),
+                ..shared.clone()
+            },
+            CalendarInfo {
+                owner_email: Some("Me@Example.com".into()),
+                ..shared.clone()
+            },
+        ];
+        for own in own_calendars {
+            assert_eq!(
+                keep_for_account(&own, me, &selfs, vec![private.clone(), invited.clone()]),
+                vec![private.clone(), invited.clone()],
+                "the user's own calendar keeps every event as it was: {own:?}"
+            );
+        }
+        assert!(
+            keep_for_account(&shared, "", &[], vec![invited]).is_empty(),
+            "without the account's address a shared calendar adds nothing"
+        );
+    }
 
     fn listener() -> (TcpListener, u16) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();

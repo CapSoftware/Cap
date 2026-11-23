@@ -93,6 +93,22 @@ impl CalendarEvent {
     pub fn has_participants(&self) -> bool {
         self.other_participants() > 0
     }
+
+    /// On a calendar that is not the user's own, the provider's `self` flag
+    /// marks that calendar's owner, not the user. Marks the user by
+    /// `self_emails` alone and says whether they are the organizer or an
+    /// attendee.
+    pub fn mark_self_by_email(&mut self, self_emails: &[String]) -> bool {
+        for person in self.organizer.iter_mut().chain(self.attendees.iter_mut()) {
+            person.is_self = is_self_email(person.email.as_deref(), self_emails);
+        }
+        self.self_response =
+            derive_self_response(self.organizer.as_ref(), &self.attendees, Response::Unknown);
+        self.organizer
+            .iter()
+            .chain(&self.attendees)
+            .any(|person| person.is_self)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +123,19 @@ pub struct CalendarInfo {
     pub access_role: Option<String>,
     pub owner_email: Option<String>,
     pub time_zone: Option<String>,
+}
+
+impl CalendarInfo {
+    /// The account's own calendar: its main one, one it owns, or one whose
+    /// owner is the account. Anything else was shared by someone else.
+    pub fn is_own(&self, account_email: &str) -> bool {
+        self.primary
+            || self.access_role.as_deref() == Some("owner")
+            || self
+                .owner_email
+                .as_deref()
+                .is_some_and(|owner| !account_email.is_empty() && email_eq(owner, account_email))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

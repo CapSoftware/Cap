@@ -482,3 +482,67 @@ fn system_events() {
     let back: SystemEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(back, base);
 }
+
+#[test]
+fn a_shared_calendars_self_flag_is_replaced_by_the_users_address() {
+    use cap_calendar::{CalendarEvent, CalendarInfo, Person, Response};
+    let owner = Person {
+        email: Some("boss@example.com".into()),
+        is_self: true,
+        response: Response::Accepted,
+        ..Person::default()
+    };
+    let mut alone = CalendarEvent {
+        organizer: Some(owner.clone()),
+        ..CalendarEvent::default()
+    };
+    assert!(!alone.mark_self_by_email(&["me@example.com".into()]));
+    assert!(!alone.organizer.as_ref().unwrap().is_self);
+
+    let mut invited = CalendarEvent {
+        organizer: Some(owner),
+        attendees: vec![Person {
+            email: Some("me@EXAMPLE.com".into()),
+            response: Response::Tentative,
+            ..Person::default()
+        }],
+        ..CalendarEvent::default()
+    };
+    assert!(invited.mark_self_by_email(&["me@example.com".into()]));
+    assert_eq!(invited.self_response, Response::Tentative);
+
+    let shared = CalendarInfo {
+        access_role: Some("reader".into()),
+        owner_email: Some("boss@example.com".into()),
+        ..CalendarInfo::default()
+    };
+    assert!(!shared.is_own("me@example.com"));
+    assert!(
+        !CalendarInfo {
+            owner_email: None,
+            ..shared.clone()
+        }
+        .is_own("")
+    );
+    assert!(
+        CalendarInfo {
+            primary: true,
+            ..shared.clone()
+        }
+        .is_own("me@example.com")
+    );
+    assert!(
+        CalendarInfo {
+            access_role: Some("owner".into()),
+            ..shared.clone()
+        }
+        .is_own("")
+    );
+    assert!(
+        CalendarInfo {
+            owner_email: Some("ME@example.com".into()),
+            ..shared
+        }
+        .is_own("me@example.com")
+    );
+}
