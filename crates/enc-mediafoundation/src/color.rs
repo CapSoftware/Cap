@@ -9,17 +9,47 @@ const MATRIX_BT709: u32 = 1 << 2;
 const NOMINAL_SHIFT: u32 = 4;
 const NOMINAL_STUDIO: u32 = 1;
 const NOMINAL_FULL: u32 = 2;
+const SD_SHORT_SIDE: u32 = 576;
 
-pub(crate) fn bt709_processor_color_words(input_full_range: bool) -> ProcessorColorWords {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum YuvMatrix {
+    Bt601,
+    Bt709,
+}
+
+/// Camera frames carry a pixel format and a size, not a matrix. A frame whose
+/// shorter side is at most 576 is SD, and SD YUV defaults to BT.601. The
+/// processor then converts that input to the BT.709 output. RGB is already
+/// full-range and converts with BT.709 at every size. HD YUV stays BT.709.
+pub(crate) fn source_matrix(rgb: bool, width: u32, height: u32) -> YuvMatrix {
+    if rgb || width.min(height) > SD_SHORT_SIDE {
+        YuvMatrix::Bt709
+    } else {
+        YuvMatrix::Bt601
+    }
+}
+
+pub(crate) fn processor_color_words(
+    source: YuvMatrix,
+    input_full_range: bool,
+) -> ProcessorColorWords {
     let nominal = if input_full_range {
         NOMINAL_FULL
     } else {
         NOMINAL_STUDIO
     };
+    let stream_matrix = match source {
+        YuvMatrix::Bt709 => MATRIX_BT709,
+        YuvMatrix::Bt601 => 0,
+    };
     ProcessorColorWords {
         output: USAGE_VIDEO_PROCESSING | MATRIX_BT709 | (NOMINAL_STUDIO << NOMINAL_SHIFT),
-        stream: USAGE_VIDEO_PROCESSING | MATRIX_BT709 | (nominal << NOMINAL_SHIFT),
+        stream: USAGE_VIDEO_PROCESSING | stream_matrix | (nominal << NOMINAL_SHIFT),
     }
+}
+
+pub(crate) fn bt709_processor_color_words(input_full_range: bool) -> ProcessorColorWords {
+    processor_color_words(YuvMatrix::Bt709, input_full_range)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,25 +193,29 @@ pub(crate) fn apply_color_tags(
     Ok(())
 }
 
-#[cfg(windows)]
-pub(crate) fn probe_color_tags(
-    mut try_set: impl FnMut(&[ColorTag]) -> windows::core::Result<()>,
-) -> windows::core::Result<TagProbe> {
-    use windows::Win32::Media::MediaFoundation::MF_E_INVALIDMEDIATYPE;
+pub(crate) fn probe_color_tags<E>(
+    mut try_set: impl FnMut(&[ColorTag]) -> Result<(), E>,
+    is_unsupported: impl Fn(&E) -> bool,
+) -> Result<TagProbe, E> {
     let mut probe = TagProbe::new();
     while let Some(attempt) = probe.next_attempt() {
         match try_set(&attempt) {
             Ok(()) => probe.observe(true),
-            Err(error) if error.code() == MF_E_INVALIDMEDIATYPE => probe.observe(false),
+            Err(error) if is_unsupported(&error) => probe.observe(false),
             Err(error) => return Err(error),
         }
     }
     if let Err(error) = try_set(probe.accepted())
-        && error.code() != MF_E_INVALIDMEDIATYPE
+        && !is_unsupported(&error)
     {
         return Err(error);
     }
     Ok(probe)
+}
+
+#[cfg(windows)]
+pub(crate) fn media_type_is_unsupported(error: &windows::core::Error) -> bool {
+    error.code() == windows::Win32::Media::MediaFoundation::MF_E_INVALIDMEDIATYPE
 }
 
 #[cfg(windows)]
@@ -309,8 +343,9 @@ fn fixed_16(row: [i32; 3], r: i32, g: i32, b: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColorTag, ProcessorColorWords, TagProbe, accepted_after_two_passes, bt709_limited_yuv,
-        bt709_processor_color_words, color_tag_report, format_tag_list,
+        ColorTag, ProcessorColorWords, TagProbe, YuvMatrix, accepted_after_two_passes,
+        bt709_limited_yuv, bt709_processor_color_words, color_tag_report, format_tag_list,
+        probe_color_tags, processor_color_words, source_matrix,
     };
 
     fn fields(word: u32) -> (u32, u32, u32, u32) {
@@ -325,6 +360,8 @@ mod tests {
     #[test]
     fn processor_words_are_bt709_limited_out_and_match_the_input_range() {
         let ProcessorColorWords { output, stream } = bt709_processor_color_words(true);
+        assert_eq!(output, 21, "output {output:#x}");
+        assert_eq!(stream, 37, "full-range stream {stream:#x}");
         assert_eq!(fields(output), (1, 0, 1, 1), "output {output:#x}");
         assert_eq!(
             fields(stream),
@@ -338,12 +375,127 @@ mod tests {
             output: limited_out,
             stream: limited_stream,
         } = bt709_processor_color_words(false);
+        assert_eq!(limited_out, 21, "output {limited_out:#x}");
+        assert_eq!(limited_stream, 21, "limited stream {limited_stream:#x}");
         assert_eq!(fields(limited_out), (1, 0, 1, 1), "output {limited_out:#x}");
         assert_eq!(
             fields(limited_stream),
             (1, 0, 1, 1),
             "limited stream {limited_stream:#x}"
         );
+    }
+
+    #[test]
+    fn sd_yuv_converts_from_bt601_while_rgb_and_hd_stay_bt709() {
+        assert_eq!(source_matrix(true, 1280, 720), YuvMatrix::Bt709);
+        assert_eq!(source_matrix(true, 640, 480), YuvMatrix::Bt709);
+        assert_eq!(source_matrix(false, 1280, 720), YuvMatrix::Bt709);
+        assert_eq!(source_matrix(false, 1920, 1080), YuvMatrix::Bt709);
+        assert_eq!(source_matrix(false, 1080, 1920), YuvMatrix::Bt709);
+        assert_eq!(source_matrix(false, 640, 480), YuvMatrix::Bt601);
+        assert_eq!(source_matrix(false, 720, 576), YuvMatrix::Bt601);
+        assert_eq!(source_matrix(false, 480, 640), YuvMatrix::Bt601);
+        assert_eq!(source_matrix(false, 854, 480), YuvMatrix::Bt601);
+
+        let ProcessorColorWords { output, stream } = processor_color_words(YuvMatrix::Bt601, false);
+        assert_eq!(output, 21, "converted output stays BT.709 limited");
+        assert_eq!(stream, 17, "SD YUV input stays BT.601 studio");
+        assert_eq!(
+            processor_color_words(source_matrix(true, 1280, 720), true),
+            bt709_processor_color_words(true)
+        );
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum TagFailure {
+        Unsupported,
+        Unexpected,
+    }
+
+    fn drive_probe(
+        steps: &[Result<(), TagFailure>],
+    ) -> (Result<TagProbe, TagFailure>, Vec<Vec<ColorTag>>) {
+        let mut calls = Vec::new();
+        let mut index = 0;
+        let result = probe_color_tags(
+            |tags| {
+                calls.push(tags.to_vec());
+                let outcome = steps.get(index).copied().unwrap_or(Ok(()));
+                index += 1;
+                outcome
+            },
+            |error| *error == TagFailure::Unsupported,
+        );
+        (result, calls)
+    }
+
+    #[test]
+    fn probe_keeps_an_accepted_tag() {
+        let (result, calls) = drive_probe(&[
+            Ok(()),
+            Err(TagFailure::Unsupported),
+            Err(TagFailure::Unsupported),
+            Err(TagFailure::Unsupported),
+            Ok(()),
+        ]);
+        let probe = result.expect("accepted tag");
+        assert_eq!(probe.accepted(), [ColorTag::YuvMatrix].as_slice());
+        assert_eq!(calls.last().map(Vec::as_slice), Some(probe.accepted()));
+    }
+
+    #[test]
+    fn probe_accepts_the_tag_after_a_rejection() {
+        let (result, calls) = drive_probe(&[
+            Err(TagFailure::Unsupported),
+            Ok(()),
+            Ok(()),
+            Err(TagFailure::Unsupported),
+            Ok(()),
+        ]);
+        let probe = result.expect("tag after rejection");
+        assert_eq!(
+            probe.accepted(),
+            [ColorTag::Primaries, ColorTag::TransferFunction].as_slice()
+        );
+        assert_eq!(
+            calls[..calls.len() - 1],
+            [
+                vec![ColorTag::YuvMatrix],
+                vec![ColorTag::Primaries],
+                vec![ColorTag::Primaries, ColorTag::TransferFunction],
+                vec![
+                    ColorTag::Primaries,
+                    ColorTag::TransferFunction,
+                    ColorTag::NominalRange
+                ],
+            ]
+        );
+        assert_eq!(calls.last().map(Vec::as_slice), Some(probe.accepted()));
+    }
+
+    #[test]
+    fn probe_returns_an_unexpected_error() {
+        let (result, calls) = drive_probe(&[Ok(()), Err(TagFailure::Unexpected)]);
+        assert_eq!(result, Err(TagFailure::Unexpected));
+        assert_eq!(
+            calls,
+            [
+                vec![ColorTag::YuvMatrix],
+                vec![ColorTag::YuvMatrix, ColorTag::Primaries],
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_finishes_by_setting_the_accepted_tags() {
+        let (result, calls) = drive_probe(&[Ok(()), Ok(()), Ok(()), Ok(())]);
+        let probe = result.expect("final set");
+        assert_eq!(probe.accepted(), ColorTag::ALL.as_slice());
+        assert_eq!(
+            calls.last().map(Vec::as_slice),
+            Some(ColorTag::ALL.as_slice())
+        );
+        assert_eq!(calls.len(), ColorTag::ALL.len() + 1);
     }
 
     #[test]

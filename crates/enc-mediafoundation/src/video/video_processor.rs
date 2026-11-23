@@ -97,8 +97,20 @@ impl VideoProcessor {
         let video_processor = unsafe { video_device.CreateVideoProcessor(&video_enum, 0) }
             .map_err(NewVideoProcessorError::CreateVideoProcessor)?;
 
-        let words =
-            crate::color::bt709_processor_color_words(input_is_full_range_rgb(input_format));
+        let full_range_rgb = input_is_full_range_rgb(input_format);
+        let source = crate::color::source_matrix(
+            full_range_rgb,
+            input_size.Width as u32,
+            input_size.Height as u32,
+        );
+        let words = match source {
+            crate::color::YuvMatrix::Bt709 => {
+                crate::color::bt709_processor_color_words(full_range_rgb)
+            }
+            crate::color::YuvMatrix::Bt601 => {
+                crate::color::processor_color_words(source, full_range_rgb)
+            }
+        };
         let output_color = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
             _bitfield: words.output,
         };

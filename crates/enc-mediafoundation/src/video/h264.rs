@@ -398,7 +398,7 @@ impl H264Encoder {
                 }
             };
             set_output(&[]).map_err(NewVideoEncoderError::OutputType)?;
-            crate::color::probe_color_tags(&mut set_output)
+            crate::color::probe_color_tags(&mut set_output, crate::color::media_type_is_unsupported)
                 .map_err(NewVideoEncoderError::OutputType)?
         };
         let output_type = output_type.ok_or_else(|| {
@@ -469,7 +469,7 @@ impl H264Encoder {
                 }
             };
             set_input(&[]).map_err(NewVideoEncoderError::InputType)?;
-            crate::color::probe_color_tags(&mut set_input)
+            crate::color::probe_color_tags(&mut set_input, crate::color::media_type_is_unsupported)
                 .map_err(NewVideoEncoderError::InputType)?
         };
         let after_input = crate::color::codec_color_passes(&transform);
