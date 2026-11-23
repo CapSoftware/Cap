@@ -24,6 +24,10 @@ const STALL_THRESHOLD: Duration = Duration::from_millis(250);
 const IDLE_INTERVAL: Duration = Duration::from_millis(100);
 const REBUILD_SETTLE: Duration = Duration::from_millis(300);
 const REBUILD_ATTEMPTS: u32 = 20;
+/// How long a start waits for the tap. Making one can raise the system's
+/// permission prompt and blocks until it is answered; a start that waits
+/// longer returns, and computer audio begins once the person answers.
+const READY_WAIT: Duration = Duration::from_secs(2);
 
 type CreateTap = unsafe extern "C-unwind" fn(description: &TapDesc, tap: *mut Obj) -> os::Status;
 type DestroyTap = unsafe extern "C-unwind" fn(tap: Obj) -> os::Status;
@@ -403,6 +407,27 @@ pub struct SystemAudioTap {
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
     thread: Option<JoinHandle<()>>,
+    /// The tap's first build has returned (it can wait on a prompt).
+    built: Arc<AtomicBool>,
+}
+
+/// What a start learned in the time it waits.
+#[derive(Debug)]
+enum Ready {
+    Started,
+    Failed(TapError),
+    /// Still building, most likely behind the system's permission prompt.
+    Pending,
+    Gone,
+}
+
+fn wait_ready(ready: &flume::Receiver<Result<(), TapError>>, wait: Duration) -> Ready {
+    match ready.recv_timeout(wait) {
+        Ok(Ok(())) => Ready::Started,
+        Ok(Err(error)) => Ready::Failed(error),
+        Err(flume::RecvTimeoutError::Timeout) => Ready::Pending,
+        Err(flume::RecvTimeoutError::Disconnected) => Ready::Gone,
+    }
 }
 
 impl SystemAudioTap {
@@ -416,19 +441,23 @@ impl SystemAudioTap {
 
         let stop = Arc::new(AtomicBool::new(false));
         let counters = Arc::new(Counters::default());
+        let built = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = flume::bounded::<Result<(), TapError>>(1);
         let thread = std::thread::Builder::new()
             .name("cap-system-audio".into())
             .spawn({
                 let stop = stop.clone();
                 let counters = counters.clone();
+                let built = built.clone();
                 move || {
                     let ring = Arc::new(Ring::new(RING_FRAMES));
                     let mut context = Box::new(IoContext {
                         ring: ring.clone(),
                         counters: counters.clone(),
                     });
-                    let mut session = match Session::start(&mut context, exclude_own_audio) {
+                    let started = Session::start(&mut context, exclude_own_audio);
+                    built.store(true, Ordering::Release);
+                    let mut session = match started {
                         Ok(session) => {
                             let _ = ready_tx.send(Ok(()));
                             // The start waited for any system prompt it raised;
@@ -570,17 +599,29 @@ impl SystemAudioTap {
             })
             .map_err(|_| TapError::Thread)?;
 
-        match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self {
+        match wait_ready(&ready_rx, READY_WAIT) {
+            Ready::Started => Ok(Self {
                 stop,
                 counters,
                 thread: Some(thread),
+                built,
             }),
-            Ok(Err(error)) => {
+            Ready::Pending => {
+                tracing::info!(
+                    "computer audio waits on the system's permission prompt; the meeting goes on"
+                );
+                Ok(Self {
+                    stop,
+                    counters,
+                    thread: Some(thread),
+                    built,
+                })
+            }
+            Ready::Failed(error) => {
                 let _ = thread.join();
                 Err(error)
             }
-            Err(_) => {
+            Ready::Gone => {
                 let _ = thread.join();
                 Err(TapError::Thread)
             }
@@ -616,7 +657,42 @@ impl Drop for SystemAudioTap {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            // A tap still waiting on the prompt cannot be joined without
+            // waiting with it: it sees `stop` once the prompt is answered
+            // and tears itself down.
+            if self.built.load(Ordering::Acquire) {
+                let _ = thread.join();
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_start_behind_a_prompt_returns_instead_of_waiting() {
+        let (_building, ready) = flume::bounded::<Result<(), TapError>>(1);
+        let asked = Instant::now();
+        assert!(matches!(
+            wait_ready(&ready, Duration::from_millis(50)),
+            Ready::Pending
+        ));
+        assert!(asked.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_quick_start_or_failure_is_seen_at_once() {
+        let (tx, ready) = flume::bounded::<Result<(), TapError>>(1);
+        tx.send(Ok(())).unwrap();
+        assert!(matches!(wait_ready(&ready, READY_WAIT), Ready::Started));
+        tx.send(Err(TapError::Thread)).unwrap();
+        assert!(matches!(
+            wait_ready(&ready, READY_WAIT),
+            Ready::Failed(TapError::Thread)
+        ));
+        drop(tx);
+        assert!(matches!(wait_ready(&ready, READY_WAIT), Ready::Gone));
     }
 }
