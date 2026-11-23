@@ -412,6 +412,23 @@ export function isNoSpokenAudioError(transcript: {
 	);
 }
 
+/** AssemblyAI rejects very short audio outright. A recording's last
+ * segment can be a few milliseconds, and when it is the only audio left the
+ * chunk can't hold speech, so it is an empty chunk rather than a failure
+ * that would leave a gap and decline promotion. */
+export const LIVE_MIN_TRANSCRIBABLE_MS = 1_000;
+
+export function isTooShortTailError(
+	transcript: { status: string; error?: string | null },
+	sentAudioMs: number,
+): boolean {
+	return (
+		transcript.status === "error" &&
+		sentAudioMs < LIVE_MIN_TRANSCRIBABLE_MS &&
+		/audio duration is too short/i.test(transcript.error ?? "")
+	);
+}
+
 export const LIVE_TRANSCRIPT_VERSION = 1;
 
 export type LiveTranscriptState = "active" | "complete" | "stopped";

@@ -17,6 +17,7 @@ import {
 import {
 	getLiveTranscriptObjectKey,
 	isNoSpokenAudioError,
+	isTooShortTailError,
 	LIVE_TRANSCRIBE,
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
 	type LiveChunkBatchResult,
@@ -454,7 +455,9 @@ async function transcribeNextLiveChunk(options: {
 			disfluencies: true,
 		});
 
-		const noSpokenAudio = isNoSpokenAudioError(transcript);
+		const noSpokenAudio =
+			isNoSpokenAudioError(transcript) ||
+			isTooShortTailError(transcript, decision.durationMs + decision.contextMs);
 		if (transcript.status === "error" && !noSpokenAudio) {
 			throw new Error(transcript.error ?? "AssemblyAI chunk failed");
 		}

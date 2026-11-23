@@ -9,6 +9,7 @@ import {
 	createEmptyLiveTranscript,
 	describeLiveChunk,
 	isNoSpokenAudioError,
+	isTooShortTailError,
 	liveTranscriptToEditTranscript,
 	offsetChunkWords,
 	parseLiveTranscript,
@@ -832,5 +833,23 @@ describe("describeLiveChunk", () => {
 		// Context must be audio before the cursor that exists.
 		expect(describe(2, 4, 3)).toBeNull();
 		expect(describe(2, 4, 0)).toBeNull();
+	});
+});
+
+describe("isTooShortTailError", () => {
+	const tooShort = { status: "error", error: "Audio duration is too short." };
+
+	it("treats a sub-second tail AssemblyAI rejects as an empty chunk", () => {
+		expect(isTooShortTailError(tooShort, 21)).toBe(true);
+		expect(isTooShortTailError(tooShort, 999)).toBe(true);
+	});
+
+	it("keeps real failures and longer audio as failures", () => {
+		expect(isTooShortTailError(tooShort, 1_000)).toBe(false);
+		expect(isTooShortTailError(tooShort, 10_000)).toBe(false);
+		expect(
+			isTooShortTailError({ status: "error", error: "Server error" }, 21),
+		).toBe(false);
+		expect(isTooShortTailError({ status: "completed" }, 21)).toBe(false);
 	});
 });
