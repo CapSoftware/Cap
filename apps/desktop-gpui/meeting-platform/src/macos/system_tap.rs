@@ -163,6 +163,83 @@ pub struct TapStats {
 struct IoContext {
     ring: Arc<Ring>,
     counters: Arc<Counters>,
+    /// Buffers before the tap's: the aggregate lists its main device's own
+    /// input first (a headset's microphone, a loopback device's input).
+    skip: AtomicUsize,
+}
+
+/// How many of the aggregate's input streams come before the tap's. The
+/// aggregate lists the input streams of its active sub-devices (the default
+/// output's own input: a headset's microphone, a loopback device's input)
+/// and then the tap's one mono stream. `None` when its input is not exactly
+/// that, or CoreAudio does not say.
+fn streams_before_tap(aggregate: &Device) -> Option<usize> {
+    let inputs = |device: Obj| {
+        device
+            .prop_vec::<Obj>(
+                &PropSelector::DEVICE_STREAMS.addr(ca::PropScope::INPUT, ca::PropElement::MAIN),
+            )
+            .map(|streams| streams.len())
+            .ok()
+    };
+    let active: Vec<Obj> = aggregate
+        .prop_vec(&PropSelector::AGGREGATE_DEVICE_ACTIVE_SUB_DEVICE_LIST.global_addr())
+        .ok()?;
+    let mut own = 0;
+    for device in active {
+        own += inputs(device)?;
+    }
+    (inputs(aggregate.0)? == own + 1).then_some(own)
+}
+
+/// Pushes what the tap delivered in one callback: the buffers after the
+/// first `skip` (the main device's own input, never the computer's sound),
+/// mono, or channels averaged. False for an empty callback.
+fn push_tap(ring: &Ring, buffers: &[cat::AudioBuf], skip: usize) -> bool {
+    let buffers = &buffers[skip.min(buffers.len())..];
+    let Some(first) = buffers.first() else {
+        return false;
+    };
+    if first.data.is_null() || first.data_bytes_size == 0 {
+        return false;
+    }
+
+    if buffers.len() == 1 {
+        let channels = first.number_channels.max(1) as usize;
+        let samples = unsafe {
+            std::slice::from_raw_parts(
+                first.data.cast::<f32>().cast_const(),
+                first.data_bytes_size as usize / size_of::<f32>(),
+            )
+        };
+        if channels == 1 {
+            ring.push(samples.iter().copied());
+        } else {
+            let scale = 1.0 / channels as f32;
+            ring.push(
+                samples
+                    .chunks_exact(channels)
+                    .map(|frame| frame.iter().sum::<f32>() * scale),
+            );
+        }
+    } else {
+        let frames = first.data_bytes_size as usize / size_of::<f32>();
+        if buffers
+            .iter()
+            .any(|buffer| buffer.data.is_null() || (buffer.data_bytes_size as usize) < frames * 4)
+        {
+            return true;
+        }
+        let scale = 1.0 / buffers.len() as f32;
+        ring.push((0..frames).map(|frame| {
+            buffers
+                .iter()
+                .map(|buffer| unsafe { *buffer.data.cast::<f32>().add(frame) })
+                .sum::<f32>()
+                * scale
+        }));
+    }
+    true
 }
 
 extern "C" fn io_proc(
@@ -187,49 +264,12 @@ extern "C" fn io_proc(
         return os::Status::NO_ERR;
     }
     let buffers = unsafe { std::slice::from_raw_parts(input.buffers.as_ptr(), count) };
-    let first = &buffers[0];
-    if first.data.is_null() || first.data_bytes_size == 0 {
+    let skip = context.skip.load(Ordering::Relaxed);
+    if !push_tap(&context.ring, buffers, skip) {
         context
             .counters
             .empty_callbacks
             .fetch_add(1, Ordering::Relaxed);
-        return os::Status::NO_ERR;
-    }
-
-    if count == 1 {
-        let channels = first.number_channels.max(1) as usize;
-        let samples = unsafe {
-            std::slice::from_raw_parts(
-                first.data.cast::<f32>().cast_const(),
-                first.data_bytes_size as usize / size_of::<f32>(),
-            )
-        };
-        if channels == 1 {
-            context.ring.push(samples.iter().copied());
-        } else {
-            let scale = 1.0 / channels as f32;
-            context.ring.push(
-                samples
-                    .chunks_exact(channels)
-                    .map(|frame| frame.iter().sum::<f32>() * scale),
-            );
-        }
-    } else {
-        let frames = first.data_bytes_size as usize / size_of::<f32>();
-        if buffers
-            .iter()
-            .any(|buffer| buffer.data.is_null() || (buffer.data_bytes_size as usize) < frames * 4)
-        {
-            return os::Status::NO_ERR;
-        }
-        let scale = 1.0 / count as f32;
-        context.ring.push((0..frames).map(|frame| {
-            buffers
-                .iter()
-                .map(|buffer| unsafe { *buffer.data.cast::<f32>().add(frame) })
-                .sum::<f32>()
-                * scale
-        }));
     }
     os::Status::NO_ERR
 }
@@ -339,6 +379,24 @@ impl Session {
             let device: &Device = &aggregate;
             device.0.0
         };
+        let skip = match streams_before_tap(&aggregate) {
+            Some(skip) => {
+                if skip > 0 {
+                    tracing::info!(
+                        skip,
+                        "the output device has its own input; recording only what the computer plays"
+                    );
+                }
+                skip
+            }
+            None => {
+                tracing::warn!(
+                    "unexpected system audio device layout; reading every input stream as before"
+                );
+                0
+            }
+        };
+        context.skip.store(skip, Ordering::Relaxed);
         let proc_id = aggregate.create_io_proc_id(io_proc, Some(context))?;
         let started = match ca::device_start(Device(Obj(aggregate_id)), Some(proc_id)) {
             Ok(started) => started,
@@ -473,6 +531,7 @@ impl SystemAudioTap {
                     let mut context = Box::new(IoContext {
                         ring: ring.clone(),
                         counters: counters.clone(),
+                        skip: AtomicUsize::new(0),
                     });
                     let started = Session::start(&mut context, exclude_own_audio);
                     built.store(true, Ordering::Release);
@@ -717,5 +776,60 @@ mod tests {
         ));
         drop(tx);
         assert!(matches!(wait_ready(&ready, READY_WAIT), Ready::Gone));
+    }
+
+    fn buf(samples: &mut [f32], channels: u32) -> cat::AudioBuf {
+        cat::AudioBuf {
+            number_channels: channels,
+            data_bytes_size: (samples.len() * size_of::<f32>()) as u32,
+            data: samples.as_mut_ptr().cast(),
+        }
+    }
+
+    fn pushed(buffers: &[cat::AudioBuf], skip: usize) -> Vec<f32> {
+        let ring = Ring::new(4_096);
+        push_tap(&ring, buffers, skip);
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        out
+    }
+
+    /// What the aggregate hands over with BlackHole 2ch as the default
+    /// output (measured on macOS 27): BlackHole's own stereo input first,
+    /// then the tap's one mono stream.
+    #[test]
+    fn the_output_devices_own_input_is_skipped_for_the_tap() {
+        let mut device_input = vec![0.0f32; 2 * 4];
+        let mut tap = vec![0.1, 0.2, 0.3, 0.4];
+        let buffers = [buf(&mut device_input, 2), buf(&mut tap, 1)];
+        assert_eq!(pushed(&buffers, 1), vec![0.1, 0.2, 0.3, 0.4]);
+        // Read as one list, the two sizes never matched: nothing was kept,
+        // and the meeting recorded silence.
+        assert!(pushed(&buffers, 0).is_empty());
+    }
+
+    /// A headset with a mono microphone as the default output: its input has
+    /// the tap's size, and was averaged into the computer's audio.
+    #[test]
+    fn a_headsets_microphone_never_reaches_the_computer_audio() {
+        let mut mic = vec![0.8f32; 4];
+        let mut tap = vec![0.1, 0.2, 0.3, 0.4];
+        let buffers = [buf(&mut mic, 1), buf(&mut tap, 1)];
+        assert_eq!(pushed(&buffers, 1), vec![0.1, 0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn a_tap_alone_passes_through_as_before() {
+        let mut tap = vec![0.1, -0.2, 0.3];
+        assert_eq!(pushed(&[buf(&mut tap, 1)], 0), vec![0.1, -0.2, 0.3]);
+        let mut stereo = vec![0.2, 0.4, -0.2, -0.4];
+        let got = pushed(&[buf(&mut stereo, 2)], 0);
+        assert!(
+            (got[0] - 0.3).abs() < 1e-6 && (got[1] + 0.3).abs() < 1e-6,
+            "{got:?}"
+        );
+        // A skip past the end leaves nothing rather than reading the wrong
+        // buffer.
+        assert!(pushed(&[buf(&mut tap, 1)], 3).is_empty());
     }
 }
