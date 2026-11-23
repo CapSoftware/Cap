@@ -5,7 +5,8 @@
 //! one line per frame: `F <ms from the root's render to the end of paint>
 //! <uptime s at the end>`, for frame times while typing or animating.
 //! Nothing runs without the variable: the observer is never installed and the
-//! paint hook returns at once.
+//! paint hook returns at once. Release builds ignore the variable, since the
+//! file records every key typed; perf builds enable debug assertions.
 
 use std::{cell::RefCell, io::Write, sync::OnceLock};
 
@@ -14,6 +15,9 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, Styled, Window, canvas, 
 fn target() -> Option<&'static str> {
     static PATH: OnceLock<Option<String>> = OnceLock::new();
     PATH.get_or_init(|| {
+        if !cfg!(debug_assertions) {
+            return None;
+        }
         std::env::var("CAP_GPUI_KEYLAT")
             .ok()
             .filter(|p| !p.is_empty())
