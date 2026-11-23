@@ -412,6 +412,8 @@ impl H264EncoderBuilder {
     }
 
     /// Opens libx264 on a stream another encoder already added.
+    /// Frame timestamps are capture time since the start of the take.
+    /// `last_stream_dts` is the last dts already written, in that stream's time base.
     pub fn build_software_on_stream(
         self,
         stream_index: usize,
@@ -434,7 +436,7 @@ impl H264EncoderBuilder {
             input_height,
             hw_upload,
         } = self.open_software(output_width, output_height)?;
-        let encoder = H264Encoder {
+        let mut encoder = H264Encoder {
             base: EncoderBase::new(stream_index),
             encoder,
             converter,
@@ -453,7 +455,7 @@ impl H264EncoderBuilder {
             injected_failure: None,
             hardware_session: None,
         };
-        let _ = last_stream_dts;
+        encoder.base.continue_after(last_stream_dts);
         Ok(encoder)
     }
 
