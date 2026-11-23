@@ -691,6 +691,18 @@ impl MeetingDiarizer {
                     labels[i] = Some((id, false));
                     if confident {
                         self.refine_cluster(id, embedding, b - a, segment.key);
+                    } else if let Some(c) = self
+                        .clusters
+                        .iter_mut()
+                        .find(|c| c.id == id && !c.confirmed && c.created_key != segment.key)
+                    {
+                        // A voice first heard in a short line is learnt from
+                        // the speech that keeps joining it, without being
+                        // shown as someone new on that alone.
+                        c.centroid.add(
+                            embedding,
+                            (b - a) as f32 / (SAMPLES_PER_MS as f32 * 1000.0),
+                        );
                     }
                 }
                 Decision::Echo(id) => {

@@ -1610,3 +1610,21 @@ fn a_one_word_reply_labelled_after_the_call_line_on_a_headset_is_kept() {
         );
     }
 }
+
+#[test]
+fn a_remote_first_heard_in_a_short_line_is_learnt_from_what_follows() {
+    // Remote B's first line is short (1.75 s, voice 4), their next line
+    // only loosely like it (voice 5), and their third (voice 6) a little
+    // like remote A (voice 2): B is learnt from the speech that joined them,
+    // so the third line is still B.
+    let mut table = speakers(4);
+    table.push(axis(3));
+    table.push(blend(&[(3, 0.45), (6, 0.89)]));
+    table.push(blend(&[(6, 0.8), (2, 0.5), (3, 0.2)]));
+    let mut d = diarizer(table);
+    let a = only(&push(&mut d, Track::System, 0, &[(2, 6_000)]));
+    push(&mut d, Track::System, 8_000, &[(4, 1_750)]);
+    push(&mut d, Track::System, 11_000, &[(5, 3_000)]);
+    let third = only(&push(&mut d, Track::System, 15_000, &[(6, 3_000)]));
+    assert_ne!(third, a, "{:?}", d.speakers());
+}
