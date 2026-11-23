@@ -739,8 +739,8 @@ async function invalidateEditedVideoCache(
 
 	const basePath = `/${video.ownerId}/${videoId}`;
 	const paths = [
-		// The trailing * also clears download responses, which are cached per
-		// response-content-disposition.
+		// Download URLs (/dl/...) are cached under this same path once /dl is
+		// stripped, keyed by response-content-disposition; the trailing * clears them.
 		`${basePath}/result.mp4*`,
 		`${basePath}/screenshot/screen-capture.jpg`,
 		`${basePath}/preview/animated-preview.gif`,

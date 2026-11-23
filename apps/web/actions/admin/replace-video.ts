@@ -124,8 +124,8 @@ export async function invalidateVideoCache(videoId: string) {
 				CallerReference: `${Date.now()}`,
 				Paths: {
 					Quantity: 1,
-					// The trailing * also clears download responses, which are cached per
-					// response-content-disposition.
+					// Download URLs (/dl/...) are cached under this same path once /dl is
+					// stripped, keyed by response-content-disposition; the trailing * clears them.
 					Items: [`/${fileKey}*`],
 				},
 			},
