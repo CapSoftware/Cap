@@ -283,18 +283,31 @@ const COUPONS = [
 	},
 ];
 
-async function ensureCoupon() {
-	for (const coupon of COUPONS) {
-		try {
-			await stripe().coupons.retrieve(coupon.id);
-		} catch (error) {
-			if ((error as { code?: string }).code !== "resource_missing") throw error;
-			await stripe().coupons.create(
-				{ ...coupon, name: "Cap Friday, 50% off", percent_off: 50 },
-				{ idempotencyKey: `coupon-${coupon.id}` },
-			);
-		}
-	}
+let couponsReady: Promise<void> | null = null;
+
+function ensureCoupon() {
+	couponsReady ??= Promise.all(
+		COUPONS.map(async (coupon) => {
+			try {
+				await stripe().coupons.retrieve(coupon.id);
+			} catch (error) {
+				if ((error as { code?: string }).code !== "resource_missing") {
+					throw error;
+				}
+				await stripe().coupons.create(
+					{ ...coupon, name: "Cap Friday, 50% off", percent_off: 50 },
+					{ idempotencyKey: `coupon-${coupon.id}` },
+				);
+			}
+		}),
+	).then(
+		() => undefined,
+		(error) => {
+			couponsReady = null;
+			throw error;
+		},
+	);
+	return couponsReady;
 }
 
 type Loaded =
@@ -306,14 +319,25 @@ type Loaded =
 			paymentMethodId: string;
 	  };
 
+const missingAsNull = (error: unknown) => {
+	if ((error as { code?: string }).code === "resource_missing") return null;
+	throw error;
+};
+
 async function load(owner: Owner): Promise<Loaded> {
 	if (!capFridayLive()) return { state: unavailable("ended") };
-	const subscription = await loadSubscription(owner);
-	if (!subscription) return { state: unavailable("not_owner") };
-	const customer = await stripe().customers.retrieve(
-		subscription.customer as string,
-	);
-	if (customer.deleted) return { state: unavailable("not_owner") };
+	const customerId = owner.stripeCustomerId;
+	if (!customerId) return { state: unavailable("not_owner") };
+	const [subscription, customer, others] = await Promise.all([
+		loadSubscription(owner),
+		stripe().customers.retrieve(customerId).catch(missingAsNull),
+		stripe()
+			.subscriptions.list({ customer: customerId, status: "all", limit: 20 })
+			.catch(missingAsNull),
+	]);
+	if (!subscription || !customer || customer.deleted || !others) {
+		return { state: unavailable("not_owner") };
+	}
 
 	const previous = await previousRedemption(customer, subscription);
 	if (previous) return { state: previous };
@@ -333,11 +357,6 @@ async function load(owner: Owner): Promise<Loaded> {
 	}
 	// Account credit is shared by every subscription on the customer, so a
 	// separate SSO or BAA bill would spend the prepaid renewal first.
-	const others = await stripe().subscriptions.list({
-		customer: customer.id,
-		status: "all",
-		limit: 20,
-	});
 	if (
 		others.data.some(
 			(other) =>
@@ -383,7 +402,7 @@ export async function redeemCapFriday(
 	owner: Owner,
 	input: { dueToday: number; prorationDate?: number },
 ): Promise<CapFridayRedeemResult> {
-	const loaded = await load(owner);
+	const [loaded] = await Promise.all([load(owner), ensureCoupon()]);
 	if ("state" in loaded) {
 		const { state } = loaded;
 		if (state.type === "redeemed") {
@@ -395,7 +414,6 @@ export async function redeemCapFriday(
 		return { ok: false, message: CHANGED };
 	}
 	const { subscription, customer, card, paymentMethodId } = loaded;
-	await ensureCoupon();
 
 	if (interval(subscription) === "year") {
 		const quote = await quoteYearly(subscription, card);
@@ -456,29 +474,23 @@ async function prepayYearly(
 		{ idempotencyKey: `${key}-item` },
 	);
 	// A second click replays the same idempotent invoice, which the first
-	// request may already have finalized or paid.
-	const finalized = await stripe()
-		.invoices.finalizeInvoice(invoice.id)
-		.catch(async (error) => {
-			const current = await stripe().invoices.retrieve(invoice.id);
-			if (current.status === "draft") throw error;
-			return current;
-		});
-	if (finalized.status === "void") return { ok: false, message: CHANGED };
-	if (finalized.total !== quote.dueToday) {
-		await stripe().invoices.voidInvoice(invoice.id);
+	// request may already have paid. Paying a draft finalizes it in the same
+	// call, so the amount is checked on the draft first.
+	const draft = await stripe().invoices.retrieve(invoice.id);
+	if (draft.status === "void") return { ok: false, message: CHANGED };
+	if (draft.status === "draft" && draft.total !== quote.dueToday) {
+		await stripe().invoices.del(invoice.id);
 		return { ok: false, message: CHANGED };
 	}
-	await stripe().customers.update(customer.id, {
-		metadata: { [CAP_FRIDAY_INVOICE_KEY]: invoice.id },
-	});
 
-	let paid: Stripe.Invoice;
-	try {
-		paid = await stripe().invoices.pay(invoice.id, { off_session: true });
-	} catch {
-		paid = await stripe().invoices.retrieve(invoice.id);
-	}
+	const [paid] = await Promise.all([
+		stripe()
+			.invoices.pay(invoice.id, { off_session: true })
+			.catch(() => stripe().invoices.retrieve(invoice.id)),
+		stripe().customers.update(customer.id, {
+			metadata: { [CAP_FRIDAY_INVOICE_KEY]: invoice.id },
+		}),
+	]);
 	if (paid.status !== "paid") {
 		if (paid.hosted_invoice_url) {
 			return { ok: false, payUrl: paid.hosted_invoice_url };
@@ -486,7 +498,7 @@ async function prepayYearly(
 		return { ok: false, message: DECLINED };
 	}
 	try {
-		await grantCapFridayCredit(paid);
+		await grantCapFridayCredit(paid, { justPaid: true });
 	} catch (error) {
 		console.error("Cap Friday credit not granted yet, webhook retries it", {
 			invoiceId: paid.id,
@@ -538,10 +550,15 @@ async function switchMonthly(
 	return { ok: true, kind: "switch", renewsOn: quote.renewsOn };
 }
 
-export async function grantCapFridayCredit(invoice: Stripe.Invoice) {
+export async function grantCapFridayCredit(
+	invoice: Stripe.Invoice,
+	options: { justPaid?: boolean } = {},
+) {
 	if (invoice.metadata?.[CAP_FRIDAY_METADATA] !== "prepay") return;
 	if (invoice.status !== "paid") return;
-	const current = await stripe().invoices.retrieve(invoice.id);
+	const current = options.justPaid
+		? invoice
+		: await stripe().invoices.retrieve(invoice.id);
 	if (current.metadata?.[CREDIT_TXN_KEY]) return;
 	const amount = Number(current.metadata?.creditAmount);
 	if (!Number.isInteger(amount) || amount <= 0) {

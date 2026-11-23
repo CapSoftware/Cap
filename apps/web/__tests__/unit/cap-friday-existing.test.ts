@@ -203,9 +203,9 @@ describe("Cap Friday for existing subscribers", () => {
 		});
 		mockStripe.invoices.create.mockResolvedValue({ id: "in_1" });
 		mockStripe.invoiceItems.create.mockResolvedValue({ id: "ii_1" });
-		mockStripe.invoices.finalizeInvoice.mockResolvedValue({
+		mockStripe.invoices.retrieve.mockResolvedValue({
 			id: "in_1",
-			status: "open",
+			status: "draft",
 			total: 7200,
 		});
 		mockStripe.invoices.pay.mockResolvedValue({
