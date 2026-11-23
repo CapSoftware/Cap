@@ -7,9 +7,12 @@
 //! | shape | used for | header |
 //! |---|---|---|
 //! | `plain` | the export flow and the screenshot editor | 13px/600 with an icon |
-//! | `section` | a sidebar group title, with an optional trailing ghost action | 12px/500 `text_2` |
-//! | `stacked` | a complex control that cannot sit on one row | 13px/400 `text_1` |
-//! | `inline` | one control on a 34px row: label, control, value | 13px/400 `text_1` |
+//! | `section` | a sidebar group title, with an optional trailing ghost action | 13px/600 `text_1` |
+//! | `stacked` | a complex control that cannot sit on one row | 13px/400 `text_2` |
+//! | `inline` | one control on a 34px row: label, control, value | 13px/400 `text_2` |
+//!
+//! A group title and the first row label under it sit 10px apart at the same
+//! size, so weight and colour are what tell them apart.
 //!
 //! `Subfield` is the inline row for controls whose label is a sentence rather
 //! than a column heading.
@@ -61,6 +64,8 @@ pub struct Field {
     gap: Pixels,
     style: FieldStyle,
     text: Hsla,
+    /// Row labels, one step quieter than the group title above them.
+    label: Hsla,
     value_color: Hsla,
     disabled_text: Hsla,
     badge_bg: Hsla,
@@ -81,6 +86,7 @@ impl Field {
             gap,
             style,
             text: Hsla::from(theme.editor.text_1),
+            label: Hsla::from(theme.editor.text_2),
             value_color: Hsla::from(theme.editor.text_3),
             disabled_text: Hsla::from(theme.editor.text_3),
             badge_bg: Hsla::from(theme.editor.ctl),
@@ -94,7 +100,7 @@ impl Field {
         Self::new(theme, name, FieldStyle::Plain, px(16.))
     }
 
-    /// A sidebar group title: 12px/500 `text_2`, no icon, with the group's
+    /// A sidebar group title: 13px/600 `text_1`, no icon, with the group's
     /// action (`None`, `Save`, `Reset`) in the `value` slot.
     pub fn section(theme: &Theme, name: impl Into<SharedString>) -> Self {
         Self::new(theme, name, FieldStyle::Section, px(10.))
@@ -172,6 +178,7 @@ impl RenderOnce for Field {
             gap,
             style,
             text,
+            label,
             value_color,
             disabled_text,
             badge_bg,
@@ -180,8 +187,8 @@ impl RenderOnce for Field {
         } = self;
         let label_color = match (disabled, style) {
             (true, _) => disabled_text,
-            (false, FieldStyle::Section) => text,
-            (false, _) => text,
+            (false, FieldStyle::Section | FieldStyle::Plain) => text,
+            (false, FieldStyle::Stacked | FieldStyle::Inline) => label,
         };
 
         if style == FieldStyle::Inline {
@@ -229,7 +236,7 @@ impl RenderOnce for Field {
         }
 
         let (label_size, label_weight) = match style {
-            FieldStyle::Section => (px(13.), FontWeight::MEDIUM),
+            FieldStyle::Section => (px(13.), FontWeight::SEMIBOLD),
             FieldStyle::Stacked => (px(13.), FontWeight::NORMAL),
             _ => (px(13.), FontWeight::SEMIBOLD),
         };
@@ -292,7 +299,7 @@ impl Subfield {
             required: false,
             children: Vec::new(),
             gap: None,
-            text: Hsla::from(theme.editor.text_1),
+            text: Hsla::from(theme.editor.text_2),
             accent: Hsla::from(theme.editor.accent_ink),
         }
     }
