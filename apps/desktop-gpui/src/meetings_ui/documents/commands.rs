@@ -7,7 +7,7 @@ use cap_meetings::{
 use cap_notes::Document;
 use gpui::{App, ClipboardItem, Entity, Task, WeakEntity, Window};
 
-use super::{export, store::DocStore, window::DocumentsWindow};
+use super::{export, store::DocStore, window::DocumentsWindow, writer};
 use crate::{i18n::tr, meetings::Meetings};
 
 pub fn markdown_of(json: Option<String>) -> Option<String> {
@@ -54,20 +54,20 @@ pub fn copy_notes(
         return;
     };
     let id = id.to_string();
+    // Read on the writer, behind any save still queued, so the copy has the
+    // edits made just before.
+    let markdown = writer::run(move || {
+        let enhanced = (meta.kind == DocKind::Meeting)
+            .then(|| markdown_of(library.read_enhanced(&id).ok().flatten()))
+            .flatten();
+        let notes = markdown_of(library.read_notes(&id).ok().flatten());
+        match (enhanced, notes) {
+            (Some(enhanced), Some(notes)) => Some(format!("{enhanced}\n\n{notes}")),
+            (enhanced, notes) => enhanced.or(notes),
+        }
+    });
     cx.spawn(async move |cx| {
-        let markdown = cx
-            .background_executor()
-            .spawn(async move {
-                let enhanced = (meta.kind == DocKind::Meeting)
-                    .then(|| markdown_of(library.read_enhanced(&id).ok().flatten()))
-                    .flatten();
-                let notes = markdown_of(library.read_notes(&id).ok().flatten());
-                match (enhanced, notes) {
-                    (Some(enhanced), Some(notes)) => Some(format!("{enhanced}\n\n{notes}")),
-                    (enhanced, notes) => enhanced.or(notes),
-                }
-            })
-            .await;
+        let markdown = markdown.await.flatten();
         cx.update(|cx| match markdown {
             Some(markdown) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(markdown));
@@ -131,12 +131,13 @@ pub fn export_markdown(
                 None => None,
             };
             let name = export::file_name(&meta);
-            let markdown = cx
-                .background_executor()
-                .spawn(async move {
-                    compose_from_disk(&library, &id, &meta, transcript.as_ref(), folder.as_deref())
-                })
-                .await;
+            let Some(markdown) = writer::run(move || {
+                compose_from_disk(&library, &id, &meta, transcript.as_ref(), folder.as_deref())
+            })
+            .await
+            else {
+                return;
+            };
             let Some(dest) = crate::platform::save_file_panel_async(&name, &["md"], cx).await
             else {
                 return;

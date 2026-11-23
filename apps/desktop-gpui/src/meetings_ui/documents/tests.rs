@@ -2031,3 +2031,36 @@ fn the_missed_audio_line_rounds_to_what_a_person_would_say() {
         "About 2 minutes of this meeting weren’t recorded."
     );
 }
+
+#[gpui::test]
+fn copy_notes_has_the_edits_whose_save_is_still_queued(cx: &mut TestAppContext) {
+    let (f, cx) = fixture(cx);
+    let first = f.store.read_with(cx, |s, _| s.open.clone().unwrap());
+    f.pane.update_in(cx, |pane, _, cx| {
+        pane.notes.update(cx, |e, cx| {
+            e.apply(
+                |ed| {
+                    ed.select_all();
+                    ed.insert_text("Typed just before copying")
+                },
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    super::writer::hold();
+    f.pane.update_in(cx, |pane, _, cx| pane.flush_saves(cx));
+    let store = f.store.clone();
+    cx.update(|_, cx| {
+        super::commands::copy_notes(&store, &first, gpui::WeakEntity::new_invalid(), cx)
+    });
+    cx.run_until_parked();
+    super::writer::release();
+    cx.run_until_parked();
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(
+        copied.as_deref().map(str::trim),
+        Some("Typed just before copying"),
+        "the copy waits for the save made just before it"
+    );
+}
