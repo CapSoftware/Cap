@@ -1863,6 +1863,7 @@ text_label = "文本"
 complete = "下载完成"
 failed = "下载失败：{error}"
 file_progress = "正在下载 {file}：{percent}%"
+no_space = "可用空间不足。请释放 {size} 后重试"
 preparing = "正在准备下载模型"
 progress = "正在下载模型：{percent}%"
 

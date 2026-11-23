@@ -58,6 +58,7 @@ const FORMATTED: &[&str] = &[
     "screenshot_editor.error.upload_task",
     "transcription.download.failed",
     "transcription.download.file_progress",
+    "transcription.download.no_space",
     "transcription.download.progress",
     "dialog.quit.canceled",
     "dialog.startup.failed",
@@ -1383,6 +1384,12 @@ fn dialog_messages_format_like_the_code_they_replaced() {
         assert_eq!(
             tr::transcription::download::file_progress(filename, format!("{progress:.0}")),
             format!("Downloading {filename}: {progress:.0}%")
+        );
+    }
+    for size in ["420 MB", "1.3 GB"] {
+        assert_eq!(
+            tr::transcription::download::no_space(size),
+            format!("Not enough free space. Free up {size} and try again")
         );
     }
     for progress in [0.0_f64, 0.5, 0.999, 1.0] {

@@ -1863,6 +1863,7 @@ text_label = "Texto"
 complete = "Descarga completada"
 failed = "La descarga falló: {error}"
 file_progress = "Descargando {file}: {percent} %"
+no_space = "No hay suficiente espacio libre. Libera {size} e inténtalo de nuevo"
 preparing = "Preparando la descarga del modelo"
 progress = "Descargando el modelo: {percent} %"
 

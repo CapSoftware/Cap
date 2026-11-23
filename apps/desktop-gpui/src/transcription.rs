@@ -55,6 +55,7 @@ use crate::i18n::tr;
 use crate::{editor_timeline::clip_timeline_offsets, store};
 
 mod align;
+pub(crate) mod fetch;
 mod refine;
 mod verbatim;
 
@@ -528,9 +529,6 @@ const REFINEMENT_THREADS: usize = 2;
 // Downloads
 // ---------------------------------------------------------------------------
 
-/// `MODEL_DOWNLOAD_REQUEST_TIMEOUT` (`captions.rs:2247`).
-const MODEL_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 /// `download_whisper_model_to_path` (`captions.rs:2105-2196`), restricted to
@@ -558,14 +556,34 @@ async fn download_whisper_model(model: &str) -> Result<(), String> {
     }
 
     let total_size = total_content_length(model_parts).await;
+    let have = whisper_resumable_bytes(&path, model_parts.len(), total_size);
+    if let Some(dir) = path.parent()
+        && let Some(missing) = fetch::missing_space(dir, total_size.saturating_sub(have))
+    {
+        return Err(tr::transcription::download::no_space(fetch::size_label(
+            missing,
+        )));
+    }
 
     let result = write_whisper_parts(model, model_parts, &path, total_size).await;
-    if result.is_err() {
+    if result.is_err() && model_parts.len() > 1 {
         // An interrupted process can leave this file behind without making
-        // an incomplete download look installed on the next disk scan.
+        // an incomplete download look installed on the next disk scan. A
+        // one-part model keeps it, and the next try resumes it.
         let _ = std::fs::remove_file(staging_path(&path));
     }
     result
+}
+
+/// What an earlier try of a one-part model left to resume: its staging file,
+/// unless it is longer than the model.
+fn whisper_resumable_bytes(path: &Path, parts: usize, total_size: u64) -> u64 {
+    let len = std::fs::metadata(staging_path(path)).map_or(0, |m| m.len());
+    match (parts, total_size) {
+        (1, 0) => len,
+        (1, total) if len <= total => len,
+        _ => 0,
+    }
 }
 
 async fn write_whisper_parts(
@@ -575,38 +593,36 @@ async fn write_whisper_parts(
     total_size: u64,
 ) -> Result<(), String> {
     let staging = staging_path(path);
-    let mut file = File::create(&staging).map_err(|e| format!("Failed to create file: {e}"))?;
+    let have = whisper_resumable_bytes(path, model_parts.len(), total_size);
+    let (mut file, on_disk) =
+        fetch::reopen(&staging).map_err(|e| format!("Failed to create file: {e}"))?;
+    if on_disk != have {
+        fetch::restart(&mut file).map_err(|e| format!("Failed to create file: {e}"))?;
+    }
 
-    let mut downloaded: u64 = 0;
+    let mut downloaded: u64 = have;
     let part_count = model_parts.len() as f64;
 
     for (idx, url) in model_parts.iter().enumerate() {
-        let response = HTTP
-            .get(*url)
-            .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download model: {e}"))?;
-
-        if !response.status().is_success() {
-            return Err(format!(
-                "Failed to download model: HTTP {}",
-                response.status()
-            ));
-        }
-
-        let part_size = response.content_length().unwrap_or(0);
         let mut downloaded_part: u64 = 0;
-        let mut stream = response.bytes_stream();
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| format!("Error while downloading: {e}"))?;
-
-            file.write_all(&chunk)
-                .map_err(|e| format!("Error while writing to file: {e}"))?;
-
-            downloaded = downloaded.saturating_add(chunk.len() as u64);
-            downloaded_part = downloaded_part.saturating_add(chunk.len() as u64);
-
+        let part_size = if model_parts.len() == 1 {
+            total_size
+        } else {
+            0
+        };
+        let from = if idx == 0 { have } else { 0 };
+        let base = downloaded.saturating_sub(from);
+        let mut on_progress = |event: fetch::Progress<'_>| {
+            match event {
+                fetch::Progress::Bytes(chunk) => {
+                    downloaded = downloaded.saturating_add(chunk.len() as u64);
+                    downloaded_part = downloaded_part.saturating_add(chunk.len() as u64);
+                }
+                fetch::Progress::Rewound(bytes) => {
+                    downloaded = downloaded.saturating_sub(bytes);
+                    downloaded_part = downloaded_part.saturating_sub(bytes);
+                }
+            }
             let progress = if total_size > 0 {
                 (downloaded as f64 / total_size as f64) * 100.0
             } else if part_size > 0 {
@@ -614,18 +630,31 @@ async fn write_whisper_parts(
             } else {
                 (idx as f64 / part_count) * 100.0
             };
-
             set_download_progress(
                 model,
                 progress,
                 tr::transcription::download::progress(format!("{progress:.0}")),
             );
-        }
+        };
+        fetch::part(
+            url,
+            &mut file,
+            base,
+            from,
+            fetch::Patience::default(),
+            &mut on_progress,
+        )
+        .await
+        .map_err(|e| format!("Failed to download model: {e}"))?;
     }
 
     file.flush()
         .map_err(|e| format!("Failed to flush file: {e}"))?;
     drop(file);
+    if total_size > 0 && std::fs::metadata(&staging).map_or(0, |m| m.len()) != total_size {
+        let _ = std::fs::remove_file(&staging);
+        return Err("Downloaded model file did not match the expected size".to_string());
+    }
     std::fs::rename(&staging, path).map_err(|e| format!("Failed to install model: {e}"))
 }
 
@@ -839,6 +868,32 @@ fn finalize_parakeet_model_download(
     Ok(())
 }
 
+/// What an interrupted try left in the staging folder that the next one can
+/// keep, per model file: a file no longer than expected (a longer one, or
+/// one of several parts with unknown sizes, starts again).
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+fn resumable_parakeet_bytes(
+    staging_dir: &Path,
+    model_files: &[(&str, &[&str])],
+    expected_file_sizes: &[(&str, u64)],
+) -> Vec<u64> {
+    model_files
+        .iter()
+        .zip(expected_file_sizes)
+        .map(|((filename, urls), (_, expected))| {
+            let len = std::fs::metadata(staging_dir.join(filename)).map_or(0, |m| m.len());
+            let sizes_known =
+                urls.len() == 1 || urls.iter().all(|u| parakeet_known_part_size(u).is_some());
+            match *expected {
+                0 if sizes_known => len,
+                0 => 0,
+                expected if len <= expected && sizes_known => len,
+                _ => 0,
+            }
+        })
+        .collect()
+}
+
 /// `download_parakeet_model_to_dir` (`captions.rs:2455-2565`): staged into a
 /// sibling `.downloading` directory, size-verified, then renamed into place.
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
@@ -859,57 +914,63 @@ async fn download_parakeet_model(model: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    if staging_dir.exists() {
-        std::fs::remove_dir_all(&staging_dir)
-            .map_err(|e| format!("Failed to clean staging directory: {e}"))?;
-    }
     std::fs::create_dir_all(&staging_dir)
         .map_err(|e| format!("Failed to create staging directory: {e}"))?;
 
     let total_size = expected_file_sizes
         .iter()
         .fold(0_u64, |acc, (_, size)| acc.saturating_add(*size));
+    // What an earlier, interrupted try already wrote is kept and resumed.
+    let resumable = resumable_parakeet_bytes(&staging_dir, model_files, &expected_file_sizes);
+    if let Some(missing) = fetch::missing_space(
+        &staging_dir,
+        total_size.saturating_sub(resumable.iter().sum()),
+    ) {
+        return Err(tr::transcription::download::no_space(fetch::size_label(
+            missing,
+        )));
+    }
 
-    let mut downloaded_total: u64 = 0;
+    let mut downloaded_total: u64 = resumable.iter().sum();
 
     let download_result: Result<(), String> = async {
         for (idx, (filename, urls)) in model_files.iter().enumerate() {
             let file_path = staging_dir.join(filename);
-            let mut file = File::create(&file_path)
+            let expected = expected_file_sizes[idx].1;
+            if expected > 0 && resumable[idx] == expected {
+                continue;
+            }
+            let (mut file, written) = fetch::reopen(&file_path)
                 .map_err(|e| format!("Failed to create {filename}: {e}"))?;
-
+            if written != resumable[idx] {
+                fetch::restart(&mut file)
+                    .map_err(|e| format!("Failed to create {filename}: {e}"))?;
+            }
+            let mut base = 0_u64;
             for url in *urls {
-                tracing::info!("Downloading {filename} part from {url}");
-
-                let response = HTTP
-                    .get(*url)
-                    .timeout(MODEL_DOWNLOAD_REQUEST_TIMEOUT)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Failed to download {filename}: {e}"))?;
-
-                if !response.status().is_success() {
-                    return Err(format!(
-                        "Failed to download {filename}: HTTP {}",
-                        response.status()
-                    ));
+                let part_size = parakeet_known_part_size(url);
+                // Only the part the earlier try stopped in resumes; parts it
+                // finished are skipped, by their known sizes.
+                let on_disk = resumable[idx].saturating_sub(base);
+                if part_size.is_some_and(|size| on_disk >= size) {
+                    base += part_size.unwrap_or(0);
+                    continue;
                 }
-
-                let mut stream = response.bytes_stream();
-                while let Some(chunk_result) = stream.next().await {
-                    let chunk =
-                        chunk_result.map_err(|e| format!("Download error for {filename}: {e}"))?;
-                    file.write_all(&chunk)
-                        .map_err(|e| format!("Write error for {filename}: {e}"))?;
-
-                    downloaded_total = downloaded_total.saturating_add(chunk.len() as u64);
-
+                tracing::info!(have = on_disk, "Downloading {filename} part from {url}");
+                let mut on_progress = |event: fetch::Progress<'_>| {
+                    match event {
+                        fetch::Progress::Bytes(chunk) => {
+                            downloaded_total = downloaded_total.saturating_add(chunk.len() as u64);
+                        }
+                        fetch::Progress::Rewound(bytes) => {
+                            downloaded_total = downloaded_total.saturating_sub(bytes);
+                        }
+                    }
                     let progress = if total_size > 0 {
                         (downloaded_total as f64 / total_size as f64) * 100.0
                     } else {
                         ((idx as f64 + 0.5) / model_files.len() as f64) * 100.0
                     };
-
                     set_download_progress(
                         model,
                         progress,
@@ -918,7 +979,18 @@ async fn download_parakeet_model(model: &str) -> Result<(), String> {
                             format!("{progress:.0}"),
                         ),
                     );
-                }
+                };
+                let written = fetch::part(
+                    url,
+                    &mut file,
+                    base,
+                    on_disk,
+                    fetch::Patience::default(),
+                    &mut on_progress,
+                )
+                .await
+                .map_err(|e| format!("Failed to download {filename}: {e}"))?;
+                base += written;
             }
 
             file.flush()
@@ -931,8 +1003,9 @@ async fn download_parakeet_model(model: &str) -> Result<(), String> {
     .await;
 
     if let Err(e) = &download_result {
-        tracing::warn!("Download failed, cleaning up staging directory: {e}");
-        let _ = std::fs::remove_dir_all(&staging_dir);
+        // The staging folder stays, so the next try picks up where this one
+        // stopped rather than downloading every byte again.
+        tracing::warn!("Download failed, keeping what arrived for the next try: {e}");
         return Err(e.clone());
     }
 
@@ -3240,6 +3313,8 @@ pub fn caption_generation_error_message(message: &str) -> String {
 mod download_tests;
 #[cfg(test)]
 mod eval;
+#[cfg(test)]
+mod fetch_tests;
 #[cfg(test)]
 mod fixture_tests;
 #[cfg(test)]

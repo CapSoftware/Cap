@@ -1865,6 +1865,7 @@ text_label = "Text"
 complete = "Download complete"
 failed = { text = "Download failed: {error}", context = "{error} is a technical error message, usually in English." }
 file_progress = { text = "Downloading {file}: {percent}%", context = "{file} is a model file name; {percent} is a whole number." }
+no_space = { text = "Not enough free space. Free up {size} and try again", context = "{size} is an amount of disk space such as 1.2 GB." }
 preparing = "Preparing model download"
 progress = { text = "Downloading model: {percent}%", context = "{percent} is a whole number." }
 

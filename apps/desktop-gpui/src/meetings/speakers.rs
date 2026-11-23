@@ -1,14 +1,10 @@
 use std::{
-    fs::File,
-    io::Write as _,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
 };
 
 use cap_diarize::VoiceProfile;
 use cap_meetings::library::DocMeta;
-use futures_util::StreamExt as _;
 use serde_json::Value;
 
 /// A speaker embedding model (CC BY 4.0), checked by size and hash. Without
@@ -18,7 +14,6 @@ const MODEL_FILE: &str = "speaker-embedding-v1.onnx";
 const MODEL_URL: &str = "https://github.com/CapSoftware/transcription-models/releases/download/speaker-v1/speaker-embedding-v1.onnx";
 const MODEL_SHA256: &str = "c46fad10b5f81e1aa4a60c162714208577093655076c5450f8c469e522ec54ef";
 const MODEL_BYTES: u64 = 29_292_684;
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const PROFILE_FILE: &str = "voice-profile.json";
 pub const USER_NAME_KEY: &str = "userName";
 /// Names the meeting app's speaker highlight suggested for voices, by id,
@@ -41,7 +36,6 @@ const NEMOTRON_FILES: [(&str, &str, u64); 2] = [
 /// The licence and notice that travel with the weights (OpenMDW-1.1 asks for both).
 const NEMOTRON_LICENSE: &str = include_str!("../../licenses/nemotron-3-diarization/LICENSE-OpenMDW-1.1.txt");
 const NEMOTRON_NOTICE: &str = include_str!("../../licenses/nemotron-3-diarization/NOTICE.txt");
-const NEMOTRON_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 static NEMOTRON_DOWNLOADING: AtomicBool = AtomicBool::new(false);
 static NEMOTRON_FAILED: AtomicBool = AtomicBool::new(false);
 static NEMOTRON_RECEIVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -153,9 +147,25 @@ fn nemotron_url() -> String {
 }
 
 async fn download_nemotron(dir: &Path) -> Result<(), String> {
-    use sha2::Digest as _;
+    use crate::transcription::fetch;
     std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create {dir:?}: {e}"))?;
-    let client = reqwest::Client::new();
+    let left: u64 = NEMOTRON_FILES
+        .iter()
+        .filter(|(name, _, bytes)| {
+            !std::fs::metadata(dir.join(name)).is_ok_and(|m| m.len() == *bytes)
+        })
+        .map(|(name, _, bytes)| {
+            let have =
+                std::fs::metadata(dir.join(format!("{name}.downloading"))).map_or(0, |m| m.len());
+            bytes.saturating_sub(if have <= *bytes { have } else { 0 })
+        })
+        .sum();
+    if let Some(missing) = fetch::missing_space(dir, left) {
+        return Err(format!(
+            "Not enough free space for Nemotron ({} more needed)",
+            fetch::size_label(missing)
+        ));
+    }
     for (name, sha, bytes) in NEMOTRON_FILES {
         let path = dir.join(name);
         if std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes) {
@@ -163,40 +173,30 @@ async fn download_nemotron(dir: &Path) -> Result<(), String> {
             continue;
         }
         let staging = dir.join(format!("{name}.downloading"));
-        let result = async {
-            let response = client
-                .get(format!("{}/{name}", nemotron_url()))
-                .timeout(NEMOTRON_TIMEOUT)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to download Nemotron: {e}"))?;
-            if !response.status().is_success() {
-                return Err(format!("Failed to download Nemotron: HTTP {}", response.status()));
+        let received = |n: i64| {
+            if n >= 0 {
+                NEMOTRON_RECEIVED.fetch_add(n as u64, Ordering::AcqRel);
+            } else {
+                let _ = NEMOTRON_RECEIVED.fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                    Some(v.saturating_sub(n.unsigned_abs()))
+                });
             }
-            let mut file = File::create(&staging).map_err(|e| format!("Failed to create {staging:?}: {e}"))?;
-            let mut hasher = sha2::Sha256::new();
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| format!("Error while downloading Nemotron: {e}"))?;
-                hasher.update(&chunk);
-                file.write_all(&chunk).map_err(|e| format!("Error while writing Nemotron: {e}"))?;
-                NEMOTRON_RECEIVED.fetch_add(chunk.len() as u64, Ordering::AcqRel);
-            }
-            file.sync_all().map_err(|e| format!("Failed to flush Nemotron: {e}"))?;
-            let hex: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-            if hex != sha {
-                return Err(format!("The Nemotron download is corrupt ({name}: sha256 {hex})"));
-            }
-            std::fs::rename(&staging, &path).map_err(|e| format!("Failed to install Nemotron: {e}"))
-        }
-        .await;
-        if result.is_err() {
-            let _ = std::fs::remove_file(&staging);
-            return result;
-        }
+        };
+        fetch::verified(
+            &format!("{}/{name}", nemotron_url()),
+            &staging,
+            sha,
+            Some(bytes),
+            &received,
+        )
+        .await
+        .map_err(|e| format!("Failed to download Nemotron ({name}): {e}"))?;
+        std::fs::rename(&staging, &path).map_err(|e| format!("Failed to install Nemotron: {e}"))?;
     }
-    std::fs::write(dir.join("LICENSE-OpenMDW-1.1.txt"), NEMOTRON_LICENSE).map_err(|e| format!("Failed to write the Nemotron licence: {e}"))?;
-    std::fs::write(dir.join("NOTICE.txt"), NEMOTRON_NOTICE).map_err(|e| format!("Failed to write the Nemotron notice: {e}"))?;
+    std::fs::write(dir.join("LICENSE-OpenMDW-1.1.txt"), NEMOTRON_LICENSE)
+        .map_err(|e| format!("Failed to write the Nemotron licence: {e}"))?;
+    std::fs::write(dir.join("NOTICE.txt"), NEMOTRON_NOTICE)
+        .map_err(|e| format!("Failed to write the Nemotron notice: {e}"))?;
     Ok(())
 }
 
@@ -305,54 +305,21 @@ pub fn ensure_model(runtime: &tokio::runtime::Handle) -> bool {
 }
 
 async fn download(path: &Path) -> Result<(), String> {
-    use sha2::Digest as _;
+    use crate::transcription::fetch;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create {parent:?}: {e}"))?;
     }
     let staging = path.with_extension("onnx.downloading");
-    let result = async {
-        let response = reqwest::Client::new()
-            .get(MODEL_URL)
-            .timeout(DOWNLOAD_TIMEOUT)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download the speaker model: {e}"))?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "Failed to download the speaker model: HTTP {}",
-                response.status()
-            ));
-        }
-        let mut file =
-            File::create(&staging).map_err(|e| format!("Failed to create {staging:?}: {e}"))?;
-        let mut hasher = sha2::Sha256::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("Error while downloading: {e}"))?;
-            hasher.update(&chunk);
-            file.write_all(&chunk)
-                .map_err(|e| format!("Error while writing the speaker model: {e}"))?;
-        }
-        file.sync_all()
-            .map_err(|e| format!("Failed to flush the speaker model: {e}"))?;
-        let hex: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        if hex != MODEL_SHA256 {
-            return Err(format!(
-                "The speaker model download is corrupt (sha256 {hex})"
-            ));
-        }
-        std::fs::rename(&staging, path)
-            .map_err(|e| format!("Failed to install the speaker model: {e}"))
-    }
-    .await;
-    if result.is_err() {
-        let _ = std::fs::remove_file(&staging);
-    }
-    result
+    fetch::verified(
+        MODEL_URL,
+        &staging,
+        MODEL_SHA256,
+        Some(MODEL_BYTES),
+        &|_| {},
+    )
+    .await
+    .map_err(|e| format!("Failed to download the speaker model: {e}"))?;
+    std::fs::rename(&staging, path).map_err(|e| format!("Failed to install the speaker model: {e}"))
 }
 
 fn clean(name: Option<&str>) -> Option<String> {

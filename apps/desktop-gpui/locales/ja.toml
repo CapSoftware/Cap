@@ -1863,6 +1863,7 @@ text_label = "テキスト"
 complete = "ダウンロード完了"
 failed = "ダウンロードに失敗しました：{error}"
 file_progress = "{file}をダウンロード中：{percent}%"
+no_space = "空き容量が足りません。{size}を空けてから、もう一度お試しください"
 preparing = "モデルのダウンロードを準備中"
 progress = "モデルをダウンロード中：{percent}%"
 

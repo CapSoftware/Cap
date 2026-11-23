@@ -1863,6 +1863,7 @@ text_label = "टेक्स्ट"
 complete = "डाउनलोड पूरा हुआ"
 failed = "डाउनलोड विफल: {error}"
 file_progress = "{file} डाउनलोड हो रहा है: {percent}%"
+no_space = "पर्याप्त खाली जगह नहीं है। {size} खाली करें और फिर से कोशिश करें"
 preparing = "मॉडल डाउनलोड की तैयारी हो रही है"
 progress = "मॉडल डाउनलोड हो रहा है: {percent}%"
 
