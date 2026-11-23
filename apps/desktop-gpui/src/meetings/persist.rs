@@ -2,7 +2,10 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use cap_meetings::{
@@ -595,7 +598,23 @@ pub fn after_repair(meta: &mut DocMeta, open: bool) -> (bool, bool) {
     (pending, open && give_up)
 }
 
-pub fn recover_unfinished(library: &Library, skip: Option<&str>) -> Vec<String> {
+/// Meetings this run of the app opened for recording. They are live, not
+/// left over from a crash, so startup recovery leaves them alone: it checks
+/// and saves under the same lock that opening a meeting takes first.
+#[derive(Clone, Default)]
+pub struct OpenedHere(Arc<Mutex<std::collections::HashSet<String>>>);
+
+impl OpenedHere {
+    fn lock(&self) -> MutexGuard<'_, std::collections::HashSet<String>> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub fn mark(&self, doc_id: &str) {
+        self.lock().insert(doc_id.to_string());
+    }
+}
+
+pub fn recover_unfinished(library: &Library, opened: &OpenedHere) -> Vec<String> {
     let Ok(listing) = library.list(&ListFilter {
         kind: Some(DocKind::Meeting),
         trash: TrashFilter::Include,
@@ -629,10 +648,11 @@ pub fn recover_unfinished(library: &Library, skip: Option<&str>) -> Vec<String> 
             .max(audio_ms);
         let tail = tail_gaps(library, &listed, &transcript);
 
-        if Some(listed.id.as_str()) == skip {
+        let opened = opened.lock();
+        let _meta = cap_meetings::library::lock_meta();
+        if opened.contains(&listed.id) {
             continue;
         }
-        let _meta = cap_meetings::library::lock_meta();
         let Ok(mut meta) = library.load(&listed.id) else {
             continue;
         };

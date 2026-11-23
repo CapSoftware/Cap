@@ -637,7 +637,7 @@ fn an_unfinished_meeting_is_recovered_with_its_duration() {
         .and_then(|mut f| std::io::Write::write_all(&mut f, b"{\"op\":\"upsert\",\"utter"))
         .unwrap();
 
-    let recovered = persist::recover_unfinished(&library, None);
+    let recovered = persist::recover_unfinished(&library, &persist::OpenedHere::default());
     assert_eq!(recovered, vec![meta.id.clone()]);
     let meta = library.load(&meta.id).unwrap();
     let meeting = meta.meeting.unwrap();
@@ -650,7 +650,33 @@ fn an_unfinished_meeting_is_recovered_with_its_duration() {
         meeting.transcript_chars,
         "first".len() as u64 + "second".len() as u64
     );
-    assert!(persist::recover_unfinished(&library, None).is_empty());
+    assert!(persist::recover_unfinished(&library, &persist::OpenedHere::default()).is_empty());
+}
+
+#[test]
+fn recovery_leaves_a_meeting_opened_in_this_run_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let library = Library::open(dir.path().join("documents")).unwrap();
+    let started = Utc::now() - chrono::Duration::minutes(10);
+    let unfinished = |seed| {
+        let mut meta = library.create(DocKind::Meeting, started, seed).unwrap();
+        meta.meeting = Some(MeetingDetails {
+            started_at: Some(started),
+            ..MeetingDetails::default()
+        });
+        library.save(&meta).unwrap();
+        meta.id
+    };
+    let crashed = unfinished(7);
+    let live = unfinished(8);
+    let opened = persist::OpenedHere::default();
+    opened.mark(&live);
+
+    assert_eq!(persist::recover_unfinished(&library, &opened), vec![crashed]);
+    let meeting = library.load(&live).unwrap().meeting.unwrap();
+    assert!(meeting.ended_at.is_none());
+    assert!(meeting.stop_reason.is_none());
+    assert!(!meeting.extra.contains_key(persist::REPAIR_KEY));
 }
 
 fn tone(seconds: f64) -> Vec<f32> {
@@ -1041,7 +1067,7 @@ fn recovery_puts_the_untranscribed_end_in_the_ledger() {
     line.end_ms = 1_000;
     append_jsonl(&path, &[LogLine::Upsert { utterance: line }]).unwrap();
 
-    assert_eq!(persist::recover_unfinished(&library, None), vec![meta.id.clone()]);
+    assert_eq!(persist::recover_unfinished(&library, &persist::OpenedHere::default()), vec![meta.id.clone()]);
     let (transcript, _) = Transcript::load_jsonl(&path).unwrap();
     let gaps = transcript.gaps();
     assert_eq!(gaps.len(), 1, "{gaps:?}");

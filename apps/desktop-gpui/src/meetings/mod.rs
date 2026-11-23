@@ -426,6 +426,7 @@ pub struct Meetings {
     quit_subscription: Option<Subscription>,
     ignored_devices: Option<Vec<String>>,
     recovery: Option<Task<()>>,
+    opened_here: persist::OpenedHere,
     library_cleanup: Option<Task<()>>,
     /// Meetings whose saved audio still needs transcribing, finished one at
     /// a time while nothing records.
@@ -650,6 +651,7 @@ impl Meetings {
             quit_subscription: None,
             ignored_devices,
             recovery: None,
+            opened_here: persist::OpenedHere::default(),
             library_cleanup: None,
             repair_queue: VecDeque::new(),
             last_start_error: None,
@@ -1652,6 +1654,7 @@ impl Meetings {
             .cloned()
             .ok_or_else(|| MeetingError::Library("the library is unavailable".into()))?;
         if let Some(doc_id) = &origin.resume_doc {
+            self.opened_here.mark(doc_id);
             let lock = lock_meta();
             let mut meta = library.load(doc_id).map_err(|_| MeetingError::NotFound)?;
             if meta.is_trashed() {
@@ -1721,6 +1724,7 @@ impl Meetings {
         let mut meta = library
             .create(DocKind::Meeting, now, persist::entropy())
             .map_err(|e| MeetingError::Library(e.to_string()))?;
+        self.opened_here.mark(&meta.id);
         let event_title = event
             .as_ref()
             .map(|e| e.title.as_str())
@@ -3566,13 +3570,14 @@ impl Meetings {
         if !dir.is_dir() {
             return;
         }
+        let opened = self.opened_here.clone();
         self.recovery = Some(cx.spawn(async move |this, cx| {
             let recovered = cx
                 .background_executor()
                 .spawn(async move {
                     Library::open(dir)
                         .map(|library| {
-                            let recovered = persist::recover_unfinished(&library, None);
+                            let recovered = persist::recover_unfinished(&library, &opened);
                             let pending = persist::pending_repairs(&library);
                             // Scratch copies only a pending repair still needs.
                             let removed = persist::drop_stale_scratch_in(&persist::scratch_root(), |id| {
