@@ -1628,3 +1628,30 @@ fn a_remote_first_heard_in_a_short_line_is_learnt_from_what_follows() {
     let third = only(&push(&mut d, Track::System, 15_000, &[(6, 3_000)]));
     assert_ne!(third, a, "{:?}", d.speakers());
 }
+
+#[test]
+fn a_different_remote_borderline_to_a_new_voice_never_merges_into_it() {
+    // Remote B's first line is short (voice 4). Later, after A has spoken
+    // again, C (another person) says a short line only loosely like B
+    // (voice 5), then a long one (voice 6) unlike B's own voice. C must
+    // not be learnt into B and then taken for B.
+    let mut table = speakers(4);
+    table.push(axis(3));
+    table.push(blend(&[(3, 0.4), (7, 0.917)]));
+    table.push(blend(&[(3, 0.2), (7, 0.98)]));
+    let mut d = diarizer(table);
+    let a = only(&push(&mut d, Track::System, 0, &[(2, 6_000)]));
+    push(&mut d, Track::System, 8_000, &[(4, 1_750)]);
+    push(&mut d, Track::System, 11_000, &[(2, 4_000)]);
+    push(&mut d, Track::System, 17_000, &[(5, 1_500)]);
+    let c = push(&mut d, Track::System, 20_000, &[(6, 6_000)]);
+    let b_voices: Vec<SpeakerId> = d
+        .speakers()
+        .iter()
+        .filter(|s| s.first_ms >= 8_000 && s.first_ms < 9_000)
+        .map(|s| s.id)
+        .collect();
+    let c = only(&c);
+    assert_ne!(c, a);
+    assert!(!b_voices.contains(&c), "C taken for B: {:?}", d.speakers());
+}

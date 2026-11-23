@@ -39,6 +39,9 @@ const LEVELS_MAX: usize = 1_000_000;
 /// it is a person.
 const LEAK_REVIEW_MS: u64 = 120_000;
 const LEAK_DECIDE_MS: u64 = 4_000;
+/// A stretch that starts this soon after a voice's last one, with no one
+/// else in between, carries on that voice's turn.
+const SAME_TURN_MS: u64 = 2_000;
 /// At the end, a microphone that followed the call through a stretch this
 /// long (a sentence, not a word said back) hears the call.
 const ECHO_HEARD_MS: u64 = 2_000;
@@ -691,14 +694,17 @@ impl MeetingDiarizer {
                     labels[i] = Some((id, false));
                     if confident {
                         self.refine_cluster(id, embedding, b - a, segment.key);
-                    } else if let Some(c) = self
-                        .clusters
-                        .iter_mut()
-                        .find(|c| c.id == id && !c.confirmed && c.created_key != segment.key)
+                    } else if self.continues(track, id, i, &labels, at(a))
+                        && let Some(c) = self
+                            .clusters
+                            .iter_mut()
+                            .find(|c| c.id == id && !c.confirmed && c.created_key != segment.key)
                     {
                         // A voice first heard in a short line is learnt from
-                        // the speech that keeps joining it, without being
-                        // shown as someone new on that alone.
+                        // the speech that carries straight on from it,
+                        // without being shown as someone new on that alone.
+                        // Someone else who only sounds a little alike, later,
+                        // never moves it.
                         c.centroid.add(
                             embedding,
                             (b - a) as f32 / (SAMPLES_PER_MS as f32 * 1000.0),
@@ -807,6 +813,27 @@ impl MeetingDiarizer {
             key: segment.key,
             spans,
         })
+    }
+
+    /// Whether window `i` of a segment carries straight on from voice `id`:
+    /// the window before it was theirs, or (the segment's first window) the
+    /// track's last stretch was theirs and ended moments before.
+    fn continues(
+        &self,
+        track: Track,
+        id: SpeakerId,
+        i: usize,
+        labels: &[Option<(SpeakerId, bool)>],
+        start_ms: u64,
+    ) -> bool {
+        if i > 0 {
+            return labels[i - 1] == Some((id, false));
+        }
+        self.pieces
+            .iter()
+            .rev()
+            .find(|p| p.track == track)
+            .is_some_and(|p| p.cluster == Some(id) && start_ms <= p.end_ms + SAME_TURN_MS)
     }
 
     /// The person to show for a stretch matched to `cluster`: itself once
