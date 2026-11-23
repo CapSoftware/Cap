@@ -47,10 +47,20 @@ fn draw(cx: &mut AsyncApp) -> Option<f64> {
     })
 }
 
+/// The bench saves smart folders into the Library it opens, so it runs only
+/// on a profile given with `CAP_GPUI_APP_DATA_DIR`, never the person's own.
+fn runs_on(app_data_dir: Option<&str>) -> bool {
+    app_data_dir.is_some_and(|dir| !dir.trim().is_empty())
+}
+
 pub fn run_from_env(cx: &mut App) {
     let Ok(kind) = std::env::var("CAP_GPUI_LIBRARY_BENCH") else {
         return;
     };
+    if !runs_on(std::env::var("CAP_GPUI_APP_DATA_DIR").ok().as_deref()) {
+        eprintln!("{PREFIX}: skipped, CAP_GPUI_APP_DATA_DIR must name a scratch profile");
+        return;
+    }
     cx.spawn(async move |cx| {
         match kind.as_str() {
             "panel" => panel(cx).await,
@@ -483,4 +493,14 @@ async fn scroll_all(cx: &mut AsyncApp) {
     report(PREFIX, "scroll-all", &mut samples);
     println!("{PREFIX}: settled");
     sleep(cx, 4000).await;
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_bench_never_runs_on_the_default_profile() {
+        assert!(!super::runs_on(None));
+        assert!(!super::runs_on(Some("  ")));
+        assert!(super::runs_on(Some("/tmp/library-bench")));
+    }
 }
