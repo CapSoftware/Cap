@@ -400,6 +400,32 @@ const SHORT_COPIES: [(&str, u64); 6] = [
     ("Then we ship", 15_000),
 ];
 
+/// A sentence that comes back through the speakers starts on the microphone
+/// while the call is still saying it. Someone reading the call back waits
+/// for it to finish, so that is no evidence the microphone hears the call.
+#[test]
+fn only_an_echo_over_the_call_shows_the_microphone_hears_it() {
+    let numbers = "Four one five two nine.";
+    for gap in [0, 150, 600] {
+        let mut t = Transcript::new();
+        t.upsert(timed("far", Source::System, 10_000, numbers, 220));
+        t.upsert(timed("back", Source::Mic, 11_100 + gap, numbers, 320));
+        assert!(
+            !t.suppress_echo_report(&EchoConfig::default()).heard,
+            "{gap}"
+        );
+    }
+    let call = "The squire was not pleased with the answer.";
+    for lag in [0, 60, 320] {
+        let mut t = Transcript::new();
+        t.upsert(timed("far", Source::System, 10_000, call, 280));
+        t.upsert(timed("echo", Source::Mic, 10_000 + lag, call, 280));
+        let report = t.suppress_echo_report(&EchoConfig::default());
+        assert_eq!(report.removed, vec!["echo".to_string()], "{lag}");
+        assert!(report.heard, "{lag}");
+    }
+}
+
 /// A headset: nothing of the call reaches the microphone, and the person
 /// answers "Yes." a tenth of a second after the other side's "Yes, good."
 /// Without evidence that the microphone hears the call, that stays theirs.

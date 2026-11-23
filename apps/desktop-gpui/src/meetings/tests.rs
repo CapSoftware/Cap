@@ -394,6 +394,17 @@ fn short_echoes_wait_until_the_microphone_is_known_to_hear_the_call() {
     transcript.upsert(timed("m1", Source::Mic, 10_040, "Merci"));
     assert!(super::remove_echoes(&mut transcript, &mut heard).is_empty());
     assert!(!heard, "a short line alone is no evidence");
+    // Reading back what the other side just said, after they finish.
+    transcript.upsert(timed(
+        "s3",
+        Source::System,
+        20_000,
+        "four one five two nine",
+    ));
+    transcript.upsert(timed("m3", Source::Mic, 21_600, "four one five two nine"));
+    super::remove_echoes(&mut transcript, &mut heard);
+    assert!(!heard, "a read-back is no evidence");
+    assert!(transcript.get("m1").is_some());
     let call = "the squire was not pleased with the answer he got";
     transcript.upsert(timed("s2", Source::System, 30_000, call));
     transcript.upsert(timed("m2", Source::Mic, 30_060, call));

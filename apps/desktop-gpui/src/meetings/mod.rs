@@ -4628,9 +4628,9 @@ pub(crate) fn respell(
 /// words with it.
 ///
 /// Short lines ("Merci.", "Soft heart,") are judged only once this meeting's
-/// microphone has repeated a full sentence of the call (`echo_heard`): on a
-/// headset nothing comes back, and a quick "Yes." over the other side's
-/// "Yes" is the person's own.
+/// microphone has repeated a sentence of the call while the call was still
+/// saying it (`echo_heard`): on a headset nothing comes back, and a quick
+/// "Yes." over the other side's "Yes" is the person's own.
 fn remove_echoes(transcript: &mut Transcript, echo_heard: &mut bool) -> Vec<String> {
     let live: HashSet<String> = transcript
         .utterances()
@@ -4642,8 +4642,9 @@ fn remove_echoes(transcript: &mut Transcript, echo_heard: &mut bool) -> Vec<Stri
         short_echoes,
         ..EchoConfig::default()
     };
-    let mut removed = transcript.suppress_echo(&config(*echo_heard));
-    if !*echo_heard && !removed.is_empty() {
+    let report = transcript.suppress_echo_report(&config(*echo_heard));
+    let mut removed = report.removed;
+    if !*echo_heard && report.heard {
         // A sentence of the call just came back through the speakers: the
         // short pieces of it already on the microphone go too.
         *echo_heard = true;

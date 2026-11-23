@@ -108,10 +108,19 @@ pub struct EchoConfig {
     pub max_mic_ratio: f64,
     pub max_words: usize,
     /// Also judge 1-3 word microphone lines. Only once this meeting's
-    /// microphone is known to hear the call (a full sentence of it was
-    /// removed as echo): on a headset nothing comes back from the call, and
-    /// someone answering "Yes." just as the other side says "Yes" is them.
+    /// microphone is known to hear the call (`EchoReport::heard`): on a
+    /// headset nothing comes back from the call, and someone answering
+    /// "Yes." just as the other side says "Yes" is them.
     pub short_echoes: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EchoReport {
+    pub removed: Vec<String>,
+    /// A removed sentence began on the microphone while the call was still
+    /// saying it: the speakers are playing into the microphone. Someone
+    /// reading the call back ("four one five two") waits for it to finish.
+    pub heard: bool,
 }
 
 impl Default for EchoConfig {
@@ -688,6 +697,11 @@ impl Transcript {
     }
 
     pub fn suppress_echo(&mut self, config: &EchoConfig) -> Vec<String> {
+        self.suppress_echo_report(config).removed
+    }
+
+    pub fn suppress_echo_report(&mut self, config: &EchoConfig) -> EchoReport {
+        let mut heard = false;
         let mut far: Vec<TimedWord> = self
             .utterances
             .iter()
@@ -720,7 +734,8 @@ impl Transcript {
             {
                 continue;
             }
-            let Some((common, (mic_first, far_first))) = align(&words, &overlapping) else {
+            let Some((common, (mic_first, far_first), far_last)) = align(&words, &overlapping)
+            else {
                 continue;
             };
             let lags = words[mic_first]
@@ -728,11 +743,15 @@ impl Transcript {
                 .saturating_add(ECHO_EARLY_SLACK_MS)
                 >= overlapping[far_first].start_ms;
             if lags && common as f64 >= config.min_containment * words.len() as f64 {
+                heard |= words[mic_first].start_ms < overlapping[far_last].start_ms;
                 echoes.push(mic.id.clone());
             }
         }
         self.remove(&echoes);
-        echoes
+        EchoReport {
+            removed: echoes,
+            heard,
+        }
     }
 
     pub fn load_jsonl(path: &Path) -> io::Result<(Transcript, LoadReport)> {
@@ -927,7 +946,9 @@ fn timed_words(u: &Utterance) -> Vec<TimedWord> {
         .collect()
 }
 
-fn align(mic: &[TimedWord], far: &[&TimedWord]) -> Option<(usize, (usize, usize))> {
+/// The common words of `mic` and `far` in order: how many, where the first
+/// pair is, and the index in `far` of the last one.
+fn align(mic: &[TimedWord], far: &[&TimedWord]) -> Option<(usize, (usize, usize), usize)> {
     let width = far.len() + 1;
     let mut table = vec![0u16; (mic.len() + 1) * width];
     for i in (0..mic.len()).rev() {
@@ -941,16 +962,20 @@ fn align(mic: &[TimedWord], far: &[&TimedWord]) -> Option<(usize, (usize, usize)
     }
     let common = usize::from(table[0]);
     let (mut i, mut j) = (0, 0);
+    let mut first = None;
+    let mut last = 0;
     while i < mic.len() && j < far.len() {
         if mic[i].text == far[j].text && table[i * width + j] == table[(i + 1) * width + j + 1] + 1
         {
-            return Some((common, (i, j)));
-        }
-        if table[(i + 1) * width + j] >= table[i * width + j + 1] {
+            first.get_or_insert((i, j));
+            last = j;
+            i += 1;
+            j += 1;
+        } else if table[(i + 1) * width + j] >= table[i * width + j + 1] {
             i += 1;
         } else {
             j += 1;
         }
     }
-    None
+    first.map(|first| (common, first, last))
 }
