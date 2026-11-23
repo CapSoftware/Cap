@@ -1432,22 +1432,27 @@ fn a_summary_preview_is_its_first_paragraph_cut_on_a_word() {
 }
 
 #[test]
-fn a_trial_asks_mid_call_like_a_paid_plan_and_signed_out_still_cannot() {
-    use super::ask::{Lock, lock_for};
+fn a_trial_asks_once_its_notes_are_written_and_paid_asks_mid_call() {
+    use super::ask::{Lock, lock_for, upgrade_refused};
     use crate::meetings::AiAccess;
     let trial = AiAccess::Trial { remaining: 2 };
     assert_eq!(
         lock_for(trial, false, true),
-        None,
+        Some(Lock::NotesFirst),
         "mid-call, before any notes"
     );
     assert_eq!(
         lock_for(trial, false, false),
-        Some(Lock::Upgrade),
-        "after the call a trial still needs its notes first"
+        Some(Lock::NotesFirst),
+        "after the call, before its notes"
     );
-    assert_eq!(lock_for(trial, true, false), None);
-    assert_eq!(lock_for(AiAccess::Ready, false, true), None);
+    assert_eq!(lock_for(trial, true, false), None, "notes written");
+    assert_eq!(
+        lock_for(AiAccess::Ready, false, true),
+        None,
+        "paid, mid-call"
+    );
+    assert_eq!(lock_for(AiAccess::Ready, false, false), None);
     assert_eq!(
         lock_for(AiAccess::NeedsSignIn, false, true),
         Some(Lock::SignIn),
@@ -1458,7 +1463,114 @@ fn a_trial_asks_mid_call_like_a_paid_plan_and_signed_out_still_cannot() {
         Some(Lock::Upgrade),
         "a used-up trial stays locked mid-call"
     );
+    assert_eq!(lock_for(AiAccess::NeedsUpgrade, true, false), None);
+    assert_eq!(
+        lock_for(AiAccess::Trial { remaining: 0 }, false, false),
+        Some(Lock::Upgrade),
+        "no free meetings left"
+    );
     assert_eq!(lock_for(AiAccess::Unavailable, false, true), None);
+
+    assert_eq!(upgrade_refused(trial, false, true), Lock::NotesFirst);
+    assert_eq!(upgrade_refused(trial, false, false), Lock::NotesFirst);
+    assert_eq!(
+        upgrade_refused(AiAccess::NeedsUpgrade, false, false),
+        Lock::Upgrade
+    );
+    assert_eq!(upgrade_refused(AiAccess::Ready, false, true), Lock::Upgrade);
+}
+
+fn ask_panel(cx: &mut TestAppContext) -> (Entity<super::ask::AskPanel>, &mut VisualTestContext) {
+    let palette = Palette::new(&Theme::light());
+    cx.add_window_view(|window, cx| super::ask::AskPanel::new(palette, window, cx))
+}
+
+#[gpui::test]
+fn a_trial_question_mid_call_waits_for_the_notes_without_offering_pro(cx: &mut TestAppContext) {
+    use crate::{i18n::tr, meetings::AiAccess};
+    let dir = tempfile::tempdir().unwrap();
+    cx.update(|cx| {
+        crate::meetings::Meetings::install_for_tests(
+            Default::default(),
+            dir.path().join("calendar"),
+            cx,
+        )
+    });
+    let (ask, cx) = ask_panel(cx);
+    let trial = AiAccess::Trial { remaining: 2 };
+    ask.update(cx, |a, cx| {
+        a.set_doc(Some("doc".into()), cx);
+        a.set_access(trial, false, true, cx);
+        a.submit(Some("What did we decide?".into()), cx);
+    });
+    let notes_first = (tr::cap_ai::ask::locked_notes_first(), None);
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![notes_first],
+        "mid-call: held with the short message, no Get Cap Pro"
+    );
+    assert!(!ask.read_with(cx, |a, _| a.pro_tag()), "no Cap Pro tag");
+    // Refused by the server in the same state: still the message.
+    ask.update(cx, |a, _| a.refused_by_server("And the dates?"));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![notes_first, notes_first]
+    );
+
+    ask.update(cx, |a, cx| a.set_access(trial, false, false, cx));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![notes_first, notes_first],
+        "after Stop, still waiting for the notes"
+    );
+
+    let ready = (tr::cap_ai::ask::ready(), Some(tr::cap_ai::ask::send_now()));
+    ask.update(cx, |a, cx| a.set_access(trial, true, false, cx));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![ready, ready],
+        "notes written: the questions can be sent"
+    );
+    assert!(!ask.read_with(cx, |a, _| a.pro_tag()));
+}
+
+#[gpui::test]
+fn a_question_mid_call_on_a_paid_plan_is_not_held(cx: &mut TestAppContext) {
+    use crate::meetings::AiAccess;
+    let (ask, cx) = ask_panel(cx);
+    ask.update(cx, |a, cx| {
+        a.set_doc(Some("doc".into()), cx);
+        a.set_access(AiAccess::Ready, false, true, cx);
+    });
+    assert!(!ask.read_with(cx, |a, _| a.pro_tag()));
+    ask.update(cx, |a, _| a.refused_by_server("What did we decide?"));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![(
+            crate::i18n::tr::cap_ai::ask::ready(),
+            Some(crate::i18n::tr::cap_ai::ask::send_now())
+        )],
+        "nothing holds a paid question"
+    );
+}
+
+#[gpui::test]
+fn a_used_up_trial_is_still_offered_pro(cx: &mut TestAppContext) {
+    use crate::{i18n::tr, meetings::AiAccess};
+    let (ask, cx) = ask_panel(cx);
+    ask.update(cx, |a, cx| {
+        a.set_doc(Some("doc".into()), cx);
+        a.set_access(AiAccess::NeedsUpgrade, false, true, cx);
+        a.refused_by_server("What did we decide?");
+    });
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![(
+            tr::cap_ai::ask::locked_upgrade(),
+            Some(tr::cap_ai::card::get_pro())
+        )]
+    );
+    assert!(ask.read_with(cx, |a, _| a.pro_tag()));
 }
 
 struct PageHost {

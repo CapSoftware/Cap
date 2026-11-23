@@ -4272,6 +4272,7 @@ me = "Moi"
 add_folder = "Ajouter à un dossier"
 
 [cap_ai.ask]
+locked_notes_first = "Vous pourrez poser vos questions dès que vos notes seront rédigées."
 locked_sign_in = "Connectez-vous pour interroger Cap AI sur cette réunion."
 locked_upgrade = "Avec Cap Pro, Cap AI répond à vos questions sur vos réunions."
 ready = "Cap AI est activé. Votre question est prête à être envoyée."

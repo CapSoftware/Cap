@@ -4272,6 +4272,7 @@ me = "我"
 add_folder = "添加到文件夹"
 
 [cap_ai.ask]
+locked_notes_first = "笔记写好后即可提问。"
 locked_sign_in = "登录后即可向 Cap AI 询问这场会议。"
 locked_upgrade = "有了 Cap Pro，Cap AI 会回答关于你会议的问题。"
 ready = "Cap AI 已开启。你的问题可以发送了。"

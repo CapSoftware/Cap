@@ -48,18 +48,28 @@ pub struct LiveLine {
 pub enum Lock {
     Upgrade,
     SignIn,
+    /// A free meeting is asked about once its notes are written.
+    NotesFirst,
 }
 
 pub fn lock_for(access: AiAccess, has_notes: bool, in_call: bool) -> Option<Lock> {
-    // A trial asks mid-call like a paid plan, before any notes exist; after
-    // the call it still needs its notes first.
-    if access.can_ask(has_notes) || (in_call && matches!(access, AiAccess::Trial { .. })) {
-        return None;
-    }
     match access {
+        AiAccess::Trial { remaining } if remaining > 0 && (in_call || !has_notes) => {
+            Some(Lock::NotesFirst)
+        }
+        _ if access.can_ask(has_notes) => None,
         AiAccess::NeedsSignIn => Some(Lock::SignIn),
         AiAccess::Unavailable => None,
         _ => Some(Lock::Upgrade),
+    }
+}
+
+/// What a refused question shows: while free meetings remain and this one's
+/// notes are not written yet, it waits for them rather than offering Cap Pro.
+pub fn upgrade_refused(access: AiAccess, has_notes: bool, in_call: bool) -> Lock {
+    match lock_for(access, has_notes, in_call) {
+        Some(Lock::NotesFirst) => Lock::NotesFirst,
+        _ => Lock::Upgrade,
     }
 }
 
@@ -314,6 +324,11 @@ impl AskPanel {
         lock_for(self.access, self.has_notes, self.in_call)
     }
 
+    /// The Cap Pro tag by the suggestions, for an account Ask is locked for.
+    pub(super) fn pro_tag(&self) -> bool {
+        matches!(self.lock(), Some(Lock::Upgrade | Lock::SignIn))
+    }
+
     pub fn send_after_upgrade(&mut self, question: String, cx: &mut Context<Self>) {
         self.thread
             .retain(|e| !(e.locked.is_some() && e.question == question));
@@ -424,7 +439,10 @@ impl AskPanel {
                             last.left_out = answer.left_out;
                             cx.emit(AskEvent::Answered(index));
                         }
-                        Err(NotesError::UpgradeRequired) => last.locked = Some(Lock::Upgrade),
+                        Err(NotesError::UpgradeRequired) => {
+                            last.locked =
+                                Some(upgrade_refused(this.access, this.has_notes, this.in_call));
+                        }
                         Err(NotesError::NotSignedIn) => last.locked = Some(Lock::SignIn),
                         Err(error) => {
                             last.error = Some(error.clone());
@@ -637,6 +655,39 @@ pub fn render_answer(text: &str, palette: &Palette) -> AnyElement {
 }
 
 impl AskPanel {
+    /// What a held question says, and its button. A refusal while this free
+    /// meeting's notes are still to come waits for them, never offering Cap
+    /// Pro.
+    fn locked_copy(&self, locked: Option<Lock>) -> (Lock, &'static str, Option<&'static str>) {
+        let current = self.lock();
+        let lock = match locked {
+            Some(Lock::SignIn) => Lock::SignIn,
+            _ if current == Some(Lock::NotesFirst) => Lock::NotesFirst,
+            Some(lock) => lock,
+            None => Lock::Upgrade,
+        };
+        if current.is_none() {
+            return (
+                lock,
+                tr::cap_ai::ask::ready(),
+                Some(tr::cap_ai::ask::send_now()),
+            );
+        }
+        match lock {
+            Lock::SignIn => (
+                lock,
+                tr::cap_ai::ask::locked_sign_in(),
+                Some(tr::cap_ai::card::sign_in()),
+            ),
+            Lock::NotesFirst => (lock, tr::cap_ai::ask::locked_notes_first(), None),
+            Lock::Upgrade => (
+                lock,
+                tr::cap_ai::ask::locked_upgrade(),
+                Some(tr::cap_ai::card::get_pro()),
+            ),
+        }
+    }
+
     fn render_locked(
         &self,
         index: usize,
@@ -645,28 +696,14 @@ impl AskPanel {
     ) -> AnyElement {
         let palette = self.palette;
         let now_open = self.lock().is_none();
-        let (text, label): (&'static str, &'static str) = if now_open {
-            (tr::cap_ai::ask::ready(), tr::cap_ai::ask::send_now())
-        } else {
-            match exchange.locked {
-                Some(Lock::SignIn) => (
-                    tr::cap_ai::ask::locked_sign_in(),
-                    tr::cap_ai::card::sign_in(),
-                ),
-                _ => (
-                    tr::cap_ai::ask::locked_upgrade(),
-                    tr::cap_ai::card::get_pro(),
-                ),
-            }
-        };
-        let lock = exchange.locked;
+        let (lock, text, label) = self.locked_copy(exchange.locked);
         let question = exchange.question.clone();
         div()
             .flex()
             .flex_col()
             .gap(px(8.))
             .child(div().text_color(palette.muted).child(text))
-            .child(
+            .children(label.map(|label| {
                 div().flex().child(
                     super::style::ink_pill(&palette, ("ask-locked", index))
                         .h(px(28.))
@@ -676,14 +713,14 @@ impl AskPanel {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if now_open {
                                 this.ask_now(index, cx);
-                            } else if lock == Some(Lock::SignIn) {
+                            } else if lock == Lock::SignIn {
                                 cx.emit(AskEvent::SignIn);
                             } else {
                                 cx.emit(AskEvent::Upgrade(question.clone()));
                             }
                         })),
-                ),
-            )
+                )
+            }))
             .into_any_element()
     }
 }
@@ -1020,7 +1057,7 @@ impl Render for AskPanel {
                 )
                 .into_any_element()
         });
-        let locked = self.lock().is_some();
+        let locked = self.pro_tag();
         if !show_suggestions {
             Self::set_chips_room(&self.chips_room, 0., cx.weak_entity(), cx);
         }
@@ -1136,6 +1173,34 @@ impl Render for AskPanel {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+impl AskPanel {
+    /// The copy and button each held question shows.
+    pub(super) fn held_copy(&self) -> Vec<(&'static str, Option<&'static str>)> {
+        self.thread
+            .iter()
+            .filter(|e| e.locked.is_some())
+            .map(|e| {
+                let (_, text, label) = self.locked_copy(e.locked);
+                (text, label)
+            })
+            .collect()
+    }
+
+    /// A question the server refused with an upgrade, as an answer that
+    /// comes back with one leaves it.
+    pub(super) fn refused_by_server(&mut self, question: &str) {
+        self.thread.push(Exchange {
+            question: question.to_string(),
+            answer: String::new(),
+            error: None,
+            locked: Some(upgrade_refused(self.access, self.has_notes, self.in_call)),
+            done: true,
+            left_out: String::new(),
+        });
     }
 }
 

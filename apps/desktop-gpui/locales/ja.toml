@@ -4272,6 +4272,7 @@ me = "自分"
 add_folder = "フォルダに追加"
 
 [cap_ai.ask]
+locked_notes_first = "メモが書き上がると質問できるようになります。"
 locked_sign_in = "この会議についてCap AIに質問するにはサインインしてください。"
 locked_upgrade = "Cap ProならCap AIが会議についての質問に答えます。"
 ready = "Cap AIがオンになりました。質問を送信できます。"

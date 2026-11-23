@@ -4272,6 +4272,7 @@ me = "Yo"
 add_folder = "Añadir a una carpeta"
 
 [cap_ai.ask]
+locked_notes_first = "Podrás preguntar en cuanto tus notas estén escritas."
 locked_sign_in = "Inicia sesión para preguntar a Cap AI sobre esta reunión."
 locked_upgrade = "Con Cap Pro, Cap AI responde preguntas sobre tus reuniones."
 ready = "Cap AI está activado. Tu pregunta está lista para enviar."

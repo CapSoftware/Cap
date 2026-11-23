@@ -4274,6 +4274,7 @@ me = "Me"
 add_folder = "Add to a folder"
 
 [cap_ai.ask]
+locked_notes_first = { text = "Ask opens once your notes are written.", context = "Shown after a question on a free meeting during the call or before Cap AI has written its notes. When they are, the question can be sent with Ask now." }
 locked_sign_in = "Sign in to ask Cap AI about this meeting."
 locked_upgrade = "Cap AI answers questions about your meetings with Cap Pro."
 ready = "Cap AI is on. Your question is ready to send."
