@@ -23,7 +23,6 @@ enum CaptureMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// For phones too narrow to fit the full title beside the recorder's close button.
     var shortTitle: String {
         switch self {
         case .instant: "Instant"

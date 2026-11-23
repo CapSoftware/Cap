@@ -314,8 +314,7 @@ struct CapDetailView: View {
                 .scrollEdgeEffectStyle(showsVideo ? nil : .hard, for: .top)
                 .onChange(of: showsVideo) { _, shows in
                     guard !shows else { return }
-                    // The keyboard took the room: show the comment being answered, or bring the section up from under
-                    // the title and reactions. A list someone has already scrolled into stays where it is.
+                    // A list someone has already scrolled into stays where it is.
                     let reply = model.replyingTo?.id
                     guard reply != nil || headerVisible else { return }
                     Task {
@@ -331,7 +330,6 @@ struct CapDetailView: View {
                 }
                 .onChange(of: model.sectionRevealRequests) {
                     Task {
-                        // After the keyboard has made its room.
                         try? await Task.sleep(for: .milliseconds(350))
                         withAnimation(.snappy) { proxy.scrollTo("sections", anchor: .top) }
                     }

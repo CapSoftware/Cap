@@ -12,9 +12,8 @@ struct SignInView: View {
 
     private static let heroMinimum: CGFloat = 96
 
-    /// Whether everything fits at once with the hero at its smallest. It doesn't on an iPhone SE or mini once the
-    /// keyboard is up; the screen then scrolls from the top instead of pushing the hero under the status bar and
-    /// cutting the text short.
+    /// On an iPhone SE or mini with the keyboard up the stack overflowed, pushing the hero under the status bar and
+    /// truncating the text; past that point the screen scrolls instead.
     private var fits: Bool {
         viewportHeight > 0 && Self.heroMinimum + formHeight + 16 + legalHeight + 8 <= viewportHeight
     }
@@ -26,7 +25,6 @@ struct SignInView: View {
 
             if let model {
                 ScrollView {
-                    // When it fits, the screen is laid out at exactly the visible height, as it always was.
                     content(model)
                         .frame(height: fits ? viewportHeight : nil)
                 }
