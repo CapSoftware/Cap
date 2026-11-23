@@ -1168,10 +1168,17 @@ describe("free plan duration limit at processing", () => {
 					processingError: expect.stringMatching(
 						/^free-plan-duration-exceeded: /,
 					),
-					rawFileKey: null,
 				}),
 			},
+			{
+				operation: "update",
+				table: mocks.tables.uploads,
+				values: { rawFileKey: null },
+			},
 		]);
+		expect(uploadWrites(database.mutations)[0]?.values).not.toHaveProperty(
+			"rawFileKey",
+		);
 		expect(
 			database.mutations.some(
 				({ table, values }) =>
@@ -1290,7 +1297,7 @@ describe("free plan duration limit at processing", () => {
 		]);
 	});
 
-	it("fails the upload first and asks for the callback again when cleanup fails", async () => {
+	it("fails the upload first, keeps the source key and asks for the callback again when cleanup fails", async () => {
 		const database = freeUpload();
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
 		mocks.deleteObjects.mockReturnValue(Effect.fail(new Error("S3 down")));
@@ -1300,10 +1307,13 @@ describe("free plan duration limit at processing", () => {
 			freePlanSearch,
 		);
 		expect(response.status).toBe(500);
-		expect(uploadWrites(database.mutations)).toContainEqual(
+		expect(uploadWrites(database.mutations)).toEqual([
 			expect.objectContaining({
-				values: expect.objectContaining({ phase: "error", rawFileKey: null }),
+				values: expect.objectContaining({ phase: "error" }),
 			}),
+		]);
+		expect(uploadWrites(database.mutations)[0]?.values).not.toHaveProperty(
+			"rawFileKey",
 		);
 	});
 });
