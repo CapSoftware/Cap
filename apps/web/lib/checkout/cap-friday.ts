@@ -8,7 +8,6 @@ export const CAP_FRIDAY_COUPON_ID = "CAP_FRIDAY_2026_EXISTING";
 export const CAP_FRIDAY_INVOICE_KEY = "capFriday2026Invoice";
 export const CAP_FRIDAY_METADATA = "capFriday2026";
 const CREDIT_TXN_KEY = "capFridayCreditTxn";
-const REVERSED_KEY = "capFridayReversed";
 const QUOTE_MAX_AGE_SECONDS = 60 * 60;
 
 export const capFridayLive = (now = Date.now()) => now < ENDS_AT;
@@ -572,18 +571,10 @@ export async function reverseCapFridayCredit(
 	const invoice = await stripe().invoices.retrieve(invoiceId);
 	if (invoice.metadata?.[CAP_FRIDAY_METADATA] !== "prepay") return "none";
 	if (!invoice.metadata?.[CREDIT_TXN_KEY]) return "awaiting_grant";
-
 	const credit = Number(invoice.metadata.creditAmount);
-	const target =
-		source.object === "dispute" || charge.amount <= 0
-			? credit
-			: Math.min(
-					credit,
-					Math.round((credit * charge.amount_refunded) / charge.amount),
-				);
-	const already = Number(invoice.metadata?.[REVERSED_KEY]) || 0;
-	if (!Number.isInteger(credit) || target <= already) return "reversed";
-
+	if (!Number.isInteger(credit) || credit <= 0 || charge.amount <= 0) {
+		return "reversed";
+	}
 	const customerId =
 		typeof invoice.customer === "string"
 			? invoice.customer
@@ -591,19 +582,51 @@ export async function reverseCapFridayCredit(
 	if (!customerId) {
 		throw new Error(`Cap Friday invoice ${invoice.id} has no customer`);
 	}
-	await stripe().customers.createBalanceTransaction(
-		customerId,
-		{
-			amount: target - already,
-			currency: invoice.currency,
-			description: `Cap Friday: prepaid renewal credit reversed after a ${source.object === "dispute" ? "dispute" : "refund"} (invoice ${invoice.number ?? invoice.id})`,
-			metadata: { [CAP_FRIDAY_METADATA]: "reversal", invoiceId: invoice.id },
-		},
-		{ idempotencyKey: `capfriday-reverse-${invoice.id}-${target}` },
-	);
-	await stripe().invoices.update(invoice.id, {
-		metadata: { [REVERSED_KEY]: String(target) },
-	});
+
+	// Each slice belongs to one refund or dispute and is derived only from the
+	// charge's refund history, so concurrent webhooks compute the same slices
+	// and the same idempotency keys instead of racing on a running total.
+	const refunds = await stripe()
+		.refunds.list({ charge: charge.id, limit: 100 })
+		.autoPagingToArray({ limit: 1000 });
+	const slices: { id: string; amount: number }[] = [];
+	let refunded = 0;
+	for (const refund of refunds
+		.filter(
+			(refund) => refund.status !== "failed" && refund.status !== "canceled",
+		)
+		.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id))) {
+		const before = Math.round((credit * refunded) / charge.amount);
+		refunded = Math.min(charge.amount, refunded + refund.amount);
+		const after = Math.round((credit * refunded) / charge.amount);
+		slices.push({ id: refund.id, amount: after - before });
+	}
+	if (source.object === "dispute") {
+		const reversed = slices.reduce((total, slice) => total + slice.amount, 0);
+		slices.push({ id: source.id, amount: credit - reversed });
+	}
+
+	for (const slice of slices) {
+		const key = `capFridayRev_${slice.id}`;
+		if (slice.amount <= 0 || invoice.metadata?.[key]) continue;
+		const transaction = await stripe().customers.createBalanceTransaction(
+			customerId,
+			{
+				amount: slice.amount,
+				currency: invoice.currency,
+				description: `Cap Friday: prepaid renewal credit reversed after a ${slice.id === source.id && source.object === "dispute" ? "dispute" : "refund"} (invoice ${invoice.number ?? invoice.id})`,
+				metadata: {
+					[CAP_FRIDAY_METADATA]: "reversal",
+					invoiceId: invoice.id,
+					sourceId: slice.id,
+				},
+			},
+			{ idempotencyKey: `capfriday-reverse-${slice.id}` },
+		);
+		await stripe().invoices.update(invoice.id, {
+			metadata: { [key]: transaction.id },
+		});
+	}
 	return "reversed";
 }
 
