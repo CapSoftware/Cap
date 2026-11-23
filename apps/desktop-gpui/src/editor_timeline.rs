@@ -1135,7 +1135,7 @@ pub struct TrackLanes {
 }
 
 pub(crate) fn scene_available(config: &ProjectConfiguration, has_camera: bool) -> bool {
-    has_camera
+    (has_camera || config.camera_picture.is_some())
         && (config.requires_camera()
             || config
                 .timeline
@@ -1254,6 +1254,7 @@ pub enum SegmentDetail {
         muted: bool,
         /// `hideCursor`: the cursor (and its ripples) fade out for this clip.
         cursor_hidden: bool,
+        voice_eq: bool,
         volume: f64,
         recording_clip: u32,
         /// Held (paused) windows inside this clip's on-screen box, in output
@@ -1810,9 +1811,11 @@ fn clip_rows(
                     // clips sidebar (`displayName`).
                     name: match segment.name.as_deref().map(str::trim) {
                         Some(name) if !name.is_empty() => SharedString::from(name.to_string()),
-                        _ if multiple_clips => SharedString::from(
-                            tr::editor::timeline::segment::numbered_clip(segment.recording_clip),
-                        ),
+                        _ if multiple_clips => {
+                            SharedString::from(tr::editor::timeline::segment::numbered_clip(
+                                segment.recording_clip.saturating_add(1),
+                            ))
+                        }
                         _ => SharedString::new_static(tr::editor::timeline::segment::clip()),
                     },
                     source_start: segment.start,
@@ -1822,6 +1825,7 @@ fn clip_rows(
                     timescale: segment.timescale,
                     muted: clip_is_muted(segment) || segment.volume() == 0.0,
                     cursor_hidden: segment.hides_cursor(),
+                    voice_eq: segment.active_voice_eq().is_some(),
                     volume: segment.volume(),
                     recording_clip: segment.recording_clip,
                     holds: inner_holds,
@@ -3728,6 +3732,7 @@ fn label_body(
                 source_duration,
                 muted,
                 cursor_hidden,
+                voice_eq,
                 ..
             },
             LabelTier::Full,
@@ -3749,6 +3754,14 @@ fn label_body(
                     tr::editor::timeline::segment::cursor_hidden(),
                 ))
             })
+            .when(*voice_eq, |this| {
+                this.child(clip_badge(
+                    theme,
+                    color,
+                    "icons/sliders-horizontal.svg",
+                    tr::editor::timeline::segment::voice_eq(),
+                ))
+            })
             .child(label_secondary(theme, color).child(format_clip_time(*source_duration)))
             .into_any_element(),
         (
@@ -3756,6 +3769,7 @@ fn label_body(
                 source_duration,
                 muted,
                 cursor_hidden,
+                voice_eq,
                 ..
             },
             LabelTier::Compact,
@@ -3774,6 +3788,15 @@ fn label_body(
                 this.child(
                     svg()
                         .path("icons/mouse-pointer-ban.svg")
+                        .size(px(12.))
+                        .flex_none()
+                        .text_color(seg_label(theme, color)),
+                )
+            })
+            .when(*voice_eq, |this| {
+                this.child(
+                    svg()
+                        .path("icons/sliders-horizontal.svg")
                         .size(px(12.))
                         .flex_none()
                         .text_color(seg_label(theme, color)),
@@ -4682,7 +4705,40 @@ mod tests {
         let SegmentDetail::Clip { name, .. } = &model.clips[1].detail else {
             panic!("not a clip")
         };
-        assert_eq!(name.as_ref(), "Clip 1");
+        assert_eq!(name.as_ref(), "Clip 2");
+    }
+
+    #[test]
+    fn numbered_clip_labels_match_the_clips_panel() {
+        let config: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {
+                "segments": [
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 2, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 4.0, "end": 6.0, "name": "Intro" }
+                ],
+                "zoomSegments": []
+            }
+        }))
+        .unwrap();
+
+        let model = TimelineModel::build(&config, false, true);
+        let names: Vec<String> = model
+            .clips
+            .iter()
+            .map(|clip| {
+                let SegmentDetail::Clip { name, .. } = &clip.detail else {
+                    panic!("not a clip")
+                };
+                name.to_string()
+            })
+            .collect();
+        assert_eq!(names, ["Clip 1", "Clip 3", "Clip 2", "Intro"]);
+        let segments = &config.timeline.as_ref().unwrap().segments;
+        for (index, name) in names.iter().enumerate().take(3) {
+            assert_eq!(*name, crate::editor_clips::segment_label(segments, index));
+        }
     }
 
     #[test]

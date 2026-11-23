@@ -54,8 +54,14 @@ function Harness(options: RecorderOptions) {
 	current = useCapRecorder(options);
 	return null;
 }
+const createUpload = vi.fn(async () => ({
+	videoId: "first-video",
+	token: "cut_first-token",
+	shareUrl: "https://cap.test/s/first-video",
+	embedUrl: "https://cap.test/embed/first-video",
+}));
 const initial: RecorderOptions = {
-	publicKey: "first-key",
+	createUpload,
 	mode: "camera",
 	microphone: { enabled: false },
 };
@@ -94,16 +100,13 @@ beforeEach(() => {
 	vi.stubGlobal("navigator", {
 		mediaDevices: { getUserMedia: capture, getDisplayMedia: capture },
 	});
+	createUpload.mockClear();
 	vi.stubGlobal("fetch", async (url: string) => {
-		if (url.endsWith("/videos/create"))
-			return Response.json({
-				videoId: "first-video",
-				shareUrl: "https://cap.test/s/first-video",
-				embedUrl: "https://cap.test/embed/first-video",
-			});
 		if (url.endsWith("/initiate")) return Response.json({ uploadId: "upload" });
 		if (url.endsWith("/presign-part"))
-			return Response.json({ presignedUrl: "https://storage.test/part" });
+			return Response.json({
+				parts: [{ partNumber: 1, presignedUrl: "https://storage.test/part" }],
+			});
 		return new Response("{}", {
 			headers: { ETag: "etag", "Content-Type": "application/json" },
 		});
@@ -127,9 +130,7 @@ const start = async () => {
 
 describe("SDK React recorder ownership", () => {
 	it.each([
-		["key", { publicKey: "second-key" }],
 		["server", { apiBase: "https://other.cap.test" }],
-		["user", { userId: "second-user" }],
 		["camera", { camera: { enabled: true, deviceId: "second-camera" } }],
 	] as const)(
 		"resets capture state when the %s configuration replaces its recorder",
@@ -160,7 +161,7 @@ describe("SDK React recorder ownership", () => {
 		});
 		expect(value().phase).toBe("complete");
 		expect(value().videoId).toBe("first-video");
-		await render({ ...initial, publicKey: "second-key" });
+		await render({ ...initial, apiBase: "https://other.cap.test" });
 		expect(value().phase).toBe("idle");
 		expect(value().videoId).toBeNull();
 		expect(value().durationMs).toBe(0);
@@ -179,5 +180,26 @@ describe("SDK React recorder ownership", () => {
 		expect(value().durationMs).toBe(2000);
 		expect(tracks).toEqual(before);
 		expect(before.every((track) => track.readyState === "live")).toBe(true);
+	});
+
+	it("keeps the capture when createUpload is a new function and asks the newest one for the upload", async () => {
+		await render();
+		await start();
+		const before = [...tracks];
+		const latest = vi.fn(async () => ({
+			videoId: "second-video",
+			token: "cut_second-token",
+			shareUrl: "https://cap.test/s/second-video",
+			embedUrl: "https://cap.test/embed/second-video",
+		}));
+		await render({ ...initial, createUpload: latest });
+		expect(value().phase).toBe("recording");
+		expect(tracks).toEqual(before);
+		await act(async () => {
+			await value().stop();
+		});
+		expect(createUpload).not.toHaveBeenCalled();
+		expect(latest).toHaveBeenCalledTimes(1);
+		expect(value().videoId).toBe("second-video");
 	});
 });

@@ -8,11 +8,13 @@ import {
 } from "./lib/lifecycle";
 import { releaseLiveSessions } from "./lib/live-transcribe";
 import { cancelAllMediaOperations } from "./lib/media-operations";
+import { stopProbeWorkers, warmProbeWorkers } from "./lib/media-probe-pool";
 import {
 	cleanupMediaTransferCache,
 	sweepMediaTransferCache,
 } from "./lib/media-transfer";
 import { installUnhandledRejectionGuard } from "./lib/process-guards";
+import { hideServerFromChildren } from "./lib/process-hardening";
 import { removeOwnTempDir, startTempDirMaintenance } from "./lib/temp-files";
 
 installUnhandledRejectionGuard();
@@ -20,6 +22,13 @@ installUnhandledRejectionGuard();
 const port = Number(process.env.PORT) || 3456;
 
 console.log(`[media-server] Starting on port ${port}`);
+
+const hidden = hideServerFromChildren();
+console.log(
+	`[media-server] Running as uid ${process.getuid?.() ?? "unknown"}${hidden ? ", hidden from child processes" : ""}`,
+);
+
+warmProbeWorkers();
 
 void Promise.allSettled([
 	startTempDirMaintenance(),
@@ -40,6 +49,7 @@ const drainAndShutdown = createShutdownHandler(async () => {
 		console.log(`[media-server] Aborted ${abortedJobs} active jobs`);
 	}
 	await cancelAllMediaOperations();
+	stopProbeWorkers();
 	await cleanupMediaTransferCache();
 	await removeOwnTempDir();
 	process.exit(0);

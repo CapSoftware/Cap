@@ -129,19 +129,18 @@ impl PresetsStore {
 }
 
 /// The built-in "Default" preset: what a fresh screen recording looks like
-/// with no user preset -- `ProjectConfiguration::default()` plus the
-/// presentation defaults the recorder applies (`recording.rs`
-/// `apply_screen_recording_presentation_defaults`): 10% padding, 7.5%
-/// rounding and the default screen-movement spring.
+/// with no user preset -- `ProjectConfiguration::for_new_project()` with the
+/// background revealed: 10% even padding, the new-project rounding and the
+/// new-project zoom spring.
 pub fn default_project_config(current: &ProjectConfiguration) -> ProjectConfiguration {
-    let mut config = ProjectConfiguration::default();
+    let mut config = ProjectConfiguration::for_new_project();
     if config.background.padding <= f64::EPSILON {
-        config.background.padding = 10.0;
+        config.background.padding = crate::editor_sidebar::DEFAULT_BACKGROUND_PADDING;
     }
     if config.background.rounding <= f64::EPSILON {
-        config.background.rounding = 7.5;
+        config.background.rounding =
+            crate::editor_sidebar::default_background_rounding(config.background.padding_mode);
     }
-    config.screen_movement_spring = cap_project::ScreenMovementSpring::default();
     current.with_preset(config)
 }
 
@@ -154,6 +153,9 @@ pub fn preset_config(project: &ProjectConfiguration) -> Value {
         map.insert("clips".into(), Value::Array(Vec::new()));
         map.remove("overlayOrder");
         map.remove("markers");
+        map.remove("autoZoomVersion");
+        map.remove("autoZoomPending");
+        map.remove("cameraPicture");
         if let Some(captions) = map.get_mut("captions").and_then(Value::as_object_mut) {
             captions.insert("segments".into(), Value::Array(Vec::new()));
             captions.remove("sourceTimed");
@@ -496,6 +498,36 @@ mod tests {
         let preset = preset_config(&current);
         assert!(apply_preset(&preset, &current).unwrap().captions.is_none());
         assert!(default_project_config(&current).captions.is_none());
+    }
+
+    #[test]
+    fn presets_never_carry_or_drop_a_camera_picture() {
+        let source = ProjectConfiguration {
+            camera_picture: Some("content/images/other.jpg".into()),
+            ..Default::default()
+        };
+        let preset = preset_config(&source);
+        assert!(preset.get("cameraPicture").is_none());
+        let current = ProjectConfiguration {
+            camera_picture: Some("content/images/mine.jpg".into()),
+            ..Default::default()
+        };
+        let legacy = serde_json::to_value(&source).unwrap();
+        for preset in [preset, legacy] {
+            assert_eq!(
+                apply_preset(&preset, &current)
+                    .unwrap()
+                    .camera_picture
+                    .as_deref(),
+                Some("content/images/mine.jpg")
+            );
+        }
+        assert_eq!(
+            apply_preset(&preset_config(&current), &ProjectConfiguration::default())
+                .unwrap()
+                .camera_picture,
+            None
+        );
     }
 
     #[test]

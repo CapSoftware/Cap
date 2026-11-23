@@ -3,13 +3,13 @@ import { buildMarketingMetadata } from "@/lib/og/url";
 import { InstantModePage } from "./InstantModePage";
 
 export const metadata: Metadata = buildMarketingMetadata({
-	title: "Instant Mode - Quick Screen Recording & Sharing | Cap",
+	title: "Instant Mode: record your screen and share a link | Cap",
 	description:
-		"Record and share instantly with Cap's cloud-powered Instant Mode. Get automatic transcriptions, collaborative comments, shareable links, and team workspaces for fast feedback loops.",
+		"Instant Mode uploads while you record on Mac, Windows and Linux, so your share link is ready the moment you stop. Viewers can leave timestamped comments.",
 	path: "/features/instant-mode",
-	ogTitle: "Instant Mode — record & share in seconds",
+	ogTitle: "Instant Mode: record your screen and share a link",
 	ogDescription:
-		"Record and share instantly with automatic transcriptions, comments, and shareable links.",
+		"Uploads while you record, so your share link is ready the moment you stop. Viewers can leave timestamped comments.",
 	ogTag: "Features",
 });
 

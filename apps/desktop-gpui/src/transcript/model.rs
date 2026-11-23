@@ -112,23 +112,46 @@ pub fn captions_signature(captions: Option<&CaptionsData>) -> u64 {
 }
 
 pub fn flatten_words(captions: &CaptionsData) -> Vec<Word> {
+    flatten(captions, None)
+}
+
+/// Where each transcript word came from: the `(segment, word)` indices of the
+/// caption words folded into it, its spoken word first.
+pub fn word_sources(captions: &CaptionsData) -> (Vec<Word>, Vec<Vec<(usize, usize)>>) {
+    let mut sources = Vec::new();
+    let words = flatten(captions, Some(&mut sources));
+    (words, sources)
+}
+
+fn flatten(
+    captions: &CaptionsData,
+    mut sources: Option<&mut Vec<Vec<(usize, usize)>>>,
+) -> Vec<Word> {
     let mut words: Vec<Word> = Vec::new();
-    let mut raw: Vec<(&str, f64, f64)> = captions
+    let mut raw: Vec<(&str, f64, f64, (usize, usize))> = captions
         .segments
         .iter()
-        .flat_map(|segment| segment.words.iter())
-        .filter_map(|word| {
+        .enumerate()
+        .flat_map(|(segment_index, segment)| {
+            segment
+                .words
+                .iter()
+                .enumerate()
+                .map(move |(word_index, word)| (word, (segment_index, word_index)))
+        })
+        .filter_map(|(word, source)| {
             let text = word.text.trim();
             let (start, end) = (f64::from(word.start), f64::from(word.end));
             (!text.is_empty() && start.is_finite() && end.is_finite()).then_some((
                 text,
                 start,
                 end.max(start),
+                source,
             ))
         })
         .collect();
     raw.sort_by(|a, b| a.1.total_cmp(&b.1));
-    for (text, start, end) in raw {
+    for (text, start, end, source) in raw {
         let spoken = !cap_project::disfluency::normalize_word(text).is_empty();
         match words.last_mut() {
             Some(previous) if !spoken || attaches_to_previous(text) => {
@@ -136,13 +159,21 @@ pub fn flatten_words(captions: &CaptionsData) -> Vec<Word> {
                 if spoken {
                     previous.end = previous.end.max(end);
                 }
+                if let Some(last) = sources.as_mut().and_then(|sources| sources.last_mut()) {
+                    last.push(source);
+                }
             }
             _ if !spoken => {}
-            _ => words.push(Word {
-                text: text.to_string(),
-                start,
-                end,
-            }),
+            _ => {
+                words.push(Word {
+                    text: text.to_string(),
+                    start,
+                    end,
+                });
+                if let Some(sources) = sources.as_mut() {
+                    sources.push(vec![source]);
+                }
+            }
         }
     }
     words
@@ -393,12 +424,7 @@ impl TranscriptEdl {
         recording_durations: &[f64],
     ) -> Self {
         let mappings = build_mappings(timeline, recording_durations);
-        let kept_ranges = merge_ranges(
-            mappings
-                .iter()
-                .map(|mapping| mapping.source_start..mapping.source_end)
-                .collect(),
-        );
+        let kept_ranges = kept_ranges(&mappings);
         let mut kept = Vec::with_capacity(doc.voiced.len());
         let mut cursor = 0;
         for word in &doc.voiced {
@@ -572,19 +598,29 @@ impl TranscriptEdl {
     }
 
     pub fn hole_around(&self, source: f64) -> Option<Range<f64>> {
-        let after = self
-            .kept_ranges
-            .partition_point(|range| range.start <= source);
-        if after > 0 && self.kept_ranges[after - 1].end > source {
-            return None;
-        }
-        let start = after
-            .checked_sub(1)
-            .map_or(f64::NEG_INFINITY, |before| self.kept_ranges[before].end);
-        let end = self
-            .kept_ranges
-            .get(after)
-            .map_or(f64::INFINITY, |range| range.start);
-        Some(start..end)
+        hole_around(&self.kept_ranges, source)
     }
+}
+
+pub fn kept_ranges(mappings: &[Mapping]) -> Vec<Range<f64>> {
+    merge_ranges(
+        mappings
+            .iter()
+            .map(|mapping| mapping.source_start..mapping.source_end)
+            .collect(),
+    )
+}
+
+pub fn hole_around(kept_ranges: &[Range<f64>], source: f64) -> Option<Range<f64>> {
+    let after = kept_ranges.partition_point(|range| range.start <= source);
+    if after > 0 && kept_ranges[after - 1].end > source {
+        return None;
+    }
+    let start = after
+        .checked_sub(1)
+        .map_or(f64::NEG_INFINITY, |before| kept_ranges[before].end);
+    let end = kept_ranges
+        .get(after)
+        .map_or(f64::INFINITY, |range| range.start);
+    Some(start..end)
 }

@@ -19,7 +19,10 @@ import {
 	useId,
 	useState,
 } from "react";
-import { changeProCheckoutPlan } from "@/actions/billing/checkout";
+import {
+	changeProCheckoutPlan,
+	setProCheckoutUsEin,
+} from "@/actions/billing/checkout";
 import { trackEvent } from "@/app/utils/analytics";
 import {
 	BODY_TEXT,
@@ -30,6 +33,7 @@ import {
 import { Segmented } from "@/components/pages/pricing/controls";
 import { homepageCopy } from "@/data/homepage-copy";
 import type { CheckoutPlan } from "@/lib/checkout/plans";
+import { formatUsEin, usEinChange } from "@/lib/checkout/us-ein";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 import {
 	CARD,
@@ -169,6 +173,7 @@ export function CheckoutForm({
 		>
 			<PaymentForm
 				checkout={checkout}
+				clientSecret={clientSecret}
 				email={email}
 				seatsPending={seatsPending}
 			/>
@@ -304,7 +309,12 @@ function OrderSummary({
 	);
 }
 
-export function PlanHeading({ tag }: { tag: string }) {
+const FRIDAY_CHIP = {
+	background: "rgba(255,77,141,0.16)",
+	color: "#FFB59A",
+} as const;
+
+export function PlanHeading({ tag, dark }: { tag: string; dark?: boolean }) {
 	const theme = MODE_THEME.instant;
 	return (
 		<>
@@ -313,14 +323,16 @@ export function PlanHeading({ tag }: { tag: string }) {
 					Cap Pro
 				</h2>
 				<span
-					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em]"
-					style={{ background: theme.chip, color: theme.glyph }}
+					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em] transition-colors duration-700"
+					style={
+						dark ? FRIDAY_CHIP : { background: theme.chip, color: theme.glyph }
+					}
 				>
 					{tag}
 				</span>
 			</div>
 			<p
-				className={`${BODY_TEXT} mt-3 text-[15px] leading-[1.5] text-[rgba(17,17,17,0.72)] max-sm:hidden`}
+				className={`${BODY_TEXT} mt-3 text-[15px] leading-[1.5] transition-colors duration-700 max-sm:hidden ${dark ? "text-[rgba(245,241,234,0.66)]" : "text-[rgba(17,17,17,0.72)]"}`}
 			>
 				Everything in Desktop, plus unlimited cloud sharing, AI, and team
 				collaboration.
@@ -329,10 +341,12 @@ export function PlanHeading({ tag }: { tag: string }) {
 	);
 }
 
-export function PlanFeatures() {
+export function PlanFeatures({ dark }: { dark?: boolean }) {
 	const theme = MODE_THEME.instant;
 	return (
-		<div className="mt-7 hidden border-t border-[#E1E7EE] pt-6 lg:block">
+		<div
+			className={`mt-7 hidden border-t pt-6 transition-colors duration-700 lg:block ${dark ? "border-[rgba(245,241,234,0.1)]" : "border-[#E1E7EE]"}`}
+		>
 			<p className="text-[13px] font-medium">
 				Everything in Desktop License, plus:
 			</p>
@@ -340,12 +354,18 @@ export function PlanFeatures() {
 				{HIGHLIGHTS.map((feature) => (
 					<li key={feature} className="flex items-start gap-3">
 						<span
-							className="mt-px grid size-5 shrink-0 place-items-center rounded-full"
-							style={{ background: theme.chip, color: theme.glyph }}
+							className="mt-px grid size-5 shrink-0 place-items-center rounded-full transition-colors duration-700"
+							style={
+								dark
+									? FRIDAY_CHIP
+									: { background: theme.chip, color: theme.glyph }
+							}
 						>
 							<Check className="size-3" strokeWidth={2.5} />
 						</span>
-						<span className="text-[14px] leading-snug text-[rgba(17,17,17,0.72)]">
+						<span
+							className={`text-[14px] leading-snug transition-colors duration-700 ${dark ? "text-[rgba(245,241,234,0.72)]" : "text-[rgba(17,17,17,0.72)]"}`}
+						>
 							{feature}
 						</span>
 					</li>
@@ -604,10 +624,12 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 
 function PaymentForm({
 	checkout,
+	clientSecret,
 	email,
 	seatsPending,
 }: {
 	checkout: Checkout;
+	clientSecret: Promise<string>;
 	email: string | null;
 	seatsPending: boolean;
 }) {
@@ -618,6 +640,15 @@ function PaymentForm({
 	const [guestEmail, setGuestEmail] = useState(checkout.email ?? "");
 	const [emailError, setEmailError] = useState<string | null>(null);
 	const [company, setCompany] = useState(hasCompanyDetails(checkout));
+	const einId = useId();
+	const [ein, setEin] = useState("");
+	const [appliedEin, setAppliedEin] = useState<string | null>(null);
+	const [einSaveUnconfirmed, setEinSaveUnconfirmed] = useState(false);
+	const [einError, setEinError] = useState<string | null>(null);
+	const [addressCountry, setAddressCountry] = useState(
+		checkout.billingAddress?.address.country ?? null,
+	);
+	const usCompany = company && addressCountry === "US";
 	const [walletsAvailable, setWalletsAvailable] = useState(false);
 	// Phones get one full-width wallet button (Apple Pay on iPhone, Google Pay
 	// on Android) instead of two squeezed side by side.
@@ -656,6 +687,32 @@ function PaymentForm({
 		return true;
 	};
 
+	const applyUsEin = async () => {
+		const change = usEinChange({
+			ein,
+			usCompany,
+			appliedEin,
+			saveUnconfirmed: einSaveUnconfirmed,
+		});
+		if (change.state === "invalid") {
+			setEinError("Enter your EIN as 9 digits, like 12-3456789.");
+			return false;
+		}
+		if (change.state === "unchanged") return true;
+		const result = await setProCheckoutUsEin({
+			clientSecret: await clientSecret,
+			ein: change.ein ?? "",
+		});
+		if (!result.ok) {
+			setEinSaveUnconfirmed(true);
+			setError("Couldn't save your EIN. Please try again.");
+			return false;
+		}
+		setEinSaveUnconfirmed(false);
+		setAppliedEin(change.ein);
+		return true;
+	};
+
 	const confirm = async (
 		expressCheckoutConfirmEvent?: StripeExpressCheckoutElementConfirmEvent,
 	) => {
@@ -676,6 +733,11 @@ function PaymentForm({
 				setSubmitting(false);
 				return;
 			}
+		}
+		if (!(await applyUsEin())) {
+			setSubmitting(false);
+			expressCheckoutConfirmEvent?.paymentFailed();
+			return;
 		}
 		trackEvent("checkout_payment_submitted", {
 			method: expressCheckoutConfirmEvent ? "express" : "form",
@@ -884,7 +946,47 @@ function PaymentForm({
 								},
 							}}
 						/>
-						<BillingAddressElement />
+						<BillingAddressElement
+							onChange={(event) =>
+								setAddressCountry(event.value.address.country)
+							}
+						/>
+						{usCompany ? (
+							<div className="flex flex-col gap-1.5">
+								<label htmlFor={einId} className={LABEL}>
+									EIN (optional)
+								</label>
+								<input
+									id={einId}
+									inputMode="numeric"
+									autoComplete="off"
+									value={ein}
+									onChange={(event) => {
+										setEin(
+											event.target.value.replace(/[^\d-]/g, "").slice(0, 10),
+										);
+										if (einError) setEinError(null);
+									}}
+									onBlur={() => {
+										const formatted = formatUsEin(ein);
+										if (formatted) setEin(formatted);
+									}}
+									placeholder="12-3456789"
+									aria-invalid={Boolean(einError)}
+									aria-describedby={einError ? `${einId}-error` : undefined}
+									className={INPUT}
+								/>
+								{einError ? (
+									<p
+										id={`${einId}-error`}
+										role="alert"
+										className="text-[13px] text-[#B4322E]"
+									>
+										{einError}
+									</p>
+								) : null}
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</section>

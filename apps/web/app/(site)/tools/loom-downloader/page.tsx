@@ -12,10 +12,9 @@ const ogImage = ogImageUrl({
 });
 
 export const metadata: Metadata = {
-	title:
-		"Loom Video Downloader — Download Loom Videos Free + Migrate to Cap | Cap",
+	title: "Loom video downloader: download Loom videos | Cap",
 	description:
-		"Download any Loom video for free with Cap's online Loom video downloader. Then migrate your entire Loom library to Cap — the open source Loom alternative — with 20% off using code MIGRATE20.",
+		"Download a Loom video from its share link. Cap is an open source screen recorder with instant share links, and Cap Pro can import Loom videos into Cap.",
 	keywords: [
 		"loom video downloader",
 		"download loom video",
@@ -35,9 +34,9 @@ export const metadata: Metadata = {
 		"switch from loom",
 	],
 	openGraph: {
-		title: "Loom Video Downloader — Free Download + Migrate to Cap",
+		title: "Loom video downloader: download Loom videos | Cap",
 		description:
-			"Download any Loom video for free. Then migrate your whole Loom library to Cap and save 20% with MIGRATE20. Built by Cap, the open source Loom alternative.",
+			"Download a Loom video from its share link. Cap is an open source screen recorder with instant share links, and Cap Pro can import Loom videos into Cap.",
 		url: "https://cap.so/tools/loom-downloader",
 		siteName: "Cap",
 		type: "website",
@@ -52,9 +51,9 @@ export const metadata: Metadata = {
 	},
 	twitter: {
 		card: "summary_large_image",
-		title: "Loom Video Downloader — Free Download + Migrate to Cap",
+		title: "Loom video downloader: download Loom videos | Cap",
 		description:
-			"Download any Loom video for free — then migrate your whole library to Cap with 20% off using MIGRATE20.",
+			"Download a Loom video from its share link. Cap is an open source screen recorder with instant share links, and Cap Pro can import Loom videos into Cap.",
 		images: [ogImage],
 	},
 	alternates: {

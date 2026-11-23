@@ -80,102 +80,6 @@ export const macScreenRecordingWithAudioContent: SeoPageContent = {
 		],
 	},
 
-	comparisonTable: {
-		title: "Mac Screen Recording with Audio: Tool Comparison",
-		headers: [
-			"Feature",
-			"Cap",
-			"macOS Cmd+Shift+5",
-			"QuickTime Player",
-			"OBS Studio",
-		],
-		rows: [
-			[
-				"Internal system audio",
-				{ text: "Built-in, no plugins", status: "positive" },
-				{ text: "Not supported", status: "negative" },
-				{ text: "Not supported", status: "negative" },
-				{ text: "Requires setup", status: "warning" },
-			],
-			[
-				"Microphone recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"Mic + system audio together",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Requires routing", status: "warning" },
-			],
-			[
-				"Instant share link",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-			[
-				"Webcam overlay",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"4K recording",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"No watermark",
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-				{ text: "Yes", status: "positive" },
-			],
-			[
-				"AI captions",
-				{ text: "Yes", status: "positive" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-				{ text: "No", status: "negative" },
-			],
-		],
-	},
-
-	comparisonTitle: "Cap vs Built-in Mac Recorders for Audio",
-	comparisonDescription:
-		"Understand why the built-in macOS tools fall short for audio recording and how Cap fills the gap",
-
-	comparison: [
-		{
-			title: "Cap vs macOS Cmd+Shift+5",
-			description:
-				"The macOS built-in screenshot toolbar (Cmd+Shift+5) can record your screen but cannot capture system audio. It records microphone only. Cap captures both system audio and microphone natively on macOS without any additional tools — making it the far superior choice for anyone who needs audio in their Mac screen recordings. <a href='/screen-recorder-mac'>See all reasons to use Cap on Mac</a>.",
-		},
-		{
-			title: "Cap vs QuickTime Player",
-			description:
-				"QuickTime Player's screen recording feature also lacks internal audio capture on modern versions of macOS. Like Cmd+Shift+5, it can only record the microphone. Cap removes this limitation entirely, capturing system audio natively alongside microphone input in every recording.",
-		},
-		{
-			title: "Cap vs OBS Studio for Mac",
-			description:
-				"OBS Studio can record Mac screen with audio, but it requires installing and configuring a virtual audio device like BlackHole to capture system sound — a multi-step process that is easy to get wrong. Cap handles all audio routing automatically with zero configuration. <a href='/screen-recording-software'>Compare all screen recording software</a>.",
-		},
-		{
-			title: "Cap vs Loom on Mac",
-			description:
-				"Loom records Mac screen with audio and is a popular tool for async video, but it charges $18/month for professional use and adds watermarks on the free plan. Cap is significantly more affordable, fully open-source, and offers Studio Mode completely free with no watermarks. <a href='/loom-alternative'>See the full Cap vs Loom comparison</a>.",
-		},
-	],
-
 	migrationGuide: {
 		title: "How to Record Your Mac Screen with Audio Using Cap",
 		steps: [
@@ -226,25 +130,10 @@ export const macScreenRecordingWithAudioContent: SeoPageContent = {
 	faqsTitle: "Mac Screen Recording with Audio — FAQ",
 	faqs: [
 		{
-			question: "Why doesn't macOS record internal audio by default?",
-			answer:
-				"Apple restricts internal audio capture on macOS for privacy and copyright protection reasons. The built-in recorder (Cmd+Shift+5) and QuickTime Player can only record your microphone — not sounds playing from apps or the system. To capture internal audio on Mac, you either need a third-party audio routing tool like BlackHole or an app like Cap that handles system audio capture natively without any extra configuration.",
-		},
-		{
-			question: "How do I record my Mac screen with internal audio?",
-			answer:
-				"The easiest way to record your Mac screen with internal audio is to use Cap. Download the app, enable System Audio in the recording settings, and click record. Cap captures all sounds playing on your Mac alongside your screen recording without requiring any audio routing extensions or virtual sound cards. The macOS built-in tools cannot capture internal audio, so a dedicated app like Cap is the practical solution.",
-		},
-		{
 			question:
 				"Can I record Mac screen with both microphone and system audio?",
 			answer:
 				"Yes — with Cap you can record both microphone and system audio simultaneously on Mac. Before starting a recording, enable both audio sources in Cap's settings. Cap mixes or captures both tracks and includes them in your recording. This is ideal for tutorials where you narrate while application sounds play, or for recording video calls where you want to capture all participants.",
-		},
-		{
-			question: "Does Cap require BlackHole or Loopback for audio on Mac?",
-			answer:
-				"No. Cap handles Mac system audio capture natively without requiring BlackHole, Loopback, or any virtual audio driver. This is one of the key advantages of Cap over OBS Studio and other screen recorders that depend on third-party audio routing tools on macOS.",
 		},
 		{
 			question: "Is there a free way to record Mac screen with audio?",

@@ -3,10 +3,17 @@
 import type { VideoMetadata } from "@cap/database/types";
 import type { SpaceRuleSource, ViewerSettingKey } from "@cap/web-backend";
 import type { Folder, ImageUpload, Video } from "@cap/web-domain";
-import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faBuilding } from "@fortawesome/free-solid-svg-icons/faBuilding";
+import { faUser } from "@fortawesome/free-solid-svg-icons/faUser";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { FontAwesomeIcon } from "@/components/FontAwesomeIcon";
+import { useEffectMutation, useRpcClient } from "@/lib/EffectRuntime";
 import type { MoveLocation } from "@/lib/move-items";
-import { CapCard } from "../../../caps/components/CapCard/CapCard";
+import {
+	CapCard,
+	type CapCardReorderActions,
+} from "../../../caps/components/CapCard/CapCard";
 
 interface SharedCapCardProps {
 	cap: {
@@ -52,7 +59,10 @@ interface SharedCapCardProps {
 	currentFolderId?: Folder.FolderId | null;
 	isSelected?: boolean;
 	anyCapSelected?: boolean;
-	onSelectToggle?: () => void;
+	onSelectToggle?: (options?: { shiftKey?: boolean }) => void;
+	selectedIds?: Video.VideoId[];
+	href?: string;
+	reorder?: CapCardReorderActions;
 }
 
 export const SharedCapCard: React.FC<SharedCapCardProps> = ({
@@ -72,12 +82,27 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	isSelected,
 	anyCapSelected,
 	onSelectToggle,
+	selectedIds,
+	href,
+	reorder,
 }) => {
 	const displayCount =
 		analytics === 0
 			? Math.max(cap.totalComments, cap.totalReactions)
 			: analytics;
 	const isOwner = userId === cap.ownerId;
+	const router = useRouter();
+	const rpc = useRpcClient();
+	const deleteCap = useEffectMutation({
+		mutationFn: (id: Video.VideoId) => rpc.VideoDelete(id),
+		onSuccess: () => {
+			toast.success("Cap deleted successfully");
+			router.refresh();
+		},
+		onError: () => {
+			toast.error("Failed to delete cap");
+		},
+	});
 
 	return (
 		<li className="list-none" onDragStart={onDragStart} onDragEnd={onDragEnd}>
@@ -94,23 +119,35 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 				isSelected={isSelected}
 				anyCapSelected={anyCapSelected}
 				onSelectToggle={onSelectToggle}
+				selectedIds={selectedIds}
+				href={href}
+				reorder={reorder}
+				onDelete={isOwner ? () => deleteCap.mutateAsync(cap.id) : undefined}
 			>
-				<div className="mb-2 space-y-1">
+				<div className="flex flex-col gap-1 -mt-1 min-w-0">
 					{cap.ownerName && (
-						<div className="flex gap-2 items-center">
-							<FontAwesomeIcon icon={faUser} className="text-gray-10 size-3" />
-							<span className="text-sm text-gray-10">{cap.ownerName}</span>
+						<div className="flex gap-2 items-center min-w-0">
+							<FontAwesomeIcon
+								icon={faUser}
+								className="text-gray-9 size-2.5 shrink-0"
+							/>
+							<span className="text-[13px] truncate text-gray-10">
+								{cap.ownerName}
+							</span>
 						</div>
 					)}
 					{isOwner && (
-						<div className="flex gap-2 items-center">
+						<div className="flex gap-2 items-center min-w-0">
 							<FontAwesomeIcon
 								icon={faBuilding}
-								className="text-gray-10 size-2.5"
+								className="text-gray-9 size-2.5 shrink-0"
 							/>
-							<p className="text-sm pointer-events-none text-gray-10">
+							<p
+								title={spaceName || organizationName}
+								className="text-[13px] truncate pointer-events-none text-gray-10"
+							>
 								Shared with{" "}
-								<span className="text-sm font-medium text-gray-12">
+								<span className="font-medium text-gray-11">
 									{spaceName || organizationName}
 								</span>
 							</p>

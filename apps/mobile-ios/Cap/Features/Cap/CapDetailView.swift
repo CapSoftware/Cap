@@ -6,8 +6,10 @@ struct CapDetailView: View {
 
     @Environment(SessionModel.self) private var session
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.capsLayout) private var layout
+    @Environment(\.capSelection) private var selection
+    @Environment(CapDetailModels.self) private var capModels: CapDetailModels?
     @State private var model: CapDetailModel
-    @State private var section: DetailSection = .comments
     @State private var showingRename = false
     @State private var renameText = ""
     @State private var showingPassword = false
@@ -18,29 +20,46 @@ struct CapDetailView: View {
     @State private var editor: EditorModel?
     @State private var showingProRequired = false
     @State private var openingEditor = false
+    @State private var columnSize: CGSize = .zero
+    @State private var headerVisible = true
     private let upgrade = WebUpgrade.shared
 
-    init(target: ShareTarget) {
-        self.target = target
-        _model = State(initialValue: CapDetailModel(target: target))
+    init(model: CapDetailModel) {
+        target = ShareTarget(id: model.id)
+        _model = State(initialValue: model)
+        _showingFullscreen = State(initialValue: model.isFullscreen)
     }
 
-    enum DetailSection: Hashable {
-        case comments, summary, transcript
+    typealias DetailSection = CapDetailModel.Section
+
+    private var section: DetailSection {
+        get { model.section }
+        nonmutating set { model.section = newValue }
     }
 
     var body: some View {
         content
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.hidden, for: .tabBar)
+            .toolbar(layout == .stack ? .hidden : .automatic, for: .tabBar)
             .task { await model.load(session: session) }
-            .onDisappear { model.pauseForDisappear() }
+            .onAppear { model.presentations += 1 }
+            .onDisappear {
+                model.presentations -= 1
+                // Folding or unfolding rebuilds this screen around the same model; only pause if nothing shows it now.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if model.presentations == 0 { model.pauseForDisappear() }
+                }
+            }
             // Mirrored into view state: a binding straight into the model isn't observed by the presenter.
             .onChange(of: model.isFullscreen) { _, value in
                 if showingFullscreen != value { showingFullscreen = value }
             }
             .onChange(of: showingFullscreen) { _, value in
                 if model.isFullscreen != value { model.isFullscreen = value }
+            }
+            .onChange(of: isCovered) { _, covered in
+                capModels?.setCovered(covered, by: model)
             }
             .fullScreenCover(isPresented: $showingFullscreen) {
                 if let player = model.player {
@@ -65,6 +84,7 @@ struct CapDetailView: View {
             .alert("Editing is part of Cap Pro", isPresented: $showingProRequired) {
                 if upgrade.isAllowed {
                     Button("Upgrade in your Cap dashboard") {
+                        Usage.track("upgrade_clicked", ["source": "editor"])
                         UIApplication.shared.open(session.services.environment.upgradeURL)
                     }
                 }
@@ -113,13 +133,37 @@ struct CapDetailView: View {
             }
             .confirmationDialog("Block \(model.cap?.ownerName.isEmpty == false ? model.cap!.ownerName : "this user")?", isPresented: $showingBlock, titleVisibility: .visible) {
                 Button("Block", role: .destructive) {
-                    Task { if await model.blockOwner() { dismiss() } }
+                    Task { if await model.blockOwner() { close() } }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("You won't see their Caps or comments in Cap for iPhone.")
             }
-            .capDeleteConfirmation(pendingDelete: $pendingDelete) { dismiss() }
+            .capDeleteConfirmation(pendingDelete: $pendingDelete) { _ in close() }
+    }
+
+    private var isCovered: Bool {
+        editor != nil || showingFullscreen
+    }
+
+    /// With the keyboard up on a small phone (iPhone SE, mini), the video and timeline would leave the comments or
+    /// transcript only a sliver, and the video squeezes into a strip its controls overflow. Composing pauses playback,
+    /// so the video steps aside until the keyboard goes. Larger phones keep it.
+    private var videoStepsAside: Bool {
+        guard layout == .stack, !model.isPictureInPictureActive, columnSize.height > 0 else { return false }
+        let video = (columnSize.width - CapTheme.spacing * 2) * 9 / 16
+        // 375 pt phones also need room for the transcript's search field and a few matches.
+        let room: CGFloat = columnSize.width < 390 ? 200 : 150
+        return columnSize.height < video + room
+    }
+
+    /// Beside the library the Cap is the detail column's root, which dismiss can't pop.
+    private func close() {
+        if let selection, selection.selected == model.id {
+            selection.deselect(model.id)
+        } else {
+            dismiss()
+        }
     }
 
     @ViewBuilder
@@ -194,12 +238,18 @@ struct CapDetailView: View {
         let owned = detail.cap.isOwned(by: session.credentials.userId)
         let available = sections(detail)
         let current = available.contains(section) ? section : available.first
+        let showsVideo = !videoStepsAside
         return VStack(spacing: 0) {
-            PlayerStage(model: model, detail: detail)
-                .padding(.horizontal, CapTheme.spacing)
-                .padding(.top, 4)
+            if showsVideo {
+                PlayerStage(model: model, detail: detail)
+                    .padding(.horizontal, CapTheme.spacing)
+                    .padding(.top, 4)
+                    // A wide, short column would otherwise give the height to the scroll view and shrink the video.
+                    .layoutPriority(layout == .split ? 1 : 0)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
-            if model.player != nil, !model.playbackFailed, !detail.viewer.isScreenshot, (model.duration ?? 0) > 0 {
+            if showsVideo, model.player != nil, !model.playbackFailed, !detail.viewer.isScreenshot, (model.duration ?? 0) > 0 {
                 PlayerTimeline(model: model, comments: detail.comments, chapters: detail.viewer.settings.disableChapters ? [] : detail.chapters) { marker in
                     model.seek(to: marker.time)
                     if model.commentsEnabled, let first = detail.comments.first(where: { marker.commentIds.contains($0.id) && $0.type == .text }) {
@@ -209,6 +259,7 @@ struct CapDetailView: View {
                 }
                 .padding(.horizontal, CapTheme.spacing)
                 .padding(.top, 2)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
 
             ScrollViewReader { proxy in
@@ -216,6 +267,7 @@ struct CapDetailView: View {
                     LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
                         CapHeader(detail: detail, owned: owned)
                             .padding(.horizontal, CapTheme.spacing)
+                            .onScrollVisibilityChange(threshold: 0.01) { headerVisible = $0 }
 
                         if model.reactionsEnabled {
                             ReactionBar(model: model)
@@ -236,6 +288,8 @@ struct CapDetailView: View {
                                 }
                             }
                             .padding(.horizontal, CapTheme.spacing)
+                            // With a single section there's no picker to carry the scroll target.
+                            .id(available.count > 1 ? "section-content" : "sections")
                         } header: {
                             if available.count > 1, let current {
                                 Picker("Section", selection: Binding(get: { current }, set: { section = $0 })) {
@@ -256,6 +310,30 @@ struct CapDetailView: View {
                     .animation(.snappy(duration: 0.25), value: section)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // With the video aside the list meets the navigation bar; keep text from showing through under it.
+                .scrollEdgeEffectStyle(showsVideo ? nil : .hard, for: .top)
+                .onChange(of: showsVideo) { _, shows in
+                    guard !shows else { return }
+                    // A list someone has already scrolled into stays where it is.
+                    let reply = model.replyingTo?.id
+                    guard reply != nil || headerVisible else { return }
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(60))
+                        withAnimation(.snappy) {
+                            if let reply {
+                                proxy.scrollTo(reply, anchor: .bottom)
+                            } else {
+                                proxy.scrollTo("sections", anchor: .top)
+                            }
+                        }
+                    }
+                }
+                .onChange(of: model.sectionRevealRequests) {
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        withAnimation(.snappy) { proxy.scrollTo("sections", anchor: .top) }
+                    }
+                }
                 .refreshable { await model.refreshDetail() }
                 .onChange(of: model.highlightedCommentID, initial: true) { _, id in
                     guard let id else { return }
@@ -267,6 +345,8 @@ struct CapDetailView: View {
                 }
             }
         }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { columnSize = $0 }
+        .animation(.snappy(duration: 0.25), value: showsVideo)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if current == .comments, model.commentsEnabled {
                 CommentComposer(model: model, ownerName: owned ? nil : detail.cap.ownerName)
@@ -287,6 +367,7 @@ struct CapDetailView: View {
     private func copyLink(_ detail: CapDetail, at time: Double?) {
         if let time {
             UIPasteboard.general.url = session.services.environment.shareURL(for: target.id, at: time)
+            Usage.track("cap_link_copied", ["timestamp": true])
             session.toasts.show("Link at \(CapFormat.timestamp(time)) copied", systemImage: "link")
         } else {
             CapActions.copyLink(detail.shareUrl, session: session)
@@ -345,6 +426,16 @@ struct CapDetailView: View {
                 Section {
                     Button(cap.isPublic ? "Make private" : "Make public", systemImage: cap.isPublic ? "lock" : "globe") {
                         Task { await model.setPublic(!cap.isPublic) }
+                    }
+                    .disabled(model.updatingSharing)
+                    if cap.isPublic, let linkAccess = cap.linkAccess {
+                        Button(
+                            linkAccess == .anyone ? "Limit to your organization" : "Open to anyone with the link",
+                            systemImage: linkAccess == .anyone ? "person.2" : "link"
+                        ) {
+                            Task { await model.setLinkAccess(linkAccess == .anyone ? .restricted : .anyone) }
+                        }
+                        .disabled(model.updatingSharing)
                     }
                     Button("Rename", systemImage: "pencil") {
                         renameText = cap.title

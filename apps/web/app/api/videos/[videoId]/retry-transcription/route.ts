@@ -5,6 +5,10 @@ import { videos } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import {
+	PROCESSING_RETRY_RATE_MESSAGE,
+	processingRetryLimited,
+} from "@/lib/processing-retry-limit";
 
 export async function POST(
 	request: Request,
@@ -37,6 +41,13 @@ export async function POST(
 		const video = videoQuery[0];
 		if (!video || video.ownerId !== user.id) {
 			return Response.json({ error: "Unauthorized" }, { status: 403 });
+		}
+
+		if (await processingRetryLimited(user.id, request.headers)) {
+			return Response.json(
+				{ error: PROCESSING_RETRY_RATE_MESSAGE },
+				{ status: 429 },
+			);
 		}
 
 		// Reset status to null - this will trigger automatic retry via get-status.ts

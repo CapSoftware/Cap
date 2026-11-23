@@ -10,6 +10,7 @@ import * as HttpServerRequest from "@effect/platform/HttpServerRequest";
 import type { RequestPresigningArguments } from "@smithy/types";
 import { type Cause, Effect, Option, Stream } from "effect";
 
+import { attachmentContentDisposition } from "../Storage/content-disposition.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 
 const DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS = 3600;
@@ -226,6 +227,24 @@ export const createS3BucketAccess = Effect.gen(function* () {
 					},
 				),
 			).pipe(Effect.withSpan("getSignedObjectUrl")),
+		getSignedDownloadUrl: (
+			key: string,
+			fileName: string,
+			signingArgs?: RequestPresigningArguments,
+		) =>
+			withPublicSigningClient((client) =>
+				S3Presigner.getSignedUrl(
+					client,
+					new S3.GetObjectCommand({
+						Bucket: provider.bucket,
+						Key: key,
+						ResponseContentDisposition: attachmentContentDisposition(fileName),
+					}),
+					signingArgs ?? {
+						expiresIn: DEFAULT_PRESIGNED_GET_EXPIRES_SECONDS,
+					},
+				),
+			).pipe(Effect.withSpan("getSignedDownloadUrl")),
 		getInternalSignedObjectUrl: (
 			key: string,
 			signingArgs?: RequestPresigningArguments,

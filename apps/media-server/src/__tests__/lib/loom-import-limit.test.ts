@@ -14,7 +14,9 @@ import { join } from "node:path";
 import {
 	downloadVideoToTemp,
 	LOOM_IMPORT_MAX_BYTES,
+	MAX_SOURCE_DOWNLOAD_BYTES,
 } from "../../lib/media-video";
+import { DownloadTooLargeError } from "../../lib/parallel-download";
 
 const previousStreamingHosts = process.env.MEDIA_SERVER_STREAMING_HOSTS;
 beforeAll(() => {
@@ -84,6 +86,30 @@ describe("Loom import file size", () => {
 				16,
 			),
 		).rejects.toThrow("10 GB");
+		expect(cancelled).toBe(true);
+	});
+
+	test("refuses an ordinary source that declares more than the download cap", async () => {
+		expect(MAX_SOURCE_DOWNLOAD_BYTES).toBe(128 * 1024 ** 3);
+		let cancelled = false;
+		stubFetch(
+			async () =>
+				new Response(
+					new ReadableStream({
+						cancel() {
+							cancelled = true;
+						},
+					}),
+					{
+						headers: {
+							"Content-Length": String(MAX_SOURCE_DOWNLOAD_BYTES + 1),
+						},
+					},
+				),
+		);
+		await expect(
+			downloadVideoToTemp("https://source.test/video.mp4", ".mp4"),
+		).rejects.toBeInstanceOf(DownloadTooLargeError);
 		expect(cancelled).toBe(true);
 	});
 

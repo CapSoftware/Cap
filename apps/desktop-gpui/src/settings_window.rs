@@ -94,6 +94,7 @@ pub enum Page {
     Cli,
     Recordings,
     Screenshots,
+    Meetings,
     Automations,
     Transcription,
     Integrations,
@@ -111,6 +112,7 @@ impl Page {
         Page::Cli,
         Page::Recordings,
         Page::Screenshots,
+        Page::Meetings,
         Page::Automations,
         Page::Transcription,
         Page::Integrations,
@@ -130,6 +132,7 @@ impl Page {
             Self::Cli => tr::settings::nav::cli(),
             Self::Recordings => tr::settings::nav::recordings(),
             Self::Screenshots => tr::settings::nav::screenshots(),
+            Self::Meetings => tr::settings::meetings::nav(),
             Self::Automations => tr::settings::nav::automations(),
             Self::Transcription => tr::settings::nav::transcription(),
             Self::Integrations => tr::settings::nav::integrations(),
@@ -149,6 +152,7 @@ impl Page {
             Self::Cli => "cli",
             Self::Recordings => "recordings",
             Self::Screenshots => "screenshots",
+            Self::Meetings => "meetings",
             Self::Automations => "automations",
             Self::Transcription => "transcription",
             Self::Integrations => "integrations",
@@ -172,6 +176,7 @@ impl Page {
             Self::Quality => "icons/gauge.svg",
             Self::Recordings => "icons/square-play.svg",
             Self::Screenshots => "icons/image.svg",
+            Self::Meetings => "icons/users.svg",
             Self::Automations => "icons/zap.svg",
             Self::Transcription => "icons/captions.svg",
             Self::Integrations => "icons/unplug.svg",
@@ -218,6 +223,7 @@ pub(crate) enum MenuKind {
     AutomationExportFps(usize, usize),
     AutomationExportCompression(usize, usize),
     AutomationPreset(usize, usize),
+    Meetings(crate::meetings_ui::settings::MeetingsMenu),
 }
 
 struct OpenMenu {
@@ -716,7 +722,7 @@ pub struct SettingsWindow {
     pub(crate) page: Page,
     pub(crate) settings: GeneralSettings,
     menu: Option<OpenMenu>,
-    page_scroll: ScrollHandle,
+    pub(crate) page_scroll: ScrollHandle,
     instant_quality_anchor: ScrollAnchor,
     studio_quality_anchor: ScrollAnchor,
     quality_scroll_request: Option<Mode>,
@@ -1201,6 +1207,14 @@ impl SettingsWindow {
             if !confirmed {
                 return;
             }
+            let Ok(editor_closing) =
+                cx.update(|_, cx| crate::app_windows::delete_closing_open_editor(&path, cx))
+            else {
+                return;
+            };
+            if editor_closing {
+                return;
+            }
 
             let Ok(task) = cx.update(|_, cx| {
                 gpui_tokio::Tokio::spawn(cx, crate::upload::queue::delete_recording(path.clone()))
@@ -1210,6 +1224,7 @@ impl SettingsWindow {
             let deleted = task.await.unwrap_or_else(|error| Err(error.to_string()));
             if let Err(error) = deleted {
                 tracing::error!(path = %path.display(), "deleting the recording failed: {error}");
+                crate::platform::alert_dialog(tr::dialog::delete_recording::failed_title(), &error);
                 return;
             }
             tracing::info!(path = %path.display(), "deleted a recording");
@@ -1324,7 +1339,8 @@ impl SettingsWindow {
     }
 
     fn delete_screenshot(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
+        let key = crate::app_windows::screenshot_editor_key(&path);
+        cx.spawn_in(window, async move |_this, cx| {
             let confirmed = crate::platform::confirm_dialog(
                 "Cap",
                 tr::main::delete_screenshot_confirm(),
@@ -1347,8 +1363,7 @@ impl SettingsWindow {
                 tracing::error!(path = %path.display(), "deleting the screenshot failed: {error}");
                 return;
             }
-            this.update_in(cx, |this, window, cx| this.refresh_screenshots(window, cx))
-                .ok();
+            crate::app_windows::finish_library_screenshot_delete(key, cx);
         })
         .detach();
     }
@@ -1574,6 +1589,7 @@ impl SettingsWindow {
                 .into_iter()
                 .map(|window| ui::MenuItem::new(window_option_label(&window), false))
                 .collect(),
+            MenuKind::Meetings(menu) => self.meetings_menu_items(menu),
             kind => self.pages_menu_items(kind),
         }
     }
@@ -1639,6 +1655,7 @@ impl SettingsWindow {
                 });
                 self.write_excluded(next, cx);
             }
+            MenuKind::Meetings(menu) => self.meetings_choose(menu, index, window, cx),
             kind => self.pages_choose(kind, index, window, cx),
         }
         cx.notify();
@@ -1858,6 +1875,7 @@ impl Render for SettingsWindow {
             // the drag layer the zoom slider needs while the button is held.
             .children(self.render_menu(cx))
             .children(self.render_slider_drag_layer(cx))
+            .children(crate::keylat::probe())
     }
 }
 
@@ -2376,6 +2394,7 @@ impl SettingsWindow {
                         Page::Quality => self.render_recording_quality(cx),
                         Page::Recordings => self.render_recordings(cx),
                         Page::Screenshots => self.render_screenshots(cx),
+                        Page::Meetings => self.render_meetings(window, cx),
                         Page::Shortcuts => self.render_shortcuts(cx),
                         Page::Cli => self.render_cli(cx),
                         Page::Automations => self.render_automations(cx),
@@ -2916,6 +2935,14 @@ impl SettingsWindow {
                 .flex_shrink_0()
                 .rounded(px(4.))
                 .bg(theme.gray_10)
+                .when(row.item.audio_only, |this| {
+                    this.flex().items_center().justify_center().child(
+                        gpui::svg()
+                            .path("icons/microphone.svg")
+                            .size(px(18.))
+                            .text_color(theme.gray_1),
+                    )
+                })
                 .into_any_element(),
         };
 
@@ -3168,7 +3195,8 @@ impl SettingsWindow {
             "recording-delete",
             "icons/trash.svg",
             tr::settings::recordings::delete(),
-            false,
+            // The recording being captured or finalized owns its folder.
+            library::is_recording_in_progress(&path),
             cx,
             move |this, window, cx| this.delete_recording(path.clone(), window, cx),
         ))
@@ -3699,6 +3727,24 @@ impl SettingsWindow {
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.new_zoom_amount();
+        let keep_drawings = crate::live_draw::SUPPORTED.then(|| {
+            self.setting_row(
+                tr::settings::general::recording::keep_drawings::label(),
+                Some(tr::settings::general::recording::keep_drawings::description()),
+                self.toggle(
+                    "keep-drawings",
+                    tr::settings::general::recording::keep_drawings::label(),
+                    settings.keep_drawings,
+                    cx,
+                    |this, cx| {
+                        this.settings.keep_drawings = !this.settings.keep_drawings;
+                        let value = this.settings.keep_drawings;
+                        this.write_bool(store::KEEP_DRAWINGS_KEY, value, cx);
+                    },
+                )
+                .into_any_element(),
+            )
+        });
 
         self.section(
             tr::settings::general::recording::title(),
@@ -3777,10 +3823,7 @@ impl SettingsWindow {
                         .into_any_element(),
                     ),
                     // "After a Studio recording" lives on the Shortcuts page,
-                    // next to the shortcuts it shapes. There is no
-                    // post-capture overlay in this app, so a stored
-                    // `showOverlay` means "reshow the main window"
-                    // (`app_windows.rs`) and is labelled "Show Cap".
+                    // next to the shortcuts it shapes.
                     self.setting_row(
                         tr::settings::general::recording::post_deletion::label(),
                         Some(tr::settings::general::recording::post_deletion::description()),
@@ -3943,6 +3986,10 @@ impl SettingsWindow {
                             .into_any_element(),
                     ),
                 ])
+                .when_some(keep_drawings, |card, row| {
+                    card.child(ui::Card::settings_divider(&self.theme))
+                        .child(row)
+                })
                 .into_any_element(),
             ],
         )
@@ -5106,7 +5153,7 @@ mod tests {
     /// addresses by slug.
     #[test]
     fn every_page_round_trips_through_its_slug() {
-        assert_eq!(Page::ALL.len(), 13);
+        assert_eq!(Page::ALL.len(), 14);
         for page in Page::ALL {
             assert_eq!(Page::from_slug(page.slug()), Some(*page));
         }
@@ -5261,6 +5308,7 @@ mod tests {
             sharing: None,
             sort_time_millis: 0.,
             thumbnail: None,
+            audio_only: false,
         }
     }
 
@@ -5472,4 +5520,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod recording_action_tests;
+pub(crate) mod recording_action_tests;

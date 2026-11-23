@@ -68,6 +68,43 @@ export function isNonMediaRawUploadKey(fileKey: string): boolean {
 	return extension !== null && NON_MEDIA_UPLOAD_EXTENSIONS.has(extension);
 }
 
+const STORED_IMAGE_UPLOAD_CONTENT_TYPES = new Set([
+	"image/jpeg",
+	"image/png",
+	"image/gif",
+	"image/webp",
+]);
+
+// The media host serves objects with their stored Content-Type, so anything
+// other than audio, video or a raster image is stored as a download.
+export function toStoredUploadContentType(contentType: string): string {
+	const essence = contentType.split(";")[0]?.trim().toLowerCase() ?? "";
+	if (
+		essence.startsWith("video/") ||
+		essence.startsWith("audio/") ||
+		STORED_IMAGE_UPLOAD_CONTENT_TYPES.has(essence)
+	) {
+		return contentType;
+	}
+	return "application/octet-stream";
+}
+
+// Completion rewrites the object's metadata. Keep the plain-download type set
+// when the upload started unless the key names a video file.
+export function toCompletedUploadContentType(
+	fileKey: string,
+	storedContentType: string | undefined,
+): string {
+	const essence = storedContentType?.split(";")[0]?.trim().toLowerCase();
+	if (
+		essence === "application/octet-stream" &&
+		!isProcessableMediaKey(fileKey)
+	) {
+		return "application/octet-stream";
+	}
+	return "video/mp4";
+}
+
 export function isMediaPolicyProcessingError(
 	error: string | null | undefined,
 ): error is string {

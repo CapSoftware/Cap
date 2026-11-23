@@ -24,11 +24,17 @@ import {
 import {
 	getEarlySegmentTracks,
 	getSegmentPlaybackState,
+	isAbandonedSegmentUpload,
 	readRecordedLength,
 	totalSegmentDuration,
 } from "@/lib/segment-playback";
 import { apiToHandler } from "@/lib/server";
 import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
+import {
+	playbackUrlValidity,
+	streamUrlValidity,
+} from "@/lib/signed-url-validity";
+import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import {
 	generateM3U8Playlist,
@@ -155,6 +161,9 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 		);
 
 		if (uploadRecord?.rawFileKey) {
+			if (isEditSourceObjectKey(uploadRecord.rawFileKey)) {
+				return yield* Effect.fail(new HttpApiError.NotFound());
+			}
 			return uploadRecord.rawFileKey;
 		}
 
@@ -200,7 +209,7 @@ const getPlaylistResponse = (
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
 			return yield* bucket
-				.getSignedObjectUrl(rawFileKey)
+				.getSignedObjectUrl(rawFileKey, playbackUrlValidity())
 				.pipe(Effect.map(HttpServerResponse.redirect));
 		}
 
@@ -379,7 +388,11 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.NotFound());
 			}
 
-			const signedInitUrl = yield* bucket.getSignedObjectUrl(initKey);
+			const streamValidity = streamUrlValidity();
+			const signedInitUrl = yield* bucket.getSignedObjectUrl(
+				initKey,
+				streamValidity,
+			);
 			const initUrl = resolveMobileWebResourceUrl(
 				signedInitUrl,
 				serverEnv().WEB_URL,
@@ -391,7 +404,7 @@ const getPlaylistResponse = (
 						? segSource.getVideoSegmentKey(seg.index)
 						: segSource.getAudioSegmentKey(seg.index);
 					return bucket
-						.getSignedObjectUrl(key)
+						.getSignedObjectUrl(key, streamValidity)
 						.pipe(
 							Effect.map((url) =>
 								resolveMobileWebResourceUrl(
@@ -425,7 +438,24 @@ const getPlaylistResponse = (
 				playlist += `${segmentUrls[i]}\n`;
 			}
 
-			if (manifest.is_complete) {
+			// An upload that stopped mid-recording never completes its manifest,
+			// and players reload an unended playlist forever, so end it once the
+			// manifest has gone quiet. A resumed upload rewrites the manifest and
+			// the next load is live again.
+			const uploadAbandoned =
+				!manifest.is_complete &&
+				(yield* bucket.listObjects({ prefix: manifestKey, maxKeys: 1 }).pipe(
+					Effect.map((objects) =>
+						isAbandonedSegmentUpload(
+							objects.Contents?.find((object) => object.Key === manifestKey)
+								?.LastModified,
+							Date.now(),
+						),
+					),
+					Effect.orElseSucceed(() => false),
+				));
+
+			if (manifest.is_complete || uploadAbandoned) {
 				playlist += "#EXT-X-ENDLIST\n";
 			}
 
@@ -440,7 +470,7 @@ const getPlaylistResponse = (
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			if (isMp4Source || urlParams.videoType === "mp4") {
 				return HttpServerResponse.redirect(
-					yield* bucket.getSignedObjectUrl(mp4Key),
+					yield* bucket.getSignedObjectUrl(mp4Key, playbackUrlValidity()),
 				);
 			}
 
@@ -488,12 +518,13 @@ const getPlaylistResponse = (
 				return yield* Effect.fail(new HttpApiError.BadRequest());
 			}
 
+			const streamValidity = streamUrlValidity();
 			const lines = yield* Effect.forEach(
 				playlistLines,
 				(line) => {
 					const uri = line.trim();
 					return isUriLine(uri)
-						? bucket.getSignedObjectUrl(resolveUri(uri))
+						? bucket.getSignedObjectUrl(resolveUri(uri), streamValidity)
 						: Effect.succeed(line);
 				},
 				{ concurrency: 16 },
@@ -535,13 +566,15 @@ const getPlaylistResponse = (
 			urlParams.fileType.value === "enhanced-audio"
 		) {
 			const enhancedAudioKey = `${video.ownerId}/${video.id}/enhanced-audio.mp3`;
-			return yield* bucket.getSignedObjectUrl(enhancedAudioKey).pipe(
-				Effect.map(HttpServerResponse.redirect),
-				Effect.catchTag("StorageError", () =>
-					Effect.fail(new HttpApiError.NotFound()),
-				),
-				Effect.withSpan("fetchEnhancedAudio"),
-			);
+			return yield* bucket
+				.getSignedObjectUrl(enhancedAudioKey, playbackUrlValidity())
+				.pipe(
+					Effect.map(HttpServerResponse.redirect),
+					Effect.catchTag("StorageError", () =>
+						Effect.fail(new HttpApiError.NotFound()),
+					),
+					Effect.withSpan("fetchEnhancedAudio"),
+				);
 		}
 
 		yield* Effect.log("Resolving path with custom bucket");
@@ -557,11 +590,13 @@ const getPlaylistResponse = (
 					)).pipe(Option.getOrNull) ?? "";
 
 				const lines = playlistText.split("\n");
+				const streamValidity = streamUrlValidity();
 
 				for (const [index, line] of lines.entries()) {
 					if (line.endsWith(".ts")) {
 						const url = yield* bucket.getSignedObjectUrl(
 							`${video.ownerId}/${video.id}/combined-source/${line}`,
+							streamValidity,
 						);
 						lines[index] = url;
 					}
@@ -578,7 +613,7 @@ const getPlaylistResponse = (
 			} else if (isMp4Source) {
 				yield* Effect.log(`Returning path ${mp4Key}`);
 				return yield* bucket
-					.getSignedObjectUrl(mp4Key)
+					.getSignedObjectUrl(mp4Key, playbackUrlValidity())
 					.pipe(Effect.map(HttpServerResponse.redirect));
 			}
 
@@ -634,10 +669,14 @@ const getPlaylistResponse = (
 				maxKeys: urlParams.thumbnail ? 1 : undefined,
 			});
 
+			const streamValidity = streamUrlValidity();
 			const chunksUrls = yield* Effect.all(
 				(objects.Contents || []).map((object) =>
 					Effect.gen(function* () {
-						const url = yield* bucket.getSignedObjectUrl(object.Key ?? "");
+						const url = yield* bucket.getSignedObjectUrl(
+							object.Key ?? "",
+							streamValidity,
+						);
 						const metadata = yield* bucket.headObject(object.Key ?? "");
 
 						return {

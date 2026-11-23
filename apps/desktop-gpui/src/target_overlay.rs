@@ -361,12 +361,15 @@ pub(crate) mod probe_frames {
     }
 }
 
+/// Shift turns snapping off as it did in 0.6.0, alongside this app's ⌘
+/// (Ctrl elsewhere).
 fn snap_off(modifiers: &gpui::Modifiers) -> bool {
-    if cfg!(target_os = "macos") {
-        modifiers.platform
-    } else {
-        modifiers.control
-    }
+    modifiers.shift
+        || if cfg!(target_os = "macos") {
+            modifiers.platform
+        } else {
+            modifiers.control
+        }
 }
 
 fn render_thirds(crop: AreaRect) -> impl IntoElement {
@@ -470,6 +473,45 @@ enum Arrangement {
     PutBack(ArrangedWindow),
 }
 
+/// Whether macOS raised its "allow Cap to control this app" prompt for a
+/// refused move; if so, waits (up to two minutes) for the user to answer.
+async fn wait_for_app_control_prompt(cx: &mut gpui::AsyncApp) -> bool {
+    let poll = |cx: &mut gpui::AsyncApp| {
+        cx.background_executor()
+            .spawn(async { crate::platform::app_control_prompt_visible() })
+    };
+    let mut seen = false;
+    for _ in 0..8 {
+        if poll(cx).await {
+            seen = true;
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(150))
+            .await;
+    }
+    if !seen {
+        return false;
+    }
+    cx.update(|cx| app_windows::lower_target_overlays(true, cx));
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline && poll(cx).await {
+        cx.background_executor()
+            .timer(Duration::from_millis(250))
+            .await;
+    }
+    true
+}
+
+/// A user-asked resize that macOS 27.3 refused although Cap holds the
+/// Override grant: the app just isn't one Cap may control yet.
+fn resize_needs_app_choice(arrangement: &Arrangement) -> bool {
+    cfg!(target_os = "macos")
+        && matches!(arrangement, Arrangement::Frame(_))
+        && crate::permissions::grants_are_settings_only()
+        && crate::foreign_window::can_arrange()
+}
+
 /// Focus records a window by itself, which only macOS and Windows capture.
 const FOCUS_SUPPORTED: bool = cfg!(any(target_os = "macos", windows));
 
@@ -498,6 +540,10 @@ impl TargetSelect {
             _poll: None,
         });
         cx.set_global(TargetSelectGlobal(select.clone()));
+        #[cfg(target_os = "macos")]
+        cx.background_executor()
+            .spawn(async { import_legacy_area_selection() })
+            .detach();
         select
     }
 
@@ -757,12 +803,64 @@ fn store_area_ratio(ratio: Option<(u32, u32)>) {
     });
 }
 
-fn stored_locked_area() -> Option<(String, AreaRect)> {
+/// The display a lock belongs to. macOS can hand the same monitor a new
+/// `CGDirectDisplayID` after it is reconnected or the display set changes,
+/// which made a saved area look forgotten, so a lock also records the
+/// display's UUID and matches on either.
+#[derive(Clone, Debug, PartialEq)]
+struct AreaScreen {
+    id: String,
+    uuid: Option<String>,
+}
+
+impl AreaScreen {
+    fn of(display: &DisplayId, cx: &App) -> Self {
+        #[cfg(target_os = "macos")]
+        let uuid = display
+            .to_string()
+            .parse::<u64>()
+            .ok()
+            .and_then(|id| cx.find_display(gpui::DisplayId::new(id)))
+            .and_then(|display| display.uuid().ok())
+            .map(|uuid| uuid.to_string());
+        #[cfg(not(target_os = "macos"))]
+        let uuid = {
+            let _ = cx;
+            None
+        };
+        Self {
+            id: display.to_string(),
+            uuid,
+        }
+    }
+
+    /// The UUID decides when both sides have one: macOS can hand a display's
+    /// old id to another display, and only the UUID follows the panel.
+    fn owns(&self, locked: &LockedArea) -> bool {
+        match (locked.screen_uuid.as_deref(), self.uuid.as_deref()) {
+            (Some(saved), Some(current)) => saved == current,
+            _ => locked.screen_id == self.id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LockedArea {
+    screen_id: String,
+    screen_uuid: Option<String>,
+    bounds: AreaRect,
+}
+
+fn stored_locked_area() -> Option<LockedArea> {
     let section = crate::store::store_section(AREA_SELECTION_STORE);
     if !section.get("locked")?.as_bool()? {
         return None;
     }
-    let display = section.get("screenId")?.as_str()?.to_string();
+    let screen_id = section.get("screenId")?.as_str()?.to_string();
+    let screen_uuid = section
+        .get("screenUuid")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let bounds = section.get("bounds")?;
     let value = |key: &str| bounds.get(key)?.as_f64().map(|value| value as f32);
     let bounds = AreaRect {
@@ -774,15 +872,23 @@ fn stored_locked_area() -> Option<(String, AreaRect)> {
     [bounds.x, bounds.y, bounds.width, bounds.height]
         .iter()
         .all(|value| value.is_finite())
-        .then_some((display, bounds))
+        .then_some(LockedArea {
+            screen_id,
+            screen_uuid,
+            bounds,
+        })
 }
 
-fn store_locked_area(locked: Option<(&DisplayId, AreaRect)>) {
+fn store_locked_area(locked: Option<(&AreaScreen, AreaRect)>) {
     crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
         match locked {
-            Some((display, bounds)) => {
+            Some((screen, bounds)) => {
                 section.insert("locked".into(), true.into());
-                section.insert("screenId".into(), display.to_string().into());
+                section.insert("screenId".into(), screen.id.clone().into());
+                match &screen.uuid {
+                    Some(uuid) => section.insert("screenUuid".into(), uuid.clone().into()),
+                    None => section.remove("screenUuid"),
+                };
                 section.insert(
                     "bounds".into(),
                     serde_json::json!({
@@ -801,11 +907,243 @@ fn store_locked_area(locked: Option<(&DisplayId, AreaRect)>) {
     });
 }
 
-fn locked_area_for(display: &DisplayId, display_size: (f32, f32), min: f32) -> Option<AreaRect> {
-    let (locked_display, bounds) = stored_locked_area()?;
-    (locked_display == display.to_string())
-        .then(|| bounds.clamped(display_size))
+fn locked_area_for(screen: &AreaScreen, display_size: (f32, f32), min: f32) -> Option<AreaRect> {
+    let locked = stored_locked_area()?;
+    screen
+        .owns(&locked)
+        .then(|| locked.bounds.clamped(display_size))
         .filter(|bounds| bounds.is_valid_for(min))
+}
+
+fn stored_area_snap_to_ratio() -> bool {
+    crate::store::store_section(AREA_SELECTION_STORE)
+        .get("snapToRatio")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn store_area_snap_to_ratio(enabled: bool) {
+    crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+        section.insert("snapToRatio".into(), enabled.into());
+        true
+    });
+}
+
+/// The `localStorage` key 0.6.0 kept its area preferences under
+/// (`AREA_SELECTION_STORAGE_KEY` in `utils/area-selection.ts`). Same shape
+/// as [`AREA_SELECTION_STORE`]: `locked`, `screenId`, `bounds` (logical
+/// points on that display), `aspectRatio` and `snapToRatio`.
+#[cfg(any(target_os = "macos", test))]
+const LEGACY_AREA_SELECTION_KEY: &str = "target-select-area-preferences-v1";
+
+#[cfg(any(target_os = "macos", test))]
+const AREA_SELECTION_KEYS: [&str; 5] =
+    ["locked", "screenId", "bounds", "aspectRatio", "snapToRatio"];
+
+/// Its own key, so an ordinary preference write before the import ran can
+/// never be mistaken for one.
+#[cfg(any(target_os = "macos", test))]
+const LEGACY_IMPORTED: &str = "legacyImported";
+
+/// Fill in the preferences this app has never written from what 0.6.0 left
+/// behind. Keys this app already holds win.
+#[cfg(any(target_os = "macos", test))]
+fn merge_legacy_area_selection(
+    section: &mut serde_json::Map<String, serde_json::Value>,
+    legacy: Option<&serde_json::Value>,
+) -> bool {
+    if section
+        .get(LEGACY_IMPORTED)
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return false;
+    }
+    if let Some(legacy) = legacy.and_then(serde_json::Value::as_object) {
+        for key in AREA_SELECTION_KEYS {
+            if section.contains_key(key) {
+                continue;
+            }
+            match (key, legacy.get(key)) {
+                (_, None | Some(serde_json::Value::Null)) => {}
+                ("snapToRatio" | "locked", Some(value)) if !value.is_boolean() => {}
+                (_, Some(value)) => {
+                    section.insert(key.into(), value.clone());
+                }
+            }
+        }
+    }
+    section.insert(LEGACY_IMPORTED.into(), true.into());
+    true
+}
+
+/// A WebKit `localStorage` value: UTF-16LE text, read out of SQLite as hex.
+#[cfg(any(target_os = "macos", test))]
+fn decode_webkit_storage_hex(hex: &str) -> Option<String> {
+    let hex = hex.trim();
+    if hex.is_empty() || hex.len() % 4 != 0 {
+        return None;
+    }
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(hex.get(index..index + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    let units = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).ok()
+}
+
+/// 0.6.0's area preferences, from the Tauri webview's `localStorage`
+/// databases (`~/Library/WebKit/so.cap.desktop/WebsiteData`), newest first.
+/// `Err` when a database could not be read, so the import is tried again on
+/// the next launch rather than recorded as done.
+#[cfg(target_os = "macos")]
+fn legacy_area_selection() -> Result<Option<serde_json::Value>, ()> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Ok(None);
+    };
+    legacy_area_selection_in(
+        &std::path::Path::new(&home).join("Library/WebKit/so.cap.desktop/WebsiteData"),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_area_selection_in(root: &std::path::Path) -> Result<Option<serde_json::Value>, ()> {
+    let mut databases = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() && depth < 4 {
+                pending.push((path, depth + 1));
+            } else if kind.is_file()
+                && path.file_name().is_some_and(|name| {
+                    name == "localstorage.sqlite3"
+                        || name.to_string_lossy().ends_with(".localstorage")
+                })
+            {
+                let modified = entry.metadata().and_then(|meta| meta.modified()).ok();
+                databases.push((modified, path));
+            }
+        }
+    }
+    databases.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut unreadable = false;
+    for (_, path) in databases {
+        let output = std::process::Command::new("/usr/bin/sqlite3")
+            .arg("-readonly")
+            .arg("-cmd")
+            .arg(".timeout 500")
+            .arg(&path)
+            .arg(format!(
+                "SELECT hex(value) FROM ItemTable WHERE key = '{LEGACY_AREA_SELECTION_KEY}'"
+            ))
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        let output = match output {
+            Ok(output) if output.status.success() => output,
+            _ => {
+                unreadable = true;
+                continue;
+            }
+        };
+        let hex = String::from_utf8_lossy(&output.stdout);
+        if let Some(value) =
+            decode_webkit_storage_hex(&hex).and_then(|text| serde_json::from_str(&text).ok())
+        {
+            return Ok(Some(value));
+        }
+    }
+    if unreadable { Err(()) } else { Ok(None) }
+}
+
+/// Brings a 0.6.0 user's locked area, ratio and snap setting across once.
+/// 0.6.1 to 0.6.3 never read them, so a locked area looked forgotten. The
+/// startup task and the first picker both come through here, and the picker
+/// waits for an import already under way so it opens with the result.
+#[cfg(target_os = "macos")]
+fn import_legacy_area_selection() {
+    static IMPORT: std::sync::Once = std::sync::Once::new();
+    IMPORT.call_once(|| {
+        if crate::store::store_section(AREA_SELECTION_STORE)
+            .get(LEGACY_IMPORTED)
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            return;
+        }
+        let Ok(legacy) = legacy_area_selection() else {
+            tracing::warn!("0.6.0 area preferences could not be read; trying again next launch");
+            return;
+        };
+        crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+            merge_legacy_area_selection(section, legacy.as_ref())
+        });
+    });
+}
+
+/// Within this many points a free draw is too small to snap, as in 0.6.0's
+/// `boundsTooSmall`.
+const RATIO_SNAP_MIN: f32 = 30.;
+
+/// 0.6.0's snap to ratios: a free draw or corner resize within 1% of a
+/// common ratio lands on it exactly, pivoting on the fixed corner `anchor`.
+/// The height leads, as it did there, unless an edge or window snap is
+/// holding the vertical edge (`held_x`), and then the width leads instead so
+/// that snap survives. Holding both, or a result that would leave the
+/// display, does not snap.
+fn snap_area_to_ratio(
+    rect: AreaRect,
+    anchor: (f32, f32),
+    display_size: (f32, f32),
+    held_x: bool,
+    held_y: bool,
+) -> Option<(AreaRect, (u32, u32))> {
+    if rect.width <= RATIO_SNAP_MIN || rect.height <= RATIO_SNAP_MIN || (held_x && held_y) {
+        return None;
+    }
+    let ratio = crate::editor_crop::find_closest_ratio(
+        f64::from(rect.width),
+        f64::from(rect.height),
+        crate::editor_crop::RATIO_SNAP_THRESHOLD,
+    )?;
+    let value = ratio_value(ratio);
+    let (width, height) = if held_x {
+        (rect.width.round(), (rect.width / value).round())
+    } else {
+        ((rect.height * value).round(), rect.height.round())
+    };
+    let left_of_anchor = rect.x < anchor.0;
+    let above_anchor = rect.y < anchor.1;
+    let snapped = AreaRect {
+        x: if left_of_anchor {
+            anchor.0 - width
+        } else {
+            anchor.0
+        },
+        y: if above_anchor {
+            anchor.1 - height
+        } else {
+            anchor.1
+        },
+        width,
+        height,
+    };
+    const EPSILON: f32 = 0.01;
+    (snapped.x >= -EPSILON
+        && snapped.y >= -EPSILON
+        && snapped.right() <= display_size.0 + EPSILON
+        && snapped.bottom() <= display_size.1 + EPSILON)
+        .then_some((snapped, ratio))
 }
 
 const QUICK_AREA_RATIOS: [Option<(u32, u32)>; 5] = [
@@ -834,7 +1172,7 @@ pub(crate) fn backdrop_suits(mode: Option<TargetType>) -> bool {
     match mode {
         None => false,
         Some(TargetType::Display | TargetType::Window) => !cfg!(windows),
-        Some(TargetType::Area | TargetType::CameraOnly) => true,
+        Some(TargetType::Area | TargetType::CameraOnly | TargetType::AudioOnly) => true,
     }
 }
 
@@ -1176,6 +1514,7 @@ pub struct OverlayWindow {
     theme: Theme,
     select: Entity<TargetSelect>,
     display_id: DisplayId,
+    area_screen: AreaScreen,
     display_name: String,
     /// Logical size, which is this window's size and the space every
     /// coordinate here lives in.
@@ -1191,6 +1530,8 @@ pub struct OverlayWindow {
     snap_guides: Vec<SnapGuide>,
     /// The aspect ratio a drawn or resized area keeps, `None` for free.
     area_ratio: Option<(u32, u32)>,
+    area_snap_to_ratio: bool,
+    area_snapped: Option<(u32, u32)>,
     area_locked: bool,
     area_snap: Vec<NormRect>,
     area_windows_requested: bool,
@@ -1199,6 +1540,10 @@ pub struct OverlayWindow {
     /// moves once a frame) or a restored area.
     area_camera_pending: bool,
     recording_area: bool,
+    /// A screenshot is about to be taken: draw nothing. What this window last
+    /// showed is what a compositor animates away when it closes.
+    #[cfg(target_os = "linux")]
+    emptied_for_capture: bool,
     /// The mode menu the start pill's caret drops down -- `menuModes()`
     /// popped up at the event location (`target-select-overlay.tsx:2064-2090,
     /// 2206-2210`). `Some` while it is open.
@@ -1244,6 +1589,8 @@ pub struct OverlayWindow {
 #[derive(Clone)]
 enum OverlayDeviceChoice {
     Camera(Option<crate::devices::CameraOption>),
+    /// The remembered picture when there is one, else a file picker.
+    CameraPicture,
     Microphone(Option<crate::devices::MicrophoneOption>),
     Access(crate::permissions::OSPermission),
 }
@@ -1355,8 +1702,11 @@ impl OverlayWindow {
                 height: logical.1,
             })
             .clamped(logical);
+        #[cfg(target_os = "macos")]
+        import_legacy_area_selection();
+        let area_screen = AreaScreen::of(&display.id(), cx);
         let locked_area = locked_area_for(
-            &display.id(),
+            &area_screen,
             logical,
             area_min_size(select.read(cx).recording_mode),
         );
@@ -1365,6 +1715,7 @@ impl OverlayWindow {
             theme,
             select,
             display_id: display.id(),
+            area_screen,
             display_name: display
                 .name()
                 .unwrap_or_else(|| tr::overlay::display_fallback(display.id())),
@@ -1380,12 +1731,16 @@ impl OverlayWindow {
             drag: None,
             snap_guides: Vec::new(),
             area_ratio: stored_area_ratio(),
+            area_snap_to_ratio: stored_area_snap_to_ratio(),
+            area_snapped: None,
             area_locked: locked_area.is_some(),
             area_snap: area_snap_rects(controls_work_area, &[], logical),
             area_windows_requested: false,
             area_hover: None,
             area_camera_pending: locked_area.is_some(),
             recording_area: false,
+            #[cfg(target_os = "linux")]
+            emptied_for_capture: false,
             mode_menu: None,
             countdown_menu: None,
             aspect_menu: None,
@@ -1423,7 +1778,14 @@ impl OverlayWindow {
             return;
         }
         self.crop = Some(crop.clamped(self.display_size));
+        self.area_snapped = None;
         self.sync_area_camera(cx);
+        cx.notify();
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn empty_for_capture(&mut self, cx: &mut Context<Self>) {
+        self.emptied_for_capture = true;
         cx.notify();
     }
 
@@ -1476,6 +1838,7 @@ impl OverlayWindow {
                 }
             }),
             TargetType::CameraOnly => Some(ScreenCaptureTarget::CameraOnly),
+            TargetType::AudioOnly => Some(ScreenCaptureTarget::AudioOnly),
         }
     }
 
@@ -1486,7 +1849,7 @@ impl OverlayWindow {
         let Some(target) = self.target(cx) else {
             return;
         };
-        if self.needs_sign_in(self.select.read(cx).recording_mode, cx) {
+        if self.needs_sign_in(self.recording_mode(cx), cx) {
             self.signed_in = crate::store::auth_snapshot().signed_in();
             if !self.signed_in {
                 self.start_sign_in(cx);
@@ -1514,7 +1877,7 @@ impl OverlayWindow {
             }
         }
         tracing::info!(target = ?target.kind_str(), "overlay start pressed");
-        if self.select.read(cx).recording_mode == Mode::Screenshot {
+        if self.recording_mode(cx) == Mode::Screenshot {
             // Screenshots never reach the recording actors: the target goes
             // straight to the capture path, which closes these overlays
             // itself (`startRecording`'s screenshot branch,
@@ -1529,6 +1892,17 @@ impl OverlayWindow {
 
     fn dismiss(&mut self, cx: &mut Context<Self>) {
         cx.defer(app_windows::dismiss_target_overlays);
+    }
+
+    /// The mode Start records in. Audio Only is always a Studio recording,
+    /// whatever the pill says.
+    fn recording_mode(&self, cx: &App) -> Mode {
+        let select = self.select.read(cx);
+        if select.mode == Some(TargetType::AudioOnly) {
+            Mode::Studio
+        } else {
+            select.recording_mode
+        }
     }
 
     /// Instant mode uploads as it records, so it cannot start signed out
@@ -1784,6 +2158,10 @@ impl Render for OverlayWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(debug_assertions)]
         probe_frames::rendered(&self.display_id);
+        #[cfg(target_os = "linux")]
+        if self.emptied_for_capture {
+            return gpui::Empty.into_any_element();
+        }
         self.sync_appearance(window, cx);
         self.sync_inline_camera(window, cx);
         self.sync_backdrop(window, cx);
@@ -1898,6 +2276,7 @@ impl Render for OverlayWindow {
                 Some(TargetType::Window) => root.child(self.render_window_variant(window, cx)),
                 Some(TargetType::Area) => root.child(self.render_area_variant(window, cx)),
                 Some(TargetType::CameraOnly) => root.child(self.render_camera_variant(cx)),
+                Some(TargetType::AudioOnly) => root.child(self.render_audio_variant(cx)),
                 None => root,
             }
         };
@@ -1972,8 +2351,13 @@ impl OverlayWindow {
             if !recording_devices_available(cx) {
                 return;
             }
-            if let Err(error) = main.update(cx, |view, _, cx| match choice {
+            if let Err(error) = main.update(cx, |view, window, cx| match choice {
                 OverlayDeviceChoice::Camera(camera) => view.set_camera_selection(camera, cx),
+                OverlayDeviceChoice::CameraPicture => {
+                    if view.device_changes_allowed(cx) {
+                        crate::camera_picture::select_or_choose(window, cx);
+                    }
+                }
                 OverlayDeviceChoice::Microphone(mic) => view.set_microphone_selection(mic, cx),
                 OverlayDeviceChoice::Access(_) => {}
             }) {
@@ -2015,9 +2399,10 @@ impl OverlayWindow {
             )
         });
         let (mut items, mut choices) = if camera {
+            let picture = view.camera_picture_selected(cx);
             let mut items = vec![crate::ui::MenuItem::new(
                 tr::main::device::no_camera(),
-                view.camera_selection().is_none(),
+                view.camera_selection().is_none() && !picture,
             )];
             let mut choices = vec![OverlayDeviceChoice::Camera(None)];
             for camera in &view.device_snapshot().cameras {
@@ -2028,6 +2413,15 @@ impl OverlayWindow {
                 ));
                 choices.push(OverlayDeviceChoice::Camera(Some(camera.clone())));
             }
+            items.push(crate::ui::MenuItem::new(
+                if view.has_remembered_camera_picture(cx) {
+                    tr::main::device::picture::label()
+                } else {
+                    tr::main::device::picture::choose()
+                },
+                picture,
+            ));
+            choices.push(OverlayDeviceChoice::CameraPicture);
             (items, choices)
         } else {
             let mut items = vec![crate::ui::MenuItem::new(
@@ -2067,8 +2461,12 @@ impl OverlayWindow {
             return div().into_any_element();
         };
         let selected = if camera {
-            view.camera_selection()
-                .map(|camera| crate::main_window::camera_label(&camera.label))
+            if view.camera_picture_selected(cx) {
+                Some(tr::main::device::picture::label().into())
+            } else {
+                view.camera_selection()
+                    .map(|camera| crate::main_window::camera_label(&camera.label))
+            }
         } else {
             view.microphone_selection().map(|mic| mic.name.clone())
         };
@@ -2082,7 +2480,8 @@ impl OverlayWindow {
         };
         let access = crate::media_access::MediaAccess::global(cx);
         let access = access.read(cx);
-        let blocked = enabled && !access.allowed(permission);
+        let picture = camera && view.camera_picture_selected(cx);
+        let blocked = enabled && !picture && !access.allowed(permission);
         let pill_label = if !blocked {
             if enabled {
                 tr::main::device::pill::on()
@@ -2475,11 +2874,19 @@ impl OverlayWindow {
             label.push_str(&format!("  ·  {w}:{h}"));
         }
         let arrangeable = crate::foreign_window::can_arrange();
+        // macOS only needs the user's OK, so the chip walks them through it.
+        let needs_permission = !arrangeable && cfg!(target_os = "macos");
+        let app = self
+            .select
+            .read(cx)
+            .active_window()
+            .map(|window| window.app_name.clone())
+            .filter(|name| !name.is_empty());
         let hint = if arrangeable {
             Hint::new(tr::overlay::window::size_title()).body(tr::overlay::window::size_body())
-        } else if cfg!(target_os = "macos") {
-            Hint::new(tr::overlay::window::size_needs_accessibility_title())
-                .body(tr::overlay::window::size_needs_accessibility_body())
+        } else if needs_permission {
+            Hint::new(tr::overlay::window::size_needs_permission_title())
+                .body(tr::overlay::window::size_needs_permission_body())
         } else {
             Hint::new(tr::overlay::window::size_unavailable_title())
                 .body(tr::overlay::window::size_unavailable_body())
@@ -2509,6 +2916,23 @@ impl OverlayWindow {
                         this.open_window_menu(event.position(), cx);
                     }))
             })
+            .when(needs_permission, move |chip| {
+                chip.cursor_pointer()
+                    .hover(move |style| style.bg(Theme::with_alpha(theme.gray_12, 0.08)))
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        let app = app.clone();
+                        // The picker dims every screen above System Settings,
+                        // so it closes for the help; the main window comes
+                        // back once the help does.
+                        cx.defer(move |cx| {
+                            crate::permission_help::show_from_picker(
+                                crate::permission_help::Need::WindowControl { app },
+                                cx,
+                            )
+                        });
+                    })
+            })
     }
 
     fn render_focus_toggle(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -2524,7 +2948,9 @@ impl OverlayWindow {
             .global::<app_windows::AppWindows>()
             .main
             .read(cx)
-            .is_ok_and(|view| view.camera_selection().is_some());
+            .is_ok_and(|view| {
+                view.camera_selection().is_some() || view.camera_picture_selected(cx)
+            });
         let title = if focus {
             tr::overlay::window::focus_disable()
         } else {
@@ -2887,6 +3313,18 @@ impl OverlayWindow {
         raise: bool,
         cx: &mut Context<Self>,
     ) {
+        self.arrange_active_window_after(arrangement, raise, false, cx);
+    }
+
+    /// [`Self::arrange_active_window`]; `after_prompt` marks the one retry
+    /// that follows macOS asking the user to let Cap control the app.
+    fn arrange_active_window_after(
+        &mut self,
+        arrangement: Arrangement,
+        raise: bool,
+        after_prompt: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(window) = self.select.read(cx).active_window().cloned() else {
             return;
         };
@@ -2903,6 +3341,11 @@ impl OverlayWindow {
         let before = window.bounds;
         let requested = id.clone();
         let select = self.select.clone();
+        let needs_app_choice = resize_needs_app_choice(&arrangement);
+        let retry_frame = match &arrangement {
+            Arrangement::Frame(frame) => Some(*frame),
+            Arrangement::PutBack(_) => None,
+        };
         cx.spawn(async move |this, cx| {
             let moved = crate::foreign_window::in_order(move || {
                 let arranged = match arrangement {
@@ -2937,6 +3380,60 @@ impl OverlayWindow {
             let (arranged, fresh) = moved;
             if !arranged {
                 tracing::warn!("the picked window could not be arranged");
+                // From macOS 27.3 Cap can hold the grant yet still not be
+                // allowed to control this app (it is not one of the apps
+                // chosen for Cap under System & App Protection Override).
+                if needs_app_choice {
+                    // An app set to "Ask First" makes macOS ask the user
+                    // right now; let that prompt do its job and try again
+                    // once it closes. Help only when nobody is asking, or
+                    // the user said no.
+                    if !after_prompt && let Some(frame) = retry_frame {
+                        let asked = wait_for_app_control_prompt(cx).await;
+                        cx.update(|cx| app_windows::lower_target_overlays(false, cx));
+                        if asked {
+                            let same = requested.clone();
+                            this.update(cx, |this, cx| {
+                                let still_picked = this
+                                    .select
+                                    .read(cx)
+                                    .active_window()
+                                    .is_some_and(|window| window.id == same);
+                                if still_picked {
+                                    this.arrange_active_window_after(
+                                        Arrangement::Frame(frame),
+                                        raise,
+                                        true,
+                                        cx,
+                                    );
+                                }
+                            })
+                            .ok();
+                            return;
+                        }
+                    }
+                    // Only for the window still picked in a live picker: the
+                    // user may have moved on while the move was refused.
+                    let still_picked = this
+                        .update(cx, |_, cx| {
+                            select
+                                .read(cx)
+                                .active_window()
+                                .is_some_and(|window| window.id == requested)
+                        })
+                        .unwrap_or(false);
+                    if !still_picked {
+                        return;
+                    }
+                    let app = Some(window.app_name.clone()).filter(|name| !name.is_empty());
+                    cx.update(|cx| {
+                        crate::permission_help::show_from_picker(
+                            crate::permission_help::Need::WindowControl { app },
+                            cx,
+                        )
+                    });
+                    return;
+                }
             }
             // Only while this picker is still up with the same window picked:
             // a slow move must not replace a newer choice.
@@ -3052,6 +3549,190 @@ impl OverlayWindow {
             .child(self.render_controls_cluster(self.target(cx), false, cx))
     }
 
+    fn render_audio_variant(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let (has_microphone, system_audio) = main
+            .read(cx)
+            .map(|view| (view.microphone_selection().is_some(), view.system_audio()))
+            .unwrap_or((false, false));
+        let fill = if has_microphone {
+            let fill = self.select.read(cx).microphone_fill;
+            self.drawn_microphone_fill.set(Some(fill));
+            fill
+        } else {
+            0.
+        };
+        let caption = if has_microphone {
+            tr::overlay::audio_only::meter_hint()
+        } else if system_audio {
+            tr::overlay::audio_only::system_audio_only()
+        } else {
+            tr::overlay::audio_only::choose_source()
+        };
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .bg(gpui::hsla(0., 0., 0., 0.7))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .mb(px(16.))
+                    .child(
+                        div()
+                            .mb(px(8.))
+                            .text_size(px(30.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(tr::main::target::audio_only()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(self.theme.gray_11)
+                            .child(tr::overlay::audio_only::description()),
+                    ),
+            )
+            .child(
+                self.glass_surface()
+                    .id("overlay-audio-meter")
+                    .w(px(CLUSTER_WIDTH))
+                    .mb(px(6.))
+                    .px(px(20.))
+                    .py(px(18.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(self.render_level_bars(fill, has_microphone))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(self.theme.gray_11)
+                            .child(caption),
+                    ),
+            )
+            .child(self.render_controls_cluster(self.target(cx), false, cx))
+    }
+
+    fn render_level_bars(&self, fill: f32, live: bool) -> impl IntoElement {
+        const BARS: usize = 31;
+        const MAX_HEIGHT: f32 = 56.;
+        const MIN_HEIGHT: f32 = 4.;
+        let fill = if fill.is_finite() {
+            fill.clamp(0., 1.)
+        } else {
+            0.
+        };
+        let lit = if live {
+            Hsla::from(self.theme.blue_9)
+        } else {
+            Hsla::from(self.theme.gray_7)
+        };
+        div()
+            .h(px(MAX_HEIGHT))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .children((0..BARS).map(move |index| {
+                let offset = index as f32 - (BARS - 1) as f32 / 2.;
+                let envelope = (std::f32::consts::PI * offset / BARS as f32).cos();
+                let texture = 0.75 + 0.25 * ((index * 7 % 5) as f32 / 4.);
+                let height = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) * fill * envelope * texture;
+                div()
+                    .w(px(4.))
+                    .h(px(height.max(MIN_HEIGHT)))
+                    .rounded_full()
+                    .bg(lit)
+            }))
+    }
+
+    fn render_system_audio_control(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let main = cx.global::<app_windows::AppWindows>().main;
+        let Ok(view) = main.read(cx) else {
+            return div().into_any_element();
+        };
+        let enabled = view.system_audio();
+        let theme = self.theme;
+        div()
+            .id("overlay-system-audio")
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(8.))
+            .h(px(42.))
+            .flex_1()
+            .min_w_0()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.gray_5)
+            .bg(theme.gray_3)
+            .text_color(theme.gray_12)
+            .overflow_hidden()
+            .child(
+                svg()
+                    .path("icons/volume-2.svg")
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .text_color(theme.gray_11),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(14.))
+                    .child(tr::overlay::audio_only::system_audio()),
+            )
+            .child(
+                div()
+                    .id("overlay-system-audio-toggle")
+                    .px(px(10.))
+                    .h(px(24.))
+                    .min_w(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .text_size(px(11.))
+                    .bg(if enabled {
+                        Hsla::from(theme.blue_9)
+                    } else {
+                        Hsla::from(theme.gray_5)
+                    })
+                    .text_color(if enabled {
+                        gpui::white()
+                    } else {
+                        Hsla::from(theme.gray_11)
+                    })
+                    .child(if enabled {
+                        tr::main::device::pill::on()
+                    } else {
+                        tr::main::device::pill::off()
+                    }),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |_, _, _, cx| {
+                cx.stop_propagation();
+                cx.defer(move |cx| {
+                    if let Err(error) = main.update(cx, |view, _, cx| {
+                        let enabled = view.system_audio();
+                        view.set_system_audio(!enabled, cx);
+                    }) {
+                        tracing::warn!(%error, "could not change the system audio setting");
+                    }
+                    app_windows::refresh_target_overlays(cx);
+                });
+            }))
+            .into_any_element()
+    }
+
     /// The crop overlay: `bg-black/45` outside the selection, a `border-white/50`
     /// region with eight handles, a size readout on top and the start cluster
     /// placed against the crop.
@@ -3161,6 +3842,11 @@ impl OverlayWindow {
             }
             if interactive && self.area_locked {
                 root = root.child(self.render_locked_badge(shown, cx));
+            } else if let Some(ratio) = self
+                .area_snapped
+                .filter(|_| interactive && self.area_ratio.is_none())
+            {
+                root = root.child(self.render_snapped_ratio(shown, ratio));
             }
         }
 
@@ -3663,6 +4349,38 @@ impl OverlayWindow {
             )
     }
 
+    fn render_snapped_ratio(&self, crop: AreaRect, ratio: (u32, u32)) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .absolute()
+            .left(px(crop.x))
+            .top(px(crop.y))
+            .w(px(crop.width))
+            .h(px(32.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .h(px(18.))
+                    .w(px(44.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .border_1()
+                    .border_color(gpui::hsla(0., 0., 1., 0.7))
+                    .bg(if theme.is_dark() {
+                        gpui::hsla(0., 0., 0., 0.5)
+                    } else {
+                        gpui::hsla(0., 0., 1., 0.5)
+                    })
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_12))
+                    .child(format!("{}:{}", ratio.0, ratio.1)),
+            )
+    }
+
     fn render_area_size(&self, crop: AreaRect) -> impl IntoElement {
         const HEIGHT: f32 = 24.;
         const GAP: f32 = 8.;
@@ -3738,6 +4456,7 @@ impl OverlayWindow {
             AreaDrag::Move { start, .. } | AreaDrag::Resize { start, .. } => Some(start),
         };
         self.snap_guides.clear();
+        self.area_snapped = None;
         self.sync_area_camera(cx);
         cx.notify();
         true
@@ -3746,7 +4465,7 @@ impl OverlayWindow {
     /// Only the display the saved lock belongs to clears it.
     fn unlock_area(&mut self) {
         self.area_locked = false;
-        if stored_locked_area().is_some_and(|(display, _)| display == self.display_id.to_string()) {
+        if stored_locked_area().is_some_and(|locked| self.area_screen.owns(&locked)) {
             store_locked_area(None);
         }
     }
@@ -3762,7 +4481,7 @@ impl OverlayWindow {
             self.area_locked = true;
             self.drag = None;
             self.snap_guides.clear();
-            store_locked_area(Some((&self.display_id, crop)));
+            store_locked_area(Some((&self.area_screen, crop)));
             // One lock is saved: another display's lock is replaced.
             let display = self.display_id.clone();
             cx.defer(move |cx| app_windows::release_other_area_locks(&display, cx));
@@ -3784,8 +4503,8 @@ impl OverlayWindow {
         let Some(crop) = self.crop.filter(|_| self.area_locked) else {
             return;
         };
-        if stored_locked_area().is_some_and(|(display, _)| display == self.display_id.to_string()) {
-            store_locked_area(Some((&self.display_id, crop)));
+        if stored_locked_area().is_some_and(|locked| self.area_screen.owns(&locked)) {
+            store_locked_area(Some((&self.area_screen, crop)));
         }
     }
 
@@ -3893,6 +4612,7 @@ impl OverlayWindow {
     }
 
     fn open_aspect_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.area_snap_to_ratio = stored_area_snap_to_ratio();
         let items = self.aspect_menu_items();
         self.mode_menu = None;
         self.countdown_menu = None;
@@ -3903,7 +4623,7 @@ impl OverlayWindow {
     }
 
     fn aspect_menu_items(&self) -> Vec<crate::ui::MenuItem> {
-        more_area_ratios()
+        let mut items = more_area_ratios()
             .into_iter()
             .map(|ratio| {
                 crate::ui::MenuItem::new(
@@ -3911,7 +4631,12 @@ impl OverlayWindow {
                     self.area_ratio == Some(ratio),
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        items.push(crate::ui::MenuItem::new(
+            tr::editor::crop::snap_to_ratios(),
+            self.area_snap_to_ratio,
+        ));
+        items
     }
 
     fn render_aspect_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
@@ -3936,11 +4661,21 @@ impl OverlayWindow {
 
     fn choose_aspect(&mut self, index: usize, cx: &mut Context<Self>) {
         self.aspect_menu = None;
-        if let Some(ratio) = more_area_ratios().get(index) {
+        let ratios = more_area_ratios();
+        if let Some(ratio) = ratios.get(index) {
             self.set_area_ratio(Some(*ratio), cx);
+        } else if index == ratios.len() {
+            self.set_area_snap_to_ratio(!self.area_snap_to_ratio, cx);
         } else {
             cx.notify();
         }
+    }
+
+    fn set_area_snap_to_ratio(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.area_snap_to_ratio = enabled;
+        self.area_snapped = None;
+        store_area_snap_to_ratio(enabled);
+        cx.notify();
     }
 
     fn displayed_crop(&mut self, window: &Window) -> Option<AreaRect> {
@@ -3969,6 +4704,7 @@ impl OverlayWindow {
         };
         self.reshape = Some((from, Instant::now()));
         self.crop = Some(to.clamped(self.display_size));
+        self.area_snapped = None;
         self.persist_locked_area();
         self.sync_area_camera(cx);
         cx.notify();
@@ -3985,6 +4721,7 @@ impl OverlayWindow {
         }
         self.reshape = None;
         self.crop = None;
+        self.area_snapped = None;
         self.sync_area_camera(cx);
         cx.notify();
     }
@@ -3993,6 +4730,7 @@ impl OverlayWindow {
     /// around its centre, and remembers the choice for the next picker.
     fn set_area_ratio(&mut self, ratio: Option<(u32, u32)>, cx: &mut Context<Self>) {
         self.area_ratio = ratio;
+        self.area_snapped = None;
         store_area_ratio(ratio);
         if let (Some(ratio), Some(crop)) = (ratio, self.crop) {
             self.reshape_area(
@@ -4110,7 +4848,10 @@ impl OverlayWindow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let mode = self.select.read(cx).recording_mode;
+        let mode = self.recording_mode(cx);
+        let audio_only = target
+            .as_ref()
+            .is_some_and(ScreenCaptureTarget::is_audio_only);
         let disabled = disabled || target.is_none();
 
         // `flex flex-col gap-2.5 items-stretch my-2.5 w-104`.
@@ -4176,16 +4917,17 @@ impl OverlayWindow {
                 ),
             )
             .when(mode != Mode::Screenshot, |cluster| {
-                cluster.child(
-                    self.glass_surface().p(px(12.)).child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .w_full()
-                            .child(self.render_device_control(true, cx))
-                            .child(self.render_device_control(false, cx)),
-                    ),
-                )
+                cluster.child(self.glass_surface().p(px(12.)).child(
+                    div().flex().gap(px(8.)).w_full().map(|row| {
+                        if audio_only {
+                            row.child(self.render_device_control(false, cx))
+                                .child(self.render_system_audio_control(cx))
+                        } else {
+                            row.child(self.render_device_control(true, cx))
+                                .child(self.render_device_control(false, cx))
+                        }
+                    }),
+                ))
             })
     }
 
@@ -4253,6 +4995,9 @@ impl OverlayWindow {
             (theme.blue_10, theme.blue_11)
         };
         let needs_sign_in = self.needs_sign_in(mode, cx);
+        let fixed_mode = target
+            .as_ref()
+            .is_some_and(ScreenCaptureTarget::is_audio_only);
         let label = match mode {
             Mode::Screenshot => tr::overlay::start::take_screenshot(),
             _ if needs_sign_in => tr::overlay::start::sign_in(),
@@ -4270,8 +5015,6 @@ impl OverlayWindow {
             Mode::Studio => tr::overlay::start::studio(),
             Mode::Screenshot => tr::main::mode::header::screenshot(),
         };
-        let _ = target;
-
         div()
             .id("overlay-start")
             .relative()
@@ -4308,6 +5051,7 @@ impl OverlayWindow {
                     // they paint square corners past the pill onto the glass
                     // card behind it.
                     .rounded_l(px(22.))
+                    .when(fixed_mode, |this| this.rounded_r(px(22.)).pr(px(16.)))
                     // `opacity-60 cursor-not-allowed hover:bg-transparent`.
                     .when(disabled, |this| this.opacity(0.6))
                     .when(!disabled, |this| {
@@ -4355,63 +5099,65 @@ impl OverlayWindow {
                             ),
                     ),
             )
-            .child(
-                // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`,
-                // `onMouseDown/onClick={showMenu(menuModes(), e)}`: the caret
-                // pops the mode menu at the press location and must never arm
-                // the pill's start click -- gpui arms clicks on mouse-down per
-                // hitbox, so the stop has to happen here, not on a click
-                // handler. Active even while start is disabled, same as the
-                // source (the disabled styling only wraps the leading half).
-                self.hinted(
-                    div().id("overlay-mode-picker"),
-                    "overlay-mode-picker",
-                    Hint::new(tr::overlay::mode_title()).body(tr::overlay::mode_body()),
-                    cx,
+            .when(!fixed_mode, |this| {
+                this.child(
+                    // `pl-2.5 pr-3 py-1.5 border-l border-white/20 bg-white/5`,
+                    // `onMouseDown/onClick={showMenu(menuModes(), e)}`: the caret
+                    // pops the mode menu at the press location and must never arm
+                    // the pill's start click -- gpui arms clicks on mouse-down per
+                    // hitbox, so the stop has to happen here, not on a click
+                    // handler. Active even while start is disabled, same as the
+                    // source (the disabled styling only wraps the leading half).
+                    self.hinted(
+                        div().id("overlay-mode-picker"),
+                        "overlay-mode-picker",
+                        Hint::new(tr::overlay::mode_title()).body(tr::overlay::mode_body()),
+                        cx,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                            if crate::session::RecordingSession::global(cx)
+                                .read(cx)
+                                .editor_recording_target()
+                                .is_some()
+                            {
+                                return;
+                            }
+                            let current = this.select.read(cx).recording_mode;
+                            this.device_menu = None;
+                            this.countdown_menu = None;
+                            this.aspect_menu = None;
+                            this.window_menu = None;
+                            this.mode_menu = Some(crate::ui::MenuState::new(
+                                event.position,
+                                &mode_menu_items(current),
+                            ));
+                            cx.notify();
+                        }),
+                    )
+                    .flex()
+                    .items_center()
+                    .pl(px(10.))
+                    .pr(px(12.))
+                    .py(px(6.))
+                    // The right cap of the pill, for the same reason the
+                    // leading half takes `rounded_l`: its `bg-white/5` panel
+                    // otherwise pokes square corners past `rounded-full`.
+                    .rounded_r(px(22.))
+                    .border_l_1()
+                    .border_color(gpui::hsla(0., 0., 1., 0.2))
+                    .bg(gpui::hsla(0., 0., 1., 0.05))
+                    .child(
+                        svg()
+                            .path("icons/caret-down.svg")
+                            .w(px(10.))
+                            .h(px(6.))
+                            .text_color(gpui::white()),
+                    ),
                 )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                        if crate::session::RecordingSession::global(cx)
-                            .read(cx)
-                            .editor_recording_target()
-                            .is_some()
-                        {
-                            return;
-                        }
-                        let current = this.select.read(cx).recording_mode;
-                        this.device_menu = None;
-                        this.countdown_menu = None;
-                        this.aspect_menu = None;
-                        this.window_menu = None;
-                        this.mode_menu = Some(crate::ui::MenuState::new(
-                            event.position,
-                            &mode_menu_items(current),
-                        ));
-                        cx.notify();
-                    }),
-                )
-                .flex()
-                .items_center()
-                .pl(px(10.))
-                .pr(px(12.))
-                .py(px(6.))
-                // The right cap of the pill, for the same reason the
-                // leading half takes `rounded_l`: its `bg-white/5` panel
-                // otherwise pokes square corners past `rounded-full`.
-                .rounded_r(px(22.))
-                .border_l_1()
-                .border_color(gpui::hsla(0., 0., 1., 0.2))
-                .bg(gpui::hsla(0., 0., 1., 0.05))
-                .child(
-                    svg()
-                        .path("icons/caret-down.svg")
-                        .w(px(10.))
-                        .h(px(6.))
-                        .text_color(gpui::white()),
-                ),
-            )
+            })
             .when(!disabled, |this| {
                 this.on_click(cx.listener(|this, _, window, cx| {
                     cx.stop_propagation();
@@ -4484,6 +5230,8 @@ impl OverlayWindow {
         }
         let point = (f32::from(position.x), f32::from(position.y));
         self.snap_guides.clear();
+        // Another display's overlay may have flipped it since this one opened.
+        self.area_snap_to_ratio = stored_area_snap_to_ratio();
         // Mid-reshape, `crop` is where the selection is going, not where it
         // is drawn; a grab has to land on what the user sees.
         if let (Some(crop), Some((from, started))) = (self.crop, self.reshape.take()) {
@@ -4518,6 +5266,7 @@ impl OverlayWindow {
                     width: 0.,
                     height: 0.,
                 });
+                self.area_snapped = None;
                 Some(AreaDrag::Draw {
                     anchor: point,
                     previous,
@@ -4526,6 +5275,32 @@ impl OverlayWindow {
         };
         self.sync_area_camera(cx);
         cx.notify();
+    }
+
+    fn snap_free_area_to_ratio(
+        &self,
+        rect: AreaRect,
+        anchor: (f32, f32),
+        guides: Vec<SnapGuide>,
+        free: bool,
+        snapped: &mut Option<(u32, u32)>,
+    ) -> (AreaRect, Vec<SnapGuide>) {
+        if free || !self.area_snap_to_ratio {
+            return (rect, guides);
+        }
+        let held_x = guides
+            .iter()
+            .any(|guide| matches!(guide.axis, GuideAxis::V));
+        let held_y = guides
+            .iter()
+            .any(|guide| matches!(guide.axis, GuideAxis::H));
+        match snap_area_to_ratio(rect, anchor, self.display_size, held_x, held_y) {
+            Some((rect, ratio)) => {
+                *snapped = Some(ratio);
+                (rect, guides)
+            }
+            None => (rect, guides),
+        }
     }
 
     fn area_mouse_move(&mut self, position: Point<Pixels>, free: bool, cx: &mut Context<Self>) {
@@ -4537,6 +5312,8 @@ impl OverlayWindow {
         let y = f32::from(position.y).clamp(0., self.display_size.1);
 
         let ratio = self.area_ratio.map(ratio_value);
+        let moving = matches!(drag, AreaDrag::Move { .. });
+        let mut snapped = None;
         let (next, guides) = match (drag, ratio) {
             (AreaDrag::Draw { anchor, .. }, Some(ratio)) => (
                 area_from_anchor_with_ratio(*anchor, (x, y), ratio, self.display_size),
@@ -4568,15 +5345,13 @@ impl OverlayWindow {
                 } else {
                     snap_area_point((x, y), self.display_size, &self.area_snap)
                 };
-                (
-                    AreaRect {
-                        x: anchor.0.min(x),
-                        y: anchor.1.min(y),
-                        width: (x - anchor.0).abs(),
-                        height: (y - anchor.1).abs(),
-                    },
-                    guides,
-                )
+                let rect = AreaRect {
+                    x: anchor.0.min(x),
+                    y: anchor.1.min(y),
+                    width: (x - anchor.0).abs(),
+                    height: (y - anchor.1).abs(),
+                };
+                self.snap_free_area_to_ratio(rect, *anchor, guides, free, &mut snapped)
             }
             (AreaDrag::Move { grab, start }, _) => {
                 let moved = AreaRect {
@@ -4618,20 +5393,37 @@ impl OverlayWindow {
                 if handle.south() {
                     bottom = y;
                 }
-                (
-                    AreaRect {
-                        x: left.min(right),
-                        y: top.min(bottom),
-                        width: (right - left).abs(),
-                        height: (bottom - top).abs(),
-                    },
-                    guides,
-                )
+                let rect = AreaRect {
+                    x: left.min(right),
+                    y: top.min(bottom),
+                    width: (right - left).abs(),
+                    height: (bottom - top).abs(),
+                };
+                if handle.east() != handle.west() && handle.north() != handle.south() {
+                    let anchor = (
+                        if handle.west() {
+                            start.right()
+                        } else {
+                            start.x
+                        },
+                        if handle.north() {
+                            start.bottom()
+                        } else {
+                            start.y
+                        },
+                    );
+                    self.snap_free_area_to_ratio(rect, anchor, guides, free, &mut snapped)
+                } else {
+                    (rect, guides)
+                }
             }
         };
 
         self.crop = Some(next);
         self.snap_guides = guides;
+        if !moving {
+            self.area_snapped = snapped;
+        }
         // Mouse events outrun the display: the camera follows on the next
         // frame, once, rather than once per event.
         self.area_camera_pending = true;
@@ -4661,6 +5453,7 @@ impl OverlayWindow {
             // the window under it instead.
             if clicked || crop.width < 2. || crop.height < 2. {
                 self.crop = None;
+                self.area_snapped = None;
                 if clicked {
                     self.fit_area_to_window_at((f32::from(position.x), f32::from(position.y)), cx);
                 }
@@ -5243,5 +6036,415 @@ mod tests {
         assert_eq!(rects.len(), 1);
         assert!((rects[0].x - 0.8).abs() < 1e-6);
         assert!((rects[0].w - 0.2).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod snap_to_ratio_tests {
+    use super::*;
+    use crate::editor_crop::COMMON_RATIOS;
+
+    fn rect_from(anchor: (f32, f32), direction: (f32, f32), width: f32, height: f32) -> AreaRect {
+        AreaRect {
+            x: if direction.0 < 0. {
+                anchor.0 - width
+            } else {
+                anchor.0
+            },
+            y: if direction.1 < 0. {
+                anchor.1 - height
+            } else {
+                anchor.1
+            },
+            width,
+            height,
+        }
+    }
+
+    /// The fixed corner of `rect` when it was dragged from `anchor`.
+    fn pinned_corner(rect: AreaRect, direction: (f32, f32)) -> (f32, f32) {
+        (
+            if direction.0 < 0. {
+                rect.right()
+            } else {
+                rect.x
+            },
+            if direction.1 < 0. {
+                rect.bottom()
+            } else {
+                rect.y
+            },
+        )
+    }
+
+    #[test]
+    fn a_free_area_near_every_ratio_snaps_onto_it_from_every_corner() {
+        let directions = [(1., 1.), (-1., 1.), (1., -1.), (-1., -1.)];
+        // Logical sizes of a Retina laptop, a 1x 1440p display and a portrait one.
+        for display in [(1512., 982.), (2560., 1440.), (1080., 1920.)] {
+            let anchor = (display.0 / 2., display.1 / 2.);
+            for (a, b) in COMMON_RATIOS {
+                for ratio in [(a, b), (b, a)] {
+                    let value = ratio_value(ratio);
+                    let height = 200.;
+                    for offset in [-0.008, 0.005] {
+                        let width = height * (value + offset);
+                        for direction in directions {
+                            let rect = rect_from(anchor, direction, width, height);
+                            let (snapped, landed) =
+                                snap_area_to_ratio(rect, anchor, display, false, false)
+                                    .unwrap_or_else(|| panic!("{ratio:?} {direction:?} {rect:?}"));
+                            assert!((ratio_value(landed) - value).abs() < 1e-6, "{landed:?}");
+                            assert_eq!(snapped.height, height);
+                            assert!(
+                                (snapped.width / snapped.height - value).abs()
+                                    <= 0.5 / snapped.height,
+                                "{ratio:?} {snapped:?}"
+                            );
+                            assert_eq!(pinned_corner(snapped, direction), anchor);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_free_area_far_from_any_ratio_stays_as_drawn() {
+        let display = (1920., 1080.);
+        let rect = AreaRect {
+            x: 100.,
+            y: 100.,
+            width: 612.,
+            height: 600.,
+        };
+        assert_eq!(
+            snap_area_to_ratio(rect, (100., 100.), display, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn a_very_small_area_never_snaps() {
+        let display = (1920., 1080.);
+        let tiny = AreaRect {
+            x: 10.,
+            y: 10.,
+            width: 30.,
+            height: 30.,
+        };
+        assert_eq!(
+            snap_area_to_ratio(tiny, (10., 10.), display, false, false),
+            None
+        );
+        let just_big_enough = AreaRect {
+            width: 31.,
+            height: 31.,
+            ..tiny
+        };
+        assert_eq!(
+            snap_area_to_ratio(just_big_enough, (10., 10.), display, false, false)
+                .map(|(_, ratio)| ratio),
+            Some((1, 1))
+        );
+    }
+
+    #[test]
+    fn an_edge_snap_on_one_axis_survives_the_ratio_snap() {
+        let display = (1920., 1080.);
+        let rect = AreaRect {
+            x: 0.,
+            y: 0.,
+            width: 640.,
+            height: 361.,
+        };
+        let (height_led, _) = snap_area_to_ratio(rect, (0., 0.), display, false, false).unwrap();
+        assert_eq!((height_led.width, height_led.height), (642., 361.));
+        let (width_held, _) = snap_area_to_ratio(rect, (0., 0.), display, true, false).unwrap();
+        assert_eq!((width_held.width, width_held.height), (640., 360.));
+        assert_eq!(
+            snap_area_to_ratio(rect, (0., 0.), display, true, true),
+            None
+        );
+    }
+
+    #[test]
+    fn a_ratio_snap_that_would_leave_the_display_is_skipped() {
+        let display = (1920., 1080.);
+        let rect = AreaRect {
+            x: 1002.,
+            y: 100.,
+            width: 918.,
+            height: 517.,
+        };
+        assert_eq!(
+            snap_area_to_ratio(rect, (1002., 100.), display, false, false),
+            None
+        );
+        let fits = AreaRect { x: 1000., ..rect };
+        let (snapped, _) = snap_area_to_ratio(fits, (1000., 100.), display, false, false).unwrap();
+        assert!(snapped.right() <= display.0);
+    }
+
+    fn legacy_060() -> serde_json::Value {
+        serde_json::json!({
+            "locked": true,
+            "screenId": "2",
+            "bounds": { "x": 120, "y": 80, "width": 1280, "height": 720 },
+            "aspectRatio": [16, 9],
+            "snapToRatio": false,
+        })
+    }
+
+    #[test]
+    fn a_060_users_area_preferences_come_across_once() {
+        let mut section = serde_json::Map::new();
+        assert!(merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        let mut expected = legacy_060();
+        expected[LEGACY_IMPORTED] = true.into();
+        assert_eq!(serde_json::Value::Object(section.clone()), expected);
+        // Already imported: nothing changes, even if 0.6.0 writes again.
+        let mut changed = legacy_060();
+        changed["snapToRatio"] = true.into();
+        assert!(!merge_legacy_area_selection(&mut section, Some(&changed)));
+        assert_eq!(section["snapToRatio"], false);
+    }
+
+    #[test]
+    fn what_063_saved_wins_over_060() {
+        let mut section = serde_json::json!({
+            "aspectRatio": [4, 3],
+            "locked": false,
+            "screenId": "1",
+            "bounds": { "x": 0, "y": 0, "width": 400, "height": 300 },
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert!(merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        assert_eq!(section["aspectRatio"], serde_json::json!([4, 3]));
+        assert_eq!(section["locked"], false);
+        assert_eq!(section["screenId"], "1");
+        assert_eq!(section["snapToRatio"], false);
+    }
+
+    #[test]
+    fn no_060_preferences_means_snapping_stays_on() {
+        let mut section = serde_json::Map::new();
+        assert!(merge_legacy_area_selection(&mut section, None));
+        assert_eq!(
+            serde_json::Value::Object(section.clone()),
+            serde_json::json!({ "legacyImported": true })
+        );
+        assert!(!merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        let mut section = serde_json::Map::new();
+        let broken = serde_json::json!({ "locked": "yes", "snapToRatio": 0, "aspectRatio": null });
+        assert!(merge_legacy_area_selection(&mut section, Some(&broken)));
+        assert_eq!(
+            serde_json::Value::Object(section),
+            serde_json::json!({ "legacyImported": true })
+        );
+    }
+
+    #[test]
+    fn a_snap_toggle_before_the_import_does_not_suppress_it() {
+        let mut section = serde_json::json!({ "snapToRatio": true })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(merge_legacy_area_selection(
+            &mut section,
+            Some(&legacy_060())
+        ));
+        assert_eq!(section["snapToRatio"], true);
+        assert_eq!(section["locked"], true);
+        assert_eq!(section["aspectRatio"], serde_json::json!([16, 9]));
+        assert_eq!(section[LEGACY_IMPORTED], true);
+    }
+
+    #[test]
+    fn a_lock_follows_its_display_when_macos_renumbers_it() {
+        let _store = TempStore::new("{}");
+        let bounds = AreaRect {
+            x: 560.,
+            y: 315.,
+            width: 800.,
+            height: 450.,
+        };
+        let screen = |id: &str, uuid: Option<&str>| AreaScreen {
+            id: id.into(),
+            uuid: uuid.map(str::to_string),
+        };
+        let display = (1920., 1080.);
+        store_locked_area(Some((&screen("34", Some("UUID-A")), bounds)));
+        assert_eq!(
+            locked_area_for(&screen("34", Some("UUID-A")), display, AREA_MIN_SIZE),
+            Some(bounds)
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", Some("UUID-A")), display, AREA_MIN_SIZE),
+            Some(bounds)
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", Some("UUID-B")), display, AREA_MIN_SIZE),
+            None
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", None), display, AREA_MIN_SIZE),
+            None
+        );
+        // Another display that inherited the old id is not the locked one.
+        assert_eq!(
+            locked_area_for(&screen("34", Some("UUID-B")), display, AREA_MIN_SIZE),
+            None
+        );
+        // A lock saved without a UUID (0.6.0, or a display that has none)
+        // still matches by id, and relocking drops a stale UUID.
+        store_locked_area(Some((&screen("34", None), bounds)));
+        assert_eq!(stored_locked_area().unwrap().screen_uuid, None);
+        assert_eq!(
+            locked_area_for(&screen("34", Some("UUID-A")), display, AREA_MIN_SIZE),
+            Some(bounds)
+        );
+        assert_eq!(
+            locked_area_for(&screen("46", Some("UUID-A")), display, AREA_MIN_SIZE),
+            None
+        );
+    }
+
+    #[test]
+    fn webkit_storage_values_decode_from_utf16() {
+        assert_eq!(
+            decode_webkit_storage_hex("6C006900670068007400\n").as_deref(),
+            Some("light")
+        );
+        assert_eq!(decode_webkit_storage_hex(""), None);
+        assert_eq!(decode_webkit_storage_hex("6C0"), None);
+        assert_eq!(decode_webkit_storage_hex("ZZ00"), None);
+    }
+
+    struct TempStore(std::path::PathBuf);
+
+    impl TempStore {
+        fn new(contents: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "cap-area-selection-{}.json",
+                crate::store::new_uuid_v4()
+            ));
+            std::fs::write(&path, contents).unwrap();
+            crate::store::set_test_tauri_store_path(Some(path.clone()));
+            Self(path)
+        }
+    }
+
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            crate::store::set_test_tauri_store_path(None);
+        }
+    }
+
+    #[test]
+    fn an_imported_060_lock_reopens_on_its_display() {
+        let store = TempStore::new(r#"{"general_settings":{"enableNotifications":true}}"#);
+        assert!(stored_area_snap_to_ratio());
+        crate::store::update_store_section(AREA_SELECTION_STORE, |section| {
+            merge_legacy_area_selection(section, Some(&legacy_060()))
+        });
+        assert!(!stored_area_snap_to_ratio());
+        assert_eq!(stored_area_ratio(), Some((16, 9)));
+        let display = AreaScreen {
+            id: "2".into(),
+            uuid: None,
+        };
+        let other = AreaScreen {
+            id: "1".into(),
+            uuid: None,
+        };
+        let expected = AreaRect {
+            x: 120.,
+            y: 80.,
+            width: 1280.,
+            height: 720.,
+        };
+        assert_eq!(
+            locked_area_for(&display, (1512., 982.), AREA_MIN_SIZE),
+            Some(expected)
+        );
+        assert_eq!(locked_area_for(&other, (1512., 982.), AREA_MIN_SIZE), None);
+        store_area_snap_to_ratio(true);
+        assert!(stored_area_snap_to_ratio());
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&store.0).unwrap()).unwrap();
+        assert_eq!(written["general_settings"]["enableNotifications"], true);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_060_webview_database_is_found_and_read() {
+        let root = std::env::temp_dir().join(format!("cap-webkit-{}", crate::store::new_uuid_v4()));
+        let dir = root.join("Default/salt/salt/LocalStorage");
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = legacy_060().to_string();
+        let hex = json
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(dir.join("localstorage.sqlite3"))
+            .arg(format!(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);\
+                 INSERT INTO ItemTable VALUES ('cap-theme', X'6C006900670068007400');\
+                 INSERT INTO ItemTable VALUES ('{LEGACY_AREA_SELECTION_KEY}', X'{hex}');"
+            ))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(legacy_area_selection_in(&root), Ok(Some(legacy_060())));
+        assert_eq!(legacy_area_selection_in(&root.join("missing")), Ok(None));
+
+        // A file that is not a database is an unreadable one: the import
+        // stays due rather than being recorded as done.
+        let broken = root.join("broken/LocalStorage");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("localstorage.sqlite3"), b"not sqlite").unwrap();
+        assert_eq!(legacy_area_selection_in(&root.join("broken")), Err(()));
+
+        // A database without the key is simply no preferences.
+        let other = root.join("other/LocalStorage");
+        std::fs::create_dir_all(&other).unwrap();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(other.join("localstorage.sqlite3"))
+            .arg("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(legacy_area_selection_in(&root.join("other")), Ok(None));
+
+        // A damaged value in the newest database falls through to an older
+        // copy that still parses.
+        let damaged = root.join("Default/newer/LocalStorage");
+        std::fs::create_dir_all(&damaged).unwrap();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(damaged.join("localstorage.sqlite3"))
+            .arg(format!(
+                "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB NOT NULL ON CONFLICT FAIL);\
+                 INSERT INTO ItemTable VALUES ('{LEGACY_AREA_SELECTION_KEY}', X'7B00');"
+            ))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(legacy_area_selection_in(&root), Ok(Some(legacy_060())));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

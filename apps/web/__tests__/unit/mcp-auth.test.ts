@@ -24,7 +24,10 @@ vi.mock("@cap/database", () => ({
 							limit: () =>
 								Object.assign(Promise.resolve([databaseState.selected]), {
 									for: async () => [
-										{ registrations: databaseState.quotaCount },
+										{
+											registrations: databaseState.quotaCount,
+											authSessionVersion: 0,
+										},
 									],
 								}),
 						}),
@@ -134,7 +137,7 @@ describe("MCP OAuth authorization", () => {
 		expect(request).not.toBeNull();
 		if (!request) return;
 		const code = await createMcpAuthorizationCode(
-			User.UserId.make("owner"),
+			{ id: User.UserId.make("owner"), authSessionVersion: 0 },
 			request,
 		);
 		expect(code).toMatch(/^cap_mcp_code_[A-Za-z0-9_-]{43}$/);

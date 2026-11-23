@@ -135,6 +135,7 @@ struct OrganizationSettingsView: View {
                 Section { ErrorText(error) }
             }
         }
+        .readableWidth()
         .toolbar {
             if settings.canManage {
                 ToolbarItem(placement: .confirmationAction) {

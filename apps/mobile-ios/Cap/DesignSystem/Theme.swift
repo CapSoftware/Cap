@@ -136,4 +136,43 @@ extension View {
     func capCardBackground() -> some View {
         background(.background.secondary, in: .rect(cornerRadius: CapTheme.cardRadius))
     }
+
+    /// A horizontal scroll view draws into the safe area, which on a folded iPhone Duo puts its items under the
+    /// system rail beside the clock. Clipped to its own frame they stop at the rail; the vertical slack keeps glass edges.
+    func clipsToSafeArea() -> some View {
+        mask { Rectangle().padding(.vertical, -24) }
+    }
+
+    func readableWidth(_ maxWidth: CGFloat = 620) -> some View {
+        modifier(ReadableWidth(maxWidth: maxWidth))
+    }
+}
+
+private struct ReadableWidth: ViewModifier {
+    let maxWidth: CGFloat
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var space = Space()
+
+    /// Content margins count from the scroll view's edges, which run under the safe area (the Duo's system rail),
+    /// so the column is centred in the safe width and each side adds its own inset.
+    private nonisolated struct Space: Equatable {
+        var width: CGFloat = 0
+        var leading: CGFloat = 0
+        var trailing: CGFloat = 0
+    }
+
+    func body(content: Content) -> some View {
+        if horizontalSizeClass == .regular, verticalSizeClass == .regular {
+            let side = max((space.width - maxWidth) / 2, 20)
+            content
+                .contentMargins(.leading, side + space.leading, for: .scrollContent)
+                .contentMargins(.trailing, side + space.trailing, for: .scrollContent)
+                .onGeometryChange(for: Space.self) { proxy in
+                    Space(width: proxy.size.width, leading: proxy.safeAreaInsets.leading, trailing: proxy.safeAreaInsets.trailing)
+                } action: { space = $0 }
+        } else {
+            content
+        }
+    }
 }

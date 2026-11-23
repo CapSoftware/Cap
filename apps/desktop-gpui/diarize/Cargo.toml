@@ -1,0 +1,52 @@
+[package]
+name = "cap-diarize"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0"
+publish = false
+
+[features]
+default = ["onnx"]
+# The speaker model itself. Without it the crate still offers the clustering,
+# names and profile types, so the transcript model can use them without
+# linking ONNX Runtime.
+onnx = ["dep:ort"]
+
+[dependencies]
+realfft = "3.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# Same ONNX Runtime build as the rest of the app (see crates/camera-effects):
+# the shared library is loaded at run time and the app initialises it once.
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"], optional = true }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "tls-native"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "coreml", "api-23"], optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "directml", "api-23"], optional = true }
+
+[dev-dependencies]
+cap-meetings = { path = "../meetings" }
+tempfile = "3"
+
+[[example]]
+name = "diarize-eval"
+required-features = ["onnx"]
+
+[[example]]
+name = "hybrid-replay"
+
+[[example]]
+name = "nemo-dump"
+required-features = ["onnx"]
+
+[[example]]
+name = "embed-dump"
+required-features = ["onnx"]

@@ -601,10 +601,17 @@ fn resolve_session(id: Option<&str>, path: Option<&Path>) -> Result<Session, Str
             .ok_or_else(|| format!("No recording session found for path {}", path.display()));
     }
 
-    let mut active: Vec<Session> = sessions
+    select_active_session(sessions)
+}
+
+fn select_active_session(sessions: Vec<Session>) -> Result<Session, String> {
+    let (mut active, inactive): (Vec<Session>, Vec<Session>) = sessions
         .into_iter()
         .filter(|s| s.status == SessionStatus::Recording)
-        .collect();
+        .partition(|session| session::process_alive(session.pid));
+    if active.is_empty() {
+        active = inactive;
+    }
     match active.len() {
         0 => Err(
             "No active recording sessions. Start one with `cap record start --detach`".to_string(),
@@ -745,19 +752,13 @@ async fn start_recording(
     target: ScreenCaptureTarget,
     path: PathBuf,
 ) -> Result<ActorHandle, String> {
-    let upload_lock = prepare_recording_project(
-        &path,
-        params.mode,
-        params.mic.is_some() || params.system_audio,
-    )?;
-
     #[cfg(target_os = "macos")]
     let target_for_shareable_content = target.clone();
     let camera_only_target = matches!(target, ScreenCaptureTarget::CameraOnly);
     let mut studio_builder = studio_recording::Actor::builder(path.clone(), target.clone())
         .with_system_audio(params.system_audio);
-    let mut instant_builder =
-        instant_recording::Actor::builder(path, target).with_system_audio(params.system_audio);
+    let mut instant_builder = instant_recording::Actor::builder(path.clone(), target)
+        .with_system_audio(params.system_audio);
     let mut camera_active = false;
     let camera_recorded =
         !(cfg!(target_os = "macos") && params.mode == RecordMode::Instant && !camera_only_target);
@@ -833,6 +834,12 @@ async fn start_recording(
         studio_builder = studio_builder.with_mic_feed(lock.clone());
         instant_builder = instant_builder.with_mic_feed(lock);
     }
+
+    let upload_lock = prepare_recording_project(
+        &path,
+        params.mode,
+        params.mic.is_some() || params.system_audio,
+    )?;
 
     match params.mode {
         RecordMode::Studio => {
@@ -1370,6 +1377,40 @@ mod tests {
         assert!(error.contains("No target specified"), "{error}");
     }
 
+    #[tokio::test]
+    async fn invalid_microphone_does_not_reserve_recording_path() {
+        let root = tempfile::tempdir().unwrap();
+        for mode in [RecordMode::Studio, RecordMode::Instant] {
+            let path = root.path().join(format!("{mode}.cap"));
+            let params = RecordParams {
+                target: RecordTargets {
+                    screen: None,
+                    window: None,
+                },
+                mode,
+                camera: None,
+                mic: Some(format!("missing-microphone-{}", Uuid::new_v4())),
+                system_audio: false,
+                path: Some(path.clone()),
+                fps: None,
+                duration: Some(1.0),
+            };
+
+            for _ in 0..2 {
+                let error = start_recording(&params, ScreenCaptureTarget::CameraOnly, path.clone())
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(error.contains("Microphone 'missing-microphone-"), "{error}");
+                assert!(
+                    !path.exists(),
+                    "failed {mode} startup reserved {}",
+                    path.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn stop_timeout_accepts_zero_and_rejects_invalid_timeouts() {
         assert_eq!(stop_timeout(0.0).unwrap(), Duration::ZERO);
@@ -1673,6 +1714,44 @@ mod tests {
         assert_eq!(
             row.error.as_deref(),
             Some("recording process is not running")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_sessions_do_not_hide_the_only_running_recording() {
+        let mut worker = std::process::Command::new("/bin/true").spawn().unwrap();
+        let dead_pid = worker.id();
+        worker.wait().unwrap();
+        assert!(!session::process_alive(dead_pid));
+        let interrupted = Session {
+            recording_id: "interrupted".to_string(),
+            pid: dead_pid,
+            path: PathBuf::from("interrupted.cap"),
+            status: SessionStatus::Recording,
+            started_at: Some(1),
+            recording_meta_exists: None,
+            error: None,
+        };
+        let current = Session {
+            recording_id: "current".to_string(),
+            pid: std::process::id(),
+            path: PathBuf::from("current.cap"),
+            ..interrupted.clone()
+        };
+        let selected = select_active_session(vec![interrupted.clone(), current.clone()]).unwrap();
+        assert_eq!(selected.recording_id, "current");
+        let selected = select_active_session(vec![interrupted]).unwrap();
+        assert_eq!(selected.recording_id, "interrupted");
+        let other = Session {
+            recording_id: "other".to_string(),
+            ..current.clone()
+        };
+        assert!(
+            select_active_session(vec![current, other])
+                .err()
+                .unwrap()
+                .contains("Multiple active recordings")
         );
     }
 }

@@ -56,6 +56,11 @@ struct DisplayGeometry {
 }
 
 fn native_handle(window: &Window) -> Option<isize> {
+    // Test builds only ever have gpui's test windows, which panic when asked
+    // for a platform handle instead of returning an error.
+    if cfg!(test) {
+        return None;
+    }
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return None;
@@ -144,6 +149,10 @@ pub fn target_overlay_level() -> isize {
     1
 }
 
+pub fn recording_area_level() -> isize {
+    1
+}
+
 pub fn teleprompter_level() -> isize {
     1
 }
@@ -216,6 +225,10 @@ pub fn set_window_click_through(native: &NativeWindow, click_through: bool) -> b
         (style & bits == bits) == click_through
     }
 }
+
+pub fn set_draw_cursor() {}
+
+pub fn reset_cursor() {}
 
 pub fn restore_borderless_style(_native: &NativeWindow) {}
 
@@ -501,6 +514,8 @@ pub fn order_front_native(native: &NativeWindow) {
         );
     }
 }
+
+pub fn set_panel_level(_native: &NativeWindow, _level: isize) {}
 
 /// Synchronous on purpose: `order_front_native`'s posted `HWND_TOP` lands
 /// after an overlay's own activation and loses to it.
@@ -822,6 +837,11 @@ pub fn begin_file_drag(_window: &Window, _path: &std::path::Path) -> bool {
 
 pub fn system_settings_frame() -> Option<(f64, f64, f64, f64)> {
     None
+}
+
+/// macOS raises an app-control prompt; Windows has no such prompt.
+pub fn app_control_prompt_visible() -> bool {
+    false
 }
 
 pub fn system_settings_frontmost() -> bool {

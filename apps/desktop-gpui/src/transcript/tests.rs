@@ -7,7 +7,8 @@ use cap_project::{
 
 use super::cuts::{
     self, CutReport, LONG_GAP, ONSET_GUARD, Removing, RestoreBlocker, TAIL_GUARD,
-    apply_source_cuts, gap_cut, plan_pause_cuts, plan_word_cuts, quietest_point, restore_words,
+    apply_source_cuts, follow_refined_words, gap_cut, plan_pause_cuts, plan_word_cuts,
+    quietest_point, restore_words,
 };
 use super::energy::{EnergyEnvelope, EnvelopeTrack, HOP_SECONDS, clip_envelope};
 use super::model::{TranscriptDoc, TranscriptEdl, flatten_words};
@@ -49,6 +50,7 @@ fn captions(words: &[(&str, f64, f64)]) -> CaptionsData {
                     end: *end as f32,
                 })
                 .collect(),
+            recording_clip: None,
         })
         .collect();
     CaptionsData {
@@ -1847,4 +1849,860 @@ fn removing_neighbouring_fillers_together_matches_removing_them_one_at_a_time() 
     assert_eq!(kept(&apart, &durations), [true, false, false, true, true]);
     assert_eq!(kept(&together, &durations), kept(&apart, &durations));
     assert_eq!(bounds(&together), bounds(&apart));
+}
+
+const FIRST_PASS: [(&str, f64, f64); 7] = [
+    ("feels", 0.24, 0.56),
+    ("the", 0.56, 0.72),
+    ("same,", 0.72, 1.12),
+    ("uh", 1.28, 1.52),
+    ("works", 1.6, 2.0),
+    ("very", 2.0, 2.24),
+    ("similar,", 2.24, 2.72),
+];
+const REFINED: [(&str, f64, f64); 7] = [
+    ("feels", 0.06, 0.3),
+    ("the", 0.36, 0.42),
+    ("same,", 0.48, 0.885),
+    ("uh", 1.62, 1.68),
+    ("works", 1.78, 1.98),
+    ("very", 2.0, 2.14),
+    ("similar,", 2.18, 2.575),
+];
+const SPOKEN_UH: Range<f64> = 1.5..1.7;
+
+fn plays(project: &ProjectConfiguration, source: &Range<f64>) -> bool {
+    bounds(project)
+        .iter()
+        .any(|(start, end)| *start < source.end && source.start < *end)
+}
+
+fn add_zoom(project: &mut ProjectConfiguration, start: f64, end: f64) {
+    timeline_mut(project).zoom_segments.push(
+        serde_json::from_value(serde_json::json!({
+            "start": start,
+            "end": end,
+            "amount": 1.5,
+            "mode": {"manual": {"x": 0.0, "y": 0.0}},
+            "glideDirection": "none",
+            "glideSpeed": 0.5,
+            "instantAnimation": false,
+            "edgeSnapRatio": 0.25
+        }))
+        .unwrap(),
+    );
+}
+
+fn follow(project: &mut ProjectConfiguration, durations: &[f64]) -> usize {
+    let before = TranscriptDoc::build(&captions(&FIRST_PASS));
+    let after = TranscriptDoc::build(&captions(&REFINED));
+    follow_refined_words(timeline_mut(project), durations, &[], &before, &after, None)
+}
+
+#[test]
+fn a_filler_cut_on_first_pass_timings_moves_to_where_the_filler_is_spoken() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert!(
+        plays(&project, &SPOKEN_UH),
+        "the first pass places the cut in the silence before the filler: {:?}",
+        bounds(&project)
+    );
+
+    assert_eq!(follow(&mut project, &durations), 1);
+
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+    let mut refined = self::project(&REFINED, &durations);
+    cut_words(&mut refined, &durations, &[(3, 4)]);
+    assert_eq!(bounds(&project).len(), 2);
+    for (moved, direct) in bounds(&project).iter().zip(bounds(&refined)) {
+        assert!(close(moved.0, direct.0) && close(moved.1, direct.1));
+    }
+    assert_eq!(follow(&mut project, &durations), 0);
+}
+
+#[test]
+fn a_moved_filler_cut_leaves_the_other_tracks_as_cutting_on_refined_timings_would() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    add_zoom(&mut project, 0.2, 0.9);
+    add_zoom(&mut project, 3.0, 4.0);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert_eq!(follow(&mut project, &durations), 1);
+
+    let mut refined = self::project(&REFINED, &durations);
+    add_zoom(&mut refined, 0.2, 0.9);
+    add_zoom(&mut refined, 3.0, 4.0);
+    cut_words(&mut refined, &durations, &[(3, 4)]);
+
+    let zooms = |project: &ProjectConfiguration| -> Vec<(f64, f64)> {
+        timeline(project)
+            .zoom_segments
+            .iter()
+            .map(|zoom| (zoom.start, zoom.end))
+            .collect()
+    };
+    assert_eq!(zooms(&project).len(), 2);
+    for (moved, direct) in zooms(&project).iter().zip(zooms(&refined)) {
+        assert!(
+            close(moved.0, direct.0) && close(moved.1, direct.1),
+            "{moved:?} {direct:?}"
+        );
+    }
+}
+
+#[test]
+fn a_trim_made_on_the_timeline_stays_put_when_word_timings_are_refined() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    apply_source_cuts(timeline_mut(&mut project), &durations, &[1.2..1.55]);
+    let trimmed = bounds(&project);
+    assert!(
+        !kept(&project, &durations)[3],
+        "the trim covers the first pass's filler"
+    );
+
+    assert_eq!(follow(&mut project, &durations), 0);
+    assert_eq!(bounds(&project), trimmed);
+}
+
+#[test]
+fn landing_a_refinement_moves_the_cut_in_the_project_and_in_undo_entries_that_have_it() {
+    let durations = [5.16];
+    let uncut = project(&FIRST_PASS, &durations);
+    let mut cut = uncut.clone();
+    cut_words(&mut cut, &durations, &[(3, 4)]);
+    cap_project::synchronize_captions(&mut cut, &durations);
+    let input = uncut.captions.as_ref().unwrap().segments.clone();
+    let refined = crate::transcription::RefinedCaptions::new(&input, captions(&REFINED).segments);
+    let mut landing = super::RefinementLanding::new(&refined, &durations, &[], None);
+
+    let mut entry = uncut.clone();
+    assert_eq!(landing.land(&mut entry), Some(0));
+    assert_eq!(bounds(&entry), bounds(&uncut));
+
+    assert_eq!(landing.land(&mut cut), Some(1));
+    assert!(!plays(&cut, &SPOKEN_UH), "{:?}", bounds(&cut));
+    let spoken: Vec<&str> = timeline(&cut)
+        .caption_segments
+        .iter()
+        .flat_map(|segment| &segment.words)
+        .map(|word| word.text.as_str())
+        .collect();
+    assert_eq!(
+        spoken,
+        ["feels", "the", "same,", "works", "very", "similar,"]
+    );
+    assert_eq!(landing.land(&mut cut), None);
+}
+
+fn add_music(project: &mut ProjectConfiguration, start: f64, end: f64) {
+    timeline_mut(project).audio_segments.push(
+        serde_json::from_value(serde_json::json!({
+            "start": start,
+            "end": end,
+            "path": "music.mp3",
+            "fadeIn": 0.5,
+            "fadeOut": 0.5
+        }))
+        .unwrap(),
+    );
+}
+
+#[test]
+fn a_moved_filler_cut_leaves_music_playing_across_it_without_a_gap() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    add_music(&mut project, 0.0, 5.16);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert_eq!(follow(&mut project, &durations), 1);
+
+    let mut refined = self::project(&REFINED, &durations);
+    add_music(&mut refined, 0.0, 5.16);
+    cut_words(&mut refined, &durations, &[(3, 4)]);
+
+    let music = |project: &ProjectConfiguration| -> Vec<[f64; 5]> {
+        timeline(project)
+            .audio_segments
+            .iter()
+            .map(|piece| {
+                [
+                    piece.start,
+                    piece.end,
+                    piece.trim_start,
+                    piece.fade_in,
+                    piece.fade_out,
+                ]
+            })
+            .collect()
+    };
+    let moved = music(&project);
+    assert_eq!(moved.len(), 2);
+    assert!(close(moved[0][1], moved[1][0]), "{moved:?}");
+    for (moved, direct) in moved.iter().zip(music(&refined)) {
+        for (moved, direct) in moved.iter().zip(direct) {
+            assert!(close(*moved, direct), "{moved:?} {direct:?}");
+        }
+    }
+}
+
+#[test]
+fn a_cut_follows_its_own_word_past_recovered_ones_or_stays_when_it_cannot_tell() {
+    let durations = [5.16];
+    let before = TranscriptDoc::build(&captions(&FIRST_PASS));
+    let recovered = |word: (&'static str, f64, f64)| {
+        let mut words = REFINED.to_vec();
+        words.insert(3, word);
+        TranscriptDoc::build(&captions(&words))
+    };
+
+    let mut project = project(&FIRST_PASS, &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    let cut = bounds(&project);
+    let twin = recovered(("uh", 1.0, 1.1));
+    assert_eq!(
+        follow_refined_words(
+            timeline_mut(&mut project),
+            &durations,
+            &[],
+            &before,
+            &twin,
+            None
+        ),
+        0
+    );
+    assert_eq!(bounds(&project), cut);
+
+    let other = recovered(("so", 1.0, 1.1));
+    assert_eq!(
+        follow_refined_words(
+            timeline_mut(&mut project),
+            &durations,
+            &[],
+            &before,
+            &other,
+            None
+        ),
+        1
+    );
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+    assert_eq!(
+        kept(&project, &durations),
+        [true, true, true, false, true, true, true]
+    );
+}
+
+#[test]
+fn a_cut_made_before_the_loudness_envelope_loaded_still_moves() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+
+    let spoken = |time: f64| {
+        SPOKEN_UH.contains(&time)
+            || REFINED
+                .iter()
+                .any(|(text, start, end)| *text != "uh" && (*start..*end).contains(&time))
+    };
+    let clip: Vec<f32> = (0..(durations[0] / HOP_SECONDS) as usize)
+        .map(|hop| {
+            let time = hop as f64 * HOP_SECONDS;
+            if spoken(time) {
+                1e-2
+            } else if (1.17..1.19).contains(&time) {
+                1e-9
+            } else {
+                1e-7
+            }
+        })
+        .collect();
+    let envelope = EnergyEnvelope::new(vec![clip], &durations);
+    let mut before = TranscriptDoc::build(&captions(&FIRST_PASS));
+    before.refine_voiced(Some(&envelope));
+    let mut after = TranscriptDoc::build(&captions(&REFINED));
+    after.refine_voiced(Some(&envelope));
+    let filler = 3..4;
+    let heard = plan_word_cuts(
+        &before,
+        Some(&envelope),
+        None,
+        std::slice::from_ref(&filler),
+    );
+    assert!(
+        !close(heard[0].start, bounds(&project)[0].1),
+        "with the envelope the same cut is planned elsewhere: {heard:?}"
+    );
+
+    assert_eq!(
+        follow_refined_words(
+            timeline_mut(&mut project),
+            &durations,
+            &[],
+            &before,
+            &after,
+            Some(&envelope)
+        ),
+        1
+    );
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+}
+
+#[test]
+fn a_cut_stays_put_when_the_music_split_by_it_was_given_a_fade_since() {
+    let durations = [5.16];
+    let mut project = project(&FIRST_PASS, &durations);
+    add_music(&mut project, 0.0, 5.16);
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    timeline_mut(&mut project).audio_segments[1].fade_in = 0.3;
+    let cut = bounds(&project);
+
+    assert_eq!(follow(&mut project, &durations), 0);
+
+    assert_eq!(bounds(&project), cut);
+    let music = &timeline(&project).audio_segments;
+    assert_eq!(music.len(), 2);
+    assert_eq!(music[1].fade_in, 0.3);
+    assert!(close(music[0].end, music[1].start));
+}
+
+fn edit_word(project: &mut ProjectConfiguration, word: usize, text: &str) -> bool {
+    super::word_edit::replace_word(project.captions.as_mut().unwrap(), word, text)
+}
+
+fn doc_texts(project: &ProjectConfiguration) -> Vec<String> {
+    flatten_words(project.captions.as_ref().unwrap())
+        .into_iter()
+        .map(|word| word.text)
+        .collect()
+}
+
+fn caption_texts(project: &ProjectConfiguration) -> Vec<String> {
+    project
+        .captions
+        .as_ref()
+        .unwrap()
+        .segments
+        .iter()
+        .map(|segment| segment.text.clone())
+        .collect()
+}
+
+fn rendered_words(project: &mut ProjectConfiguration, durations: &[f64]) -> Vec<String> {
+    cap_project::synchronize_captions(project, durations);
+    timeline(project)
+        .caption_segments
+        .iter()
+        .flat_map(|segment| &segment.words)
+        .map(|word| word.text.clone())
+        .collect()
+}
+
+#[test]
+fn correcting_a_word_keeps_its_timing_and_reaches_the_rendered_captions() {
+    let durations = [5.0];
+    let words = spoken(&["One", "two.", "Three", "four", "five"]);
+    let mut project = project(&borrowed(&words), &durations);
+    let before = flatten_words(project.captions.as_ref().unwrap());
+
+    assert!(edit_word(&mut project, 2, "Tree"));
+
+    let after = flatten_words(project.captions.as_ref().unwrap());
+    assert_eq!(doc_texts(&project), ["One", "two.", "Tree", "four", "five"]);
+    assert_eq!(after.len(), before.len());
+    for (before, after) in before.iter().zip(&after) {
+        assert!(close(before.start, after.start) && close(before.end, after.end));
+    }
+    assert_eq!(caption_texts(&project), ["One two. Tree four five"]);
+    assert_eq!(
+        project.captions.as_ref().unwrap().segments[0].id,
+        "segment-0"
+    );
+    assert_eq!(
+        rendered_words(&mut project, &durations),
+        ["One", "two.", "Tree", "four", "five"]
+    );
+    assert!(!edit_word(&mut project, 2, "Tree"));
+    assert!(!edit_word(&mut project, 2, "  Tree "));
+    assert!(!edit_word(&mut project, 9, "nine"));
+}
+
+#[test]
+fn a_word_with_attached_punctuation_is_replaced_whole_and_keeps_its_span() {
+    let durations = [5.0];
+    let mut project = project(
+        &[
+            ("hello", 1.0, 1.3),
+            (",", 1.3, 1.3),
+            ("world", 1.5, 1.8),
+            (".", 1.8, 1.8),
+            ("it", 2.0, 2.1),
+            ("'s", 2.1, 2.3),
+        ],
+        &durations,
+    );
+    assert_eq!(doc_texts(&project), ["hello,", "world.", "it's"]);
+
+    assert!(edit_word(&mut project, 0, "Hi!"));
+    assert_eq!(doc_texts(&project), ["Hi!", "world.", "it's"]);
+    let words = flatten_words(project.captions.as_ref().unwrap());
+    assert!(close(words[0].start, 1.0) && close(words[0].end, f64::from(1.3f32)));
+
+    assert!(edit_word(&mut project, 0, "Hi ,"));
+    assert_eq!(doc_texts(&project), ["Hi,", "world.", "it's"]);
+    assert_eq!(caption_texts(&project), ["Hi, world. it's"]);
+    let words = flatten_words(project.captions.as_ref().unwrap());
+    assert!(close(words[0].end, f64::from(1.3f32)));
+
+    assert!(edit_word(&mut project, 2, "it is"));
+    let caption_words = &project.captions.as_ref().unwrap().segments[0].words;
+    let split: Vec<(&str, f32, f32)> = caption_words[caption_words.len() - 2..]
+        .iter()
+        .map(|word| (word.text.as_str(), word.start, word.end))
+        .collect();
+    assert_eq!(split, [("it", 2.0, 2.1), ("is", 2.1, 2.3)]);
+}
+
+#[test]
+fn splitting_a_word_shares_its_span_and_cut_words_stay_cut() {
+    let durations = [5.0];
+    let words = spoken(&["One", "two.", "Three", "four", "five"]);
+    let mut project = project(&borrowed(&words), &durations);
+    cut_words(&mut project, &durations, &[(4, 5)]);
+    let cut = bounds(&project);
+    assert_eq!(kept(&project, &durations), [true, true, true, true, false]);
+
+    assert!(edit_word(&mut project, 4, "fi ve"));
+    assert_eq!(
+        doc_texts(&project),
+        ["One", "two.", "Three", "four", "fi", "ve"]
+    );
+    assert_eq!(
+        kept(&project, &durations),
+        [true, true, true, true, false, false]
+    );
+    assert_eq!(bounds(&project), cut);
+    let words = flatten_words(project.captions.as_ref().unwrap());
+    assert!(close(words[4].start, 3.0) && close(words[5].end, f64::from(3.3f32)));
+    assert!(close(words[4].end, words[5].start));
+
+    assert!(edit_word(&mut project, 2, "Tree"));
+    assert_eq!(
+        kept(&project, &durations),
+        [true, true, true, true, false, false]
+    );
+    assert_eq!(bounds(&project), cut);
+    assert_eq!(
+        rendered_words(&mut project, &durations),
+        ["One", "two.", "Tree", "four"]
+    );
+}
+
+#[test]
+fn a_corrected_cut_word_comes_back_with_its_new_text_when_restored() {
+    let durations = [5.0];
+    let words = spoken(&["One", "two.", "Three", "four", "five"]);
+    let mut project = project(&borrowed(&words), &durations);
+    let uncut = bounds(&project);
+    cut_words(&mut project, &durations, &[(2, 3)]);
+    assert!(edit_word(&mut project, 2, "Tree"));
+    assert_eq!(kept(&project, &durations), [true, true, false, true, true]);
+    assert_eq!(
+        rendered_words(&mut project, &durations),
+        ["One", "two.", "four", "five"]
+    );
+
+    let doc = TranscriptDoc::build(project.captions.as_ref().unwrap());
+    assert_eq!(
+        restore_words(timeline_mut(&mut project), &durations, &[], &doc, 2..3),
+        Ok(1)
+    );
+    assert_eq!(bounds(&project), uncut);
+    assert_eq!(
+        rendered_words(&mut project, &durations),
+        ["One", "two.", "Tree", "four", "five"]
+    );
+}
+
+#[test]
+fn clearing_a_word_drops_it_from_the_captions_but_not_the_video() {
+    let durations = [10.0];
+    let words = spoken(&["a", "b", "c", "d", "e", "f", "g"]);
+    let mut project = project(&borrowed(&words), &durations);
+    let uncut = bounds(&project);
+    assert_eq!(project.captions.as_ref().unwrap().segments.len(), 2);
+
+    assert!(edit_word(&mut project, 6, " "));
+    assert_eq!(doc_texts(&project), ["a", "b", "c", "d", "e", "f"]);
+    assert_eq!(project.captions.as_ref().unwrap().segments.len(), 1);
+    assert!(edit_word(&mut project, 0, ""));
+    assert_eq!(caption_texts(&project), ["b c d e f"]);
+    assert_eq!(bounds(&project), uncut);
+}
+
+#[test]
+fn punctuation_in_the_next_caption_is_replaced_with_its_word() {
+    let mut data = captions(&[("hello", 1.0, 1.3)]);
+    let mut tail = captions(&[(",", 1.3, 1.3), ("world", 1.5, 1.8)]).segments;
+    tail[0].id = "segment-1".to_string();
+    data.segments.extend(tail);
+    let mut project = project(&[], &[5.0]);
+    project.captions = Some(data);
+    assert_eq!(doc_texts(&project), ["hello,", "world"]);
+
+    assert!(edit_word(&mut project, 0, "Hey"));
+    assert_eq!(doc_texts(&project), ["Hey", "world"]);
+    assert_eq!(caption_texts(&project), ["Hey", "world"]);
+
+    assert!(edit_word(&mut project, 0, ""));
+    assert_eq!(caption_texts(&project), ["world"]);
+    assert_eq!(
+        project.captions.as_ref().unwrap().segments[0].id,
+        "segment-1"
+    );
+}
+
+#[test]
+fn right_to_left_cjk_and_emoji_corrections_keep_their_text() {
+    let durations = [5.0];
+    let words = spoken(&["One", "two", "Three", "four", "five"]);
+    let mut project = project(&borrowed(&words), &durations);
+
+    assert!(edit_word(&mut project, 0, "שלום"));
+    assert!(edit_word(&mut project, 1, "世界、"));
+    assert!(edit_word(&mut project, 2, "great 👍"));
+    assert_eq!(
+        doc_texts(&project),
+        ["שלום", "世界、", "great👍", "four", "five"]
+    );
+    assert_eq!(caption_texts(&project), ["שלום 世界、 great 👍 four five"]);
+
+    assert!(edit_word(&mut project, 3, "🎉"));
+    assert_eq!(doc_texts(&project), ["שלום", "世界、", "great👍🎉", "five"]);
+    assert_eq!(caption_texts(&project), ["שלום 世界、 great 👍 🎉 five"]);
+    assert_eq!(
+        rendered_words(&mut project, &durations),
+        ["שלום", "世界、", "great", "👍", "🎉", "five"]
+    );
+}
+
+#[test]
+fn an_edited_word_is_found_again_after_its_transcript_moves() {
+    let words = flatten_words(&captions(&FIRST_PASS));
+    let refined = flatten_words(&captions(&REFINED));
+    assert_eq!(super::word_edit::locate(&words, 4, "works", 1.6), Some(4));
+    assert_eq!(super::word_edit::locate(&refined, 4, "works", 1.6), Some(4));
+    assert_eq!(super::word_edit::locate(&refined, 2, "works", 1.6), Some(4));
+    assert_eq!(super::word_edit::locate(&refined, 4, "works", 9.0), None);
+    assert_eq!(super::word_edit::locate(&refined, 40, "gone", 1.6), None);
+}
+
+#[test]
+fn a_correction_survives_a_refinement_and_the_word_cut_still_follows() {
+    let durations = [5.16];
+    let uncut = project(&FIRST_PASS, &durations);
+    let mut project = uncut.clone();
+    cut_words(&mut project, &durations, &[(3, 4)]);
+    assert!(edit_word(&mut project, 4, "worked"));
+    cap_project::synchronize_captions(&mut project, &durations);
+    let input = uncut.captions.as_ref().unwrap().segments.clone();
+    let refined = crate::transcription::RefinedCaptions::new(&input, captions(&REFINED).segments);
+    let mut landing = super::RefinementLanding::new(&refined, &durations, &[], None);
+
+    assert_eq!(landing.land(&mut project), Some(1));
+
+    assert!(!plays(&project, &SPOKEN_UH), "{:?}", bounds(&project));
+    assert_eq!(
+        rendered_words(&mut project, &durations),
+        ["feels", "the", "same,", "worked", "very", "similar,"]
+    );
+}
+
+#[test]
+fn correcting_a_word_in_a_two_hour_transcript_is_fast() {
+    let mut words = Vec::with_capacity(20_000);
+    let mut time = 0.5;
+    for index in 0..20_000 {
+        words.push((format!("w{index},"), time, time + 0.25));
+        time += 0.36;
+    }
+    let durations = [time + 1.0];
+    let mut project = project(&borrowed(&words), &durations);
+
+    let started = std::time::Instant::now();
+    assert!(edit_word(&mut project, 19_990, "fixed"));
+    let elapsed = started.elapsed();
+
+    let limit = std::time::Duration::from_millis(if cfg!(debug_assertions) { 600 } else { 40 });
+    println!("20k words: one correction {elapsed:?}");
+    assert!(elapsed < limit, "{elapsed:?}");
+    let texts = doc_texts(&project);
+    assert_eq!(texts.len(), 20_000);
+    assert_eq!(texts[19_990], "fixed");
+    assert_eq!(texts[19_991], "w19991,");
+}
+
+#[cfg(target_os = "linux")]
+mod word_edit_ui {
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, Window, div};
+
+    use crate::editor_window::EditorWindow;
+    use crate::transcript::WordSelection;
+
+    struct EditView {
+        editor: Entity<EditorWindow>,
+        _project: tempfile::TempDir,
+    }
+
+    impl Render for EditView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn fixture(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<EditorWindow>, &mut gpui::VisualTestContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let (view, cx) = cx.add_window_view(move |window, cx| {
+            let editor = cx.new(|cx| EditorWindow::new(path, window, cx));
+            editor.update(cx, |editor, cx| {
+                let words = super::spoken(&["One", "two.", "Three", "four", "five"]);
+                editor.project = super::project(&super::borrowed(&words), &[5.0]);
+                editor.clip_display_durations = vec![5.0];
+                editor.history.record(&editor.project);
+                editor.transcript.open = true;
+                editor.transcript.dirty = true;
+                editor.transcript_refresh();
+                window.focus(&editor.transcript.focus, cx);
+            });
+            EditView {
+                editor,
+                _project: directory,
+            }
+        });
+        (view.read_with(cx, |view, _| view.editor.clone()), cx)
+    }
+
+    fn texts(editor: &EditorWindow) -> Vec<String> {
+        super::doc_texts(&editor.project)
+    }
+
+    fn type_text(editor: &EditorWindow, text: &str, cx: &mut Context<EditorWindow>) {
+        let input = editor.transcript.edit_input.clone().unwrap();
+        input.update(cx, |input, cx| input.set_text(text.to_string(), cx));
+    }
+
+    #[gpui::test]
+    fn tab_saves_the_correction_and_opens_the_next_word(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(2, window, cx);
+            let input = editor.transcript.edit_input.clone().unwrap();
+            assert_eq!(input.read(cx).text(), "Three");
+            assert!(input.read(cx).focus_handle().is_focused(window));
+            assert_eq!(editor.transcript.selection, Some(WordSelection::single(2)));
+
+            type_text(editor, "Tree", cx);
+            editor.transcript_step_word_edit(true, window, cx);
+            assert_eq!(texts(editor), ["One", "two.", "Tree", "four", "five"]);
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(3));
+            assert_eq!(input.read(cx).text(), "four");
+            assert!(input.read(cx).focus_handle().is_focused(window));
+
+            type_text(editor, "for", cx);
+            editor.transcript_step_word_edit(false, window, cx);
+            assert_eq!(texts(editor), ["One", "two.", "Tree", "for", "five"]);
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(2));
+
+            editor.transcript_commit_word_edit(window, cx);
+            assert!(editor.transcript.editing.is_none());
+            assert_eq!(texts(editor), ["One", "two.", "Tree", "for", "five"]);
+        });
+    }
+
+    #[gpui::test]
+    fn tab_skips_cut_words_and_stops_after_the_last(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            super::cut_words(&mut editor.project, &[5.0], &[(3, 4)]);
+            editor.transcript.dirty = true;
+            editor.transcript_refresh();
+            editor.transcript_begin_word_edit(2, window, cx);
+            editor.transcript_step_word_edit(true, window, cx);
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(4));
+            editor.transcript_step_word_edit(true, window, cx);
+            assert!(editor.transcript.editing.is_none());
+            assert!(editor.transcript.focus.is_focused(window));
+        });
+    }
+
+    #[gpui::test]
+    fn escape_discards_and_a_split_word_lands_on_the_next_word(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(0, window, cx);
+            type_text(editor, "Uno", cx);
+        });
+        let input = editor.read_with(cx, |editor, _| {
+            editor.transcript.edit_input.clone().unwrap()
+        });
+        input.update_in(cx, |_, _, cx| cx.emit(crate::ui::TextInputEvent::Cancelled));
+        editor.update_in(cx, |editor, window, cx| {
+            assert!(editor.transcript.editing.is_none());
+            assert_eq!(texts(editor), ["One", "two.", "Three", "four", "five"]);
+
+            editor.transcript_begin_word_edit(0, window, cx);
+            type_text(editor, "On e", cx);
+            editor.transcript_step_word_edit(true, window, cx);
+            assert_eq!(texts(editor), ["On", "e", "two.", "Three", "four", "five"]);
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(2));
+            assert_eq!(
+                editor
+                    .transcript
+                    .edit_input
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .text(),
+                "two."
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn the_open_field_follows_its_word_when_the_transcript_is_rebuilt(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(2, window, cx);
+            let segment = &mut editor.project.captions.as_mut().unwrap().segments[0];
+            segment.words.insert(
+                0,
+                cap_project::CaptionWord {
+                    text: "Hey".into(),
+                    start: 0.2,
+                    end: 0.5,
+                },
+            );
+            editor.transcript.dirty = true;
+            editor.transcript_refresh();
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(3));
+
+            editor.transcript_step_word_edit(true, window, cx);
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(4));
+            assert_eq!(
+                editor
+                    .transcript
+                    .edit_input
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .text(),
+                "four"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_triple_click_on_the_field_still_selects_the_sentence(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(3, window, cx);
+            assert!(editor.transcript_select_from_field(3, window, cx));
+            assert!(editor.transcript.editing.is_none());
+            assert_eq!(
+                editor.transcript.selection.map(WordSelection::range),
+                Some(2..5)
+            );
+
+            editor.transcript_begin_word_edit(3, window, cx);
+            type_text(editor, "for", cx);
+            assert!(!editor.transcript_select_from_field(3, window, cx));
+            assert_eq!(editor.transcript.editing.as_ref().map(|e| e.word), Some(3));
+        });
+    }
+
+    #[gpui::test]
+    fn a_correction_is_one_undo_step(cx: &mut gpui::TestAppContext) {
+        let (editor, cx) = fixture(cx);
+        editor.update_in(cx, |editor, window, cx| {
+            editor.transcript_begin_word_edit(2, window, cx);
+            type_text(editor, "Tree", cx);
+            editor.transcript_commit_word_edit(window, cx);
+            // `project_changed` records nothing until a recording loads.
+            editor.history.record(&editor.project);
+            assert_eq!(texts(editor), ["One", "two.", "Tree", "four", "five"]);
+
+            editor.undo(window, cx);
+            assert_eq!(texts(editor), ["One", "two.", "Three", "four", "five"]);
+            editor.transcript_refresh();
+            assert_eq!(
+                editor.transcript.doc.as_ref().unwrap().words[2].text,
+                "Three"
+            );
+            editor.redo(window, cx);
+            assert_eq!(texts(editor), ["One", "two.", "Tree", "four", "five"]);
+        });
+    }
+
+    /// Lays `text` out 60px wide in the test text system (6px per character,
+    /// 20px lines) and returns each span's field anchor as (x, y, width).
+    fn anchors(
+        cx: &mut gpui::TestAppContext,
+        text: &'static str,
+        spans: &[std::ops::Range<usize>],
+    ) -> Vec<(f32, f32, f32)> {
+        use gpui::{ParentElement, Styled, StyledText, point, px, size};
+
+        let cx = cx.add_empty_window();
+        let styled = StyledText::new(text);
+        let layout = styled.layout().clone();
+        cx.draw(point(px(0.), px(0.)), size(px(60.), px(200.)), |_, _| {
+            div()
+                .w(px(60.))
+                .text_size(px(10.))
+                .line_height(px(20.))
+                .child(styled)
+        });
+        spans
+            .iter()
+            .map(|span| {
+                let anchor = crate::transcript::view::word_anchor(&layout, span.clone()).unwrap();
+                (
+                    f32::from(anchor.origin.x),
+                    f32::from(anchor.origin.y),
+                    f32::from(anchor.width),
+                )
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn the_field_opens_on_the_line_a_wrapped_word_starts(cx: &mut gpui::TestAppContext) {
+        // "one two " fills the first line, so "three" opens the second.
+        assert_eq!(
+            anchors(cx, "one two three four", &[0..3, 4..7, 8..13, 14..18]),
+            [
+                (0., 0., 18.),
+                (24., 0., 18.),
+                (0., 20., 30.),
+                (36., 20., 24.)
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn a_word_longer_than_the_line_gets_the_rest_of_its_first_line(cx: &mut gpui::TestAppContext) {
+        assert_eq!(
+            anchors(cx, "ab cdefghijklmnop", &[0..2, 3..17]),
+            [(0., 0., 12.), (0., 20., 60.)]
+        );
+        assert_eq!(
+            anchors(cx, "abcdefghijklmnop qr", &[0..16]),
+            [(0., 0., 60.)]
+        );
+    }
 }

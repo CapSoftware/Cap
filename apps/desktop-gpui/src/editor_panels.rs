@@ -3331,7 +3331,7 @@ fn commit_segment_timing(
         return false;
     }
     if start {
-        segment.set_start(value);
+        segment.trim_start_to(value);
     } else {
         segment.set_end(value);
     }
@@ -4452,6 +4452,29 @@ impl EditorWindow {
                         .children(manual.then(|| self.render_pad(PadKey::ZoomManual(index), cx))),
                 ),
             )
+            .child(self.zoom_start_early_field(cx))
+            .into_any_element()
+    }
+
+    fn zoom_start_early_field(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let enabled = self.project.screen_movement_spring.start_zooms_early;
+        ui::Field::inline(&theme, tr::editor::panel::zoom::start_early())
+            .value(
+                ui::Toggle::plain(&theme, "zoom-start-early", enabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_project_without_timeline(
+                            "zoom-start-early",
+                            window,
+                            cx,
+                            move |project| {
+                                project.screen_movement_spring.start_zooms_early = !enabled;
+                                true
+                            },
+                        );
+                    }))
+                    .into_any_element(),
+            )
             .into_any_element()
     }
 
@@ -4576,6 +4599,7 @@ impl EditorWindow {
                         field
                     }),
             )
+            .child(self.zoom_start_early_field(cx))
             // The per-segment preview grid (`:6046-6068`) is a decoded frame per
             // card; see the README's zoom-preview deviation. The remove-from-
             // selection affordance it carries is reproduced as a plain row.
@@ -6536,7 +6560,8 @@ impl EditorWindow {
         };
         let mode = segment.mode;
         let split_mode = matches!(mode, SceneMode::SplitScreen | SceneMode::Floating);
-        let has_camera = self.summary().is_some_and(|summary| summary.has_camera);
+        let has_camera = self.summary().is_some_and(|summary| summary.has_camera)
+            || self.project.camera_picture.is_some();
         let description = SCENE_MODES
             .iter()
             .find(|(candidate, ..)| {
@@ -8504,6 +8529,24 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn keyboard_start_field_preserves_keypress_times() {
+        let mut segment: KeyboardTrackSegment = serde_json::from_value(serde_json::json!({
+            "id": "typed", "start": 2.0, "end": 6.0, "displayText": "ab",
+            "keys": [
+                { "key": "a", "timeOffset": 0.0 },
+                { "key": "b", "timeOffset": 2000.0 }
+            ]
+        }))
+        .unwrap();
+        assert!(commit_segment_timing(&mut segment, true, "3.00", 3.0));
+        assert_eq!(segment.keys[0].time_offset, -1000.0);
+        assert_eq!(segment.keys[1].time_offset, 1000.0);
+        assert!(commit_segment_timing(&mut segment, false, "7.00", 7.0));
+        assert_eq!(segment.keys[0].time_offset, -1000.0);
+        assert_eq!(segment.keys[1].time_offset, 1000.0);
+    }
 
     #[test]
     fn unchanged_timing_fields_preserve_redo() {
