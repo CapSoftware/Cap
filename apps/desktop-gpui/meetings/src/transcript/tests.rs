@@ -954,3 +954,81 @@ fn readers_without_the_ledger_skip_its_lines() {
     let closed = serde_json::to_string(&LogLine::GapClosed { ids: vec!["gm0".into()] }).unwrap();
     assert!(closed.contains("\"op\":\"gapClosed\""));
 }
+
+/// A voice left out of the notes keeps its lines in the transcript but is
+/// never in what a summary or Ask is given, nor among the people heard. The
+/// choice is kept in the log, follows a rename, and can be undone.
+#[test]
+fn a_voice_left_out_of_the_notes_stays_in_the_transcript_only() {
+    let mut t = Transcript::new();
+    t.upsert(utt("m1", Source::Mic, 0, 1_000, "Let's start.", true));
+    let mut tv = utt("s1", Source::System, 5_000, 6_000, "Dinner is ready!", true);
+    tv.speaker_id = Some(7);
+    t.upsert(tv);
+    let mut named = utt(
+        "s2",
+        Source::System,
+        10_000,
+        11_000,
+        "Budget looks fine.",
+        true,
+    );
+    named.speaker = Some("Ana".into());
+    t.upsert(named);
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[cap_diarize::SpeakerInfo {
+        id: SpeakerId(7),
+        track: cap_diarize::Track::System,
+        first_ms: 5_000,
+        speech_ms: 1_000,
+        is_user: false,
+    }]);
+    names.set_left_out(SpeakerId(7), true);
+    t.set_names(names);
+    t.apply(LogLine::LeaveOut {
+        voice: Voice::Named("Ana".into()),
+        out: true,
+    });
+    let prompt = t.labelled_for_prompt(usize::MAX, Some("Richie")).text;
+    assert!(prompt.contains("Let's start."), "{prompt}");
+    assert!(
+        !prompt.contains("Dinner") && !prompt.contains("Budget"),
+        "{prompt}"
+    );
+    assert_eq!(t.len(), 3, "every line stays in the transcript");
+    assert!(
+        !t.named_speakers(Some("Richie"))
+            .iter()
+            .any(|(name, _)| name == "Ana")
+    );
+
+    // A rename carries the choice; the log keeps it across a reload.
+    t.rename_speaker("Ana", "Ana Ruiz");
+    assert!(t.is_left_out(Source::System, Some("Ana Ruiz"), None));
+    let mut reloaded = Transcript::new();
+    for line in t.to_log_lines() {
+        let json = serde_json::to_string(&line).unwrap();
+        reloaded.apply(parse_line(&json).expect("a line this version reads"));
+    }
+    assert_eq!(reloaded, t);
+    let line = serde_json::to_string(&LogLine::LeaveOut {
+        voice: Voice::Source(Source::Mic),
+        out: true,
+    })
+    .unwrap();
+    assert_eq!(
+        line,
+        r#"{"op":"leaveOut","voice":{"kind":"source","value":"mic"},"out":true}"#
+    );
+
+    // Taking it back in puts the lines back in the prompt.
+    t.apply(LogLine::LeaveOut {
+        voice: Voice::Named("Ana Ruiz".into()),
+        out: false,
+    });
+    assert!(
+        t.labelled_for_prompt(usize::MAX, None)
+            .text
+            .contains("Budget")
+    );
+}

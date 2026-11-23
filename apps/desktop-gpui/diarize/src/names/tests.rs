@@ -280,3 +280,90 @@ fn a_late_correction_moves_a_rename_and_the_user_with_a_merge() {
     names.apply_late(&FinalPass { speakers: vec![info(1, Track::Mic, 0, 1, false), info(5, Track::System, 900, 1, false)], ..FinalPass::default() });
     assert_eq!(names.label(SpeakerId(1)), Some(Label::User));
 }
+
+#[test]
+fn a_voice_that_is_not_the_user_stays_someone_else_live_and_after_the_meeting() {
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        info(1, Track::Mic, 0, 1, true),
+        info(2, Track::System, 500, 1, false),
+    ]);
+    assert_eq!(names.label(SpeakerId(1)), Some(Label::User));
+    names.not_user(SpeakerId(1));
+    assert_eq!(names.label(SpeakerId(1)), Some(Label::Person(2)));
+    assert_eq!(names.user(), None);
+    // The live pass still thinks it is the user: it stays someone else.
+    names.observe(&[
+        info(1, Track::Mic, 0, 1, true),
+        info(2, Track::System, 500, 1, false),
+    ]);
+    assert_eq!(names.label(SpeakerId(1)), Some(Label::Person(2)));
+    // The real user speaks: they are the user, and nobody else moves.
+    names.observe(&[info(3, Track::Mic, 4_000, 1, true)]);
+    assert_eq!(names.label(SpeakerId(3)), Some(Label::User));
+    assert_eq!(names.label(SpeakerId(1)), Some(Label::Person(2)));
+    assert_eq!(names.label(SpeakerId(2)), Some(Label::Person(1)));
+
+    // "That's me" takes it back, and back again.
+    let mut undone = names.clone();
+    undone.claim_user(SpeakerId(1));
+    assert_eq!(undone.label(SpeakerId(1)), Some(Label::User));
+    assert!(!undone.is_not_user(SpeakerId(1)));
+    assert!(matches!(undone.label(SpeakerId(3)), Some(Label::Person(_))));
+
+    // The end-of-meeting pass merges the disowned voice into 4 and picks 4
+    // as the user: 4 is still someone else, and is the voice disowned.
+    let mut late = names.clone();
+    let end = pass(
+        vec![
+            info(2, Track::System, 500, 1, false),
+            info(3, Track::Mic, 4_000, 1, false),
+            info(4, Track::Mic, 0, 1, true),
+        ],
+        vec![(1, 4)],
+    );
+    assert!(names.disowns(SpeakerId(4), &end.merged));
+    assert!(!names.disowns(SpeakerId(3), &end.merged));
+    names.apply_final(&end);
+    assert_eq!(names.user(), None);
+    assert!(matches!(names.label(SpeakerId(4)), Some(Label::Person(_))));
+    late.apply_late(&end);
+    assert_eq!(late.user(), None);
+    assert!(matches!(late.label(SpeakerId(4)), Some(Label::Person(_))));
+}
+
+#[test]
+fn a_voice_left_out_of_the_notes_follows_merges_and_round_trips() {
+    let mut names = SpeakerNames::new(None);
+    names.observe(&[
+        info(1, Track::Mic, 0, 1, true),
+        info(2, Track::System, 500, 1, false),
+        info(3, Track::System, 900, 1, false),
+    ]);
+    names.set_left_out(SpeakerId(3), true);
+    names.not_user(SpeakerId(1));
+    assert!(names.is_left_out(SpeakerId(3)) && !names.is_left_out(SpeakerId(2)));
+    let json = serde_json::to_string(&names).unwrap();
+    let back: SpeakerNames = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, names);
+    // Names saved before these choices existed still load.
+    let mut plain = SpeakerNames::new(None);
+    plain.observe(&[info(1, Track::Mic, 0, 1, true)]);
+    let old = serde_json::to_string(&plain).unwrap();
+    assert!(!old.contains("leftOut") && !old.contains("notUser"));
+    assert_eq!(serde_json::from_str::<SpeakerNames>(&old).unwrap(), plain);
+
+    names.apply_late(&pass(
+        vec![
+            info(1, Track::Mic, 0, 1, false),
+            info(2, Track::System, 500, 1, false),
+        ],
+        vec![(3, 2)],
+    ));
+    assert!(
+        names.is_left_out(SpeakerId(2)),
+        "the merged voice keeps the choice"
+    );
+    names.set_left_out(SpeakerId(2), false);
+    assert!(!names.is_left_out(SpeakerId(2)));
+}

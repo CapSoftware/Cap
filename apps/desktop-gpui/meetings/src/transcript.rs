@@ -179,6 +179,21 @@ pub enum LogLine {
         #[serde(default)]
         ids: Vec<String>,
     },
+    /// A voice with no told-apart id left out of the notes (`out`), or taken
+    /// back in. Told-apart voices keep this choice in `SpeakerNames`.
+    LeaveOut {
+        voice: Voice,
+        #[serde(default)]
+        out: bool,
+    },
+}
+
+/// A voice the transcript knows only by its track or a name on its lines.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum Voice {
+    Source(Source),
+    Named(String),
 }
 
 /// A stretch of one track's saved audio whose words did not land: a
@@ -254,6 +269,8 @@ pub struct Transcript {
     system_label: Option<String>,
     names: Option<SpeakerNames>,
     gaps: Vec<Gap>,
+    /// Voices without a told-apart id left out of the notes.
+    left_out: Vec<Voice>,
 }
 
 fn order_key(u: &Utterance) -> (u64, Source, &str) {
@@ -331,6 +348,15 @@ impl Transcript {
 
     pub fn rename_speaker(&mut self, from: &str, to: &str) -> usize {
         let to = to.trim();
+        if let Some(voice) = self
+            .left_out
+            .iter_mut()
+            .find(|v| **v == Voice::Named(from.to_string()))
+        {
+            *voice = Voice::Named(to.to_string());
+        }
+        self.left_out.retain(|v| *v != Voice::Named(String::new()));
+        self.left_out.dedup();
         let mut changed = 0;
         for u in &mut self.utterances {
             if u.speaker.as_deref() == Some(from) {
@@ -360,6 +386,37 @@ impl Transcript {
 
     pub fn names(&self) -> Option<&SpeakerNames> {
         self.names.as_ref()
+    }
+
+    pub fn set_left_out(&mut self, voice: Voice, out: bool) {
+        self.left_out.retain(|v| *v != voice);
+        if out {
+            self.left_out.push(voice);
+        }
+    }
+
+    /// Whether lines by this speaker are left out of the notes, by the same
+    /// precedence `speaker` names them: a name on the line, then the
+    /// told-apart voice, then the track.
+    pub fn is_left_out(
+        &self,
+        source: Source,
+        speaker: Option<&str>,
+        speaker_id: Option<u32>,
+    ) -> bool {
+        if let Some(name) = speaker.map(str::trim).filter(|s| !s.is_empty()) {
+            return self.left_out.contains(&Voice::Named(name.to_string()));
+        }
+        if let (Some(id), Some(names)) = (speaker_id, self.names.as_ref())
+            && names.is_left_out(SpeakerId(id))
+        {
+            return true;
+        }
+        self.left_out.contains(&Voice::Source(source))
+    }
+
+    pub fn turn_left_out(&self, turn: &Turn) -> bool {
+        self.is_left_out(turn.source, turn.speaker.as_deref(), turn.speaker_id)
     }
 
     pub fn set_names(&mut self, names: SpeakerNames) {
@@ -462,6 +519,9 @@ impl Transcript {
     pub fn named_speakers(&self, self_name: Option<&str>) -> Vec<(String, bool)> {
         let mut out: Vec<(String, bool)> = Vec::new();
         for turn in self.turns() {
+            if self.turn_left_out(&turn) {
+                continue;
+            }
             let label = self.turn_speaker(&turn);
             let entry = match &label {
                 SpeakerLabel::User => self_name
@@ -503,6 +563,7 @@ impl Transcript {
             LogLine::GapClosed { ids } => {
                 self.close_gaps(&ids);
             }
+            LogLine::LeaveOut { voice, out } => self.set_left_out(voice, out),
         }
     }
 
@@ -626,6 +687,7 @@ impl Transcript {
         let lines: Vec<String> = self
             .turns()
             .iter()
+            .filter(|t| !self.turn_left_out(t))
             .map(|t| {
                 format!("{}: {}", self.turn_speaker(t).english(self_name), t.text)
             })
@@ -828,6 +890,10 @@ impl Transcript {
                 }),
         );
         lines.extend(self.gaps.iter().map(|gap| LogLine::Gap { gap: gap.clone() }));
+        lines.extend(self.left_out.iter().map(|voice| LogLine::LeaveOut {
+            voice: voice.clone(),
+            out: true,
+        }));
         lines
     }
 }

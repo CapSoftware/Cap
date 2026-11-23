@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +43,14 @@ pub struct SpeakerNames {
     numbers: BTreeMap<SpeakerId, u32>,
     known: Vec<SpeakerId>,
     system_seen: bool,
+    /// Voices the person said were not them ("That's not me"): numbered
+    /// like anyone else and never taken for the user again in this meeting.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    not_user: BTreeSet<SpeakerId>,
+    /// Voices the person left out of the notes: still in the transcript,
+    /// never in what the summary or Ask is given.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    left_out: BTreeSet<SpeakerId>,
 }
 
 impl SpeakerNames {
@@ -65,6 +73,71 @@ impl SpeakerNames {
         &self.renames
     }
 
+    /// "That's not me": the voice is someone else from now on, with the
+    /// next free number, and is never taken for the user again in this
+    /// meeting (the live pass or the end-of-meeting one).
+    pub fn not_user(&mut self, id: SpeakerId) {
+        self.not_user.insert(id);
+        if self.user == Some(id) {
+            self.user = None;
+        }
+        if self.attendee_voice != Some(id) && !self.numbers.contains_key(&id) {
+            let next = self.numbers.values().max().copied().unwrap_or(0) + 1;
+            self.numbers.insert(id, next);
+        }
+        if !self.known.contains(&id) {
+            self.known.push(id);
+        }
+    }
+
+    /// "That's me": takes back "That's not me" on this voice, which is the
+    /// user again. A voice shown as the user until now takes a number.
+    pub fn claim_user(&mut self, id: SpeakerId) {
+        self.not_user.remove(&id);
+        if let Some(before) = self.user.replace(id)
+            && before != id
+            && self.attendee_voice != Some(before)
+            && !self.numbers.contains_key(&before)
+        {
+            let next = self.numbers.values().max().copied().unwrap_or(0) + 1;
+            self.numbers.insert(before, next);
+        }
+        if !self.known.contains(&id) {
+            self.known.push(id);
+        }
+    }
+
+    pub fn is_not_user(&self, id: SpeakerId) -> bool {
+        self.not_user.contains(&id)
+    }
+
+    /// Whether the person said `id` (an end-of-meeting voice) was not them,
+    /// following the live voices merged into it.
+    pub fn disowns(&self, id: SpeakerId, merged: &[(SpeakerId, SpeakerId)]) -> bool {
+        self.not_user.iter().any(|&live| follow(live, merged) == id)
+    }
+
+    /// Leaves the voice out of the notes (or takes it back in).
+    pub fn set_left_out(&mut self, id: SpeakerId, out: bool) {
+        if out {
+            self.left_out.insert(id);
+        } else {
+            self.left_out.remove(&id);
+        }
+    }
+
+    pub fn is_left_out(&self, id: SpeakerId) -> bool {
+        self.left_out.contains(&id)
+    }
+
+    /// The person's choices about voices follow the voices merged into
+    /// others, as renames do.
+    fn follow_choices(&mut self, merged: &[(SpeakerId, SpeakerId)]) {
+        for set in [&mut self.not_user, &mut self.left_out] {
+            *set = set.iter().map(|&id| follow(id, merged)).collect();
+        }
+    }
+
     /// Takes in the live speaker list. Speakers already seen keep their
     /// labels; new ones are numbered in order of first speech.
     pub fn observe(&mut self, speakers: &[SpeakerInfo]) {
@@ -73,7 +146,9 @@ impl SpeakerNames {
             .filter(|s| !self.known.contains(&s.id))
             .collect();
         fresh.sort_by_key(|s| (s.first_ms, s.id));
-        if let Some(user) = speakers.iter().find(|s| s.is_user)
+        if let Some(user) = speakers
+            .iter()
+            .find(|s| s.is_user && !self.not_user.contains(&s.id))
             && self.user != Some(user.id)
         {
             // The microphone's user moved to a clearly louder voice: the
@@ -166,10 +241,14 @@ impl SpeakerNames {
                 self.renames.entry(*to).or_insert(name);
             }
         }
+        self.follow_choices(&pass.merged);
         let alive: Vec<SpeakerId> = pass.speakers.iter().map(|s| s.id).collect();
         self.renames.retain(|id, _| alive.contains(id));
         if pass.user.is_some() {
-            self.user = pass.user.map(follow);
+            self.user = pass
+                .user
+                .map(follow)
+                .filter(|id| !self.not_user.contains(id));
         }
         self.attendee_voice = self.attendee_voice.map(follow).filter(|id| alive.contains(id));
         self.numbers
@@ -217,9 +296,10 @@ impl SpeakerNames {
                 self.renames.entry(*to).or_insert(name);
             }
         }
+        self.follow_choices(&pass.merged);
         let alive: Vec<SpeakerId> = pass.speakers.iter().map(|s| s.id).collect();
         self.renames.retain(|id, _| alive.contains(id));
-        self.user = pass.user;
+        self.user = pass.user.filter(|id| !self.not_user.contains(id));
 
         let system: Vec<&SpeakerInfo> = pass
             .speakers
@@ -267,6 +347,17 @@ impl SpeakerNames {
             })
             .collect()
     }
+}
+
+/// Where a live voice ended up after the end-of-meeting pass merged voices.
+fn follow(mut id: SpeakerId, merged: &[(SpeakerId, SpeakerId)]) -> SpeakerId {
+    for _ in 0..merged.len() {
+        match merged.iter().find(|(from, _)| *from == id) {
+            Some((_, to)) => id = *to,
+            None => break,
+        }
+    }
+    id
 }
 
 /// Maps keyed by voice are stored as `[id, value]` pairs: the transcript log
