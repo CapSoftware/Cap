@@ -52,11 +52,12 @@ export const LIVE_TRANSCRIBE = {
 	 * window instead of one per chunk. Equal to MAX_POLL_MS_PER_STEP so a
 	 * step never runs longer than a single waiting step could. */
 	MAX_BATCH_MS_PER_STEP: 120_000,
-	/** AssemblyAI rejects very short audio ("Audio duration is too short"),
-	 * and a recording's last segment can be a few milliseconds. A chunk
-	 * shorter than this is sent with already transcribed audio in front of
-	 * it so the tail's words still land instead of leaving a gap. */
-	MIN_SENT_SECONDS: 3,
+	/** AssemblyAI rejects audio this short ("Audio duration is too short";
+	 * measured: 100 ms rejected, 150 ms accepted), and a recording's last
+	 * segment can be a few milliseconds. Such a chunk is sent with already
+	 * transcribed audio in front of it so its words still land instead of
+	 * leaving a gap. Longer chunks are sent exactly as before. */
+	MIN_SENT_SECONDS: 0.5,
 } as const;
 
 export type LiveChunkResult =

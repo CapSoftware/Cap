@@ -850,16 +850,16 @@ describe("short final chunks", () => {
 			manifest,
 			lastProcessedIndex: 10,
 			targetSeconds: 10,
-			minSentSeconds: 3,
+			minSentSeconds: 0.5,
 		});
 		expect(tail).toMatchObject({
 			action: "chunk",
 			startMs: 20_000,
 			durationMs: 21,
-			contextMs: 4000,
+			contextMs: 2000,
 		});
 		if (tail.action === "chunk") {
-			expect(tail.context.map((entry) => entry.index)).toEqual([9, 10]);
+			expect(tail.context.map((entry) => entry.index)).toEqual([10]);
 			expect(tail.entries.map((entry) => entry.index)).toEqual([11]);
 		}
 	});
@@ -870,7 +870,7 @@ describe("short final chunks", () => {
 				manifest,
 				lastProcessedIndex: 5,
 				targetSeconds: 10,
-				minSentSeconds: 3,
+				minSentSeconds: 0.5,
 			}),
 		).toMatchObject({ action: "chunk", contextMs: 0, context: [] });
 
@@ -882,7 +882,7 @@ describe("short final chunks", () => {
 			},
 			lastProcessedIndex: 0,
 			targetSeconds: 10,
-			minSentSeconds: 3,
+			minSentSeconds: 0.5,
 		});
 		expect(lone).toMatchObject({ action: "chunk", contextMs: 0, context: [] });
 	});
@@ -894,7 +894,7 @@ describe("short final chunks", () => {
 				lastProcessedIndex: 10,
 				targetSeconds: 10,
 				contextSeconds: 6,
-				minSentSeconds: 3,
+				minSentSeconds: 0.5,
 			}),
 		).toMatchObject({ action: "chunk", contextMs: 6000 });
 	});
