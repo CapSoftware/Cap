@@ -289,3 +289,24 @@ fn settings_without_the_slow_cloud_choice_write_nothing_new() {
     let json = serde_json::to_string(&MeetingSettings::default()).unwrap();
     assert!(!json.contains("liveOnSlowCloud"), "{json}");
 }
+
+#[test]
+fn user_entries_leave_out_what_cap_added_itself() {
+    assert!(
+        MeetingSettings::default()
+            .transcription
+            .user_entries()
+            .is_empty()
+    );
+
+    let mut t = TranscriptionSettings::default();
+    let mut entries = t.entries().to_vec();
+    entries.push(Entry::new("Acme"));
+    dictionary::learn(&mut entries, "Cap", "Kappa");
+    t.dictionary = Some(entries);
+    let mine = t.user_entries();
+    assert_eq!(mine.len(), 2, "{mine:?}");
+    assert_eq!(mine[0].spelling, "Cap");
+    assert_eq!(mine[0].sounds_like, vec!["Kappa".to_string()]);
+    assert_eq!(mine[1], Entry::new("Acme"));
+}

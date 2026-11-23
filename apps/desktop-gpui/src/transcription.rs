@@ -2586,13 +2586,11 @@ fn transcribe_project_first_pass(
     })
 }
 
-/// The user's dictionary, as the meetings settings hold it.
+/// The words the user added to the dictionary. Cap's own entries are for
+/// Notes transcripts only, so with none added captions are exactly what the
+/// engine heard.
 pub(crate) fn caption_corrector() -> cap_meetings::dictionary::Corrector {
-    cap_meetings::dictionary::Corrector::new(
-        crate::meetings::persist::load_settings()
-            .transcription
-            .entries(),
-    )
+    cap_meetings::dictionary::Corrector::new(&crate::meetings::persist::caption_entries())
 }
 
 /// Spell caption words with the dictionary. Words keep their own times
@@ -3564,6 +3562,58 @@ mod tests {
             &mut untouched,
         );
         assert_eq!(flat(&untouched[0]), flat(&heard));
+    }
+
+    #[test]
+    fn studio_captions_use_only_words_the_user_added() {
+        use cap_meetings::dictionary::{Corrector, Entry};
+        use cap_meetings::settings::MeetingSettings;
+
+        let heard = vec![
+            heard_word("Kapp", 0.1, 0.4),
+            heard_word("and", 0.5, 0.6),
+            heard_word("Capp", 0.7, 1.0),
+            heard_word("tried", 1.1, 1.3),
+            heard_word("Kap", 1.4, 1.6),
+            heard_word("on", 1.7, 1.8),
+            heard_word("Cubernetes.", 1.9, 2.4),
+        ];
+        let texts = |groups: &[Vec<CaptionWord>]| -> Vec<String> {
+            groups[0].iter().map(|w| w.text.clone()).collect()
+        };
+
+        // Notes transcripts keep Cap's own entry.
+        let mut notes = vec![heard.clone()];
+        spell_caption_groups(
+            &Corrector::new(MeetingSettings::default().transcription.entries()),
+            &mut notes,
+        );
+        assert_eq!(&texts(&notes)[..5], ["Cap", "and", "Cap", "tried", "Cap"]);
+
+        // Studio captions: nothing saved, or a saved dictionary holding only
+        // Cap's own entries, changes nothing.
+        let saved_default = serde_json::to_string(&MeetingSettings::default()).unwrap();
+        for json in [None, Some(saved_default.as_str())] {
+            let entries = crate::meetings::persist::caption_entries_in(json);
+            assert!(entries.is_empty(), "{entries:?}");
+            let mut groups = vec![heard.clone()];
+            spell_caption_groups(&Corrector::new(&entries), &mut groups);
+            assert_eq!(texts(&groups), texts(&[heard.clone()]));
+        }
+
+        // A word the user added still spells captions; Cap's forms stay out.
+        let mut settings = MeetingSettings::default();
+        let mut entries = settings.transcription.entries().to_vec();
+        entries.push(Entry::new("Kubernetes"));
+        settings.transcription.dictionary = Some(entries);
+        let json = serde_json::to_string(&settings).unwrap();
+        let entries = crate::meetings::persist::caption_entries_in(Some(&json));
+        let mut groups = vec![heard.clone()];
+        spell_caption_groups(&Corrector::new(&entries), &mut groups);
+        assert_eq!(
+            texts(&groups),
+            ["Kapp", "and", "Capp", "tried", "Kap", "on", "Kubernetes."]
+        );
     }
 
     fn dylib(commands: &[(u32, Vec<u32>)]) -> Vec<u8> {
