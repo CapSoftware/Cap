@@ -6,7 +6,7 @@
 //! GPU once rather than every frame.
 
 use std::{
-    path::Path,
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -36,7 +36,9 @@ impl CameraPictureCache {
             return frame.clone();
         }
         let path = project_path.join(relative);
-        let frame = match decode_camera_picture(&path) {
+        let frame = match inside_project(project_path, relative)
+            .and_then(|path| decode_camera_picture(&path))
+        {
             Ok(frame) => Some(frame),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "Camera picture is unavailable");
@@ -46,6 +48,30 @@ impl CameraPictureCache {
         *loaded = Some((relative.to_string(), frame.clone()));
         frame
     }
+}
+
+/// `relative` resolved inside `project_path`. The field comes from a project
+/// file, which can be shared, so a path that leaves the project (absolute,
+/// `..`, or a link pointing out) is refused rather than drawn into exports.
+fn inside_project(project_path: &Path, relative: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(relative);
+    if !relative
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err("Camera picture path must stay inside the project".into());
+    }
+    let project = project_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let path = project
+        .join(relative)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !path.starts_with(&project) {
+        return Err("Camera picture path must stay inside the project".into());
+    }
+    Ok(path)
 }
 
 pub fn decode_camera_picture(path: &Path) -> Result<DecodedFrame, String> {
@@ -131,6 +157,30 @@ mod tests {
             .unwrap();
         assert!(cache.frame(&dir, "content/images/next.png").is_some());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn pictures_outside_the_project_are_refused() {
+        let root = temp_dir("outside");
+        let project = root.join("rec.cap");
+        std::fs::create_dir_all(project.join("content/images")).unwrap();
+        let outside = root.join("secret.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
+            .save(&outside)
+            .unwrap();
+        let cache = CameraPictureCache::default();
+        assert!(cache.frame(&project, "../secret.png").is_none());
+        assert!(cache.frame(&project, outside.to_str().unwrap()).is_none());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, project.join("content/images/link.png")).unwrap();
+            assert!(cache.frame(&project, "content/images/link.png").is_none());
+        }
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
+            .save(project.join("content/images/inside.png"))
+            .unwrap();
+        assert!(cache.frame(&project, "content/images/inside.png").is_some());
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
