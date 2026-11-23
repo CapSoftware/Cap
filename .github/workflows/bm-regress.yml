@@ -442,8 +442,11 @@ jobs:
         run: |
           set -euo pipefail
           A="$RUNNER_TEMP/apps"; mkdir -p "$A"
-          F=(); [[ "$RUNNER_OS" == "Windows" ]] && F=(--force-local)
-          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar "${F[@]}" -C "$A" -xf {} \;
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar --force-local -C "$A" -xf {} \;
+          else
+            find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          fi
           cat "$A"/*/sha.txt
       - if: matrix.os == 'windows'
         shell: pwsh
