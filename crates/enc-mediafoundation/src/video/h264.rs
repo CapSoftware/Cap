@@ -757,7 +757,7 @@ impl H264Encoder {
     }
 }
 
-fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
+pub(crate) fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
     let frame_rate_factor = (fps as f32 - 30.0).max(0.0) / 2.0 + 30.0;
     (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
 }

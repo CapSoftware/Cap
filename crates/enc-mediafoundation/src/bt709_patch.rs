@@ -13,7 +13,7 @@ use windows::{
                 D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
                 D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11Texture2D,
             },
-            Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
+            Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
         },
         Media::MediaFoundation::{
             IMFSample, MFMediaType_Video, MFSTARTUP_FULL, MFStartup, MFT_ENUM_FLAG_HARDWARE,
@@ -23,11 +23,17 @@ use windows::{
     },
 };
 
-use crate::{d3d::create_d3d_device, media::MF_VERSION, mft::EncoderDevice, video::H264Encoder};
+use crate::{
+    d3d::create_d3d_device,
+    media::MF_VERSION,
+    mft::EncoderDevice,
+    video::{H264Encoder, NewVideoEncoderError, calculate_bitrate},
+};
 
-const WIDTH: u32 = 64;
-const HEIGHT: u32 = 64;
+const WIDTH: u32 = 1280;
+const HEIGHT: u32 = 720;
 const FPS: u32 = 30;
+const BITRATE_MULTIPLIER: f32 = 0.15;
 const RGB: [u8; 3] = [125, 62, 93];
 const FRAMES: u32 = 48;
 
@@ -39,11 +45,7 @@ fn color_patch_decodes_as_limited_bt709() {
     ffmpeg::init().expect("ffmpeg::init");
 
     let device = create_d3d_device().expect("D3D11 device");
-    let texture = solid_bgra(&device, RGB);
-    let size = SizeInt32 {
-        Width: WIDTH as i32,
-        Height: HEIGHT as i32,
-    };
+    let texture = solid_rgba(&device, RGB);
     let hardware = EncoderDevice::enumerate_with_flags(
         MFMediaType_Video,
         MFVideoFormat_H264,
@@ -53,8 +55,7 @@ fn color_patch_decodes_as_limited_bt709() {
     let mut encoder = if let Some(found) = hardware.first() {
         let name = found.display_name().to_owned();
         eprintln!("mft_name={name}");
-        H264Encoder::new(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
-            .expect("Media Foundation H.264 encoder")
+        open_encoder(&device, true)
     } else {
         let software = EncoderDevice::enumerate_with_flags(
             MFMediaType_Video,
@@ -67,8 +68,7 @@ fn color_patch_decodes_as_limited_bt709() {
             .map(|found| found.display_name().to_owned())
             .unwrap_or_else(|| "none".to_owned());
         eprintln!("mft_name={name}");
-        H264Encoder::new_software(&device, DXGI_FORMAT_B8G8R8A8_UNORM, size, FPS, 8.0)
-            .expect("Media Foundation software H.264 encoder")
+        open_encoder(&device, false)
     };
     eprintln!("color_tags={}", encoder.color_tags());
 
@@ -123,15 +123,51 @@ fn color_patch_decodes_as_limited_bt709() {
     }
 }
 
-fn solid_bgra(device: &ID3D11Device, rgb: [u8; 3]) -> ID3D11Texture2D {
+fn open_encoder(device: &ID3D11Device, hardware: bool) -> H264Encoder {
+    let size = SizeInt32 {
+        Width: WIDTH as i32,
+        Height: HEIGHT as i32,
+    };
+    let result = if hardware {
+        H264Encoder::new(
+            device,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            size,
+            FPS,
+            BITRATE_MULTIPLIER,
+        )
+    } else {
+        H264Encoder::new_software(
+            device,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            size,
+            FPS,
+            BITRATE_MULTIPLIER,
+        )
+    };
+    match result {
+        Ok(encoder) => encoder,
+        Err(error) => {
+            if matches!(error, NewVideoEncoderError::OutputType(_)) {
+                let bitrate = calculate_bitrate(WIDTH, HEIGHT, FPS, BITRATE_MULTIPLIER);
+                eprintln!(
+                    "output_type subtype=H264 frame_size={WIDTH}x{HEIGHT} frame_rate={FPS}/1 bitrate={bitrate} profile=unset interlace=progressive"
+                );
+            }
+            panic!("Media Foundation H.264 encoder: {error}");
+        }
+    }
+}
+
+fn solid_rgba(device: &ID3D11Device, rgb: [u8; 3]) -> ID3D11Texture2D {
     let [r, g, b] = rgb;
-    let pixels = [b, g, r, 255].repeat((WIDTH * HEIGHT) as usize);
+    let pixels = [r, g, b, 255].repeat((WIDTH * HEIGHT) as usize);
     let desc = D3D11_TEXTURE2D_DESC {
         Width: WIDTH,
         Height: HEIGHT,
         MipLevels: 1,
         ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
