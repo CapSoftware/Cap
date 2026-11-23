@@ -511,7 +511,11 @@ async function withIndexRead<T>(run: () => Promise<T>): Promise<T> {
 
 async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
 	const headEnd = Math.min(size, 128 * 1024);
-	const { bytes: head, etag } = await s3.getRangeTagged(key, 0, headEnd - 1);
+	const {
+		bytes: head,
+		etag,
+		size: stored,
+	} = await s3.getRangeTagged(key, 0, headEnd - 1);
 	const cacheKey =
 		etag && process.env.RF_INDEX_CACHE !== "0"
 			? `${key}\n${size}\n${etag}`
@@ -522,7 +526,7 @@ async function mp4MetaRanges(key: string, size: number): Promise<Mp4Meta> {
 		mp4Metas.set(cacheKey, cached);
 		return cached;
 	}
-	const meta = await readMp4Meta(key, size, head);
+	const meta = await readMp4Meta(key, Math.min(size, stored ?? size), head);
 	if (cacheKey) {
 		mp4Metas.set(cacheKey, meta);
 		if (mp4Metas.size > MP4_META_CACHE_ENTRIES)
@@ -570,7 +574,7 @@ async function readMp4Meta(
 	return {
 		head: [0, Math.min(size, 128 * 1024)],
 		moov: [moovStart, moovStart + moovBytes.byteLength],
-		index: indexVideoTrack(moovBytes),
+		index: indexVideoTrack(moovBytes, size),
 	};
 }
 
@@ -1849,6 +1853,7 @@ async function buildPlacement(
 				prefix: { key: prefixKey, size: bytes.byteLength },
 				index: indexVideoTrack(
 					bytes.subarray(where.start, where.start + where.size),
+					bytes.byteLength + sourceSize,
 				),
 			};
 		}

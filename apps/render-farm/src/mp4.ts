@@ -4,6 +4,8 @@
 // sample table. The mdat is assembled by the chunk workers themselves as
 // multipart parts, so this never touches media data.
 
+import { MAX_SOURCE_PIXELS, MAX_SOURCE_SIDE } from "./transcode";
+
 type Box = { type: string; start: number; headerSize: number; size: number };
 
 function readBoxes(data: Uint8Array, start: number, end: number): Box[] {
@@ -43,6 +45,11 @@ function children(data: Uint8Array, box: Box, type: string) {
 	).filter((candidate) => candidate.type === type);
 }
 
+function mediaHeader(data: Uint8Array, trak: Box) {
+	const mdia = child(data, trak, "mdia");
+	return mdia && child(data, mdia, "mdhd");
+}
+
 /** Top-level layout from the first bytes: where moov lives. */
 export function locateMoov(head: Uint8Array, fileSize: number) {
 	const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
@@ -73,17 +80,46 @@ export type TrackIndex = {
 	keyframes: Uint32Array;
 };
 
-// Sources are user uploads: a sample count drives several allocations, so it
-// is capped (about 23 h at 60 fps) and every table must fit inside its box.
-export const MAX_SAMPLES = 5_000_000;
+export class UnsupportedSource extends Error {}
 
-/** Index the first video track of a moov box (bytes = the whole moov). */
-export function indexVideoTrack(moov: Uint8Array): TrackIndex {
+// Sources are user uploads: a sample count drives several allocations, so it
+// is capped (about 23 h at 60 fps), every table must fit inside its box, and
+// the samples must fit inside the file, at least a byte each.
+export const MAX_SAMPLES = 5_000_000;
+export const MAX_SOURCE_SECONDS = MAX_SAMPLES / 60;
+
+/**
+ * Index the first video track of a moov box (bytes = the whole moov) in a
+ * file of `fileSize` bytes.
+ */
+export function indexVideoTrack(
+	moov: Uint8Array,
+	fileSize: number,
+): TrackIndex {
 	const root = readBoxes(moov, 0, moov.byteLength).find(
 		(box) => box.type === "moov",
 	);
-	if (!root) throw new Error("not a moov box");
+	if (!root) throw new UnsupportedSource("not a moov box");
 	const view = new DataView(moov.buffer, moov.byteOffset, moov.byteLength);
+	// The engine's probe sizes the timeline from the longest track's header.
+	for (const trak of children(moov, root, "trak")) {
+		const mdhd = mediaHeader(moov, trak);
+		if (!mdhd) continue;
+		const body = mdhd.start + mdhd.headerSize;
+		const long = moov[body] === 1;
+		if (mdhd.size - mdhd.headerSize < (long ? 32 : 20)) {
+			throw new UnsupportedSource("mdhd is too short");
+		}
+		const timescale = view.getUint32(body + (long ? 20 : 12));
+		const duration = long
+			? Number(view.getBigUint64(body + 24))
+			: view.getUint32(body + 16);
+		if (duration > timescale * MAX_SOURCE_SECONDS) {
+			throw new UnsupportedSource(
+				`a ${Math.round(duration / timescale)} s track`,
+			);
+		}
+	}
 	for (const trak of children(moov, root, "trak")) {
 		const mdia = child(moov, trak, "mdia");
 		if (!mdia) continue;
@@ -104,6 +140,7 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 		const timescale = view.getUint32(
 			mdhd.start + mdhd.headerSize + (version === 1 ? 20 : 12),
 		);
+		if (!timescale) throw new UnsupportedSource("zero timescale");
 		// Full-box tables: `countAt` bytes into the body sits the entry count,
 		// and `entrySize`-byte entries follow it.
 		const table = (type: string, countAt: number, entrySize: number) => {
@@ -115,25 +152,69 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 				countAt + 4 + entries * entrySize > box.size - box.headerSize ||
 				entries > MAX_SAMPLES
 			) {
-				throw new Error(`${type} lists more entries than it holds`);
+				throw new UnsupportedSource(`${type} lists more entries than it holds`);
 			}
 			return { body, entries };
 		};
 
 		const stszBox = child(moov, stbl, "stsz");
-		if (!stszBox) throw new Error("no stsz");
+		if (!stszBox) throw new UnsupportedSource("no stsz");
 		const stsz = stszBox.start + stszBox.headerSize;
 		const uniform = view.getUint32(stsz + 4);
 		const count = view.getUint32(stsz + 8);
-		if (count > MAX_SAMPLES) throw new Error(`${count} video samples`);
-		if (!uniform) table("stsz", 8, 4);
+		if (count > MAX_SAMPLES) {
+			throw new UnsupportedSource(`${count} video samples`);
+		}
+		let mediaBytes = uniform * count;
+		if (!uniform) {
+			table("stsz", 8, 4);
+			for (let index = 0; index < count; index++) {
+				mediaBytes += view.getUint32(stsz + 12 + index * 4);
+			}
+		}
+		if (Math.max(count, mediaBytes) > fileSize) {
+			throw new UnsupportedSource(
+				`${count} video samples of ${mediaBytes} bytes in a ${fileSize} byte file`,
+			);
+		}
+
+		const sttsTable = table("stts", 4, 8);
+		let duration = 0;
+		for (let entry = 0; sttsTable && entry < sttsTable.entries; entry++) {
+			const at = sttsTable.body + 8 + entry * 8;
+			duration += view.getUint32(at) * view.getUint32(at + 4);
+		}
+		if (duration / timescale > MAX_SOURCE_SECONDS) {
+			throw new UnsupportedSource(
+				`a ${Math.round(duration / timescale)} s video track`,
+			);
+		}
+
+		const stsd = child(moov, stbl, "stsd");
+		const entry =
+			stsd &&
+			readBoxes(
+				moov,
+				stsd.start + stsd.headerSize + 8,
+				stsd.start + stsd.size,
+			)[0];
+		if (entry && entry.size >= entry.headerSize + 28) {
+			const width = view.getUint16(entry.start + entry.headerSize + 24);
+			const height = view.getUint16(entry.start + entry.headerSize + 26);
+			if (
+				width * height > MAX_SOURCE_PIXELS ||
+				Math.max(width, height) > MAX_SOURCE_SIDE
+			) {
+				throw new UnsupportedSource(`a ${width}x${height} video track`);
+			}
+		}
+
 		const sizes = new Uint32Array(count);
 		for (let index = 0; index < count; index++) {
 			sizes[index] = uniform || view.getUint32(stsz + 12 + index * 4);
 		}
 
 		const times = new Float64Array(count);
-		const sttsTable = table("stts", 4, 8);
 		if (sttsTable !== null) {
 			const { body: stts, entries } = sttsTable;
 			let sample = 0;
@@ -161,7 +242,7 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 			}
 		}
 		const stscTable = table("stsc", 4, 12);
-		if (stscTable === null) throw new Error("no stsc");
+		if (stscTable === null) throw new UnsupportedSource("no stsc");
 		const { body: stsc, entries: stscEntries } = stscTable;
 		const offsets = new Float64Array(count);
 		let sample = 0;
@@ -185,6 +266,9 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 					offset += sizes[sample] ?? 0;
 					sample++;
 				}
+				if (offset > fileSize) {
+					throw new UnsupportedSource(`chunk ${chunk + 1} ends past the file`);
+				}
 			}
 		}
 
@@ -194,6 +278,9 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 			keyframes = Uint32Array.from({ length: count }, (_, index) => index);
 		} else {
 			const { body: stss, entries } = stssTable;
+			if (entries > count) {
+				throw new UnsupportedSource(`${entries} keyframes of ${count} samples`);
+			}
 			keyframes = new Uint32Array(entries);
 			for (let index = 0; index < entries; index++) {
 				keyframes[index] = view.getUint32(stss + 8 + index * 4) - 1;
@@ -201,7 +288,7 @@ export function indexVideoTrack(moov: Uint8Array): TrackIndex {
 		}
 		return { timescale, times, offsets, sizes, keyframes };
 	}
-	throw new Error("no video track");
+	throw new UnsupportedSource("no video track");
 }
 
 /**

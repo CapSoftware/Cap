@@ -2,9 +2,11 @@ import {
 	box,
 	build,
 	MAX_SAMPLES,
+	MAX_SOURCE_SECONDS,
 	type Run,
 	sampleTable,
 	type TrackIndex,
+	UnsupportedSource,
 } from "./mp4";
 import { MAX_REMUX_KEYFRAME_GAP_SECONDS } from "./transcode";
 
@@ -21,7 +23,7 @@ import { MAX_REMUX_KEYFRAME_GAP_SECONDS } from "./transcode";
 // prefix, then the source ranges they need, and ffmpeg opens the result like
 // the remuxed file, so the renderer needs no changes.
 
-export class UnsupportedSource extends Error {}
+export { UnsupportedSource };
 
 export const PREFIX_VERSION = 1;
 
@@ -256,14 +258,15 @@ function requireBody(found: Box, bytes: number) {
 
 /**
  * Appends the video track's samples from one moof (`moof` = the whole box,
- * which starts at `position` in the file). Other tracks' runs are walked
- * only to find where the next traf's data starts.
+ * which starts at `position` in a file of `fileSize` bytes). Other tracks'
+ * runs are walked only to find where the next traf's data starts.
  */
 export function readMoof(
 	moof: Uint8Array,
 	position: number,
 	init: FragmentedInit,
 	samples: FragmentSamples,
+	fileSize: number,
 ) {
 	const view = new DataView(moof.buffer, moof.byteOffset, moof.byteLength);
 	const root = boxAt(view, 0, moof.byteLength);
@@ -359,6 +362,13 @@ export function readMoof(
 			if (video && samples.count + count > MAX_SAMPLES) {
 				throw new UnsupportedSource(`more than ${MAX_SAMPLES} video samples`);
 			}
+			if (
+				video &&
+				dataAt + count * (flags & TRUN_SIZE ? 1 : Math.max(defaultSize, 1)) >
+					fileSize
+			) {
+				throw new UnsupportedSource("samples point past the end of the file");
+			}
 			if (!video && !(flags & TRUN_SIZE)) {
 				// Only the run's length matters here, and with one size for every
 				// sample that is a product: a count of 2^32 costs nothing.
@@ -409,6 +419,9 @@ export function readMoof(
 					dts += duration;
 				}
 				dataAt += size;
+			}
+			if (video && dataAt > fileSize) {
+				throw new UnsupportedSource("samples point past the end of the file");
 			}
 		}
 		if (video) samples.nextDts = dts;
@@ -468,18 +481,27 @@ export function mfraMoofs(tail: Uint8Array, trackId: number) {
 	return { size, moofs: [...moofs].sort((a, b) => a - b) };
 }
 
-type Region = { start: number; end: number; bytes: Promise<Uint8Array> };
+type Region = {
+	start: number;
+	end: number;
+	bytes: Promise<Uint8Array> | null;
+};
 
 /**
  * Reads served from ranges fetched ahead: either small reads at the moofs an
  * mfra lists, or (with no mfra) the whole file in large pieces, a window at a
- * time, dropping what the walk has passed.
+ * time. Either way what the walk has passed is dropped.
  */
 class Prefetch {
 	private regions: Region[] = [];
+	/** Regions before `first` are dropped; `fill` loads from `next` on. */
+	private first = 0;
+	private next = 0;
+	private held = 0;
 	private window: Map<number, Promise<Uint8Array>> | null = null;
 	requests = 0;
 	bytes = 0;
+	peakHeld = 0;
 
 	constructor(
 		private read: RangeReader,
@@ -488,6 +510,7 @@ class Prefetch {
 			concurrency: number;
 			piece: number;
 			windowPieces: number;
+			aheadBytes: number;
 		},
 	) {}
 
@@ -515,16 +538,45 @@ class Prefetch {
 		}
 	}
 
-	/** Fetch these [start, end) ranges now, for reads that fall inside them. */
+	/** Fetch these [start, end) ranges ahead of reads that fall inside them. */
 	hint(ranges: [number, number][]) {
+		this.regions = this.regions.slice(this.first);
+		this.first = 0;
 		for (const [start, end] of ranges) {
 			const clamped = Math.min(end, this.size);
 			if (clamped <= start) continue;
-			const bytes = this.fetch(start, clamped);
-			bytes.catch(() => {});
-			this.regions.push({ start, end: clamped, bytes });
+			this.regions.push({ start, end: clamped, bytes: null });
 		}
 		this.regions.sort((a, b) => a.start - b.start);
+		this.next = 0;
+		this.fill();
+	}
+
+	private load(region: Region) {
+		const bytes = this.fetch(region.start, region.end);
+		bytes.catch(() => {});
+		this.held += region.end - region.start;
+		this.peakHeld = Math.max(this.peakHeld, this.held);
+		return bytes;
+	}
+
+	private fill() {
+		while (
+			this.next < this.regions.length &&
+			this.held < this.options.aheadBytes
+		) {
+			const region = this.regions[this.next++] as Region;
+			region.bytes ??= this.load(region);
+		}
+	}
+
+	private drop(before: number) {
+		for (; this.first < before; this.first++) {
+			const region = this.regions[this.first] as Region;
+			if (region.bytes) this.held -= region.end - region.start;
+			region.bytes = null;
+		}
+		this.next = Math.max(this.next, this.first);
 	}
 
 	stream() {
@@ -577,25 +629,32 @@ class Prefetch {
 			return out;
 		}
 		// Regions are sorted and don't overlap: the last one starting at or
-		// before `start` is the only one that can cover the read.
-		let low = 0;
+		// before `start` is the only one that can cover the read, and the walk
+		// only moves forward, so every region before it is done with.
+		let low = this.first;
 		let high = this.regions.length - 1;
 		while (low <= high) {
 			const middle = (low + high) >> 1;
 			if ((this.regions[middle] as Region).start <= start) low = middle + 1;
 			else high = middle - 1;
 		}
-		const region = this.regions[high];
+		this.drop(high);
+		const region = high >= this.first ? this.regions[high] : undefined;
 		if (region && region.end >= end) {
-			const bytes = await region.bytes;
-			return bytes.subarray(start - region.start, end - region.start);
+			region.bytes ??= this.load(region);
+			const bytes = region.bytes;
+			this.fill();
+			return (await bytes).subarray(start - region.start, end - region.start);
 		}
+		this.fill();
 		return this.fetch(start, end);
 	}
 }
 
 /** Bytes read per moof listed in an mfra: the moof and the next box header. */
 const MOOF_READ = 4096;
+/** Largest read that neighbouring moofs an mfra lists are merged into. */
+const MOOF_REGION = 8 << 20;
 
 export type FragmentScan = {
 	samples: FragmentSamples;
@@ -603,6 +662,8 @@ export type FragmentScan = {
 	usedMfra: boolean;
 	requests: number;
 	bytes: number;
+	/** Most bytes of the mfra's and its moofs' reads held at once. */
+	peakHeld: number;
 };
 
 /**
@@ -620,6 +681,7 @@ export async function scanFragments(
 		windowPieces?: number;
 		tailBytes?: number;
 		maxBoxes?: number;
+		aheadBytes?: number;
 	} = {},
 ): Promise<FragmentScan> {
 	const maxBoxes = options.maxBoxes ?? MAX_TOP_LEVEL_BOXES;
@@ -629,6 +691,7 @@ export async function scanFragments(
 		concurrency: options.concurrency ?? 128,
 		piece: options.piece ?? 8 << 20,
 		windowPieces: options.windowPieces ?? 12,
+		aheadBytes: options.aheadBytes ?? 64 << 20,
 	});
 	const tailStart = Math.max(
 		init.moovEnd,
@@ -658,8 +721,15 @@ export async function scanFragments(
 			const start = Math.max(init.moovEnd, offset - 256, last?.[1] ?? 0);
 			const end = Math.min(tailStart, offset + MOOF_READ);
 			if (end <= start) continue;
-			if (last && start <= last[1] + MOOF_READ) last[1] = end;
-			else ranges.push([start, end]);
+			if (
+				last &&
+				start <= last[1] + MOOF_READ &&
+				end - last[0] <= MOOF_REGION
+			) {
+				last[1] = end;
+			} else {
+				ranges.push([start, end]);
+			}
 		}
 		prefetch.hint(ranges);
 	} else {
@@ -692,6 +762,7 @@ export async function scanFragments(
 				offset,
 				init,
 				samples,
+				size,
 			);
 			fragments++;
 		} else if (found.type === "mfra") {
@@ -706,6 +777,7 @@ export async function scanFragments(
 		usedMfra,
 		requests: prefetch.requests,
 		bytes: prefetch.bytes,
+		peakHeld: prefetch.peakHeld,
 	};
 }
 
@@ -768,6 +840,11 @@ export function buildPrefix(
 	}
 	const mediaDuration =
 		(samples.dts[count - 1] as number) + samples.lastDuration;
+	if (mediaDuration / init.timescale > MAX_SOURCE_SECONDS) {
+		throw new UnsupportedSource(
+			`a ${Math.round(mediaDuration / init.timescale)} s video track`,
+		);
+	}
 	let ctts: [number, number][] | null = null;
 	if (samples.offsets.some((offset) => offset !== 0)) {
 		ctts = [];

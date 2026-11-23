@@ -23,6 +23,7 @@ import {
 	fullBox,
 	indexVideoTrack,
 	locateMoov,
+	MAX_SAMPLES,
 } from "./mp4";
 
 function reader(bytes: Uint8Array) {
@@ -88,6 +89,7 @@ describe("fragment index", () => {
 		};
 		const reread = indexVideoTrack(
 			bytes.subarray(where.start, where.start + where.size),
+			joined.byteLength,
 		);
 		expect([...reread.offsets]).toEqual([...index.offsets]);
 		expect([...reread.sizes]).toEqual([...index.sizes]);
@@ -253,7 +255,7 @@ describe("fragment index", () => {
 				),
 			),
 		);
-		readMoof(moof, 5000, init, samples);
+		readMoof(moof, 5000, init, samples, 5030);
 		expect(samples.positions).toEqual([5000, 5010, 5020]);
 		expect(samples.offsets).toEqual([2000, -1000, 0]);
 		expect(remuxBlocker(init, samples)).toBe(
@@ -352,7 +354,7 @@ describe("fragment index", () => {
 			),
 		);
 		const samples = new FragmentSamples();
-		readMoof(moof, 5000, init, samples);
+		readMoof(moof, 5000, init, samples, 5030);
 		expect(samples.otherSamples).toBe(0);
 		expect(samples.sizes).toEqual([10, 20]);
 		expect(samples.positions).toEqual([5000, 5010]);
@@ -372,7 +374,7 @@ describe("fragment index", () => {
 		);
 		const near = new FragmentSamples();
 		near.otherSamples = MAX_OTHER_SAMPLES - 1;
-		expect(() => readMoof(sized, 0, init, near)).toThrow(
+		expect(() => readMoof(sized, 0, init, near, sized.byteLength)).toThrow(
 			`more than ${MAX_OTHER_SAMPLES} samples in other tracks`,
 		);
 		expect(() =>
@@ -381,8 +383,74 @@ describe("fragment index", () => {
 				0,
 				init,
 				new FragmentSamples(),
+				0,
 			),
 		).toThrow(UnsupportedSource);
+	});
+
+	test("a run declaring millions of samples it has no bytes for is refused before it is read", () => {
+		const recording = fragmentedRecording({ frames: 2, gop: 30 });
+		const init = initOf(recording.bytes);
+		const run = (count: number) =>
+			box(
+				"moof",
+				box(
+					"traf",
+					fullBox(
+						"tfhd",
+						0,
+						0x20010,
+						build((writer) => {
+							writer.u32(init.trackId);
+							writer.u32(1);
+						}),
+					),
+					fullBox(
+						"trun",
+						0,
+						0,
+						build((writer) => writer.u32(count)),
+					),
+				),
+			);
+		const crafted = run(MAX_SAMPLES);
+		const samples = new FragmentSamples();
+		expect(() =>
+			readMoof(crafted, 5000, init, samples, 5000 + crafted.byteLength),
+		).toThrow("samples point past the end of the file");
+		expect(samples.count).toBe(0);
+
+		const honest = run(3);
+		expect(() =>
+			readMoof(honest, 5000, init, new FragmentSamples(), 5002),
+		).toThrow("samples point past the end of the file");
+		const held = new FragmentSamples();
+		readMoof(honest, 5000, init, held, 5003);
+		expect(held.positions).toEqual([5000, 5001, 5002]);
+	});
+
+	test("moofs an mfra lists are fetched a window ahead of the walk", async () => {
+		const recording = fragmentedRecording({
+			frames: 6000,
+			gop: 60,
+			mfra: true,
+		});
+		const all = await place(recording.bytes, { tailBytes: 4096 });
+		const windowed = await place(recording.bytes, {
+			tailBytes: 4096,
+			aheadBytes: 16 << 10,
+		});
+		expect(all.scan).toMatchObject({ usedMfra: true, fragments: 100 });
+		expect(windowed.scan).toMatchObject({
+			usedMfra: true,
+			fragments: 100,
+			requests: all.scan.requests,
+			bytes: all.scan.bytes,
+		});
+		expect(all.scan.peakHeld).toBeGreaterThan(400 << 10);
+		expect(windowed.scan.peakHeld).toBeLessThan(32 << 10);
+		expect(windowed.bytes).toEqual(all.bytes);
+		expect([...windowed.index.offsets]).toEqual([...all.index.offsets]);
 	});
 
 	test("an oversized mfra, moof or box count is refused without reading it", async () => {

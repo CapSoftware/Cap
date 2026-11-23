@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localS3, stopLocalS3 } from "./local-s3.test-util";
+import { localS3, memoryBucket, stopLocalS3 } from "./local-s3.test-util";
 import { decodeXml, S3, type S3Config } from "./s3";
 
 afterEach(stopLocalS3);
@@ -171,6 +171,29 @@ describe("S3 signing", () => {
 				copySource: "/source-bucket/recordings/it%27s%20%28final%29%21%2A.mp4",
 			},
 		]);
+	});
+});
+
+describe("getRangeTagged", () => {
+	test("reports the whole object's size, not the range's", async () => {
+		const bucket = memoryBucket();
+		const s3 = localS3(bucket.handle);
+		await s3.put("source.mp4", new Uint8Array(1000));
+		expect(await s3.getRangeTagged("source.mp4", 0, 99)).toMatchObject({
+			size: 1000,
+		});
+		expect(
+			(await s3.getRangeTagged("source.mp4", 0, 128 * 1024 - 1)).bytes
+				.byteLength,
+		).toBe(1000);
+		expect(
+			await s3.getRangeTagged("source.mp4", 0, 128 * 1024 - 1),
+		).toMatchObject({ size: 1000 });
+
+		const whole = localS3(() => new Response(new Uint8Array(30)));
+		expect(await whole.getRangeTagged("source.mp4", 0, 99)).toMatchObject({
+			size: 30,
+		});
 	});
 });
 

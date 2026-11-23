@@ -531,7 +531,10 @@ describe("assembly", () => {
 			).toBe("mdat");
 			const mdatHeader = view.getUint32(moovEnd) === 1 ? 16 : 8;
 			expect(file.byteLength).toBe(moovEnd + mdatHeader + sizes[0] + sizes[1]);
-			const index = mp4.indexVideoTrack(file.subarray(moov.start, moovEnd));
+			const index = mp4.indexVideoTrack(
+				file.subarray(moov.start, moovEnd),
+				file.byteLength,
+			);
 			for (let sample = 0; sample < index.sizes.length; sample++) {
 				const offset = index.offsets[sample] ?? 0;
 				const chunk = sample < 30 ? 0 : 1;
@@ -1687,6 +1690,60 @@ describe("jobs for the product", () => {
 			frames: 300_000,
 			reads: 2,
 		});
+	});
+
+	test("a source whose moov declares more samples than its bytes hold is refused", async () => {
+		const h = harness();
+		const header = mp4.buildHeader({
+			width: 128,
+			height: 72,
+			fps: 30,
+			video: {
+				sizes: Uint32Array.of(1),
+				runs: [{ first: 0, count: 1, offset: 0 }],
+				keyframes: Uint32Array.of(0),
+				avcC: mp4.avcC(ANNEX_B_PARAMETER_SETS),
+			},
+			audio: null,
+			payloadSize: 1,
+			minimumSize: 0,
+		});
+		const indexOf = async (prefix: string, bytes: Uint8Array) => {
+			h.objects.set(`${prefix}/display.mp4`, bytes);
+			h.objects.set(
+				`${prefix}/recording-meta.json`,
+				new TextEncoder().encode("{}"),
+			);
+			h.objects.set(
+				`${prefix}/manifest.json`,
+				new TextEncoder().encode(
+					JSON.stringify({
+						files: [
+							{ path: "recording-meta.json", size: 2 },
+							{ path: "display.mp4", size: bytes.byteLength },
+						],
+					}),
+				),
+			);
+			const index = (await h.sourceIndex(prefix)) as {
+				mediaMeta: Map<string, { index: { sizes: Uint32Array } }>;
+			};
+			return index.mediaMeta.get("display.mp4")?.index.sizes.length;
+		};
+		const honest = new Uint8Array(header.byteLength + 1);
+		honest.set(header);
+		expect(await indexOf("owner/video/honest", honest)).toBe(1);
+
+		// One uniform-size stsz entry stretched to every sample a recording may
+		// have, in a file a few hundred bytes long.
+		const crafted = honest.slice();
+		const stsz = Buffer.from(crafted).indexOf("stsz");
+		const view = new DataView(crafted.buffer);
+		view.setUint32(stsz + 8, 1);
+		view.setUint32(stsz + 12, mp4.MAX_SAMPLES);
+		await expect(indexOf("owner/video/crafted", crafted)).rejects.toThrow(
+			`${mp4.MAX_SAMPLES} video samples of ${mp4.MAX_SAMPLES} bytes in a ${crafted.byteLength} byte file`,
+		);
 	});
 
 	test("write to the requested keys and call back signed when finished", async () => {

@@ -1,3 +1,4 @@
+import { heapStats } from "bun:jsc";
 import { describe, expect, test } from "bun:test";
 import {
 	ANNEX_B_PARAMETER_SETS,
@@ -11,7 +12,9 @@ import {
 	buildHeader,
 	byteRangeFor,
 	indexVideoTrack,
+	locateMoov,
 	type TrackIndex,
+	UnsupportedSource,
 } from "./mp4";
 
 function syntheticIndex(samples: number, gop: number): TrackIndex {
@@ -179,14 +182,14 @@ describe("indexVideoTrack", () => {
 		}
 		return bytes;
 	};
-	const track = (tables: Partial<Record<string, Uint8Array>>) =>
+	const track = ({ mdhd, ...tables }: Partial<Record<string, Uint8Array>>) =>
 		box(
 			"moov",
 			box(
 				"trak",
 				box(
 					"mdia",
-					box("mdhd", u32s(0, 0, 0, 30, 0, 0)),
+					mdhd ?? box("mdhd", u32s(0, 0, 0, 30, 0, 0)),
 					box("hdlr", u32s(0, 0), new TextEncoder().encode("vide")),
 					box(
 						"minf",
@@ -207,7 +210,7 @@ describe("indexVideoTrack", () => {
 		);
 
 	test("indexes sizes, offsets, times and keyframes", () => {
-		const index = indexVideoTrack(track({}));
+		const index = indexVideoTrack(track({}), 1060);
 		expect([...index.sizes]).toEqual([10, 20, 30]);
 		expect([...index.offsets]).toEqual([1000, 1010, 1030]);
 		expect([...index.times]).toEqual([0, 1 / 30, 2 / 30]);
@@ -235,14 +238,84 @@ describe("indexVideoTrack", () => {
 			"stss lists more entries",
 			{ stss: box("stss", u32s(0, 50, 1)) },
 		],
+		[
+			"sample sizes that add up to more than the file",
+			"3 video samples of 2030 bytes in a 1060 byte file",
+			{ stsz: box("stsz", u32s(0, 0, 3, 10, 20, 2000)) },
+		],
+		[
+			"a chunk that runs past the end of the file",
+			"chunk 1 ends past the file",
+			{ stco: box("stco", u32s(0, 1, 1001)) },
+		],
+		[
+			"more keyframes than samples",
+			"4 keyframes of 3 samples",
+			{ stss: box("stss", u32s(0, 4, 1, 2, 3, 4)) },
+		],
+		[
+			"samples far longer than any recording",
+			"s video track",
+			{ stts: box("stts", u32s(0, 1, 3, 0x7fffffff)) },
+		],
+		[
+			"a header duration far longer than any recording",
+			"143165577 s track",
+			{ mdhd: box("mdhd", u32s(0, 0, 0, 30, 0xffffffff, 0)) },
+		],
 	])("rejects %s", (_, message, tables) => {
-		expect(() => indexVideoTrack(track(tables))).toThrow(message);
+		expect(() => indexVideoTrack(track(tables), 1060)).toThrow(message);
 	});
 
 	test("a sample-to-chunk run past the offset table ends at the last chunk", () => {
 		const index = indexVideoTrack(
 			track({ stsc: box("stsc", u32s(0, 2, 1, 1, 1, 0xfffffff0, 1, 1)) }),
+			1060,
 		);
 		expect(index.offsets[0]).toBe(1000);
+	});
+
+	test("a few header bytes declaring millions of samples are refused before anything is allocated", () => {
+		const count = 2_500_000;
+		const crafted = track({
+			stsz: box("stsz", u32s(0, 1, count)),
+			stts: box("stts", u32s(0, 1, count, 1)),
+			stco: box("stco", u32s(0, 1, 64)),
+			stsc: box("stsc", u32s(0, 1, 1, count, 1)),
+		});
+		const before = heapStats().extraMemorySize;
+		expect(() => indexVideoTrack(crafted, crafted.byteLength + 64)).toThrow(
+			UnsupportedSource,
+		);
+		expect(heapStats().extraMemorySize - before).toBeLessThan(1 << 20);
+
+		const held = indexVideoTrack(crafted, 64 + count);
+		expect(held.sizes.length).toBe(count);
+		expect(held.offsets[count - 1]).toBe(64 + count - 1);
+		expect(held.times[count - 1]).toBeCloseTo((count - 1) / 30, 9);
+	});
+
+	test("holds sources to the engine's pixel limit", async () => {
+		const index = async (name: string) => {
+			const bytes = new Uint8Array(
+				await Bun.file(
+					new URL(
+						`../../../crates/render-farm/tests/fixtures/${name}`,
+						import.meta.url,
+					),
+				).arrayBuffer(),
+			);
+			const where = locateMoov(bytes, bytes.byteLength) as {
+				start: number;
+				size: number;
+			};
+			return () =>
+				indexVideoTrack(
+					bytes.subarray(where.start, where.start + where.size),
+					bytes.byteLength,
+				);
+		};
+		expect((await index("at-limit.mp4"))().sizes.length).toBe(1);
+		expect(await index("over-limit.mp4")).toThrow("a 8000x5008 video track");
 	});
 });
