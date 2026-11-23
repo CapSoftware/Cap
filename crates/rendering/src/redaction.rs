@@ -30,7 +30,6 @@ pub struct RedactionRect {
     pub y: f32,
     pub w: f32,
     pub h: f32,
-    /// Drawn with an outline in the editor while its detection is selected.
     pub highlighted: bool,
 }
 
