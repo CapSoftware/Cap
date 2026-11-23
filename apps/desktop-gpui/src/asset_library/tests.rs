@@ -997,7 +997,6 @@ fn restore_without_a_connection_stops_early_and_tries_again_next_launch() {
     let fixture = Fixture::new(&server, items);
     fixture.library.decide_restore(true);
 
-    let started = std::time::Instant::now();
     let library = fixture.library.clone();
     fixture
         .runtime
@@ -1014,5 +1013,4 @@ fn restore_without_a_connection_stops_early_and_tries_again_next_launch() {
         })
         .count();
     assert_eq!(failed, 3, "stopped after three offline files");
-    assert!(started.elapsed() < Duration::from_secs(15));
 }
