@@ -64,19 +64,17 @@ app.post(
 			size,
 			thumbnailSize,
 		} = c.req.valid("json");
-		// Direct uploads are signed for their exact size; without one there is
-		// no thumbnail target (it is optional) and no single upload.
+		// Every upload is a single PUT signed for its declared size, so storage
+		// rejects any other size. Without a size there is no thumbnail target
+		// (it is optional) and no upload. Multipart uploads already in flight
+		// can still finish through /presign-part and /complete.
 		const withThumbnail =
 			c.req.valid("json").withThumbnail === true &&
 			thumbnailSize !== undefined &&
 			thumbnailSize <= MAX_MEDIA_OBJECT_BYTES;
-		if (mode === "single" && size === undefined)
+		if (mode !== "single" || size === undefined)
 			return c.json({ error: "Missing upload size" }, 400);
-		if (
-			mode === "single" &&
-			size !== undefined &&
-			size > MAX_MEDIA_OBJECT_BYTES
-		)
+		if (size > MAX_MEDIA_OBJECT_BYTES)
 			return c.json({ error: "Recording is too large" }, 413);
 		const user = c.get("user");
 		const videoId = Video.VideoId.make(videoIdRaw);
@@ -171,9 +169,7 @@ app.post(
 				});
 			}
 
-			const directBytes =
-				(mode === "single" ? (size ?? 0) : 0) +
-				(thumbnailKey ? (thumbnailSize ?? 0) : 0);
+			const directBytes = size + (thumbnailKey ? (thumbnailSize ?? 0) : 0);
 			if (directBytes > 0) {
 				const withinBudget = yield* Effect.tryPromise(() =>
 					reserveCommentMediaBytes({
@@ -211,31 +207,13 @@ app.post(
 
 			// Deliberately no Db.videoUploads row: that table drives the parent
 			// video's "uploading" UI state and the stale-upload cron.
-			if (mode === "single") {
-				const upload = yield* bucket.createUploadTarget(key, {
-					contentType,
-					method: "put",
-					contentLength: size,
-					enforceContentLength: true,
-				});
-				return c.json({ commentId, key, uploadToken, upload, thumbnailUpload });
-			}
-
-			const { UploadId } = yield* bucket.multipart.create(key, {
-				ContentType: contentType,
-				Metadata: { userId: user.id, source: "cap-comment-media" },
-				CacheControl: "max-age=31536000",
+			const upload = yield* bucket.createUploadTarget(key, {
+				contentType,
+				method: "put",
+				contentLength: size,
+				enforceContentLength: true,
 			});
-			if (!UploadId) return yield* Effect.fail(new Error("No UploadId"));
-
-			return c.json({
-				commentId,
-				key,
-				uploadToken,
-				uploadId: UploadId,
-				provider: bucket.provider,
-				thumbnailUpload,
-			});
+			return c.json({ commentId, key, uploadToken, upload, thumbnailUpload });
 		}).pipe(
 			Effect.tapError(Effect.logError),
 			Effect.catchAll((e) => {

@@ -260,19 +260,25 @@ describe("comment media initiate size", () => {
 		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
 	});
 
-	it("signs the thumbnail for its size and leaves the recording to /complete", async () => {
+	it("signs a video and its thumbnail for their sizes and charges both", async () => {
 		const response = await initiate({
 			kind: "video",
 			contentType: "video/webm",
-			mode: "multipart",
+			mode: "single",
 			size: 12_000_000,
 			withThumbnail: true,
 			thumbnailSize: 90_000,
 		});
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toMatchObject({ uploadId: "upload-1" });
-		expect(mocks.createUploadTarget).toHaveBeenCalledExactlyOnceWith(
+		expect(mocks.createUploadTarget).toHaveBeenCalledWith(
+			expect.stringMatching(/\/media\.webm$/),
+			expect.objectContaining({
+				contentLength: 12_000_000,
+				enforceContentLength: true,
+			}),
+		);
+		expect(mocks.createUploadTarget).toHaveBeenCalledWith(
 			expect.stringMatching(/\/thumbnail\.jpg$/),
 			expect.objectContaining({
 				contentLength: 90_000,
@@ -282,21 +288,40 @@ describe("comment media initiate size", () => {
 		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
 			videoId: "video-1",
 			userId: "viewer-1",
-			bytes: 90_000,
+			bytes: 12_090_000,
 		});
+		expect(mocks.createMultipart).not.toHaveBeenCalled();
 	});
 
 	it("skips the optional thumbnail when its size is missing", async () => {
 		const response = await initiate({
 			kind: "video",
 			contentType: "video/webm",
-			mode: "multipart",
+			mode: "single",
+			size: 12_000_000,
 			withThumbnail: true,
 		});
 
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({ thumbnailUpload: null });
+		expect(mocks.createUploadTarget).toHaveBeenCalledOnce();
+		expect(mocks.reserveBytes).toHaveBeenCalledExactlyOnceWith({
+			videoId: "video-1",
+			userId: "viewer-1",
+			bytes: 12_000_000,
+		});
+	});
+
+	it("no longer starts multipart uploads", async () => {
+		const response = await initiate({
+			kind: "video",
+			contentType: "video/webm",
+			mode: "multipart",
+			size: 12_000_000,
+		});
+
+		expect(response.status).toBe(400);
+		expect(mocks.createMultipart).not.toHaveBeenCalled();
 		expect(mocks.createUploadTarget).not.toHaveBeenCalled();
-		expect(mocks.reserveBytes).not.toHaveBeenCalled();
 	});
 });
