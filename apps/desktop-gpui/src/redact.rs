@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use cap_project::redaction::Redactions;
+use cap_project::redaction::{REDACTIONS_FILE, Redactions};
 use sha2::Digest;
 
 /// The model the analyser runs, by version, with each file's checksum.
@@ -250,9 +250,9 @@ fn run(
         },
         &mut stats,
     )?;
-    if let Err(error) = result.save(project) {
-        tracing::warn!(%error, "Could not save auto redact results");
-    }
+    result
+        .save(project)
+        .map_err(|error| anyhow::anyhow!("save {}: {error}", REDACTIONS_FILE))?;
     tracing::info!(
         regions = result.regions.len(),
         seconds = stats.total.as_secs_f64(),
