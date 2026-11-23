@@ -1,7 +1,9 @@
-use crate::{project::LoadedProject, video::base64_encode};
+use crate::{
+    project::{LoadedProject, usable_duration},
+    video::base64_encode,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use cap_editor::AudioRenderer;
-use cap_project::StudioRecordingMeta;
 use ffmpeg::{ChannelLayout, format::Sample, format::sample::Type, frame};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -279,30 +281,7 @@ async fn load_audio_segments(
     .ok();
     let repairs =
         cap_editor::segment_audio_timing_repairs(&project.studio_meta, legacy_log.as_deref());
-    let tracks: Vec<(Option<PathBuf>, Option<PathBuf>)> = match &project.studio_meta {
-        StudioRecordingMeta::SingleSegment { segment } => vec![(
-            segment
-                .audio
-                .as_ref()
-                .map(|audio| project.recording_meta.path(&audio.path)),
-            None,
-        )],
-        StudioRecordingMeta::MultipleSegments { inner } => inner
-            .segments
-            .iter()
-            .map(|segment| {
-                (
-                    segment
-                        .mic
-                        .as_ref()
-                        .map(|audio| project.recording_meta.path(&audio.path)),
-                    segment
-                        .usable_system_audio()
-                        .map(|audio| project.recording_meta.path(&audio.path)),
-                )
-            })
-            .collect(),
-    };
+    let tracks = crate::project::audio_tracks(&project.recording_meta, &project.studio_meta);
     let mut segments = Vec::with_capacity(tracks.len());
     for (index, (mic, system)) in tracks.into_iter().enumerate() {
         let window = windows.get(index).copied().flatten();
@@ -329,8 +308,7 @@ async fn load_audio_segments(
 // one); without a length every section decoded the whole track through EOF,
 // ~11 s per section of a 2 h mic. The clip's video length stands in.
 fn track_duration(probed: f64, clip: Option<f64>) -> Option<f64> {
-    let usable = |duration: f64| (duration.is_finite() && duration > 0.0).then_some(duration);
-    usable(probed).or(clip.and_then(usable))
+    usable_duration(probed).or(clip.and_then(usable_duration))
 }
 
 /// Decodes only the first `VOICE_PROFILE_SAMPLES` (what Studio Sound's voice
