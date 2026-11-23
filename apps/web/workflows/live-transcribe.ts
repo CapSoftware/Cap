@@ -90,6 +90,7 @@ export async function liveTranscribeWorkflow(
 	let idleSteps = 0;
 	let failuresAtIndex = 0;
 	let outcome = "chunk-limit";
+	let promotion: LivePromotionResult | undefined;
 
 	try {
 		while (cursor.chunkCount < LIVE_TRANSCRIBE.MAX_CHUNKS) {
@@ -103,6 +104,7 @@ export async function liveTranscribeWorkflow(
 
 			const batch = await processLiveChunks({
 				videoId,
+				userId,
 				cursor,
 				orgLanguage: init.orgLanguage,
 				// After repeated failures the chunk is skipped: advance past it and
@@ -146,6 +148,7 @@ export async function liveTranscribeWorkflow(
 			}
 
 			outcome = result.outcome;
+			promotion = batch.promotion;
 			break;
 		}
 	} catch (error) {
@@ -159,7 +162,7 @@ export async function liveTranscribeWorkflow(
 		// Full gap-free coverage: promote the live transcript to canonical and
 		// skip the duplicate full transcription pass entirely. On any failure
 		// the full-pass fallback is queued so transcription still lands fast.
-		const promotion = await promoteLiveTranscriptStep(videoId, userId);
+		promotion ??= await promoteLiveTranscriptStep(videoId, userId);
 		if (promotion.promoted) {
 			return {
 				success: true,
@@ -250,17 +253,20 @@ async function initLiveTranscription(
 	};
 }
 
+type LivePromotionResult = Awaited<ReturnType<typeof promoteLiveTranscript>>;
+
 async function processLiveChunks(options: {
 	videoId: string;
+	userId: string;
 	cursor: LiveChunkCursor;
 	orgLanguage: AiGenerationLanguage;
 	skipPastFailedChunk: boolean;
 	withContext: boolean;
-}): Promise<LiveChunkBatchResult> {
+}): Promise<LiveChunkBatchResult & { promotion?: LivePromotionResult }> {
 	"use step";
 
-	const { videoId, orgLanguage } = options;
-	return runLiveChunkBatch({
+	const { videoId, userId, orgLanguage } = options;
+	const batch = await runLiveChunkBatch({
 		cursor: options.cursor,
 		skipPastFailedChunk: options.skipPastFailedChunk,
 		withContext: options.withContext,
@@ -283,6 +289,12 @@ async function processLiveChunks(options: {
 				error,
 			),
 	});
+	if (batch.last.outcome !== "done") return batch;
+	// Promote in the same invocation: a separate step would add a workflow
+	// round trip between the last words landing and the final transcript.
+	// promoteLiveTranscript never throws and claims the canonical slot
+	// atomically, so a retried step only sees it declined.
+	return { ...batch, promotion: await promoteLiveTranscript(videoId, userId) };
 }
 
 async function transcribeNextLiveChunk(options: {
