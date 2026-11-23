@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 	generateText: vi.fn(),
 	after: [] as Array<() => unknown>,
 	completeFails: false,
+	trialLookupFails: false,
 	trial: new Map<string, string[]>(),
 	trialState: new Map<
 		string,
@@ -48,8 +49,11 @@ vi.mock("@/lib/meetings/trial", () => {
 	};
 	return {
 		MEETING_NOTES_TRIAL_MEETINGS: limit,
-		trialRemaining: async (userId: string, max = limit) =>
-			Math.max(0, max - claimed(userId).length),
+		trialRemaining: async (userId: string, max = limit) => {
+			if (mocks.trialLookupFails)
+				throw new Error("Table 'meeting_notes_trial_uses' doesn't exist");
+			return Math.max(0, max - claimed(userId).length);
+		},
 		claimTrialMeeting: async (
 			userId: string,
 			meetingId: string,
@@ -297,6 +301,7 @@ beforeEach(() => {
 	mocks.trial.clear();
 	mocks.trialState.clear();
 	mocks.completeFails = false;
+	mocks.trialLookupFails = false;
 	for (const fn of [
 		mocks.upload,
 		mocks.submit,
@@ -1068,6 +1073,16 @@ describe("free meetings for signed-in users", () => {
 			meetingId: "m2",
 		});
 		expect(other.status).toBe(402);
+	});
+
+	it("answers without free meetings when the trial lookup fails", async () => {
+		signIn(null);
+		mocks.trialLookupFails = true;
+		const response = await call("/capabilities", { method: "GET" });
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(body).toMatchObject({ notes: false });
+		expect(body).not.toHaveProperty("notesTrialRemaining");
 	});
 
 	it("does not offer free meetings when notes are not configured", async () => {

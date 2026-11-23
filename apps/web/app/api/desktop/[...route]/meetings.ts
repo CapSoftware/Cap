@@ -186,7 +186,7 @@ app.get("/capabilities", async (c) => {
 	const notes = isEntitled(user, "notes") && notesConfigured;
 	const notesTrialRemaining =
 		!notes && notesConfigured
-			? await trialRemaining(user.id, config.trialMeetings)
+			? await trialRemainingOrNone(user.id, config.trialMeetings)
 			: undefined;
 	return c.json(
 		{
@@ -205,6 +205,23 @@ app.get("/capabilities", async (c) => {
 		{ "Cache-Control": "no-store" },
 	);
 });
+
+// A failed lookup (the trial table not yet migrated, the database briefly
+// down) offers no free meetings rather than failing the app's whole check.
+async function trialRemainingOrNone(
+	userId: string,
+	limit: number,
+): Promise<number | undefined> {
+	try {
+		return await trialRemaining(userId, limit);
+	} catch (error) {
+		console.error(
+			"[meetings] free meeting lookup failed",
+			providerErrorSummary(error),
+		);
+		return undefined;
+	}
+}
 
 type TranscribeResult = {
 	text: string;
