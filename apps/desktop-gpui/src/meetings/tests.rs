@@ -2237,3 +2237,49 @@ fn a_voice_left_out_while_notes_are_written_leaves_them_stale(cx: &mut gpui::Tes
 fn a_voice_left_out_queued_while_notes_land_leaves_them_stale(cx: &mut gpui::TestAppContext) {
     left_out_while_notes_are_written(true, cx);
 }
+
+/// A late speaker label lands while an edit to the summary is still queued
+/// on the documents writer: the edit is kept and the label applied on top.
+#[gpui::test]
+fn a_late_label_keeps_a_summary_edit_still_being_saved(cx: &mut gpui::TestAppContext) {
+    let (meetings, doc, _dir) = voice_choice_meeting(cx);
+    let library = meetings.read_with(cx, |m, _| m.library.clone().unwrap());
+    let summary = |markdown: &str| {
+        let mut document = cap_notes::Document::from_markdown(markdown);
+        for block in &mut document.blocks {
+            block.origin = cap_notes::Origin::Generated;
+        }
+        document.to_json()
+    };
+    library
+        .write_enhanced(&doc, &summary("- Person 2 will send the deck."))
+        .unwrap();
+
+    crate::meetings_ui::documents::hold_writer();
+    let edited = summary("- Person 2 will send the deck.\n- Book the room for Friday.");
+    {
+        let (library, doc) = (library.clone(), doc.clone());
+        crate::meetings_ui::documents::queue_after_saves(move || {
+            library.write_enhanced(&doc, &edited).unwrap();
+        });
+    }
+    meetings.update(cx, |m, cx| {
+        m.follow_late_renames(&doc, vec![("Person 2".into(), "Dana".into())], cx)
+    });
+    crate::meetings_ui::documents::release_writer();
+    cx.run_until_parked();
+
+    let saved = library.read_enhanced(&doc).unwrap().unwrap();
+    let text = cap_notes::Document::from_json(&saved)
+        .unwrap()
+        .to_markdown();
+    assert!(
+        text.contains("Book the room for Friday."),
+        "the edit is kept: {text}"
+    );
+    assert!(
+        text.contains("Dana will send the deck."),
+        "the label follows: {text}"
+    );
+    assert!(!text.contains("Person 2"), "{text}");
+}

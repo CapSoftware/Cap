@@ -4054,12 +4054,19 @@ impl Meetings {
                 .extend(renames);
             return;
         }
-        if let Some(library) = self.library().cloned()
-            && let Ok(Some(json)) = library.read_enhanced(doc_id)
-            && let Some(renamed) = rename_in_saved_summary(&json, &renames)
-            && let Err(error) = library.write_enhanced(doc_id, &renamed)
-        {
-            tracing::warn!(%error, doc_id, "could not follow the late speaker labels in the summary");
+        if let Some(library) = self.library().cloned() {
+            // Read, renamed and written on the documents writer, after any
+            // edit to the summary still queued there, so that edit is kept.
+            let doc = doc_id.to_string();
+            let summary_renames = renames.clone();
+            crate::meetings_ui::documents::queue_after_saves(move || {
+                if let Ok(Some(json)) = library.read_enhanced(&doc)
+                    && let Some(renamed) = rename_in_saved_summary(&json, &summary_renames)
+                    && let Err(error) = library.write_enhanced(&doc, &renamed)
+                {
+                    tracing::warn!(%error, doc_id = doc, "could not follow the late speaker labels in the summary");
+                }
+            });
         }
         if !renames.is_empty() {
             tracing::info!(
