@@ -107,6 +107,7 @@ export class BrowserAudioPlayback {
 			this.onError,
 		);
 		for (const slot of this.slots.values()) {
+			if (slot.element.ended) continue;
 			void slot.element.play().catch((cause: unknown) => {
 				if (!this.disposed && this.slotsHas(slot)) {
 					if (
@@ -268,7 +269,7 @@ export class BrowserAudioPlayback {
 				slot.gain.gain.value = gain;
 			}
 			if (playing) {
-				if (audio.paused) await audio.play();
+				if (audio.paused && !audio.ended) await audio.play();
 			} else if (!audio.paused) {
 				audio.pause();
 			}

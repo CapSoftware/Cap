@@ -409,7 +409,9 @@ export class BrowserVideoPool {
 			}
 			if (playing && speed >= 0.25 && speed <= 4) {
 				video.playbackRate = speed;
-				if (video.paused && !slot.playPending) {
+				// play() on an ended element restarts it from zero; a request this
+				// close to the end holds the last frame instead.
+				if (video.paused && !video.ended && !slot.playPending) {
 					const version = ++slot.playVersion;
 					slot.playPending = true;
 					void video.play().then(
@@ -442,6 +444,7 @@ export class BrowserVideoPool {
 			}
 			if (
 				continuous &&
+				!video.ended &&
 				slot.presentedTime !== null &&
 				Math.abs(slot.presentedTime - decodeTarget) > 0.075
 			) {

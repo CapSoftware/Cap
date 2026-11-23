@@ -1084,6 +1084,36 @@ async function replay(forceWebGl, forceWebGpu = false) {
 							},
 						});
 						try {
+							const endController = new AbortController();
+							const endVideo = await playback.pool.frame(
+								0,
+								"display",
+								"primary",
+								1.9,
+								true,
+								1,
+								endController.signal,
+							);
+							if (!endVideo.ended) {
+								await new Promise((resolve) =>
+									endVideo.addEventListener("ended", resolve, { once: true }),
+								);
+							}
+							await playback.pool.frame(
+								0,
+								"display",
+								"primary",
+								endVideo.duration - 0.001,
+								true,
+								1,
+								endController.signal,
+							);
+							await new Promise((resolve) => setTimeout(resolve, 100));
+							const endHold = {
+								currentTime: endVideo.currentTime,
+								duration: endVideo.duration,
+							};
+							playback.pool.pause();
 							await playback.seek(0.1);
 							seekCount = 0;
 							const beforeSlowPlay = frames.length;
@@ -1094,6 +1124,7 @@ async function replay(forceWebGl, forceWebGpu = false) {
 								seekCount,
 								playedFrames: frames.length - beforeSlowPlay,
 								outputTime: playback.outputTime,
+								endHold,
 							};
 							// Playback that resumes below full resolution redraws at full
 							// detail on pause, while a config change seeks the same video.
@@ -1543,6 +1574,11 @@ async function replay(forceWebGl, forceWebGpu = false) {
 					result.slowHtmlPlayback.seekCount <= 3 &&
 					typeof result.slowHtmlPlayback.pauseRedraw === "number",
 				`Slow HTML playback sought too often or its pause redraw hung: ${JSON.stringify(result.slowHtmlPlayback)}`,
+			);
+			assert(
+				result.slowHtmlPlayback.endHold.currentTime >=
+					result.slowHtmlPlayback.endHold.duration - 0.05,
+				`A video that ended restarted when playback asked for its last frame: ${JSON.stringify(result.slowHtmlPlayback.endHold)}`,
 			);
 		}
 		for (const track of ["display", "camera"]) {
