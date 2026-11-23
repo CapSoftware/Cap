@@ -35,6 +35,19 @@ const encodeKeySegment = (segment: string) =>
 export const getCloudFrontObjectUrl = (bucketUrl: string, key: string) =>
 	`${bucketUrl}/${key.split("/").map(encodeKeySegment).join("/")}`;
 
+const getCloudFrontResourceUrl = (
+	bucketUrl: string,
+	key: string,
+	responseContentDisposition: string | undefined,
+) => {
+	if (responseContentDisposition === undefined)
+		return getCloudFrontObjectUrl(bucketUrl, key);
+	// The distribution's /dl/* behaviour keys its cache on
+	// response-content-disposition and strips /dl before reaching the bucket.
+	const downloadUrl = getCloudFrontObjectUrl(`${bucketUrl}/dl`, key);
+	return `${downloadUrl}?response-content-disposition=${encodeKeySegment(responseContentDisposition)}`;
+};
+
 export const isCloudFrontSignedUrl = (url: string) => {
 	try {
 		const query = new URL(url).searchParams;
@@ -50,17 +63,23 @@ export const createCloudFrontSignedUrl = ({
 	keyPairId,
 	privateKey,
 	expiresAt,
+	responseContentDisposition,
 }: {
 	bucketUrl: string;
 	key: string;
 	keyPairId: string;
 	privateKey: string;
 	expiresAt: number;
+	responseContentDisposition?: string;
 }) => {
 	const policy = {
 		Statement: [
 			{
-				Resource: getCloudFrontObjectUrl(bucketUrl, key),
+				Resource: getCloudFrontResourceUrl(
+					bucketUrl,
+					key,
+					responseContentDisposition,
+				),
 				Condition: {
 					DateLessThan: {
 						"AWS:EpochTime": expiresAt,
