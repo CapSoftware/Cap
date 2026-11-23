@@ -164,12 +164,74 @@ export function isMediaTimeHeld(media: HTMLMediaElement) {
 	return heldTimes.has(media);
 }
 
+// The element shows nothing between losing its source and painting the new
+// one, so a still of the last frame covers it until then.
+const frameCovers = new WeakMap<
+	HTMLVideoElement,
+	{ canvas: HTMLCanvasElement; owner: object }
+>();
+const FRAME_COVER_MAX_MS = 500;
+
+function coverVideoFrame(video: HTMLVideoElement, owner: object) {
+	const existing = frameCovers.get(video);
+	if (existing) {
+		existing.owner = owner;
+		return;
+	}
+	if (video.readyState < 2 || !video.videoWidth || !video.isConnected) return;
+	const canvas = document.createElement("canvas");
+	const scale = Math.min(
+		1,
+		(video.offsetWidth * (window.devicePixelRatio || 1)) / video.videoWidth,
+	);
+	canvas.width = Math.max(1, Math.round(video.videoWidth * (scale || 1)));
+	canvas.height = Math.max(1, Math.round(video.videoHeight * (scale || 1)));
+	const context = canvas.getContext("2d");
+	if (!context) return;
+	try {
+		context.drawImage(video, 0, 0, canvas.width, canvas.height);
+	} catch {
+		return;
+	}
+	const style = getComputedStyle(video);
+	Object.assign(canvas.style, {
+		position: "absolute",
+		left: `${video.offsetLeft}px`,
+		top: `${video.offsetTop}px`,
+		width: `${video.offsetWidth}px`,
+		height: `${video.offsetHeight}px`,
+		objectFit: style.objectFit,
+		objectPosition: style.objectPosition,
+		borderRadius: style.borderRadius,
+		zIndex: style.zIndex,
+		pointerEvents: "none",
+	});
+	canvas.setAttribute("aria-hidden", "true");
+	video.after(canvas);
+	frameCovers.set(video, { canvas, owner });
+}
+
+function uncoverVideoFrame(video: HTMLVideoElement, owner: object) {
+	const cover = frameCovers.get(video);
+	if (!cover || cover.owner !== owner) return;
+	const remove = () => {
+		if (frameCovers.get(video) !== cover || cover.owner !== owner) return;
+		frameCovers.delete(video);
+		cover.canvas.remove();
+	};
+	setTimeout(remove, FRAME_COVER_MAX_MS);
+	if (typeof video.requestVideoFrameCallback === "function")
+		video.requestVideoFrameCallback(remove);
+	else requestAnimationFrame(() => requestAnimationFrame(remove));
+}
+
 export function holdDisplayedTime(
 	media: HTMLMediaElement,
 	time: number,
 ): () => void {
 	const hold = { time };
 	heldTimes.set(media, hold);
+	if (media instanceof HTMLVideoElement) coverVideoFrame(media, hold);
 	let loadStarted = false;
 	const handleLoadStart = () => {
 		loadStarted = true;
@@ -191,6 +253,7 @@ export function holdDisplayedTime(
 		media.removeEventListener("seeked", handleSettled);
 		media.removeEventListener("error", handleSettled);
 		media.removeEventListener("timeupdate", handleTimeUpdate);
+		if (media instanceof HTMLVideoElement) uncoverVideoFrame(media, hold);
 		if (heldTimes.get(media) !== hold) return;
 		heldTimes.delete(media);
 		media.dispatchEvent(new Event("timeupdate"));

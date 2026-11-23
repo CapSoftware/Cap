@@ -176,6 +176,52 @@ describe("media source refresh", () => {
 		release();
 	});
 
+	it("covers a video with its last frame until the new source paints", () => {
+		vi.useFakeTimers();
+		const drawImage = vi.fn();
+		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+			drawImage,
+		} as unknown as CanvasRenderingContext2D);
+		const parent = document.createElement("div");
+		const video = document.createElement("video");
+		parent.append(video, document.createElement("span"));
+		document.body.append(parent);
+		Object.defineProperties(video, {
+			readyState: { configurable: true, get: () => 4 },
+			videoWidth: { configurable: true, get: () => 1920 },
+			videoHeight: { configurable: true, get: () => 1080 },
+			offsetWidth: { configurable: true, get: () => 640 },
+			offsetHeight: { configurable: true, get: () => 360 },
+		});
+		let presentFrame: (() => void) | undefined;
+		Object.defineProperty(video, "requestVideoFrameCallback", {
+			configurable: true,
+			value: (callback: () => void) => {
+				presentFrame = callback;
+				return 1;
+			},
+		});
+
+		const release = holdDisplayedTime(video, 12);
+		const cover = video.nextElementSibling as HTMLCanvasElement;
+		expect(cover.tagName).toBe("CANVAS");
+		expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 640, 360);
+		expect(cover.style.width).toBe("640px");
+
+		release();
+		expect(cover.isConnected).toBe(true);
+		presentFrame?.();
+		expect(cover.isConnected).toBe(false);
+
+		holdDisplayedTime(video, 20)();
+		const second = video.nextElementSibling as HTMLElement;
+		expect(second.tagName).toBe("CANVAS");
+		vi.advanceTimersByTime(500);
+		expect(second.isConnected).toBe(false);
+		parent.remove();
+		vi.useRealTimers();
+	});
+
 	it("resumes a viewer the browser paused while reporting the failure", () => {
 		const now = vi.spyOn(Date, "now").mockReturnValue(0);
 		const { media, state, load, play, fail } = fakeMedia();
