@@ -1,0 +1,141 @@
+BEGIN:VCALENDAR
+PRODID:-//Google Inc//Google Calendar 70.9054//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+X-WR-CALNAME:Acme Work
+X-WR-TIMEZONE:America/New_York
+BEGIN:VTIMEZONE
+TZID:America/New_York
+X-LIC-LOCATION:America/New_York
+BEGIN:DAYLIGHT
+TZOFFSETFROM:-0500
+TZOFFSETTO:-0400
+TZNAME:EDT
+DTSTART:19700308T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:-0400
+TZOFFSETTO:-0500
+TZNAME:EST
+DTSTART:19701101T020000
+RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260223T090000
+DTEND;TZID=America/New_York:20260223T093000
+RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO
+EXDATE;TZID=America/New_York:20260316T090000
+DTSTAMP:20260301T120000Z
+ORGANIZER;CN=Alice Chen:mailto:alice@acme.example
+UID:7kukuqrfedlm2f9t6vo2mh1ln5@google.com
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Alice Ch
+ en;X-NUM-GUESTS=0:mailto:alice@acme.example
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=me@acme.
+ example;X-NUM-GUESTS=0:mailto:me@acme.example
+ATTENDEE;CUTYPE=RESOURCE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=NYC-4-Huds
+ on (8);X-NUM-GUESTS=0:mailto:c_188abc@resource.calendar.google.com
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+CREATED:20260201T100000Z
+DESCRIPTION:Weekly product sync\, bring updates\; demos welcome.\n\n-::~:~::~
+ :~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~
+ :~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-\nJoin with Google Meet: https://meet.go
+ ogle.com/abc-defg-hij\nOr dial: (US) +1 555-0100 PIN: 123456789#\nMore phone
+  numbers: https://tel.meet/abc-defg-hij?pin=123456789\n\nLearn more about Me
+ et at: https://support.google.com/a/users/answer/9282720\n\nPlease do not ed
+ it this section.\n-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:
+ ~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-
+LAST-MODIFIED:20260301T120000Z
+LOCATION:NYC-4-Hudson (8)
+SEQUENCE:0
+STATUS:CONFIRMED
+SUMMARY:Product sync
+TRANSP:OPAQUE
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:This is an event reminder
+TRIGGER:-P0DT0H10M0S
+END:VALARM
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260323T110000
+DTEND;TZID=America/New_York:20260323T113000
+DTSTAMP:20260301T120000Z
+ORGANIZER;CN=Alice Chen:mailto:alice@acme.example
+UID:7kukuqrfedlm2f9t6vo2mh1ln5@google.com
+RECURRENCE-ID;TZID=America/New_York:20260323T090000
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Alice Ch
+ en;X-NUM-GUESTS=0:mailto:alice@acme.example
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=TENTATIVE;CN=me@acme
+ .example;X-NUM-GUESTS=0:mailto:me@acme.example
+X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij
+SEQUENCE:1
+STATUS:CONFIRMED
+SUMMARY:Product sync (moved)
+TRANSP:OPAQUE
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260330T090000
+DTEND;TZID=America/New_York:20260330T093000
+DTSTAMP:20260301T120000Z
+UID:7kukuqrfedlm2f9t6vo2mh1ln5@google.com
+RECURRENCE-ID;TZID=America/New_York:20260330T090000
+SEQUENCE:2
+STATUS:CANCELLED
+SUMMARY:Product sync
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;VALUE=DATE:20260310
+DTEND;VALUE=DATE:20260312
+DTSTAMP:20260301T120000Z
+UID:offsite-2026@google.com
+SUMMARY:Team offsite
+TRANSP:TRANSPARENT
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20260304T170000Z
+DTEND:20260304T174500Z
+DTSTAMP:20260301T120000Z
+UID:0abc123zoom@google.com
+SUMMARY:Customer call: Globex
+DESCRIPTION:<p>Hi all\,</p><p>Join Zoom Meeting<br><a href="https://www.go
+ ogle.com/url?q=https%3A%2F%2Facme.zoom.us%2Fj%2F84512345678%3Fpwd%3DaBcDeF&amp
+ ;sa=D&amp;source=calendar">https://acme.zoom.us/j/84512345678?pwd=aBcDeF</a></p><
+ p>Meeting ID: 845 1234 5678</p><p>Find your local number: <a href="https://acm
+ e.zoom.us/u/abcdEfGh">https://acme.zoom.us/u/abcdEfGh</a></p>
+ORGANIZER;CN=me@acme.example:mailto:me@acme.example
+ATTENDEE;PARTSTAT=NEEDS-ACTION;CN=Bob Stone:mailto:bob@globex.example
+ATTENDEE;PARTSTAT=ACCEPTED:mailto:me@acme.example
+LOCATION:
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260305T150000
+DTEND;TZID=America/New_York:20260305T160000
+DTSTAMP:20260301T120000Z
+UID:declined-1@google.com
+SUMMARY:All hands
+ATTENDEE;PARTSTAT=DECLINED;CN=Me:mailto:ME@Acme.Example
+ORGANIZER;CN=CEO:mailto:ceo@acme.example
+LOCATION:https://teams.microsoft.com/l/meetup-join/19%3ameeting_YmFkZ2Vy%40th
+ read.v2/0?context=%7b%22Tid%22%3a%22t%22%7d
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20260309T080000
+DURATION:PT45M
+RRULE:FREQ=DAILY;COUNT=5
+DTSTAMP:20260301T120000Z
+UID:focus-daily@google.com
+SUMMARY:Focus block
+END:VEVENT
+BEGIN:VEVENT
+DTSTART;TZID=America/New_York:20260306T120000
+DTSTAMP:20260301T120000Z
+UID:quick-chat@google.com
+SUMMARY:Quick chat
+URL:https://whereby.com/acme-standup
+END:VEVENT
+END:VCALENDAR
