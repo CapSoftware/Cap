@@ -335,6 +335,8 @@ struct Recording {
     mic_own: Option<String>,
     mic_moved: Option<String>,
     mic_watch: mic_watch::MicWatch,
+    /// Whether the meeting may go back to its own microphone.
+    mic_return: mic_watch::OwnReturn,
     restore_mic: Option<(Option<String>, Option<String>)>,
     awaiting_mode: bool,
     voices: LiveVoices,
@@ -1869,7 +1871,8 @@ impl Meetings {
             // The screen recording's own watch keeps its feed.
             return;
         }
-        let Some(step) = mic_watch::mic_move(
+        let Some(step) = mic_watch::decide(
+            &mut recording.mic_return,
             recording.mic_own.as_deref(),
             current.as_deref(),
             listed,
@@ -2328,6 +2331,7 @@ impl Meetings {
             mic_own,
             mic_moved: None,
             mic_watch: mic_watch::MicWatch::default(),
+            mic_return: mic_watch::OwnReturn::default(),
             restore_mic,
             awaiting_mode,
             voices: live_voices,

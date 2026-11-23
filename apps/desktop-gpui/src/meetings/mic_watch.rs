@@ -48,6 +48,58 @@ pub fn mic_move(
     })
 }
 
+/// Whether the meeting may go back to its own microphone. Given up on while
+/// it was still listed (it is there but sends nothing), it stays out until
+/// it shows it recovered by being unplugged and plugged back in; otherwise
+/// the meeting would go back to it every few seconds, lose its audio again,
+/// and keep interrupting the recording.
+#[derive(Debug, Default)]
+pub struct OwnReturn {
+    failed: bool,
+    gone_since: bool,
+}
+
+impl OwnReturn {
+    /// One look at the device list: whether the own microphone may be used.
+    fn returnable(&mut self, own_listed: bool) -> bool {
+        if !self.failed {
+            return true;
+        }
+        if !own_listed {
+            self.gone_since = true;
+            return false;
+        }
+        if self.gone_since {
+            *self = Self::default();
+            return true;
+        }
+        false
+    }
+}
+
+/// [`mic_move`] for a meeting that remembers giving up on its own microphone.
+pub fn decide(
+    own_return: &mut OwnReturn,
+    own: Option<&str>,
+    current: Option<&str>,
+    listed: &[String],
+    default: Option<&str>,
+    stalled: Option<u32>,
+) -> Option<MicMove> {
+    let own_listed = own.is_some_and(|own| listed.iter().any(|name| name == own));
+    let usable = own.filter(|_| own_return.returnable(own_listed));
+    let step = mic_move(usable, current, listed, default, stalled);
+    if stalled.is_some()
+        && own_listed
+        && let Some(MicMove::Switch(to)) = &step
+        && Some(to.as_str()) != own
+    {
+        own_return.failed = true;
+        own_return.gone_since = false;
+    }
+    step
+}
+
 /// How long a stalled microphone waits before the next try: soon at first
 /// (a device switch takes a moment), then every few seconds while nothing
 /// is there to go to.
@@ -153,6 +205,67 @@ mod tests {
                 Some(OWN_TRIES + 1)
             ),
             Some(MicMove::Switch(BUILT_IN.into()))
+        );
+    }
+
+    #[test]
+    fn a_listed_microphone_that_sends_nothing_is_not_gone_back_to_until_replugged() {
+        let both = names(&[BUILT_IN, "Studio Mic"]);
+        let mut back = OwnReturn::default();
+        let own = Some("Studio Mic");
+        let step = |back: &mut OwnReturn,
+                    current: Option<&str>,
+                    listed: &[String],
+                    stalled: Option<u32>| {
+            decide(back, own, current, listed, Some(BUILT_IN), stalled)
+        };
+        for tries in 1..=OWN_TRIES {
+            assert_eq!(
+                step(&mut back, own, &both, Some(tries)),
+                Some(MicMove::Reopen("Studio Mic".into()))
+            );
+        }
+        assert_eq!(
+            step(&mut back, own, &both, Some(OWN_TRIES + 1)),
+            Some(MicMove::Switch(BUILT_IN.into()))
+        );
+        // The default delivers. Before, the next look went straight back to
+        // the listed but silent microphone and the loop began again.
+        assert_eq!(
+            mic_move(own, Some(BUILT_IN), &both, Some(BUILT_IN), None),
+            Some(MicMove::Switch("Studio Mic".into())),
+            "what a look without the memory would do"
+        );
+        for _ in 0..5 {
+            assert_eq!(step(&mut back, Some(BUILT_IN), &both, None), None);
+        }
+        // A stall on the default does not reach for the silent one either.
+        assert_eq!(
+            step(&mut back, Some(BUILT_IN), &both, Some(1)),
+            Some(MicMove::Reopen(BUILT_IN.into()))
+        );
+        // Unplugged and plugged back in: the meeting goes back to it.
+        let without = names(&[BUILT_IN]);
+        assert_eq!(step(&mut back, Some(BUILT_IN), &without, None), None);
+        assert_eq!(
+            step(&mut back, Some(BUILT_IN), &both, None),
+            Some(MicMove::Switch("Studio Mic".into()))
+        );
+    }
+
+    #[test]
+    fn an_unplugged_microphone_is_still_gone_back_to_when_it_returns() {
+        let mut back = OwnReturn::default();
+        let own = Some("AirPods Pro");
+        let without = names(&[BUILT_IN]);
+        assert_eq!(
+            decide(&mut back, own, own, &without, Some(BUILT_IN), Some(1)),
+            Some(MicMove::Switch(BUILT_IN.into()))
+        );
+        let with = names(&[BUILT_IN, "AirPods Pro"]);
+        assert_eq!(
+            decide(&mut back, own, Some(BUILT_IN), &with, Some(BUILT_IN), None),
+            Some(MicMove::Switch("AirPods Pro".into()))
         );
     }
 
