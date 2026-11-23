@@ -29,8 +29,8 @@ export async function verifyCollectionPassword(
 			await isPasswordAttemptLimited(
 				{
 					perClient: RATE_LIMIT_IDS.COLLECTION_PASSWORD,
-					perViewer: RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_VIEWER,
-					perResource: RATE_LIMIT_IDS.COLLECTION_PASSWORD_PER_COLLECTION,
+					perViewer: RATE_LIMIT_IDS.PASSWORD_PER_VIEWER,
+					perResource: RATE_LIMIT_IDS.PASSWORD_PER_RESOURCE,
 				},
 				`collection:${resourceKey}`,
 			)
