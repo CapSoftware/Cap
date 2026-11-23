@@ -35,30 +35,6 @@ pub const LIST_ROW_HEIGHT: f32 = 56.;
 pub const GRID_MIN_TILE: f32 = 200.;
 pub const GRID_GAP: f32 = 18.;
 
-/// Kind colours: small glyph tiles and the coloured sidebar glyphs macOS 27
-/// brought back.
-pub fn kind_tint(kind: super::items::ItemKind, dark: bool) -> Hsla {
-    use super::items::ItemKind;
-    let (h, s) = match kind {
-        ItemKind::Recording => (352., 0.72),
-        ItemKind::Screenshot => (205., 0.75),
-        ItemKind::Meeting => (262., 0.62),
-        ItemKind::Note => (38., 0.85),
-    };
-    if dark {
-        hsla(h / 360., s, 0.66, 1.)
-    } else {
-        hsla(h / 360., s, 0.50, 1.)
-    }
-}
-
-pub fn soft(color: Hsla, dark: bool) -> Hsla {
-    Hsla {
-        a: if dark { 0.16 } else { 0.09 },
-        ..color
-    }
-}
-
 pub fn card_shadow(dark: bool) -> Vec<BoxShadow> {
     vec![
         BoxShadow {
@@ -132,24 +108,6 @@ pub fn sidebar_wash(dark: bool) -> Hsla {
     }
 }
 
-/// Note and meeting cards without a picture: quiet paper, not a colour slab.
-pub fn paper(dark: bool) -> Hsla {
-    if dark {
-        hsla(240. / 360., 0.05, 0.15, 1.)
-    } else {
-        hsla(45. / 360., 0.30, 0.975, 1.)
-    }
-}
-
-/// A kind glyph standing in for a picture that is not there yet: the kind's
-/// colour, faded into the well.
-pub fn soft_glyph(color: Hsla, dark: bool) -> Hsla {
-    Hsla {
-        a: if dark { 0.45 } else { 0.38 },
-        ..color
-    }
-}
-
 /// The month band of a calendar leaf, the red calendars have always used.
 pub fn calendar_red(dark: bool) -> Hsla {
     if dark {
@@ -164,5 +122,26 @@ pub fn leaf_face(dark: bool) -> Hsla {
         hsla(240. / 360., 0.04, 0.22, 1.)
     } else {
         hsla(0., 0., 1., 1.)
+    }
+}
+
+pub const MEDIA_RADIUS: f32 = 10.;
+pub const LEAD_WIDTH: f32 = 64.;
+pub const LEAD_HEIGHT: f32 = 40.;
+pub const LEAD_RADIUS: f32 = 6.;
+
+/// One neutral surface for every kind: colour is kept for state.
+pub fn well(dark: bool) -> Hsla {
+    if dark {
+        hsla(0., 0., 1., 0.045)
+    } else {
+        hsla(0., 0., 0., 0.03)
+    }
+}
+
+pub fn wave_ink(p: &Palette) -> Hsla {
+    Hsla {
+        a: if p.dark { 0.5 } else { 0.42 },
+        ..p.text
     }
 }

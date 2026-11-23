@@ -33,7 +33,7 @@ use gpui::{
     prelude::FluentBuilder, px, size, svg,
 };
 
-use self::items::{Item, ItemKind};
+use self::items::{Item, ItemKey, ItemKind};
 use self::load::Scan;
 use self::rules::{
     Content, DateRange, EvalContext, IsOp, LengthOp, Matching, Rule, SmartFolder, TextOp,
@@ -102,14 +102,6 @@ impl KindView {
             Self::Recordings => "icons/video.svg",
             Self::Screenshots => "icons/screenshot.svg",
             Self::Notes => "icons/notebook.svg",
-        }
-    }
-
-    fn tint(self) -> ItemKind {
-        match self {
-            Self::Recordings => ItemKind::Recording,
-            Self::Screenshots => ItemKind::Screenshot,
-            Self::Notes => ItemKind::Meeting,
         }
     }
 }
@@ -251,6 +243,11 @@ pub struct LibraryWindow {
     texts: SharedTextCache,
     list_scroll: gpui::UniformListScrollHandle,
     grid_scroll: gpui::UniformListScrollHandle,
+    /// Kept across scans so a rescan puts them straight back on the new
+    /// items instead of flashing the bare tiles.
+    visuals: HashMap<ItemKey, visuals::Visual>,
+    visuals_task: Option<Task<()>>,
+    wave_images: std::cell::RefCell<visuals::WaveImages>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -470,6 +467,9 @@ impl LibraryWindow {
             texts: TextCache::shared(),
             list_scroll: gpui::UniformListScrollHandle::new(),
             grid_scroll: gpui::UniformListScrollHandle::new(),
+            visuals: HashMap::new(),
+            visuals_task: None,
+            wave_images: Default::default(),
             _subscriptions: subscriptions,
         };
         this.reload(cx);
@@ -511,9 +511,14 @@ impl LibraryWindow {
                 "library scanned"
             );
             this.update(cx, |this, cx| {
+                let mut scan = scan;
+                let jobs = std::mem::take(&mut scan.visual_jobs);
+                this.visuals.extend(std::mem::take(&mut scan.seed_visuals));
+                visuals::apply(&mut scan.items, &this.visuals);
                 this.load_task = None;
                 this.last_scan = Some(Instant::now());
                 this.scan = Rc::new(scan);
+                this.load_visuals(jobs, cx);
                 this.thumbs.forget_failures();
                 this.reevaluate(cx);
                 this.check_members(cx);
@@ -679,6 +684,81 @@ impl LibraryWindow {
         {
             self.file = file;
         }
+    }
+
+    /// Two workers only: audio decodes are long and the window must stay
+    /// responsive while a first open works through a big library.
+    fn load_visuals(&mut self, jobs: Vec<visuals::Job>, cx: &mut Context<Self>) {
+        if jobs.is_empty() {
+            return;
+        }
+        let keep: Vec<ItemKey> = jobs.iter().map(|j| j.key.clone()).collect();
+        let dir = visuals::cache_dir();
+        self.visuals_task = Some(cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            let cache = dir.clone();
+            let (known, todo) = cx
+                .background_spawn(async move { visuals::cached(jobs, &cache) })
+                .await;
+            let hits = known.len();
+            if this
+                .update(cx, |this, cx| this.merge_visuals(known, cx))
+                .is_err()
+            {
+                return;
+            }
+            let misses = todo.len();
+            if !todo.is_empty() {
+                let frames = dir.join("library-frames");
+                let (_workers, results) = crate::library::spawn_decode_pool_limited(
+                    cx.background_executor(),
+                    todo,
+                    2,
+                    move |(job, stamp): (visuals::Job, String)| {
+                        let visual = visuals::work(&job, &frames);
+                        Some((job.key, stamp, visual))
+                    },
+                );
+                let mut done = Vec::new();
+                while let Ok(first) = results.recv_async().await {
+                    let mut batch = vec![first];
+                    batch.extend(results.try_iter());
+                    let found: HashMap<ItemKey, visuals::Visual> = batch
+                        .iter()
+                        .map(|(k, _, v)| (k.clone(), v.clone()))
+                        .collect();
+                    done.extend(batch);
+                    if this
+                        .update(cx, |this, cx| this.merge_visuals(found, cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                cx.background_spawn(async move { visuals::remember(&dir, &done, &keep) })
+                    .await;
+            }
+            tracing::info!(
+                hits,
+                misses,
+                ms = started.elapsed().as_secs_f64() * 1000.,
+                "library visuals ready"
+            );
+        }));
+    }
+
+    fn merge_visuals(&mut self, found: HashMap<ItemKey, visuals::Visual>, cx: &mut Context<Self>) {
+        if found.is_empty() {
+            return;
+        }
+        let mut next = (*self.scan).clone();
+        let changed = visuals::apply(&mut next.items, &found);
+        self.visuals.extend(found);
+        if changed {
+            self.scan = Rc::new(next);
+            self.reevaluate(cx);
+        }
+        cx.notify();
     }
 
     /// Decodes the thumbnails the last render asked for, off the main thread,
@@ -1339,13 +1419,11 @@ impl LibraryWindow {
         let dark = p.dark;
         let nav = |id: SharedString,
                    icon: &'static str,
-                   tint: Option<Hsla>,
                    label: SharedString,
                    count: Option<usize>,
                    section: Section| Row::Nav {
             id,
             icon,
-            tint,
             label,
             count,
             section,
@@ -1353,7 +1431,6 @@ impl LibraryWindow {
         let mut rows = vec![nav(
             "nav-home".into(),
             "icons/layers.svg",
-            None,
             tr::library::title().into(),
             None,
             Section::Home,
@@ -1363,7 +1440,6 @@ impl LibraryWindow {
             rows.push(nav(
                 SharedString::from(format!("nav-{}", kind.label())),
                 kind.icon(),
-                Some(style::kind_tint(kind.tint(), dark)),
                 kind.label().into(),
                 Some(self.count_for(&section)),
                 section,
@@ -1374,7 +1450,6 @@ impl LibraryWindow {
             rows.push(nav(
                 "nav-pinned".into(),
                 "icons/pin.svg",
-                Some(style::kind_tint(ItemKind::Note, dark)),
                 tr::library::pinned().into(),
                 Some(pinned),
                 Section::Pinned,
@@ -1386,7 +1461,6 @@ impl LibraryWindow {
             rows.push(nav(
                 SharedString::from(format!("nav-folder-{}", folder.id)),
                 "icons/folder.svg",
-                None,
                 folder.name.clone().into(),
                 Some(self.count_for(&section)),
                 section,
@@ -1397,7 +1471,6 @@ impl LibraryWindow {
             rows.push(nav(
                 SharedString::from(format!("nav-smart-{}", folder.id)),
                 "icons/sliders-horizontal.svg",
-                Some(p.accent),
                 folder.name.clone().into(),
                 Some(self.count_for(&section)),
                 section,
@@ -1414,7 +1487,6 @@ impl LibraryWindow {
         rows.push(nav(
             "nav-trash".into(),
             "icons/trash.svg",
-            None,
             tr::library::trash().into(),
             Some(self.count_for(&Section::Trash)),
             Section::Trash,
@@ -1577,40 +1649,26 @@ impl LibraryWindow {
     }
 
     /// An installed app's icon at `size` points, nothing for the moment it
-    /// is looked up, or the meeting glyph when the app is not on this computer.
-    fn app_icon(&self, app: &'static AppInfo, size: f32) -> AnyElement {
+    /// is looked up or when the app is not on this computer.
+    fn app_icon(&self, app: &'static AppInfo, size: f32) -> Option<AnyElement> {
         match self.app_icons.get(app) {
             app_icons::Icon::Image(image) => {
-                img(image).size(px(size)).flex_shrink_0().into_any_element()
+                Some(img(image).size(px(size)).flex_shrink_0().into_any_element())
             }
-            app_icons::Icon::Pending => div().size(px(size)).flex_shrink_0().into_any_element(),
-            app_icons::Icon::Missing => self.glyph_tile(ItemKind::Meeting, size, size),
+            app_icons::Icon::Pending => {
+                Some(div().size(px(size)).flex_shrink_0().into_any_element())
+            }
+            app_icons::Icon::Missing => None,
         }
     }
 
-    fn glyph_tile(&self, kind: ItemKind, w: f32, h: f32) -> AnyElement {
-        self.glyph_tile_with(kind_glyph(kind), kind, w, h)
-    }
-
-    fn glyph_tile_with(&self, glyph: &'static str, kind: ItemKind, w: f32, h: f32) -> AnyElement {
-        let dark = self.palette.dark;
-        let tint = style::kind_tint(kind, dark);
-        let side = w.min(h);
-        div()
-            .w(px(w))
-            .h(px(h))
+    fn kind_mark(&self, kind: ItemKind, size: f32) -> AnyElement {
+        let p = self.palette;
+        svg()
+            .path(kind_glyph(kind))
+            .size(px(size))
             .flex_shrink_0()
-            .rounded(px((side * 0.24).clamp(5., 9.)))
-            .bg(style::soft(tint, dark))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                svg()
-                    .path(glyph)
-                    .size(px((side * 0.42).clamp(12., 22.)))
-                    .text_color(tint),
-            )
+            .text_color(p.muted)
             .into_any_element()
     }
 
@@ -1646,7 +1704,6 @@ impl LibraryWindow {
             .bg(style::leaf_face(dark))
             .border_1()
             .border_color(style::capsule_border(dark))
-            .shadow(style::capsule_shadow(dark))
             .child(
                 div()
                     .h(px(band))
@@ -1684,11 +1741,9 @@ impl LibraryWindow {
             .into_any_element()
     }
 
-    /// A recording's or screenshot's picture in a well: the well takes the
-    /// kind's soft colour while it decodes, then the picture. No extra
-    /// elements and no animation frames (a fade repainted the window for
-    /// every batch of pictures that landed), so new rows cost what they did. `None` when the file is missing or unreadable, so the caller draws
-    /// something else.
+    /// No extra elements and no fade: a fade repainted the window for every
+    /// batch of pictures that landed. `None` when the file is missing or
+    /// unreadable, so the caller draws something else.
     fn picture(&self, item: &Item, path: &Path, height: f32, radius: f32) -> Option<gpui::Div> {
         let dark = self.palette.dark;
         let image = match self.thumbs.picture(path) {
@@ -1704,7 +1759,7 @@ impl LibraryWindow {
                 .rounded(px(radius))
                 .overflow_hidden()
                 .bg(if image.is_none() {
-                    style::soft(style::kind_tint(item.kind, dark), dark)
+                    style::well(dark)
                 } else {
                     style::thumb_well(dark)
                 })
@@ -1718,6 +1773,46 @@ impl LibraryWindow {
         )
     }
 
+    fn wave(&self, item: &Item) -> Option<visuals::Wave> {
+        self.visuals.get(&item.key)?.wave.clone()
+    }
+
+    /// One element painting quads: a div per bar cost a layout node each.
+    fn wave_bars(&self, wave: visuals::Wave, height: f32, bar: f32) -> gpui::Canvas<()> {
+        let color = style::wave_ink(&self.palette);
+        gpui::canvas(
+            |_, _, _| (),
+            move |bounds, (), window, _| {
+                let w = f32::from(bounds.size.width);
+                let h = f32::from(bounds.size.height);
+                let gap = bar;
+                let n = (((w + gap) / (bar + gap)).floor() as usize).clamp(1, visuals::BARS);
+                let total = n as f32 * (bar + gap) - gap;
+                let x0 = f32::from(bounds.origin.x) + ((w - total) / 2.).max(0.);
+                let mid = f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.;
+                for i in 0..n {
+                    let from = i * visuals::BARS / n;
+                    let to = ((i + 1) * visuals::BARS / n).max(from + 1);
+                    let v = wave[from..to].iter().copied().max().unwrap_or(0);
+                    let bh = (h * (0.08 + 0.92 * f32::from(v) / 255.)).max(bar);
+                    window.paint_quad(
+                        gpui::fill(
+                            gpui::Bounds::new(
+                                gpui::point(px(x0 + i as f32 * (bar + gap)), px(mid - bh / 2.)),
+                                gpui::size(px(bar), px(bh)),
+                            ),
+                            color,
+                        )
+                        .corner_radii(gpui::Corners::all(px(bar / 2.))),
+                    );
+                }
+            },
+        )
+        .w_full()
+        .h(px(height))
+        .flex_shrink_0()
+    }
+
     fn thumb(&self, item: &Item, height: f32, radius: f32) -> AnyElement {
         if let Some(well) = item
             .thumbnail
@@ -1728,334 +1823,291 @@ impl LibraryWindow {
                 .when_some(
                     item.duration_ms
                         .filter(|_| item.kind == ItemKind::Recording),
-                    |el, ms| {
-                        el.child(
-                            div()
-                                .absolute()
-                                .right(px(8.))
-                                .bottom(px(8.))
-                                .px(px(6.))
-                                .py(px(1.))
-                                .rounded(px(6.))
-                                .bg(gpui::hsla(0., 0., 0., 0.55))
-                                .text_size(px(11.))
-                                .text_color(gpui::white())
-                                .child(self.text(format::duration(ms))),
-                        )
-                    },
+                    |el, ms| el.child(self.length_badge(ms, true)),
                 )
                 .into_any_element();
         }
-        self.paper(item, height, radius)
+        self.media(item, height, radius)
     }
 
-    /// No picture: a quiet paper card that still says what it was. Where the
-    /// meeting happened (its calendar day or its app), its first lines, and
-    /// who was there.
-    fn paper(&self, item: &Item, height: f32, radius: f32) -> AnyElement {
+    fn length_badge(&self, ms: u64, on_picture: bool) -> AnyElement {
+        let p = self.palette;
+        div()
+            .absolute()
+            .right(px(8.))
+            .bottom(px(8.))
+            .px(px(5.))
+            .py(px(1.))
+            .rounded(px(5.))
+            .when(on_picture, |el| el.bg(gpui::hsla(0., 0., 0., 0.5)))
+            .text_size(px(11.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if on_picture { gpui::white() } else { p.muted })
+            .child(self.text(format::duration(ms)))
+            .into_any_element()
+    }
+
+    fn media(&self, item: &Item, height: f32, radius: f32) -> AnyElement {
         let p = self.palette;
         let dark = p.dark;
-        let tint = style::kind_tint(item.kind, dark);
         let big = height > 220.;
-        let people: Vec<String> = item.people.iter().take(4).cloned().collect();
-        let extra = item.people.len().saturating_sub(people.len());
-        let avatars = div()
-            .flex()
-            .items_center()
-            .children(people.iter().enumerate().map(|(i, name)| {
-                let initial: String = name
-                    .chars()
-                    .next()
-                    .map(|c| c.to_uppercase().collect())
-                    .unwrap_or_default();
-                div()
-                    .size(px(24.))
-                    .when(i > 0, |el| el.ml(px(-6.)))
-                    .rounded_full()
-                    .border_2()
-                    .border_color(style::paper(dark))
-                    .bg(p.speaker(i))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(gpui::white())
-                    .child(self.text(initial))
-            }));
-        let footer = (!people.is_empty()).then(|| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(avatars)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.))
-                        .text_color(p.muted)
-                        .child(self.text(if extra > 0 {
-                            format!("{} +{extra}", people.join(", "))
-                        } else {
-                            people.join(", ")
-                        })),
-                )
-        });
-        let event = item
-            .event
-            .as_ref()
-            .filter(|_| item.kind == ItemKind::Meeting);
-        let header = if let Some(event) = event {
-            let start = format::local(event.start);
-            let span = match event.end.map(format::local) {
-                Some(end) if end > start => {
-                    format!("{}\u{2013}{}", format::clock(start), format::clock(end))
-                }
-                _ => format::clock(start),
-            };
-            let place = [
-                event.calendar.clone(),
-                item.meeting_app.map(|a| a.name.to_string()),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("  \u{00b7}  ");
-            div()
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .child(self.date_leaf(event.start, if big { 40. } else { 32. }, item.meeting_app))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .pl(px(if item.meeting_app.is_some() { 4. } else { 0. }))
-                        .flex()
-                        .flex_col()
-                        .gap(px(1.))
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(p.text)
-                                .child(self.text(span)),
-                        )
-                        .when(!place.is_empty(), |el| {
-                            el.child(
-                                div()
-                                    .truncate()
-                                    .text_size(px(11.5))
-                                    .text_color(p.muted)
-                                    .child(self.text(place)),
-                            )
-                        }),
-                )
-        } else if let Some(app) = item.meeting_app {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(self.app_icon(app, if big { 26. } else { 22. }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(p.muted)
-                        .child(self.text(app.name)),
-                )
-        } else {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .text_size(px(11.5))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(tint)
-                .child(
-                    svg()
-                        .path(kind_glyph(item.kind))
-                        .size(px(13.))
-                        .text_color(tint),
-                )
-                .child(self.text(kind_word(item.kind)))
-                .child(div().flex_1())
-                .children(item.app.clone().map(|app| {
-                    div()
-                        .text_color(p.faint)
-                        .font_weight(FontWeight::NORMAL)
-                        .child(self.text(app))
-                }))
-        };
-        // Whole lines only: the excerpt gets the lines that fit, and the
-        // avatars give way when they would leave it less than two (the names
-        // are under the card too).
-        let line_h = if big { 25. } else { 19.5 };
-        let header_h = match (event, item.meeting_app) {
-            (Some(_), _) => ((if big { 40. } else { 32. }) * 1.12f32).round(),
-            (None, Some(_)) => {
-                if big {
-                    26.
-                } else {
-                    22.
-                }
-            }
-            (None, None) => 16.,
-        };
-        const PAD: f32 = 16. * 2. + 2.;
-        const GAP: f32 = 10.;
-        let room =
-            |footer: bool| height - PAD - header_h - GAP - if footer { 24. + GAP } else { 0. };
-        let footer = footer.filter(|_| item.excerpt.is_none() || room(true) >= line_h * 2.);
-        // Never fewer than one line: a note with words always shows some.
-        let lines =
-            ((room(footer.is_some()) / line_h).floor() as usize).clamp(1, if big { 4 } else { 3 });
-        let body: AnyElement = match &item.excerpt {
-            Some(text) => div()
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .text_size(px(if big { 17. } else { 13.5 }))
-                .line_height(px(line_h))
-                .max_h(px(lines as f32 * line_h))
-                .line_clamp(lines)
-                .text_color(p.text)
-                .child(self.text(text.clone()))
-                .into_any_element(),
-            // Nothing written yet: the page stays a page, with its glyph
-            // where the words will go.
-            None => div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    svg()
-                        .path(kind_glyph(item.kind))
-                        .size(px(if big { 34. } else { 24. }))
-                        .text_color(style::soft_glyph(tint, dark)),
-                )
-                .into_any_element(),
-        };
-        div()
+        let pad = if big { 20. } else { 14. };
+        let wave = self.wave(item);
+        let surface = div()
             .relative()
             .w_full()
             .h(px(height))
             .rounded(px(radius))
             .overflow_hidden()
-            .bg(style::paper(dark))
+            .bg(style::well(dark))
             .border_1()
-            .border_color(style::capsule_border(dark))
-            .shadow(style::capsule_shadow(dark))
-            .p(px(16.))
+            .border_color(p.hairline)
+            .p(px(pad))
             .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(header)
-            .child(body)
-            .children(footer)
-            .into_any_element()
+            .flex_col();
+        let title_first = |surface: gpui::Div| {
+            surface
+                .child(
+                    div()
+                        .text_size(px(if big { 22. } else { 16. }))
+                        .line_height(px(if big { 28. } else { 21. }))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(p.text)
+                        .line_clamp(3)
+                        .text_ellipsis()
+                        .child(self.text(item.title.clone())),
+                )
+                .into_any_element()
+        };
+        match item.kind {
+            ItemKind::Note => match &item.excerpt {
+                Some(text) => {
+                    let line_h = if big { 26. } else { 20. };
+                    let lines = (((height - pad * 2.) / line_h).floor() as usize).clamp(1, 8);
+                    surface
+                        .child(
+                            div()
+                                .w_full()
+                                .text_size(px(if big { 17. } else { 13.5 }))
+                                .line_height(px(line_h))
+                                .text_color(p.text)
+                                .line_clamp(lines)
+                                .text_ellipsis()
+                                .child(self.text(text.clone())),
+                        )
+                        .into_any_element()
+                }
+                None => title_first(surface),
+            },
+            ItemKind::Meeting => {
+                let app = item
+                    .meeting_app
+                    .and_then(|app| self.app_icon(app, if big { 20. } else { 16. }));
+                let who = if item.people.is_empty() {
+                    item.meeting_app.map(|app| app.name.to_string())
+                } else if item.people.len() == 1 {
+                    Some(item.people[0].clone())
+                } else {
+                    let names: Vec<&str> = item
+                        .people
+                        .iter()
+                        .take(3)
+                        .map(|n| n.split(' ').next().unwrap_or(n))
+                        .collect();
+                    let extra = item.people.len().saturating_sub(names.len());
+                    Some(if extra > 0 {
+                        format!("{} +{extra}", names.join(", "))
+                    } else {
+                        names.join(", ")
+                    })
+                };
+                let who = who.map(|who| {
+                    div()
+                        .truncate()
+                        .text_size(px(12.))
+                        .line_height(px(20.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(p.muted)
+                        .child(self.text(who))
+                });
+                let header: Option<AnyElement> = match (app, who) {
+                    (Some(app), Some(who)) => Some(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .child(app)
+                            .child(who.flex_1().min_w_0())
+                            .into_any_element(),
+                    ),
+                    (Some(app), None) => Some(app),
+                    (None, Some(who)) => Some(who.flex_shrink_0().into_any_element()),
+                    (None, None) => None,
+                };
+                let wave_h = if big { 40. } else { 26. };
+                let has_header = header.is_some();
+                let mut surface = surface.children(header);
+                match (&item.excerpt, wave) {
+                    (Some(text), wave) => {
+                        let line_h = if big { 24. } else { 19. };
+                        let room = height
+                            - pad * 2.
+                            - if has_header { 28. } else { 0. }
+                            - if wave.is_some() { wave_h + 10. } else { 0. };
+                        let lines = ((room / line_h).floor() as usize).clamp(1, 5);
+                        surface = surface.child(
+                            div()
+                                .w_full()
+                                .when(has_header, |el| el.mt(px(8.)))
+                                .text_size(px(if big { 16. } else { 13. }))
+                                .line_height(px(line_h))
+                                .text_color(p.text)
+                                .line_clamp(lines)
+                                .text_ellipsis()
+                                .child(self.text(text.clone())),
+                        );
+                        if let Some(wave) = wave {
+                            surface = surface.child(
+                                self.wave_bars(wave, wave_h, if big { 3. } else { 2. })
+                                    .mt_auto(),
+                            );
+                        }
+                        surface.into_any_element()
+                    }
+                    (None, Some(wave)) => surface
+                        .child(
+                            self.wave_bars(
+                                wave,
+                                (height * 0.42).round(),
+                                if big { 4. } else { 3. },
+                            )
+                            .my_auto(),
+                        )
+                        .when_some(item.duration_ms, |el, ms| {
+                            el.child(self.length_badge(ms, false))
+                        })
+                        .into_any_element(),
+                    (None, None) => title_first(surface),
+                }
+            }
+            ItemKind::Recording | ItemKind::Screenshot => match wave {
+                Some(wave) => surface
+                    .items_center()
+                    .justify_center()
+                    .child(self.wave_bars(wave, (height * 0.42).round(), if big { 4. } else { 3. }))
+                    .when_some(item.duration_ms, |el, ms| {
+                        el.child(self.length_badge(ms, false))
+                    })
+                    .into_any_element(),
+                None => title_first(surface),
+            },
+        }
     }
 
-    /// The list row's leading picture, always 64 x 40 so titles line up.
+    /// One size for every row so titles line up.
     fn lead(&self, item: &Item) -> AnyElement {
-        const W: f32 = 64.;
-        const H: f32 = 40.;
+        let p = self.palette;
+        let (w, h, radius) = (style::LEAD_WIDTH, style::LEAD_HEIGHT, style::LEAD_RADIUS);
         if let Some(well) = item
             .thumbnail
             .as_deref()
-            .and_then(|path| self.picture(item, path, H, 7.))
+            .and_then(|path| self.picture(item, path, h, radius))
         {
-            return well.w(px(W)).flex_shrink_0().into_any_element();
+            return well.w(px(w)).flex_shrink_0().into_any_element();
         }
-        // Holds the row's place while an app icon is looked up.
-        let slot = div().w(px(W)).h(px(H)).flex_shrink_0();
-        match (item.kind, &item.event, item.meeting_app) {
-            // The row's day heading and time already say when: the app says
-            // where. (A calendar leaf here cost two text runs per row while
-            // scrolling; cards and Up next keep it.)
-            // One element per row, no wrapper: as cheap as the glyph tile.
-            (ItemKind::Meeting, _, Some(app)) => match self.app_icons.get(app) {
-                app_icons::Icon::Image(image) => img(image)
-                    .size(px(34.))
-                    .mx(px((W - 34.) / 2.))
-                    .my(px((H - 34.) / 2.))
-                    .flex_shrink_0()
-                    .into_any_element(),
-                app_icons::Icon::Pending => slot.into_any_element(),
-                app_icons::Icon::Missing => self.glyph_tile(ItemKind::Meeting, W, H),
-            },
-            (ItemKind::Meeting, Some(_), None) => {
-                self.glyph_tile_with("icons/calendar.svg", ItemKind::Meeting, W, H)
-            }
-            (kind, _, _) => self.glyph_tile(kind, W, H),
+        let well = div()
+            .w(px(w))
+            .h(px(h))
+            .flex_shrink_0()
+            .rounded(px(radius))
+            .overflow_hidden()
+            .bg(style::well(p.dark))
+            .border_1()
+            .border_color(p.hairline);
+        if let Some(wave) = self.wave(item) {
+            let (iw, ih) = (w - 12., (h * 0.7).round());
+            let image =
+                self.wave_images
+                    .borrow_mut()
+                    .get(&wave, p.dark, (iw, ih), style::wave_ink(&p));
+            return well
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(img(image).w(px(iw)).h(px(ih)))
+                .into_any_element();
         }
+        let (text, weight) = match (&item.excerpt, item.kind) {
+            (Some(text), ItemKind::Note) => (text.clone(), FontWeight::NORMAL),
+            _ => (item.title.clone(), FontWeight::SEMIBOLD),
+        };
+        well.px(px(6.))
+            .py(px(5.))
+            .text_size(px(7.))
+            .line_height(px(9.))
+            .font_weight(weight)
+            .text_color(Hsla { a: 0.72, ..p.text })
+            .line_clamp(3)
+            .text_ellipsis()
+            .child(self.text(text))
+            .into_any_element()
     }
 
-    fn card(&self, index: u32, thumb_h: f32, cx: &mut Context<Self>) -> AnyElement {
+    /// Flat on purpose: half of a magazine page's first frame is Taffy
+    /// layout, so each card is its media, its title and its meta line.
+    fn card(&self, index: u32, width: f32, thumb_h: f32, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let item = &self.scan.items[index as usize];
         let today = today();
+        let title = div()
+            .truncate()
+            .text_size(px(13.5))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(p.text)
+            .child(self.text(item.title.clone()));
+        let title = if item.pinned {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(title.flex_1().min_w_0())
+                .child(
+                    svg()
+                        .path("icons/pin.svg")
+                        .size(px(11.))
+                        .text_color(p.faint),
+                )
+        } else {
+            title
+        };
         div()
             .id(SharedString::from(format!("card-{index}")))
+            .w(px(width))
+            .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap(px(8.))
             .p(px(6.))
             .rounded(px(style::CARD_RADIUS + 4.))
             .cursor_pointer()
             .role(gpui::Role::Button)
             .aria_label(SharedString::from(item.title.clone()))
             .hover(move |s| s.bg(p.hover))
-            .child(self.thumb(item, thumb_h, style::CARD_RADIUS))
+            .child(self.thumb(item, thumb_h, style::MEDIA_RADIUS))
+            .child(title.mt(px(8.)).px(px(4.)))
             .child(
                 div()
+                    .mt(px(2.))
                     .px(px(4.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(p.text)
-                                    .child(self.text(item.title.clone())),
-                            )
-                            .when(item.pinned, |el| {
-                                el.child(
-                                    svg()
-                                        .path("icons/pin.svg")
-                                        .size(px(11.))
-                                        .text_color(p.faint),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(p.muted)
-                            .child(self.text(format!(
-                                "{}  ·  {}",
-                                when_line(item, today),
-                                meta_line(item)
-                            ))),
-                    ),
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(p.muted)
+                    .child(self.text(format!(
+                        "{}  ·  {}",
+                        when_line(item, today),
+                        meta_line(item)
+                    ))),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.open_item(index, cx)))
             .into_any_element()
@@ -2123,12 +2175,12 @@ impl LibraryWindow {
 
     fn heading(&self, text: impl Into<SharedString>) -> gpui::Div {
         div()
-            .mt(px(26.))
-            .mb(px(10.))
+            .mt(px(24.))
+            .mb(px(8.))
             .px(px(4.))
-            .text_size(px(15.))
+            .text_size(px(13.))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(self.palette.text)
+            .text_color(self.palette.muted)
             .child(self.text(text))
     }
 
@@ -2142,7 +2194,7 @@ impl LibraryWindow {
         } else {
             format::clock(format::local(next.start))
         };
-        let tint = style::kind_tint(ItemKind::Meeting, dark);
+        let tint = p.accent;
         Some(
             div()
                 .flex()
@@ -2252,12 +2304,7 @@ impl LibraryWindow {
                     .flex()
                     .when(stacked, |el| el.flex_col())
                     .gap(px(style::GRID_GAP))
-                    .child(
-                        div()
-                            .w(px(hero_w))
-                            .flex_shrink_0()
-                            .child(self.card(hero, hero_h, cx)),
-                    )
+                    .child(self.card(hero, hero_w, hero_h, cx))
                     .child(
                         div()
                             .flex_1()
@@ -2325,7 +2372,6 @@ impl LibraryWindow {
                     .gap(px(8.))
                     .children(pinned.iter().map(|&i| {
                         let item = &self.scan.items[i as usize];
-                        let tint = style::kind_tint(item.kind, p.dark);
                         div()
                             .id(SharedString::from(format!("pin-{i}")))
                             .h(px(32.))
@@ -2340,14 +2386,11 @@ impl LibraryWindow {
                             .shadow(style::capsule_shadow(p.dark))
                             .cursor_pointer()
                             .text_size(px(13.))
-                            .child(match item.meeting_app {
-                                Some(app) => self.app_icon(app, 16.),
-                                None => svg()
-                                    .path(kind_glyph(item.kind))
-                                    .size(px(13.))
-                                    .text_color(tint)
-                                    .into_any_element(),
-                            })
+                            .child(
+                                item.meeting_app
+                                    .and_then(|app| self.app_icon(app, 16.))
+                                    .unwrap_or_else(|| self.kind_mark(item.kind, 13.)),
+                            )
                             .child(self.text(item.title.clone()))
                             .on_click(cx.listener(move |this, _, _, cx| this.open_item(i, cx)))
                     })),
@@ -2384,23 +2427,25 @@ impl LibraryWindow {
 
     fn grid_rows(&self, indexes: &[u32], width: f32, cx: &mut Context<Self>) -> AnyElement {
         let cols = self.columns(width);
-        let tile = (width - style::GRID_GAP * (cols as f32 - 1.)) / cols as f32;
         div()
             .flex()
             .flex_col()
             .gap(px(style::GRID_GAP))
-            .children(indexes.chunks(cols).map(|row| {
-                div()
-                    .flex()
-                    .gap(px(style::GRID_GAP))
-                    .children(row.iter().map(|&i| {
-                        div()
-                            .w(px(tile))
-                            .flex_shrink_0()
-                            .child(self.card(i, tile * 0.6, cx))
-                    }))
-            }))
+            .children(
+                indexes
+                    .chunks(cols)
+                    .map(|row| self.grid_row(row, width, cx)),
+            )
             .into_any_element()
+    }
+
+    fn grid_row(&self, row: &[u32], width: f32, cx: &mut Context<Self>) -> gpui::Div {
+        let cols = self.columns(width);
+        let tile = (width - style::GRID_GAP * (cols as f32 - 1.)) / cols as f32;
+        div()
+            .flex()
+            .gap(px(style::GRID_GAP))
+            .children(row.iter().map(|&i| self.card(i, tile, tile * 0.6, cx)))
     }
 
     fn render_collection(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2445,9 +2490,8 @@ impl LibraryWindow {
                             .map(|r| {
                                 let start = r * cols;
                                 let end = (start + cols).min(visible.len());
-                                div()
+                                this.grid_row(&visible[start..end], width, cx)
                                     .pb(px(style::GRID_GAP))
-                                    .child(this.grid_rows(&visible[start..end], width, cx))
                                     .into_any_element()
                             })
                             .collect::<Vec<_>>();
@@ -2824,19 +2868,13 @@ impl LibraryWindow {
             .iter()
             .map(|&i| {
                 let item = &self.scan.items[i as usize];
-                let tint = style::kind_tint(item.kind, dark);
                 div()
                     .flex()
                     .items_center()
                     .gap(px(8.))
                     .h(px(26.))
                     .text_size(px(12.5))
-                    .child(
-                        svg()
-                            .path(kind_glyph(item.kind))
-                            .size(px(13.))
-                            .text_color(tint),
-                    )
+                    .child(self.kind_mark(item.kind, 13.))
                     .child(
                         div()
                             .flex_1()
@@ -3088,7 +3126,8 @@ impl Render for LibraryWindow {
         // Pictures this frame asked for start decoding now; pictures that
         // left the cache leave the GPU atlas too.
         self.load_thumbs(cx);
-        for image in self.thumbs.take_evicted() {
+        let waves = self.wave_images.get_mut().take_evicted();
+        for image in self.thumbs.take_evicted().into_iter().chain(waves) {
             window.drop_image(image).ok();
         }
         div()

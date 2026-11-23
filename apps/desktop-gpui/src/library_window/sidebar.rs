@@ -16,7 +16,6 @@ pub enum Row {
     Nav {
         id: SharedString,
         icon: &'static str,
-        tint: Option<Hsla>,
         label: SharedString,
         count: Option<usize>,
         section: Section,
@@ -93,7 +92,6 @@ impl Render for SidebarView {
                 Row::Nav {
                     id,
                     icon,
-                    tint,
                     label,
                     count,
                     section,
@@ -124,7 +122,7 @@ impl Render for SidebarView {
                                     .path(icon)
                                     .size(px(15.))
                                     .flex_shrink_0()
-                                    .text_color(tint.unwrap_or(p.muted)),
+                                    .text_color(p.muted),
                             )
                             .child(div().flex_1().min_w_0().truncate().child(label))
                             .children(count.filter(|c| *c > 0).map(|c| {
