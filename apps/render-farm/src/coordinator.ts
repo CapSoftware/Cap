@@ -8,6 +8,15 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Engine } from "./engine";
 import { initSegment, playlist } from "./fmp4";
+import {
+	buildPrefix,
+	PREFIX_VERSION,
+	parseFragmentedInit,
+	prefixProvenance,
+	remuxBlocker,
+	scanFragments,
+	UnsupportedSource,
+} from "./fragment-index";
 import { checkSegmentReport, segmentCuts, segmentKey } from "./hls";
 import { type FileSpec, ProjectCache } from "./materialize";
 import {
@@ -24,6 +33,12 @@ import {
 	MIN_RANGE_PARTS,
 	planChunkBoundaries,
 } from "./planning";
+import {
+	builtinPath,
+	builtinSize,
+	prepareRecording,
+	prepareSupport,
+} from "./prepare";
 import { ProbeEngine } from "./probe-engine";
 import {
 	type AudioResultMeta,
@@ -83,6 +98,15 @@ const PACKET = 1024;
 const probeEngine = new ProbeEngine(
 	() => new Engine(ENGINE_BIN, {}, "coordinator-engine"),
 );
+
+// Advertised only once this engine can prepare projects, so the web app keeps
+// preparing on editor workers until a farm build that can is running.
+let prepareCapability: Awaited<ReturnType<typeof prepareSupport>> | null = null;
+prepareSupport((op, body) => probeEngine.request(body, op))
+	.then((capability) => {
+		prepareCapability = capability;
+	})
+	.catch((error) => console.warn(`project preparation unavailable: ${error}`));
 
 // Audio sections (Studio Sound) are CPU work. These lanes render them on the
 // coordinator's cores, pulling from the same queue as workers' audio lanes.
@@ -240,6 +264,8 @@ type Worker = {
 	service: string;
 	audioSlots?: number;
 	usage?: Usage | null;
+	features?: string[];
+	kinds?: string[] | "any";
 };
 
 type Section = {
@@ -313,6 +339,7 @@ type Job = {
 	headerStashes?: Map<string, Promise<Uint8Array>>;
 	/** Summary frozen when the job ends; the job's media data is released then. */
 	final?: ReturnType<typeof summary>;
+	unservableSince?: number;
 	hls?: HlsState;
 	id: string;
 	request: JobRequest;
@@ -425,6 +452,7 @@ type Manifest = {
 		key?: string;
 		/** Transcode this source to `key` first (see TranscodeTask). */
 		transcodeFrom?: string;
+		builtin?: string;
 	}[];
 };
 
@@ -561,6 +589,7 @@ type SourceIndex = {
 			index: TrackIndex;
 			size: number;
 			key: string;
+			prefix?: { key: string; size: number };
 		}
 	>;
 };
@@ -615,6 +644,14 @@ function checkManifest(
 		if (file.transcodeFrom !== undefined && file.key === undefined) {
 			throw new Error(`manifest transcode for ${file.path} names no key`);
 		}
+		if (
+			file.builtin !== undefined &&
+			(file.key !== undefined ||
+				file.transcodeFrom !== undefined ||
+				builtinPath(file.builtin) === null)
+		) {
+			throw new Error(`manifest built-in for ${file.path} is invalid`);
+		}
 	}
 }
 
@@ -623,8 +660,17 @@ async function sourceIndex(
 	sourceRoot?: string,
 	onManifest?: (manifest: Manifest) => void,
 ): Promise<SourceIndex> {
-	const cached =
+	let cached =
 		process.env.RF_INDEX_CACHE !== "0" ? sourceIndexes.get(prefix) : undefined;
+	// An index of in-place sources is only usable while every worker is.
+	if (
+		cached &&
+		!workersTakePrefixes() &&
+		[...cached.mediaMeta.values()].some((meta) => meta.prefix)
+	) {
+		sourceIndexes.delete(prefix);
+		cached = undefined;
+	}
 	if (cached) {
 		checkManifest(cached.manifest, prefix, sourceRoot);
 		onManifest?.(cached.manifest);
@@ -636,6 +682,9 @@ async function sourceIndex(
 		),
 	) as Manifest;
 	checkManifest(manifest, prefix, sourceRoot);
+	for (const file of manifest.files) {
+		if (file.builtin !== undefined) file.size = builtinSize(file.builtin).size;
+	}
 	onManifest?.(manifest);
 	const keyOf = (file: { path: string; key?: string }) =>
 		file.key ?? `${prefix}/${file.path}`;
@@ -654,9 +703,16 @@ async function sourceIndex(
 		SOURCE_LIMITS,
 	);
 	if (sourceBounds) throw new Error(sourceBounds);
+	const placed = new Map<string, Placement>();
 	await Promise.all(
 		manifest.files.map(async (file) => {
 			if (file.transcodeFrom === undefined) return;
+			const placement = await placeSource(file.transcodeFrom, keyOf(file));
+			if (placement) {
+				placed.set(file.path, placement);
+				file.size = placement.prefix.size + placement.sourceSize;
+				return;
+			}
 			file.size = await awaitTranscode(
 				await ensureTranscode(file.transcodeFrom, keyOf(file)),
 			);
@@ -676,6 +732,18 @@ async function sourceIndex(
 		...manifest.files
 			.filter((file) => file.path.endsWith(".mp4"))
 			.map(async (file) => {
+				const placement = placed.get(file.path);
+				if (placement) {
+					mediaMeta.set(file.path, {
+						head: [0, placement.prefix.size],
+						moov: [0, placement.prefix.size],
+						index: placement.index,
+						size: file.size,
+						key: placement.source,
+						prefix: placement.prefix,
+					});
+					return;
+				}
 				const meta = await withIndexRead(() =>
 					mp4MetaRanges(keyOf(file), file.size),
 				);
@@ -721,25 +789,65 @@ function baseFileSpecs(
 			key: keyOf(file),
 			size: file.size,
 			ranges: "all" as const,
+			...(file.builtin !== undefined
+				? { local: builtinSize(file.builtin).path }
+				: {}),
 		})),
-		...audioFiles.map((file) => ({
-			path: file.path,
-			key: keyOf(file),
-			size: file.size,
-			ranges:
-				audioMode === "all"
-					? ("all" as const)
-					: mergeRanges([
-							[0, Math.min(file.size, 256 * 1024)],
-							[Math.max(0, file.size - 256 * 1024), file.size],
-						]),
-		})),
+		...audioFiles.map((file) =>
+			file.builtin !== undefined
+				? {
+						path: file.path,
+						key: "",
+						size: file.size,
+						ranges: "all" as const,
+						local: builtinSize(file.builtin).path,
+					}
+				: {
+						path: file.path,
+						key: keyOf(file),
+						size: file.size,
+						ranges:
+							audioMode === "all"
+								? ("all" as const)
+								: mergeRanges([
+										[0, Math.min(file.size, 256 * 1024)],
+										[Math.max(0, file.size - 256 * 1024), file.size],
+									]),
+					},
+		),
 	];
 }
 
 async function planJob(job: Job) {
 	const request = job.request;
 	const prefix = request.recording.replace(/\/$/, "");
+	if (request.prepare) {
+		await prepareRecording(
+			prefix,
+			request.prepare,
+			join(WORK_DIR, `${job.id}-prepare`),
+			{
+				getBounded,
+				put: (key, body, contentType) => s3.put(key, body, contentType),
+				presignGet: (key) => s3.presignFresh("GET", key, 6 * 3600),
+				inScope: (key) =>
+					isKey(key) &&
+					(key.startsWith(`${prefix}/`) ||
+						(request.sourceRoot !== undefined &&
+							key.startsWith(request.sourceRoot))),
+				engine: (op, body) => probeEngine.request(body, op),
+				onManifest: (manifest) => {
+					checkManifest(manifest as Manifest, prefix, request.sourceRoot);
+					for (const file of (manifest as Manifest).files) {
+						if (file.transcodeFrom !== undefined && file.key !== undefined) {
+							warmSource(file.transcodeFrom, file.key);
+						}
+					}
+				},
+			},
+		);
+		job.t.prepared = now();
+	}
 	const probeDir = join(WORK_DIR, job.id);
 	mkdirSync(probeDir, { recursive: true });
 	const cache = new ProjectCache(s3, probeDir);
@@ -772,6 +880,7 @@ async function planJob(job: Job) {
 			key: meta.key,
 			size: meta.size,
 			ranges: mergeRanges([meta.head, meta.moov, ...extra]),
+			...(meta.prefix ? { prefix: meta.prefix } : {}),
 		};
 	};
 
@@ -1468,7 +1577,10 @@ function enqueue(job: Job, task: Task, duplicateOf?: string) {
 	queue.push(state);
 }
 
-function pickQueued(accepts: (kind: string) => boolean) {
+function pickQueued(
+	accepts: (kind: string) => boolean,
+	canTake?: (state: TaskState) => boolean,
+) {
 	for (const state of [...queue]) {
 		const job = jobs.get(state.task.jobId);
 		if (job && taskAccepted(job, state.task)) retireTask(state);
@@ -1491,6 +1603,7 @@ function pickQueued(accepts: (kind: string) => boolean) {
 		headChunks: HEAD_CHUNKS,
 		fifo: process.env.RF_SCHEDULER === "fifo",
 		now: Date.now(),
+		canTake,
 	});
 }
 
@@ -1556,6 +1669,188 @@ function requeue(state: TaskState, reason: string) {
 	state.progress = undefined;
 	state.reattach = false;
 	if (!queue.includes(state)) queue.unshift(state);
+}
+
+const FRAGMENT_INDEX = process.env.RF_FRAGMENT_INDEX !== "0";
+
+type Placement = {
+	source: string;
+	sourceSize: number;
+	prefix: { key: string; size: number };
+	index: TrackIndex;
+};
+
+const placements = new Map<string, Promise<Placement | null>>();
+const PLACEMENT_CACHE_ENTRIES = 64;
+
+const prefixKeyFor = (output: string) =>
+	`${output.replace(/\.mp4$/, "")}.prefix-v${PREFIX_VERSION}`;
+
+// A worker from before prefixed files would read their ranges from the raw
+// recording at the wrong offsets.
+function taskNeeds(task: Task): string[] {
+	return "files" in task && task.files.some((file) => file.prefix)
+		? ["prefix"]
+		: [];
+}
+
+function canRun(
+	kinds: readonly string[] | "any" | undefined,
+	features: readonly string[] | undefined,
+	task: Task,
+) {
+	return (
+		kinds !== undefined &&
+		(kinds === "any" || kinds.includes(task.kind)) &&
+		taskNeeds(task).every((need) => features?.includes(need))
+	);
+}
+
+// Long enough for a rolling restart to bring a capable worker back.
+const UNSERVABLE_GRACE_MS = Number(
+	process.env.RF_UNSERVABLE_GRACE_MS ?? 60_000,
+);
+
+// The fleet can be rolled back under a queued job; failing it after a grace
+// period beats waiting for the stall timeout. Its retry plans with the
+// transcode, since placements need every live worker to take prefixes.
+function failUnservable(job: Job) {
+	const cutoff = Date.now() - 30_000;
+	const live = [...workers.values()].filter(
+		(worker) => worker.lastSeen >= cutoff,
+	);
+	const stuck = [...job.tasks.values()].some(
+		(state) =>
+			state.state === "queued" &&
+			taskNeeds(state.task).length > 0 &&
+			!live.some((worker) => canRun(worker.kinds, worker.features, state.task)),
+	);
+	if (!stuck) {
+		job.unservableSince = undefined;
+		return;
+	}
+	job.unservableSince ??= Date.now();
+	if (Date.now() - job.unservableSince >= UNSERVABLE_GRACE_MS) {
+		failJob(
+			job,
+			new Error("no live worker can read this job's in-place sources"),
+		);
+	}
+}
+
+function workersTakePrefixes() {
+	const cutoff = Date.now() - 30_000;
+	let live = 0;
+	for (const worker of workers.values()) {
+		if (worker.lastSeen < cutoff) continue;
+		if (!worker.features?.includes("prefix")) return false;
+		live++;
+	}
+	return live > 0;
+}
+
+function placeSource(source: string, output: string) {
+	if (!FRAGMENT_INDEX || !workersTakePrefixes()) return Promise.resolve(null);
+	const existing = placements.get(output);
+	if (existing) {
+		placements.delete(output);
+		placements.set(output, existing);
+		return existing;
+	}
+	const pending = buildPlacement(source, output).catch((error) => {
+		// A source that can't be placed stays that way; a failed read may not.
+		if (!(error instanceof UnsupportedSource)) placements.delete(output);
+		console.warn(`placing ${source}: ${String(error)}`);
+		return null;
+	});
+	placements.set(output, pending);
+	if (placements.size > PLACEMENT_CACHE_ENTRIES) {
+		placements.delete(placements.keys().next().value as string);
+	}
+	return pending;
+}
+
+function warmSource(source: string, output: string) {
+	void placeSource(source, output).then((placement) => {
+		if (!placement) void ensureTranscode(source, output);
+	});
+}
+
+async function buildPlacement(
+	source: string,
+	output: string,
+): Promise<Placement | null> {
+	const started = performance.now();
+	const prefixKey = prefixKeyFor(output);
+	const [sourceSize, storedPrefix, transcoded] = await Promise.all([
+		transcodeSourceSize(source),
+		s3.head(prefixKey),
+		storedTranscodeSize(output),
+	]);
+	if (storedPrefix) {
+		if (storedPrefix.size > SOURCE_LIMITS.moovBytes) {
+			throw new UnsupportedSource(`${prefixKey} is ${storedPrefix.size} bytes`);
+		}
+		const bytes = await s3.get(prefixKey);
+		const provenance = prefixProvenance(bytes);
+		const where = locateMoov(bytes, bytes.byteLength);
+		if (
+			provenance?.version === PREFIX_VERSION &&
+			provenance.source === source &&
+			provenance.size === sourceSize &&
+			where &&
+			"start" in where &&
+			where.start !== undefined
+		) {
+			return {
+				source,
+				sourceSize,
+				prefix: { key: prefixKey, size: bytes.byteLength },
+				index: indexVideoTrack(
+					bytes.subarray(where.start, where.start + where.size),
+				),
+			};
+		}
+	}
+	// Already remuxed: reading that is as quick as building a prefix.
+	if (transcoded !== null) return null;
+	const headEnd = Math.min(sourceSize, 128 * 1024);
+	const head = await s3.getRange(source, 0, headEnd - 1);
+	const where = locateMoov(head, sourceSize);
+	if (!where || !("start" in where) || where.start === undefined) {
+		throw new UnsupportedSource("no moov up front");
+	}
+	if (where.size > SOURCE_LIMITS.moovBytes) {
+		throw new UnsupportedSource(`a ${where.size} byte moov`);
+	}
+	const moov =
+		where.start + where.size <= head.byteLength
+			? head.subarray(where.start, where.start + where.size)
+			: await s3.getRange(source, where.start, where.start + where.size - 1);
+	const init = parseFragmentedInit(moov, where.start);
+	if (!init) throw new UnsupportedSource("not fragmented");
+	const scan = await scanFragments(
+		(start, end) => s3.getRange(source, start, end),
+		sourceSize,
+		init,
+	);
+	const blocker = remuxBlocker(init, scan.samples);
+	if (blocker) throw new UnsupportedSource(blocker);
+	const { bytes, index } = buildPrefix(init, scan.samples, {
+		version: PREFIX_VERSION,
+		source,
+		size: sourceSize,
+	});
+	await s3.put(prefixKey, bytes, "application/octet-stream");
+	console.log(
+		`placed ${source}: ${scan.samples.count} frames in ${scan.fragments} fragments, ${scan.usedMfra ? "mfra" : "streamed"}, ${scan.requests} reads, ${(scan.bytes / 2 ** 20).toFixed(1)} MB read, ${bytes.byteLength} byte prefix, ${Math.round(performance.now() - started)} ms`,
+	);
+	return {
+		source,
+		sourceSize,
+		prefix: { key: prefixKey, size: bytes.byteLength },
+		index,
+	};
 }
 
 // -------------------------------------------------------------- transcodes ---
@@ -1750,12 +2045,18 @@ function dispatch() {
 			poller.resolve({ ...transcode.task, attempt: transcode.attempts });
 			continue;
 		}
-		const next = pickQueued(accepts);
+		const canTake = (candidate: TaskState) =>
+			canRun(
+				poller.kinds ?? "any",
+				workers.get(poller.worker)?.features,
+				candidate.task,
+			);
+		const next = pickQueued(accepts, canTake);
 		let state: TaskState | undefined;
 		if (next >= 0) {
 			state = queue.splice(next, 1)[0];
 		} else if (accepts("video") && !poller.prefetch) {
-			state = straggler();
+			state = straggler(canTake);
 		}
 		if (!state) {
 			p++;
@@ -1800,7 +2101,9 @@ function dispatch() {
  */
 const FROZEN_MS = 5_000;
 
-function straggler(): TaskState | undefined {
+function straggler(
+	canTake: (state: TaskState) => boolean = () => true,
+): TaskState | undefined {
 	let best: { state: TaskState; gain: number } | undefined;
 	for (const job of jobs.values()) {
 		if (job.status !== "rendering" || job.request.duplicateStragglers === false)
@@ -1827,6 +2130,7 @@ function straggler(): TaskState | undefined {
 				state.state !== "running" ||
 				state.duplicated ||
 				state.duplicateOf ||
+				!canTake(state) ||
 				(state.prefetched && !state.progress) ||
 				job.videoResults.has(state.task.chunk)
 			) {
@@ -1944,6 +2248,8 @@ setInterval(() => {
 			);
 			continue;
 		}
+		failUnservable(job);
+		if (job.status !== "rendering") continue;
 		for (const state of job.tasks.values()) {
 			if (
 				state.state !== "running" ||
@@ -2207,6 +2513,12 @@ async function acceptVideo(job: Job, state: TaskState, result: VideoResult) {
 				)
 			: "result is not from this chunk's dispatch";
 	if (problem) throw new Error(`chunk ${chunk}: ${problem}`);
+	// A worker that lost its stash upload must not be credited with the chunk:
+	// assembly could only fail later, with nothing left to re-render it.
+	const stored = await journalS3.head(result.stash.key);
+	if (stored?.size !== result.stash.bytes) {
+		throw new Error(`chunk ${chunk}: stash ${result.stash.key} is not stored`);
+	}
 	await journalPut(
 		journalKey(job.id, `v/${chunk}.json`),
 		JSON.stringify(result),
@@ -2763,7 +3075,11 @@ Bun.serve({
 	async fetch(request) {
 		const url = new URL(request.url);
 		if (url.pathname === "/health")
-			return Response.json({ ok: true, ...liveSlots() });
+			return Response.json({
+				ok: true,
+				...liveSlots(),
+				...(prepareCapability ? { prepare: prepareCapability } : {}),
+			});
 		if (!authorized(request))
 			return new Response("unauthorized", { status: 401 });
 
@@ -2777,6 +3093,7 @@ Bun.serve({
 				audioSlots?: number;
 				prefetch?: boolean;
 				draining?: boolean;
+				features?: string[];
 			};
 			const worker = workers.get(body.worker) ?? {
 				id: body.worker,
@@ -2788,6 +3105,11 @@ Bun.serve({
 			worker.lastSeen = Date.now();
 			worker.slots = body.slots;
 			worker.audioSlots = body.audioSlots ?? 0;
+			worker.features = body.features ?? [];
+			worker.kinds =
+				!body.kinds || worker.kinds === "any"
+					? "any"
+					: [...new Set([...(worker.kinds ?? []), ...body.kinds])];
 			supersede(body.worker);
 			workers.set(body.worker, worker);
 			if (body.draining)
@@ -2961,6 +3283,16 @@ Bun.serve({
 					"source and output must be keys inside sourceRoot, output an .mp4",
 					{ status: 400 },
 				);
+			}
+			const placement = await placeSource(source, output);
+			if (placement) {
+				return Response.json({
+					status: "ready",
+					source,
+					output,
+					placed: true,
+					size: placement.prefix.size + placement.sourceSize,
+				});
 			}
 			return Response.json(
 				transcodeSummary(await ensureTranscode(source, output)),

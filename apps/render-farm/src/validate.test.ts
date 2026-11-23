@@ -68,6 +68,23 @@ describe("checkManifestBounds", () => {
 		).toBeNull();
 	});
 
+	test("built-in assets are sized from the image", () => {
+		expect(
+			checkManifestBounds(
+				{
+					files: [
+						file("recording-meta.json", 50),
+						{
+							path: "assets/backgrounds/macOS/sequoia-dark.jpg",
+							builtin: "backgrounds/macOS/sequoia-dark.jpg",
+						},
+					],
+				},
+				limits,
+			),
+		).toBeNull();
+	});
+
 	test.each([
 		[{}, "no files list"],
 		[
@@ -81,6 +98,7 @@ describe("checkManifestBounds", () => {
 		[{ files: [file("cursors/0.png", 101)] }, "cursors/0.png is 101 bytes"],
 		[{ files: [file("display.mp4", -1)] }, "non-negative integer"],
 		[{ files: [file("display.mp4", Number.NaN)] }, "non-negative integer"],
+		[{ files: [{ path: "a.jpg", builtin: "x", size: -1 }] }, "non-negative"],
 		[{ files: [{ path: "", size: 1 }] }, "manifest paths"],
 		[{ files: [{ path: "a.json", size: 1, key: 5 }] }, "manifest key"],
 		[{ files: [null] }, "not an object"],

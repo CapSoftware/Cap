@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	MIN_PART,
@@ -15,6 +16,7 @@ function harness(
 	options: {
 		presignGate?: Promise<void>;
 		probeStalls?: boolean;
+		rangeGates?: Promise<void>[];
 		stashFails?: boolean;
 	} = {},
 ) {
@@ -22,6 +24,7 @@ function harness(
 	const killed: string[] = [];
 	const removed: string[] = [];
 	const intervals: (() => void)[] = [];
+	const posts: { path: string; body: unknown }[] = [];
 	let uploads = 0;
 	const source = readFileSync(
 		new URL("./worker.ts", import.meta.url),
@@ -33,6 +36,18 @@ function harness(
 		...transcode,
 		processCpuSeconds: async () => 0,
 		sampleThreads: async () => ({}),
+		downloadSource: (
+			s3: transcode.RangeSource,
+			key: string,
+			_path: string,
+			options: { signal?: AbortSignal; onProgress?: (bytes: number) => void },
+		) =>
+			transcode.downloadSource(
+				s3,
+				key,
+				join(mkdtempSync(join(tmpdir(), "rf-worker-")), "source"),
+				{ ...options, piece: 4, concurrency: 1 },
+			),
 		availableParallelism: () => 1,
 		hostname: () => "worker-test",
 		mkdirSync: () => {},
@@ -49,9 +64,13 @@ function harness(
 			close() {}
 		},
 		S3: class {
-			async presignFresh() {
+			async head() {
 				await options.presignGate;
-				return "https://media.test/source";
+				return { size: options.rangeGates ? options.rangeGates.length * 4 : 4 };
+			}
+			async getRange() {
+				await options.rangeGates?.shift();
+				return new Uint8Array(4);
 			}
 			async uploadFile() {
 				uploads++;
@@ -71,6 +90,13 @@ function harness(
 			on: () => {},
 		},
 		setInterval: (callback: () => void) => intervals.push(callback),
+		fetch: async (url: string, init?: { body?: string }) => {
+			posts.push({
+				path: new URL(url).pathname,
+				body: init?.body ? JSON.parse(init.body) : null,
+			});
+			return Response.json({ finished: [], cancel: [] });
+		},
 		console: { log() {}, warn() {}, error() {} },
 		Bun: {
 			spawn: ([command]: string[]) => {
@@ -111,7 +137,7 @@ function harness(
 	const compiled = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
 	const worker = new Function(
 		...Object.keys(deps),
-		`${compiled}\nreturn {runVideo, runTranscode, cancel, busy, progress, transcoders, engineEnv, uploadLayout};`,
+		`${compiled}\nreturn {runVideo, runTranscode, cancel, busy, progress, transcoders, engineEnv, uploadLayout, finishInBackground, finishing};`,
 	)(...Object.values(deps)) as {
 		runVideo: (
 			task: VideoTask,
@@ -136,6 +162,13 @@ function harness(
 			segments: { bytes: Uint8Array }[],
 			bytes: number,
 		) => Promise<unknown>;
+		finishInBackground: (
+			slot: number,
+			task: unknown,
+			since: number,
+			done: Promise<unknown>,
+		) => Promise<void>;
+		finishing: Map<string, unknown>;
 	};
 	return {
 		...worker,
@@ -143,6 +176,7 @@ function harness(
 		killed,
 		removed,
 		intervals,
+		posts,
 		uploads: () => uploads,
 	};
 }
@@ -155,12 +189,16 @@ const task: TranscodeTask = {
 	keyframeSeconds: 1,
 };
 
+async function until(condition: () => boolean) {
+	for (let i = 0; i < 200 && !condition(); i++) await Bun.sleep(5);
+}
+
 describe("transcode cancellation", () => {
 	test("cancelling a stalled probe kills it and prevents the encoder from starting", async () => {
 		const h = harness();
 		h.busy.set(0, task);
 		const pending = h.runTranscode(task, 0);
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await until(() => h.spawned.length > 0);
 		expect(h.spawned).toEqual(["ffprobe"]);
 		h.cancel([task.taskId]);
 		await expect(pending).rejects.toThrow("transcode cancelled");
@@ -175,7 +213,7 @@ describe("transcode cancellation", () => {
 	test("the watchdog releases a stalled probe without waiting for cancellation", async () => {
 		const h = harness();
 		const pending = h.runTranscode(task, 0);
-		for (let i = 0; i < 20; i++) await Promise.resolve();
+		await until(() => h.spawned.length > 0);
 		const progress = h.progress.get(0);
 		if (!progress) throw new Error("missing progress");
 		progress.lastProgressAt = 0;
@@ -183,6 +221,28 @@ describe("transcode cancellation", () => {
 		await expect(pending).rejects.toThrow("transcode cancelled");
 		expect(h.killed).toEqual(["ffprobe:SIGKILL"]);
 		expect(h.spawned).toEqual(["ffprobe"]);
+		expect(h.transcoders.size).toBe(0);
+	});
+
+	test("a download that keeps landing ranges is not taken for a stalled transcode", async () => {
+		const gates = [0, 1, 2].map(() => Promise.withResolvers<void>());
+		const h = harness({ rangeGates: gates.map((gate) => gate.promise) });
+		const pending = h.runTranscode(task, 0);
+		await until(() => h.progress.has(0));
+		const progress = h.progress.get(0);
+		if (!progress) throw new Error("missing progress");
+		for (const gate of gates.slice(0, 2)) {
+			progress.lastProgressAt = 0;
+			gate.resolve();
+			await until(() => progress.lastProgressAt > 0);
+			h.intervals[0]?.();
+			expect(h.transcoders.size).toBe(1);
+		}
+		progress.lastProgressAt = 0;
+		h.intervals[0]?.();
+		gates[2]?.resolve();
+		await expect(pending).rejects.toThrow("transcode cancelled");
+		expect(h.spawned).toEqual([]);
 		expect(h.transcoders.size).toBe(0);
 	});
 
@@ -288,4 +348,88 @@ test("a failed video render removes its temporary output", async () => {
 	expect(worker.removed).toHaveLength(1);
 	expect(worker.removed[0]).toStartWith("/work/job/v0-");
 	expect(worker.removed[0]).toEndWith(".h264");
+});
+
+describe("chunks finishing after their render", () => {
+	const chunk = (index: number) => ({
+		kind: "video",
+		taskId: `job:v${index}`,
+		jobId: "job",
+		chunk: index,
+		attempt: 1,
+		frames: [index * 100, index * 100 + 100],
+	});
+	const settled = (promise: Promise<unknown>) =>
+		Promise.race([promise.then(() => true), Bun.sleep(20).then(() => false)]);
+
+	test("free their slot and are reported as fully rendered", async () => {
+		const h = harness();
+		const audio = Promise.withResolvers<void>();
+		const since = Date.now() - 5000;
+		expect(
+			await settled(h.finishInBackground(0, chunk(1), since, audio.promise)),
+		).toBe(true);
+		for (const interval of h.intervals) await interval();
+		const heartbeat = h.posts.find((post) => post.path === "/heartbeat")
+			?.body as {
+			running: {
+				taskId: string;
+				frames: number;
+				total: number;
+				elapsedMs: number;
+			}[];
+		};
+		expect(heartbeat.running).toEqual([
+			expect.objectContaining({ taskId: "job:v1", frames: 100, total: 100 }),
+		]);
+		expect(heartbeat.running[0]?.elapsedMs).toBeGreaterThanOrEqual(5000);
+		audio.resolve();
+		await until(() => h.finishing.size === 0);
+		expect(h.finishing.size).toBe(0);
+	});
+
+	test("hold their slot once it has too many waiting", async () => {
+		const h = harness();
+		const audio = Array.from({ length: 9 }, () =>
+			Promise.withResolvers<void>(),
+		);
+		for (let index = 0; index < 8; index++) {
+			const done = audio[index] as PromiseWithResolvers<void>;
+			expect(
+				await settled(
+					h.finishInBackground(0, chunk(index), Date.now(), done.promise),
+				),
+			).toBe(true);
+		}
+		const ninth = h.finishInBackground(
+			0,
+			chunk(8),
+			Date.now(),
+			(audio[8] as PromiseWithResolvers<void>).promise,
+		);
+		expect(await settled(ninth)).toBe(false);
+		expect(
+			await settled(
+				h.finishInBackground(1, chunk(9), Date.now(), new Promise(() => {})),
+			),
+		).toBe(true);
+		(audio[3] as PromiseWithResolvers<void>).resolve();
+		expect(await settled(ninth)).toBe(true);
+	});
+
+	test("that fail are reported as failed", async () => {
+		const h = harness();
+		await h.finishInBackground(
+			0,
+			chunk(2),
+			Date.now(),
+			Promise.reject(new Error("audio -> 410")),
+		);
+		await until(() => h.finishing.size === 0);
+		expect(h.posts).toContainEqual({
+			path: "/tasks/job%3Av2/fail",
+			body: { worker: expect.any(String), attempt: 1, error: "audio -> 410" },
+		});
+		expect(h.finishing.size).toBe(0);
+	});
 });

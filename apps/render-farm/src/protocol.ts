@@ -149,4 +149,5 @@ export type JobRequest = {
 	callbackUrl?: string;
 	/** Opaque, echoed in callbacks. */
 	reference?: string;
+	prepare?: string;
 };

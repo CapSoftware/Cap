@@ -4,6 +4,8 @@
 !crates
 !vendor
 !apps/cli
+!apps/desktop-gpui/assets/backgrounds
+!apps/desktop-gpui/assets/music
 !apps/render-farm/src
 **/target
 **/node_modules

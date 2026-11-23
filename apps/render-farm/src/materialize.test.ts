@@ -170,3 +170,66 @@ describe("ProjectCache lifecycle", () => {
 		expect([...readFileSync(join(root, spec(1).path))]).toEqual([42]);
 	});
 });
+
+describe("prefixed files", () => {
+	test("are their prefix, then the source shifted by it", async () => {
+		const objects = new Map<string, Uint8Array>([
+			["prefix", Uint8Array.from({ length: 100 }, (_, index) => index + 1)],
+			[
+				"source",
+				Uint8Array.from({ length: 10 << 20 }, (_, index) => (index % 250) + 1),
+			],
+		]);
+		const reads: string[] = [];
+		const { cache, root } = harness(async (key, start, endInclusive) => {
+			reads.push(`${key}:${start}-${endInclusive}`);
+			return (objects.get(key) as Uint8Array).slice(start, endInclusive + 1);
+		}, 12);
+		const size = 100 + (10 << 20);
+		await cache.materialize([
+			{
+				path: "display.mp4",
+				key: "source",
+				size,
+				prefix: { key: "prefix", size: 100 },
+				ranges: [
+					[0, 100],
+					[100 + PIECE - 10, 100 + PIECE + 10],
+				],
+			},
+		]);
+		expect(reads.sort()).toEqual([
+			"prefix:0-99",
+			`source:0-${PIECE - 1}`,
+			`source:${PIECE}-${2 * PIECE - 1}`,
+		]);
+		const file = readFileSync(join(root, "display.mp4"));
+		expect(file.byteLength).toBe(size);
+		expect([...file.subarray(0, 100)]).toEqual([
+			...(objects.get("prefix") as Uint8Array),
+		]);
+		const source = objects.get("source") as Uint8Array;
+		for (const at of [0, 1, PIECE - 1, PIECE, 2 * PIECE - 1]) {
+			expect(file[100 + at]).toBe(source[at] as number);
+		}
+		expect(file[100 + (9 << 20)]).toBe(0);
+	});
+
+	test("are not fetched once the cache is closed", async () => {
+		const { cache } = harness(async () => {
+			throw new Error("Unexpected S3 request");
+		});
+		cache.close();
+		await expect(
+			cache.materialize([
+				{
+					path: "display.mp4",
+					key: "source",
+					size: 200,
+					prefix: { key: "prefix", size: 100 },
+					ranges: [[0, 200]],
+				},
+			]),
+		).rejects.toThrow("closed");
+	});
+});

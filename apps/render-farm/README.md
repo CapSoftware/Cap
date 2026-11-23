@@ -121,7 +121,18 @@ names such a source; the coordinator first has a GPU slot re-encode it into
 the entry's `key` as H.264 with a keyframe every second (kept and reused for
 later exports). `POST /transcodes {sourceRoot, source, output}` starts one
 ahead of time (e.g. when the editor opens) and `GET /transcodes/:id` reports
-it.
+it. A fragmented MP4 that a transcode would only remux is read in place
+instead: the coordinator turns its fragments into a regular `moov`, stores it
+beside the transcode key as `<key>.prefix-v1`, and workers fetch the samples
+they need from the recording itself (`RF_FRAGMENT_INDEX=0` turns this off).
+
+A browser recording can also arrive unprepared: `prepare: "prepare.json"`
+names a file in the recording whose `sources` the engine turns into the
+project files (`recording-meta.json`, `project-config.json`, pointer input)
+before planning, and the manifest lists only the media. Manifest entries with
+`builtin` (`backgrounds/<group>/<name>.jpg`, `music/<name>.mp3`) are read
+from the image's `/opt/cap`. `/health` advertises `prepare` (the default
+configuration and the built-in music) once the engine can do this.
 
 ## Development
 

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	canRemux,
+	downloadSource,
 	encodedSeconds,
 	MAX_DECODE_PIXELS,
 	probeArgs,
@@ -126,5 +130,60 @@ describe("source size", () => {
 			expect(args[limit + 1]).toBe(String(MAX_DECODE_PIXELS));
 			expect(limit).toBeLessThan(args.indexOf("https://in"));
 		}
+	});
+});
+
+describe("downloadSource", () => {
+	test("reassembles a source from parallel ranged reads", async () => {
+		const data = new Uint8Array(1000).map((_, index) => index % 251);
+		const reads: [number, number][] = [];
+		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
+		const size = await downloadSource(
+			{
+				head: async () => ({ size: data.byteLength }),
+				getRange: async (_key, start, end) => {
+					reads.push([start, end]);
+					return data.slice(start, end + 1);
+				},
+			},
+			"k",
+			path,
+			{ piece: 128, concurrency: 3 },
+		);
+		expect(size).toBe(1000);
+		expect(new Uint8Array(readFileSync(path))).toEqual(data);
+		expect(reads).toHaveLength(8);
+	});
+
+	test("reports progress as each range lands", async () => {
+		const progress: number[] = [];
+		await downloadSource(
+			{
+				head: async () => ({ size: 300 }),
+				getRange: async (_key, start, end) => new Uint8Array(end - start + 1),
+			},
+			"k",
+			join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source"),
+			{
+				piece: 100,
+				concurrency: 1,
+				onProgress: (bytes) => progress.push(bytes),
+			},
+		);
+		expect(progress).toEqual([100, 200, 300]);
+	});
+
+	test("refuses a short read", async () => {
+		const path = join(mkdtempSync(join(tmpdir(), "rf-dl-")), "source");
+		await expect(
+			downloadSource(
+				{
+					head: async () => ({ size: 100 }),
+					getRange: async () => new Uint8Array(10),
+				},
+				"k",
+				path,
+			),
+		).rejects.toThrow("short read");
 	});
 });

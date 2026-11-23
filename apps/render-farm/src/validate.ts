@@ -112,6 +112,13 @@ export function validateJobRequest(body: unknown): JobRequest | string {
 	) {
 		return "reference must be a string of at most 200 characters";
 	}
+	if (
+		request.prepare !== undefined &&
+		(typeof request.prepare !== "string" ||
+			!/^[a-z0-9-]{1,40}\.json$/.test(request.prepare))
+	) {
+		return "prepare must name a JSON file in the recording";
+	}
 	return request as JobRequest;
 }
 
@@ -164,7 +171,10 @@ export function checkManifestBounds(
 	for (const file of files) {
 		if (!file || typeof file !== "object")
 			return "manifest entry is not an object";
-		const { path, key, size, transcodeFrom } = file as Record<string, unknown>;
+		const { path, key, size, transcodeFrom, builtin } = file as Record<
+			string,
+			unknown
+		>;
 		if (typeof path !== "string" || path.length === 0 || path.length > 1024) {
 			return "manifest paths must be strings of 1 to 1024 characters";
 		}
@@ -179,9 +189,13 @@ export function checkManifestBounds(
 		) {
 			return `manifest transcodeFrom for ${path} must be a key and produce an .mp4`;
 		}
-		// Size of a source still to be transcoded is only known afterwards.
+		// Size of a source still to be transcoded is only known afterwards, and
+		// a built-in asset's comes from the image.
 		if (
-			!(transcodeFrom !== undefined && size === undefined) &&
+			!(
+				(transcodeFrom !== undefined || builtin !== undefined) &&
+				size === undefined
+			) &&
 			(typeof size !== "number" || !Number.isSafeInteger(size) || size < 0)
 		) {
 			return `manifest size for ${path} must be a non-negative integer`;

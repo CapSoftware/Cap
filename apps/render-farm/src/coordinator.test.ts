@@ -6,10 +6,11 @@ import {
 	timingSafeEqual,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { ANNEX_B_PARAMETER_SETS } from "./boxes.test-util";
+import { ANNEX_B_PARAMETER_SETS, fragmentedRecording } from "./boxes.test-util";
 import type { Job, TaskState } from "./coordinator";
 import type { Engine } from "./engine";
 import * as fmp4 from "./fmp4";
+import * as fragmentIndex from "./fragment-index";
 import * as hls from "./hls";
 import * as mp4 from "./mp4";
 import * as planning from "./planning";
@@ -42,6 +43,14 @@ function harness(env: Record<string, string> = {}) {
 	let headGate: Promise<void> | undefined;
 	let failures = 0;
 	const callbacks: { url: string; init: RequestInit }[] = [];
+	const conditions: { ready: () => boolean; resolve: () => void }[] = [];
+	const changed = () => {
+		for (const condition of [...conditions]) {
+			if (!condition.ready()) continue;
+			conditions.splice(conditions.indexOf(condition), 1);
+			condition.resolve();
+		}
+	};
 	const s3 = {
 		async head(key: string) {
 			await headGate;
@@ -50,6 +59,7 @@ function harness(env: Record<string, string> = {}) {
 		},
 		async put(key: string, body: Uint8Array | string) {
 			writes.push(key);
+			changed();
 			await putGate;
 			if (failures-- > 0) throw new Error("injected storage failure");
 			objects.set(
@@ -105,6 +115,7 @@ function harness(env: Record<string, string> = {}) {
 				job,
 				Math.max(copyPeaks.byJob.get(job) ?? 0, copying.get(job) ?? 0),
 			);
+			changed();
 			try {
 				await copyGate(source.key);
 			} finally {
@@ -158,6 +169,7 @@ function harness(env: Record<string, string> = {}) {
 		createHmac,
 		...validate,
 		...fmp4,
+		...fragmentIndex,
 		...hls,
 		...mp4,
 		...planning,
@@ -196,6 +208,7 @@ function harness(env: Record<string, string> = {}) {
 			request() {
 				this.pending = Promise.withResolvers<unknown>();
 				engineCalls.push(this.pending);
+				changed();
 				return this.pending.promise;
 			}
 			kill(signal?: NodeJS.Signals) {
@@ -203,6 +216,12 @@ function harness(env: Record<string, string> = {}) {
 				this.alive = false;
 				this.pending?.reject(new Error("audio engine exited"));
 			}
+		},
+		prepareSupport: () => new Promise(() => {}),
+		prepareRecording: async () => false,
+		builtinPath: () => null,
+		builtinSize: () => {
+			throw new Error("no built-in assets in tests");
 		},
 		process: {
 			env: {
@@ -224,6 +243,7 @@ function harness(env: Record<string, string> = {}) {
 		setTimeout: (callback: () => void, delay: number) => {
 			timers.push(callback);
 			timerDelays.push(delay);
+			changed();
 			return { unref() {} };
 		},
 		clearTimeout: (timer: unknown) => clearedTimers.push(timer),
@@ -307,6 +327,12 @@ function harness(env: Record<string, string> = {}) {
 		},
 		fail: (count = 1) => {
 			failures = count;
+		},
+		when: (ready: () => boolean) => {
+			if (ready()) return Promise.resolve();
+			const { promise, resolve } = Promise.withResolvers<void>();
+			conditions.push({ ready, resolve });
+			return promise;
 		},
 	};
 }
@@ -578,7 +604,7 @@ describe("assembly", () => {
 				);
 			h.stitchAhead(j);
 		}
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await h.when(() => h.copyPeaks.total >= 8);
 		expect(h.copyPeaks.total).toBe(8);
 		for (const j of jobs)
 			expect(h.copyPeaks.byJob.get(j.id) ?? 0).toBeLessThanOrEqual(4);
@@ -665,6 +691,26 @@ describe("assembly", () => {
 		await expect(h.onVideoDone(j, state, padded)).rejects.toThrow("add up");
 		expect(j.videoResults.size).toBe(0);
 	});
+
+	test("a result whose stash was never stored is refused", async () => {
+		const h = harness();
+		const j = job();
+		const state = videoState(j);
+		const lost = stored(h, j, 0, 220_000, 1);
+		h.objects.delete(lost.stash.key);
+		await expect(h.onVideoDone(j, state, lost)).rejects.toThrow(
+			"is not stored",
+		);
+		expect(j.videoResults.size).toBe(0);
+		expect(state.state).toBe("running");
+		h.objects.set(lost.stash.key, new Uint8Array(lost.stash.bytes - 1));
+		await expect(h.onVideoDone(j, state, lost)).rejects.toThrow(
+			"is not stored",
+		);
+		h.objects.set(lost.stash.key, new Uint8Array(lost.stash.bytes));
+		await h.onVideoDone(j, state, lost);
+		expect(j.videoResults.size).toBe(1);
+	});
 });
 
 describe("coordinator recovery", () => {
@@ -741,8 +787,10 @@ describe("coordinator recovery", () => {
 		h.gate(gate.promise);
 		const first = result(original);
 		const second = result(hedge);
+		h.objects.set(first.stash.key, new Uint8Array(first.stash.bytes));
 		const accepted = h.onVideoDone(j, original, first);
 		const duplicate = h.onVideoDone(j, hedge, second);
+		await h.when(() => h.writes.length > 0);
 		expect(j.videoResults.size).toBe(0);
 		expect(h.writes).toEqual(["jobs/job/v/0.json"]);
 		gate.resolve();
@@ -1193,6 +1241,299 @@ describe("transcodes", () => {
 	});
 });
 
+describe("placements", () => {
+	const root = "owner/video/";
+	const source = `${root}raw-upload.mp4`;
+	const output = `${root}.recording/render/sources/display.mp4`;
+	const prefixKey = `${root}.recording/render/sources/display.prefix-v1`;
+	let folder = 0;
+
+	function project(h: ReturnType<typeof harness>) {
+		const prefix = `${root}.recording/render/${folder++}/project`;
+		h.objects.set(
+			`${prefix}/recording-meta.json`,
+			new TextEncoder().encode("{}"),
+		);
+		h.objects.set(
+			`${prefix}/manifest.json`,
+			new TextEncoder().encode(
+				JSON.stringify({
+					files: [
+						{ path: "recording-meta.json", size: 2 },
+						{ path: "display.mp4", key: output, transcodeFrom: source },
+					],
+				}),
+			),
+		);
+		return prefix;
+	}
+
+	function worker(h: ReturnType<typeof harness>, features?: string[]) {
+		void call(h, "/work", {
+			worker: `gpu-${features ? "new" : "old"}`,
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+			...(features ? { features } : {}),
+		});
+	}
+
+	const sourceReads = (h: ReturnType<typeof harness>) =>
+		h.ranges.filter((range) => range.startsWith(`${source}:`)).length;
+
+	test("a fragmented recording is read in place, with no transcode", async () => {
+		const h = harness();
+		worker(h, ["prefix"]);
+		const recording = fragmentedRecording({
+			frames: 300,
+			gop: 30,
+			audio: true,
+			mfra: true,
+		});
+		h.objects.set(source, recording.bytes);
+		const index = (await h.sourceIndex(project(h), root)) as {
+			manifest: { files: { path: string; size: number }[] };
+			mediaMeta: Map<
+				string,
+				{
+					key: string;
+					size: number;
+					prefix?: { key: string; size: number };
+					index: { sizes: Uint32Array; offsets: Float64Array };
+				}
+			>;
+		};
+		const meta = index.mediaMeta.get("display.mp4");
+		const prefix = h.objects.get(prefixKey) as Uint8Array;
+		expect(meta).toMatchObject({
+			key: source,
+			size: prefix.byteLength + recording.bytes.byteLength,
+			prefix: { key: prefixKey, size: prefix.byteLength },
+		});
+		expect(meta?.index.sizes.length).toBe(300);
+		expect(meta?.index.offsets[0]).toBeGreaterThan(prefix.byteLength);
+		expect(h.objects.has(output)).toBe(false);
+		expect(
+			await (
+				await call(h, "/transcodes", { sourceRoot: root, source, output })
+			).json(),
+		).toMatchObject({ status: "ready", placed: true });
+
+		const reads = sourceReads(h);
+		await h.sourceIndex(project(h), root);
+		expect(sourceReads(h)).toBe(reads);
+
+		const restarted = harness();
+		worker(restarted, ["prefix"]);
+		restarted.objects.set(source, recording.bytes);
+		restarted.objects.set(prefixKey, prefix);
+		const again = (await restarted.sourceIndex(
+			project(restarted),
+			root,
+		)) as typeof index;
+		expect(sourceReads(restarted)).toBe(0);
+		expect([
+			...(again.mediaMeta.get("display.mp4")?.index.offsets ?? []),
+		]).toEqual([...(meta?.index.offsets ?? [])]);
+	});
+
+	function prefixedTask(h: ReturnType<typeof harness>) {
+		const j = job();
+		h.jobs.set(j.id, j);
+		const state = videoState(j);
+		state.state = "queued";
+		state.worker = undefined;
+		state.attempts = 0;
+		(state.task as protocol.VideoTask).files = [
+			{
+				path: "display.mp4",
+				key: source,
+				size: 1100,
+				ranges: [[0, 600]],
+				prefix: { key: prefixKey, size: 100 },
+			},
+		];
+		h.queue.push(state);
+		return { j, state };
+	}
+
+	const answered = (poll: Promise<Response>) =>
+		Promise.race([
+			poll.then(() => "answered"),
+			Bun.sleep(20).then(() => "waiting"),
+		]);
+
+	test("a task with a prefix only goes to a worker that takes prefixes", async () => {
+		const h = harness();
+		void call(h, "/work", {
+			worker: "gpu-new-audio",
+			slots: 1,
+			cpus: 8,
+			kinds: ["audio"],
+			features: ["prefix"],
+		});
+		const { state } = prefixedTask(h);
+		const old = call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		expect(await answered(old)).toBe("waiting");
+		expect(state.state).toBe("queued");
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-new",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+				features: ["prefix"],
+			})
+		).json()) as { task: protocol.VideoTask };
+		expect(work.task.taskId).toBe(state.task.taskId);
+		expect(state.worker).toBe("gpu-new");
+	});
+
+	test("an older worker is not sent a hedge of a task with a prefix", async () => {
+		const h = harness();
+		const j = job();
+		h.jobs.set(j.id, j);
+		for (let index = 0; index < 3; index++) {
+			j.taskStats.push({ kind: "video", frames: 30, engineRenderMs: 1000 });
+		}
+		const original = videoState(j);
+		(original.task as protocol.VideoTask).files = [
+			{
+				path: "display.mp4",
+				key: source,
+				size: 1100,
+				ranges: [[0, 600]],
+				prefix: { key: prefixKey, size: 100 },
+			},
+		];
+		original.progress = {
+			frames: 27,
+			total: 30,
+			elapsedMs: 900,
+			at: 0,
+			advancedAt: Number.NEGATIVE_INFINITY,
+		};
+		const old = call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		expect(await answered(old)).toBe("waiting");
+		expect(original.duplicated).toBeFalsy();
+		const work = (await (
+			await call(h, "/work", {
+				worker: "gpu-new",
+				slots: 1,
+				cpus: 8,
+				kinds: ["video"],
+				features: ["prefix"],
+			})
+		).json()) as { task: protocol.VideoTask };
+		expect(work.task.chunk).toBe(
+			original.task.kind === "video" ? original.task.chunk : -1,
+		);
+		expect(original.duplicated).toBe(true);
+	});
+
+	async function runWatchdogs(h: ReturnType<typeof harness>) {
+		for (const watchdog of h.watchdogs) {
+			try {
+				await watchdog();
+			} catch {}
+		}
+	}
+
+	test("with no worker left that takes prefixes, the job fails for a retry", async () => {
+		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(h, "/work", {
+			worker: "gpu-old",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+		});
+		const { j } = prefixedTask(h);
+		await runWatchdogs(h);
+		expect(j.status).toBe("error");
+		expect(j.error).toContain("in-place sources");
+		expect(h.queue).toHaveLength(0);
+
+		const kept = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		const poll = call(kept, "/work", {
+			worker: "gpu-new",
+			slots: 1,
+			cpus: 8,
+			kinds: ["video"],
+			features: ["prefix"],
+		});
+		const waiting = prefixedTask(kept);
+		await runWatchdogs(kept);
+		expect(waiting.j.status).toBe("rendering");
+		await poll;
+		expect(waiting.state.worker).toBe("gpu-new");
+	});
+
+	test("a worker that takes prefixes only for audio can't serve a video task", async () => {
+		const h = harness({ RF_UNSERVABLE_GRACE_MS: "0" });
+		void call(h, "/work", {
+			worker: "gpu-new-audio",
+			slots: 1,
+			cpus: 8,
+			kinds: ["audio"],
+			features: ["prefix"],
+		});
+		const { j, state } = prefixedTask(h);
+		await runWatchdogs(h);
+		expect(state.worker).toBeUndefined();
+		expect(j.status).toBe("error");
+		expect(j.error).toContain("in-place sources");
+	});
+
+	test("older workers, other sources and finished transcodes keep the transcode", async () => {
+		const recording = fragmentedRecording({ frames: 60, gop: 30, mfra: true });
+		const request = { sourceRoot: root, source, output };
+		const transcoding = async (h: ReturnType<typeof harness>) =>
+			(
+				(await (await call(h, "/transcodes", request)).json()) as {
+					status: string;
+				}
+			).status;
+
+		const old = harness();
+		worker(old);
+		old.objects.set(source, recording.bytes);
+		expect(["queued", "running"]).toContain(await transcoding(old));
+		expect(old.objects.has(prefixKey)).toBe(false);
+
+		const webm = harness();
+		worker(webm, ["prefix"]);
+		webm.objects.set(
+			source,
+			Uint8Array.of(0x1a, 0x45, 0xdf, 0xa3, 0, 0, 0, 0, 0),
+		);
+		expect(["queued", "running"]).toContain(await transcoding(webm));
+
+		const done = harness();
+		worker(done, ["prefix"]);
+		done.objects.set(source, recording.bytes);
+		done.objects.set(output, new Uint8Array(42));
+		expect(
+			await (await call(done, "/transcodes", request)).json(),
+		).toMatchObject({ status: "ready", size: 42 });
+		expect(done.objects.has(prefixKey)).toBe(false);
+
+		const off = harness({ RF_FRAGMENT_INDEX: "0" });
+		worker(off, ["prefix"]);
+		off.objects.set(source, recording.bytes);
+		expect(["queued", "running"]).toContain(await transcoding(off));
+	});
+});
+
 describe("jobs for the product", () => {
 	test("cached indexes must satisfy each job's source scope", async () => {
 		const h = harness();
@@ -1437,19 +1778,22 @@ describe("local audio deadlines", () => {
 		j.tasks.set(state.task.taskId, state);
 		h.jobs.set(j.id, j);
 		h.queue.push(state);
+		const failed = new Promise<void>((resolve) => j.waiters.push(resolve));
 		h.pumpLocalAudio();
 		for (let attempt = 1; attempt <= 3; attempt++) {
-			await Bun.sleep(0);
+			await h.when(() => h.engineCalls.length >= attempt);
 			expect(h.engineCalls).toHaveLength(attempt);
 			expect(h.timerDelays.at(-1)).toBe(110_000);
+			const scheduled = h.timers.length;
 			h.timers.at(-1)?.();
-			await Bun.sleep(0);
 			if (attempt < 3) {
+				await h.when(() => h.timers.length > scheduled);
 				expect(j.status).toBe("rendering");
 				expect(h.timerDelays.at(-1)).toBe(1000 * attempt);
 				h.timers.at(-1)?.();
 			}
 		}
+		await failed;
 		expect(j.status).toBe("error");
 		expect(j.error).toBe("audio engine exited");
 		expect(state.attempts).toBe(3);
