@@ -22,6 +22,13 @@ import { bindCaptionTrackCueText } from "./caption-tracks";
 import { scheduleReadyRefresh } from "./deferred-ready-refresh";
 import { EarlyUploadOverlay } from "./EarlyUploadOverlay";
 import { useEarlyPlayback } from "./early-playback";
+import {
+	capturePlayback,
+	createSourceRefreshBudget,
+	isMediaLoadError,
+	restorePlaybackOnLoad,
+	sourceMayHaveExpired,
+} from "./media-source-refresh";
 import { waitForSegmentPlayback } from "./segment-playback-probe";
 import {
 	canRetryFailedProcessing,
@@ -438,8 +445,10 @@ export function HLSVideoPlayer({
 
 				const isExpiredUrl =
 					data.response?.code === 403 || data.response?.code === 410;
+				// With a single rendition hls.js has nothing to switch to, so it
+				// reports the refused fragment as fatal and stops loading; the
+				// playlist reload below starts it again.
 				if (
-					!data.fatal &&
 					isExpiredUrl &&
 					(data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR ||
 						data.details === Hls.ErrorDetails.KEY_LOAD_ERROR) &&
@@ -533,9 +542,38 @@ export function HLSVideoPlayer({
 				}
 			};
 		} else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+			// The native player keeps the signed segment URLs from the playlist it
+			// loaded, so one that expired is refused; loading the playlist again
+			// signs them afresh.
+			const refreshes = createSourceRefreshBudget();
+			let obtainedAt = Date.now();
+			let refreshCount = 0;
+			let cancelRestore: (() => void) | null = null;
+			const handleNativeLoaded = () => refreshes.markLoaded();
+			const handleNativeError = () => {
+				if (
+					!isMediaLoadError(video.error) ||
+					!sourceMayHaveExpired(obtainedAt) ||
+					!refreshes.tryStart()
+				)
+					return;
+				setHlsInitFailed(false);
+				cancelRestore?.();
+				cancelRestore = restorePlaybackOnLoad(video, capturePlayback(video));
+				obtainedAt = Date.now();
+				refreshCount += 1;
+				video.src = `${playbackSrc}${playbackSrc.includes("?") ? "&" : "?"}_r=${refreshCount}`;
+			};
+			video.addEventListener("loadeddata", handleNativeLoaded);
+			video.addEventListener("error", handleNativeError);
 			video.src = playbackSrc;
 			video.load();
 			console.log("HLSVideoPlayer: Using native HLS support");
+			return () => {
+				cancelRestore?.();
+				video.removeEventListener("loadeddata", handleNativeLoaded);
+				video.removeEventListener("error", handleNativeError);
+			};
 		} else {
 			console.error("HLSVideoPlayer: HLS is not supported in this browser");
 			setHlsInitFailed(true);

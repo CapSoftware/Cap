@@ -20,6 +20,14 @@ import { CallToActionOverlay } from "./call-to-action/CallToActionOverlay";
 import { bindCaptionTrackCueText } from "./caption-tracks";
 import { resolveInitialPlaybackUrl } from "./initial-playback-url";
 import {
+	capturePlayback,
+	createSourceRefreshBudget,
+	isMediaLoadError,
+	isSignedMediaUrl,
+	type PlaybackSnapshot,
+	sourceMayHaveExpired,
+} from "./media-source-refresh";
+import {
 	createLevelPatchedMp4ObjectUrl,
 	isIosSafari,
 	probeAvcFromUrl,
@@ -220,11 +228,11 @@ export function CapVideoPlayer({
 	);
 	const hasRetriedInitialPlaybackSource = useRef(false);
 	const initialPlaybackSourceRetryPending = useRef(false);
-	const playbackToRestore = useRef<{
-		sourceUrl: string;
-		time: number;
-		wasPlaying: boolean;
-	} | null>(null);
+	const playbackToRestore = useRef<
+		(PlaybackSnapshot & { sourceUrl: string }) | null
+	>(null);
+	const signedSourceRefreshes = useRef(createSourceRefreshBudget());
+	const sourceObtainedAt = useRef(Date.now());
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -316,12 +324,14 @@ export function CapVideoPlayer({
 		hasRetriedInitialPlaybackSource.current = false;
 		initialPlaybackSourceRetryPending.current = false;
 		playbackToRestore.current = null;
+		signedSourceRefreshes.current = createSourceRefreshBudget();
 		setIsRefreshingInitialPlaybackSource(false);
 	}, [videoSrc, rawFallbackSrc]);
 
 	useEffect(() => {
 		const resolvedUrl = resolvedSrc.data?.url;
 		const resolvedType = resolvedSrc.data?.type;
+		sourceObtainedAt.current = Date.now();
 
 		setIosLevelPatchedUrl((previous) => {
 			if (previous) URL.revokeObjectURL(previous);
@@ -463,6 +473,9 @@ export function CapVideoPlayer({
 		if (!video || resolvedSrc.isPending) return;
 
 		const handleLoadedData = () => {
+			if (resolvedSrc.data?.url !== playbackToRestore.current?.sourceUrl) {
+				signedSourceRefreshes.current.markLoaded();
+			}
 			if (isRefreshingInitialPlaybackSource) {
 				const restore = playbackToRestore.current;
 				if (
@@ -498,62 +511,88 @@ export function CapVideoPlayer({
 			setHasPlayedOnce(true);
 		};
 
+		const refreshPlaybackSource = (
+			sourceUrl: string,
+			sourceType: ResolvedPlaybackSource["type"],
+			keepPlayerVisible: boolean,
+		) => {
+			initialPlaybackSourceRetryPending.current = true;
+			const snapshot = capturePlayback(video);
+			playbackToRestore.current = { ...snapshot, sourceUrl };
+			// A viewer who paused stays paused; the autoplay attribute would start
+			// the new source on its own.
+			if (keepPlayerVisible && !snapshot.wasPlaying) video.autoplay = false;
+			setIsRefreshingInitialPlaybackSource(true);
+			setHasError(false);
+			if (!keepPlayerVisible) {
+				setVideoLoaded(false);
+				setShowPlayButton(false);
+			}
+			// The playlist route can sign the same URL again within a second, so a
+			// retry that changes nothing moves on to the raw upload.
+			const stopRetrying = () => {
+				playbackToRestore.current = null;
+				setIsRefreshingInitialPlaybackSource(false);
+				if (
+					shouldFallbackToRawPlaybackSource(
+						sourceType,
+						rawFallbackSrc,
+						hasTriedRawFallback,
+					)
+				) {
+					setHasTriedRawFallback(true);
+					setPreferredSource("raw");
+					setVideoLoaded(false);
+					setHasError(false);
+					setShowPlayButton(false);
+					return;
+				}
+				setHasError(true);
+			};
+			void resolvedSrc
+				.refetch()
+				.then((result) => {
+					if (
+						!result.data ||
+						result.data.url === playbackToRestore.current?.sourceUrl
+					) {
+						stopRetrying();
+					}
+				})
+				.catch(stopRetrying)
+				.finally(() => {
+					initialPlaybackSourceRetryPending.current = false;
+				});
+		};
+
 		const handleError = () => {
 			if (initialPlaybackSourceRetryPending.current) return;
+			const sourceUrl = resolvedSrc.data?.url;
+			const sourceType = resolvedSrc.data?.type;
+			// A signed URL refused after the page sat open has expired; signing it
+			// again resumes where the viewer was.
+			if (
+				sourceUrl &&
+				sourceType &&
+				!video.currentSrc.startsWith("blob:") &&
+				isSignedMediaUrl(sourceUrl) &&
+				isMediaLoadError(video.error) &&
+				sourceMayHaveExpired(sourceObtainedAt.current) &&
+				signedSourceRefreshes.current.tryStart()
+			) {
+				refreshPlaybackSource(sourceUrl, sourceType, hasPlayedOnce);
+				return;
+			}
 			// A server-rendered source never ran the client probe, so its failure
 			// takes the path a failed probe would: playlist route, then raw.
 			if (
 				(!rawFallbackSrc || resolvedSrc.data?.fromServer) &&
 				resolvedSrc.data?.fromInitialUrl &&
+				sourceUrl &&
 				!hasRetriedInitialPlaybackSource.current
 			) {
 				hasRetriedInitialPlaybackSource.current = true;
-				initialPlaybackSourceRetryPending.current = true;
-				playbackToRestore.current = {
-					sourceUrl: resolvedSrc.data.url,
-					time: Number.isFinite(video.currentTime) ? video.currentTime : 0,
-					wasPlaying: !video.paused && !video.ended,
-				};
-				setIsRefreshingInitialPlaybackSource(true);
-				setVideoLoaded(false);
-				setHasError(false);
-				setShowPlayButton(false);
-				// Only a server-rendered source reaches here with a raw fallback. The
-				// playlist route can sign the same URL again within a second, so a
-				// retry that changes nothing moves on to the raw upload.
-				const stopRetrying = () => {
-					playbackToRestore.current = null;
-					setIsRefreshingInitialPlaybackSource(false);
-					if (
-						shouldFallbackToRawPlaybackSource(
-							"mp4",
-							rawFallbackSrc,
-							hasTriedRawFallback,
-						)
-					) {
-						setHasTriedRawFallback(true);
-						setPreferredSource("raw");
-						setVideoLoaded(false);
-						setHasError(false);
-						setShowPlayButton(false);
-						return;
-					}
-					setHasError(true);
-				};
-				void resolvedSrc
-					.refetch()
-					.then((result) => {
-						if (
-							!result.data ||
-							result.data.url === playbackToRestore.current?.sourceUrl
-						) {
-							stopRetrying();
-						}
-					})
-					.catch(stopRetrying)
-					.finally(() => {
-						initialPlaybackSourceRetryPending.current = false;
-					});
+				refreshPlaybackSource(sourceUrl, "mp4", false);
 				return;
 			}
 			if (
@@ -584,6 +623,7 @@ export function CapVideoPlayer({
 			setIsRefreshingInitialPlaybackSource(false);
 			setVideoLoaded(true);
 			setHasError(false);
+			video.playbackRate = restore.playbackRate;
 			if (restore.wasPlaying) void video.play().catch(() => undefined);
 		};
 
