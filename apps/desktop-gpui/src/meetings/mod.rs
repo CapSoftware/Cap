@@ -1915,6 +1915,9 @@ impl Meetings {
             let at_ms =
                 recording.timeline_offset_ms + recording.started.elapsed().as_millis() as u64;
             recording.echo.devices_changed(at_ms);
+            let _ = recording.engine.send(EngineCommand::EchoStretches(
+                recording.echo.stretches().to_vec(),
+            ));
         }
     }
 
@@ -1998,6 +2001,9 @@ impl Meetings {
                         let at_ms = recording.timeline_offset_ms
                             + recording.started.elapsed().as_millis() as u64;
                         recording.echo.devices_changed(at_ms);
+                        let _ = recording.engine.send(EngineCommand::EchoStretches(
+                            recording.echo.stretches().to_vec(),
+                        ));
                     }
                     recording.mic_moved = (own.as_deref() != Some(name.as_str())).then_some(name);
                 }
@@ -2487,9 +2493,9 @@ impl Meetings {
         if let Some((previous, ours)) = recording.restore_mic.take() {
             self.restore_microphone(previous, ours, cx);
         }
-        let _ = recording
-            .engine
-            .send(EngineCommand::EchoStretches(recording.echo.stretches().to_vec()));
+        let _ = recording.engine.send(EngineCommand::EchoStretches(
+            recording.echo.stretches().to_vec(),
+        ));
         let _ = recording.engine.send(EngineCommand::Finish);
 
         let duration_ms = recording.timeline_offset_ms
@@ -2839,7 +2845,16 @@ impl Meetings {
                         .map(|u| u.id.clone())
                         .collect();
                     transcript.remove(&stale);
+                    let stretches = echo.stretches().to_vec();
                     let echoes = remove_echoes(transcript, echo);
+                    if echo.stretches() != stretches.as_slice()
+                        && let Some(engine) = engine
+                    {
+                        // The diarizer judges echoes on the microphone by
+                        // the same stretches as it goes.
+                        let _ =
+                            engine.send(EngineCommand::EchoStretches(echo.stretches().to_vec()));
+                    }
                     if !echoes.is_empty() {
                         let line = vec![LogLine::Delete { ids: echoes }];
                         if let Some(engine) = engine

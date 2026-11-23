@@ -319,6 +319,9 @@ pub struct MeetingDiarizer {
     /// Where each stretch between device changes starts (ms) and whether the
     /// microphone was already known to repeat the call in it.
     echo_stretches: Vec<(u64, bool)>,
+    /// Where a whole window of the microphone followed the call (ms), the
+    /// first in each stretch: the speakers are playing the call there.
+    heard_live: Vec<u64>,
 }
 
 /// Nemotron hearing a finished meeting after Stop (`Schedule::AfterStop`): the
@@ -364,6 +367,7 @@ impl MeetingDiarizer {
             nemotron_voices: None,
             late: None,
             echo_stretches: Vec::new(),
+            heard_live: Vec::new(),
         }
     }
 
@@ -392,6 +396,29 @@ impl MeetingDiarizer {
     /// a headset is two different rooms.
     pub fn set_echo_stretches(&mut self, stretches: &[(u64, bool)]) {
         self.echo_stretches = stretches.to_vec();
+    }
+
+    /// The stretch between device changes that holds `ms`, as `[from, until)`
+    /// and whether it was already known to hear the call.
+    fn echo_stretch(&self, ms: u64) -> (u64, u64, bool) {
+        let k = self
+            .echo_stretches
+            .partition_point(|&(start, _)| start <= ms)
+            .saturating_sub(1);
+        let (from, heard) = self.echo_stretches.get(k).copied().unwrap_or((0, false));
+        let until = self.echo_stretches.get(k + 1).map_or(u64::MAX, |s| s.0);
+        (from, until, heard)
+    }
+
+    /// Whether the microphone hears the call around `ms`: its stretch was
+    /// known to, or a whole window of the microphone followed the call there.
+    /// Elsewhere (a headset) nothing on the microphone is the call's echo.
+    fn mic_hears_call_at(&self, ms: u64) -> bool {
+        let (from, until, heard) = self.echo_stretch(ms);
+        heard || {
+            let at = self.heard_live.partition_point(|&t| t < from);
+            self.heard_live.get(at).is_some_and(|&t| t < until)
+        }
     }
 
     pub fn cancel_after_stop_nemotron(&mut self) {
@@ -640,8 +667,17 @@ impl MeetingDiarizer {
         let at = |sample: usize| segment.start_ms + sample as u64 / SAMPLES_PER_MS;
         let mut labels: Vec<Option<(SpeakerId, bool)>> = vec![None; windows.len()];
         let mut pending: Vec<usize> = Vec::new();
+        let whole = (self.config.window_ms * SAMPLES_PER_MS) as usize;
         for (i, embedding) in embeddings.iter().enumerate() {
             let (a, b) = windows[i];
+            if track == Track::Mic
+                && b - a >= whole
+                && !self.mic_hears_call_at(at(a))
+                && self.leak(at(a), at(b)) >= Some(self.config.leak)
+            {
+                let k = self.heard_live.partition_point(|&t| t < at(a));
+                self.heard_live.insert(k, at(a));
+            }
             match self.decide(track, embedding, at(a), at(b)) {
                 Decision::Join(id, confident) => {
                     self.settle(
@@ -806,7 +842,9 @@ impl MeetingDiarizer {
     }
 
     fn decide(&self, track: Track, embedding: &[f32], start_ms: u64, end_ms: u64) -> Decision {
-        if track == Track::Mic
+        // The microphone can only echo the call where it hears it.
+        let mic_hears_call = || track == Track::Mic && self.mic_hears_call_at(start_ms);
+        if mic_hears_call()
             && self.leak(start_ms, end_ms) >= Some(self.config.leak)
             && let Some(id) = self.call_speaker(start_ms, end_ms)
         {
@@ -826,6 +864,7 @@ impl MeetingDiarizer {
             && sim >= self.config.assign
             && own.is_none_or(|(_, own)| sim > own)
             && !call_heard_in_the_room()
+            && (track == Track::System || mic_hears_call())
         {
             return Decision::Echo(id);
         }
@@ -1437,6 +1476,9 @@ impl MeetingDiarizer {
             if *s >= Some(self.config.leak) && p.ms() >= ECHO_HEARD_MS {
                 stretch_hears[stretch(p.start_ms)] = true;
             }
+        }
+        for &t in &self.heard_live {
+            stretch_hears[stretch(t)] = true;
         }
         let hears: Vec<bool> = self
             .pieces

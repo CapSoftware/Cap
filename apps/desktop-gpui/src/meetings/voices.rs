@@ -343,6 +343,7 @@ impl Voices {
                     if let Some((model, schedule)) = self.test_nemotron.take() {
                         diarizer.set_nemotron_with(model, schedule, || {});
                     }
+                    diarizer.set_echo_stretches(&self.echo_stretches);
                     self.state = State::Ready(Box::new(diarizer));
                 }
                 Err(error) => {
@@ -634,8 +635,12 @@ impl Voices {
     /// The microphone lines the last `finish` found to be the call heard
     /// through the speakers, to remove from the transcript.
     /// Where the meeting's devices changed and whether each stretch was
-    /// heard repeating the call, for the end-of-meeting echo check.
+    /// heard repeating the call: the microphone only echoes the call where
+    /// it hears it.
     pub fn set_echo_stretches(&mut self, stretches: Vec<(u64, bool)>) {
+        if let State::Ready(diarizer) = &mut self.state {
+            diarizer.set_echo_stretches(&stretches);
+        }
         self.echo_stretches = stretches;
     }
 

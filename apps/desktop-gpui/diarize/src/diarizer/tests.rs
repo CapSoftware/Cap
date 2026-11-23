@@ -304,8 +304,19 @@ fn the_user_echoed_on_the_system_track_is_not_a_new_person() {
 fn a_remote_voice_leaking_into_the_microphone_is_marked_as_echo() {
     let mut d = diarizer(speakers(4));
     let user = only(&push(&mut d, Track::Mic, 0, &[(1, 4_000)]));
-    let remote = only(&push(&mut d, Track::System, 10_000, &[(2, 5_000)]));
-    let bleed = push(&mut d, Track::Mic, 10_200, &[(2, 4_000)]);
+    let remote = only(&push_samples(
+        &mut d,
+        Track::System,
+        10_000,
+        &spoken(2, 10_000, 5_000, 7, 0, 1.0),
+    ));
+    // The speakers play it into the microphone: same voice, same rhythm.
+    let bleed = push_samples(
+        &mut d,
+        Track::Mic,
+        10_200,
+        &spoken(2, 10_200, 4_000, 7, 2, 1.0),
+    );
     assert_eq!(bleed.spans.len(), 1);
     assert_eq!(bleed.spans[0].speaker, remote);
     assert!(bleed.spans[0].echo);
@@ -1556,6 +1567,46 @@ fn a_headset_after_the_speakers_keeps_its_short_replies() {
         assert!(
             reply.spans.iter().all(|s| !s.echo && s.speaker == user),
             "{reply:?}"
+        );
+    }
+}
+
+#[test]
+fn a_one_word_reply_labelled_after_the_call_line_on_a_headset_is_kept() {
+    // As above, but the other side's line is labelled first (a short line,
+    // or a slow machine): the reply already overlaps the call when it is
+    // labelled, and must not be taken for its echo there either.
+    let mut table = speakers(4);
+    table.push(near(2, 1, 0.8));
+    let mut d = diarizer(table);
+    for i in 0..4u64 {
+        let t = i * 12_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(1, t, 5_000, 3 + i, 0, 1.0));
+        push_samples(
+            &mut d,
+            Track::System,
+            t + 6_000,
+            &spoken(2, t + 6_000, 1_500, 20 + i, 0, 1.0),
+        );
+        let reply = push_samples(
+            &mut d,
+            Track::Mic,
+            t + 6_100,
+            &spoken(4, t + 6_100, 600, 20 + i, 5, 1.0),
+        );
+        assert!(reply.spans.iter().all(|s| !s.echo), "live {i}: {reply:?}");
+    }
+    d.set_echo_stretches(&[(0, false)]);
+    let pass = d.finish();
+    let user = pass.user.expect("a user");
+    for seg in pass
+        .segments
+        .iter()
+        .filter(|s| s.track == Track::Mic && s.key % 12_000 == 6_100)
+    {
+        assert!(
+            seg.spans.iter().all(|s| !s.echo && s.speaker == user),
+            "{seg:?}"
         );
     }
 }

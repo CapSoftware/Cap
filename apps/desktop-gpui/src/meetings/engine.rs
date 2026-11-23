@@ -147,7 +147,7 @@ pub enum EngineCommand {
     /// Capture opened another file for a track (after a failed write).
     AudioPart(AudioPart),
     /// The meeting's echo stretches (start ms, call heard on the microphone),
-    /// sent before `Finish` for the end-of-meeting echo check.
+    /// sent whenever they change and before `Finish`.
     EchoStretches(Vec<(u64, bool)>),
     Finish,
 }
