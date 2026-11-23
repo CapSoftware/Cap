@@ -20,6 +20,29 @@ pub struct Scan {
     pub seed_visuals: std::collections::HashMap<ItemKey, visuals::Visual>,
 }
 
+/// Everything a scan found, as one number: two scans of a library that did
+/// not change on disk give the same one. Worked out with the scan, off the
+/// main thread.
+pub fn fingerprint(scan: &Scan) -> u64 {
+    use std::hash::Hasher as _;
+    struct Hasher(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for Hasher {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut hasher = Hasher(Default::default());
+    let _ = std::fmt::Write::write_fmt(
+        &mut hasher,
+        format_args!(
+            "{:?}{:?}{}{:?}",
+            scan.items, scan.folders, scan.folders_loaded, scan.visual_jobs
+        ),
+    );
+    hasher.0.finish()
+}
+
 fn millis_to_utc(ms: f64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms as i64)
         .single()
@@ -597,5 +620,36 @@ mod tests {
         assert!(item.damaged);
         assert_eq!(item.kind, ItemKind::Meeting);
         assert!(item.has_transcript);
+    }
+
+    #[test]
+    fn a_rescan_of_an_unchanged_library_has_the_same_fingerprint() {
+        let at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+        let scan = |title: &str, bundle: &str| Scan {
+            items: vec![Item::new(
+                ItemKey::Path(bundle.into()),
+                ItemKind::Recording,
+                title,
+                at,
+                ItemFacts::default(),
+            )],
+            visual_jobs: vec![visuals::recording_job(
+                ItemKey::Path(bundle.into()),
+                bundle.into(),
+                false,
+            )],
+            folders_loaded: true,
+            ..Scan::default()
+        };
+        let shown = fingerprint(&scan("Demo", "/r/a.cap"));
+        assert_eq!(fingerprint(&scan("Demo", "/r/a.cap")), shown);
+        assert_ne!(fingerprint(&scan("Demo 2", "/r/a.cap")), shown, "renamed");
+        let mut moved = scan("Demo", "/r/a.cap");
+        moved.visual_jobs[0] =
+            visuals::recording_job(ItemKey::Path("/r/a.cap".into()), "/r/b.cap".into(), false);
+        assert_ne!(fingerprint(&moved), shown, "a visual job changed");
+        let mut unknown = scan("Demo", "/r/a.cap");
+        unknown.folders_loaded = false;
+        assert_ne!(fingerprint(&unknown), shown, "folders no longer known");
     }
 }

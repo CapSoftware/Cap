@@ -237,6 +237,9 @@ pub struct LibraryWindow {
     home_scroll: [gpui::ScrollHandle; 2],
     reload_again: bool,
     last_scan: Option<Instant>,
+    /// [`load::fingerprint`] of the scan on screen, before visuals and
+    /// speaker names were added to it.
+    scan_print: Option<u64>,
     /// Main-thread time spent taking in scans and their visuals, for the
     /// `rescan` bench.
     bench_main_us: f64,
@@ -464,6 +467,7 @@ impl LibraryWindow {
             home_scroll: [gpui::ScrollHandle::new(), gpui::ScrollHandle::new()],
             reload_again: false,
             last_scan: None,
+            scan_print: None,
             bench_main_us: 0.,
             people_task: None,
             thumbs: thumbs::Thumbs::default(),
@@ -505,9 +509,13 @@ impl LibraryWindow {
             }
             let started = Instant::now();
             let for_scan = library.clone();
-            let scan = cx
+            let (scan, print) = cx
                 .background_executor()
-                .spawn(async move { load::scan(for_scan) })
+                .spawn(async move {
+                    let scan = load::scan(for_scan);
+                    let print = load::fingerprint(&scan);
+                    (scan, print)
+                })
                 .await;
             tracing::info!(
                 items = scan.items.len(),
@@ -518,16 +526,25 @@ impl LibraryWindow {
                 let applying = Instant::now();
                 let mut scan = scan;
                 let jobs = std::mem::take(&mut scan.visual_jobs);
-                this.visuals.extend(std::mem::take(&mut scan.seed_visuals));
-                visuals::apply(&mut scan.items, &this.visuals);
                 this.load_task = None;
                 this.last_scan = Some(Instant::now());
-                this.scan = Rc::new(scan);
-                this.load_visuals(jobs, cx);
                 this.thumbs.forget_failures();
-                this.reevaluate(cx);
-                this.check_members(cx);
-                this.index_people(library, cx);
+                if this.scan_print == Some(print) {
+                    // Nothing changed on disk (the window came back, or a
+                    // meeting event touched nothing listed here): keep what
+                    // is on screen, with its visuals and speaker names.
+                    this.load_visuals(jobs, cx);
+                    this.index_people(library, cx);
+                } else {
+                    this.scan_print = Some(print);
+                    this.visuals.extend(std::mem::take(&mut scan.seed_visuals));
+                    visuals::apply(&mut scan.items, &this.visuals);
+                    this.scan = Rc::new(scan);
+                    this.load_visuals(jobs, cx);
+                    this.reevaluate(cx);
+                    this.check_members(cx);
+                    this.index_people(library, cx);
+                }
                 this.bench_main_us += applying.elapsed().as_secs_f64() * 1e6;
                 if std::mem::take(&mut this.reload_again) {
                     this.reload(cx);
@@ -630,22 +647,29 @@ impl LibraryWindow {
             return;
         }
         drop(current);
+        // Copy the whole list only when a name is new to its item: after a
+        // rescan that found nothing new, every name is already there.
+        let gains = |item: &Item| match &item.key {
+            items::ItemKey::Doc(id) => names.get(id).is_some_and(|found| {
+                let mut probe = item.clone();
+                probe.add_people(found);
+                probe.people.len() != item.people.len()
+            }),
+            _ => false,
+        };
+        if !self.scan.items.iter().any(gains) {
+            return;
+        }
         let mut next = (*self.scan).clone();
-        let mut changed = false;
         for item in &mut next.items {
             if let items::ItemKey::Doc(id) = &item.key
                 && let Some(found) = names.get(id)
-                && !found.is_empty()
             {
-                let before = item.people.len();
                 item.add_people(found);
-                changed |= item.people.len() != before;
             }
         }
-        if changed {
-            self.scan = Rc::new(next);
-            self.reevaluate(cx);
-        }
+        self.scan = Rc::new(next);
+        self.reevaluate(cx);
     }
 
     fn load_up_next(&mut self, cx: &mut Context<Self>) {
@@ -772,9 +796,11 @@ impl LibraryWindow {
 
     fn merge_visuals_timed(
         &mut self,
-        found: HashMap<ItemKey, visuals::Visual>,
+        mut found: HashMap<ItemKey, visuals::Visual>,
         cx: &mut Context<Self>,
     ) {
+        // Visuals already known were applied to the items when they were.
+        found.retain(|key, visual| self.visuals.get(key) != Some(visual));
         if found.is_empty() {
             return;
         }
