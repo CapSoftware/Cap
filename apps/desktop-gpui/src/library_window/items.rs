@@ -96,6 +96,10 @@ pub(crate) struct Folded {
     text: String,
     title_end: u32,
     app_end: u32,
+    /// Where the item's own people (saved guests and attendees) end, in the
+    /// text and in `Item::people`: names heard in its transcript follow.
+    own_end: u32,
+    own_people: u32,
 }
 
 const PART_END: char = '\0';
@@ -112,6 +116,8 @@ impl Folded {
             text,
             title_end,
             app_end,
+            own_end: app_end,
+            own_people: 0,
         }
     }
 
@@ -193,6 +199,8 @@ impl Item {
             &facts.app.as_deref().map(fold).unwrap_or_default(),
         );
         people.retain(|p| folded.add_person(&fold(p)));
+        folded.own_end = folded.text.len() as u32;
+        folded.own_people = people.len() as u32;
         folded.text.shrink_to_fit();
         Self {
             key,
@@ -229,6 +237,37 @@ impl Item {
                 self.people.push(name.to_string());
             }
         }
+    }
+
+    /// Puts the names heard in the meeting's transcript in place of the
+    /// ones an earlier read gave, keeping the meeting's saved guests and
+    /// attendees: a renamed speaker no longer shows under the old name.
+    pub fn set_heard(&mut self, names: &[String]) {
+        self.people.truncate(self.folded.own_people as usize);
+        self.folded.text.truncate(self.folded.own_end as usize);
+        self.add_people(names);
+    }
+
+    /// Whether `set_heard(names)` would change the item, without copying it.
+    pub fn heard_differs(&self, names: &[String]) -> bool {
+        let own = self.folded.own_people as usize;
+        let mut seen: Vec<String> = self.folded.people().take(own).map(str::to_string).collect();
+        let mut heard = self.people[own.min(self.people.len())..].iter();
+        for name in names {
+            let name = name.trim();
+            if name.is_empty() {
+                continue;
+            }
+            let folded = fold(name).replace(PART_END, "");
+            if seen.contains(&folded) {
+                continue;
+            }
+            seen.push(folded);
+            if heard.next().map(String::as_str) != Some(name) {
+                return true;
+            }
+        }
+        heard.next().is_some()
     }
 
     pub fn folded_title(&self) -> &str {

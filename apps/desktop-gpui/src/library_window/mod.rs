@@ -671,27 +671,11 @@ impl LibraryWindow {
             return;
         }
         drop(current);
-        // Copy the whole list only when a name is new to its item: after a
-        // rescan that found nothing new, every name is already there.
-        let gains = |item: &Item| match &item.key {
-            items::ItemKey::Doc(id) => names.get(id).is_some_and(|found| {
-                let mut probe = item.clone();
-                probe.add_people(found);
-                probe.people.len() != item.people.len()
-            }),
-            _ => false,
-        };
-        if !self.scan.items.iter().any(gains) {
+        let Some(items) = with_people(&self.scan.items, names) else {
             return;
-        }
+        };
         let mut next = (*self.scan).clone();
-        for item in &mut next.items {
-            if let items::ItemKey::Doc(id) = &item.key
-                && let Some(found) = names.get(id)
-            {
-                item.add_people(found);
-            }
-        }
+        next.items = items;
         self.scan = Rc::new(next);
         self.reevaluate(cx);
     }
@@ -3276,6 +3260,31 @@ impl Render for LibraryWindow {
     }
 }
 
+/// The items with the speaker names their transcripts give now: names an
+/// earlier read gave are replaced, so a renamed speaker leaves search and
+/// smart folders under the old name, and names from a meeting's saved guests
+/// and attendees stay. `None` when nothing changes: after a rescan that
+/// found nothing new, nothing is copied.
+fn with_people(items: &[Item], names: &HashMap<String, Vec<String>>) -> Option<Vec<Item>> {
+    let heard = |item: &Item| match &item.key {
+        items::ItemKey::Doc(id) => names.get(id),
+        _ => None,
+    };
+    if !items
+        .iter()
+        .any(|item| heard(item).is_some_and(|found| item.heard_differs(found)))
+    {
+        return None;
+    }
+    let mut next = items.to_vec();
+    for item in &mut next {
+        if let Some(found) = heard(item) {
+            item.set_heard(found);
+        }
+    }
+    Some(next)
+}
+
 #[cfg(test)]
 mod save_tests {
     use super::*;
@@ -3337,6 +3346,92 @@ mod save_tests {
         };
         assert_eq!(members(monday), vec![0]);
         assert!(members(tuesday).is_empty());
+    }
+
+    /// Renaming a speaker who is not a guest ("Alex" to "Sam") changes only
+    /// the transcript. The next rescan replaces the name the transcript gave
+    /// before: the old name leaves search and speaker smart folders, the
+    /// meeting's saved guest stays, and an unchanged rescan copies nothing.
+    #[test]
+    fn a_renamed_speaker_leaves_search_and_smart_folders() {
+        use cap_meetings::transcript::{LogLine, Source, Utterance, append_jsonl};
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.jsonl");
+        let cache = dir.path().join(people::CACHE_FILE);
+        let named = |name: &str| {
+            let mut names = cap_diarize::SpeakerNames::new(None);
+            names.observe(&[cap_diarize::SpeakerInfo {
+                id: cap_diarize::SpeakerId(2),
+                track: cap_diarize::Track::System,
+                first_ms: 0,
+                speech_ms: 1_000,
+                is_user: false,
+            }]);
+            names.rename(cap_diarize::SpeakerId(2), name);
+            LogLine::SpeakerNames { names }
+        };
+        append_jsonl(
+            &transcript,
+            &[
+                named("Alex"),
+                LogLine::Upsert {
+                    utterance: Utterance {
+                        id: "s1".into(),
+                        source: Source::System,
+                        speaker_id: Some(2),
+                        end_ms: 1_000,
+                        text: "Shipping Friday.".into(),
+                        is_final: true,
+                        ..Utterance::default()
+                    },
+                },
+            ],
+        )
+        .unwrap();
+        let docs = vec![("sync".to_string(), transcript.clone())];
+        let item = Item::new(
+            items::ItemKey::Doc("sync".into()),
+            ItemKind::Meeting,
+            "Sync",
+            Utc::now(),
+            items::ItemFacts {
+                people: vec!["Ana Ruiz".into()],
+                ..Default::default()
+            },
+        );
+        let first = with_people(&[item], &people::index(&docs, &cache)).unwrap();
+        assert_eq!(first[0].people, ["Ana Ruiz", "Alex"]);
+
+        append_jsonl(&transcript, &[named("Sam")]).unwrap();
+        let names = people::index(&docs, &cache);
+        let renamed = with_people(&first, &names).unwrap();
+        assert_eq!(renamed[0].people, ["Ana Ruiz", "Sam"]);
+        assert!(!renamed[0].matches_query("alex"));
+        assert!(renamed[0].matches_query("sam") && renamed[0].matches_query("ana"));
+        let speaker = |value: &str| {
+            let mut folder = folder("speaker");
+            folder.rules = vec![Rule::Person {
+                op: rules::TextOp::Contains,
+                value: value.into(),
+            }];
+            let utc_day = |at: chrono::DateTime<Utc>| at.date_naive();
+            let none = |_: &str, _: &Item| false;
+            rules::evaluate_all(
+                std::slice::from_ref(&folder),
+                &renamed,
+                &EvalContext {
+                    today: Utc::now().date_naive(),
+                    local_day: &utc_day,
+                    in_folder: &none,
+                },
+            )
+            .remove("speaker")
+            .unwrap_or_default()
+        };
+        assert!(speaker("alex").is_empty());
+        assert_eq!(speaker("sam"), vec![0]);
+        assert_eq!(speaker("ana"), vec![0]);
+        assert!(with_people(&renamed, &names).is_none(), "nothing changed");
     }
 
     #[test]
