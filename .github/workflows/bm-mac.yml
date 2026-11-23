@@ -1,0 +1,152 @@
+name: Scratch macOS upgrade, pixels and old versions (temporary)
+
+on:
+  push:
+    branches: [ci/bm-mac, ci/bm-mac2]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: bm-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAIN_RUN: "45167422846"
+  OLD_RUN: "45169123172"
+
+jobs:
+  macos:
+    name: Upgrade from released 0.6.3 on macOS
+    if: github.ref == 'refs/heads/ci/bm-mac'
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-macos-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: releases
+          path: ${{ runner.temp }}/dl/releases
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - name: Unpack (binary in MacOS/, Frameworks beside it) and mount the release
+        run: |
+          set -euo pipefail
+          A="$RUNNER_TEMP/apps"; mkdir -p "$A" "$RUNNER_TEMP/old"
+          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          for t in "$A"/*/; do mkdir -p "$t/MacOS"; mv "$t/cap-gpui" "$t/MacOS/"; [ -d "$t/resources" ] && mv "$t/resources" "$t/MacOS/"; cat "$t/sha.txt"; done
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/dl/releases/latest-mac.dmg"
+          app=$(find "$RUNNER_TEMP/dmg" -maxdepth 1 -name '*.app' | head -1)
+          cp -R "$app" "$RUNNER_TEMP/old/"
+          hdiutil detach "$RUNNER_TEMP/dmg" || true
+          name=$(basename "$app")
+          /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$RUNNER_TEMP/old/$name/Contents/Info.plist"
+          echo "OLD_BIN=$(find "$RUNNER_TEMP/old/$name/Contents/MacOS" -type f -perm +111 | head -1)" >> "$GITHUB_ENV"
+      - run: |
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil
+          command -v ffmpeg || HOMEBREW_NO_AUTO_UPDATE=1 brew install -q ffmpeg
+          A="$RUNNER_TEMP/apps"
+          "$RUNNER_TEMP/venv/bin/python" .bm/bm.py --old "$OLD_BIN" --base "$A/base/MacOS/cap-gpui" --head "$A/head/MacOS/cap-gpui" \
+            --out "$RUNNER_TEMP/bm" --rounds 3 --idle 40
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-macos-fixed
+          path: |
+            ${{ runner.temp }}/bm/summary.*
+            ${{ runner.temp }}/bm/snap-old.json
+            ${{ runner.temp }}/bm/runs/**/app.log
+            ${{ runner.temp }}/bm/runs/**/result.json
+            ${{ runner.temp }}/bm/runs/**/*.png
+            ${{ runner.temp }}/bm/exports/**
+          retention-days: 7
+
+  pixels:
+    name: macOS text rendering, base vs head, light and dark
+    if: github.ref == 'refs/heads/ci/bm-mac'
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-macos-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - run: |
+          A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          for t in "$A"/*/; do mkdir -p "$t/MacOS"; mv "$t/cap-gpui" "$t/MacOS/"; [ -d "$t/resources" ] && mv "$t/resources" "$t/MacOS/"; done
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil pillow
+          "$RUNNER_TEMP/venv/bin/python" .bm/bm.py --mode pixels --base "$A/base/MacOS/cap-gpui" --head "$A/head/MacOS/cap-gpui" --out "$RUNNER_TEMP/px"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-pixels-fixed
+          path: |
+            ${{ runner.temp }}/px/summary.*
+            ${{ runner.temp }}/px/pixels/*.png
+            ${{ runner.temp }}/px/runs/**/app.log
+          retention-days: 7
+
+  old:
+    name: Upgrade from ${{ matrix.ver }} on macOS
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        ver: ${{ github.ref == 'refs/heads/ci/bm-mac' && fromJSON('["0.6.2"]') || fromJSON('["0.6.1"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-macos-*
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.MAIN_RUN }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: old-macos-${{ matrix.ver }}
+          path: ${{ runner.temp }}/dl
+          run-id: ${{ env.OLD_RUN }}
+          github-token: ${{ github.token }}
+      - run: |
+          A="$RUNNER_TEMP/apps"; mkdir -p "$A"
+          find "$RUNNER_TEMP/dl" -name '*.tar' -exec tar -C "$A" -xf {} \;
+          for t in "$A"/*/; do mkdir -p "$t/MacOS"; mv "$t/cap-gpui" "$t/MacOS/"; [ -d "$t/resources" ] && mv "$t/resources" "$t/MacOS/"; cat "$t/sha.txt"; done
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install -q psutil
+          command -v ffmpeg || HOMEBREW_NO_AUTO_UPDATE=1 brew install -q ffmpeg
+          "$RUNNER_TEMP/venv/bin/python" .bm/bm.py --old "$A/old/MacOS/cap-gpui" --base "$A/base/MacOS/cap-gpui" --head "$A/head/MacOS/cap-gpui" \
+            --out "$RUNNER_TEMP/bm" --rounds 0
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bm-macos-from-${{ matrix.ver }}
+          path: |
+            ${{ runner.temp }}/bm/summary.*
+            ${{ runner.temp }}/bm/snap-old.json
+            ${{ runner.temp }}/bm/runs/**/app.log
+            ${{ runner.temp }}/bm/runs/**/result.json
+            ${{ runner.temp }}/bm/runs/**/*.png
+          retention-days: 7
