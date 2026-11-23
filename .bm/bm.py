@@ -341,8 +341,8 @@ class Flow:
         self.out = os.path.abspath(args.out)
         os.makedirs(self.out, exist_ok=True)
         self.summary = {"os": OS, "steps": {}}
-        self.bins = {"old": args.old, "base": args.base, "head": args.head}
-        self.libs = {"old": args.old_libs, "base": args.base_libs, "head": args.head_libs}
+        self.bins = {"old": args.old, "base": args.base, "head": args.head, "fix": args.fix}
+        self.libs = {"old": args.old_libs, "base": args.base_libs, "head": args.head_libs, "fix": args.fix_libs}
 
     def profile(self, name):
         p = os.path.join(self.out, "profiles", name)
@@ -412,9 +412,9 @@ class Flow:
         res["window"] = win
         return res
 
-    def studio(self, tag, profile, name, secs=6):
+    def studio(self, tag, profile, name, secs=6, env=None):
         before = set(p["path"] for p in projects(profile))
-        app = self.app(tag, profile, name, {"CAP_GPUI_AUTO_RECORD": f"studio:{secs}"})
+        app = self.app(tag, profile, name, dict({"CAP_GPUI_AUTO_RECORD": f"studio:{secs}"}, **(env or {})))
         started = app.wait_log(r"recording started", 60)
         finished = app.wait_log(r"recording finished", 60 + secs)
         app.idle(6)
@@ -621,6 +621,148 @@ class Flow:
         self.record("idle_rounds", rounds)
         self.write_md()
 
+    def pixels(self):
+        """macOS: the same surfaces from base and head, light and dark, then
+        a per-pixel comparison (needs Pillow)."""
+        from PIL import Image, ImageChops
+
+        shots = os.path.join(self.out, "pixels")
+        os.makedirs(shots, exist_ok=True)
+        fixture = None
+        results = {}
+        for theme in ("light", "dark"):
+            for tag in ("base", "head"):
+                p = os.path.join(self.out, "profiles", f"px-{theme}-{tag}")
+                os.makedirs(p, exist_ok=True)
+                self.seed_store(p, theme=theme)
+                if fixture:
+                    shutil.copytree(fixture, os.path.join(p, "recordings", os.path.basename(fixture)))
+                surfaces = {}
+                app = self.app(tag, p, f"px-{theme}-{tag}-main")
+                app.wait_log(r"main window opened", 60)
+                m = re.search(r"number=(?:Some\()?(\d+)", app.text())
+                time.sleep(4)
+                surfaces["main"] = os.path.join(shots, f"{theme}-{tag}-main.png")
+                screenshot(surfaces["main"], m.group(1) if m else None)
+                surfaces["main_screen"] = os.path.join(shots, f"{theme}-{tag}-main-screen.png")
+                screenshot(surfaces["main_screen"])
+                app.stop()
+                app = self.app(tag, p, f"px-{theme}-{tag}-settings", {"CAP_GPUI_AUTO_SETTINGS": "general"})
+                app.wait_log(r"main window opened", 60)
+                time.sleep(5)
+                surfaces["settings"] = os.path.join(shots, f"{theme}-{tag}-settings.png")
+                screenshot(surfaces["settings"])
+                app.stop()
+                if not fixture:
+                    r, proj = self.studio(tag, p, f"px-{theme}-{tag}-rec", secs=4)
+                    if proj:
+                        fixture = os.path.join(self.out, "px-fixture.cap")
+                        shutil.copytree(proj, fixture)
+                proj = os.path.join(p, "recordings", os.path.basename(fixture)) if fixture else None
+                if proj and os.path.exists(proj):
+                    app = self.app(tag, p, f"px-{theme}-{tag}-editor", {"CAP_GPUI_AUTO_EDITOR": proj})
+                    app.wait_log(r"editor timeline model", 90)
+                    time.sleep(6)
+                    surfaces["editor"] = os.path.join(shots, f"{theme}-{tag}-editor.png")
+                    screenshot(surfaces["editor"])
+                    app.stop()
+                app = self.app(tag, p, f"px-{theme}-{tag}-recording", {"CAP_GPUI_AUTO_RECORD": "studio:12"})
+                app.wait_log(r"recording started", 60)
+                time.sleep(4)
+                surfaces["recording"] = os.path.join(shots, f"{theme}-{tag}-recording.png")
+                screenshot(surfaces["recording"])
+                app.wait_log(r"recording finished", 30)
+                app.stop()
+                results[f"{theme}-{tag}"] = surfaces
+        cmp = {}
+        for theme in ("light", "dark"):
+            for surface in ("main", "main_screen", "settings", "editor", "recording"):
+                a = results.get(f"{theme}-base", {}).get(surface)
+                b = results.get(f"{theme}-head", {}).get(surface)
+                if not (a and b and os.path.exists(a) and os.path.exists(b)):
+                    cmp[f"{theme}.{surface}"] = "missing"
+                    continue
+                ia, ib = Image.open(a).convert("RGB"), Image.open(b).convert("RGB")
+                if ia.size != ib.size:
+                    cmp[f"{theme}.{surface}"] = f"size {ia.size} vs {ib.size}"
+                    continue
+                d = ImageChops.difference(ia, ib)
+                # The menu bar clock differs between any two captures.
+                w, h = d.size
+                d.paste((0, 0, 0), (0, 0, w, int(h * 0.03))) if surface != "main" else None
+                box = d.getbbox()
+                px = sum(1 for v in d.convert("L").getdata() if v > 8)
+                d.point(lambda v: 255 if v > 8 else 0).save(a.replace("-base-", "-diff-"))
+                cmp[f"{theme}.{surface}"] = {"pixels_over_8": px, "of": w * h, "bbox": box}
+        self.record("pixels", cmp)
+
+    def captions(self):
+        """Linux: one Studio project with a known spoken track, captions
+        generated in the real editor by each build, words compared."""
+        text = ("Hello, this is Mister Kapp from Capp Street. Kap said the cap fits. "
+                "We record our demos with Cap every week.")
+        p0 = self.profile("cap-src")
+        self.seed_store(p0)
+        store_path = os.path.join(p0, "store")
+        store = json.load(open(store_path))
+        store["gpui"] = {"selectedTranscriptionModel": "small", "selectedTranscriptionLanguage": "en"}
+        json.dump(store, open(store_path, "w"))
+        r, proj = self.studio("base", p0, "cap-record", secs=14, env={"CAP_GPUI_AUTO_NO_MIC": "0"})
+        self.record("captions.record", r)
+        if not proj:
+            return
+        mics = glob.glob(os.path.join(proj, "**", "audio-input.*"), recursive=True)
+        self.record("captions.mic_files", mics)
+        wav = os.path.join(self.out, "speech.wav")
+        subprocess.run(["espeak-ng", "-s", "150", "-w", wav, text], check=True)
+        for mic in mics:
+            info = mp4_info(mic)
+            dur = float(info.get("format", {}).get("duration", 12))
+            tmp = mic + ".new" + os.path.splitext(mic)[1]
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", wav, "-af", f"apad,atrim=0:{dur}",
+                            "-ar", "48000", "-ac", "1", "-c:a", "aac", "-b:a", "128k", tmp], check=True)
+            os.replace(tmp, mic)
+        dumps = {}
+        for tag in ("base", "head", "fix"):
+            if not self.bins.get(tag):
+                continue
+            p = self.profile(f"cap-{tag}")
+            shutil.copy(store_path, os.path.join(p, "store"))
+            dst = os.path.join(p, "recordings", os.path.basename(proj))
+            shutil.copytree(proj, dst)
+            dump = os.path.join(self.out, f"captions-{tag}.json")
+            app = self.app(tag, p, f"cap-{tag}", {
+                "CAP_GPUI_AUTO_EDITOR": dst,
+                "CAP_GPUI_AUTO_SIDEBAR": "captions",
+                "CAP_GPUI_AUTO_TRANSCRIPT": f"transcribe,dump:{dump}",
+            })
+            app.wait_log(r"transcribe finished", 600)
+            app.wait_glob(dump, 60)
+            res = app.stop()
+            cfg = {}
+            try:
+                cfg = json.load(open(os.path.join(dst, "project-config.json")))
+            except Exception:
+                pass
+            caps = cfg.get("captions") or {}
+            seg_text = [s.get("text") for s in caps.get("segments", [])] if isinstance(caps, dict) else None
+            words = []
+            if os.path.exists(dump):
+                words = [(w["text"], round(w["start"], 3), round(w["end"], 3)) for w in json.load(open(dump)).get("words", [])]
+            dumps[tag] = {"words": words, "segments": seg_text,
+                          "model_lines": [l for l in app.text().splitlines() if re.search(r"(?i)whisper|parakeet|model", l)][-6:],
+                          "panics": res["panics"]}
+        cmp = {}
+        for a, b in (("base", "head"), ("base", "fix")):
+            if a in dumps and b in dumps:
+                cmp[f"{a}_vs_{b}"] = {
+                    "words_identical": dumps[a]["words"] == dumps[b]["words"],
+                    "segments_identical": dumps[a]["segments"] == dumps[b]["segments"],
+                }
+        self.record("captions.text", {k: " ".join(t for t, _, _ in v["words"]) for k, v in dumps.items()})
+        self.record("captions.detail", dumps)
+        self.record("captions.compare", cmp)
+
     def write_md(self):
         s = self.summary["steps"]
         lines = [f"# BM upgrade run on {OS}", ""]
@@ -640,6 +782,8 @@ def main():
     ap.add_argument("--old-libs")
     ap.add_argument("--base-libs")
     ap.add_argument("--head-libs")
+    ap.add_argument("--fix")
+    ap.add_argument("--fix-libs")
     ap.add_argument("--out", required=True)
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--idle", type=int, default=45)
@@ -651,6 +795,18 @@ def main():
     ap.add_argument("--name")
     args = ap.parse_args()
     flow = Flow(args)
+    if args.mode == "captions":
+        try:
+            flow.captions()
+        finally:
+            flow.save()
+        return
+    if args.mode == "pixels":
+        try:
+            flow.pixels()
+        finally:
+            flow.save()
+        return
     if args.mode == "instant":
         p = flow.profile(args.name)
         flow.seed_store(p)
