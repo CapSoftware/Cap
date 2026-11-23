@@ -238,6 +238,8 @@ mod windows {
         decoded: usize,
         encoder: String,
         sw: String,
+        ring_capacity: Option<u32>,
+        ring_high_water: Option<u32>,
     }
 
     fn decode_count(path: &Path) -> usize {
@@ -348,7 +350,17 @@ mod windows {
             decoded,
             encoder: encoder_name,
             sw: "frames rgba".to_string(),
+            ring_capacity: None,
+            ring_high_water: None,
         }
+    }
+
+    fn texture_refusal(ring: &GpuTextureRing, encoder: &str, sw: &str, reason: &str) -> String {
+        format!(
+            "{reason} encoder {encoder} {sw} ring {} high-water {}",
+            ring.capacity(),
+            ring.high_water()
+        )
     }
 
     fn run_texture(
@@ -367,17 +379,17 @@ mod windows {
             },
         )
         .map_err(|error| error.to_string())?;
-        if !encoder.is_d3d11_hw_input() {
-            return Err(encoder.d3d11_status().to_string());
-        }
         let encoder_name = encoder.codec_name();
+        if !encoder.is_d3d11_hw_input() {
+            return Err(format!("{} encoder {encoder_name}", encoder.d3d11_status()));
+        }
         let sw = format!("hw sw_format {}", encoder.d3d11_status());
         let mut ring = GpuTextureRing::new(device.device.clone())
             .ok_or_else(|| "no immediate context".to_string())?;
         for i in 0..WARMUP {
-            let (texture, lifetime) = ring
-                .submit_from(&sources[i % SOURCES], info.width, info.height)
-                .ok_or_else(|| ring.refusal().to_string())?;
+            let submitted = ring.submit_from(&sources[i % SOURCES], info.width, info.height);
+            let (texture, lifetime) = submitted
+                .ok_or_else(|| texture_refusal(&ring, &encoder_name, &sw, ring.refusal()))?;
             unsafe {
                 encoder
                     .queue_d3d11_texture(
@@ -385,16 +397,18 @@ mod windows {
                         Duration::from_millis(i as u64 * 33),
                         Some(lifetime),
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| {
+                        texture_refusal(&ring, &encoder_name, &sw, &error.to_string())
+                    })?;
             }
         }
         let wall_start = Instant::now();
         let cpu_start = process_cpu();
         for i in 0..FRAMES {
             let index = WARMUP + i;
-            let (texture, lifetime) = ring
-                .submit_from(&sources[index % SOURCES], info.width, info.height)
-                .ok_or_else(|| ring.refusal().to_string())?;
+            let submitted = ring.submit_from(&sources[index % SOURCES], info.width, info.height);
+            let (texture, lifetime) = submitted
+                .ok_or_else(|| texture_refusal(&ring, &encoder_name, &sw, ring.refusal()))?;
             unsafe {
                 encoder
                     .queue_d3d11_texture(
@@ -402,12 +416,16 @@ mod windows {
                         Duration::from_millis(index as u64 * 33),
                         Some(lifetime),
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| {
+                        texture_refusal(&ring, &encoder_name, &sw, &error.to_string())
+                    })?;
             }
         }
         let wall = wall_start.elapsed();
         let cpu = process_cpu().saturating_sub(cpu_start);
-        encoder.finish().map_err(|error| error.to_string())?;
+        encoder
+            .finish()
+            .map_err(|error| texture_refusal(&ring, &encoder_name, &sw, &error.to_string()))?;
         let decoded = decode_count(&assemble(dir));
         Ok(Run {
             wall,
@@ -415,6 +433,8 @@ mod windows {
             decoded,
             encoder: encoder_name,
             sw,
+            ring_capacity: Some(ring.capacity()),
+            ring_high_water: Some(ring.high_water()),
         })
     }
 
@@ -430,8 +450,14 @@ mod windows {
             .map(|run| run.encoder.as_str())
             .unwrap_or("unknown");
         let sw = runs.first().map(|run| run.sw.as_str()).unwrap_or("unknown");
+        let capacity = runs.iter().find_map(|run| run.ring_capacity);
+        let high_water = runs.iter().filter_map(|run| run.ring_high_water).max();
+        let ring_text = match (capacity, high_water) {
+            (Some(capacity), Some(peak)) => format!(" ring {capacity} high-water {peak}"),
+            _ => String::new(),
+        };
         println!(
-            "{label} {path} encoder {encoder} {sw} wall median {} ms range {wall_min}-{wall_max} cpu median {} ms range {cpu_min}-{cpu_max} decoded {:?}",
+            "{label} {path} encoder {encoder} {sw}{ring_text} wall median {} ms range {wall_min}-{wall_max} cpu median {} ms range {cpu_min}-{cpu_max} decoded {:?}",
             median(&mut wall),
             median(&mut cpu),
             runs.iter().map(|run| run.decoded).collect::<Vec<_>>()

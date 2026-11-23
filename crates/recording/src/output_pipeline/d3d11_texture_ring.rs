@@ -253,6 +253,14 @@ impl GpuTextureRing {
         self.unusable
     }
 
+    pub fn capacity(&self) -> u32 {
+        TEXTURE_RING_CAPACITY
+    }
+
+    pub fn high_water(&self) -> u32 {
+        self.slots.high_water()
+    }
+
     pub fn refusal(&self) -> &str {
         self.refusal
             .as_deref()
