@@ -22,7 +22,6 @@ use crate::{
     motion::{ChangeMap, Patch, TILE, diff_tiles, estimate_shift},
 };
 
-/// A display video to analyse and the segment index its regions belong to.
 #[derive(Debug, Clone)]
 pub struct SegmentSource {
     pub index: u32,
@@ -232,6 +231,7 @@ impl<'a> Analyzer<'a> {
         };
         let mut last_progress = Instant::now();
         let mut decode_mark = Instant::now();
+        let mut last_frame: Option<(f64, ffmpeg::frame::Video, Arc<GrayImage>)> = None;
         let cancel = self.cancel.clone();
         let model = &mut *self.model;
         let mut segment_info = RedactionSegment {
@@ -252,8 +252,12 @@ impl<'a> Analyzer<'a> {
             let gray_started = Instant::now();
             let gray = Arc::new(frames.gray(&frame.video)?);
             stats.gray += gray_started.elapsed();
-            state.step(model, frames, &frame, gray, stats)?;
+            state.step(model, frames, &frame, gray.clone(), stats)?;
             stats.frames += 1;
+            // Changed content still waiting for a settled frame is read on
+            // the last frame if the recording ends first.
+            last_frame =
+                (!state.pending.is_empty()).then(|| (frame.time, frame.video.clone(), gray));
             if last_progress.elapsed() >= Duration::from_millis(500) {
                 last_progress = Instant::now();
                 segment_info.source_frames = state.frame_count;
@@ -265,6 +269,13 @@ impl<'a> Analyzer<'a> {
             Ok(true)
         })?;
         stats.hardware_decode |= frames.is_hardware_accelerated();
+        if let Some((time, video, gray)) = last_frame.take()
+            && !state.pending.is_empty()
+        {
+            let rgb = frames.rgb(&video)?;
+            state.detect(model, &rgb, &gray, time, false, stats)?;
+            state.pending.clear();
+        }
         state.finish_all();
         let fps = state.fps_estimate;
         stats.source_seconds += state.last_time - state.first_time.unwrap_or(0.0) + 1.0 / fps;
@@ -646,7 +657,7 @@ impl SegmentState {
         }
 
         let (w, h) = (self.width as f32, self.height as f32);
-        let contexts = lines
+        let mut contexts = lines
             .iter()
             .zip(&recognized)
             .map(|(rect, rec)| LineContext {
@@ -657,7 +668,19 @@ impl SegmentState {
                 h: rect.h / h,
             })
             .collect::<Vec<_>>();
-        let findings = classify_frame(&contexts);
+        // Lines read earlier and not changed since (a "Password" label above
+        // a field whose value just appeared) give the new lines their
+        // context; their own findings come from when they were read.
+        let neighbours = self.remembered_near(&lines);
+        contexts.extend(neighbours.iter().map(|(rect, text)| LineContext {
+            text: text.as_str(),
+            x: rect.x / w,
+            y: rect.y / h,
+            w: rect.w / w,
+            h: rect.h / h,
+        }));
+        let mut findings = classify_frame(&contexts);
+        findings.truncate(lines.len());
         let mut boxes = Vec::new();
         for ((line, rec), found) in lines.iter().zip(&recognized).zip(findings) {
             for finding in found {
@@ -799,6 +822,26 @@ impl SegmentState {
                 .collect(),
             confidence: 1.0,
         })
+    }
+
+    /// Remembered lines, where the motion since puts them now, within a few
+    /// line heights of `lines` and not overlapping any of them.
+    fn remembered_near(&self, lines: &[Rect]) -> Vec<(Rect, String)> {
+        let from_track = 1.0 / self.to_track;
+        self.memory
+            .iter()
+            .filter_map(|known| {
+                let dx = (self.shift_total.0 - known.shift_total.0) * from_track;
+                let dy = (self.shift_total.1 - known.shift_total.1) * from_track;
+                let rect = known.full.translate(dx, dy);
+                let near = lines.iter().any(|line| {
+                    let reach = line.h * 4.0;
+                    rect.intersection(&line.expand(reach * 3.0, reach)) > 0.0
+                });
+                let overlaps = lines.iter().any(|line| line.iou(&rect) > 0.3);
+                (near && !overlaps).then(|| (rect, known.text.clone()))
+            })
+            .collect()
     }
 
     fn remember(
