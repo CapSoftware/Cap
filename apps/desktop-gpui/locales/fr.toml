@@ -4320,6 +4320,7 @@ close_tab = "Vous pouvez fermer cet onglet."
 [library]
 add_rule = "Ajouter une règle"
 create = "Créer"
+damaged = "Impossible de lire les détails de cette note"
 date_after = "après le {date}"
 date_before = "avant le {date}"
 date_between = "du {from} au {to}"

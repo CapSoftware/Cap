@@ -4320,6 +4320,7 @@ close_tab = "Sie können diesen Tab schließen."
 [library]
 add_rule = "Regel hinzufügen"
 create = "Erstellen"
+damaged = "Die Details dieser Notiz sind nicht lesbar"
 date_after = "nach dem {date}"
 date_before = "vor dem {date}"
 date_between = "{from} bis {to}"

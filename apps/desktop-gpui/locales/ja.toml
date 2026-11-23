@@ -4320,6 +4320,7 @@ close_tab = "このタブは閉じてかまいません。"
 [library]
 add_rule = "条件を追加"
 create = "作成"
+damaged = "このメモの詳細を読み込めません"
 date_after = "{date}以降"
 date_before = "{date}以前"
 date_between = "{from}〜{to}"

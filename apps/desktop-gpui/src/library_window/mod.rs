@@ -1365,6 +1365,11 @@ fn when_line(item: &Item, today: NaiveDate) -> String {
 }
 
 fn meta_line(item: &Item) -> String {
+    // A meeting rebuilt from its folder has no details worth listing; say so
+    // once instead of a bare "Meeting".
+    if item.damaged {
+        return tr::library::damaged().to_string();
+    }
     let mut parts: Vec<String> = Vec::new();
     if let Some(ms) = item.duration_ms {
         parts.push(format::duration(ms));

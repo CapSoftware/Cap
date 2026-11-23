@@ -4322,6 +4322,7 @@ close_tab = { text = "You can close this tab.", context = "Quiet footer on the b
 [library]
 add_rule = "Add rule"
 create = "Create"
+damaged = "Can't read this note's details"
 date_after = "after {date}"
 date_before = "before {date}"
 date_between = "{from} to {to}"

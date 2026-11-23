@@ -4320,6 +4320,7 @@ close_tab = "你可以关闭此标签页。"
 [library]
 add_rule = "添加规则"
 create = "创建"
+damaged = "无法读取此笔记的详细信息"
 date_after = "{date} 之后"
 date_before = "{date} 之前"
 date_between = "{from} 至 {to}"

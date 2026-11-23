@@ -4320,6 +4320,7 @@ close_tab = "आप यह टैब बंद कर सकते हैं।"
 [library]
 add_rule = "नियम जोड़ें"
 create = "बनाएँ"
+damaged = "इस नोट का विवरण पढ़ा नहीं जा सका"
 date_after = "{date} के बाद"
 date_before = "{date} से पहले"
 date_between = "{from} से {to}"
