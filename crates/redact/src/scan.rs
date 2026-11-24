@@ -89,6 +89,12 @@ const KNOWN_CATEGORIES: [RedactCategory; 5] = [
     RedactCategory::Email,
 ];
 const KNOWN_MIN_LEN: usize = 8;
+/// Line height, in detector pixels, that the adaptive scale aims the
+/// smaller quarter of on-screen text at, its floor, and how many recent
+/// lines it looks at.
+const TEXT_HEIGHT: f32 = 24.0;
+const MIN_DETECT_SCALE: f32 = 0.35;
+const HEIGHT_SAMPLES: usize = 200;
 /// Lines of at most this many characters are hidden whole once any part of
 /// them is sensitive.
 const SHORT_LINE: usize = 32;
@@ -257,6 +263,8 @@ pub struct Scan {
     height: u32,
     to_track: f32,
     det_scale: f32,
+    /// Heights of the lines detected lately, which set the detector scale.
+    heights: VecDeque<f32>,
     switches: Switches,
     previous: Option<Arc<GrayImage>>,
     previous_luma: Option<Arc<GrayImage>>,
@@ -283,6 +291,7 @@ impl Scan {
             height,
             to_track: track_width as f32 / width as f32,
             det_scale: (2048.0 / width.max(height) as f32).min(1.0),
+            heights: VecDeque::new(),
             switches: Switches::from_env(),
             previous: None,
             previous_luma: None,
@@ -390,7 +399,7 @@ impl Scan {
             let rgb = frames.rgb_regions(&frame.video, &rois)?;
             stats.rgb += rgb_started.elapsed();
             let detect_started = Instant::now();
-            let pending = model.detect_begin(&rgb.0, &rois, self.det_scale)?;
+            let pending = model.detect_begin(&rgb.0, &rois, self.detect_scale())?;
             stats.detect += detect_started.elapsed();
             (Some(rgb), Some(pending))
         };
@@ -488,18 +497,19 @@ impl Scan {
                 frames::fill_rgb(&video, &mut rgb, &extra);
             }
             stats.rgb += rgb_started.elapsed();
+            let scale = self.detect_scale();
             let detect_started = Instant::now();
             let mut found = match pending {
                 Some(pending) => model.detect_end(pending)?,
                 None => Vec::new(),
             };
             if !extra.is_empty() {
-                found.extend(model.detect_all(&rgb, &extra, self.det_scale)?);
+                found.extend(model.detect_all(&rgb, &extra, scale)?);
             }
             let mut lines: Vec<Rect> = Vec::new();
             let mut cut = Vec::new();
             for (roi, found) in rois.iter().zip(found) {
-                stats.det_pixels += f64::from(roi.area() * self.det_scale * self.det_scale);
+                stats.det_pixels += f64::from(roi.area() * scale * scale);
                 for line in found {
                     let r = line.rect;
                     if (r.x - roi.x < 3.0 && roi.x > 0.5)
@@ -528,9 +538,9 @@ impl Scan {
                 if partial {
                     frames::fill_rgb(&video, &mut rgb, &strips);
                 }
-                let found = model.detect_all(&rgb, &strips, self.det_scale)?;
+                let found = model.detect_all(&rgb, &strips, scale)?;
                 for (strip, found) in strips.iter().zip(found) {
-                    stats.det_pixels += f64::from(strip.area() * self.det_scale * self.det_scale);
+                    stats.det_pixels += f64::from(strip.area() * scale * scale);
                     for line in found {
                         let r = line.rect;
                         lines.retain(|other| other.intersection(&r) < 0.8 * other.area());
@@ -558,6 +568,12 @@ impl Scan {
                 );
             }
 
+            for line in &lines {
+                self.heights.push_back(line.h);
+            }
+            while self.heights.len() > HEIGHT_SAMPLES {
+                self.heights.pop_front();
+            }
             if self.switches.rowmerge {
                 lines = merge_row_boxes(lines);
             }
@@ -967,6 +983,22 @@ impl Scan {
             region.id = id;
         }
         regions
+    }
+
+    /// The detector's scale: the frame's (at most 2048 px on its long side),
+    /// lowered while most text on screen is large, so a line reaches the
+    /// detector at about [`TEXT_HEIGHT`] px: large text is found whole and
+    /// costs less.
+    fn detect_scale(&self) -> f32 {
+        if self.heights.len() < HEIGHT_SAMPLES / 10 {
+            return self.det_scale;
+        }
+        let mut heights = self.heights.iter().copied().collect::<Vec<_>>();
+        heights.sort_by(f32::total_cmp);
+        let small = heights[heights.len() / 4].max(1.0);
+        (TEXT_HEIGHT / small)
+            .min(self.det_scale)
+            .max(MIN_DETECT_SCALE.min(self.det_scale))
     }
 
     pub fn cache_entries(&self) -> usize {
