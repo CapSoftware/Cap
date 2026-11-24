@@ -282,6 +282,65 @@ const INSTANT_RESOLUTION_TIERS: &[(u32, &str, Label)] = &[
 /// `FREE_INSTANT_MODE_MAX_RESOLUTION`.
 const FREE_INSTANT_MODE_MAX_RESOLUTION: u32 = 1280;
 
+const RESOLUTION_NAMES: &[(u32, &str)] = &[
+    (1280, "720p"),
+    (1920, "1080p"),
+    (2560, "1440p"),
+    (3840, "4K"),
+    (4096, "4K"),
+    (5120, "5K"),
+    (6016, "6K"),
+    (6144, "6K"),
+    (7680, "8K"),
+];
+
+fn resolution_name(width: u32, height: u32) -> Option<&'static str> {
+    let (long, short) = (width.max(height), width.min(height));
+    let sixteen_by_nine = (u64::from(long) * 9).abs_diff(u64::from(short) * 16) <= 16;
+    if !sixteen_by_nine && (long, short) != (4096, 2160) {
+        return None;
+    }
+    RESOLUTION_NAMES
+        .iter()
+        .find(|(named, _)| *named == long)
+        .map(|(_, name)| *name)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StudioResolution {
+    width: u32,
+    height: u32,
+    several_displays: bool,
+}
+
+fn studio_resolution(display_sizes: &[Option<(u32, u32)>]) -> Option<StudioResolution> {
+    display_sizes
+        .iter()
+        .flatten()
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .map(|&(width, height)| {
+            cap_recording::studio_recording::studio_display_recording_size(width, height)
+        })
+        .max_by_key(|&(width, height)| u64::from(width) * u64::from(height))
+        .map(|(width, height)| StudioResolution {
+            width,
+            height,
+            several_displays: display_sizes.len() > 1,
+        })
+}
+
+fn read_studio_resolution() -> Option<StudioResolution> {
+    let sizes: Vec<_> = scap_targets::Display::list()
+        .iter()
+        .map(|display| {
+            display
+                .physical_size()
+                .map(|size| (size.width() as u32, size.height() as u32))
+        })
+        .collect();
+    studio_resolution(&sizes)
+}
+
 #[derive(Clone, Copy)]
 enum InstantQualityNotice {
     SaveFailed,
@@ -731,6 +790,7 @@ pub struct SettingsWindow {
     pub(crate) plan_refresh_failed: bool,
     instant_quality_notice: Option<InstantQualityNotice>,
     studio_quality_save_failed: bool,
+    studio_resolution: Option<StudioResolution>,
     /// Everything the pages in `settings_pages.rs` own -- their fetch state,
     /// drafts and text-input entities.
     pub(crate) pages: crate::settings_pages::PagesState,
@@ -892,6 +952,7 @@ impl SettingsWindow {
             plan_refresh_failed: false,
             instant_quality_notice: None,
             studio_quality_save_failed: false,
+            studio_resolution: read_studio_resolution(),
             project_name_input,
             server_url_input,
             _field_events: field_events,
@@ -947,6 +1008,7 @@ impl SettingsWindow {
         self.quality_scroll_request = None;
         self.instant_quality_notice = None;
         self.studio_quality_save_failed = false;
+        self.studio_resolution = read_studio_resolution();
         self.has_cap_pro = store::auth_snapshot().is_upgraded();
         self.shortcuts_cancel(cx);
         self.page = page;
@@ -3608,6 +3670,46 @@ impl SettingsWindow {
             })
     }
 
+    fn render_studio_resolution(&self, quality: StudioQuality) -> gpui::AnyElement {
+        let theme = self.theme;
+        let resolution = self.studio_resolution;
+        let description = if quality == StudioQuality::Compatibility {
+            tr::settings::quality::studio::resolution_description_compatibility()
+        } else if resolution.is_some_and(|resolution| resolution.several_displays) {
+            tr::settings::quality::studio::resolution_description_several()
+        } else {
+            tr::settings::quality::studio::resolution_description()
+        };
+        let value = resolution.map(|resolution| {
+            let pixels = format!("{} × {}", resolution.width, resolution.height);
+            let (headline, detail) = match resolution_name(resolution.width, resolution.height) {
+                Some(name) => (name.to_string(), Some(pixels)),
+                None => (pixels, None),
+            };
+            let headline = if resolution.several_displays {
+                tr::settings::quality::studio::resolution_up_to(&headline)
+            } else {
+                headline
+            };
+            div()
+                .flex()
+                .items_baseline()
+                .gap(px(6.))
+                .child(div().text_size(px(13.)).child(headline))
+                .children(detail.map(|detail| {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.settings_muted())
+                        .child(detail)
+                }))
+        });
+        self.setting_row(
+            tr::settings::quality::studio::resolution(),
+            Some(description),
+            value.map_or_else(|| div().into_any_element(), IntoElement::into_any_element),
+        )
+    }
+
     fn render_studio_quality(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let current = self.settings.studio_recording_quality;
@@ -3685,6 +3787,8 @@ impl SettingsWindow {
                     .into_any_element()
             })
             .collect();
+
+        rows.insert(0, self.render_studio_resolution(current));
 
         if self.studio_quality_save_failed {
             rows.push(
@@ -5469,6 +5573,88 @@ mod tests {
         rows[30].item.thumbnail = None;
         assert!(
             pending_thumbnail_decodes(&rows, &[30], RecordingRow::pending_thumbnail).is_empty()
+        );
+    }
+
+    #[test]
+    fn standard_sizes_get_a_name_and_other_panels_do_not() {
+        for ((width, height), name) in [
+            ((1280, 720), Some("720p")),
+            ((1920, 1080), Some("1080p")),
+            ((2560, 1440), Some("1440p")),
+            ((3840, 2160), Some("4K")),
+            ((4096, 2160), Some("4K")),
+            ((4096, 2304), Some("4K")),
+            ((5120, 2880), Some("5K")),
+            ((6016, 3384), Some("6K")),
+            ((6144, 3456), Some("6K")),
+            ((7680, 4320), Some("8K")),
+            ((2160, 3840), Some("4K")),
+            ((1080, 1920), Some("1080p")),
+            ((3456, 2234), None),
+            ((3024, 1964), None),
+            ((2880, 1864), None),
+            ((2560, 1664), None),
+            ((1366, 768), None),
+            ((1364, 766), None),
+            ((1920, 1200), None),
+            ((2560, 1600), None),
+            ((3440, 1440), None),
+            ((2560, 1080), None),
+            ((5120, 1440), None),
+            ((4096, 1152), None),
+            ((3840, 1600), None),
+            ((1600, 900), None),
+            ((0, 0), None),
+        ] {
+            assert_eq!(resolution_name(width, height), name, "{width}x{height}");
+        }
+    }
+
+    #[test]
+    fn studio_resolution_shows_what_the_largest_display_records() {
+        assert_eq!(studio_resolution(&[]), None);
+        assert_eq!(studio_resolution(&[None]), None);
+        assert_eq!(studio_resolution(&[Some((0, 0))]), None);
+        assert_eq!(
+            studio_resolution(&[Some((3456, 2234))]),
+            Some(StudioResolution {
+                width: 3456,
+                height: 2234,
+                several_displays: false,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[Some((5120, 2880))]),
+            Some(StudioResolution {
+                width: 4096,
+                height: 2304,
+                several_displays: false,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[Some((3024, 1964)), Some((3840, 2160)), None]),
+            Some(StudioResolution {
+                width: 3840,
+                height: 2160,
+                several_displays: true,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[None, Some((1920, 1080))]),
+            Some(StudioResolution {
+                width: 1920,
+                height: 1080,
+                several_displays: true,
+            })
+        );
+        assert_eq!(
+            studio_resolution(&[Some((3440, 1440)), Some((2560, 1440))]),
+            Some(StudioResolution {
+                width: 3440,
+                height: 1440,
+                several_displays: true,
+            })
         );
     }
 
