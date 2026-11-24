@@ -62,6 +62,7 @@ pub struct EncoderHealthStatus {
 
 #[derive(Debug, Clone)]
 pub enum EncoderFailureReason {
+    UnexpectedEvent(i32),
     Stalled,
     ConsecutiveProcessFailures,
     Timeout,
@@ -681,7 +682,13 @@ impl H264Encoder {
                         }
                     }
                     _ => {
-                        panic!("Unknown media event type: {}", event_type.0);
+                        let _ = self.cleanup_encoder();
+                        return Err(EncoderRuntimeError::EncoderUnhealthy {
+                            reason: EncoderFailureReason::UnexpectedEvent(event_type.0),
+                            inputs_without_output: health_monitor.inputs_without_output,
+                            process_failures: health_monitor.consecutive_process_failures,
+                            frames_encoded: health_monitor.total_frames_encoded,
+                        });
                     }
                 }
             }
@@ -713,4 +720,83 @@ impl H264Encoder {
 fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
     let frame_rate_factor = (fps as f32 - 30.0).max(0.0) / 2.0 + 30.0;
     (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::{
+        Foundation::E_FAIL,
+        Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM,
+        Media::MediaFoundation::{
+            IMFAsyncCallback, IMFAsyncResult, IMFMediaEvent, IMFMediaEventGenerator_Impl,
+            MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MEError, MF_VERSION, MFCreateMediaEvent,
+            MFSTARTUP_FULL, MFStartup,
+        },
+        System::Com::StructuredStorage::PROPVARIANT,
+    };
+    use windows_core::{GUID, HRESULT, IUnknown, Ref, implement};
+
+    #[implement(IMFMediaEventGenerator)]
+    struct RepeatedEvent(IMFMediaEvent);
+
+    impl IMFMediaEventGenerator_Impl for RepeatedEvent_Impl {
+        fn GetEvent(
+            &self,
+            _flags: MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS,
+        ) -> windows_core::Result<IMFMediaEvent> {
+            Ok(self.0.clone())
+        }
+
+        fn BeginGetEvent(
+            &self,
+            _callback: Ref<'_, IMFAsyncCallback>,
+            _state: Ref<'_, IUnknown>,
+        ) -> windows_core::Result<()> {
+            Err(E_NOTIMPL.into())
+        }
+
+        fn EndGetEvent(
+            &self,
+            _result: Ref<'_, IMFAsyncResult>,
+        ) -> windows_core::Result<IMFMediaEvent> {
+            Err(E_NOTIMPL.into())
+        }
+
+        fn QueueEvent(
+            &self,
+            _event_type: u32,
+            _extended_type: *const GUID,
+            _status: HRESULT,
+            _value: *const PROPVARIANT,
+        ) -> windows_core::Result<()> {
+            Err(E_NOTIMPL.into())
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a hardware H264 encoder"]
+    fn unexpected_media_event_ends_the_run_with_a_fallback_error() {
+        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.expect("start Media Foundation");
+        let d3d_device = crate::d3d::create_d3d_device().expect("create D3D11 device");
+        let mut encoder = H264Encoder::new(
+            &d3d_device,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            SizeInt32 {
+                Width: 1280,
+                Height: 720,
+            },
+            30,
+            0.15,
+        )
+        .expect("create hardware H264 encoder");
+        let event = unsafe { MFCreateMediaEvent(MEError.0 as u32, &GUID::zeroed(), E_FAIL, None) }
+            .expect("create media event");
+        encoder.event_generator = RepeatedEvent(event).into();
+
+        let error = encoder
+            .run(Arc::new(AtomicBool::new(false)), || Ok(None), |_| Ok(()))
+            .expect_err("an unexpected media event ends the run with an error");
+        assert!(error.should_fallback(), "{error}");
+    }
 }
