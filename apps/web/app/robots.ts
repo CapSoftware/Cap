@@ -6,7 +6,7 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
 			{
 				userAgent: "*",
 				allow: "/",
-				disallow: ["/dashboard", "/login", "/invite", "/onboarding", "/record"],
+				disallow: ["/dashboard", "/login", "/invite", "/onboarding"],
 			},
 		],
 		sitemap: "https://cap.so/sitemap.xml",
