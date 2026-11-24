@@ -1,3 +1,4 @@
+use cap_enc_ffmpeg::h264::VideoEncoderChoice;
 use cap_project::{
     InstantRecordingMeta, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
 };
@@ -59,6 +60,11 @@ pub struct RecordParams {
     /// Maximum fps to record at (clamped to 1-120; camera recordings follow the desktop camera cap)
     #[arg(long)]
     fps: Option<u32>,
+    /// Video encoder for macOS Studio recordings without a camera: hardware keeps the hardware
+    /// encoder at sizes and frame rates where auto switches to the software encoder. On Windows
+    /// and Linux, hardware behaves like auto
+    #[arg(long, value_enum, default_value_t = VideoEncoderArg::Auto)]
+    video_encoder: VideoEncoderArg,
     /// Stop automatically after N seconds
     #[arg(long)]
     duration: Option<f64>,
@@ -109,11 +115,30 @@ impl RecordParams {
             args.push("--fps".to_string());
             args.push(fps.to_string());
         }
+        if self.video_encoder == VideoEncoderArg::Hardware {
+            args.push("--video-encoder".to_string());
+            args.push("hardware".to_string());
+        }
         if let Some(duration) = self.duration {
             args.push("--duration".to_string());
             args.push(duration.to_string());
         }
         args
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum VideoEncoderArg {
+    Auto,
+    Hardware,
+}
+
+impl From<VideoEncoderArg> for VideoEncoderChoice {
+    fn from(value: VideoEncoderArg) -> Self {
+        match value {
+            VideoEncoderArg::Auto => Self::Automatic,
+            VideoEncoderArg::Hardware => Self::Hardware,
+        }
     }
 }
 
@@ -843,11 +868,9 @@ async fn start_recording(
 
     match params.mode {
         RecordMode::Studio => {
-            let builder = cap_recording::RecordingDefaults::default().apply_to_studio_builder(
-                studio_builder,
-                camera_active,
-                params.fps,
-            );
+            let builder = cap_recording::RecordingDefaults::default()
+                .apply_to_studio_builder(studio_builder, camera_active, params.fps)
+                .with_video_encoder(params.video_encoder.into());
 
             builder
                 .build(
@@ -1340,6 +1363,34 @@ fn emit_record_event(format: OutputFormat, event: &RecordEvent<'_>) -> Result<()
 mod tests {
     use super::*;
 
+    #[test]
+    fn detached_worker_receives_the_video_encoder_choice() {
+        #[derive(clap::Parser)]
+        struct Record {
+            #[command(flatten)]
+            params: RecordParams,
+        }
+        for (flag, choice) in [
+            (None, VideoEncoderArg::Auto),
+            (Some("auto"), VideoEncoderArg::Auto),
+            (Some("hardware"), VideoEncoderArg::Hardware),
+        ] {
+            let args = flag.map(|flag| vec!["--video-encoder".to_string(), flag.to_string()]);
+            let parsed = <Record as clap::Parser>::try_parse_from(
+                std::iter::once("record".to_string()).chain(args.unwrap_or_default()),
+            )
+            .unwrap()
+            .params;
+            assert_eq!(parsed.video_encoder, choice);
+            let forwarded = <Record as clap::Parser>::try_parse_from(
+                std::iter::once("record".to_string()).chain(parsed.to_cli_args()),
+            )
+            .unwrap()
+            .params;
+            assert_eq!(forwarded.video_encoder, choice, "{flag:?}");
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn detached_recording_rejects_non_utf8_path_before_starting() {
@@ -1360,6 +1411,7 @@ mod tests {
             system_audio: false,
             path: Some(path.clone()),
             fps: None,
+            video_encoder: VideoEncoderArg::Auto,
             duration: None,
         };
 
@@ -1393,6 +1445,7 @@ mod tests {
                 system_audio: false,
                 path: Some(path.clone()),
                 fps: None,
+                video_encoder: VideoEncoderArg::Auto,
                 duration: Some(1.0),
             };
 
