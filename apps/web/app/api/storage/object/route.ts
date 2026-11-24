@@ -180,31 +180,37 @@ const isWholeVideoKey = (key: string) => /\.(mp4|m4v|mov|webm|mkv)$/i.test(key);
 
 const DECLARED_LENGTH_CACHE_MS = 30_000;
 const MAX_DECLARED_LENGTH_ENTRIES = 5_000;
-const declaredHolds = new Map<string, { held: boolean; until: number }>();
+const declaredLengths = new Map<
+	string,
+	{ declared: { key: string; seconds: number } | null; until: number }
+>();
 
-// Segments and playlists are read many times per view, so the length their
-// playlist declares is checked at most every 30 s per video.
-async function isHeldByDeclaredLength(
-	video: {
-		id: Video.VideoId;
-		ownerId: string;
-		source: { type: string };
-	},
-	getObject: (key: string) => Promise<string | null>,
-): Promise<boolean> {
-	const cached = declaredHolds.get(video.id);
-	if (cached && cached.until > Date.now()) return cached.held;
-	const declared = await readDeclaredLength(video, getObject);
-	const held =
-		declared !== null &&
-		(await recordFreePlanOverLength(video.id, declared.key, declared.seconds));
-	if (declaredHolds.size >= MAX_DECLARED_LENGTH_ENTRIES) declaredHolds.clear();
-	declaredHolds.set(video.id, {
-		held,
-		until: Date.now() + DECLARED_LENGTH_CACHE_MS,
+// Segments and playlists are read many times per view, so the playlist is
+// read at most every 30 s per video. The plan is checked on every read, so an
+// upgrade lifts the hold at once.
+const isHeldByDeclaredLength = <E, R>(
+	video: { id: Video.VideoId; ownerId: string; source: { type: string } },
+	getObject: (key: string) => Effect.Effect<string | null, E, R>,
+) =>
+	Effect.gen(function* () {
+		const cached = declaredLengths.get(video.id);
+		const declared =
+			cached && cached.until > Date.now()
+				? cached.declared
+				: yield* readDeclaredLength(video, getObject);
+		if (!cached || cached.until <= Date.now()) {
+			if (declaredLengths.size >= MAX_DECLARED_LENGTH_ENTRIES)
+				declaredLengths.clear();
+			declaredLengths.set(video.id, {
+				declared,
+				until: Date.now() + DECLARED_LENGTH_CACHE_MS,
+			});
+		}
+		if (!declared) return false;
+		return yield* Effect.tryPromise(() =>
+			recordFreePlanOverLength(video.id, declared.key, declared.seconds),
+		);
 	});
-	return held;
-}
 
 export async function GET(request: NextRequest) {
 	const internalDownload =
@@ -272,29 +278,29 @@ export async function GET(request: NextRequest) {
 		if (!internalRead && isPlayableMediaKey(key)) {
 			const viewer = yield* Effect.serviceOption(CurrentUser);
 			if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
-				const decision = yield* Effect.tryPromise(async () => {
-					const freePlanVideo = {
+				const decision = yield* Effect.gen(function* () {
+					const freePlanVideo = yield* Effect.try(() => ({
 						id: video.id,
 						createdAt: video.createdAt,
 						metadata: Option.getOrNull(video.metadata),
-					};
-					if (
-						await isVideoOverFreePlanDuration({
+					}));
+					const held = yield* Effect.tryPromise(() =>
+						isVideoOverFreePlanDuration({
 							...freePlanVideo,
 							ownerId: video.ownerId,
 							orgId: video.orgId,
-						})
-					)
-						return "held";
+						}),
+					);
+					if (held) return "held" as const;
 					if (isWholeVideoKey(key))
-						return firstViewDecision(freePlanVideo, key);
-					return (await isHeldByDeclaredLength(video, (objectKey) =>
-						runPromise(
-							storage.getObject(objectKey).pipe(Effect.map(Option.getOrNull)),
-						),
+						return yield* Effect.tryPromise(() =>
+							firstViewDecision(freePlanVideo, key),
+						);
+					return (yield* isHeldByDeclaredLength(video, (objectKey) =>
+						storage.getObject(objectKey).pipe(Effect.map(Option.getOrNull)),
 					))
-						? "held"
-						: "play";
+						? ("held" as const)
+						: ("play" as const);
 				}).pipe(Effect.orElseSucceed(() => "play" as const));
 				if (decision !== "play")
 					return yield* Effect.fail("not-found" as const);
