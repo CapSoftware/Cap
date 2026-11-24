@@ -77,6 +77,7 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
 import {
 	describeLinkAccessChoice,
 	isLinkRestricted,
@@ -2630,6 +2631,8 @@ const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
 				db
 					.select({
 						ownerId: Db.videos.ownerId,
+						orgId: Db.videos.orgId,
+						metadata: Db.videos.metadata,
 						createdAt: Db.videos.createdAt,
 						settings: Db.videos.settings,
 						orgSettings: Db.organizations.settings,
@@ -2679,6 +2682,8 @@ const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
 		isScreenshot: video.isScreenshot,
 		isSegmentsSource: video.source?.type === "desktopSegments",
 		ownerId: video.ownerId,
+		orgId: video.orgId,
+		metadata: video.metadata,
 		ownerImage: video.ownerImage,
 		createdAt: video.createdAt,
 		ownerBilling: {
@@ -2688,21 +2693,29 @@ const getMobileVideoRules = Effect.fn("Mobile.getVideoRules")(function* (
 	};
 });
 
-// Fail-open like the share page: a broken count never blocks playback.
+// Fail-open like the share page: a broken check never blocks playback.
 const isMobileVideoOverShareLimit = (
 	videoId: Video.VideoId,
 	rules: MobileVideoRules,
 ) =>
 	userIsPro(rules.ownerBilling)
 		? Effect.succeed(false)
-		: Effect.promise(() =>
-				isVideoOverShareableLinkLimit({
+		: Effect.promise(async () => {
+				const overShareLimit = await isVideoOverShareableLinkLimit({
 					id: videoId,
 					ownerId: rules.ownerId,
 					createdAt: rules.createdAt,
 					isScreenshot: rules.isScreenshot,
-				}).catch(() => false),
-			);
+				}).catch(() => false);
+				if (overShareLimit || !rules.orgId) return overShareLimit;
+				return isVideoOverFreePlanDuration({
+					id: videoId,
+					ownerId: rules.ownerId,
+					orgId: rules.orgId,
+					isScreenshot: rules.isScreenshot,
+					metadata: rules.metadata,
+				}).catch(() => false);
+			});
 
 type MobileVideoRules = Effect.Effect.Success<
 	ReturnType<typeof getMobileVideoRules>

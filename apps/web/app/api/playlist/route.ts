@@ -17,6 +17,15 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
+import { exceedsFreePlanMeasuredDuration } from "@/lib/free-plan-duration";
+import {
+	isVideoOverFreePlanDuration,
+	recordFreePlanOverLength,
+} from "@/lib/free-plan-measure";
+import {
+	measureFreePlanObjectIfNeeded,
+	runAfterResponse,
+} from "@/lib/free-plan-measure-probe";
 import {
 	resolveMobileRequestOrigin,
 	resolveMobileWebResourceUrl,
@@ -112,6 +121,19 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							);
 							if (locked)
 								return yield* Effect.fail(new HttpApiError.Forbidden());
+							const overDurationLimit = yield* Effect.tryPromise(() =>
+								isVideoOverFreePlanDuration({
+									id: video.id,
+									ownerId: video.ownerId,
+									orgId: video.orgId,
+									metadata: Option.getOrNull(video.metadata),
+								}),
+							).pipe(
+								Effect.tapError(Effect.logError),
+								Effect.orElseSucceed(() => false),
+							);
+							if (overDurationLimit)
+								return yield* Effect.fail(new HttpApiError.Forbidden());
 						}
 
 						return yield* getPlaylistResponse(
@@ -189,6 +211,45 @@ const resolveRawPreviewKey = (video: Video.Video) =>
 		return yield* Effect.fail(new HttpApiError.NotFound());
 	});
 
+const runFreePlanCheck = (check: () => void) =>
+	Effect.sync(() => {
+		try {
+			check();
+		} catch (error) {
+			console.error("[playlist] Free plan check failed:", error);
+		}
+	});
+
+const scheduleFreePlanMeasure = (video: Video.Video, key: string) =>
+	runFreePlanCheck(() =>
+		measureFreePlanObjectIfNeeded(
+			{
+				id: video.id,
+				createdAt: video.createdAt,
+				metadata: Option.getOrNull(video.metadata),
+			},
+			key,
+		),
+	);
+
+const scheduleFreePlanOverLength = (
+	video: Video.Video,
+	key: string,
+	seconds: () => number,
+) =>
+	runFreePlanCheck(() => {
+		const length = seconds();
+		if (exceedsFreePlanMeasuredDuration(length))
+			runAfterResponse(() => recordFreePlanOverLength(video.id, key, length));
+	});
+
+const declaredPlaylistSeconds = (text: string) =>
+	text.split("\n").reduce((total, line) => {
+		const match = /^#EXTINF:\s*([0-9.]+)/.exec(line.trim());
+		const seconds = match ? Number(match[1]) : 0;
+		return Number.isFinite(seconds) ? total + seconds : total;
+	}, 0);
+
 const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
@@ -204,6 +265,7 @@ const getPlaylistResponse = (
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
+			yield* scheduleFreePlanMeasure(video, rawFileKey);
 			return yield* bucket
 				.getSignedObjectUrl(rawFileKey)
 				.pipe(Effect.map(HttpServerResponse.redirect));
@@ -240,6 +302,11 @@ const getPlaylistResponse = (
 			let manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
+			yield* scheduleFreePlanOverLength(video, manifestKey, () =>
+				totalSegmentDuration(
+					manifest.video_segments.map(Video.normalizeSegmentEntry),
+				),
+			);
 			if (
 				manifest.version === 1 &&
 				manifest.is_complete &&
@@ -459,6 +526,12 @@ const getPlaylistResponse = (
 			});
 		}
 
+		if (
+			(isMp4Source || urlParams.videoType === "mp4") &&
+			Option.isNone(urlParams.fileType)
+		)
+			yield* scheduleFreePlanMeasure(video, mp4Key);
+
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			if (isMp4Source || urlParams.videoType === "mp4") {
 				return HttpServerResponse.redirect(
@@ -499,6 +572,10 @@ const getPlaylistResponse = (
 				if (!variant) return yield* Effect.fail(new HttpApiError.NotFound());
 				playlist = yield* readPlaylist(resolveUri(variant));
 			}
+
+			yield* scheduleFreePlanOverLength(video, playlist.key, () =>
+				declaredPlaylistSeconds(playlist.text),
+			);
 
 			const playlistLines = playlist.text.split("\n");
 			// Legacy segments run 3-4 s, so this covers recordings of several

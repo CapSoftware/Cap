@@ -33,6 +33,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { after } from "next/server";
 import { type EmbedOptions, parseEmbedOptions } from "@/lib/embed-options";
+import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -340,7 +341,24 @@ async function EmbedContent({
 			return false;
 		}));
 
-	if (overShareLimit) {
+	const overDurationLimit =
+		!overShareLimit &&
+		!ownerIsProUser &&
+		(await isVideoOverFreePlanDuration({
+			id: video.id,
+			ownerId: video.ownerId,
+			orgId: video.orgId,
+			isScreenshot: video.isScreenshot,
+			metadata: video.metadata,
+		}).catch((error) => {
+			console.error(
+				`[EmbedVideoPage] Free plan duration check failed for ${video.id}:`,
+				error,
+			);
+			return false;
+		}));
+
+	if (overShareLimit || overDurationLimit) {
 		return (
 			<div className="flex flex-col gap-3 justify-center items-center px-6 min-h-screen text-center bg-black">
 				<Logo className="w-auto h-7" white />
@@ -348,7 +366,9 @@ async function EmbedContent({
 					This video is over its free limit
 				</h1>
 				<p className="max-w-sm text-sm leading-relaxed text-white/60">
-					{`The owner of this video has used all ${Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH} shareable links included with Cap's free plan this month. As soon as they upgrade to Cap Pro, this video will be instantly viewable.`}
+					{overShareLimit
+						? `The owner of this video has used all ${Video.FREE_PLAN_SHAREABLE_LINKS_PER_MONTH} shareable links included with Cap's free plan this month. As soon as they upgrade to Cap Pro, this video will be instantly viewable.`
+						: `This video is longer than the ${Video.FREE_PLAN_MAX_RECORDING_SECONDS / 60} minutes Cap's free plan shares. As soon as the owner upgrades to Cap Pro, it will be instantly viewable.`}
 				</p>
 				<a
 					href={`${buildEnv.NEXT_PUBLIC_WEB_URL}/s/${video.id}`}

@@ -627,7 +627,8 @@ export const Share = ({
 	const timelineAvailable =
 		!isScreenshot &&
 		!areCommentStampsDisabled &&
-		data.ownerIsOverShareLimit !== true;
+		data.ownerIsOverShareLimit !== true &&
+		data.ownerIsOverDurationLimit !== true;
 
 	// Where the timeline's filmstrip frames come from. Mirrors the source split
 	// in `ShareVideo`: instant recordings have a result.mp4 a bare <video> can
