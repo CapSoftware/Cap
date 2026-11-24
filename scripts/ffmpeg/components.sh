@@ -43,6 +43,11 @@ CAP_ENCODERS_LINUX=(
   h264_amf
   hevc_amf
 )
+# Named only where code checks whether an encoder exists (diagnostics and the
+# HEVC encoder no recording or export path calls). Not built.
+CAP_PROBE_ONLY_ENCODERS=(
+  libx265
+)
 CAP_MUXERS=(
   mp4
   mov
@@ -68,6 +73,24 @@ CAP_FILTERS=(
 )
 CAP_PROTOCOLS=(
   file
+)
+
+# Built because every decoder, demuxer, parser and bitstream filter is kept.
+# Listed so the runtime check fails if one Cap depends on ever goes missing.
+CAP_REQUIRED_DECODERS=(
+  h264 hevc mjpeg mpeg4 prores vp8 vp9 libdav1d wmv2 wmv3 vc1 flv h263 mpeg2video dnxhd rawvideo
+  png gif webp bmp tiff
+  aac mp3float opus vorbis flac alac pcm_s16le pcm_f32le wmav2 ac3 eac3
+)
+CAP_REQUIRED_DEMUXERS=(
+  mov matroska avi asf flv ogg wav mp3 aac flac concat image2 png_pipe jpeg_pipe webp_pipe gif bmp_pipe tiff_pipe
+)
+CAP_REQUIRED_BSFS=(
+  h264_mp4toannexb aac_adtstoasc null
+)
+# Codecs, by decoder name, whose parser stream probing needs.
+CAP_REQUIRED_PARSERS=(
+  h264 hevc aac mp3float flac opus vorbis vp8 vp9 libdav1d mjpeg mpeg4 png gif webp vc1
 )
 
 cap_component_flags() {
