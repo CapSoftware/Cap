@@ -1077,6 +1077,11 @@ impl ActiveRecording {
             let result = finish_after_capture_stop(
                 async move {
                     let outcome = handle.stop_with_outcome().await;
+                    #[cfg(windows)]
+                    let outcome = match outcome.finishing.clone() {
+                        Some(finishing) => finishing.wait().await,
+                        None => outcome,
+                    };
                     (
                         outcome.capture_stopped,
                         outcome.result.map_err(anyhow::Error::msg),
@@ -1201,6 +1206,11 @@ impl ActiveRecording {
                 let handle = handle.clone();
                 return Box::pin(async move {
                     let outcome = handle.stop_with_outcome().await;
+                    #[cfg(windows)]
+                    let outcome = match outcome.finishing.clone() {
+                        Some(finishing) => finishing.wait().await,
+                        None => outcome,
+                    };
                     (
                         outcome.capture_stopped,
                         outcome.result.map_err(anyhow::Error::msg).and_then(|_| {

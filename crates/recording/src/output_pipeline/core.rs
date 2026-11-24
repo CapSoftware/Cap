@@ -3377,6 +3377,8 @@ async fn finish_build(
 /// its other tasks: past the video source's own 5s stop deadline.
 const UNOWNED_TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
 
+const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// A muxer whose subprocess was not reaped, or whose encoder or writer thread
 /// did not finish, may still be working, so its pipeline has not fully exited.
 fn muxer_work_may_run(muxer_result: &anyhow::Result<anyhow::Result<()>>) -> bool {
@@ -5201,6 +5203,27 @@ impl OutputPipeline {
         self.first_timestamp.clone()
     }
 
+    /// Stops like [`Self::stop_with_outcome`], but a pipeline still finishing
+    /// at the stop limit calls `late` and is then waited for without a limit,
+    /// so slow work completes instead of being abandoned.
+    #[cfg(windows)]
+    pub(crate) async fn stop_with_outcome_or_late(
+        mut self,
+        late: impl FnOnce(),
+    ) -> anyhow::Result<OutputPipelineStopOutcome> {
+        if !self.joined_stop {
+            drop(self.stop_token.take());
+            if tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone())
+                .await
+                .is_err()
+            {
+                late();
+                self.joined_stop = true;
+            }
+        }
+        self.stop_with_outcome().await
+    }
+
     pub async fn stop(self) -> anyhow::Result<FinishedOutputPipeline> {
         let outcome = self.stop_with_outcome().await?;
         match outcome.media_error {
@@ -5227,7 +5250,6 @@ impl OutputPipeline {
                 Ok(()) => None,
             }
         } else {
-            const PIPELINE_STOP_TIMEOUT: Duration = Duration::from_secs(10);
             match tokio::time::timeout(PIPELINE_STOP_TIMEOUT, self.done_fut.clone()).await {
                 Ok(Err(error)) if error.is_caused_by::<PipelineStoppedByUser>() => None,
                 Ok(Err(error)) if error.is_caused_by::<OopMediaFailureAfterJoin>() => {

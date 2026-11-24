@@ -21,7 +21,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, Ordering},
         mpsc::{RecvTimeoutError, SyncSender, sync_channel},
     },
     thread::JoinHandle,
@@ -144,11 +144,33 @@ fn report_encode_result(
     encoded
 }
 
+const ENCODER_FINISH_LIMIT: Duration = Duration::from_secs(5);
+
+/// Shared by the muxers of one recording. Once a stop asks for it, finishing
+/// waits for the encoder thread however long it takes, so a slow encoder is
+/// finalized instead of abandoned while still writing.
+#[derive(Clone, Debug, Default)]
+pub struct EncoderFinishWait(Arc<AtomicBool>);
+
+impl EncoderFinishWait {
+    pub fn wait_without_limit(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn limit(wait: Option<&Self>) -> Duration {
+        match wait {
+            Some(wait) if wait.0.load(Ordering::Acquire) => Duration::MAX,
+            _ => ENCODER_FINISH_LIMIT,
+        }
+    }
+}
+
 fn finish_encoder_thread(
     handle: JoinHandle<anyhow::Result<()>>,
     label: &str,
+    limit: Duration,
 ) -> BlockingThreadFinish {
-    wait_for_blocking_thread_finish(handle, Duration::from_secs(5), label)
+    wait_for_blocking_thread_finish(handle, limit, label)
 }
 
 trait FinishableEncoderState {
@@ -246,12 +268,13 @@ fn finish_segmented_encoder_impl(
     thread_label: &str,
     finish_label: &str,
     health_tx: &SharedHealthSender,
+    limit: Duration,
 ) -> anyhow::Result<()> {
     state.close_channel(thread_label);
 
     let thread_result = state
         .take_handle()
-        .map(|handle| finish_encoder_thread(handle, thread_label))
+        .map(|handle| finish_encoder_thread(handle, thread_label, limit))
         .unwrap_or(BlockingThreadFinish::Clean);
 
     let thread_error = match thread_result {
@@ -293,6 +316,7 @@ pub struct WindowsFragmentedM4SMuxer {
     segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
     health_tx: SharedHealthSender,
+    finish_wait: Option<EncoderFinishWait>,
 }
 
 pub struct WindowsFragmentedM4SMuxerConfig {
@@ -305,6 +329,7 @@ pub struct WindowsFragmentedM4SMuxerConfig {
     pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx:
         Option<std::sync::mpsc::Sender<cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent>>,
+    pub finish_wait: Option<EncoderFinishWait>,
 }
 
 impl Default for WindowsFragmentedM4SMuxerConfig {
@@ -318,6 +343,7 @@ impl Default for WindowsFragmentedM4SMuxerConfig {
             shared_pause_state: None,
             disk_space_callback: None,
             segment_tx: None,
+            finish_wait: None,
         }
     }
 }
@@ -364,6 +390,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
             disk_space_callback: config.disk_space_callback,
             segment_tx: config.segment_tx,
             health_tx: SharedHealthSender::new(),
+            finish_wait: config.finish_wait,
         };
 
         muxer.start_encoder()?;
@@ -387,6 +414,7 @@ impl Muxer for WindowsFragmentedM4SMuxer {
                 "Windows M4S encoder",
                 "Failed to finish segmented encoder",
                 &self.health_tx,
+                EncoderFinishWait::limit(self.finish_wait.as_ref()),
             )
         {
             return Ok(Err(error));
@@ -722,6 +750,7 @@ pub struct WindowsFragmentedM4SCameraMuxer {
     started: bool,
     disk_space_callback: Option<DiskSpaceCallback>,
     health_tx: SharedHealthSender,
+    finish_wait: Option<EncoderFinishWait>,
 }
 
 pub struct WindowsFragmentedM4SCameraMuxerConfig {
@@ -731,6 +760,7 @@ pub struct WindowsFragmentedM4SCameraMuxerConfig {
     pub output_size: Option<(u32, u32)>,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
+    pub finish_wait: Option<EncoderFinishWait>,
 }
 
 impl Default for WindowsFragmentedM4SCameraMuxerConfig {
@@ -742,6 +772,7 @@ impl Default for WindowsFragmentedM4SCameraMuxerConfig {
             output_size: None,
             shared_pause_state: None,
             disk_space_callback: None,
+            finish_wait: None,
         }
     }
 }
@@ -787,6 +818,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
             started: false,
             disk_space_callback: config.disk_space_callback,
             health_tx: SharedHealthSender::new(),
+            finish_wait: config.finish_wait,
         };
 
         muxer.start_encoder()?;
@@ -810,6 +842,7 @@ impl Muxer for WindowsFragmentedM4SCameraMuxer {
                 "Windows M4S camera encoder",
                 "Failed to finish camera segmented encoder",
                 &self.health_tx,
+                EncoderFinishWait::limit(self.finish_wait.as_ref()),
             )
         {
             return Ok(Err(error));
