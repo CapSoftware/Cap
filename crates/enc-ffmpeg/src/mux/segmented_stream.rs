@@ -192,6 +192,8 @@ pub struct SegmentedVideoEncoder {
     pending_fallback: Option<EncoderFallback>,
     unrecovered_codec_failure: Option<(String, ffmpeg::Error)>,
     flush_failure: Option<EncoderFlushFailure>,
+    #[cfg(windows)]
+    d3d11_status: String,
 }
 
 struct SegmentMux {
@@ -466,21 +468,24 @@ impl SegmentedVideoEncoder {
             None
         };
         #[cfg(target_os = "windows")]
-        let hw_attempt = match config.d3d11_device {
+        let (hw_attempt, d3d11_status) = match config.d3d11_device {
             Some(device) => {
                 let device = device as *mut std::ffi::c_void;
                 match unsafe { builder.clone().build_d3d11_hw_input(&mut output, device) } {
-                    Ok(encoder) => Some(encoder),
+                    Ok(encoder) => {
+                        let status = encoder.d3d11_sw_format_name().unwrap_or("nv12").to_string();
+                        (Some(encoder), status)
+                    }
                     Err(error) => {
                         tracing::info!(
                             %error,
                             "D3D11 texture input unavailable, using the CPU frame path"
                         );
-                        None
+                        (None, error.to_string())
                     }
                 }
             }
-            None => None,
+            None => (None, String::new()),
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let hw_attempt: Option<H264Encoder> = None;
@@ -547,6 +552,8 @@ impl SegmentedVideoEncoder {
             pending_fallback: None,
             unrecovered_codec_failure: None,
             flush_failure: None,
+            #[cfg(windows)]
+            d3d11_status,
         };
 
         if write_behind {
@@ -609,6 +616,15 @@ impl SegmentedVideoEncoder {
     }
 
     #[cfg(windows)]
+    pub fn d3d11_status(&self) -> &str {
+        &self.d3d11_status
+    }
+
+    pub fn codec_name(&self) -> String {
+        self.encoder.codec_name()
+    }
+
+    #[cfg(windows)]
     pub fn abandon_d3d11_input(&mut self) -> bool {
         if !self.encoder.is_d3d11_hw_input() {
             return false;
@@ -626,7 +642,7 @@ impl SegmentedVideoEncoder {
     }
 
     /// # Safety
-    /// `texture` must be an RGBA texture on the device passed at init, at the
+    /// `texture` must be an NV12 texture on the device passed at init, at the
     /// encoder's width and height. `lifetime.free` runs once when the queued
     /// frame is dropped.
     #[cfg(windows)]

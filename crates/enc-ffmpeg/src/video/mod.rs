@@ -1,6 +1,8 @@
 use ffmpeg::frame;
 
 pub mod colour;
+#[cfg(any(windows, test))]
+pub(crate) mod d3d11_format;
 #[cfg(target_os = "windows")]
 mod d3d11_hw;
 pub mod h264;

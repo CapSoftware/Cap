@@ -8,6 +8,8 @@ mod audio;
 pub use audio::*;
 
 mod video;
+#[cfg(any(windows, test))]
+pub use video::d3d11_format::capture_texel_feeds_nv12;
 pub use video::*;
 
 mod mux;

@@ -14,6 +14,8 @@ use tracing::{debug, error, info, trace, warn};
 use crate::base::{EncoderBase, PacketSink};
 use crate::video::HwUpload;
 #[cfg(windows)]
+use crate::video::d3d11_format::{D3d11SwFormat, D3d11TexturePath, d3d11_texture_path};
+#[cfg(windows)]
 use crate::video::d3d11_hw::{D3d11HwFrames, D3d11TextureLifetime};
 use crate::video::h264_packet::H264PacketEncoder;
 use crate::video::hardware_crash::{self, HardwareEncoderSession};
@@ -96,8 +98,15 @@ pub enum H264EncoderError {
 }
 
 #[cfg(windows)]
+struct D3d11EncoderTarget<'a> {
+    frames_ctx: *mut ffmpeg::sys::AVBufferRef,
+    pixel: ffmpeg::format::Pixel,
+    hw_frames: &'a D3d11HwFrames,
+}
+
+#[cfg(windows)]
 fn open_d3d11_encoder(
-    hw_frames: &D3d11HwFrames,
+    target: D3d11EncoderTarget<'_>,
     codec: Codec,
     encoder_options: Dictionary<'static>,
     input_config: &VideoInfo,
@@ -113,7 +122,7 @@ fn open_d3d11_encoder(
     let mut encoder = encoder_ctx.encoder().video()?;
     encoder.set_width(output_width);
     encoder.set_height(output_height);
-    encoder.set_format(ffmpeg::format::Pixel::D3D11);
+    encoder.set_format(target.pixel);
     encoder.set_time_base(input_config.time_base);
     encoder.set_frame_rate(Some(input_config.frame_rate));
     encoder.set_colorspace(color::Space::BT709);
@@ -122,7 +131,9 @@ fn open_d3d11_encoder(
         (*encoder.as_mut_ptr()).color_primaries = ffmpeg::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
         (*encoder.as_mut_ptr()).color_trc =
             ffmpeg::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
-        hw_frames.attach_to_encoder(encoder.as_mut_ptr());
+        target
+            .hw_frames
+            .attach_frames(encoder.as_mut_ptr(), target.frames_ctx);
     }
     let frame_rate = input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32;
     let bitrate = get_bitrate(output_width, output_height, frame_rate, bpp);
@@ -642,8 +653,6 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
         device: *mut std::ffi::c_void,
     ) -> Result<H264Encoder, H264EncoderError> {
-        const D3D11_TEXTURE_ENCODERS: &[&str] = &["h264_amf", "h264_nvenc", "h264_qsv", "h264_mf"];
-
         let software_fallback = Box::new(self.clone());
         let input_config = self.input_config;
         let (output_width, output_height) = match self.output_size {
@@ -680,7 +689,7 @@ impl H264EncoderBuilder {
             ));
         }
 
-        let hw_frames = unsafe { D3d11HwFrames::new(device, output_width, output_height) }
+        let mut hw_frames = unsafe { D3d11HwFrames::new(device, output_width, output_height) }
             .map_err(|error| H264EncoderError::D3d11HwInput(error.to_string()))?;
 
         let candidates = get_codec_and_options(
@@ -690,14 +699,29 @@ impl H264EncoderBuilder {
             self.is_export,
             None,
         );
-        let mut last_error = None;
+        let mut failures = Vec::new();
         for (codec, encoder_options) in candidates {
             let codec_name = codec.name().to_string();
-            if !D3D11_TEXTURE_ENCODERS.contains(&codec_name.as_str()) {
+            let Some(path) = d3d11_texture_path(&codec_name) else {
                 continue;
-            }
+            };
+            let pixel = match path {
+                D3d11TexturePath::D3d11Nv12 => ffmpeg::format::Pixel::D3D11,
+                D3d11TexturePath::QsvFromD3d11Nv12 => ffmpeg::format::Pixel::QSV,
+            };
+            let frames_ctx = match unsafe { hw_frames.frames_for(path) } {
+                Ok(frames_ctx) => frames_ctx,
+                Err(error) => {
+                    failures.push(format!("{codec_name}: {error}"));
+                    continue;
+                }
+            };
             match open_d3d11_encoder(
-                &hw_frames,
+                D3d11EncoderTarget {
+                    frames_ctx,
+                    pixel,
+                    hw_frames: &hw_frames,
+                },
                 codec,
                 encoder_options,
                 &input_config,
@@ -713,6 +737,7 @@ impl H264EncoderBuilder {
                     output_stream.set_parameters(&encoder);
                     info!(
                         encoder = %codec_name,
+                        sw_format = D3d11SwFormat::Nv12.name(),
                         width = output_width,
                         height = output_height,
                         "Selected hardware H264 encoder with D3D11 texture input"
@@ -721,7 +746,7 @@ impl H264EncoderBuilder {
                         base: EncoderBase::new(stream_index),
                         encoder,
                         converter: None,
-                        output_format: ffmpeg::format::Pixel::D3D11,
+                        output_format: pixel,
                         output_width,
                         output_height,
                         input_format: input_config.pixel_format,
@@ -737,19 +762,24 @@ impl H264EncoderBuilder {
                     });
                 }
                 Err(error) => {
+                    hw_frames.clear_qsv();
+                    let text = match &error {
+                        H264EncoderError::FFmpeg(inner) => inner.to_string(),
+                        other => other.to_string(),
+                    };
                     debug!(
                         encoder = %codec_name,
-                        %error,
+                        error = %text,
                         "D3D11 texture input open failed"
                     );
-                    last_error = Some(error);
+                    failures.push(format!("{codec_name}: {text}"));
                 }
             }
         }
-        Err(last_error.unwrap_or_else(|| {
-            H264EncoderError::D3d11HwInput(
-                "no hardware encoder accepted the D3D11 texture".to_string(),
-            )
+        Err(H264EncoderError::D3d11HwInput(if failures.is_empty() {
+            "no hardware encoder accepted the D3D11 texture".to_string()
+        } else {
+            failures.join("; ")
         }))
     }
 
@@ -1281,8 +1311,13 @@ impl H264Encoder {
         self.d3d11_hw.is_some()
     }
 
+    #[cfg(windows)]
+    pub fn d3d11_sw_format_name(&self) -> Option<&'static str> {
+        self.d3d11_hw.as_ref().map(|_| D3d11SwFormat::Nv12.name())
+    }
+
     /// # Safety
-    /// `texture` must be an RGBA `ID3D11Texture2D` on the device this encoder
+    /// `texture` must be an NV12 `ID3D11Texture2D` on the device this encoder
     /// was opened with, at this encoder's width and height. `lifetime.free`
     /// runs once when the frame is dropped.
     #[cfg(windows)]

@@ -14,11 +14,8 @@ fn main() {
 mod windows {
     use std::ffi::c_void;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{Duration, Instant};
 
-    use cap_enc_ffmpeg::D3d11TextureLifetime;
     use cap_enc_ffmpeg::h264::H264Preset;
     use cap_enc_ffmpeg::remux::concatenate_m4s_segments_with_init;
     use cap_enc_ffmpeg::segmented_stream::{SegmentedVideoEncoder, SegmentedVideoEncoderConfig};
@@ -32,12 +29,14 @@ mod windows {
         ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
     };
     use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+    use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice};
     use windows::core::Interface;
+
+    use cap_recording::GpuTextureRing;
 
     const WARMUP: usize = 30;
     const FRAMES: usize = 300;
     const RUNS: usize = 5;
-    const RING: usize = 8;
     const SOURCES: usize = 4;
 
     #[repr(C)]
@@ -185,64 +184,22 @@ mod windows {
         }
     }
 
-    struct Holds {
-        counts: Arc<[AtomicU32; RING]>,
-        index: u32,
-    }
-
-    unsafe extern "C" fn release_hold(data: *mut c_void) {
-        let hold = unsafe { Box::from_raw(data as *mut Holds) };
-        hold.counts[hold.index as usize].fetch_sub(1, Ordering::AcqRel);
-    }
-
-    struct Ring {
-        textures: Vec<ID3D11Texture2D>,
-        counts: Arc<[AtomicU32; RING]>,
-        next: usize,
-    }
-
-    impl Ring {
-        fn new(device: &ID3D11Device, width: u32, height: u32) -> Self {
-            let textures = (0..RING)
-                .map(|_| rgba_texture(device, width, height, false))
-                .collect();
-            Self {
-                textures,
-                counts: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
-                next: 0,
-            }
-        }
-
-        fn submit_source(
-            &mut self,
-            context: &ID3D11DeviceContext,
-            source: &ID3D11Texture2D,
-        ) -> (*mut c_void, D3d11TextureLifetime) {
-            let mut chosen = None;
-            for step in 0..RING {
-                let index = (self.next + step) % RING;
-                if self.counts[index].load(Ordering::Acquire) == 0 {
-                    chosen = Some(index);
-                    break;
-                }
-            }
-            let index = chosen.expect("texture ring full");
-            self.next = (index + 1) % RING;
-            let dest = &self.textures[index];
-            unsafe { context.CopyResource(dest, source) };
-            self.counts[index].fetch_add(1, Ordering::AcqRel);
-            let hold = Box::new(Holds {
-                counts: Arc::clone(&self.counts),
-                index: index as u32,
-            });
-            (
-                dest.as_raw(),
-                D3d11TextureLifetime {
-                    data: Box::into_raw(hold) as *mut c_void,
-                    free: release_hold,
-                },
-            )
-        }
+    fn adapter_description(device: &ID3D11Device) -> String {
+        let Ok(dxgi) = device.cast::<IDXGIDevice>() else {
+            return "unknown".to_string();
+        };
+        let Ok(adapter) = (unsafe { dxgi.GetAdapter() }) else {
+            return "unknown".to_string();
+        };
+        let Ok(desc) = (unsafe { IDXGIAdapter::GetDesc(&adapter) }) else {
+            return "unknown".to_string();
+        };
+        let end = desc
+            .Description
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(desc.Description.len());
+        String::from_utf16_lossy(&desc.Description[..end])
     }
 
     fn readback(
@@ -279,6 +236,8 @@ mod windows {
         wall: Duration,
         cpu: Duration,
         decoded: usize,
+        encoder: String,
+        sw: String,
     }
 
     fn decode_count(path: &Path) -> usize {
@@ -341,6 +300,7 @@ mod windows {
             },
         )
         .expect("readback encoder");
+        let encoder_name = encoder.codec_name();
         let mut reusable =
             ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, info.width, info.height);
         for i in 0..WARMUP {
@@ -382,7 +342,13 @@ mod windows {
         let cpu = process_cpu().saturating_sub(cpu_start);
         encoder.finish().expect("finish readback");
         let decoded = decode_count(&assemble(dir));
-        Run { wall, cpu, decoded }
+        Run {
+            wall,
+            cpu,
+            decoded,
+            encoder: encoder_name,
+            sw: "frames rgba".to_string(),
+        }
     }
 
     fn run_texture(
@@ -390,7 +356,7 @@ mod windows {
         device: &Device,
         sources: &[ID3D11Texture2D],
         info: VideoInfo,
-    ) -> Option<Run> {
+    ) -> Result<Run, String> {
         let mut encoder = SegmentedVideoEncoder::init(
             dir.to_path_buf(),
             info,
@@ -400,13 +366,18 @@ mod windows {
                 ..Default::default()
             },
         )
-        .expect("texture encoder");
+        .map_err(|error| error.to_string())?;
         if !encoder.is_d3d11_hw_input() {
-            return None;
+            return Err(encoder.d3d11_status().to_string());
         }
-        let mut ring = Ring::new(&device.device, info.width, info.height);
+        let encoder_name = encoder.codec_name();
+        let sw = format!("hw sw_format {}", encoder.d3d11_status());
+        let mut ring = GpuTextureRing::new(device.device.clone())
+            .ok_or_else(|| "no immediate context".to_string())?;
         for i in 0..WARMUP {
-            let (texture, lifetime) = ring.submit_source(&device.context, &sources[i % SOURCES]);
+            let (texture, lifetime) = ring
+                .submit_from(&sources[i % SOURCES], info.width, info.height)
+                .ok_or_else(|| ring.refusal().to_string())?;
             unsafe {
                 encoder
                     .queue_d3d11_texture(
@@ -414,15 +385,16 @@ mod windows {
                         Duration::from_millis(i as u64 * 33),
                         Some(lifetime),
                     )
-                    .expect("warmup texture");
+                    .map_err(|error| error.to_string())?;
             }
         }
         let wall_start = Instant::now();
         let cpu_start = process_cpu();
         for i in 0..FRAMES {
             let index = WARMUP + i;
-            let (texture, lifetime) =
-                ring.submit_source(&device.context, &sources[index % SOURCES]);
+            let (texture, lifetime) = ring
+                .submit_from(&sources[index % SOURCES], info.width, info.height)
+                .ok_or_else(|| ring.refusal().to_string())?;
             unsafe {
                 encoder
                     .queue_d3d11_texture(
@@ -430,14 +402,20 @@ mod windows {
                         Duration::from_millis(index as u64 * 33),
                         Some(lifetime),
                     )
-                    .expect("texture frame");
+                    .map_err(|error| error.to_string())?;
             }
         }
         let wall = wall_start.elapsed();
         let cpu = process_cpu().saturating_sub(cpu_start);
-        encoder.finish().expect("finish texture");
+        encoder.finish().map_err(|error| error.to_string())?;
         let decoded = decode_count(&assemble(dir));
-        Some(Run { wall, cpu, decoded })
+        Ok(Run {
+            wall,
+            cpu,
+            decoded,
+            encoder: encoder_name,
+            sw,
+        })
     }
 
     fn report(label: &str, path: &str, runs: &[Run]) {
@@ -447,8 +425,13 @@ mod windows {
         let wall_max = *wall.iter().max().unwrap_or(&0);
         let cpu_min = *cpu.iter().min().unwrap_or(&0);
         let cpu_max = *cpu.iter().max().unwrap_or(&0);
+        let encoder = runs
+            .first()
+            .map(|run| run.encoder.as_str())
+            .unwrap_or("unknown");
+        let sw = runs.first().map(|run| run.sw.as_str()).unwrap_or("unknown");
         println!(
-            "{label} {path} wall median {} ms range {wall_min}-{wall_max} cpu median {} ms range {cpu_min}-{cpu_max} decoded {:?}",
+            "{label} {path} encoder {encoder} {sw} wall median {} ms range {wall_min}-{wall_max} cpu median {} ms range {cpu_min}-{cpu_max} decoded {:?}",
             median(&mut wall),
             median(&mut cpu),
             runs.iter().map(|run| run.decoded).collect::<Vec<_>>()
@@ -460,6 +443,7 @@ mod windows {
         let device = open_device();
         let expected = WARMUP + FRAMES;
         let mut failed = false;
+        println!("adapter: {}", adapter_description(&device.device));
         println!("frames {FRAMES} warmup {WARMUP} runs {RUNS} expected decoded {expected}");
         for (width, height) in [(1920u32, 1080u32), (3840, 2160)] {
             let info = VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30);
@@ -475,7 +459,7 @@ mod windows {
             let _ = std::fs::remove_dir_all(&base);
             let mut readback_runs = Vec::new();
             let mut texture_runs = Vec::new();
-            let mut texture_refused = false;
+            let mut texture_refusal = None;
             for run_index in 0..RUNS {
                 let readback_dir = base.join(format!("readback-{run_index}"));
                 std::fs::create_dir_all(&readback_dir).expect("readback dir");
@@ -488,21 +472,26 @@ mod windows {
                 let texture_dir = base.join(format!("texture-{run_index}"));
                 std::fs::create_dir_all(&texture_dir).expect("texture dir");
                 match run_texture(&texture_dir, &device, &sources, info) {
-                    Some(texture) => {
+                    Ok(texture) => {
                         if texture.decoded != expected {
                             failed = true;
                         }
                         texture_runs.push(texture);
                     }
-                    None => texture_refused = true,
+                    Err(reason) => {
+                        if texture_refusal.is_none() {
+                            texture_refusal = Some(reason);
+                        }
+                    }
                 }
             }
             let label = format!("{width}x{height}");
             report(&label, "readback", &readback_runs);
-            if texture_refused {
-                println!("{label} texture refused, CPU frame path stayed in use");
-            } else {
+            if !texture_runs.is_empty() {
                 report(&label, "texture", &texture_runs);
+            }
+            if let Some(reason) = texture_refusal {
+                println!("{label} texture refused: {reason}");
             }
         }
         if failed {

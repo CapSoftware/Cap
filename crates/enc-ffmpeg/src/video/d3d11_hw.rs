@@ -6,11 +6,16 @@ use std::ffi::c_void;
 use std::ptr::null_mut;
 
 use ffmpeg::sys::{
-    AVBufferRef, AVCodecContext, AVHWDeviceContext, AVHWDeviceType, AVHWFramesContext,
-    AVPixelFormat, av_buffer_create, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_alloc,
-    av_hwdevice_ctx_init, av_hwframe_ctx_alloc, av_hwframe_ctx_init,
+    AV_HWFRAME_MAP_READ, AVBufferRef, AVCodecContext, AVHWDeviceContext, AVHWDeviceType,
+    AVHWFramesContext, AVPixelFormat, av_buffer_create, av_buffer_ref, av_buffer_unref,
+    av_hwdevice_ctx_alloc, av_hwdevice_ctx_create_derived, av_hwdevice_ctx_init,
+    av_hwframe_ctx_alloc, av_hwframe_ctx_create_derived, av_hwframe_ctx_init, av_hwframe_map,
 };
 use windows::core::{IUnknown, Interface};
+
+use super::d3d11_format::{
+    D3d11SwFormat, D3d11TexturePath, H264_TEXTURE_ENCODERS, shared_d3d11_sw_format,
+};
 
 const BIND_SHADER_RESOURCE: u32 = 0x8;
 const BIND_RENDER_TARGET: u32 = 0x20;
@@ -27,12 +32,16 @@ struct D3d11FramesHwctx {
 pub enum D3d11HwError {
     #[error("Failed to create a D3D11 hardware device context")]
     DeviceCreation,
+    #[error("D3D11 device context: {0}")]
+    DeviceInit(String),
     #[error("Failed to allocate a D3D11 hardware frames context")]
     FramesAllocation,
-    #[error("Failed to initialize a D3D11 hardware frames context: {0}")]
-    FramesInit(i32),
+    #[error("D3D11 frames context: {0}")]
+    FramesInit(String),
     #[error("Failed to wrap a D3D11 texture into an AVFrame")]
     FrameWrap,
+    #[error("D3D11 frame map: {0}")]
+    FrameMap(String),
 }
 
 pub struct D3d11TextureLifetime {
@@ -48,8 +57,13 @@ struct ExtraRelease {
 pub(crate) struct D3d11HwFrames {
     device_ctx: *mut AVBufferRef,
     frames_ctx: *mut AVBufferRef,
+    qsv_frames: *mut AVBufferRef,
     width: u32,
     height: u32,
+}
+
+fn av_error(code: i32) -> String {
+    format!("{} ({code})", ffmpeg::Error::from(code))
 }
 
 unsafe impl Send for D3d11HwFrames {}
@@ -115,10 +129,11 @@ impl D3d11HwFrames {
                 return Err(D3d11HwError::DeviceCreation);
             }
             *d3d_device = add_ref(device);
-            if av_hwdevice_ctx_init(device_ctx) < 0 {
+            let device_init = av_hwdevice_ctx_init(device_ctx);
+            if device_init < 0 {
                 let mut device_ctx = device_ctx;
                 av_buffer_unref(&mut device_ctx);
-                return Err(D3d11HwError::DeviceCreation);
+                return Err(D3d11HwError::DeviceInit(av_error(device_init)));
             }
 
             let frames_ctx = av_hwframe_ctx_alloc(device_ctx);
@@ -128,9 +143,13 @@ impl D3d11HwFrames {
                 return Err(D3d11HwError::FramesAllocation);
             }
 
+            let sw_format = shared_d3d11_sw_format(H264_TEXTURE_ENCODERS)
+                .ok_or_else(|| D3d11HwError::FramesInit("no shared NV12 sw_format".to_string()))?;
             let ctx = (*frames_ctx).data as *mut AVHWFramesContext;
             (*ctx).format = AVPixelFormat::AV_PIX_FMT_D3D11;
-            (*ctx).sw_format = AVPixelFormat::AV_PIX_FMT_RGBA;
+            (*ctx).sw_format = match sw_format {
+                D3d11SwFormat::Nv12 => AVPixelFormat::AV_PIX_FMT_NV12,
+            };
             (*ctx).width = width as i32;
             (*ctx).height = height as i32;
             (*ctx).initial_pool_size = 0;
@@ -146,12 +165,13 @@ impl D3d11HwFrames {
                 av_buffer_unref(&mut frames_ctx);
                 let mut device_ctx = device_ctx;
                 av_buffer_unref(&mut device_ctx);
-                return Err(D3d11HwError::FramesInit(init_result));
+                return Err(D3d11HwError::FramesInit(av_error(init_result)));
             }
 
             Ok(Self {
                 device_ctx,
                 frames_ctx,
+                qsv_frames: null_mut(),
                 width,
                 height,
             })
@@ -160,15 +180,73 @@ impl D3d11HwFrames {
 
     /// # Safety
     /// `encoder_ctx` must be a valid, not-yet-opened `AVCodecContext`.
-    pub(crate) unsafe fn attach_to_encoder(&self, encoder_ctx: *mut AVCodecContext) {
+    /// `frames` must be the D3D11 frames context or a QSV context derived from it.
+    pub(crate) unsafe fn attach_frames(
+        &self,
+        encoder_ctx: *mut AVCodecContext,
+        frames: *mut AVBufferRef,
+    ) {
         unsafe {
-            (*encoder_ctx).hw_frames_ctx = av_buffer_ref(self.frames_ctx);
+            (*encoder_ctx).hw_frames_ctx = av_buffer_ref(frames);
         }
     }
 
     /// # Safety
-    /// `texture` must be a 2D `ID3D11Texture2D` on this device, RGBA
-    /// (`DXGI_FORMAT_R8G8B8A8_UNORM`), matching `width` and `height`.
+    /// Called only while this value is still owned by the opening thread.
+    pub(crate) unsafe fn frames_for(
+        &mut self,
+        path: D3d11TexturePath,
+    ) -> Result<*mut AVBufferRef, D3d11HwError> {
+        match path {
+            D3d11TexturePath::D3d11Nv12 => Ok(self.frames_ctx),
+            D3d11TexturePath::QsvFromD3d11Nv12 => {
+                unsafe { self.derive_qsv() }?;
+                Ok(self.qsv_frames)
+            }
+        }
+    }
+
+    pub(crate) fn clear_qsv(&mut self) {
+        if !self.qsv_frames.is_null() {
+            unsafe { av_buffer_unref(&mut self.qsv_frames) };
+        }
+    }
+
+    unsafe fn derive_qsv(&mut self) -> Result<(), D3d11HwError> {
+        if !self.qsv_frames.is_null() {
+            return Ok(());
+        }
+        unsafe {
+            let mut device = null_mut();
+            let device_result = av_hwdevice_ctx_create_derived(
+                &mut device,
+                AVHWDeviceType::AV_HWDEVICE_TYPE_QSV,
+                self.device_ctx,
+                0,
+            );
+            if device_result < 0 {
+                return Err(D3d11HwError::FramesInit(av_error(device_result)));
+            }
+            let mut frames = null_mut();
+            let frames_result = av_hwframe_ctx_create_derived(
+                &mut frames,
+                AVPixelFormat::AV_PIX_FMT_QSV,
+                device,
+                self.frames_ctx,
+                AV_HWFRAME_MAP_READ as i32,
+            );
+            av_buffer_unref(&mut device);
+            if frames_result < 0 {
+                return Err(D3d11HwError::FramesInit(av_error(frames_result)));
+            }
+            self.qsv_frames = frames;
+            Ok(())
+        }
+    }
+
+    /// # Safety
+    /// `texture` must be a 2D `ID3D11Texture2D` on this device, NV12
+    /// (`DXGI_FORMAT_NV12`), matching `width` and `height`.
     /// `lifetime.free` runs once, on whichever thread drops the frame.
     pub(crate) unsafe fn wrap_texture(
         &self,
@@ -209,14 +287,31 @@ impl D3d11HwFrames {
             if (*ptr).hw_frames_ctx.is_null() {
                 return Err(D3d11HwError::FrameWrap);
             }
+            if self.qsv_frames.is_null() {
+                return Ok(frame);
+            }
+            let mut mapped = ffmpeg::frame::Video::empty();
+            let dst = mapped.as_mut_ptr();
+            (*dst).format = AVPixelFormat::AV_PIX_FMT_QSV as i32;
+            (*dst).hw_frames_ctx = av_buffer_ref(self.qsv_frames);
+            if (*dst).hw_frames_ctx.is_null() {
+                return Err(D3d11HwError::FrameWrap);
+            }
+            let map_result = av_hwframe_map(dst, frame.as_ptr(), AV_HWFRAME_MAP_READ as i32);
+            if map_result < 0 {
+                return Err(D3d11HwError::FrameMap(av_error(map_result)));
+            }
+            Ok(mapped)
         }
-        Ok(frame)
     }
 }
 
 impl Drop for D3d11HwFrames {
     fn drop(&mut self) {
         unsafe {
+            if !self.qsv_frames.is_null() {
+                av_buffer_unref(&mut self.qsv_frames);
+            }
             av_buffer_unref(&mut self.frames_ctx);
             av_buffer_unref(&mut self.device_ctx);
         }
