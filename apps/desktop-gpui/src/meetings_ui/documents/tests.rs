@@ -2646,3 +2646,27 @@ fn transcript_rows_carry_the_voice_choices() {
     let rows = turns(&transcript);
     assert!(!rows[0].you && rows[0].disowned);
 }
+
+/// macOS answers a notification permission request only once the person has
+/// answered its prompt. A failed start does not wait on it for long.
+#[gpui::test]
+async fn an_unanswered_notification_request_does_not_hold_a_failed_start(cx: &mut TestAppContext) {
+    let (tx, rx) = flume::bounded::<bool>(1);
+    let waiting = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
+    cx.executor().advance_clock(super::PERMISSION_WAIT / 2);
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(super::PERMISSION_WAIT / 2 + std::time::Duration::from_millis(1));
+    assert_eq!(waiting.await, None);
+    drop(tx);
+
+    let (tx, rx) = flume::bounded::<bool>(1);
+    tx.send(true).unwrap();
+    let answered = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
+    assert_eq!(answered.await, Some(true));
+
+    let (tx, rx) = flume::bounded::<bool>(1);
+    drop(tx);
+    let gone = cx.spawn(|cx| async move { super::permission_answer(rx, &cx).await });
+    assert_eq!(gone.await, Some(false));
+}

@@ -286,14 +286,37 @@ pub fn auto_start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
     notify_start_failure(title, body, cx);
 }
 
+/// How long a failed start waits for macOS to answer the notification
+/// permission request. macOS answers only once the person has answered its
+/// prompt, and never when it cannot show one; the failure must still be said.
+#[cfg(any(target_os = "macos", test))]
+const PERMISSION_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The answer to a notification permission request, or `None` when none came
+/// within [`PERMISSION_WAIT`].
+#[cfg(any(target_os = "macos", test))]
+async fn permission_answer(answer: flume::Receiver<bool>, cx: &gpui::AsyncApp) -> Option<bool> {
+    use futures_util::future::{Either, select};
+    let answered = Box::pin(answer.recv_async());
+    let timeout = Box::pin(cx.background_executor().timer(PERMISSION_WAIT));
+    match select(answered, timeout).await {
+        Either::Left((answer, _)) => Some(answer.unwrap_or(false)),
+        Either::Right(_) => None,
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
     let permission = crate::notifications::request_permission();
     cx.spawn(async move |cx| {
-        let allowed = permission.recv_async().await.unwrap_or(false);
+        let answer = permission_answer(permission, cx).await;
         cx.update(|cx| {
-            if !allowed {
-                tracing::info!("notifications are not allowed; opening the notes window");
+            if answer != Some(true) {
+                if answer.is_none() {
+                    tracing::info!("no notification answer; opening the notes window");
+                } else {
+                    tracing::info!("notifications are not allowed; opening the notes window");
+                }
                 window::open_with_message(title, Some(body), cx);
                 return;
             }
