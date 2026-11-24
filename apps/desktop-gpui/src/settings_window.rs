@@ -38,8 +38,8 @@ use crate::{
     store::{
         self, AppTheme, DEFAULT_PROJECT_NAME_TEMPLATE, DEFAULT_SERVER_URL, GENERAL_SETTINGS,
         GeneralSettings, MainWindowStartBehaviour, PostDeletionBehaviour, RECORDING_START_SAFETY,
-        SettingsEnum, StudioQuality, UpdateChannel, UpdateDownloadPolicy, WindowCaptureStyle,
-        WindowExclusion,
+        SettingsEnum, StudioFrameRate, StudioQuality, UpdateChannel, UpdateDownloadPolicy,
+        WindowCaptureStyle, WindowExclusion,
     },
     theme::Theme,
     ui,
@@ -235,13 +235,43 @@ struct OpenMenu {
     state: ui::MenuState,
 }
 
-/// `MAX_FPS_OPTIONS` in general.tsx.
-const MAX_FPS_OPTIONS: &[(u32, fn() -> &'static str)] = &[
-    (24, tr::settings::general::recording::max_fps::fps_24),
-    (25, tr::settings::general::recording::max_fps::fps_25),
-    (30, tr::settings::general::recording::max_fps::fps_30),
-    (60, tr::settings::general::recording::max_fps::fps_60),
-    (120, tr::settings::general::recording::max_fps::fps_120),
+const FRAME_RATE_OPTIONS: &[(StudioFrameRate, Label)] = &[
+    (
+        StudioFrameRate::Fixed(24),
+        tr::settings::quality::studio::frame_rate::fps_24,
+    ),
+    (
+        StudioFrameRate::Fixed(25),
+        tr::settings::quality::studio::frame_rate::fps_25,
+    ),
+    (
+        StudioFrameRate::Fixed(30),
+        tr::settings::quality::studio::frame_rate::fps_30,
+    ),
+    (
+        StudioFrameRate::Fixed(60),
+        tr::settings::quality::studio::frame_rate::fps_60,
+    ),
+    (
+        StudioFrameRate::Fixed(120),
+        tr::settings::quality::studio::frame_rate::fps_120,
+    ),
+    (
+        StudioFrameRate::Fixed(144),
+        tr::settings::quality::studio::frame_rate::fps_144,
+    ),
+    (
+        StudioFrameRate::Fixed(165),
+        tr::settings::quality::studio::frame_rate::fps_165,
+    ),
+    (
+        StudioFrameRate::Fixed(240),
+        tr::settings::quality::studio::frame_rate::fps_240,
+    ),
+    (
+        StudioFrameRate::MatchDisplay,
+        tr::settings::quality::studio::frame_rate::match_display,
+    ),
 ];
 
 /// The Countdown select's options.
@@ -1569,10 +1599,13 @@ impl SettingsWindow {
                     .map(|(value, label)| ui::MenuItem::new(label(), *value == current))
                     .collect()
             }
-            MenuKind::MaxFps => MAX_FPS_OPTIONS
-                .iter()
-                .map(|(value, label)| ui::MenuItem::new(label(), *value == self.settings.max_fps))
-                .collect(),
+            MenuKind::MaxFps => {
+                let current = self.settings.studio_frame_rate();
+                FRAME_RATE_OPTIONS
+                    .iter()
+                    .map(|(rate, label)| ui::MenuItem::new(label(), *rate == current))
+                    .collect()
+            }
             MenuKind::Language => {
                 let current = self.language_preference();
                 i18n::Preference::options()
@@ -1610,9 +1643,8 @@ impl SettingsWindow {
                 }
             }
             MenuKind::MaxFps => {
-                if let Some((value, _)) = MAX_FPS_OPTIONS.get(index) {
-                    self.settings.max_fps = *value;
-                    self.write_u32("maxFps", *value, cx);
+                if let Some((rate, _)) = FRAME_RATE_OPTIONS.get(index) {
+                    self.select_studio_frame_rate(*rate, cx);
                 }
             }
             MenuKind::Language => {
@@ -3573,6 +3605,44 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn select_studio_frame_rate(&mut self, rate: StudioFrameRate, cx: &mut Context<Self>) {
+        if store::set_studio_frame_rate(rate) {
+            let (max_fps, match_display) = match rate {
+                StudioFrameRate::Fixed(fps) => (fps, false),
+                StudioFrameRate::MatchDisplay => (cap_recording::MAX_STUDIO_FPS, true),
+            };
+            self.settings.max_fps = max_fps;
+            self.settings.max_fps_match_display = match_display;
+        } else {
+            self.settings = GeneralSettings::load();
+        }
+        cx.notify();
+    }
+
+    fn render_studio_frame_rate(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self.settings.studio_frame_rate();
+        let label = FRAME_RATE_OPTIONS
+            .iter()
+            .find(|(rate, _)| *rate == current)
+            .map(|(_, label)| label().to_string())
+            .unwrap_or_else(|| self.settings.max_fps.to_string());
+        let description = match current {
+            StudioFrameRate::MatchDisplay => {
+                tr::settings::quality::studio::frame_rate::description_match()
+            }
+            StudioFrameRate::Fixed(fps) if fps > 60 => {
+                tr::settings::quality::studio::frame_rate::description_high()
+            }
+            StudioFrameRate::Fixed(_) => tr::settings::quality::studio::frame_rate::description(),
+        };
+        self.setting_row(
+            tr::settings::quality::studio::frame_rate::label(),
+            Some(description),
+            self.select("max-fps", label, MenuKind::MaxFps, cx)
+                .into_any_element(),
+        )
+    }
+
     fn radio_dot(&self, checked: bool) -> gpui::Div {
         let theme = self.theme;
         let accent: Hsla = rgb(Theme::SETTINGS_ACCENT).into();
@@ -3685,6 +3755,7 @@ impl SettingsWindow {
                     .into_any_element()
             })
             .collect();
+        rows.push(self.render_studio_frame_rate(cx));
 
         if self.studio_quality_save_failed {
             rows.push(
@@ -3721,11 +3792,6 @@ impl SettingsWindow {
             .find(|(value, _)| *value == settings.recording_countdown.unwrap_or(0))
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| settings.recording_countdown.unwrap_or(0).to_string());
-        let fps_label = MAX_FPS_OPTIONS
-            .iter()
-            .find(|(value, _)| *value == settings.max_fps)
-            .map(|(_, label)| label().to_string())
-            .unwrap_or_else(|| settings.max_fps.to_string());
         let zoom = settings.new_zoom_amount();
         let keep_drawings = crate::live_draw::SUPPORTED.then(|| {
             self.setting_row(
@@ -3974,16 +4040,6 @@ impl SettingsWindow {
                             },
                         )
                         .into_any_element(),
-                    ),
-                    self.setting_row(
-                        tr::settings::general::recording::max_fps::label(),
-                        Some(if settings.max_fps > 60 {
-                            tr::settings::general::recording::max_fps::description_high()
-                        } else {
-                            tr::settings::general::recording::max_fps::description()
-                        }),
-                        self.select("max-fps", fps_label, MenuKind::MaxFps, cx)
-                            .into_any_element(),
                     ),
                 ])
                 .when_some(keep_drawings, |card, row| {
