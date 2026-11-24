@@ -387,7 +387,19 @@ impl DocumentsWindow {
         let sidebar_choice = saved_sidebar_choice();
         let sidebar_open = sidebar_default(sidebar_choice);
         pane.update(cx, |pane, cx| pane.set_leading_inset(!sidebar_open, cx));
+        let keyboard_nav = crate::ui::keyboard_nav::install_keeping(
+            window,
+            cx,
+            |_, _, _| false,
+            // The notes editors use Tab for list indent; Ctrl-Tab moves on.
+            |this: &Self, window, cx| {
+                let pane = this.pane.read(cx);
+                pane.notes.focus_handle(cx).contains_focused(window, cx)
+                    || pane.enhanced.focus_handle(cx).contains_focused(window, cx)
+            },
+        );
         let subscriptions = vec![
+            keyboard_nav,
             cx.subscribe_in(&sidebar, window, Self::on_sidebar_event),
             cx.subscribe_in(&home, window, Self::on_home_event),
             cx.subscribe_in(&store, window, |this, _, event: &StoreEvent, window, cx| {
@@ -915,6 +927,7 @@ impl Focusable for DocumentsWindow {
 
 impl Render for DocumentsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         crate::keylat::frame_started();
         self.sync_theme(window, cx);
         style::set_reduce_motion(cx.reduce_motion());
@@ -1052,6 +1065,7 @@ impl Render for DocumentsWindow {
                 )),
         );
         shell
+            .child(crate::ui::keyboard_nav::pointer_watcher())
             .child(body)
             .child(self.render_leading_controls(cx))
             .children(self.render_toast(cx))

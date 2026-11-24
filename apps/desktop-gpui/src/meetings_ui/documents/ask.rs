@@ -981,6 +981,7 @@ impl AskPanel {
                                 div()
                                     .id("ask-sheet-send")
                                     .role(gpui::Role::Button)
+                                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                                     .aria_label(tr::cap_ai::ask::send_now())
                                     .size(px(34.))
                                     .flex()
@@ -1007,6 +1008,7 @@ impl AskPanel {
 
 impl Render for AskPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let theme = Theme::new(if palette.dark {
             Appearance::Dark
@@ -1057,6 +1059,7 @@ impl Render for AskPanel {
                                 div()
                                     .id("ask-close")
                                     .role(gpui::Role::Button)
+                                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                                     .aria_label(tr::common::close())
                                     .size(px(22.))
                                     .flex()
@@ -1198,6 +1201,7 @@ impl Render for AskPanel {
                         div()
                             .id("ask-send")
                             .role(gpui::Role::Button)
+                            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                             .aria_label(tr::cap_ai::ask::send_now())
                             .size(px(34.))
                             .flex()

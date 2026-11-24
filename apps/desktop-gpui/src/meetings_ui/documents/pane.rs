@@ -185,6 +185,7 @@ pub fn notes_error_action(error: &NotesError, palette: &Palette) -> Option<AnyEl
                 "notes-sign-in"
             })
             .role(gpui::Role::Button)
+            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
             .aria_label(label)
             .h(px(26.))
             .px(px(11.))
@@ -1802,6 +1803,7 @@ impl Pane {
                             div()
                                 .id("page-transcript-toggle")
                                 .role(gpui::Role::Button)
+                                .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                                 .aria_label(toggle_label)
                                 .ml(px(-8.))
                                 .h(px(28.))
@@ -3208,6 +3210,7 @@ impl Pane {
         div()
             .id(id)
             .role(gpui::Role::Button)
+            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
             .aria_label(label.clone())
             .h(px(24.))
             .px(px(6.))
@@ -3660,6 +3663,7 @@ impl Pane {
             div()
                 .id(id)
                 .role(gpui::Role::Tab)
+                .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                 .aria_label(label)
                 .aria_selected(selected)
                 .h(px(28.))
@@ -3894,6 +3898,7 @@ impl Pane {
             div()
                 .id(id)
                 .role(gpui::Role::Button)
+                .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                 .aria_label(label.clone())
                 .h(px(32.))
                 .px(px(10.))
@@ -4228,6 +4233,7 @@ impl Pane {
                     div()
                         .id(id)
                         .role(gpui::Role::Button)
+                        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(label)
                         .h(px(26.))
                         .px(px(11.))
@@ -4358,6 +4364,7 @@ impl Pane {
                                 div()
                                     .id(("participant-remove", i))
                                     .role(gpui::Role::Button)
+                                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                                     .aria_label(tr::settings::cli::remove())
                                     .aria_description(person.clone())
                                     .size(px(20.))
@@ -4440,6 +4447,7 @@ impl Pane {
                     div()
                         .id(id)
                         .role(gpui::Role::MenuItemCheckBox)
+                        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(label.clone())
                         .aria_toggled(if checked {
                             gpui::Toggled::True
@@ -4575,6 +4583,7 @@ impl Pane {
             div()
                 .id(("mention", i))
                 .role(gpui::Role::MenuItem)
+                .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                 .aria_label(label.clone())
                 .h(px(28.))
                 .px(px(8.))
@@ -4654,6 +4663,7 @@ fn chip_anchor(event: &gpui::ClickEvent) -> Point<Pixels> {
 
 impl Render for Pane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let viewport = window.viewport_size();
         let viewport_w = f32::from(viewport.width);

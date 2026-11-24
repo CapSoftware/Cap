@@ -280,6 +280,7 @@ impl SetupWindow {
             .role(gpui::Role::Button)
             .aria_label(perm.name())
             .aria_description(caption)
+            .when(paper.keyboard && !active, crate::ui::keyboard_nav::stop)
             .flex()
             .flex_row()
             .items_center()

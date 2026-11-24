@@ -284,6 +284,7 @@ impl Sidebar {
         div()
             .id(id)
             .role(gpui::Role::Button)
+            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
             .aria_label(label.clone())
             .mx(px(10.))
             .h(px(glass::ROW_HEIGHT))
@@ -341,7 +342,8 @@ impl Sidebar {
 }
 
 impl Render for Sidebar {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let entity = cx.entity();
         let store = self.store.read(cx);
@@ -410,6 +412,7 @@ impl Render for Sidebar {
                     div()
                         .id(SharedString::from(format!("recent-{}", row.id)))
                         .role(gpui::Role::Button)
+                        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(row.title.clone())
                         .mx(px(10.))
                         .h(px(glass::ROW_HEIGHT))
@@ -444,6 +447,7 @@ impl Render for Sidebar {
                     div()
                         .id("documents-add-folder")
                         .role(gpui::Role::Button)
+                        .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                         .aria_label(tr::documents::sidebar::new_folder())
                         .size(px(22.))
                         .flex()

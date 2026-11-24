@@ -1542,6 +1542,7 @@ impl Home {
 
 impl Render for Home {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let sidebar_open = self
             .root
             .upgrade()

@@ -74,6 +74,7 @@ fn small_button(
         .id(id.into())
         .role(gpui::Role::Button)
         .aria_label(label)
+        .when(paper.keyboard && enabled, crate::ui::keyboard_nav::stop)
         .flex()
         .flex_none()
         .items_center()
@@ -111,6 +112,7 @@ fn quiet_link(
         .id(id.into())
         .role(gpui::Role::Link)
         .aria_label(label)
+        .when(paper.keyboard, crate::ui::keyboard_nav::stop)
         .text_size(px(13.))
         .text_color(paper.soft)
         .cursor_pointer()
@@ -120,7 +122,10 @@ fn quiet_link(
 
 impl SetupWindow {
     fn paper(&self) -> Paper {
-        Paper::new(&self.theme)
+        Paper {
+            keyboard: self.keyboard,
+            ..Paper::new(&self.theme)
+        }
     }
 
     fn doodle(
@@ -504,6 +509,7 @@ impl SetupWindow {
         let card = paper_card(&paper)
             .id(("meeting-setup-engine", index))
             .role(gpui::Role::RadioButton)
+            .when(paper.keyboard && enabled, crate::ui::keyboard_nav::stop)
             .aria_label(title)
             .aria_description(body)
             .aria_toggled(if selected {
@@ -1511,6 +1517,7 @@ impl SetupWindow {
 
 impl Render for SetupWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.keyboard = crate::ui::keyboard_nav::active(window, cx);
         #[cfg(not(test))]
         self.theme.refresh(window, cx, true);
         if self.step == Step::Permissions {
@@ -1573,6 +1580,7 @@ impl Render for SetupWindow {
         div()
             .id("meeting-setup")
             .track_focus(self.focus_handle())
+            .child(crate::ui::keyboard_nav::pointer_watcher())
             .key_context("MeetingSetup")
             .on_key_down(cx.listener(Self::on_key))
             .relative()

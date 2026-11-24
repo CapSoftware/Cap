@@ -692,6 +692,7 @@ impl RecordingBar {
         div()
             .id(id)
             .role(gpui::Role::Button)
+            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
             .h(px(34.))
             .px(px(10.))
             .flex()
@@ -721,6 +722,7 @@ impl RecordingBar {
 
 impl Render for RecordingBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         if Meetings::try_global(cx).is_none() || self.doc_id.is_none() {
             return div().into_any_element();
@@ -825,6 +827,7 @@ impl RecordingBar {
                         div()
                             .id("bar-stop-writing")
                             .role(gpui::Role::Button)
+                            .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                             .aria_label(tr::documents::notes::stop())
                             .ml(px(2.))
                             .px(px(8.))

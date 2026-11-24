@@ -2849,7 +2849,8 @@ impl Element for PageScroll {
 }
 
 impl Render for TranscriptView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let entity = cx.entity();
         let empty = self.loaded && !self.has_transcript();

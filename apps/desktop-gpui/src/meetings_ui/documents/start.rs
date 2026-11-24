@@ -238,6 +238,7 @@ impl StartButton {
             div()
                 .id((self.id, index))
                 .role(gpui::Role::MenuItem)
+                .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                 .aria_label(title.clone())
                 .aria_description(about.clone())
                 .px(px(10.))
@@ -313,7 +314,8 @@ impl StartButton {
 }
 
 impl Render for StartButton {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.palette.keyboard = crate::ui::keyboard_nav::active(window, cx);
         let palette = self.palette;
         let choice = current(cx);
         let live = recording(cx);
@@ -363,6 +365,7 @@ impl Render for StartButton {
                 div()
                     .id((self.id, 10usize))
                     .role(gpui::Role::Button)
+                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                     .aria_label(accessible_label)
                     .h_full()
                     .when(wide, |el| el.flex_1().min_w_0())
@@ -394,6 +397,7 @@ impl Render for StartButton {
                 div()
                     .id((self.id, 11usize))
                     .role(gpui::Role::Button)
+                    .when(palette.keyboard, crate::ui::keyboard_nav::stop)
                     .aria_label(tr::documents::start::more())
                     .h_full()
                     .pl(px(8.))

@@ -108,6 +108,7 @@ pub fn panel<A: Clone + 'static>(
         let pick = pick.clone();
         div()
             .id(ElementId::NamedInteger(id.into(), index as u64))
+            .when(palette.keyboard && enabled, crate::ui::keyboard_nav::stop)
             .role(if entry.checked {
                 gpui::Role::MenuItemCheckBox
             } else {
