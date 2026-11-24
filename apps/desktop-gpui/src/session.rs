@@ -1085,7 +1085,11 @@ impl RecordingSession {
         if self.mode() == Some(recording::RecordingMode::Studio) {
             crate::app_windows::prewarm_shared_wgpu_device(cx);
         }
-        if let Some(limit) = self.active.as_ref().and_then(ActiveRecording::recording_limit) {
+        if let Some(limit) = self
+            .active
+            .as_ref()
+            .and_then(ActiveRecording::recording_limit)
+        {
             self.monitor_recording_limit(limit, project_dir.clone(), cx);
         }
         self.monitor_storage(project_dir, cx);

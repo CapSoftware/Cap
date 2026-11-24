@@ -2904,8 +2904,7 @@ mod tests {
 
     #[test]
     fn created_video_reads_the_recording_limit() {
-        let created =
-            parse_created_video(r#"{"id":"abc123","recording_limit_secs":300}"#).unwrap();
+        let created = parse_created_video(r#"{"id":"abc123","recording_limit_secs":300}"#).unwrap();
         assert_eq!(
             created.recording_limit,
             Some(std::time::Duration::from_secs(300))
@@ -2919,7 +2918,11 @@ mod tests {
             r#"{"id":"abc123","recording_limit_secs":"300"}"#,
             r#"{"id":"abc123","recording_limit_secs":12.5}"#,
         ] {
-            assert_eq!(parse_created_video(body).unwrap().recording_limit, None, "{body}");
+            assert_eq!(
+                parse_created_video(body).unwrap().recording_limit,
+                None,
+                "{body}"
+            );
         }
     }
 
