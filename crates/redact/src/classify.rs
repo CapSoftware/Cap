@@ -46,6 +46,13 @@ static IPV4: LazyLock<Regex> = LazyLock::new(|| {
         r"(?:^|[^0-9A-Za-z.])((?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3})(?::[0-9]{1,5})?(?:/[0-9]{1,2})?(?:$|[^0-9A-Za-z.])",
     )
 });
+/// Three octets and a dot at the end of a line: an address cut off by a
+/// window over it or the frame edge.
+static CUT_IPV4: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?:^|[^0-9A-Za-z.])((?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2}\.)\s*$",
+    )
+});
 static IPV6: LazyLock<Regex> = LazyLock::new(|| {
     re(
         r"(?i)(?:^|[^0-9a-z:])((?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?::[0-9a-f]{1,4}){1,6}|::(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4})(?:$|[^0-9a-z:])",
@@ -124,6 +131,32 @@ static ASSIGNED_SECRET: LazyLock<Regex> = LazyLock::new(|| {
 static BEARER: LazyLock<Regex> = LazyLock::new(|| {
     re(r#"(?i)\b(?:bearer|basic)\s+([^\s"']{8,})|\btoken\s+([A-Za-z0-9_\-.=+/]{16,})"#)
 });
+/// A capitalised name of two to four words before an address in angle
+/// brackets: "Vesta Toro <vesta@example.com>".
+static DISPLAY_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?:^|[:\s,])(\p{Lu}[\p{L}'.\-]*(?:\s+\p{Lu}[\p{L}'.\-]*){1,3})\s*<[^<>\s]+@[^<>\s]+>")
+});
+/// A person field: "From: Vesta Toro", "Organizer: Mark Landis".
+static PERSON_FIELD: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"^\s*(?:From|To|Cc|Bcc|Reply-To|Sender|Attendees?|Organi[sz]er|Assignee|Owner|Reporter|Host)\s*:\s*(\p{Lu}[\p{L}'.\-]*(?:\s+\p{Lu}[\p{L}'.\-]*){1,3})\s*(?:$|<|,|\()",
+    )
+});
+/// "Hi Shelly,", "Dear Vesta Toro,".
+static SALUTATION: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"^\s*(?:Hi|Hello|Hey|Dear|Thanks|Thank you)\s+(\p{Lu}[\p{L}'\-]+(?:\s+\p{Lu}[\p{L}'\-]+){0,2})\s*[,!]",
+    )
+});
+/// A line that is only a capitalised name of one to four words.
+static NAME_LINE: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^\s*\p{Lu}[\p{L}'.\-]*(?:\s+\p{Lu}[\p{L}'.\-]*){0,3}\s*$"));
+static SIGN_OFF: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?i)^\s*(?:best|thanks|thank you|regards|cheers|sincerely|kind regards|best regards|warm regards|many thanks|all the best),?\s*$",
+    )
+});
+static CLOCK: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^\s*\d{1,2}:\d{2}\s*(?:am|pm)?\s*$"));
 static LABEL_ONLY: LazyLock<Regex> = LazyLock::new(|| {
     re(
         r"(?i)^\s*(?:[a-z\-]+\s+){0,3}(?:password|passcode|passphrase|secret|key|api\s*key|token|credentials?|pin|recovery\s*(?:code|phrase)|seed\s*phrase)\s*[:*]?\s*$",
@@ -344,6 +377,23 @@ fn classify_raw(text: &str) -> Vec<Finding> {
     for (start, end) in names::find_names(text) {
         push(&mut findings, RedactCategory::Name, start, end);
     }
+    for pattern in structural_names()
+        .then_some([&*DISPLAY_NAME, &*PERSON_FIELD, &*SALUTATION])
+        .into_iter()
+        .flatten()
+    {
+        for captures in pattern.captures_iter(text) {
+            if let Some(name) = captures.get(1) {
+                push_bytes(
+                    &mut findings,
+                    &index,
+                    RedactCategory::Name,
+                    name.start(),
+                    name.end(),
+                );
+            }
+        }
+    }
 
     resolve_overlaps(findings)
 }
@@ -352,11 +402,23 @@ fn classify_raw(text: &str) -> Vec<Finding> {
 /// another line (a field labelled "Password" with the value under or beside
 /// it).
 pub fn classify_frame(lines: &[LineContext<'_>]) -> Vec<Vec<Finding>> {
-    let mut results = lines
+    let results = lines
         .iter()
         .map(|line| classify_line(line.text))
         .collect::<Vec<_>>();
+    classify_frame_with(lines, results)
+}
+
+/// [`classify_frame`] for lines whose own findings (`classify_line`) are
+/// already known.
+pub fn classify_frame_with(
+    lines: &[LineContext<'_>],
+    mut results: Vec<Vec<Finding>>,
+) -> Vec<Vec<Finding>> {
     join_wrapped_lines(lines, &mut results);
+    if structural_names() {
+        names_from_layout(lines, &mut results);
+    }
     for (label_index, label) in lines.iter().enumerate() {
         if !LABEL_ONLY.is_match(label.text) {
             continue;
@@ -401,6 +463,63 @@ pub fn classify_frame(lines: &[LineContext<'_>]) -> Vec<Vec<Finding>> {
     results
 }
 
+/// Whether names come from page structure as well as the name lists
+/// (`CAP_REDACT_OFF=structnames` turns it off while it is measured).
+pub fn structural_names() -> bool {
+    static ON: LazyLock<bool> = LazyLock::new(|| {
+        !std::env::var("CAP_REDACT_OFF")
+            .unwrap_or_default()
+            .split(',')
+            .any(|item| item.trim() == "structnames")
+    });
+    *ON
+}
+
+/// Names the page's layout gives away: the line under a sign-off ("Best" /
+/// "Vesta Toro"), and a name with a clock time beside it on its row (a
+/// sender in a message list).
+fn names_from_layout(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
+    let whole = |text: &str| {
+        let start = text.chars().take_while(|c| c.is_whitespace()).count();
+        let end =
+            text.chars().count() - text.chars().rev().take_while(|c| c.is_whitespace()).count();
+        (start, end)
+    };
+    for (index, line) in lines.iter().enumerate() {
+        if !NAME_LINE.is_match(line.text) || line.text.trim().chars().count() < 3 {
+            continue;
+        }
+        let words = line.text.split_whitespace().count();
+        let signed = lines.iter().any(|above| {
+            SIGN_OFF.is_match(above.text)
+                && line.y > above.y
+                && line.y - (above.y + above.h) < above.h * 2.5
+                && (line.x - above.x).abs() < above.h * 2.0
+        });
+        let listed = words >= 2
+            && lines.iter().any(|beside| {
+                CLOCK.is_match(beside.text)
+                    && beside.x > line.x + line.w
+                    && ((beside.y + beside.h * 0.5) - (line.y + line.h * 0.5)).abs() < line.h * 0.5
+            });
+        if signed || listed {
+            let (start, end) = whole(line.text);
+            if end > start
+                && !results[index]
+                    .iter()
+                    .any(|f| f.category == RedactCategory::Name && f.start <= start && f.end >= end)
+            {
+                results[index].push(Finding {
+                    category: RedactCategory::Name,
+                    start,
+                    end,
+                });
+                results[index] = resolve_overlaps(std::mem::take(&mut results[index]));
+            }
+        }
+    }
+}
+
 /// A string wrapped onto the next line ("+1 (436)" / "519-9838", "4013
 /// Pine Court, Suite" / "754, Columbus, OH 26159") is only recognisable
 /// whole: each line followed by the one right under it at the same left
@@ -418,31 +537,36 @@ fn join_wrapped_lines(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
             continue;
         };
         let upper_len = upper.text.chars().count();
-        let joined = format!("{} {}", upper.text, lower.text);
-        for finding in classify_line(&joined) {
-            if finding.start >= upper_len || finding.end <= upper_len + 1 {
-                continue;
-            }
-            let already = |found: &[Finding], start: usize, end: usize| {
-                found
-                    .iter()
-                    .any(|f| f.category == finding.category && f.start <= start && f.end >= end)
-            };
-            let (upper_start, upper_end) = (finding.start, upper_len);
-            let (lower_start, lower_end) = (0, finding.end - upper_len - 1);
-            if !already(&results[upper_index], upper_start, upper_end) {
-                results[upper_index].push(Finding {
-                    category: finding.category,
-                    start: upper_start,
-                    end: upper_end,
-                });
-            }
-            if !already(&results[lower_index], lower_start, lower_end) {
-                results[lower_index].push(Finding {
-                    category: finding.category,
-                    start: lower_start,
-                    end: lower_end,
-                });
+        // Glued as well as spaced: a wrap after a hyphen ("(631) 555-" /
+        // "0153") or inside a token leaves no space in the string.
+        for joiner in [" ", ""] {
+            let gap = joiner.len();
+            let joined = format!("{}{joiner}{}", upper.text, lower.text);
+            for finding in classify_line(&joined) {
+                if finding.start >= upper_len || finding.end <= upper_len + gap {
+                    continue;
+                }
+                let already = |found: &[Finding], start: usize, end: usize| {
+                    found
+                        .iter()
+                        .any(|f| f.category == finding.category && f.start <= start && f.end >= end)
+                };
+                let (upper_start, upper_end) = (finding.start, upper_len);
+                let (lower_start, lower_end) = (0, finding.end - upper_len - gap);
+                if !already(&results[upper_index], upper_start, upper_end) {
+                    results[upper_index].push(Finding {
+                        category: finding.category,
+                        start: upper_start,
+                        end: upper_end,
+                    });
+                }
+                if !already(&results[lower_index], lower_start, lower_end) {
+                    results[lower_index].push(Finding {
+                        category: finding.category,
+                        start: lower_start,
+                        end: lower_end,
+                    });
+                }
             }
         }
     }
@@ -1154,6 +1278,15 @@ fn ips(text: &str, index: &CharIndex, findings: &mut Vec<Finding>) {
             ip.start(),
             ip.end() + suffix,
         );
+    }
+    if let Some(cut) = CUT_IPV4.captures(text).and_then(|c| c.get(1))
+        && cut
+            .as_str()
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .any(|part| part.len() > 1)
+    {
+        push_bytes(findings, index, RedactCategory::Ip, cut.start(), cut.end());
     }
     for captures in IPV6.captures_iter(text) {
         let Some(ip) = captures.get(1) else { continue };

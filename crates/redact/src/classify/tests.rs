@@ -525,3 +525,91 @@ fn an_at_sign_read_as_something_else_is_found() {
         "{found:?}"
     );
 }
+
+#[test]
+fn a_phone_wrapped_after_its_hyphen_is_found_on_both_lines() {
+    let lines = [
+        LineContext {
+            text: "unclear, call me on (631) 555-",
+            x: 0.81,
+            y: 0.771,
+            w: 0.145,
+            h: 0.028,
+        },
+        LineContext {
+            text: "0153",
+            x: 0.815,
+            y: 0.803,
+            w: 0.026,
+            h: 0.021,
+        },
+    ];
+    let found = classify_frame(&lines);
+    assert!(
+        found[0]
+            .iter()
+            .any(|f| f.category == Phone && f.start == 20),
+        "{found:?}"
+    );
+    assert!(
+        found[1]
+            .iter()
+            .any(|f| f.category == Phone && f.start == 0 && f.end == 4),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn an_address_cut_off_at_the_end_of_a_line_is_hidden() {
+    let found = classify_line("VPN 100.22.195.");
+    assert!(
+        found
+            .iter()
+            .any(|f| f.category == Ip && f.start == 4 && f.end == 15),
+        "{found:?}"
+    );
+    assert!(
+        classify_line("see section 1.2.3. for details")
+            .iter()
+            .all(|f| f.category != Ip)
+    );
+}
+
+#[test]
+fn names_come_from_mail_structure() {
+    let spans = |text: &str| {
+        classify_line(text)
+            .into_iter()
+            .filter(|f| f.category == Name)
+            .map(|f| {
+                text.chars()
+                    .skip(f.start)
+                    .take(f.end - f.start)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        spans("From: Vesta Toro <myrtis+test@outlook.com>").contains(&"Vesta Toro".to_string())
+    );
+    assert!(spans("Hi Shelly,").contains(&"Shelly".to_string()));
+    let at = |text, x: f32, y: f32| LineContext {
+        text,
+        x,
+        y,
+        w: 0.06,
+        h: 0.02,
+    };
+    let lines = [
+        at("Best", 0.33, 0.42),
+        at("Vesta Toro", 0.33, 0.44),
+        at("Chong Casper", 0.13, 0.37),
+        at("8:59 PM", 0.28, 0.374),
+        at("Quick question", 0.13, 0.16),
+        at("4:33 PM", 0.28, 0.16),
+    ];
+    let found = classify_frame(&lines);
+    assert!(found[1].iter().any(|f| f.category == Name), "{found:?}");
+    assert!(found[2].iter().any(|f| f.category == Name), "{found:?}");
+    assert!(found[4].iter().all(|f| f.category != Name), "{found:?}");
+}

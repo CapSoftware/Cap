@@ -12,8 +12,9 @@ pub mod image;
 pub mod model;
 pub mod motion;
 mod names;
+mod scan;
 mod wdet;
 
 pub use analyze::{Analyzer, Progress, SegmentSource, Stats, segment_sources};
-pub use classify::{Finding, LineContext, classify_frame, classify_line};
+pub use classify::{Finding, LineContext, classify_frame, classify_frame_with, classify_line};
 pub use model::OcrModel;

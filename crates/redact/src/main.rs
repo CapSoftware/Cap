@@ -144,6 +144,7 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
     std::fs::rename(&temp, &out)?;
     if options.stats {
         let seconds = stats.source_seconds.max(1e-6);
+        eprintln!("detector {}", model.detector());
         eprintln!(
             "model load {:.2}s; analysed {:.1}s of video in {:.2}s ({:.3}x realtime, {:.2}s per minute)",
             load_time.as_secs_f64(),
@@ -153,22 +154,27 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
             wall.as_secs_f64() / seconds * 60.0
         );
         eprintln!(
-            "frames {} detections {} lines {} (reused {}) det_mpx {:.1} hw_decode {}",
+            "frames {} duplicates {} detections {} det_mpx {:.1} lines {} reused {} ({:.1}%) cache {} hw_decode {}",
             stats.frames,
+            stats.duplicates,
             stats.detections,
+            stats.det_pixels / 1e6,
             stats.lines,
             stats.reused,
-            stats.det_pixels / 1e6,
+            100.0 * stats.reused as f64 / stats.lines.max(1) as f64,
+            stats.cache_entries,
             stats.hardware_decode
         );
         eprintln!(
-            "decode {:.2}s gray {:.2}s rgb {:.2}s detect {:.2}s recognize {:.2}s track {:.2}s",
+            "decode {:.2}s gray {:.2}s rgb {:.2}s change {:.2}s detect {:.2}s recognize {:.2}s classify {:.2}s compile {:.2}s",
             stats.decode.as_secs_f64(),
             stats.gray.as_secs_f64(),
             stats.rgb.as_secs_f64(),
+            stats.track.as_secs_f64(),
             stats.detect.as_secs_f64(),
             stats.recognize.as_secs_f64(),
-            stats.track.as_secs_f64()
+            stats.classify.as_secs_f64(),
+            stats.compile.as_secs_f64()
         );
         eprintln!("regions {} -> {}", redactions.regions.len(), out.display());
     }
