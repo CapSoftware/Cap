@@ -5,6 +5,7 @@ type StorageObjectTokenPayload = {
 	videoId: string;
 	key: string;
 	expiresAt: number;
+	internal?: boolean;
 };
 
 const encode = (value: unknown) =>

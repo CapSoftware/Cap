@@ -234,7 +234,9 @@ export async function GET(request: NextRequest) {
 			return yield* Effect.fail("not-found" as const);
 		}
 
-		if (!internalDownload && isPlayableMediaKey(key)) {
+		const internalRead =
+			internalDownload || (hasKeyToken && tokenPayload?.internal === true);
+		if (!internalRead && isPlayableMediaKey(key)) {
 			const viewer = yield* Effect.serviceOption(CurrentUser);
 			if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
 				const decision = yield* Effect.tryPromise(async () => {
