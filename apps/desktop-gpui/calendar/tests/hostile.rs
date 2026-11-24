@@ -382,3 +382,102 @@ fn titles_and_names_lose_control_and_override_characters() {
         Some("LAHS\u{202c} Mallory")
     );
 }
+
+/// Folds a content line at 75 octets, as calendar servers write them.
+fn folded(line: &str) -> String {
+    let mut out = String::new();
+    let mut width = 0;
+    for c in line.chars() {
+        if width + c.len_utf8() > 74 {
+            out.push_str("\r\n ");
+            width = 1;
+        }
+        out.push(c);
+        width += c.len_utf8();
+    }
+    out + "\r\n"
+}
+
+#[test]
+fn real_world_invites_keep_everything_people_see() {
+    let teams_link = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ZDk3YzE0NzEtMzg1Mi00YjY2LWE0NTItNWQ3ZmE5NmM2ZTgy%40thread.v2/0?context=%7b%22Tid%22%3a%2272f988bf-86f1-41af-91ab-2d7cd011db47%22%2c%22Oid%22%3a%22a1b2c3d4-0000-4000-8000-000000000001%22%7d";
+    let dial_in: String = (0..120)
+        .map(|n| {
+            format!(
+                "+1 555-01{:02} {:03},,{:09}# United States, City {n} (Toll)\\n",
+                n % 100,
+                n,
+                400_000_000 + n * 7919
+            )
+        })
+        .collect();
+    let teams_body = format!(
+        "________________________________________________________________________________\\nMicrosoft Teams meeting\\nJoin on your computer, mobile app or room device\\nClick here to join the meeting<{teams_link}>\\nMeeting ID: 123 456 789 012\\nPasscode: aB3cD4\\nDownload Teams | Join on the web\\nOr call in (audio only)\\n{dial_in}Phone Conference ID: 123 456 789#\\nFind a local number | Reset PIN\\nLearn More | Meeting options\\n{}\\n{teams_link}\\n________________________________________________________________________________",
+        "Please read the pre-read before the session. ".repeat(40)
+    );
+    let zoom_numbers: String = (0..90)
+        .map(|n| {
+            format!(
+                "        +{} {} {} {:04} Country {n}\\n",
+                1 + n % 60,
+                200 + n,
+                555,
+                n * 37 % 10_000
+            )
+        })
+        .collect();
+    let zoom_body = format!(
+        "Hi there,\\n\\nYou are invited to a Zoom meeting.\\n\\nJoin Zoom Meeting\\nhttps://us02web.zoom.us/j/81234567890?pwd=bXlwYXNzd29yZGlzdmVyeWxvbmdhbmRzZWN1cmUx\\n\\nMeeting ID: 812 3456 7890\\nPasscode: 123456\\n\\n---\\n\\nOne tap mobile\\n+16465588656,,81234567890#,,,,*123456# US\\n\\nDial by your location\\n{zoom_numbers}\\nFind your local number: https://us02web.zoom.us/u/kdEFghIJk\\n"
+    );
+    let people: String = (0..200)
+        .map(|n| {
+            folded(&format!(
+                "ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=\"Lastname{n}, Firstname{n} (Platform Engineering)\":mailto:firstname.lastname{n}@example-company.com"
+            ))
+        })
+        .collect();
+    let title =
+        "Q4 All-hands: product roadmap, hiring plan and Q&A (please join on time) \u{1F680}";
+    let text = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+         BEGIN:VEVENT\r\nUID:040000008200E00074C5B7101A82E00800000000A0B1C2D3E4F5000000000000000010000000F1E2D3C4B5A69788\r\n{}DTSTART:20260105T170000Z\r\nDTEND:20260105T180000Z\r\nRRULE:FREQ=WEEKLY;BYDAY=MO\r\n{}{}ORGANIZER;CN=\"Organizer, Pat\":mailto:pat.organizer@example-company.com\r\n{people}END:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:zoom-1\r\nSUMMARY:Customer call\r\nDTSTART:20260106T150000Z\r\nDTEND:20260106T153000Z\r\n{}END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+        folded(&format!("SUMMARY:{title}")),
+        folded("LOCATION:Microsoft Teams Meeting; Conference Room 4B (Building 2, Floor 3)"),
+        folded(&format!("DESCRIPTION:{teams_body}")),
+        folded(&format!("DESCRIPTION:{zoom_body}")),
+    );
+    assert!(teams_body.len() > cap_calendar::MAX_TEXT_BYTES * 2);
+    let (events, _, _) = expand_all(&text);
+    let all_hands: Vec<_> = events.iter().filter(|e| e.title == title).collect();
+    assert_eq!(all_hands.len(), 8);
+    for event in &all_hands {
+        assert_eq!(event.link.as_ref().unwrap().url, teams_link);
+        assert_eq!(
+            event.location.as_deref(),
+            Some("Microsoft Teams Meeting; Conference Room 4B (Building 2, Floor 3)")
+        );
+        assert_eq!(event.attendees.len(), 200);
+        for (n, person) in event.attendees.iter().enumerate() {
+            assert_eq!(
+                person.name.as_deref(),
+                Some(format!("Lastname{n}, Firstname{n} (Platform Engineering)").as_str())
+            );
+            assert_eq!(
+                person.email.as_deref(),
+                Some(format!("firstname.lastname{n}@example-company.com").as_str())
+            );
+        }
+        assert_eq!(
+            event.organizer.as_ref().unwrap().name.as_deref(),
+            Some("Organizer, Pat")
+        );
+        assert!(event.id.starts_with("040000008200E00074C5B7101A82E008"));
+    }
+    let zoom = events.iter().find(|e| e.title == "Customer call").unwrap();
+    assert_eq!(
+        zoom.link.as_ref().unwrap().url,
+        "https://us02web.zoom.us/j/81234567890?pwd=bXlwYXNzd29yZGlzdmVyeWxvbmdhbmRzZWN1cmUx"
+    );
+}
