@@ -6,7 +6,7 @@ import {
 
 const image = (path: string) => ({ source: { type: "image", path } });
 
-test("style segments' background images are collected once each", () => {
+test("enabled style segments' background images are collected once each", () => {
 	const config = {
 		background: image("bg/main.png"),
 		timeline: {
@@ -18,6 +18,7 @@ test("style segments' background images are collected once each", () => {
 					},
 				},
 				{ overrides: { background: image("bg/focus.png") } },
+				{ enabled: false, overrides: { background: image("bg/off.png") } },
 				{ overrides: { background: { source: { type: "color" } } } },
 				{ overrides: { camera: { hide: true } } },
 				{ overrides: { background: image("") } },

@@ -28,15 +28,15 @@ export function backgroundImagePath(config: unknown) {
 	return imageSourcePath(record(config)?.background);
 }
 
-/// Images that style segments swap in as the background while they are
-/// active; the renderer reads them by path like the main background.
+/// Images that enabled style segments swap in as the background while they
+/// are active; the renderer reads them by path like the main background.
 export function styleBackgroundImagePaths(config: unknown) {
 	const segments = record(record(config)?.timeline)?.styleSegments;
 	if (!Array.isArray(segments)) return [];
-	const paths = segments.flatMap((segment) => {
-		const path = imageSourcePath(
-			record(record(segment)?.overrides)?.background,
-		);
+	const paths = segments.flatMap((value) => {
+		const segment = record(value);
+		if (segment?.enabled === false) return [];
+		const path = imageSourcePath(record(segment?.overrides)?.background);
 		return path ? [path] : [];
 	});
 	return [...new Set(paths)];

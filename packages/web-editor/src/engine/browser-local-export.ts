@@ -258,13 +258,17 @@ async function exportJob(
 			background.path
 				? [background.path]
 				: []),
-			...styleBackgroundImagePaths(config),
 			...segmentPaths(timeline?.imageSegments),
 		];
 		const assetUrls: Record<string, string> = {};
 		for (const path of imagePaths) {
 			const url = assetUrl(path);
 			if (url) assetUrls[path] = url;
+		}
+		const optionalAssetUrls: Record<string, string> = {};
+		for (const path of styleBackgroundImagePaths(config)) {
+			const url = path in assetUrls ? null : assetUrl(path);
+			if (url) optionalAssetUrls[path] = url;
 		}
 		const musicUrls: Record<string, string> = {};
 		for (const path of segmentPaths(timeline?.audioSegments)) {
@@ -316,6 +320,7 @@ async function exportJob(
 			sourcesExpireAt: sources.expiresAt,
 			musicUrls,
 			assetUrls,
+			optionalAssetUrls,
 			fontUrls: hasTextOverlays(config)
 				? BROWSER_RENDERER_FONT_URLS.map((url) => url.href)
 				: [],

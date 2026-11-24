@@ -61,6 +61,9 @@ export type BrowserExportJob = {
 	sourcesExpireAt: number | null;
 	musicUrls: Record<string, string>;
 	assetUrls: Record<string, string>;
+	/// Style backgrounds: the renderer draws a plain background in place of
+	/// one that fails to load, as the preview does, so the export goes on.
+	optionalAssetUrls?: Record<string, string>;
 	fontUrls: string[];
 	fps: number;
 	webGpu: boolean;
@@ -349,6 +352,15 @@ async function prepareAssets(module: RendererModule, job: BrowserExportJob) {
 			if (registeredAssets.has(path) || module.has_asset(path)) return;
 			module.register_asset(path, await fetchBytes(url));
 			registeredAssets.add(path);
+		}),
+		...Object.entries(job.optionalAssetUrls ?? {}).map(async ([path, url]) => {
+			if (registeredAssets.has(path) || module.has_asset(path)) return;
+			try {
+				module.register_asset(path, await fetchBytes(url));
+				registeredAssets.add(path);
+			} catch (cause) {
+				console.warn("Export style background could not load:", path, cause);
+			}
 		}),
 		job.fontUrls.length > 0 && !fontsRegistered
 			? Promise.all(job.fontUrls.map(fetchBytes)).then((fonts) => {
