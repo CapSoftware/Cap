@@ -1065,9 +1065,6 @@ fn record_known(
     if KNOWN_CATEGORIES.contains(&category) && text.len() >= KNOWN_MIN_LEN {
         add(category, text.to_vec());
     }
-    if !crate::classify::structural_names() {
-        return;
-    }
     if category == RedactCategory::Name {
         let words = text.iter().collect::<String>();
         let words = words.split_whitespace().collect::<Vec<_>>();

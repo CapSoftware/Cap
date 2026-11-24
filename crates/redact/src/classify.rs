@@ -377,11 +377,7 @@ fn classify_raw(text: &str) -> Vec<Finding> {
     for (start, end) in names::find_names(text) {
         push(&mut findings, RedactCategory::Name, start, end);
     }
-    for pattern in structural_names()
-        .then_some([&*DISPLAY_NAME, &*PERSON_FIELD, &*SALUTATION])
-        .into_iter()
-        .flatten()
-    {
+    for pattern in [&*DISPLAY_NAME, &*PERSON_FIELD, &*SALUTATION] {
         for captures in pattern.captures_iter(text) {
             if let Some(name) = captures.get(1) {
                 push_bytes(
@@ -416,9 +412,7 @@ pub fn classify_frame_with(
     mut results: Vec<Vec<Finding>>,
 ) -> Vec<Vec<Finding>> {
     join_wrapped_lines(lines, &mut results);
-    if structural_names() {
-        names_from_layout(lines, &mut results);
-    }
+    names_from_layout(lines, &mut results);
     for (label_index, label) in lines.iter().enumerate() {
         if !LABEL_ONLY.is_match(label.text) {
             continue;
@@ -461,18 +455,6 @@ pub fn classify_frame_with(
         }
     }
     results
-}
-
-/// Whether names come from page structure as well as the name lists
-/// (`CAP_REDACT_OFF=structnames` turns it off while it is measured).
-pub fn structural_names() -> bool {
-    static ON: LazyLock<bool> = LazyLock::new(|| {
-        !std::env::var("CAP_REDACT_OFF")
-            .unwrap_or_default()
-            .split(',')
-            .any(|item| item.trim() == "structnames")
-    });
-    *ON
 }
 
 /// Names the page's layout gives away: the line under a sign-off ("Best" /
