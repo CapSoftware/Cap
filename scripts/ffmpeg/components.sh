@@ -85,6 +85,11 @@ CAP_REQUIRED_DECODERS=(
   png gif webp bmp tiff
   aac mp3float opus vorbis flac alac pcm_s16le pcm_f32le wmav2 ac3 eac3
 )
+# Windows imports decoded these through external libraries before, so the
+# Windows build keeps them (scripts/ffmpeg/stage-windows-decoders.sh).
+CAP_REQUIRED_DECODERS_WINDOWS=(
+  libjxl libdavs2 libuavs3d libxevd libcodec2 liblc3
+)
 CAP_REQUIRED_DEMUXERS=(
   mov matroska avi asf flv ogg wav mp3 aac flac concat image2 png_pipe jpeg_pipe webp_pipe gif bmp_pipe tiff_pipe
 )

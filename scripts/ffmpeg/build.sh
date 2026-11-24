@@ -37,7 +37,7 @@ keep=(
 )
 case "$TARGET" in
   *linux*) keep+=(25-pciaccess.sh 45-drm.sh 50-va.sh 50-nvenc.sh 50-amf.sh 50-onevpl.sh) ;;
-  *windows*) keep+=(50-nvenc.sh 50-amf.sh 50-onevpl.sh) ;;
+  *windows*) keep+=(25-lcms.sh 50-nvenc.sh 50-amf.sh 50-onevpl.sh) ;;
 esac
 
 while IFS= read -r stage; do
@@ -74,6 +74,30 @@ if [[ "$TARGET" == *windows* ]]; then
   # odd 16 bytes.
   sed -i 's/^set -euo pipefail$/set -euo pipefail\ncase "$TARGET" in *windows*) export LTO=0 ;; esac/' scripts/build.sh
   grep -q '^case "$TARGET" in \*windows\*) export LTO=0 ;; esac$' scripts/build.sh
+
+  # Decoders Gyan's build had through external libraries, built in their own
+  # layer and copied into the prefix FFmpeg links against.
+  cp "$HERE/stage-windows-decoders.sh" stages/50-cap-decoders.sh
+  python3 - <<'PY'
+import re
+
+path = "Dockerfile"
+text = open(path).read()
+layer = (
+    "FROM layer-45 AS layer-50-cap-decoders\n\n"
+    "RUN --mount=type=cache,target=/root/.cache `\n"
+    "\t--mount=type=bind,source=stages/50-cap-decoders.sh,target=/srv/stage.sh `\n"
+    "\t/srv/build.sh\n\n"
+)
+anchor = "FROM layer-45 AS layer-50\n"
+assert text.count(anchor) == 1
+text = text.replace(anchor, layer + anchor)
+copy = 'COPY --from=layer-50-zimg "${PREFIX}/." "$PREFIX"\n'
+assert text.count(copy) == 1
+text = text.replace(copy, copy + 'COPY --from=layer-50-cap-decoders "${PREFIX}/." "$PREFIX"\n')
+open(path, "w").write(text)
+PY
+  grep -q 'COPY --from=layer-50-cap-decoders' Dockerfile
 fi
 
 sed -i 's#^mv "${OUT}/models" .*#[ ! -d "${OUT}/models" ] || mv "${OUT}/models" "${OUT}/${_framework}/Versions/A/Resources/Models"#' scripts/create-macos-framework.sh

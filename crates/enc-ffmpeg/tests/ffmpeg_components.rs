@@ -62,9 +62,13 @@ fn every_component_cap_uses_is_available() {
             !ffi::avcodec_find_encoder_by_name(name.as_ptr()).is_null()
         }),
     );
+    let mut decoders = list("CAP_REQUIRED_DECODERS");
+    if cfg!(target_os = "windows") {
+        decoders.extend(list("CAP_REQUIRED_DECODERS_WINDOWS"));
+    }
     check(
         "decoders",
-        missing(list("CAP_REQUIRED_DECODERS"), |name| unsafe {
+        missing(decoders, |name| unsafe {
             !ffi::avcodec_find_decoder_by_name(name.as_ptr()).is_null()
         }),
     );

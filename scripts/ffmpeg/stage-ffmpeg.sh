@@ -134,6 +134,12 @@ case "$TARGET" in
       --disable-cuda-nvcc
       --enable-amf
       --enable-libvpl
+      --enable-libjxl
+      --enable-libdavs2
+      --enable-libuavs3d
+      --enable-libxevd
+      --enable-libcodec2
+      --enable-liblc3
     )
     ;;
 esac
