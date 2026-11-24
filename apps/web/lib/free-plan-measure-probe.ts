@@ -73,7 +73,9 @@ export async function measureFreePlanObject(
 		await recordFreePlanMeasure(videoId, key, measured.seconds);
 	} catch (error) {
 		console.error(
-			`[free-plan-measure] Could not measure ${videoId} (${key}):`,
+			"[free-plan-measure] Could not measure %s (%s):",
+			videoId,
+			key,
 			error,
 		);
 	} finally {

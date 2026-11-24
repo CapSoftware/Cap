@@ -236,7 +236,9 @@ export async function recordFreePlanOverLength(
 		await recordFreePlanMeasure(videoId, key, seconds);
 	} catch (error) {
 		console.error(
-			`[free-plan-measure] Could not record ${videoId} (${key}):`,
+			"[free-plan-measure] Could not record %s (%s):",
+			videoId,
+			key,
 			error,
 		);
 	}
