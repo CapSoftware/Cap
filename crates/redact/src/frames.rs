@@ -29,6 +29,8 @@ pub struct FrameSource {
     luma_frame: Video,
     rgb_frame: Video,
     last_pts: f64,
+    /// The video stream's length from its first frame, if the file says.
+    pub duration: Option<f64>,
 }
 
 pub struct Frame {
@@ -65,6 +67,15 @@ impl FrameSource {
         anyhow::ensure!(width > 0 && height > 0, "video has no size");
         let time_base = f64::from(video.time_base());
         let start = decoder.start_time();
+        let duration = ffmpeg::format::input(path).ok().and_then(|input| {
+            let stream = input.streams().best(ffmpeg::media::Type::Video)?;
+            let base = f64::from(stream.time_base());
+            if stream.duration() > 0 && base > 0.0 {
+                return Some(stream.duration() as f64 * base);
+            }
+            (input.duration() > 0)
+                .then(|| input.duration() as f64 / f64::from(ffmpeg::ffi::AV_TIME_BASE))
+        });
         let track_width = TRACK_WIDTH.min(width);
         let track_height =
             ((height as f64 * track_width as f64 / width as f64).round() as u32).max(1);
@@ -91,6 +102,7 @@ impl FrameSource {
             luma_frame: Video::empty(),
             rgb_frame: Video::empty(),
             last_pts: -1.0,
+            duration,
         })
     }
 

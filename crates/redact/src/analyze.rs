@@ -173,6 +173,7 @@ impl<'a> Analyzer<'a> {
         let mut frames = FrameSource::open(&source.path)?;
         let (width, height) = (frames.width, frames.height);
         let mut scan = Scan::new(source.index, width, height, frames.track_width);
+        scan.end_time = frames.duration;
         let mut last_progress = Instant::now();
         let mut decode_mark = Instant::now();
         let cancel = self.cancel.clone();

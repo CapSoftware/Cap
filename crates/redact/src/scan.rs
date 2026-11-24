@@ -95,6 +95,9 @@ const KNOWN_MIN_LEN: usize = 8;
 const TEXT_HEIGHT: f32 = 24.0;
 const MIN_DETECT_SCALE: f32 = 0.35;
 const HEIGHT_SAMPLES: usize = 200;
+/// How long before the next frame a held mask lets go (keys need distinct
+/// times).
+const HOLD: f64 = 1e-4;
 /// Lines of at most this many characters are hidden whole once any part of
 /// them is sensitive.
 const SHORT_LINE: usize = 32;
@@ -283,6 +286,10 @@ pub struct Scan {
     pub fps_estimate: f64,
     pub first_time: Option<f64>,
     pub last_time: f64,
+    /// When the segment's last frame stops showing (its duration), if known.
+    pub end_time: Option<f64>,
+    /// Every frame's time, in order: a frame shows until the next one.
+    frame_times: Vec<f64>,
     dump: bool,
 }
 
@@ -308,6 +315,8 @@ impl Scan {
             fps_estimate: 30.0,
             first_time: None,
             last_time: 0.0,
+            end_time: None,
+            frame_times: Vec::new(),
             dump: std::env::var_os("CAP_REDACT_DUMP").is_some(),
         }
     }
@@ -334,6 +343,7 @@ impl Scan {
             self.first_time = Some(time);
         }
         self.last_time = time;
+        self.frame_times.push(time);
         self.frame_count += 1;
 
         let started = Instant::now();
@@ -959,7 +969,7 @@ impl Scan {
                         return;
                     };
                     let start = (first.t - frame).max(0.0);
-                    let end = last.t + frame;
+                    let end = self.shown_until(last.t, frame);
                     regions.push(RedactionRegion {
                         id: region_id(self.segment, category, start, &first),
                         segment: self.segment,
@@ -977,7 +987,12 @@ impl Scan {
                         last_end = None;
                         continue;
                     };
-                    if last_end.is_some_and(|end| run.t0 - end > frame * 1.5) {
+                    // A gap splits the region only when frames came without
+                    // the line: a held frame (a still screen in a variable
+                    // frame rate recording) keeps it.
+                    if last_end.is_some_and(|end| {
+                        run.t0 - end > frame * 1.5 && self.shown_until(end, frame) < run.t0 - 1e-6
+                    }) {
                         flush(&mut keys);
                     }
                     let key = |t: f64| RedactionKey {
@@ -988,8 +1003,11 @@ impl Scan {
                         h: rect.h / h,
                     };
                     keys.push(key(run.t0));
-                    if run.t1 > run.t0 {
-                        keys.push(key(run.t1));
+                    // The run's last frame shows until the next frame: the
+                    // mask stays where it is until then.
+                    let until = self.shown_until(run.t1, frame) - HOLD;
+                    if until > run.t0 {
+                        keys.push(key(until));
                     }
                     last_end = Some(run.t1);
                 }
@@ -1025,6 +1043,16 @@ impl Scan {
         (TEXT_HEIGHT / small)
             .min(self.det_scale)
             .max(MIN_DETECT_SCALE.min(self.det_scale))
+    }
+
+    /// When the frame shown at `t` is replaced: the next frame's time, or the
+    /// segment's end after its last frame.
+    fn shown_until(&self, t: f64, frame: f64) -> f64 {
+        let next = self.frame_times.partition_point(|&time| time <= t + 1e-6);
+        match self.frame_times.get(next) {
+            Some(&time) => time,
+            None => self.end_time.filter(|&end| end > t).unwrap_or(t + frame),
+        }
     }
 
     pub fn cache_entries(&self) -> usize {
@@ -1317,6 +1345,44 @@ mod tests {
             *value = value.saturating_add(n).saturating_sub(noise / 2);
         }
         image
+    }
+
+    #[test]
+    fn a_held_frame_keeps_its_mask_until_the_next_frame() {
+        let mut scan = Scan::new(0, 1000, 500, 960);
+        scan.fps_estimate = 30.0;
+        scan.end_time = Some(5.0);
+        scan.frame_times = vec![0.0, 0.03, 2.0, 2.03];
+        scan.readings.push(Reading {
+            text: "jo@x.io".into(),
+            spans: (0..7)
+                .map(|i| (i as f32 / 7.0, (i + 1) as f32 / 7.0))
+                .collect(),
+            own: Vec::new(),
+        });
+        let mut identity = Identity::default();
+        identity.findings.insert(
+            0,
+            vec![Finding {
+                category: RedactCategory::Email,
+                start: 0,
+                end: 7,
+            }],
+        );
+        let run = |t0, t1, y| Run {
+            t0,
+            t1,
+            rect: Rect::new(100.0, y, 200.0, 20.0),
+            reading: 0,
+        };
+        identity.runs = vec![run(0.0, 0.03, 100.0), run(2.0, 2.03, 300.0)];
+        scan.identities.push(identity);
+        let regions = scan.regions();
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let region = &regions[0];
+        assert!(region.rect_at(1.99).unwrap().y < 0.25, "{region:?}");
+        assert!(region.rect_at(2.0).unwrap().y > 0.5, "{region:?}");
+        assert!(region.rect_at(4.9).is_some(), "{region:?}");
     }
 
     #[test]
