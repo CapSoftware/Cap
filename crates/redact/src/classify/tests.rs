@@ -712,3 +712,35 @@ fn three_octets_in_an_ip_column_are_a_cut_address() {
     let own = alone.iter().map(|l| classify_line(l.text)).collect();
     assert!(classify_frame_with(&alone, own)[0].is_empty());
 }
+
+#[test]
+fn numbers_and_keys_cut_by_the_frame_edge_are_found() {
+    let at = |text, x, w| LineContext {
+        text,
+        x,
+        y: 0.5,
+        w,
+        h: 0.02,
+    };
+    let lines = [
+        at("Card 4242 4242 42", 0.8, 0.2),
+        at("8291 0045 is the account", 0.0, 0.3),
+        at("token sk_live_51Hq7x2AbCdEf9", 0.7, 0.3),
+        at("Account DE89 3704 0044", 0.75, 0.25),
+        at("Released in version 2024", 0.75, 0.25),
+    ];
+    let own = lines.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&lines, own);
+    let has = |i: usize, c: RedactCategory| found[i].iter().any(|f| f.category == c);
+    assert!(has(0, Card), "{found:?}");
+    assert!(has(1, Card), "{found:?}");
+    assert!(has(2, Secret), "{found:?}");
+    assert!(has(3, Card), "{found:?}");
+    assert!(found[4].is_empty(), "{found:?}");
+    let inside = [at("Card 4242 4242 42", 0.5, 0.2)];
+    let own = vec![classify_line(inside[0].text)];
+    assert_eq!(
+        classify_frame_with(&inside, own),
+        vec![classify_line(inside[0].text)]
+    );
+}

@@ -48,6 +48,22 @@ static IPV4: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// Three octets and a dot at the end of a line: an address cut off by a
 /// window over it or the frame edge.
+/// What a string cut by the frame's right edge starts with, and what one cut
+/// by its left edge ends with: eight or more digits (a card or account
+/// number), an IBAN's country, check digits and first groups, or a long
+/// key-like token.
+static CUT_RIGHT: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?:^|[^0-9A-Za-z])((?:[0-9][ \-]?){7}[0-9][0-9 \-]*|[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]{4}){1,}[A-Z0-9 ]*|[A-Za-z0-9_\-]{20,})\s*$",
+    )
+});
+static CUT_LEFT: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"^\s*([0-9 \-]*(?:[0-9][ \-]?){7}[0-9]|[A-Za-z0-9_\-]{20,})(?:$|[^0-9A-Za-z])")
+});
+/// Lines whose left or right end is within this fraction of the frame's width
+/// of its edge are cut by it.
+const FRAME_EDGE: f32 = 0.002;
+
 /// A whole line of three IPv4 octets: an address its cell or pane cuts off.
 static IPV4_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
     re(
@@ -489,6 +505,7 @@ pub fn classify_frame_with(
     join_wrapped_lines(lines, &mut results);
     names_from_layout(lines, &mut results);
     ips_from_columns(lines, &mut results);
+    cut_by_the_frame(lines, &mut results);
     for (label_index, label) in lines.iter().enumerate() {
         if !LABEL_ONLY.is_match(label.text) {
             continue;
@@ -531,6 +548,50 @@ pub fn classify_frame_with(
         }
     }
     results
+}
+
+/// The visible part of a number or key that runs out of the frame: digits,
+/// an IBAN's start or a long token touching the edge it is cut by. A token
+/// needs digits and both cases, so plain words never match.
+fn cut_by_the_frame(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
+    for (index, line) in lines.iter().enumerate() {
+        let left = line.x <= FRAME_EDGE;
+        let right = line.x + line.w >= 1.0 - FRAME_EDGE;
+        let found = [(right, &*CUT_RIGHT), (left, &*CUT_LEFT)]
+            .into_iter()
+            .filter(|(cut, _)| *cut)
+            .filter_map(|(_, pattern)| pattern.captures(line.text)?.get(1))
+            .next();
+        let Some(found) = found else { continue };
+        let value = found.as_str();
+        let digits = value.chars().filter(char::is_ascii_digit).count();
+        let token = value.len() >= 20
+            && value.chars().any(|c| c.is_ascii_uppercase())
+            && value.chars().any(|c| c.is_ascii_lowercase());
+        let category = if digits >= 8 && !token {
+            RedactCategory::Card
+        } else if token && digits > 0 {
+            RedactCategory::Secret
+        } else if value.chars().take(2).all(|c| c.is_ascii_uppercase()) && digits >= 6 {
+            RedactCategory::Card
+        } else {
+            continue;
+        };
+        let start = line.text[..found.start()].chars().count();
+        let end = start + value.trim_end().chars().count();
+        if results[index]
+            .iter()
+            .any(|f| f.start <= start && f.end >= end)
+        {
+            continue;
+        }
+        results[index].push(Finding {
+            category,
+            start,
+            end,
+        });
+        results[index] = resolve_overlaps(std::mem::take(&mut results[index]));
+    }
 }
 
 /// Three octets alone on a line, in the same column as a line holding an IP
