@@ -318,6 +318,44 @@ describe("video metadata route", () => {
 		});
 	});
 
+	it("keeps every server-written field and changes only the owner's fields", async () => {
+		const stored = {
+			sourceName: "a.mp4",
+			summary: "stored summary",
+			aiGenerationStatus: "COMPLETE",
+		};
+		mocks.selectWhere.mockResolvedValue([{ ...video, metadata: stored }]);
+		mocks.lockedFor.mockResolvedValue([{ metadata: stored }]);
+
+		const response = await put({
+			sourceName: "b.mp4",
+			customCreatedAt: "2026-01-01T00:00:00.000Z",
+			aiGenerationStatus: null,
+			summary: "forged",
+		});
+
+		expect(response.status).toBe(200);
+		expect(mocks.updateSet).toHaveBeenCalledWith({
+			metadata: {
+				sourceName: "b.mp4",
+				customCreatedAt: "2026-01-01T00:00:00.000Z",
+				summary: "stored summary",
+				aiGenerationStatus: "COMPLETE",
+			},
+		});
+	});
+
+	it("clears an owner field sent as null", async () => {
+		const stored = { customCreatedAt: "2026-01-01T00:00:00.000Z" };
+		mocks.selectWhere.mockResolvedValue([{ ...video, metadata: stored }]);
+		mocks.lockedFor.mockResolvedValue([{ metadata: stored }]);
+
+		const response = await put({ customCreatedAt: null });
+
+		expect(response.status).toBe(200);
+		expect(mocks.updateSet).toHaveBeenCalledWith({ metadata: {} });
+	});
+
 	it("rejects metadata that is not an object", async () => {
 		mocks.selectWhere.mockResolvedValue([{ ...video, metadata: null }]);
 
