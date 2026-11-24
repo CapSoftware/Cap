@@ -24,6 +24,7 @@ import {
 } from "@/lib/free-plan-measure";
 import {
 	measureFreePlanObjectIfNeeded,
+	remeasureHeldVideoIfNeeded,
 	runAfterResponse,
 } from "@/lib/free-plan-measure-probe";
 import {
@@ -132,8 +133,14 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								Effect.tapError(Effect.logError),
 								Effect.orElseSucceed(() => false),
 							);
-							if (overDurationLimit)
+							if (overDurationLimit) {
+								remeasureHeldVideoIfNeeded({
+									id: video.id,
+									createdAt: video.createdAt,
+									metadata: Option.getOrNull(video.metadata),
+								});
 								return yield* Effect.fail(new HttpApiError.Forbidden());
+							}
 						}
 
 						return yield* getPlaylistResponse(

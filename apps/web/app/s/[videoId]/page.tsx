@@ -52,7 +52,10 @@ import { isAiConfigured } from "@/lib/ai/provider";
 import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-recovery";
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
-import { measureFreePlanObjectIfNeeded } from "@/lib/free-plan-measure-probe";
+import {
+	measureFreePlanObjectIfNeeded,
+	remeasureHeldVideoIfNeeded,
+} from "@/lib/free-plan-measure-probe";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -656,6 +659,14 @@ async function AuthorizedContent({
 				);
 				return false;
 			});
+	void overDurationLimitPromise.then((overDurationLimit) => {
+		if (overDurationLimit)
+			remeasureHeldVideoIfNeeded({
+				id: videoId,
+				createdAt: video.createdAt,
+				metadata: video.metadata,
+			});
+	});
 	const playbackLockedPromise = Promise.all([
 		overShareLimitPromise,
 		overDurationLimitPromise,
