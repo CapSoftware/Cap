@@ -751,14 +751,18 @@ fn local_mode(local: Option<&LocalModel>) -> EngineMode {
     }
 }
 
+/// Which account (server, sign-in and plan) cached answers belong to. The
+/// sign-in enters as a hash, never as itself.
 fn auth_key() -> String {
+    use std::hash::{Hash, Hasher};
+
     let auth = crate::store::auth_snapshot();
-    format!(
-        "{}|{}|{}",
-        auth.server_url,
-        auth.token.as_deref().map_or(0, str::len),
-        auth.is_upgraded()
-    )
+    let token = auth.token.as_deref().map(|token| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        token.hash(&mut hasher);
+        hasher.finish()
+    });
+    format!("{}|{:?}|{}", auth.server_url, token, auth.is_upgraded())
 }
 
 impl Meetings {
