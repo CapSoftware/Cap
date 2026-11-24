@@ -1,0 +1,388 @@
+//! Windows: which output a meeting's computer audio is read from. A call app
+//! can play to an output that is not the default (Teams, Zoom and browser
+//! calls play to the default communications device, often a headset, while
+//! the speakers stay the default), and the default output's loopback then
+//! hears nothing of the call. The call app is the program that records the
+//! microphone; when everything it plays goes to one output other than the
+//! default, that output is followed. Otherwise the default output is kept,
+//! exactly as before. The rule is Linux's (`capture/sink.rs`): music playing
+//! elsewhere is never taken for the call.
+
+use std::collections::HashMap;
+
+/// An audio session as the audio system lists it on one endpoint.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Session {
+    /// The endpoint (device) id.
+    pub endpoint: String,
+    pub pid: u32,
+    /// A stream of the session is running (not only opened before).
+    pub active: bool,
+}
+
+/// A running process: its parent and lowercase executable file name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Proc {
+    pub parent: u32,
+    pub exe: String,
+}
+
+/// How far up the process tree a call app's helpers are looked for (an app,
+/// its embedded browser, that browser's audio service).
+const DEPTH: usize = 6;
+
+fn chain(pid: u32, procs: &HashMap<u32, Proc>) -> Vec<u32> {
+    let mut out = vec![pid];
+    let mut at = pid;
+    while out.len() <= DEPTH {
+        let Some(parent) = procs.get(&at).map(|p| p.parent) else {
+            break;
+        };
+        if parent == 0 || out.contains(&parent) {
+            break;
+        }
+        out.push(parent);
+        at = parent;
+    }
+    out
+}
+
+/// Programs that start other programs for a person (the shell, terminals,
+/// the system's service hosts): two apps they both started stay two apps.
+const LAUNCHERS: &[&str] = &[
+    "explorer.exe",
+    "svchost.exe",
+    "services.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "userinit.exe",
+    "sihost.exe",
+    "runtimebroker.exe",
+    "taskhostw.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "windowsterminal.exe",
+    "openconsole.exe",
+    "conhost.exe",
+];
+
+/// Whether two processes are one app: the same process, one started the
+/// other, or the nearest process that started both is an app itself (an
+/// app's helpers, such as its embedded browser's audio service). A
+/// launcher (the shell, a terminal) never joins two apps.
+fn same_app(a: u32, b: u32, procs: &HashMap<u32, Proc>) -> bool {
+    if a == b {
+        return true;
+    }
+    let (up_a, up_b) = (chain(a, procs), chain(b, procs));
+    if up_a.contains(&b) || up_b.contains(&a) {
+        return true;
+    }
+    let Some(common) = up_a.iter().find(|pid| up_b.contains(pid)) else {
+        return false;
+    };
+    procs
+        .get(common)
+        .map(|p| p.exe.as_str())
+        .is_some_and(|exe| !exe.is_empty() && !LAUNCHERS.contains(&exe))
+}
+
+/// The output to loop back, or `None` for the default output. `ours` is
+/// Cap's own process, whose sessions (its sounds, its own recording) never
+/// count; process 0 is the system sounds.
+pub fn choose(
+    default: Option<&str>,
+    playing: &[Session],
+    recording: &[Session],
+    procs: &HashMap<u32, Proc>,
+    ours: u32,
+) -> Option<String> {
+    let foreign = |s: &&Session| s.active && s.pid != 0 && s.pid != ours;
+    let callers: Vec<u32> = recording.iter().filter(foreign).map(|s| s.pid).collect();
+    if callers.is_empty() {
+        return None;
+    }
+    // One process can play several things: a browser plays every tab from
+    // one audio service, so a music tab on the speakers and a call on a
+    // headset share it. Only when everything the calling apps play goes to
+    // one output other than the default is that output followed.
+    let mut outputs: Vec<&str> = playing
+        .iter()
+        .filter(foreign)
+        .filter(|s| callers.iter().any(|c| same_app(s.pid, *c, procs)))
+        .map(|s| s.endpoint.as_str())
+        .collect();
+    outputs.sort_unstable();
+    outputs.dedup();
+    match outputs.as_slice() {
+        [only] if Some(*only) != default => Some((*only).to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPEAKERS: &str = "{0.0.0.00000000}.{speakers}";
+    const HEADSET: &str = "{0.0.0.00000000}.{headset}";
+    const HEADSET_MIC: &str = "{0.0.1.00000000}.{headset-mic}";
+    const OURS: u32 = 900;
+
+    fn session(endpoint: &str, pid: u32) -> Session {
+        Session {
+            endpoint: endpoint.into(),
+            pid,
+            active: true,
+        }
+    }
+
+    fn procs(list: &[(u32, u32, &str)]) -> HashMap<u32, Proc> {
+        list.iter()
+            .map(|(pid, parent, exe)| {
+                (
+                    *pid,
+                    Proc {
+                        parent: *parent,
+                        exe: exe.to_string(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_call_on_the_communications_device_is_followed() {
+        // A browser call: the audio service both records and plays.
+        let playing = [session(HEADSET, 4100)];
+        let recording = [session(HEADSET_MIC, 4100)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+    }
+
+    #[test]
+    fn a_call_on_the_default_output_keeps_the_default() {
+        let playing = [session(SPEAKERS, 4100)];
+        let recording = [session(HEADSET_MIC, 4100)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            None
+        );
+    }
+
+    #[test]
+    fn a_call_playing_to_both_outputs_keeps_the_default() {
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, 4100)];
+        let recording = [session(HEADSET_MIC, 4100)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            None
+        );
+    }
+
+    #[test]
+    fn music_elsewhere_is_never_taken_for_the_call() {
+        // The music player does not record: the call's output is followed.
+        let playing = [session(SPEAKERS, 5200), session(HEADSET, 4100)];
+        let recording = [session(HEADSET_MIC, 4100)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+        // Nothing records: no call, the default as always.
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &[], &HashMap::new(), OURS),
+            None
+        );
+    }
+
+    #[test]
+    fn two_call_apps_on_different_outputs_keep_the_default() {
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, 6100)];
+        let recording = [session(HEADSET_MIC, 4100), session(HEADSET_MIC, 6100)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            None
+        );
+    }
+
+    #[test]
+    fn caps_own_sessions_and_system_sounds_never_count() {
+        // Cap records the microphone and plays a sound to the headset.
+        let playing = [session(HEADSET, OURS), session(HEADSET, 0)];
+        let recording = [session(HEADSET_MIC, OURS)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            None
+        );
+        // A call on the speakers while Cap plays to the headset: the default.
+        let playing = [session(SPEAKERS, 4100), session(HEADSET, OURS)];
+        let recording = [session(HEADSET_MIC, 4100), session(HEADSET_MIC, OURS)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            None
+        );
+    }
+
+    #[test]
+    fn sessions_that_are_not_running_do_not_count() {
+        let mut idle = session(SPEAKERS, 4100);
+        idle.active = false;
+        let playing = [idle, session(HEADSET, 4100)];
+        let recording = [session(HEADSET_MIC, 4100)];
+        assert_eq!(
+            choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+        let mut stopped = session(HEADSET_MIC, 4100);
+        stopped.active = false;
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 4100)],
+                &[stopped],
+                &HashMap::new(),
+                OURS
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_apps_helper_process_plays_for_it() {
+        // The app records; its embedded browser's helper plays.
+        let tree = procs(&[
+            (10, 1, "explorer.exe"),
+            (20, 10, "ms-teams.exe"),
+            (30, 20, "msedgewebview2.exe"),
+            (31, 30, "msedgewebview2.exe"),
+            (32, 30, "msedgewebview2.exe"),
+        ]);
+        let recording = [session(HEADSET_MIC, 20)];
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 31)],
+                &recording,
+                &tree,
+                OURS
+            ),
+            Some(HEADSET.into())
+        );
+        // Two helpers side by side under the same program.
+        let recording = [session(HEADSET_MIC, 32)];
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 31)],
+                &recording,
+                &tree,
+                OURS
+            ),
+            Some(HEADSET.into())
+        );
+        // A media helper records and the embedded browser's audio service
+        // plays, both under the app.
+        let tree = procs(&[
+            (10, 1, "explorer.exe"),
+            (20, 10, "ms-teams.exe"),
+            (25, 20, "ms-teams_modulehost.exe"),
+            (30, 20, "msedgewebview2.exe"),
+            (31, 30, "msedgewebview2.exe"),
+        ]);
+        let recording = [session(HEADSET_MIC, 25)];
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 31)],
+                &recording,
+                &tree,
+                OURS
+            ),
+            Some(HEADSET.into())
+        );
+    }
+
+    #[test]
+    fn processes_with_nothing_known_about_them_stay_apart() {
+        let recording = [session(HEADSET_MIC, 20)];
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 31)],
+                &recording,
+                &HashMap::new(),
+                OURS
+            ),
+            None
+        );
+        let tree = procs(&[(20, 5, "a.exe"), (31, 5, "b.exe")]);
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 31)],
+                &recording,
+                &tree,
+                OURS
+            ),
+            None,
+            "a parent nothing is known of is no app"
+        );
+    }
+
+    #[test]
+    fn apps_started_by_the_same_shell_stay_apart() {
+        // A call app on the speakers, a music app (also started from the
+        // shell) on the headset: the music is not the call.
+        let tree = procs(&[
+            (10, 1, "explorer.exe"),
+            (20, 10, "zoom.exe"),
+            (40, 10, "spotify.exe"),
+            (50, 60, "pwsh.exe"),
+            (51, 50, "recorder.exe"),
+            (52, 50, "player.exe"),
+        ]);
+        let recording = [session(HEADSET_MIC, 20)];
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(SPEAKERS, 20), session(HEADSET, 40)],
+                &recording,
+                &tree,
+                OURS
+            ),
+            None
+        );
+        let recording = [session(HEADSET_MIC, 51)];
+        assert_eq!(
+            choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 52)],
+                &recording,
+                &tree,
+                OURS
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_loop_in_the_process_list_ends() {
+        let tree = procs(&[(20, 21, "a.exe"), (21, 20, "b.exe")]);
+        assert!(!same_app(20, 99, &tree));
+        assert!(same_app(20, 21, &tree));
+    }
+
+    #[test]
+    fn no_default_output_follows_the_only_call_output() {
+        let playing = [session(HEADSET, 4100)];
+        let recording = [session(HEADSET_MIC, 4100)];
+        assert_eq!(
+            choose(None, &playing, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+    }
+}

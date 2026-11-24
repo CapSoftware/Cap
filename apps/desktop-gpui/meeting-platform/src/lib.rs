@@ -1,3 +1,5 @@
+#[cfg(any(windows, test))]
+pub(crate) mod call_output;
 pub mod resample;
 
 #[cfg(target_os = "linux")]
@@ -31,6 +33,8 @@ pub struct BrowserProbe {
 
 #[cfg(target_os = "macos")]
 pub use macos::browser_probe::{accessibility_trusted, probe_browser};
+#[cfg(windows)]
+pub use windows::follow::{CallOutputWatch, EndpointLoopback};
 #[cfg(windows)]
 pub use windows::uia::probe_browser;
 

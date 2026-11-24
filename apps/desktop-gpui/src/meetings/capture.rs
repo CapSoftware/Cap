@@ -407,8 +407,9 @@ impl MeetingCapture {
     /// through, as a value to compare between looks. Linux: the default
     /// and the output a call was followed to, as the sink watch last saw
     /// them. macOS: how many times the audio system said the default output
-    /// changed (the tap listens for it). Windows: nothing, see
-    /// [`output_identity`]. Cheap: no audio system call.
+    /// changed (the tap listens for it). Windows: the output a call was
+    /// followed to, if any (the default is added by [`output_identity`]).
+    /// Cheap: no audio system call.
     pub fn outputs_seen(&self) -> Option<String> {
         #[cfg(target_os = "linux")]
         {
@@ -423,7 +424,13 @@ impl MeetingCapture {
             let replaced = platform.replaced.load(Ordering::Relaxed);
             Some(format!("{replaced}:{changes}"))
         }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(windows)]
+        {
+            self.platform
+                .as_ref()
+                .and_then(|platform| platform.followed.lock().ok()?.clone())
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
             None
         }
@@ -1151,10 +1158,18 @@ impl SystemPlatform {
     }
 }
 
+/// Windows: what the default output plays (scap_cpal), or, while a call
+/// plays only to another output (Teams, Zoom and browser calls play to the
+/// default communications device, often a headset), that output alone. See
+/// `cap_meeting_platform::CallOutputWatch` for which output a call is on.
 #[cfg(windows)]
 struct SystemPlatform {
     stop: Option<flume::Sender<()>>,
     thread: Option<JoinHandle<()>>,
+    /// Looks for the output a call plays to.
+    watch: Option<cap_meeting_platform::CallOutputWatch>,
+    /// The output a call was followed to; `None` while the default is read.
+    followed: Arc<std::sync::Mutex<Option<String>>>,
     dropped: Arc<AtomicU64>,
     callbacks: Arc<AtomicU64>,
     restarts: Arc<AtomicU64>,
@@ -1162,6 +1177,37 @@ struct SystemPlatform {
     /// loopback again.
     failed: Arc<AtomicBool>,
 }
+
+#[cfg(windows)]
+enum WindowsLoopback {
+    Default(scap_cpal::Capturer),
+    /// The output a call was followed to, by endpoint id.
+    Call(cap_meeting_platform::EndpointLoopback, String),
+}
+
+#[cfg(windows)]
+impl WindowsLoopback {
+    fn stop(self) {
+        match self {
+            Self::Default(capturer) => {
+                let _ = capturer.pause();
+            }
+            Self::Call(loopback, _) => drop(loopback),
+        }
+    }
+
+    fn followed(&self) -> Option<String> {
+        match self {
+            Self::Default(_) => None,
+            Self::Call(_, id) => Some(id.clone()),
+        }
+    }
+}
+
+/// How long an output that would not open is left alone while the call
+/// stays on it (the default output is read meanwhile).
+#[cfg(windows)]
+const REFUSED_RETRY: Duration = Duration::from_secs(30);
 
 #[cfg(windows)]
 impl SystemPlatform {
@@ -1208,24 +1254,95 @@ impl SystemPlatform {
             )
         }
 
+        fn follower(
+            id: &str,
+            tx: flume::Sender<SystemChunk>,
+            dropped: Arc<AtomicU64>,
+            callbacks: Arc<AtomicU64>,
+            failed: Arc<AtomicBool>,
+        ) -> Result<cap_meeting_platform::EndpointLoopback, String> {
+            cap_meeting_platform::EndpointLoopback::start(
+                id.to_string(),
+                move |samples, sample_rate| {
+                    callbacks.fetch_add(1, Ordering::Relaxed);
+                    let message = SystemChunk::Samples {
+                        samples: samples.to_vec(),
+                        sample_rate,
+                        synthetic: false,
+                        received: Instant::now(),
+                    };
+                    if tx.try_send(message).is_err() {
+                        dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                failed,
+            )
+        }
+
         let (tx, rx) = flume::bounded::<SystemChunk>(SOURCE_CHANNEL);
         let dropped = Arc::new(AtomicU64::new(0));
         let callbacks = Arc::new(AtomicU64::new(0));
         let restarts = Arc::new(AtomicU64::new(0));
         let failed = Arc::new(AtomicBool::new(false));
-        let first = capturer(
-            tx.clone(),
-            dropped.clone(),
-            callbacks.clone(),
-            failed.clone(),
-        )
-        .map_err(|error| match error {
-            scap_cpal::CapturerError::NoDevice => HealthIssue::NoInputDevice,
-            other => HealthIssue::Failed(format!("Computer audio capture failed: {other}")),
-        })?;
-        first
-            .play()
-            .map_err(|e| HealthIssue::Failed(format!("Computer audio capture failed: {e}")))?;
+        let followed = Arc::new(std::sync::Mutex::new(None));
+
+        let (target_tx, target_rx) = flume::unbounded::<Option<String>>();
+        let watch = cap_meeting_platform::CallOutputWatch::start(Duration::from_secs(2), target_tx)
+            .inspect_err(|error| tracing::warn!(%error, "could not look for a call's output"))
+            .ok();
+        // The first look decides where a meeting that starts mid-call reads
+        // from; it takes a few milliseconds.
+        let mut target = if watch.is_some() {
+            target_rx
+                .recv_timeout(Duration::from_millis(1500))
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let mut refused: Option<(String, Instant)> = None;
+        let mut first = None;
+        if let Some(id) = target.as_deref() {
+            match follower(
+                id,
+                tx.clone(),
+                dropped.clone(),
+                callbacks.clone(),
+                failed.clone(),
+            ) {
+                Ok(loopback) => {
+                    tracing::info!(output = %id, "meeting computer audio follows the call to another output");
+                    first = Some(WindowsLoopback::Call(loopback, id.to_string()));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, output = %id, "could not read the call's output; reading the default output");
+                    refused = Some((id.to_string(), Instant::now()));
+                }
+            }
+        }
+        let first = match first {
+            Some(first) => first,
+            None => {
+                let first = capturer(
+                    tx.clone(),
+                    dropped.clone(),
+                    callbacks.clone(),
+                    failed.clone(),
+                )
+                .map_err(|error| match error {
+                    scap_cpal::CapturerError::NoDevice => HealthIssue::NoInputDevice,
+                    other => HealthIssue::Failed(format!("Computer audio capture failed: {other}")),
+                })?;
+                first.play().map_err(|e| {
+                    HealthIssue::Failed(format!("Computer audio capture failed: {e}"))
+                })?;
+                WindowsLoopback::Default(first)
+            }
+        };
+        if let Ok(mut slot) = followed.lock() {
+            *slot = first.followed();
+        }
+        let watching = watch.is_some();
         let (stop_tx, stop_rx) = flume::bounded::<()>(1);
         let thread = std::thread::Builder::new()
             .name("cap-meeting-loopback".into())
@@ -1234,42 +1351,108 @@ impl SystemPlatform {
                 let callbacks = callbacks.clone();
                 let restarts = restarts.clone();
                 let failed = failed.clone();
+                let followed = followed.clone();
                 move || {
+                    enum Woke {
+                        Stop,
+                        Target(Option<String>),
+                        WatchGone,
+                    }
+                    let mut targets = watching.then_some(target_rx);
                     let mut current = Some(first);
                     let mut name = device_name();
                     loop {
-                        match stop_rx.recv_timeout(Duration::from_secs(2)) {
-                            Err(flume::RecvTimeoutError::Timeout) => {}
-                            _ => break,
+                        let selector = flume::Selector::new().recv(&stop_rx, |_| Woke::Stop);
+                        let selector = match targets.as_ref() {
+                            Some(targets) => selector.recv(targets, |message| match message {
+                                Ok(target) => Woke::Target(target),
+                                Err(_) => Woke::WatchGone,
+                            }),
+                            None => selector,
+                        };
+                        match selector.wait_timeout(Duration::from_secs(2)) {
+                            Ok(Woke::Stop) => break,
+                            Ok(Woke::Target(next)) => target = next,
+                            Ok(Woke::WatchGone) => {
+                                targets = None;
+                                target = None;
+                            }
+                            Err(_) => {}
                         }
-                        let now_name = device_name();
                         let errored = failed.swap(false, Ordering::Relaxed);
-                        if now_name == name && !errored && current.is_some() {
-                            continue;
+                        if refused
+                            .as_ref()
+                            .is_some_and(|(id, at)| Some(id) != target.as_ref() || at.elapsed() >= REFUSED_RETRY)
+                        {
+                            refused = None;
                         }
+                        let wanted = target.clone().filter(|_| refused.is_none());
+                        match (&current, &wanted) {
+                            (Some(WindowsLoopback::Default(_)) | None, None) => {
+                                let now_name = device_name();
+                                if now_name == name && !errored && current.is_some() {
+                                    continue;
+                                }
+                                name = now_name;
+                            }
+                            (Some(WindowsLoopback::Call(_, id)), Some(want))
+                                if id == want && !errored =>
+                            {
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        let was_following = current.as_ref().and_then(WindowsLoopback::followed);
                         if let Some(old) = current.take() {
-                            let _ = old.pause();
+                            old.stop();
                         }
-                        name = now_name;
-                        match capturer(
-                            tx.clone(),
-                            dropped.clone(),
-                            callbacks.clone(),
-                            failed.clone(),
-                        ) {
-                            Ok(next) => {
-                                if next.play().is_ok() {
+                        if let Some(id) = wanted.as_deref() {
+                            match follower(
+                                id,
+                                tx.clone(),
+                                dropped.clone(),
+                                callbacks.clone(),
+                                failed.clone(),
+                            ) {
+                                Ok(loopback) => {
+                                    tracing::info!(output = %id, "meeting computer audio follows the call to another output");
                                     restarts.fetch_add(1, Ordering::Relaxed);
-                                    current = Some(next);
+                                    current = Some(WindowsLoopback::Call(loopback, id.to_string()));
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, output = %id, "could not read the call's output; reading the default output");
+                                    refused = Some((id.to_string(), Instant::now()));
                                 }
                             }
-                            Err(error) => {
-                                tracing::warn!(%error, "meeting loopback restart failed");
+                        }
+                        if current.is_none() {
+                            if was_following.is_some() {
+                                name = device_name();
+                                tracing::info!("meeting computer audio is back on the default output");
                             }
+                            match capturer(
+                                tx.clone(),
+                                dropped.clone(),
+                                callbacks.clone(),
+                                failed.clone(),
+                            ) {
+                                Ok(next) => {
+                                    if next.play().is_ok() {
+                                        restarts.fetch_add(1, Ordering::Relaxed);
+                                        current = Some(WindowsLoopback::Default(next));
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "meeting loopback restart failed");
+                                }
+                            }
+                        }
+                        if let Ok(mut slot) = followed.lock() {
+                            *slot = current.as_ref().and_then(WindowsLoopback::followed);
                         }
                     }
                     if let Some(old) = current.take() {
-                        let _ = old.pause();
+                        old.stop();
                     }
                 }
             })
@@ -1278,6 +1461,8 @@ impl SystemPlatform {
             Self {
                 stop: Some(stop_tx),
                 thread: Some(thread),
+                watch,
+                followed,
                 dropped,
                 callbacks,
                 restarts,
@@ -1308,6 +1493,7 @@ impl Drop for SystemPlatform {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        drop(self.watch.take());
     }
 }
 
@@ -1416,10 +1602,13 @@ pub fn output_identity(seen: Option<String>) -> Option<String> {
     #[cfg(windows)]
     {
         use cpal::traits::{DeviceTrait, HostTrait};
-        let _ = seen;
-        cpal::default_host()
+        let default = cpal::default_host()
             .default_output_device()
-            .and_then(|device| device.name().ok())
+            .and_then(|device| device.name().ok());
+        match seen {
+            Some(followed) => Some(format!("{} > {followed}", default.unwrap_or_default())),
+            None => default,
+        }
     }
     #[cfg(not(windows))]
     {

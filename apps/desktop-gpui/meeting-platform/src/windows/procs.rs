@@ -91,6 +91,35 @@ pub fn processes_for(names: &[&str]) -> HashMap<String, u32> {
         .collect()
 }
 
+/// Every running process: its parent and lowercase executable file name.
+pub fn tree() -> HashMap<u32, crate::call_output::Proc> {
+    let mut out = HashMap::new();
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return out;
+    }
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+    let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+    while more {
+        let end = entry
+            .szExeFile
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        out.insert(
+            entry.th32ProcessID,
+            crate::call_output::Proc {
+                parent: entry.th32ParentProcessID,
+                exe: String::from_utf16_lossy(&entry.szExeFile[..end]).to_lowercase(),
+            },
+        );
+        more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+    }
+    unsafe { CloseHandle(snapshot) };
+    out
+}
+
 /// Visible, unowned top-level windows with their process ids.
 pub fn top_level_windows() -> Vec<(HWND, u32)> {
     unsafe extern "system" fn each(window: HWND, list: LPARAM) -> i32 {
