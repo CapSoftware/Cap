@@ -82,16 +82,22 @@ const DESKTOP_SOURCE_TYPES = new Set([
 
 // Desktop recordings are only held once the desktop release that stops free
 // recordings at the limit is out, and never ones made before it.
+function desktopLimitAppliesTo(video: {
+	source: { type: string };
+	createdAt: Date;
+}): boolean {
+	if (!DESKTOP_SOURCE_TYPES.has(video.source.type)) return true;
+	const from = serverEnv().CAP_FREE_PLAN_DESKTOP_LIMIT_FROM;
+	return from !== undefined && video.createdAt >= new Date(from);
+}
+
 async function desktopLimitApplies(videoId: Video.VideoId): Promise<boolean> {
 	const [video] = await db()
 		.select({ source: videos.source, createdAt: videos.createdAt })
 		.from(videos)
 		.where(eq(videos.id, videoId))
 		.limit(1);
-	if (!video) return false;
-	if (!DESKTOP_SOURCE_TYPES.has(video.source.type)) return true;
-	const from = serverEnv().CAP_FREE_PLAN_DESKTOP_LIMIT_FROM;
-	return from !== undefined && video.createdAt >= new Date(from);
+	return video ? desktopLimitAppliesTo(video) : false;
 }
 
 // Evaluated on every read, so upgrading the owner or the organization owner
@@ -187,6 +193,10 @@ export async function loadLimitedVideo(
 		.where(eq(videos.id, videoId))
 		.limit(1);
 	if (!video || video.isScreenshot) return null;
+	if (!desktopLimitAppliesTo(video)) {
+		remember(notLimitedUntil, videoId);
+		return null;
+	}
 	if (!anyAge && !measuredByAge(video)) {
 		remember(notMeasuredUntil, videoId);
 		return null;

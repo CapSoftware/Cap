@@ -75,6 +75,7 @@ const video = (metadata: object | null, overrides: object = {}) => ({
 	ownerId: "owner-1" as User.UserId,
 	orgId: "org-1" as Organisation.OrganisationId,
 	isScreenshot: false,
+	source: { type: "webMP4" },
 	metadata,
 	...overrides,
 });
@@ -267,6 +268,24 @@ describe("free plan measured lock", () => {
 		await recordFreePlanOverLength("video-2" as Video.VideoId, "k", 400);
 		const queries = mocks.queries;
 		await recordFreePlanOverLength("video-2" as Video.VideoId, "k", 500);
+		expect(mocks.updates).toHaveLength(0);
+		expect(mocks.queries).toBe(queries);
+	});
+
+	it("does not measure desktop recordings before the desktop limit date", async () => {
+		mocks.rows = [
+			[
+				{
+					...video(null),
+					id: "video-4",
+					source: { type: "desktopSegments" },
+					createdAt: afterCutoff,
+				},
+			],
+		];
+		await recordFreePlanOverLength("video-4" as Video.VideoId, "k", 400);
+		const queries = mocks.queries;
+		await recordFreePlanOverLength("video-4" as Video.VideoId, "k", 500);
 		expect(mocks.updates).toHaveLength(0);
 		expect(mocks.queries).toBe(queries);
 	});
