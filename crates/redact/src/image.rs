@@ -178,6 +178,27 @@ impl RgbImage {
         stride: usize,
         rgba: &mut [u8],
     ) {
+        let whole = |v: f32| v >= 0.0 && v.fract() == 0.0;
+        if whole(src.x)
+            && whole(src.y)
+            && src.w as usize == out_w
+            && src.h as usize == out_h
+            && src.x as usize + out_w <= self.width as usize
+            && src.y as usize + out_h <= self.height as usize
+        {
+            let (x0, y0) = (src.x as usize, src.y as usize);
+            let width = self.width as usize;
+            for oy in 0..out_h {
+                let row =
+                    &self.data[((y0 + oy) * width + x0) * 3..((y0 + oy) * width + x0 + out_w) * 3];
+                let out = &mut rgba[oy * stride * 4..(oy * stride + out_w) * 4];
+                for (pixel, dst) in row.chunks_exact(3).zip(out.chunks_exact_mut(4)) {
+                    dst[..3].copy_from_slice(pixel);
+                    dst[3] = 255;
+                }
+            }
+            return;
+        }
         self.resample(src, out_w, out_h, |ox, oy, value| {
             let index = (oy * stride + ox) * 4;
             for (c, v) in value.iter().enumerate() {
@@ -299,6 +320,26 @@ impl RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unscaled_regions_copy_exactly_what_resampling_gives() {
+        let mut image = RgbImage::new(37, 21);
+        for (i, value) in image.data.iter_mut().enumerate() {
+            *value = (i * 7 % 251) as u8;
+        }
+        let rect = Rect::new(5.0, 3.0, 20.0, 11.0);
+        let mut fast = vec![0u8; 24 * 11 * 4];
+        image.resize_into_rgba(rect, 20, 11, 24, &mut fast);
+        let mut slow = vec![0u8; 24 * 11 * 4];
+        image.resample(rect, 20, 11, |ox, oy, value| {
+            let index = (oy * 24 + ox) * 4;
+            for (c, v) in value.iter().enumerate() {
+                slow[index + c] = v.round().clamp(0.0, 255.0) as u8;
+            }
+            slow[index + 3] = 255;
+        });
+        assert_eq!(fast, slow);
+    }
 
     #[test]
     fn rect_math() {
