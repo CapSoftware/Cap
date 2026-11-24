@@ -145,7 +145,7 @@ mod fallback {
         rx: mpsc::Receiver<PlayCommand>,
         opened: tokio::sync::watch::Sender<bool>,
     ) {
-        let output = OutputStream::try_default()
+        let output = crate::app_sounds::open_output()
             .map_err(|error| error.to_string())
             .and_then(|(stream, handle)| {
                 let sink = Sink::try_new(&handle).map_err(|error| error.to_string())?;

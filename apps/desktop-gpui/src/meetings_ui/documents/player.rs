@@ -469,7 +469,7 @@ fn run(parts: Vec<Part>, commands: flume::Receiver<Command>, shared: Arc<Shared>
                     sink.stop();
                 }
                 if output.is_none() {
-                    match rodio::OutputStream::try_default() {
+                    match crate::app_sounds::open_output() {
                         Ok(stream) => output = Some(stream),
                         Err(error) => {
                             tracing::warn!(%error, "no audio output for meeting playback");
