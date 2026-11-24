@@ -1165,7 +1165,7 @@ mod tests {
         ffmpeg::init().unwrap();
         let (width, height) = (8000, 6000);
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("large.mkv");
+        let path = directory.path().join("large.mp4");
         let codec = avcodec::encoder::find(avcodec::Id::MJPEG).unwrap();
         let mut output = avformat::output(&path).unwrap();
         let mut encoder = avcodec::Context::new_with_codec(codec)
@@ -1192,6 +1192,7 @@ mod tests {
         let mut packet = ffmpeg::Packet::empty();
         while encoder.receive_packet(&mut packet).is_ok() {
             packet.set_stream(0);
+            packet.set_duration(1);
             packet.rescale_ts((1, 30), stream_time_base);
             packet.write_interleaved(&mut output).unwrap();
         }
