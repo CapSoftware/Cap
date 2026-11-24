@@ -459,7 +459,9 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
             stale = true;
             return false;
         }
-        if let Some(plan) = plan {
+        if let Some(plan) = plan
+            && !superseded(auth.get("plan"), &plan)
+        {
             auth.insert("plan".into(), plan);
         }
         let now = json!(chrono::Utc::now().timestamp() as i32);
@@ -483,6 +485,16 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
         return Err(AuthApiError::Other("Failed to persist auth plan".into()));
     }
     Ok(())
+}
+
+/// Plan fetches can finish out of order: `update_auth_plan` saves only after
+/// the organizations request, so its plan can be older than one saved since.
+fn superseded(saved: Option<&Value>, fetched: &Value) -> bool {
+    let checked_at = |plan: &Value| plan.get("last_checked").and_then(Value::as_i64);
+    match (saved.and_then(checked_at), checked_at(fetched)) {
+        (Some(saved), Some(fetched)) => saved > fetched,
+        _ => false,
+    }
 }
 
 async fn fetch_plan() -> Option<Value> {
@@ -527,7 +539,9 @@ pub async fn update_plan_only() -> Result<(), AuthApiError> {
             stale = true;
             return false;
         }
-        auth.insert("plan".into(), plan);
+        if !superseded(auth.get("plan"), &plan) {
+            auth.insert("plan".into(), plan);
+        }
         true
     });
     if stale {
@@ -740,6 +754,20 @@ mod server_change_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_plan_never_replaces_a_newer_one() {
+        let plan = |at: i64| json!({"upgraded": true, "manual": false, "last_checked": at});
+        assert!(superseded(Some(&plan(20)), &plan(10)));
+        assert!(!superseded(Some(&plan(10)), &plan(20)));
+        assert!(!superseded(Some(&plan(10)), &plan(10)));
+        assert!(!superseded(None, &plan(10)));
+        assert!(!superseded(Some(&Value::Null), &plan(10)));
+        assert!(!superseded(
+            Some(&json!({"upgraded": true, "manual": true})),
+            &plan(10)
+        ));
+    }
 
     #[test]
     fn parses_api_key_callback() {
