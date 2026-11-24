@@ -3545,6 +3545,7 @@ export_failed = "Le masquage automatique n'a pas pu analyser cet enregistrement.
 export_screen_track = "La piste d'écran ne peut pas être exportée seule quand le masquage automatique est activé."
 export_wait = "Le masquage automatique analyse encore. Exportez une fois terminé."
 failed = "Impossible d'analyser cet enregistrement"
+found = { one = "{count} trouvé pour l'instant", many = "{count} de trouvés pour l'instant", other = "{count} trouvés pour l'instant" }
 hidden = { one = "{count} élément masqué", many = "{count} d'éléments masqués", other = "{count} éléments masqués" }
 hide = "Masquer"
 keep = "Laisser visible"

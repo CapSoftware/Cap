@@ -3545,6 +3545,7 @@ export_failed = "自动打码无法扫描此录制。请先关闭或重试，然
 export_screen_track = "开启自动打码时，无法单独导出屏幕轨道。"
 export_wait = "自动打码仍在扫描。请在完成后导出。"
 failed = "无法扫描此录制"
+found = { other = "已找到 {count} 项" }
 hidden = { other = "已隐藏 {count} 项" }
 hide = "隐藏"
 keep = "保持可见"

@@ -1189,6 +1189,9 @@ enum EditorSection {
     Transcript,
     PanelSwitcher,
     BlankStart,
+    /// Auto redact's chip, a view of its own so the scan's progress ring
+    /// repaints the chip and not the toolbar's other controls' owners.
+    RedactChip,
 }
 
 pub(crate) struct EditorSectionView {
@@ -1263,6 +1266,13 @@ impl Render for EditorSectionView {
                 EditorSection::Transcript => editor.render_transcript(window, cx),
                 EditorSection::PanelSwitcher => editor.render_panel_switcher(cx).into_any_element(),
                 EditorSection::BlankStart => editor.render_blank_start(window, cx),
+                EditorSection::RedactChip => {
+                    let narrow =
+                        editor.player_width(f32::from(window.viewport_size().width)) < 560.;
+                    editor
+                        .render_preview_redact(!narrow, window, cx)
+                        .into_any_element()
+                }
                 EditorSection::Timeline => {
                     let viewport_width: f32 = window.viewport_size().width.into();
                     let viewport_height: f32 = window.viewport_size().height.into();
@@ -1272,7 +1282,7 @@ impl Render for EditorSectionView {
                 }
                 EditorSection::TimelineOverlay => {
                     let viewport_width: f32 = window.viewport_size().width.into();
-                    editor.render_timeline_overlay(viewport_width, cx)
+                    editor.render_timeline_overlay(viewport_width, window, cx)
                 }
             }
         })
@@ -1908,6 +1918,7 @@ pub struct EditorWindow {
     paused_requests: Option<PreviewRequests>,
     header: Entity<EditorSectionView>,
     toolbar: Entity<EditorSectionView>,
+    redact_chip_view: Entity<EditorSectionView>,
     transport_controls: Entity<EditorSectionView>,
     /// What the transport bar last drew from the playhead: it shows whole
     /// seconds, so most playhead ticks leave it as it is.
@@ -2728,6 +2739,10 @@ impl EditorWindow {
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Transport, cx)
         });
+        let redact_chip_view = cx.new({
+            let editor = editor.clone();
+            move |cx| EditorSectionView::new(&editor, EditorSection::RedactChip, cx)
+        });
         let sidebar_view = cx.new({
             let editor = editor.clone();
             move |cx| EditorSectionView::new(&editor, EditorSection::Sidebar, cx)
@@ -2786,6 +2801,7 @@ impl EditorWindow {
             paused_requests: None,
             header,
             toolbar,
+            redact_chip_view,
             transport_controls,
             transport_drawn: Cell::new(None),
             sidebar_view,
@@ -12801,7 +12817,7 @@ impl EditorWindow {
                     .items_center()
                     .flex_none()
                     .gap(px(8.))
-                    .child(self.render_preview_redact(!narrow, cx))
+                    .child(self.redact_chip_view.clone())
                     .child(self.render_preview_enhance(!narrow, cx))
                     .child(self.header_divider())
                     // The quality picker and its name, one group with one
@@ -13543,6 +13559,7 @@ impl EditorWindow {
     fn render_timeline_overlay(
         &mut self,
         viewport_width: f32,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let merged = self.timeline_merged(cx);
@@ -13551,6 +13568,7 @@ impl EditorWindow {
             return div().size_full().into_any_element();
         }
         self.with_timeline_overlay(timeline_layer(), viewport_width, cx)
+            .children(self.render_redact_scan_veil(viewport_width, window))
             .into_any_element()
     }
 

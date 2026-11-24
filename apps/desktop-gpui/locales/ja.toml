@@ -3545,6 +3545,7 @@ export_failed = "この録画をスキャンできませんでした。書き出
 export_screen_track = "自動で隠す機能がオンの間は、画面トラックだけを書き出すことはできません。"
 export_wait = "自動で隠す機能がまだスキャン中です。完了してから書き出してください。"
 failed = "この録画をスキャンできませんでした"
+found = { other = "これまでに{count}件" }
 hidden = { other = "{count}件を非表示" }
 hide = "隠す項目"
 keep = "表示したままにする"

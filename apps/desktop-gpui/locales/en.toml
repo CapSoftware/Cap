@@ -3547,6 +3547,7 @@ export_failed = "Auto redact couldn't scan this recording. Turn it off or try ag
 export_screen_track = "The screen track can't be exported on its own while Auto redact is on."
 export_wait = "Auto redact is still scanning. Export when it finishes."
 failed = "Couldn't scan this recording"
+found = { one = "{count} found so far", other = "{count} found so far" }
 hidden = { one = "{count} item hidden", other = "{count} items hidden" }
 hide = "Hide"
 keep = "Keep visible"

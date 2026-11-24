@@ -2,17 +2,64 @@
 //! Enhance, and a card that holds what to hide, how, and how the scan is
 //! going. The card stays open while the pointer is on the chip or the card.
 //! Analysis runs in the background (see `crate::redact`); its results reach
-//! the renderer as they arrive.
+//! the renderer and the redact lane as they arrive.
+//!
+//! While a scan runs, the chip's icon becomes a progress ring and the redact
+//! lane dims the part of the timeline not read yet, with a soft edge where
+//! the scan is reading. Both follow one eased progress value and repaint only
+//! the chip and the timeline overlay, never the whole editor.
 
 use super::*;
 use crate::redact::{JobPhase, RedactJob};
 use cap_project::{AutoRedactConfiguration, RedactCategory, RedactStyle, redaction::Redactions};
-use gpui::{AnyElement, relative};
+use gpui::{AnyElement, PathBuilder, relative};
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 const CARD_DELAY: Duration = Duration::from_millis(350);
 const CARD_CLOSE_GRACE: Duration = Duration::from_millis(220);
 const CARD_WIDTH: f32 = 304.;
-const POLL: Duration = Duration::from_millis(300);
+const POLL: Duration = Duration::from_millis(250);
+/// How long the ring and the lane take to glide to a new progress value.
+const TWEEN: Duration = Duration::from_millis(450);
+/// How long the finished check stays in the chip before the icon returns.
+const FINISH_HOLD: Duration = Duration::from_millis(1600);
+/// How long the reading edge takes to fade once the scan is done.
+const FINISH_FADE: Duration = Duration::from_millis(500);
+const RING: f32 = 14.;
+/// One spin of the ring while the model loads.
+const SPIN_SECONDS: f32 = 1.1;
+
+/// A progress value that glides to each new target instead of jumping.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct Tween {
+    from: f32,
+    to: f32,
+    at: Option<Instant>,
+}
+
+impl Tween {
+    /// The value at `now`, and whether it is still moving.
+    pub(crate) fn value(&self, now: Instant) -> (f32, bool) {
+        let Some(at) = self.at else {
+            return (self.to, false);
+        };
+        let t = (now.saturating_duration_since(at).as_secs_f32() / TWEEN.as_secs_f32()).min(1.);
+        let eased = 1. - (1. - t).powi(3);
+        (self.from + (self.to - self.from) * eased, t < 1.)
+    }
+
+    pub(crate) fn set(&mut self, target: f32, now: Instant, instant: bool) {
+        if (target - self.to).abs() < 1e-4 {
+            return;
+        }
+        let (current, _) = self.value(now);
+        *self = Self {
+            from: current,
+            to: target,
+            at: (!instant).then_some(now),
+        };
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct RedactUi {
@@ -28,6 +75,15 @@ pub(crate) struct RedactUi {
     pub(crate) redactions: Option<Arc<Redactions>>,
     loaded_for: Option<PathBuf>,
     highlighted: Vec<String>,
+    /// The progress the ring and the lane draw.
+    shown: Tween,
+    /// When the scan the user watched finished, for the chip's check.
+    finished_at: Option<Instant>,
+    /// When the model started loading, for the ring's spin.
+    preparing_since: Option<Instant>,
+    /// Set while the editor checks a saved scan that is probably still
+    /// current: nothing shows unless it turns out to need a real scan.
+    quiet: bool,
 }
 
 pub(crate) fn category_label(category: RedactCategory) -> &'static str {
@@ -107,10 +163,166 @@ fn redact_switch(theme: &Theme, on: bool) -> impl IntoElement {
         )
 }
 
+/// A ring that fills clockwise from twelve o'clock; `spin` instead turns a
+/// short arc, for while the scan has no progress to show yet.
+fn progress_ring(fraction: f32, spin: Option<f32>, arc: Hsla, track: Hsla) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            const STROKE: f32 = 1.75;
+            let size = f32::from(bounds.size.width.min(bounds.size.height));
+            let radius = size / 2. - STROKE / 2. - 0.5;
+            let center = bounds.center();
+            paint_arc(window, center, radius, 0., TAU, STROKE, track);
+            let (start, sweep) = match spin {
+                Some(turn) => (turn * TAU, 0.28 * TAU),
+                None => (0., fraction.clamp(0., 1.) * TAU),
+            };
+            if sweep > 0.02 {
+                paint_arc(
+                    window,
+                    center,
+                    radius,
+                    start - FRAC_PI_2,
+                    sweep,
+                    STROKE,
+                    arc,
+                );
+            }
+        },
+    )
+    .size(px(RING))
+    .flex_none()
+}
+
+fn arc_point(center: gpui::Point<Pixels>, radius: f32, angle: f32) -> gpui::Point<Pixels> {
+    gpui::point(
+        center.x + px(radius * angle.cos()),
+        center.y + px(radius * angle.sin()),
+    )
+}
+
+fn paint_arc(
+    window: &mut Window,
+    center: gpui::Point<Pixels>,
+    radius: f32,
+    start: f32,
+    sweep: f32,
+    width: f32,
+    color: Hsla,
+) {
+    let steps = ((sweep / TAU) * 64.).ceil().max(2.) as usize;
+    let mut builder = PathBuilder::stroke(px(width));
+    for step in 0..=steps {
+        let point = arc_point(center, radius, start + sweep * step as f32 / steps as f32);
+        if step == 0 {
+            builder.move_to(point);
+        } else {
+            builder.line_to(point);
+        }
+    }
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+    if sweep < TAU - 0.01 {
+        for angle in [start, start + sweep] {
+            paint_dot(window, arc_point(center, radius, angle), width / 2., color);
+        }
+    }
+}
+
+/// A round line cap, as the disc it is.
+fn paint_dot(window: &mut Window, center: gpui::Point<Pixels>, radius: f32, color: Hsla) {
+    let mut builder = PathBuilder::fill();
+    let steps = 12;
+    for step in 0..=steps {
+        let point = arc_point(center, radius, TAU * step as f32 / steps as f32);
+        if step == 0 {
+            builder.move_to(point);
+        } else {
+            builder.line_to(point);
+        }
+    }
+    builder.close();
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
 impl EditorWindow {
+    /// Whether the chip and the lane show a scan: one is preparing or running
+    /// and it is not the silent check of a saved scan.
+    fn redact_scan_shown(&self) -> bool {
+        self.project.auto_redact.enabled
+            && !self.redact.quiet
+            && matches!(
+                self.redact.phase,
+                Some(JobPhase::Preparing | JobPhase::Scanning)
+            )
+    }
+
+    /// The chip's icon: the eye, the progress ring while scanning, or a check
+    /// for a moment after the scan the user watched finishes.
+    fn redact_chip_glyph(&self, ink: Hsla, window: &mut Window, cx: &gpui::App) -> AnyElement {
+        let editor = self.theme.editor;
+        let now = Instant::now();
+        let still = cx.reduce_motion();
+        if self.redact_scan_shown() {
+            let (shown, moving) = self.redact.shown.value(now);
+            let spin = match (&self.redact.phase, self.redact.preparing_since) {
+                (Some(JobPhase::Preparing), Some(since)) if !still => Some(
+                    (now.saturating_duration_since(since).as_secs_f32() / SPIN_SECONDS).fract(),
+                ),
+                (Some(JobPhase::Preparing), _) => Some(0.),
+                _ => None,
+            };
+            if !still && (moving || spin.is_some()) {
+                window.request_animation_frame();
+            }
+            return progress_ring(
+                shown,
+                spin,
+                Hsla::from(editor.accent_ink),
+                Hsla::from(editor.accent).opacity(0.24),
+            )
+            .into_any_element();
+        }
+        if let Some(at) = self.redact.finished_at {
+            let age = now.saturating_duration_since(at);
+            if age < FINISH_HOLD {
+                if !still {
+                    window.request_animation_frame();
+                }
+                let fade_in = (age.as_secs_f32() / 0.18).min(1.);
+                let fade_out = ((FINISH_HOLD.saturating_sub(age)).as_secs_f32() / 0.25).min(1.);
+                return svg()
+                    .path("icons/check.svg")
+                    .size(px(RING))
+                    .flex_none()
+                    .text_color(Hsla::from(editor.accent_ink))
+                    .opacity(if still { 1. } else { fade_in.min(fade_out) })
+                    .into_any_element();
+            }
+        }
+        let ready = self.project_ready();
+        let on = self.project.auto_redact.enabled;
+        svg()
+            .path("icons/eye-off.svg")
+            .size(px(RING))
+            .flex_none()
+            .text_color(ink)
+            .when(ready && !on, |this| {
+                this.group_hover("transport-redact", |style| {
+                    style.text_color(Hsla::from(editor.text_1))
+                })
+            })
+            .into_any_element()
+    }
+
     pub(super) fn render_preview_redact(
         &self,
         labels: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
@@ -120,6 +332,7 @@ impl EditorWindow {
         let wash = Hsla::from(editor.accent);
         let ink = Hsla::from(if on { editor.accent_ink } else { editor.text_2 });
         let bounds = self.redact.chip_bounds.clone();
+        let glyph = self.redact_chip_glyph(ink, window, cx);
         div()
             .id("transport-redact")
             .group("transport-redact")
@@ -165,18 +378,7 @@ impl EditorWindow {
                 this.redact.chip_hovered = *hovered;
                 this.redact_hover_changed(cx);
             }))
-            .child(
-                svg()
-                    .path("icons/eye-off.svg")
-                    .size(px(14.))
-                    .flex_none()
-                    .text_color(ink)
-                    .when(ready && !on, |this| {
-                        this.group_hover("transport-redact", |style| {
-                            style.text_color(Hsla::from(editor.text_1))
-                        })
-                    }),
-            )
+            .child(glyph)
             .when(labels, |this| this.child(tr::editor::redact::chip()))
             .child(redact_switch(&theme, on))
             .child(
@@ -184,6 +386,183 @@ impl EditorWindow {
                     .absolute()
                     .size_full(),
             )
+    }
+
+    /// Over the redact lane while a scan runs: the part of the timeline not
+    /// read yet is dimmed, and a soft accent edge marks where the scan is
+    /// reading, so the lane fills in left to right as detections arrive.
+    pub(super) fn render_redact_scan_veil(
+        &self,
+        viewport_width: f32,
+        window: &mut Window,
+    ) -> Option<AnyElement> {
+        if !self.project_ready() || !self.project.auto_redact.enabled {
+            return None;
+        }
+        let row = self
+            .timeline
+            .rows
+            .iter()
+            .position(|row| row.kind == TrackKind::Redact)?;
+        let now = Instant::now();
+        let scanning = self.redact_scan_shown();
+        let fading = self
+            .redact
+            .finished_at
+            .map(|at| now.saturating_duration_since(at))
+            .filter(|age| *age < FINISH_FADE);
+        if !scanning && fading.is_none() {
+            return None;
+        }
+        let (shown, moving) = self.redact.shown.value(now);
+        if moving || fading.is_some() {
+            window.request_animation_frame();
+        }
+        let instance = self.instance.as_ref()?;
+        let durations = instance
+            .recordings
+            .segments
+            .iter()
+            .map(|segment| segment.display.duration)
+            .collect::<Vec<_>>();
+        let total: f64 = durations.iter().sum();
+        let mut read = f64::from(shown) * total;
+        let scanned = durations
+            .iter()
+            .map(|duration| {
+                let here = read.clamp(0., *duration);
+                read -= here;
+                here
+            })
+            .collect::<Vec<_>>();
+        let pending = timeline::redact_pending_spans(
+            &self.project,
+            &scanned,
+            &durations,
+            &self.redact_video_offsets(),
+        );
+        let theme = self.theme;
+        let editor = theme.editor;
+        let content = timeline::content_width(viewport_width);
+        let secs_per_pixel = self.view.transform.secs_per_pixel(content);
+        let position = self.view.transform.position;
+        let x_at = |time: f64| ((time - position) / secs_per_pixel) as f32;
+        let top = timeline::PLAYHEAD_TOP_OFFSET
+            + timeline::TIMELINE_HEADER_GAP
+            + row as f32 * (timeline::TRACK_HEIGHT + TRACK_ROW_GAP)
+            - f32::from(self.timeline_scroll.offset().y);
+        if top < timeline::PLAYHEAD_TOP_OFFSET - 0.5 {
+            return None;
+        }
+        let edge_alpha =
+            fading.map_or(1., |age| 1. - age.as_secs_f32() / FINISH_FADE.as_secs_f32());
+        let accent = Hsla::from(editor.accent);
+        let mut layer = div()
+            .absolute()
+            .left(px(TIMELINE_PADDING + TRACK_GUTTER))
+            .top(px(top))
+            .w(px(content))
+            .h(px(timeline::TRACK_HEIGHT))
+            .overflow_hidden();
+        let mut frontier = pending
+            .iter()
+            .filter(|(_, _, at)| *at)
+            .map(|(start, _, _)| x_at(*start))
+            .collect::<Vec<_>>();
+        if !scanning {
+            frontier = vec![x_at(self.total_duration())];
+        }
+        for (start, end, _) in &pending {
+            let left = x_at(*start).max(-1.);
+            let right = x_at(*end).min(content + 1.);
+            if right <= left {
+                continue;
+            }
+            layer = layer.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left(px(left))
+                    .w(px(right - left))
+                    .h_full()
+                    .rounded(px(timeline::TRACK_BAND_RADIUS))
+                    .bg(Hsla::from(editor.ctl).opacity(0.7)),
+            );
+        }
+        const TAIL: f32 = 56.;
+        for x in frontier {
+            if !(-TAIL..=content + 2.).contains(&x) {
+                continue;
+            }
+            layer = layer
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(4.))
+                        .bottom(px(4.))
+                        .left(px(x - TAIL))
+                        .w(px(TAIL))
+                        .bg(gpui::linear_gradient(
+                            90.,
+                            gpui::linear_color_stop(accent.opacity(0.), 0.),
+                            gpui::linear_color_stop(accent.opacity(0.16 * edge_alpha), 1.),
+                        )),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(6.))
+                        .bottom(px(6.))
+                        .left(px(x - 1.))
+                        .w(px(2.))
+                        .rounded_full()
+                        .bg(accent.opacity(edge_alpha))
+                        .shadow(vec![gpui::BoxShadow {
+                            color: accent.opacity(0.55 * edge_alpha),
+                            offset: gpui::point(px(0.), px(0.)),
+                            blur_radius: px(8.),
+                            spread_radius: px(0.),
+                            inset: false,
+                        }]),
+                );
+        }
+        Some(layer.into_any_element())
+    }
+
+    /// Whether a scan is preparing or running.
+    pub(crate) fn redact_running(&self) -> bool {
+        matches!(
+            self.redact.phase,
+            Some(JobPhase::Preparing | JobPhase::Scanning)
+        )
+    }
+
+    /// Whether a scan is reading frames (past loading the model).
+    pub(crate) fn redact_scanning(&self) -> bool {
+        matches!(self.redact.phase, Some(JobPhase::Scanning))
+    }
+
+    /// Harness only (`CAP_GPUI_AUTO_REDACT`): turns auto redact off and
+    /// deletes the saved scan, so turning it on again scans from scratch.
+    pub(crate) fn forget_redact_scan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_redact_enabled(false, window, cx);
+        if let Err(error) = std::fs::remove_file(Redactions::path_for(&self.project_path))
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%error, "Could not remove the saved auto redact scan");
+        }
+        self.redact.redactions = None;
+        self.redact.phase = None;
+        if let Some(instance) = &self.instance {
+            instance.render_constants.redactions.set(None);
+        }
+    }
+
+    /// Repaints what the scan's progress draws: the chip and the overlay
+    /// above the timeline rows. Nothing else re-renders.
+    fn invalidate_redact_progress(&mut self, cx: &mut Context<Self>) {
+        self.redact_chip_view.update(cx, |_, cx| cx.notify());
+        self.invalidate_playhead_layer(cx);
     }
 
     /// Opens the card after the pointer rests on the chip; closes it a moment
@@ -226,7 +605,15 @@ impl EditorWindow {
         }));
     }
 
-    fn open_redact_card(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_redact_card(&mut self, cx: &mut Context<Self>) {
+        self.redact.card_task = None;
+        if self.redact.card_open {
+            self.redact.card_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_redact_card(&mut self, cx: &mut Context<Self>) {
         self.redact.card_task = None;
         if !self.redact.card_open {
             self.redact.card_open = true;
@@ -263,28 +650,46 @@ impl EditorWindow {
                         .child(tr::editor::window::transport::enhance_off())
                 }
             });
+        let scanning = self.redact_scan_shown();
+        let (shown, _) = self.redact.shown.value(Instant::now());
         let status: Option<AnyElement> = on.then(|| {
             let (text, fraction): (SharedString, Option<f32>) = match &self.redact.phase {
-                Some(JobPhase::Preparing) => (tr::editor::redact::preparing().into(), None),
-                Some(JobPhase::Scanning) => (
-                    tr::editor::redact::scanning((self.redact.progress * 100.).floor() as u32)
-                        .into(),
-                    Some(self.redact.progress),
+                Some(JobPhase::Preparing) if scanning => {
+                    (tr::editor::redact::preparing().into(), None)
+                }
+                Some(JobPhase::Scanning) if scanning => (
+                    tr::editor::redact::scanning((shown * 100.).floor() as u32).into(),
+                    Some(shown),
                 ),
                 Some(JobPhase::Failed(_)) => (tr::editor::redact::failed().into(), None),
                 _ if hidden == 0 => (tr::editor::redact::nothing().into(), None),
                 _ => (tr::editor::redact::hidden(hidden).into(), None),
             };
+            let found = (scanning && hidden > 0).then(|| tr::editor::redact::found(hidden));
             div()
                 .flex()
                 .flex_col()
                 .gap(px(6.))
                 .child(
                     div()
-                        .text_size(px(12.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(editor.text_1))
-                        .child(text),
+                        .flex()
+                        .flex_row()
+                        .items_baseline()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(Hsla::from(editor.text_1))
+                                .child(text),
+                        )
+                        .children(found.map(|found| {
+                            div()
+                                .text_size(px(11.))
+                                .text_color(Hsla::from(editor.text_2))
+                                .child(found)
+                        })),
                 )
                 .children(fraction.map(|fraction| {
                     div()
@@ -575,7 +980,8 @@ impl EditorWindow {
 
     /// Starts, keeps or stops the scan to match the project, and hands the
     /// renderer what is known. Called after every project change, undo and
-    /// redo, and when the editor opens.
+    /// redo, and when the editor opens. A scan already running for this
+    /// recording (one started when it stopped) is watched, not restarted.
     pub(crate) fn sync_redact(&mut self, cx: &mut Context<Self>) {
         let Some(instance) = self.instance.clone() else {
             return;
@@ -594,12 +1000,14 @@ impl EditorWindow {
                 job.cancel();
             }
             self.redact.poll_task = None;
+            self.redact.quiet = false;
             if matches!(
                 self.redact.phase,
                 Some(JobPhase::Scanning | JobPhase::Preparing)
             ) {
                 self.redact.phase = None;
             }
+            self.invalidate_redact_progress(cx);
             return;
         }
         let complete = self
@@ -617,54 +1025,97 @@ impl EditorWindow {
             .iter()
             .map(|segment| segment.display.duration)
             .collect::<Vec<_>>();
-        self.redact.job = Some(RedactJob::start(project_path, durations));
+        self.redact.quiet = self
+            .redact
+            .redactions
+            .as_ref()
+            .is_some_and(|redactions| redactions.is_complete());
+        self.redact.job = Some(RedactJob::attach_or_start(project_path, durations));
         self.redact.phase = Some(JobPhase::Preparing);
+        self.redact.preparing_since = Some(Instant::now());
         self.redact.progress = 0.0;
-        self.redact.poll_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(POLL).await;
-                let running = this
-                    .update(cx, |this, cx| this.poll_redact(cx))
-                    .unwrap_or(false);
-                if !running {
-                    break;
+        self.redact.shown = Tween::default();
+        self.redact.finished_at = None;
+        self.poll_redact(cx);
+        if self.redact.job.is_some() {
+            self.redact.poll_task = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(POLL).await;
+                    let running = this
+                        .update(cx, |this, cx| this.poll_redact(cx))
+                        .unwrap_or(false);
+                    if !running {
+                        break;
+                    }
                 }
-            }
-        }));
-        cx.notify();
+            }));
+        }
+        self.invalidate_redact_progress(cx);
     }
 
-    /// Reads the scan's progress; returns whether it is still running.
+    /// Reads the scan's progress; returns whether it is still running. A
+    /// progress tick repaints the chip and the overlay; new detections also
+    /// rebuild the redact lane and, while paused, the preview frame. Only a
+    /// change of phase re-renders the editor.
     fn poll_redact(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(job) = self.redact.job.as_mut() else {
             return false;
         };
         let update = job.poll();
         let running = matches!(update.phase, JobPhase::Preparing | JobPhase::Scanning);
-        let changed = self.redact.phase.as_ref() != Some(&update.phase)
-            || (self.redact.progress - update.progress).abs() > 0.004
-            || update.snapshot.is_some();
-        self.redact.phase = Some(update.phase);
+        let was_shown = self.redact_scan_shown();
+        if self.redact.quiet && update.phase == JobPhase::Scanning {
+            self.redact.quiet = false;
+        }
+        let phase_changed = self.redact.phase.as_ref() != Some(&update.phase);
+        let progressed = (self.redact.progress - update.progress).abs() > 1e-4;
+        let now = Instant::now();
+        let still = cx.reduce_motion();
+        if phase_changed && update.phase == JobPhase::Scanning {
+            self.redact.preparing_since = None;
+        }
+        self.redact.phase = Some(update.phase.clone());
         self.redact.progress = update.progress;
+        if running {
+            self.redact.shown.set(update.progress, now, still);
+        } else if update.phase == JobPhase::Done && was_shown {
+            self.redact.shown.set(1., now, still);
+            self.redact.finished_at = Some(now);
+        }
         if let Some(snapshot) = update.snapshot {
             self.redact.redactions = Some(snapshot.clone());
             if let Some(instance) = &self.instance {
                 instance.render_constants.redactions.set(Some(snapshot));
+                if !self.playing {
+                    let time = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
+                    request_frame(
+                        instance,
+                        (time * EDITOR_PREVIEW_FPS as f64).floor() as u32,
+                        self.preview_resolution(),
+                    );
+                }
             }
+            let before = std::mem::take(&mut self.timeline.redact);
             let video_offsets = self.redact_video_offsets();
             self.timeline.set_redact(
                 &self.project,
                 self.redact.redactions.as_deref(),
                 &video_offsets,
             );
-            self.publish_project();
+            if !same_redact_lane(&before, &self.timeline.redact) {
+                self.timeline_view.update(cx, |_, cx| cx.notify());
+            }
         }
         if !running {
             self.redact.job = None;
             self.redact.poll_task = None;
+            self.redact.quiet = false;
         }
-        if changed {
+        if phase_changed {
             cx.notify();
+        }
+        if phase_changed || progressed || !running {
+            self.invalidate_redact_progress(cx);
         }
         running
     }
@@ -901,6 +1352,23 @@ impl EditorWindow {
         }
         body.into_any_element()
     }
+}
+
+/// Whether two builds of the redact lane draw the same spans, so a snapshot
+/// that found nothing new leaves the cached rows alone.
+fn same_redact_lane(a: &[timeline::Segment], b: &[timeline::Segment]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.start == b.start
+                && a.end == b.end
+                && match (&a.detail, &b.detail) {
+                    (
+                        timeline::SegmentDetail::Redact { count: a },
+                        timeline::SegmentDetail::Redact { count: b },
+                    ) => a == b,
+                    _ => false,
+                }
+        })
 }
 
 fn format_redact_time(seconds: f64) -> String {

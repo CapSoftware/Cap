@@ -3545,6 +3545,7 @@ export_failed = "Automatisch schwärzen konnte diese Aufnahme nicht prüfen. Sch
 export_screen_track = "Die Bildschirmspur kann nicht einzeln exportiert werden, solange Automatisch schwärzen an ist."
 export_wait = "Automatisch schwärzen prüft noch. Exportiere, wenn es fertig ist."
 failed = "Diese Aufnahme konnte nicht geprüft werden"
+found = { one = "{count} bisher gefunden", other = "{count} bisher gefunden" }
 hidden = { one = "{count} Element verborgen", other = "{count} Elemente verborgen" }
 hide = "Verbergen"
 keep = "Sichtbar lassen"

@@ -3545,6 +3545,7 @@ export_failed = "La ocultación automática no pudo analizar esta grabación. De
 export_screen_track = "La pista de pantalla no se puede exportar sola con la ocultación automática activada."
 export_wait = "La ocultación automática sigue analizando. Exporta cuando termine."
 failed = "No se pudo analizar esta grabación"
+found = { one = "{count} encontrado hasta ahora", many = "{count} de encontrados hasta ahora", other = "{count} encontrados hasta ahora" }
 hidden = { one = "{count} elemento oculto", many = "{count} de elementos ocultos", other = "{count} elementos ocultos" }
 hide = "Ocultar"
 keep = "Dejar visible"

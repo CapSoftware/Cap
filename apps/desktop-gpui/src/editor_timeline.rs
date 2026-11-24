@@ -1946,6 +1946,40 @@ fn lane_count(segments: &[Segment]) -> u32 {
         .unwrap_or(0)
 }
 
+/// Where `start..end` of recording clip `recording_clip` (seconds of its
+/// segment time) plays on the timeline: once for every clip that shows part of
+/// it, at the clip's speed and past any holds.
+fn source_interval_spans(
+    timeline: &TimelineConfiguration,
+    offsets: &[f64],
+    holds: &[(f64, f64)],
+    recording_clip: u32,
+    start: f64,
+    end: f64,
+) -> Vec<(f64, f64)> {
+    let mut spans = Vec::new();
+    for (index, segment) in timeline.segments.iter().enumerate() {
+        if segment.recording_clip != recording_clip {
+            continue;
+        }
+        let scale = if segment.timescale > 0.0 {
+            segment.timescale
+        } else {
+            1.0
+        };
+        let start = start.max(segment.start);
+        let end = end.min(segment.end);
+        if end <= start {
+            continue;
+        }
+        let output_start =
+            effective_to_output(holds, offsets[index] + (start - segment.start) / scale);
+        let output_end = effective_to_output(holds, offsets[index] + (end - segment.start) / scale);
+        spans.push((output_start, output_end));
+    }
+    spans
+}
+
 /// Every detection's time on the timeline: each region's source interval is
 /// placed through every clip that shows that part of its recording, at the
 /// clip's speed and past any holds.
@@ -1964,33 +1998,65 @@ pub fn redact_region_spans<'a>(
     let offsets = clip_timeline_offsets(timeline);
     let holds = timeline.hold_windows();
     let mut spans = Vec::new();
-    for (index, segment) in timeline.segments.iter().enumerate() {
-        let scale = if segment.timescale > 0.0 {
-            segment.timescale
-        } else {
-            1.0
-        };
-        for region in redactions
-            .regions
-            .iter()
-            .filter(|region| region.segment == segment.recording_clip)
-        {
-            let offset = video_offsets
-                .get(segment.recording_clip as usize)
-                .copied()
-                .unwrap_or(0.0);
-            let start = (region.start - offset).max(segment.start);
-            let end = (region.end - offset).min(segment.end);
-            if end <= start {
-                continue;
-            }
-            let output_start =
-                effective_to_output(&holds, offsets[index] + (start - segment.start) / scale);
-            let output_end =
-                effective_to_output(&holds, offsets[index] + (end - segment.start) / scale);
-            spans.push((output_start, output_end, region));
+    for region in &redactions.regions {
+        let offset = video_offsets
+            .get(region.segment as usize)
+            .copied()
+            .unwrap_or(0.0);
+        for (start, end) in source_interval_spans(
+            timeline,
+            &offsets,
+            &holds,
+            region.segment,
+            region.start - offset,
+            region.end - offset,
+        ) {
+            spans.push((start, end, region));
         }
     }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    spans
+}
+
+/// The parts of the timeline auto redact has not read yet, given how many
+/// seconds of each recording clip's display video it has read
+/// (`scanned[clip]`). The flag marks the part that starts where the scan is
+/// reading now.
+pub fn redact_pending_spans(
+    config: &ProjectConfiguration,
+    scanned: &[f64],
+    durations: &[f64],
+    video_offsets: &[f64],
+) -> Vec<(f64, f64, bool)> {
+    let Some(timeline) = config.timeline.as_ref() else {
+        return Vec::new();
+    };
+    let offsets = clip_timeline_offsets(timeline);
+    let holds = timeline.hold_windows();
+    let reading = scanned
+        .iter()
+        .zip(durations)
+        .position(|(read, duration)| read < duration);
+    let mut spans = Vec::new();
+    for (clip, (read, duration)) in scanned.iter().zip(durations).enumerate() {
+        if read >= duration {
+            continue;
+        }
+        let offset = video_offsets.get(clip).copied().unwrap_or(0.0);
+        let from = read - offset;
+        let frontier = if reading == Some(clip) && *read > 0.0 {
+            source_interval_spans(timeline, &offsets, &holds, clip as u32, from, from + 1e-6)
+        } else {
+            Vec::new()
+        };
+        for (start, end) in
+            source_interval_spans(timeline, &offsets, &holds, clip as u32, from, f64::INFINITY)
+        {
+            let at_frontier = frontier.iter().any(|(edge, _)| (edge - start).abs() < 1e-9);
+            spans.push((start, end, at_frontier));
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     spans
 }
 
@@ -4980,6 +5046,42 @@ mod tests {
         config.auto_redact.enabled = false;
         model.set_redact(&config, Some(&redactions), &[0.5]);
         assert!(model.redact.is_empty());
+    }
+
+    /// The unread part of a recording lands on the timeline through every
+    /// clip that shows it, and only the piece that starts where the scan is
+    /// reading carries the reading edge.
+    #[test]
+    fn redact_pending_spans_follow_clips_and_mark_the_reading_edge() {
+        let mut config = ProjectConfiguration::default();
+        config.auto_redact.enabled = true;
+        config.timeline = Some(
+            serde_json::from_value(serde_json::json!({
+                "segments": [
+                    { "recordingSegment": 1, "timescale": 1.0, "start": 0.0, "end": 4.0 },
+                    { "recordingSegment": 0, "timescale": 2.0, "start": 2.0, "end": 10.0 },
+                    { "recordingSegment": 0, "timescale": 1.0, "start": 0.0, "end": 2.0 }
+                ],
+                "zoomSegments": []
+            }))
+            .unwrap(),
+        );
+        let round = |spans: Vec<(f64, f64, bool)>| {
+            spans
+                .into_iter()
+                .map(|(s, e, at)| ((s * 1000.).round() / 1000., (e * 1000.).round() / 1000., at))
+                .collect::<Vec<_>>()
+        };
+        let spans = redact_pending_spans(&config, &[6.0, 0.0], &[10.0, 4.0], &[0.0, 0.0]);
+        assert_eq!(
+            round(spans),
+            vec![(0.0, 4.0, false), (6.0, 8.0, true)],
+            "clip 1 is unread; clip 0 is read to 6 s, which plays at 6 s on the 2x clip"
+        );
+        let spans = redact_pending_spans(&config, &[10.0, 1.0], &[10.0, 4.0], &[0.0, 0.5]);
+        assert_eq!(round(spans), vec![(0.5, 4.0, true)]);
+        let done = redact_pending_spans(&config, &[10.0, 4.0], &[10.0, 4.0], &[0.0, 0.0]);
+        assert!(done.is_empty());
     }
 
     #[test]
