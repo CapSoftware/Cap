@@ -333,6 +333,17 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_KEYCHAIN: ${{ runner.os == 'macOS' && format('{0}/build.keychain', runner.temp) || '' }}
 
+      # Ubuntu 22.04's PipeWire headers are too old for the Rust bindings, so
+      # Cap compiles against Ubuntu 24.04's (the ones it has always built
+      # with) and links the build image's own libpipewire.
+      - name: Stage PipeWire headers (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$(bash scripts/stage-pipewire-headers.sh "$RUNNER_TEMP/pipewire-headers")"
+          echo "PKG_CONFIG_PATH=$dir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
       # The sidecars ship inside Cap, which is itself stripped, and nothing
       # symbolicates them, so their symbol tables are dead weight in every
       # download.
