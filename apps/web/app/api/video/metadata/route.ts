@@ -5,6 +5,16 @@ import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
+// Written only by the server, so the owner cannot change how uploads and
+// plan limits treat the video.
+const SERVER_OWNED_KEYS = [
+	"agentUpload",
+	"freePlanMeasure",
+	"freePlanUploadOpenUntil",
+	"loomDeferredProcessing",
+] as const;
+type ServerOwnedKey = (typeof SERVER_OWNED_KEYS)[number];
+
 export async function PUT(request: NextRequest) {
 	const user = isCrossSiteCookieWrite(request) ? null : await getCurrentUser();
 	const { videoId, metadata } = await request.json();
@@ -35,7 +45,11 @@ export async function PUT(request: NextRequest) {
 		return Response.json({ error: true }, { status: 400 });
 	}
 
-	const { agentUpload: _agentUpload, ...clientMetadata } = metadata;
+	const clientMetadata = Object.fromEntries(
+		Object.entries(metadata).filter(
+			([key]) => !SERVER_OWNED_KEYS.includes(key as ServerOwnedKey),
+		),
+	);
 
 	await db().transaction(async (tx) => {
 		const [locked] = await tx
@@ -44,15 +58,16 @@ export async function PUT(request: NextRequest) {
 			.where(eq(videos.id, videoId))
 			.for("update");
 
-		const storedAgentUpload = locked?.metadata?.agentUpload;
+		const stored = locked?.metadata ?? {};
+		const serverOwned = Object.fromEntries(
+			SERVER_OWNED_KEYS.filter((key) => stored[key] !== undefined).map(
+				(key) => [key, stored[key]],
+			),
+		);
 
 		await tx
 			.update(videos)
-			.set({
-				metadata: storedAgentUpload
-					? { ...clientMetadata, agentUpload: storedAgentUpload }
-					: clientMetadata,
-			})
+			.set({ metadata: { ...clientMetadata, ...serverOwned } })
 			.where(eq(videos.id, videoId));
 	});
 

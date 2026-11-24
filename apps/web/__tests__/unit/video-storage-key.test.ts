@@ -294,6 +294,30 @@ describe("video metadata route", () => {
 		});
 	});
 
+	it("keeps the stored free plan state and ignores the request's", async () => {
+		const freePlanMeasure = {
+			key: `${ownerId}/${videoId}/result.mp4`,
+			seconds: 600,
+			at: "2026-11-24T00:00:00.000Z",
+		};
+		mocks.selectWhere.mockResolvedValue([
+			{ ...video, metadata: { freePlanMeasure } },
+		]);
+		mocks.lockedFor.mockResolvedValue([{ metadata: { freePlanMeasure } }]);
+
+		const response = await put({
+			sourceName: "b.mp4",
+			freePlanMeasure: { key: "x", seconds: 1, at: "2025-01-01T00:00:00Z" },
+			freePlanUploadOpenUntil: "2099-01-01T00:00:00Z",
+			loomDeferredProcessing: { rawFileKey: "x" },
+		});
+
+		expect(response.status).toBe(200);
+		expect(mocks.updateSet).toHaveBeenCalledWith({
+			metadata: { sourceName: "b.mp4", freePlanMeasure },
+		});
+	});
+
 	it("rejects metadata that is not an object", async () => {
 		mocks.selectWhere.mockResolvedValue([{ ...video, metadata: null }]);
 
