@@ -52,7 +52,7 @@ const RPM_HOST_PLUGIN_DIRECTORIES: [&str; 2] = ["/usr/lib64/alsa-lib", "/usr/lib
 
 /// The ALSA configuration for Cap's own pulse plugin, when this install
 /// needs it: always in the AppImage, and in the rpm only on hosts without a
-/// pulse plugin of their own.
+/// pulse plugin of their own and without an `ALSA_CONFIG_PATH` of the user's.
 pub fn bundled_alsa_config_path() -> Option<OsString> {
     appimage_alsa_config_path().or_else(rpm_alsa_config_path)
 }
@@ -66,12 +66,23 @@ fn rpm_alsa_config_path() -> Option<OsString> {
             .join("lib/cap/package-format"),
     )
     .ok()?;
-    let config = rpm_alsa_config(&marker, |path| path.is_file())?;
-    append_alsa_config(config, env::var_os("ALSA_CONFIG_PATH").as_deref())
+    rpm_alsa_config(
+        &marker,
+        env::var_os("ALSA_CONFIG_PATH").as_deref(),
+        |path| path.is_file(),
+    )
+    .map(OsString::from)
 }
 
-fn rpm_alsa_config(marker: &str, is_file: impl Fn(&Path) -> bool) -> Option<&'static Path> {
+/// The rpm's configuration includes the distribution's `alsa.conf` itself:
+/// openSUSE's alsa-lib ignores an `ALSA_CONFIG_PATH` that is a list of files.
+fn rpm_alsa_config(
+    marker: &str,
+    existing: Option<&OsStr>,
+    is_file: impl Fn(&Path) -> bool,
+) -> Option<&'static Path> {
     if marker.trim() != "rpm"
+        || existing.is_some_and(|value| !value.is_empty())
         || RPM_HOST_PLUGIN_DIRECTORIES
             .iter()
             .any(|directory| is_file(&Path::new(directory).join(PULSE_PLUGIN)))
@@ -192,24 +203,30 @@ mod tests {
     fn rpm_loads_its_pulse_plugin_only_when_the_host_has_none() {
         let bundled =
             |path: &Path| path == Path::new(RPM_ALSA_CONFIG) || path == Path::new(RPM_PULSE_PLUGIN);
+        for existing in [None, Some(OsStr::new(""))] {
+            assert_eq!(
+                rpm_alsa_config("rpm\n", existing, bundled),
+                Some(Path::new("/usr/lib/cap/alsa-pulse.conf"))
+            );
+        }
         assert_eq!(
-            rpm_alsa_config("rpm\n", bundled),
-            Some(Path::new("/usr/lib/cap/alsa-pulse.conf"))
+            rpm_alsa_config("rpm", Some(OsStr::new("/home/user/audio.conf")), bundled),
+            None
         );
         for host in ["/usr/lib64/alsa-lib", "/usr/lib/alsa-lib"] {
             let with_host_plugin =
                 |path: &Path| bundled(path) || path == Path::new(host).join(PULSE_PLUGIN);
-            assert_eq!(rpm_alsa_config("rpm", with_host_plugin), None);
+            assert_eq!(rpm_alsa_config("rpm", None, with_host_plugin), None);
         }
         for marker in ["deb", "arch", "appimage", ""] {
-            assert_eq!(rpm_alsa_config(marker, bundled), None);
+            assert_eq!(rpm_alsa_config(marker, None, bundled), None);
         }
         assert_eq!(
-            rpm_alsa_config("rpm", |path| path == Path::new(RPM_ALSA_CONFIG)),
+            rpm_alsa_config("rpm", None, |path| path == Path::new(RPM_ALSA_CONFIG)),
             None
         );
         assert_eq!(
-            rpm_alsa_config("rpm", |path| path == Path::new(RPM_PULSE_PLUGIN)),
+            rpm_alsa_config("rpm", None, |path| path == Path::new(RPM_PULSE_PLUGIN)),
             None
         );
     }
