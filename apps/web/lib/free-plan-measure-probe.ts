@@ -91,6 +91,13 @@ async function measureNow(
 			return undefined;
 		}
 		failedUntil.delete(failureKey(videoId, key));
+		if (
+			measured.seconds === null &&
+			exceedsFreePlanMeasuredDuration(
+				readFreePlanMeasure(video.metadata)?.seconds ?? null,
+			)
+		)
+			return undefined;
 		await recordFreePlanMeasure(videoId, key, measured.seconds);
 		return measured.seconds;
 	} catch (error) {
@@ -153,6 +160,8 @@ export function measureFreePlanObjectIfNeeded(
 	}
 }
 
+const isMediaKey = (key: string) => !/\.(json|m3u8)$/i.test(key);
+
 // A held video is measured again while a replacement upload can still land,
 // so a shorter replacement is not left held.
 export function remeasureHeldVideoIfNeeded(video: {
@@ -161,5 +170,6 @@ export function remeasureHeldVideoIfNeeded(video: {
 	metadata: object | null;
 }): void {
 	const measure = readFreePlanMeasure(video.metadata);
-	if (measure) measureFreePlanObjectIfNeeded(video, measure.key);
+	if (measure && isMediaKey(measure.key))
+		measureFreePlanObjectIfNeeded(video, measure.key);
 }
