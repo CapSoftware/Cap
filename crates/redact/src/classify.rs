@@ -87,7 +87,7 @@ static DATE_LIKE: LazyLock<Regex> = LazyLock::new(|| {
         r"^(?:[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4})(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?$",
     )
 });
-/// A date anywhere in a run of digits (its digits are not a number's).
+/// A date in a run of digits: a run made only of dates is not a number.
 static DATE_IN_RUN: LazyLock<Regex> = LazyLock::new(|| {
     re(r"[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4}")
 });
@@ -576,7 +576,10 @@ fn cut_by_the_frame(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
             })
             .map(|date| date.as_str().chars().filter(char::is_ascii_digit).count())
             .sum::<usize>();
-        let digits = value.chars().filter(char::is_ascii_digit).count() - in_dates;
+        let digits = value.chars().filter(char::is_ascii_digit).count();
+        if digits > 0 && in_dates == digits {
+            continue;
+        }
         let token = value.len() >= 20
             && value.chars().any(|c| c.is_ascii_uppercase())
             && value.chars().any(|c| c.is_ascii_lowercase());

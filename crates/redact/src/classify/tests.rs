@@ -747,6 +747,10 @@ fn numbers_and_keys_cut_by_the_frame_edge_are_found() {
         found.iter().flatten().all(|f| f.category != Card),
         "{found:?}"
     );
+    let phone = [at("Tel 06-12-34-56", 0.8, 0.2)];
+    let own = phone.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&phone, own);
+    assert!(!found[0].is_empty(), "{found:?}");
     let inside = [at("Card 4242 4242 42", 0.5, 0.2)];
     let own = vec![classify_line(inside[0].text)];
     assert_eq!(
