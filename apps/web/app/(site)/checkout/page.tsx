@@ -17,6 +17,7 @@ import { customCheckoutEnabled } from "@/lib/checkout/enabled";
 import {
 	type CheckoutEnvironment,
 	isCheckoutPlan,
+	isYearlyOnlyPromotion,
 	parseCheckoutSeats,
 	parsePromotionCode,
 	planPriceId,
@@ -63,7 +64,12 @@ export default async function CheckoutPage(props: {
 	}
 
 	const requestedPlan = first(searchParams.plan);
-	const plan = isCheckoutPlan(requestedPlan) ? requestedPlan : "monthly";
+	const promo = parsePromotionCode(first(searchParams.promo));
+	const plan = isYearlyOnlyPromotion(promo)
+		? "yearly"
+		: isCheckoutPlan(requestedPlan)
+			? requestedPlan
+			: "monthly";
 	const onboarding = first(searchParams.onboarding) === "1" && Boolean(user);
 	const environment: CheckoutEnvironment =
 		serverEnv().VERCEL_ENV === "production" ? "production" : "development";
@@ -83,7 +89,7 @@ export default async function CheckoutPage(props: {
 			plan={plan}
 			seats={seats}
 			onboarding={onboarding}
-			promo={parsePromotionCode(first(searchParams.promo))}
+			promo={promo}
 			priceIds={{
 				monthly: planPriceId("monthly", environment),
 				yearly: planPriceId("yearly", environment),
