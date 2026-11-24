@@ -183,9 +183,10 @@ export function VerifyOTPForm({
 					</p>
 				) : (
 					<p className="text-sm text-gray-10">
-						Email (Resend) is not configured on this server. The 6-digit code
-						for {normalizedEmail} was printed to the server logs. Ask your
-						administrator, or set RESEND_API_KEY and RESEND_FROM_DOMAIN.
+						Email is not configured on this server. The 6-digit code for{" "}
+						{normalizedEmail} was printed to the server logs. Ask your
+						administrator, or configure SMTP (SMTP_HOST and SMTP_FROM) or Resend
+						(RESEND_API_KEY and RESEND_FROM_DOMAIN).
 					</p>
 				)}
 			</div>
