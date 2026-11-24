@@ -6,7 +6,7 @@
 //!
 //! While a scan runs, the chip's icon becomes a progress ring and the redact
 //! lane dims the part of the timeline not read yet, with a soft edge where
-//! the scan is reading. Both follow one eased progress value and repaint only
+//! the scan is reading. Both step with each progress update and repaint only
 //! the chip and the timeline overlay, never the whole editor.
 
 use super::*;
@@ -19,8 +19,6 @@ const CARD_DELAY: Duration = Duration::from_millis(350);
 const CARD_CLOSE_GRACE: Duration = Duration::from_millis(220);
 const CARD_WIDTH: f32 = 304.;
 const POLL: Duration = Duration::from_millis(250);
-/// How long the ring and the lane take to glide to a new progress value.
-const TWEEN: Duration = Duration::from_millis(450);
 /// How long the finished check stays in the chip before the icon returns.
 const FINISH_HOLD: Duration = Duration::from_millis(1600);
 /// How long the reading edge takes to fade once the scan is done.
@@ -28,38 +26,6 @@ const FINISH_FADE: Duration = Duration::from_millis(500);
 const RING: f32 = 14.;
 /// One spin of the ring while the model loads.
 const SPIN_SECONDS: f32 = 1.1;
-
-/// A progress value that glides to each new target instead of jumping.
-#[derive(Default, Clone, Copy)]
-pub(crate) struct Tween {
-    from: f32,
-    to: f32,
-    at: Option<Instant>,
-}
-
-impl Tween {
-    /// The value at `now`, and whether it is still moving.
-    pub(crate) fn value(&self, now: Instant) -> (f32, bool) {
-        let Some(at) = self.at else {
-            return (self.to, false);
-        };
-        let t = (now.saturating_duration_since(at).as_secs_f32() / TWEEN.as_secs_f32()).min(1.);
-        let eased = 1. - (1. - t).powi(3);
-        (self.from + (self.to - self.from) * eased, t < 1.)
-    }
-
-    pub(crate) fn set(&mut self, target: f32, now: Instant, instant: bool) {
-        if (target - self.to).abs() < 1e-4 {
-            return;
-        }
-        let (current, _) = self.value(now);
-        *self = Self {
-            from: current,
-            to: target,
-            at: (!instant).then_some(now),
-        };
-    }
-}
 
 #[derive(Default)]
 pub(crate) struct RedactUi {
@@ -75,8 +41,6 @@ pub(crate) struct RedactUi {
     pub(crate) redactions: Option<Arc<Redactions>>,
     loaded_for: Option<PathBuf>,
     highlighted: Vec<String>,
-    /// The progress the ring and the lane draw.
-    shown: Tween,
     /// When the scan the user watched finished, for the chip's check.
     finished_at: Option<Instant>,
     /// When the model started loading, for the ring's spin.
@@ -271,7 +235,7 @@ impl EditorWindow {
         let now = Instant::now();
         let still = cx.reduce_motion();
         if self.redact_scan_shown() {
-            let (shown, moving) = self.redact.shown.value(now);
+            let shown = self.redact.progress;
             let spin = match (&self.redact.phase, self.redact.preparing_since) {
                 (Some(JobPhase::Preparing), Some(since)) if !still => Some(
                     (now.saturating_duration_since(since).as_secs_f32() / SPIN_SECONDS).fract(),
@@ -279,7 +243,7 @@ impl EditorWindow {
                 (Some(JobPhase::Preparing), _) => Some(0.),
                 _ => None,
             };
-            if !still && (moving || spin.is_some()) {
+            if !still && spin.is_some() {
                 window.request_animation_frame();
             }
             return progress_ring(
@@ -417,8 +381,8 @@ impl EditorWindow {
         if !scanning && fading.is_none() {
             return None;
         }
-        let (shown, moving) = self.redact.shown.value(now);
-        if moving || fading.is_some() {
+        let shown = if scanning { self.redact.progress } else { 1. };
+        if fading.is_some() {
             window.request_animation_frame();
         }
         let instance = self.instance.as_ref()?;
@@ -654,7 +618,7 @@ impl EditorWindow {
                 }
             });
         let scanning = self.redact_scan_shown();
-        let (shown, _) = self.redact.shown.value(Instant::now());
+        let shown = self.redact.progress;
         let status: Option<AnyElement> = on.then(|| {
             let (text, fraction): (SharedString, Option<f32>) = match &self.redact.phase {
                 Some(JobPhase::Preparing) if scanning => {
@@ -1037,7 +1001,6 @@ impl EditorWindow {
         self.redact.phase = Some(JobPhase::Preparing);
         self.redact.preparing_since = Some(Instant::now());
         self.redact.progress = 0.0;
-        self.redact.shown = Tween::default();
         self.redact.finished_at = None;
         self.poll_redact(cx);
         if self.redact.job.is_some() {
@@ -1073,16 +1036,13 @@ impl EditorWindow {
         let phase_changed = self.redact.phase.as_ref() != Some(&update.phase);
         let progressed = (self.redact.progress - update.progress).abs() > 1e-4;
         let now = Instant::now();
-        let still = cx.reduce_motion();
         if phase_changed && update.phase == JobPhase::Scanning {
             self.redact.preparing_since = None;
         }
         self.redact.phase = Some(update.phase.clone());
         self.redact.progress = update.progress;
-        if running {
-            self.redact.shown.set(update.progress, now, still);
-        } else if update.phase == JobPhase::Done && was_shown {
-            self.redact.shown.set(1., now, still);
+        if update.phase == JobPhase::Done && was_shown {
+            self.redact.progress = 1.;
             self.redact.finished_at = Some(now);
         }
         if let Some(snapshot) = update.snapshot {
