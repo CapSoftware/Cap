@@ -2,7 +2,7 @@ import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { getNewVideoPublic } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
-import { dub } from "@cap/utils";
+import { dub, userIsPro } from "@cap/utils";
 import {
 	CurrentUser,
 	DatabaseError,
@@ -135,6 +135,37 @@ const nextObjectPage = (
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
+
+		const ownerOrOrganizationHasPro = (videoId: Video.VideoId) =>
+			Effect.gen(function* () {
+				const planFields = {
+					stripeSubscriptionStatus: Db.users.stripeSubscriptionStatus,
+					thirdPartyStripeSubscriptionId:
+						Db.users.thirdPartyStripeSubscriptionId,
+				};
+				const [owner] = yield* db.use((db) =>
+					db
+						.select(planFields)
+						.from(Db.videos)
+						.innerJoin(Db.users, Dz.eq(Db.users.id, Db.videos.ownerId))
+						.where(Dz.eq(Db.videos.id, videoId))
+						.limit(1),
+				);
+				if (userIsPro(owner)) return true;
+				const [organizationOwner] = yield* db.use((db) =>
+					db
+						.select(planFields)
+						.from(Db.videos)
+						.innerJoin(
+							Db.organizations,
+							Dz.eq(Db.organizations.id, Db.videos.orgId),
+						)
+						.innerJoin(Db.users, Dz.eq(Db.users.id, Db.organizations.ownerId))
+						.where(Dz.eq(Db.videos.id, videoId))
+						.limit(1),
+				);
+				return userIsPro(organizationOwner);
+			}).pipe(Effect.orElseSucceed(() => false));
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const storage = yield* StorageService;
@@ -582,6 +613,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					result.processingJobState === "queued" ||
 					result.processingJobState === "processing" ||
 					result.processingJobState === "retry";
+				const errorKind = automaticRetry
+					? undefined
+					: Video.getUploadProgressErrorKind(result.processingError);
+				const processingErrorKind =
+					errorKind === "upgrade-required" &&
+					(yield* ownerOrOrganizationHasPro(videoId))
+						? undefined
+						: errorKind;
 				return Option.some(
 					new Video.UploadProgress({
 						uploaded: result.uploaded,
@@ -592,9 +631,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						processingProgress: result.processingProgress,
 						processingMessage: Option.fromNullable(result.processingMessage),
 						processingError: Option.none(),
-						processingErrorKind: automaticRetry
-							? undefined
-							: Video.getUploadProgressErrorKind(result.processingError),
+						processingErrorKind,
 						hasRawFallback: result.rawFileKey != null,
 						automaticRetry,
 					}),
