@@ -70,6 +70,82 @@ fn main_surfaces_match_the_literals_they_replaced() {
         (tr::camera::blur::light(), "Light"),
         (tr::camera::blur::heavy(), "Heavy"),
         (tr::camera::blur::cutout(), "Cutout"),
+        (tr::camera::toolbar::close(), "Close camera"),
+        (tr::camera::toolbar::larger(), "Make larger"),
+        (tr::camera::toolbar::smaller(), "Make smaller"),
+        (
+            tr::camera::toolbar::size_body(),
+            "Or drag any corner to resize.",
+        ),
+        (tr::camera::toolbar::shape(), "Change shape"),
+        (
+            tr::camera::toolbar::shape_to_square(),
+            "Switch to a square.",
+        ),
+        (
+            tr::camera::toolbar::shape_to_full(),
+            "Switch to a rectangle that shows your whole camera.",
+        ),
+        (
+            tr::camera::toolbar::shape_to_round(),
+            "Switch back to a circle.",
+        ),
+        (tr::camera::toolbar::mirror(), "Mirror preview"),
+        (
+            tr::camera::toolbar::mirror_off(),
+            "Flip the preview like a mirror.",
+        ),
+        (
+            tr::camera::toolbar::mirror_on(),
+            "Mirrored now. Click to flip it back.",
+        ),
+        (tr::camera::toolbar::blur(), "Background blur"),
+        (
+            tr::camera::toolbar::blur_off(),
+            "Off. Click for a light blur.",
+        ),
+        (
+            tr::camera::toolbar::blur_light(),
+            "Light. Click for a heavier blur.",
+        ),
+        (
+            tr::camera::toolbar::blur_heavy_then_cutout(),
+            "Heavy. Click to remove the background.",
+        ),
+        (
+            tr::camera::toolbar::blur_heavy_then_off(),
+            "Heavy. Click to turn it off.",
+        ),
+        (
+            tr::camera::toolbar::blur_cutout(),
+            "Background removed. Click to turn it off.",
+        ),
+        (tr::camera::toolbar::picture(), "Use a picture"),
+        (
+            tr::camera::toolbar::picture_body(),
+            "Show a still picture instead of your camera.",
+        ),
+        (tr::camera::toolbar::change_picture(), "Change picture"),
+        (
+            tr::camera::toolbar::change_picture_body(),
+            "Choose another picture to show.",
+        ),
+        (tr::camera::toolbar::use_camera(), "Use your camera"),
+        (
+            tr::camera::toolbar::use_camera_body(),
+            "Show your camera again instead of the picture.",
+        ),
+        (tr::main::device::picture::label(), "Picture"),
+        (tr::main::device::picture::choose(), "Use a picture"),
+        (
+            tr::main::device::picture::detail(),
+            "Shows in place of a camera",
+        ),
+        (
+            tr::main::device::picture::change(),
+            "Choose another picture",
+        ),
+        (tr::main::device::picture::filter(), "Images"),
         (tr::main::target::display(), "Display"),
         (tr::main::target::window(), "Window"),
         (tr::main::target::area(), "Area"),

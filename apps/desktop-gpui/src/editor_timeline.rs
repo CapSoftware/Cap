@@ -1019,8 +1019,15 @@ pub fn waveform_sample_count(canvas_width: f64) -> usize {
     ((canvas_width * WAVEFORM_SAMPLES_PER_PIXEL).ceil() as usize).min(MAX_WAVEFORM_SAMPLES)
 }
 
-pub fn waveform_color(_color: Hsla) -> Hsla {
-    gpui::hsla(0., 0., 1., 0.42)
+/// A deep shade of the track colour: it sits on the lit bottom of the fill,
+/// so a darker shape reads as the sound's outline where a pale one washed
+/// the segment out.
+pub fn waveform_color(color: Hsla) -> Hsla {
+    Hsla {
+        l: color.l * 0.5,
+        a: 0.6,
+        ..color
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,7 +1213,7 @@ pub struct TrackLanes {
 }
 
 pub(crate) fn scene_available(config: &ProjectConfiguration, has_camera: bool) -> bool {
-    has_camera
+    (has_camera || config.camera_picture.is_some())
         && (config.requires_camera()
             || config
                 .timeline
@@ -3191,10 +3198,19 @@ fn render_empty_prompt(
         .gap(px(5.))
         .px(px(10.))
         .rounded(px(SEGMENT_RADIUS))
-        .when(active, |this| this.bg(seg_fill(theme, color)))
+        // While the lane waits on a pick it is lit as the target: a wash of
+        // the track colour inside a dashed ring, the copy still in the
+        // window's own text colours so it reads on either theme.
+        .when(active, |this| {
+            let dark = theme.is_dark();
+            this.bg(color.opacity(if dark { 0.16 } else { 0.1 }))
+                .border_1()
+                .border_dashed()
+                .border_color(color.opacity(if dark { 0.6 } else { 0.5 }))
+        })
         .text_size(px(12.))
         .line_height(px(16.))
-        .text_color(Hsla::from(if hovered {
+        .text_color(Hsla::from(if hovered || active {
             theme.editor.text_2
         } else {
             theme.editor.text_3
@@ -3211,7 +3227,11 @@ fn render_empty_prompt(
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(Hsla::from(theme.editor.text_2))
+                        .text_color(Hsla::from(if active {
+                            theme.editor.text_1
+                        } else {
+                            theme.editor.text_2
+                        }))
                         .child(action),
                 )
         }))
@@ -4662,7 +4682,7 @@ fn label_body(
             })
             .child(
                 label_primary(theme, color)
-                    .when(*bold, |this| this.font_weight(FontWeight::BOLD))
+                    .when(*bold, |this| this.font_weight(FontWeight::SEMIBOLD))
                     .when(*italic, |this| this.italic())
                     .child(content.clone()),
             )
@@ -4699,9 +4719,20 @@ fn label_body(
                     .path(shape_kind_icon(*kind))
                     .size(px(12.))
                     .flex_none()
-                    .text_color(*swatch),
+                    .text_color(seg_label(theme, color)),
             )
             .child(label_primary(theme, color).child(shape_kind_label(*kind)))
+            // The shape's own colour, ringed so a dark or track-coloured
+            // swatch still shows on the fill.
+            .child(
+                div()
+                    .size(px(9.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(*swatch)
+                    .border_1()
+                    .border_color(seg_label(theme, color).opacity(0.85)),
+            )
             .into_any_element(),
         (SegmentDetail::Shape { kind, .. }, LabelTier::Glyph) => label_glyph(
             theme,

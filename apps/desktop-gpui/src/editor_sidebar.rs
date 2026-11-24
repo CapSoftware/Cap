@@ -2769,7 +2769,8 @@ impl EditorWindow {
             .into_iter()
             .map(|tab| {
                 // Camera and Cursor stay reachable without their data; the tab
-                // explains what is missing instead of refusing the click.
+                // explains what is missing, or offers a picture in place of a
+                // camera, instead of refusing the click.
                 let disabled = false;
                 // While a selection panel is up the rail shows no selected
                 // item at all: `KTabs`'s value is forced to `undefined` and
