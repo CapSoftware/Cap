@@ -211,7 +211,76 @@ static ADDRESS_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
 /// rules tolerate the usual confusions (O for 0, l for 1) in digit runs.
 pub fn classify_line(text: &str) -> Vec<Finding> {
     let findings = classify_raw(text);
-    glue_split_tokens(text, findings)
+    let findings = glue_split_tokens(text, findings);
+    widen(text, findings)
+}
+
+/// Capitalised words that stand next to names without being part of them.
+const NOT_NAMES: [&str; 16] = [
+    "hi", "hello", "hey", "dear", "thanks", "from", "to", "cc", "bcc", "by", "with", "for", "the",
+    "and", "mr", "ms",
+];
+
+/// Grows every finding to whole tokens, and a name over the capitalised
+/// words and initials right next to it ("Chong" in "Chong Casper" when only
+/// the surname is a known name), so a mask never stops inside a word.
+fn widen(text: &str, findings: Vec<Finding>) -> Vec<Finding> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let word_at = |start: usize| {
+        let end = (start..chars.len())
+            .find(|i| chars[*i].is_whitespace())
+            .unwrap_or(chars.len());
+        (start, end)
+    };
+    let name_like = |(start, end): (usize, usize)| {
+        let word = &chars[start..end];
+        let lower = word.iter().collect::<String>().to_lowercase();
+        let lower = lower.trim_end_matches([',', ':', '.']);
+        !NOT_NAMES.contains(&lower)
+            && word.first().is_some_and(|c| c.is_uppercase())
+            && word
+                .iter()
+                .all(|c| c.is_alphabetic() || matches!(c, '.' | '\'' | '-'))
+    };
+    let widened = findings
+        .into_iter()
+        .map(|mut f| {
+            while f.start > 0 && chars[f.start - 1].is_alphanumeric() {
+                f.start -= 1;
+            }
+            while f.end < chars.len() && chars[f.end].is_alphanumeric() {
+                f.end += 1;
+            }
+            if f.category == RedactCategory::Name {
+                for _ in 0..2 {
+                    let before = (0..f.start).rev().find(|i| !chars[*i].is_whitespace());
+                    let Some(last) = before else { break };
+                    let first = (0..=last)
+                        .rev()
+                        .take_while(|i| !chars[*i].is_whitespace())
+                        .last()
+                        .unwrap_or(last);
+                    if !name_like((first, last + 1)) {
+                        break;
+                    }
+                    f.start = first;
+                }
+                for _ in 0..2 {
+                    let Some(next) = (f.end..chars.len()).find(|i| !chars[*i].is_whitespace())
+                    else {
+                        break;
+                    };
+                    let word = word_at(next);
+                    if !name_like(word) {
+                        break;
+                    }
+                    f.end = word.1;
+                }
+            }
+            f
+        })
+        .collect();
+    resolve_overlaps(widened)
 }
 
 /// Categories whose patterns are strict enough (checksums, fixed shapes) to

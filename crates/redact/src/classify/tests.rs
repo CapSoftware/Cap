@@ -624,3 +624,55 @@ fn an_unspaced_iban_with_a_letter_digits_look_like_is_found() {
         "{found:?}"
     );
 }
+
+#[test]
+fn findings_cover_whole_words_and_whole_names() {
+    let text = "Chong Casper replied to jane.doe@exam";
+    let found = widen(
+        text,
+        vec![
+            Finding {
+                category: Name,
+                start: 6,
+                end: 12,
+            },
+            Finding {
+                category: Email,
+                start: 25,
+                end: 33,
+            },
+        ],
+    );
+    assert!(
+        found.contains(&Finding {
+            category: Name,
+            start: 0,
+            end: 12
+        }),
+        "{found:?}"
+    );
+    assert!(
+        found.contains(&Finding {
+            category: Email,
+            start: 24,
+            end: 37
+        }),
+        "{found:?}"
+    );
+    let greeting = widen(
+        "Hi Shelly,",
+        vec![Finding {
+            category: Name,
+            start: 3,
+            end: 9,
+        }],
+    );
+    assert_eq!(
+        greeting,
+        vec![Finding {
+            category: Name,
+            start: 3,
+            end: 9
+        }]
+    );
+}
