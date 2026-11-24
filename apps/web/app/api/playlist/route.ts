@@ -17,6 +17,7 @@ import {
 } from "@effect/platform";
 import { eq } from "drizzle-orm";
 import { Effect, Layer, Option, Schema } from "effect";
+import { declaredPlaylistSeconds } from "@/lib/free-plan-declared-length";
 import { exceedsFreePlanMeasuredDuration } from "@/lib/free-plan-duration";
 import {
 	isVideoOverFreePlanDuration,
@@ -301,13 +302,6 @@ const holdDeclaredOverLength = (
 		);
 		if (held) return yield* Effect.fail(new HttpApiError.Forbidden());
 	});
-
-const declaredPlaylistSeconds = (text: string) =>
-	text.split("\n").reduce((total, line) => {
-		const match = /^#EXTINF:\s*([0-9.]+)/.exec(line.trim());
-		const seconds = match ? Number(match[1]) : 0;
-		return Number.isFinite(seconds) ? total + seconds : total;
-	}, 0);
 
 const getPlaylistResponse = (
 	video: Video.Video,

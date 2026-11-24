@@ -14,7 +14,11 @@ import { CurrentUser, Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
-import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
+import { readDeclaredLength } from "@/lib/free-plan-declared-length";
+import {
+	isVideoOverFreePlanDuration,
+	recordFreePlanOverLength,
+} from "@/lib/free-plan-measure";
 import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import { runPromise } from "@/lib/server";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
@@ -174,6 +178,34 @@ const isPlayableMediaKey = (key: string) =>
 
 const isWholeVideoKey = (key: string) => /\.(mp4|m4v|mov|webm|mkv)$/i.test(key);
 
+const DECLARED_LENGTH_CACHE_MS = 30_000;
+const MAX_DECLARED_LENGTH_ENTRIES = 5_000;
+const declaredHolds = new Map<string, { held: boolean; until: number }>();
+
+// Segments and playlists are read many times per view, so the length their
+// playlist declares is checked at most every 30 s per video.
+async function isHeldByDeclaredLength(
+	video: {
+		id: Video.VideoId;
+		ownerId: string;
+		source: { type: string };
+	},
+	getObject: (key: string) => Promise<string | null>,
+): Promise<boolean> {
+	const cached = declaredHolds.get(video.id);
+	if (cached && cached.until > Date.now()) return cached.held;
+	const declared = await readDeclaredLength(video, getObject);
+	const held =
+		declared !== null &&
+		(await recordFreePlanOverLength(video.id, declared.key, declared.seconds));
+	if (declaredHolds.size >= MAX_DECLARED_LENGTH_ENTRIES) declaredHolds.clear();
+	declaredHolds.set(video.id, {
+		held,
+		until: Date.now() + DECLARED_LENGTH_CACHE_MS,
+	});
+	return held;
+}
+
 export async function GET(request: NextRequest) {
 	const internalDownload =
 		request.headers.get("x-cap-internal-download") === "1";
@@ -234,6 +266,7 @@ export async function GET(request: NextRequest) {
 			return yield* Effect.fail("not-found" as const);
 		}
 
+		const [storage] = yield* Storage.getAccessForVideo(video);
 		const internalRead =
 			internalDownload || (hasKeyToken && tokenPayload?.internal === true);
 		if (!internalRead && isPlayableMediaKey(key)) {
@@ -253,8 +286,14 @@ export async function GET(request: NextRequest) {
 						})
 					)
 						return "held";
-					return isWholeVideoKey(key)
-						? firstViewDecision(freePlanVideo, key)
+					if (isWholeVideoKey(key))
+						return firstViewDecision(freePlanVideo, key);
+					return (await isHeldByDeclaredLength(video, (objectKey) =>
+						runPromise(
+							storage.getObject(objectKey).pipe(Effect.map(Option.getOrNull)),
+						),
+					))
+						? "held"
 						: "play";
 				}).pipe(Effect.orElseSucceed(() => "play" as const));
 				if (decision !== "play")
@@ -262,7 +301,6 @@ export async function GET(request: NextRequest) {
 			}
 		}
 
-		const [storage] = yield* Storage.getAccessForVideo(video);
 		if (!("getObjectResponse" in storage)) {
 			const url = downloadName
 				? yield* storage.getSignedDownloadUrl(key, downloadName)
