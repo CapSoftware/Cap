@@ -52,6 +52,12 @@ const MAX_TRACKED_VIDEOS = 5_000;
 const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
 const probedFiles = new Map<string, { keys: Set<string>; until: number }>();
 
+const RAW_UPLOAD_NAMES = new Set(
+	["mp4", "webm", "mov", "m4v", "mkv"].map(
+		(extension) => `raw-upload.${extension}`,
+	),
+);
+
 // The files a video itself plays: its MP4 output and its raw upload.
 function isVideosOwnFile(
 	video: typeof videos.$inferSelect,
@@ -60,7 +66,7 @@ function isVideosOwnFile(
 	const prefix = `${video.ownerId}/${video.id}/`;
 	return (
 		key === `${prefix}result.mp4` ||
-		key.startsWith(`${prefix}raw-upload.`) ||
+		RAW_UPLOAD_NAMES.has(key.slice(prefix.length)) ||
 		("outputKey" in video.source && key === video.source.outputKey)
 	);
 }
