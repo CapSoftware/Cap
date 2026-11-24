@@ -49,7 +49,16 @@ const MAX_FILES_PER_VIDEO = 4;
 const FILES_PER_VIDEO_WINDOW_MS = 10 * 60_000;
 const MAX_TRACKED_VIDEOS = 5_000;
 
+// A file measured in the last 30 s is not probed again, so asking for a
+// video's files in turn cannot make each request a probe. Thirty seconds is
+// also how soon a replacement upload is measured again.
+const MEASURED_FILE_TTL_MS = 30_000;
+
 const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
+const measuredFiles = new Map<
+	string,
+	{ outcome: FreePlanMeasureOutcome; until: number }
+>();
 const probedFiles = new Map<string, { keys: Set<string>; until: number }>();
 
 const RAW_UPLOAD_NAMES = new Set(
@@ -133,6 +142,9 @@ export function measureFreePlanObject(
 	{ anyAge = false }: { anyAge?: boolean } = {},
 ): Promise<FreePlanMeasureOutcome> {
 	const id = objectKey(videoId, key);
+	const measured = measuredFiles.get(id);
+	if (measured && measured.until > Date.now())
+		return Promise.resolve(measured.outcome);
 	const current = inFlight.get(id);
 	if (current) return current;
 	if ((unavailableUntil.get(id) ?? 0) > Date.now())
@@ -177,6 +189,11 @@ async function measureNow(
 		if (outcome.seconds === null && existing && measureHoldsVideo(existing))
 			return { kind: "measured", seconds: existing.seconds };
 		await recordFreePlanMeasure(videoId, key, outcome.seconds);
+		if (measuredFiles.size >= MAX_TRACKED_VIDEOS) measuredFiles.clear();
+		measuredFiles.set(id, {
+			outcome,
+			until: Date.now() + MEASURED_FILE_TTL_MS,
+		});
 		return outcome;
 	} catch (error) {
 		console.error(
