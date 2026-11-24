@@ -1753,6 +1753,7 @@ export const useStudioRecorder = ({
 					(type) => MediaRecorder.isTypeSupported(type),
 					qualityBitrateScale(quality),
 					recordingMode === "camera" ? "camera" : "screen",
+					pipeline.mode,
 				),
 			);
 			let cameraRecorder: MediaRecorder | null = null;
@@ -1768,6 +1769,7 @@ export const useStudioRecorder = ({
 						(type) => MediaRecorder.isTypeSupported(type),
 						qualityBitrateScale(quality),
 						"cameraOverlay",
+						cameraPipeline.mode,
 					),
 				);
 				cameraRecorder.addEventListener("dataavailable", (event) => {

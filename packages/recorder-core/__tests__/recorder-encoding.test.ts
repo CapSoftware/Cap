@@ -50,6 +50,22 @@ describe("recorderOptions", () => {
 		).toBe(5_600_000);
 	});
 
+	it("asks Chromium's MP4 encoder for less above 30 fps, since it overspends", () => {
+		const at = (frameRate: number, mode?: "streaming-mp4" | "buffered-raw") =>
+			recorderOptions(
+				'video/mp4;codecs="avc1.64002A"',
+				track({ width: 1920, height: 1080, frameRate }),
+				() => true,
+				1,
+				"screen",
+				mode,
+			).videoBitsPerSecond;
+		expect(at(60, "streaming-mp4")).toBe(3_000_000);
+		expect(at(30, "streaming-mp4")).toBe(4_000_000);
+		expect(at(60, "buffered-raw")).toBe(6_000_000);
+		expect(at(60)).toBe(6_000_000);
+	});
+
 	it("gives VP8 camera recordings more bits than H.264", () => {
 		expect(
 			recorderOptions(

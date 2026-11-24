@@ -1,3 +1,5 @@
+import type { RecordingPipeline } from "./recorder-utils";
+
 const MAX_LEVEL_4_2_WIDTH = 2048;
 const MAX_LEVEL_4_2_HEIGHT = 1088;
 const MAX_LEVEL_5_1_WIDTH = 4096;
@@ -45,6 +47,11 @@ const BITRATES: Record<RecordingContent, readonly number[]> = {
 // hold the same quality on camera footage.
 const VP8_BITRATE_SCALE = 1.3;
 
+const HIGH_FRAME_RATE_SCALE = 1.5;
+// Chromium's MP4 encoder spends about twice its target above 30 fps, so asking
+// for 0.75x lands near the intended 1.5x of the 30 fps rate.
+const CHROMIUM_MP4_HIGH_FRAME_RATE_SCALE = 0.75;
+
 // Chrome's MediaRecorder defaults to about 2.5 Mb/s, which smears text in
 // screen recordings.
 export function recordingBitrate(
@@ -52,6 +59,7 @@ export function recordingBitrate(
 	height: number | undefined,
 	frameRate: number | undefined,
 	content: RecordingContent = "screen",
+	highFrameRateScale = HIGH_FRAME_RATE_SCALE,
 ) {
 	const pixels = (width ?? 1920) * (height ?? 1080);
 	const [hd, fullHd, qhd, uhd] = BITRATES[content];
@@ -63,7 +71,7 @@ export function recordingBitrate(
 				: pixels <= 2560 * 1600
 					? qhd
 					: uhd;
-	return (frameRate ?? 30) > 40 ? Math.round(base * 1.5) : base;
+	return (frameRate ?? 30) > 40 ? Math.round(base * highFrameRateScale) : base;
 }
 
 type RecorderOptions = MediaRecorderOptions & {
@@ -76,6 +84,7 @@ export function recorderOptions(
 	isSupported: (type: string) => boolean,
 	bitrateScale = 1,
 	content: RecordingContent = "screen",
+	mode?: RecordingPipeline["mode"],
 ): RecorderOptions {
 	const settings = track?.getSettings?.() ?? {};
 	const options: RecorderOptions = {
@@ -86,6 +95,9 @@ export function recorderOptions(
 				settings.height,
 				settings.frameRate,
 				content,
+				mode === "streaming-mp4"
+					? CHROMIUM_MP4_HIGH_FRAME_RATE_SCALE
+					: HIGH_FRAME_RATE_SCALE,
 			) *
 				bitrateScale *
 				(/vp8/i.test(mimeType) ? VP8_BITRATE_SCALE : 1),
