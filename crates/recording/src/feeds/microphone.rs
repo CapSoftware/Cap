@@ -1167,6 +1167,19 @@ fn alsa_card_names() -> Vec<String> {
     names
 }
 
+/// The sound server's input that records the microphone selected as `label`,
+/// when ALSA would open that selection on the bare sound card (see
+/// [`crate::sources::screen_capture::microphone_input_device`]). Its formats
+/// are the ones the recording gets, and probing the card instead fails while
+/// the server holds it.
+#[cfg(target_os = "linux")]
+fn sound_server_input(host: &cpal::Host, label: &str) -> Option<Device> {
+    let input = crate::sources::screen_capture::microphone_input_device(label)?;
+    host.input_devices()
+        .ok()?
+        .find(|device| device.name().is_ok_and(|name| name == input))
+}
+
 #[cfg(not(target_os = "macos"))]
 fn list_input_device_names() -> Vec<String> {
     let host = cpal::default_host();
@@ -1235,6 +1248,12 @@ impl MicrophoneFeed {
 
     pub fn default_device() -> Option<(String, Device, SupportedStreamConfig)> {
         let host = cpal::default_host();
+        #[cfg(target_os = "linux")]
+        if let Some((_, device, config)) =
+            sound_server_input(&host, "default").and_then(|device| get_usable_device(device, None))
+        {
+            return Some(("default".to_string(), device, config));
+        }
         host.default_input_device()
             .and_then(|device| get_usable_device(device, None))
     }
@@ -1267,17 +1286,27 @@ impl MicrophoneFeed {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
-        if let Some((name, device, config)) = host
-            .default_input_device()
+        #[cfg(target_os = "linux")]
+        if let Some((_, device, config)) = sound_server_input(&host, "default")
             .and_then(|device| get_usable_device(device, settings))
+        {
+            device_map.insert("default".to_string(), (device, config));
+        }
+        if !device_map.contains_key("default")
+            && let Some((name, device, config)) = host
+                .default_input_device()
+                .and_then(|device| get_usable_device(device, settings))
         {
             device_map.insert(name, (device, config));
         }
 
         match host.input_devices() {
             Ok(devices) => {
-                for (name, device, config) in
-                    devices.filter_map(|device| get_usable_device(device, settings))
+                // The default is already listed: probing it again only reopens it.
+                let listed = device_map.keys().cloned().collect::<Vec<_>>();
+                for (name, device, config) in devices
+                    .filter(|device| !device.name().is_ok_and(|name| listed.contains(&name)))
+                    .filter_map(|device| get_usable_device(device, settings))
                 {
                     device_map.entry(name).or_insert((device, config));
                 }
@@ -1298,6 +1327,10 @@ impl MicrophoneFeed {
         let configure = |device| {
             get_usable_device(device, settings).map(|(_, device, config)| (device, config))
         };
+        #[cfg(target_os = "linux")]
+        if let Some(device) = sound_server_input(&host, label).and_then(configure) {
+            return Some(device);
+        }
         if let Some(device) = configure_named_device(
             host.default_input_device(),
             label,
