@@ -55,6 +55,12 @@ const MAX_TRACKED_VIDEOS = 5_000;
 const MEASURED_FILE_TTL_MS = 30_000;
 
 const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
+// The outcome for the exact object an upload last completed, so completing the
+// same upload again reuses it instead of probing.
+const measuredIdentities = new Map<
+	string,
+	{ identity: string; outcome: FreePlanMeasureOutcome }
+>();
 const measuredFiles = new Map<
 	string,
 	{ outcome: FreePlanMeasureOutcome; until: number }
@@ -141,9 +147,16 @@ async function probeStoredObject(
 export function measureFreePlanObject(
 	videoId: Video.VideoId,
 	key: string,
-	{ anyAge = false, fresh = false }: { anyAge?: boolean; fresh?: boolean } = {},
+	{
+		anyAge = false,
+		fresh = false,
+		identity,
+	}: { anyAge?: boolean; fresh?: boolean; identity?: string | null } = {},
 ): Promise<FreePlanMeasureOutcome> {
 	const id = objectKey(videoId, key);
+	const known = identity ? measuredIdentities.get(id) : undefined;
+	if (known && known.identity === identity)
+		return Promise.resolve(known.outcome);
 	const previous = inFlight.get(id);
 	if (fresh) {
 		measuredFiles.delete(id);
@@ -168,6 +181,14 @@ export function measureFreePlanObject(
 			: Promise.resolve()
 	)
 		.then(() => withMeasurementSlot(() => measureNow(videoId, key, anyAge)))
+		.then((outcome) => {
+			if (identity && outcome.kind === "measured") {
+				if (measuredIdentities.size >= MAX_TRACKED_VIDEOS)
+					measuredIdentities.clear();
+				measuredIdentities.set(id, { identity, outcome });
+			}
+			return outcome;
+		})
 		.finally(() => {
 			if (inFlight.get(id) === measurement) inFlight.delete(id);
 		});

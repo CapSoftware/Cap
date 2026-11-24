@@ -700,6 +700,7 @@ app.post(
 						measureFreePlanObject(videoId, outputKey, {
 							anyAge: true,
 							fresh: true,
+							identity: head.ETag,
 						}),
 					);
 					return c.json({
@@ -894,6 +895,7 @@ app.post(
 							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
 								anyAge: true,
 								fresh: true,
+								identity: objectIdentity,
 							}),
 						);
 
@@ -1077,6 +1079,7 @@ app.post(
 							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
 								anyAge: true,
 								fresh: true,
+								identity: objectIdentity,
 							}),
 						);
 
