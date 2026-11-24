@@ -123,7 +123,8 @@ fn audio_follows_confirmed_route(
 /// anchor once a whole window of arrivals agrees. Arrivals are first
 /// corrected by how much the capture delay the device reports has grown
 /// since the stream started, so the server buffering more is not mistaken
-/// for lost frames.
+/// for lost frames. The baseline is the smallest delay seen, so a held-back
+/// first callback cannot offset the whole track.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 struct SteadyDeliveryClock {
@@ -132,7 +133,7 @@ struct SteadyDeliveryClock {
     frames: u64,
     window_started: Option<Instant>,
     window_min_lag: Option<Duration>,
-    first_delay: Option<Duration>,
+    min_delay: Option<Duration>,
 }
 
 #[cfg(target_os = "linux")]
@@ -142,7 +143,7 @@ impl SteadyDeliveryClock {
     /// buffers; an arrival this much later means frames were lost.
     const LOSS: Duration = Duration::from_millis(150);
 
-    /// Reported delays that move further than this from the first are not trusted.
+    /// Reported delays further than this above the smallest are not trusted.
     const MAX_DELAY_CHANGE: Duration = Duration::from_secs(1);
 
     fn timestamp(
@@ -173,10 +174,11 @@ impl SteadyDeliveryClock {
         let predicted = anchor + delivered;
         if received < predicted {
             // Arrivals are never early, so this one shows the anchor was late.
-            self.anchor = Some(anchor.checked_sub(predicted - received).unwrap_or(anchor));
+            let early = predicted.saturating_duration_since(received);
+            self.anchor = Some(anchor.checked_sub(early).unwrap_or(anchor));
             return Timestamp::Instant(received);
         }
-        let lag = received - predicted;
+        let lag = received.saturating_duration_since(predicted);
         if lag > Self::LOSS {
             self.anchor = Some(anchor + lag);
             self.window_started = Some(received);
@@ -203,16 +205,13 @@ impl SteadyDeliveryClock {
         let Some(delay) = delay else {
             return received;
         };
-        let first = *self.first_delay.get_or_insert(delay);
-        if delay >= first {
-            let grown = delay - first;
-            if grown <= Self::MAX_DELAY_CHANGE {
-                return received.checked_sub(grown).unwrap_or(received);
-            }
-        } else if first - delay <= Self::MAX_DELAY_CHANGE {
-            return received + (first - delay);
+        let min = self.min_delay.map_or(delay, |min| min.min(delay));
+        self.min_delay = Some(min);
+        let grown = delay.saturating_sub(min);
+        if grown > Self::MAX_DELAY_CHANGE {
+            return received;
         }
-        received
+        received.checked_sub(grown).unwrap_or(received)
     }
 }
 
@@ -5685,6 +5684,27 @@ mod steady_delivery_clock_tests {
         let _ = clock.timestamp(start, None, FRAMES, RATE);
         let later = start + Duration::from_secs(5);
         assert_eq!(instant(clock.timestamp(later, None, 960, 48_000)), later);
+    }
+
+    #[test]
+    fn a_held_back_first_callback_does_not_offset_the_track() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let delay = Duration::from_millis(40);
+        let held = Duration::from_millis(75);
+        let mut last_off = Duration::ZERO;
+        for buffer in 1..=200u32 {
+            let (late, reported) = if buffer == 1 {
+                (held, delay + held)
+            } else {
+                (Duration::ZERO, delay)
+            };
+            let received = start + period() * buffer + late;
+            let stamped = instant(clock.timestamp(received, Some(reported), FRAMES, RATE));
+            let on_time = start + period() * buffer;
+            last_off = on_time.max(stamped) - on_time.min(stamped);
+        }
+        assert!(last_off < Duration::from_millis(1), "{last_off:?}");
     }
 
     #[test]
