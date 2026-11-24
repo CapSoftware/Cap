@@ -1555,6 +1555,35 @@ fn a_question_mid_call_on_a_paid_plan_is_not_held(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_free_meeting_out_of_questions_offers_pro_not_ask_now(cx: &mut TestAppContext) {
+    use crate::{i18n::tr, meetings::AiAccess};
+    let (ask, cx) = ask_panel(cx);
+    let upgrade = (
+        tr::cap_ai::ask::locked_upgrade(),
+        Some(tr::cap_ai::card::get_pro()),
+    );
+    for access in [AiAccess::Trial { remaining: 2 }, AiAccess::NeedsUpgrade] {
+        ask.update(cx, |a, cx| {
+            a.set_doc(Some(format!("doc-{access:?}")), cx);
+            a.set_access(access, true, false, cx);
+            a.refused_by_server("Who takes the Friday call?");
+        });
+        assert_eq!(
+            ask.read_with(cx, |a, _| a.held_copy()),
+            vec![upgrade],
+            "{access:?}: notes written and still refused, so the free questions are used"
+        );
+    }
+
+    ask.update(cx, |a, cx| a.set_access(AiAccess::Ready, true, false, cx));
+    assert_eq!(
+        ask.read_with(cx, |a, _| a.held_copy()),
+        vec![(tr::cap_ai::ask::ready(), Some(tr::cap_ai::ask::send_now()))],
+        "after Cap Pro the question can be sent"
+    );
+}
+
+#[gpui::test]
 fn a_used_up_trial_is_still_offered_pro(cx: &mut TestAppContext) {
     use crate::{i18n::tr, meetings::AiAccess};
     let (ask, cx) = ask_panel(cx);
