@@ -1,10 +1,10 @@
 import { db } from "@cap/database";
 import { importedVideos, videos } from "@cap/database/schema";
-import { buildEnv, serverEnv } from "@cap/env";
-import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
+import { buildEnv } from "@cap/env";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import {
+	desktopLimitAppliesTo,
 	exceedsFreePlanMeasuredDuration,
 	FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM,
 	ownerOrOrganizationHasPro,
@@ -76,25 +76,6 @@ export function needsFreePlanMeasure(
 	const measuredAt = Date.parse(measure.at);
 	if (Number.isNaN(measuredAt)) return true;
 	return measuredAt <= openUntil && now - measuredAt >= REMEASURE_INTERVAL_MS;
-}
-
-// Recordings published by the desktop recording pipeline are only held once
-// the desktop release that stops free recordings at the limit is out, and
-// never ones made before it. Anything else, including other desktop uploads,
-// is held as soon as it is measured.
-function desktopLimitAppliesTo(video: {
-	id: string;
-	ownerId: string;
-	source: { type: string; outputKey?: string };
-	createdAt: Date;
-}): boolean {
-	const fromRecordingPipeline =
-		video.source.type === "desktopSegments" ||
-		(video.source.type === "desktopMP4" &&
-			getPublishedRecordingOutputKey(video) !== undefined);
-	if (!fromRecordingPipeline) return true;
-	const from = serverEnv().CAP_FREE_PLAN_DESKTOP_LIMIT_FROM;
-	return from !== undefined && video.createdAt >= new Date(from);
 }
 
 async function desktopLimitApplies(videoId: Video.VideoId): Promise<boolean> {

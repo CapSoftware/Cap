@@ -5,7 +5,8 @@ import {
 	users,
 	videoUploads,
 } from "@cap/database/schema";
-import { buildEnv } from "@cap/env";
+import { buildEnv, serverEnv } from "@cap/env";
+import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
 import { type Organisation, type User, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 
@@ -120,6 +121,25 @@ export async function getFreePlanRecordingLimit(
 	return Video.FREE_PLAN_MAX_RECORDING_SECONDS;
 }
 
+// Recordings published by the desktop recording pipeline are only held once
+// the desktop release that stops free recordings at the limit is out, and
+// never ones made before it. Anything else, including other desktop uploads,
+// is held as soon as it is measured.
+export function desktopLimitAppliesTo(video: {
+	id: string;
+	ownerId: string;
+	source: { type: string; outputKey?: string };
+	createdAt: Date;
+}): boolean {
+	const fromRecordingPipeline =
+		video.source.type === "desktopSegments" ||
+		(video.source.type === "desktopMP4" &&
+			getPublishedRecordingOutputKey(video) !== undefined);
+	if (!fromRecordingPipeline) return true;
+	const from = serverEnv().CAP_FREE_PLAN_DESKTOP_LIMIT_FROM;
+	return from !== undefined && video.createdAt >= new Date(from);
+}
+
 // An upload started on or after this date is new content, even for an
 // older video.
 async function hasUploadSince(
@@ -142,10 +162,15 @@ export async function getFreePlanDurationLimit(video: {
 	id: Video.VideoId;
 	ownerId: User.UserId;
 	orgId: Organisation.OrganisationId;
+	source: { type: string; outputKey?: string };
 	createdAt: Date;
 	metadata?: { loomDeferredProcessing?: unknown } | null;
 }): Promise<number | null> {
-	if (!buildEnv.NEXT_PUBLIC_IS_CAP || video.metadata?.loomDeferredProcessing)
+	if (
+		!buildEnv.NEXT_PUBLIC_IS_CAP ||
+		video.metadata?.loomDeferredProcessing ||
+		!desktopLimitAppliesTo(video)
+	)
 		return null;
 	if (
 		video.createdAt < FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM &&

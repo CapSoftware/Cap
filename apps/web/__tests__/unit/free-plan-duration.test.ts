@@ -2,12 +2,18 @@ import type { Organisation, User, Video } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	serverEnv: {
+		CAP_FREE_PLAN_DESKTOP_LIMIT_FROM: undefined as string | undefined,
+	},
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" as string | undefined },
 	rows: [] as unknown[][],
 	queries: 0,
 }));
 
-vi.mock("@cap/env", () => ({ buildEnv: mocks.buildEnv }));
+vi.mock("@cap/env", () => ({
+	buildEnv: mocks.buildEnv,
+	serverEnv: () => mocks.serverEnv,
+}));
 vi.mock("@cap/database", () => {
 	const query = {
 		from: () => query,
@@ -149,6 +155,23 @@ describe("free plan measured duration", () => {
 		await expect(
 			getFreePlanDurationLimit(video({ source: { type: "desktopMP4" } })),
 		).resolves.toBe(330);
+	});
+
+	it("limits desktop pipeline recordings only from the desktop limit date", async () => {
+		const pipeline = video({ source: { type: "desktopSegments" } });
+		await expect(getFreePlanDurationLimit(pipeline)).resolves.toBeNull();
+		expect(mocks.queries).toBe(0);
+
+		mocks.serverEnv.CAP_FREE_PLAN_DESKTOP_LIMIT_FROM = new Date(
+			pipeline.createdAt.getTime() + 1,
+		).toISOString();
+		await expect(getFreePlanDurationLimit(pipeline)).resolves.toBeNull();
+
+		mocks.serverEnv.CAP_FREE_PLAN_DESKTOP_LIMIT_FROM =
+			pipeline.createdAt.toISOString();
+		mocks.rows = [[free], [free], []];
+		await expect(getFreePlanDurationLimit(pipeline)).resolves.toBe(330);
+		mocks.serverEnv.CAP_FREE_PLAN_DESKTOP_LIMIT_FROM = undefined;
 	});
 
 	it("leaves an older video alone unless its upload is new", async () => {
