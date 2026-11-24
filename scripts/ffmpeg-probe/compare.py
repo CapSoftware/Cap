@@ -8,6 +8,7 @@ encoder) pass if head matches base on stream layout and frame count instead.
 
 import json
 import os
+import re
 import sys
 
 root, base_label, head_label = sys.argv[1:4]
@@ -38,11 +39,21 @@ def same(a, b):
     return None
 
 
+THUMBNAIL = re.compile(r"(screenshots/thumbnail)-[0-9a-f]+(\.jpg)$")
+
+
 def media(case):
     found = dict(case.get("media") or {})
     for name, info in ((case.get("export") or {}).get("media") or {}).items():
         found["export/" + name] = info
-    return found
+    # Thumbnail names carry a per-run id; compare them by content.
+    renamed = {}
+    for name, info in found.items():
+        key = THUMBNAIL.sub(r"\1\2", name)
+        if key != name:
+            key = f"{key} #{sum(1 for k in renamed if k.startswith(key))}"
+        renamed[key] = info
+    return renamed
 
 
 rows, failures = [], 0
