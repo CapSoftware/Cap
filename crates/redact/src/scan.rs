@@ -89,6 +89,9 @@ const KNOWN_CATEGORIES: [RedactCategory; 5] = [
     RedactCategory::Email,
 ];
 const KNOWN_MIN_LEN: usize = 8;
+/// Lines of at most this many characters are hidden whole once any part of
+/// them is sensitive.
+const SHORT_LINE: usize = 32;
 /// Box height in frame pixels from which the row merge accepts uneven boxes.
 const LARGE_TEXT: f32 = 28.0;
 const KNOWN_MIN_SHARED: usize = 10;
@@ -858,7 +861,8 @@ impl Scan {
     }
 
     /// The box over character ranges of `reading` on line `r`, padded by
-    /// about a character on both sides (within a pad of the line).
+    /// about a character on both sides (within a pad of the line). A short
+    /// line (a table cell, a list row) is covered whole.
     fn span_rect(&self, r: Rect, reading: &Reading, ranges: &[(usize, usize)]) -> Rect {
         let spans = &reading.spans;
         let mut x0 = f32::MAX;
@@ -876,8 +880,14 @@ impl Scan {
         } else {
             0.0
         };
-        let left = (left - pad).max(r.x - pad);
-        let right = (right + pad).min(r.right() + pad);
+        let (left, right) = if reading.spans.len() <= SHORT_LINE {
+            (r.x - pad, r.right() + pad)
+        } else {
+            (
+                (left - pad).max(r.x - pad),
+                (right + pad).min(r.right() + pad),
+            )
+        };
         Rect::new(left, r.y - r.h * 0.15, right - left, r.h * 1.3)
     }
 
