@@ -306,14 +306,16 @@ impl Meetings {
             return;
         }
         let mut all = read_unwritten(&path);
+        let account = current_account();
         for id in doc_ids {
-            if !all.contains(&id) {
-                all.push(id);
+            if !all.iter().any(|entry| entry.id() == id) {
+                all.push(Unwritten::Owned {
+                    id,
+                    account: account.clone(),
+                });
             }
         }
-        if let Ok(bytes) = serde_json::to_vec(&all)
-            && let Err(error) = persist::atomic_write(&path, &bytes)
-        {
+        if let Err(error) = write_unwritten(&path, &all) {
             tracing::warn!(%error, "could not remember meetings waiting for notes");
         }
     }
@@ -326,18 +328,11 @@ impl Meetings {
         }
         let mut all = read_unwritten(&path);
         let before = all.len();
-        all.retain(|id| id != doc_id);
+        all.retain(|entry| entry.id() != doc_id);
         if all.len() == before {
             return;
         }
-        let written = if all.is_empty() {
-            std::fs::remove_file(&path)
-        } else {
-            serde_json::to_vec(&all)
-                .map_err(std::io::Error::other)
-                .and_then(|bytes| persist::atomic_write(&path, &bytes))
-        };
-        if let Err(error) = written {
+        if let Err(error) = write_unwritten(&path, &all) {
             tracing::warn!(%error, "could not update the meetings waiting for notes");
         }
     }
@@ -347,8 +342,10 @@ impl Meetings {
         if !path.exists() {
             return;
         }
-        let ids = read_unwritten(&path);
-        let _ = std::fs::remove_file(&path);
+        let (ids, kept) = split_unwritten(read_unwritten(&path), current_account().as_deref());
+        if let Err(error) = write_unwritten(&path, &kept) {
+            tracing::warn!(%error, "could not update the meetings waiting for notes");
+        }
         if ids.is_empty() || !self.settings.notes.auto_generate {
             return;
         }
@@ -378,18 +375,112 @@ impl Meetings {
 /// Meetings whose notes were left to write after Cap last quit.
 pub(super) fn unwritten_ids() -> Vec<String> {
     read_unwritten(&persist::meetings_dir().join(UNWRITTEN_FILE))
+        .into_iter()
+        .map(|entry| entry.id().to_string())
+        .collect()
 }
 
-fn read_unwritten(path: &std::path::Path) -> Vec<String> {
+/// A meeting whose notes are still to write, with the Cap account signed in
+/// when they were left (none when signed out). Files from before accounts
+/// were kept hold bare ids.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum Unwritten {
+    Owned { id: String, account: Option<String> },
+    Bare(String),
+}
+
+impl Unwritten {
+    fn id(&self) -> &str {
+        match self {
+            Unwritten::Owned { id, .. } | Unwritten::Bare(id) => id,
+        }
+    }
+}
+
+fn current_account() -> Option<String> {
+    if !crate::store::auth_snapshot().signed_in() {
+        return None;
+    }
+    crate::store::store_section("auth")
+        .get("user_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+/// The ids to write now (left by `account`, or by nobody in particular),
+/// and the entries to keep for another account's next sign-in.
+fn split_unwritten(all: Vec<Unwritten>, account: Option<&str>) -> (Vec<String>, Vec<Unwritten>) {
+    let (mine, kept): (Vec<_>, Vec<_>) = all.into_iter().partition(|entry| match entry {
+        Unwritten::Owned {
+            account: Some(owner),
+            ..
+        } => Some(owner.as_str()) == account,
+        _ => true,
+    });
+    (
+        mine.iter().map(|entry| entry.id().to_string()).collect(),
+        kept,
+    )
+}
+
+fn read_unwritten(path: &std::path::Path) -> Vec<Unwritten> {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
 }
 
+fn write_unwritten(path: &std::path::Path, all: &[Unwritten]) -> std::io::Result<()> {
+    if all.is_empty() {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    }
+    persist::atomic_write(
+        path,
+        &serde_json::to_vec(all).map_err(std::io::Error::other)?,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_left_by_one_account_wait_for_that_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(UNWRITTEN_FILE);
+        // A file from before accounts were kept, then newer entries.
+        std::fs::write(&path, br#"["old"]"#).unwrap();
+        let mut all = read_unwritten(&path);
+        for (id, account) in [
+            ("a1", Some("user-a")),
+            ("b1", Some("user-b")),
+            ("anon", None),
+        ] {
+            all.push(Unwritten::Owned {
+                id: id.into(),
+                account: account.map(str::to_string),
+            });
+        }
+        write_unwritten(&path, &all).unwrap();
+        let all = read_unwritten(&path);
+        assert_eq!(all.len(), 4);
+
+        let (now, kept) = split_unwritten(all.clone(), Some("user-b"));
+        assert_eq!(now, ["old", "b1", "anon"]);
+        assert_eq!(kept.iter().map(Unwritten::id).collect::<Vec<_>>(), ["a1"]);
+
+        let (now, kept) = split_unwritten(all, None);
+        assert_eq!(now, ["old", "anon"]);
+        assert_eq!(kept.len(), 2);
+
+        write_unwritten(&path, &[]).unwrap();
+        assert!(!path.exists());
+        write_unwritten(&path, &[]).unwrap();
+    }
 
     #[test]
     fn a_free_meeting_can_be_rewritten_after_the_last_one_is_used() {
