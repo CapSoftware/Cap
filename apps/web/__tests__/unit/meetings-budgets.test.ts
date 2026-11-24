@@ -325,6 +325,86 @@ describe("meeting budgets", () => {
 		expect(mocks.checkRateLimit).toHaveBeenCalledTimes(12);
 	});
 
+	it("charges notes and Ask one more unit per started 100 KB of body", async () => {
+		const { budgets } = await load();
+		expect(budgets.meetingBodyUnits(0)).toBe(1);
+		expect(budgets.meetingBodyUnits(100_000)).toBe(1);
+		expect(budgets.meetingBodyUnits(100_001)).toBe(2);
+		expect(budgets.meetingBodyUnits(4_000_000)).toBe(40);
+
+		const headers = new Headers();
+		expect(
+			await budgets.consumeMeetingBodyBudget(
+				"notes",
+				"user-1",
+				90_000,
+				headers,
+			),
+		).toEqual({ limited: false });
+		// 20 requests of 250 KB use the whole hour: 1 unit on arrival plus 2.
+		for (let index = 0; index < 20; index++) {
+			expect(
+				(await budgets.consumeMeetingRequestBudget("notes", "user-1", headers))
+					.limited,
+			).toBe(false);
+			expect(
+				await budgets.consumeMeetingBodyBudget(
+					"notes",
+					"user-1",
+					250_000,
+					headers,
+				),
+			).toEqual({ limited: false });
+		}
+		expect(
+			(await budgets.consumeMeetingRequestBudget("notes", "user-1", headers))
+				.limited,
+		).toBe(true);
+		expect(
+			(
+				await budgets.consumeMeetingBodyBudget(
+					"ask",
+					"user-1",
+					250_000,
+					headers,
+				)
+			).limited,
+		).toBe(false);
+	});
+
+	it("charges body units to the endpoint's firewall rule in one round trip", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.checkRateLimit.mockResolvedValue({ rateLimited: false });
+		const { budgets } = await load();
+		const headers = new Headers({ "x-real-ip": "203.0.113.1" });
+		expect(
+			await budgets.consumeMeetingBodyBudget("ask", "user-1", 99_999, headers),
+		).toEqual({ limited: false });
+		expect(mocks.checkRateLimit).not.toHaveBeenCalled();
+		expect(
+			await budgets.consumeMeetingBodyBudget("ask", "user-1", 664_000, headers),
+		).toEqual({ limited: false });
+		expect(mocks.checkRateLimit).toHaveBeenCalledTimes(6);
+		for (const [ruleId, options] of mocks.checkRateLimit.mock.calls)
+			expect([ruleId, options.rateLimitKey]).toEqual([
+				"rl_meetings_ask",
+				"user-1",
+			]);
+
+		mocks.checkRateLimit.mockResolvedValue({ rateLimited: true });
+		expect(
+			await budgets.consumeMeetingBodyBudget(
+				"notes",
+				"user-1",
+				300_000,
+				headers,
+			),
+		).toEqual({
+			limited: true,
+			retryAfterSeconds: budgets.FIREWALL_RETRY_AFTER_SECONDS,
+		});
+	});
+
 	it("honours a firewall decision in production", async () => {
 		vi.stubEnv("NODE_ENV", "production");
 		mocks.checkRateLimit.mockResolvedValue({ rateLimited: true });
