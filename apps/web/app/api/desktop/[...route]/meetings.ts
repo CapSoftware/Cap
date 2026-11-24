@@ -27,6 +27,7 @@ import {
 } from "@/lib/meetings/ai-config";
 import {
 	consumeMeetingAudioBudget,
+	consumeMeetingBodyBudget,
 	consumeMeetingRequestBudget,
 	type MeetingEndpoint,
 } from "@/lib/meetings/budgets";
@@ -50,6 +51,7 @@ import {
 	type TitleSplit,
 } from "@/lib/meetings/prompts";
 import {
+	isJsonContentType,
 	isWavContentType,
 	MEETING_JSON_BODY_MAX_BYTES,
 	MEETING_KEYWORDS_HEADER,
@@ -516,6 +518,10 @@ async function readNextText(reader: FullStreamReader): Promise<string | null> {
 	}
 }
 
+// Set once a model has answered a request, even with nothing: the provider has
+// charged for it by then.
+type Charge = { charged: boolean };
+
 // The first text delta is read inside the provider chain so setup failures
 // fall through to the next provider before anything reaches the client.
 async function openTextStream(
@@ -526,6 +532,7 @@ async function openTextStream(
 		maxOutputTokens?: number;
 	},
 	signal: AbortSignal,
+	charge?: Charge,
 ): Promise<AsyncGenerator<string>> {
 	const opened = await runMeetingChain(
 		chain,
@@ -542,7 +549,10 @@ async function openTextStream(
 				});
 				const reader = result.fullStream.getReader();
 				const first = await readNextText(reader);
-				if (first === null) throw new EmptyCompletionError();
+				if (first === null) {
+					if (charge) charge.charged = true;
+					throw new EmptyCompletionError();
+				}
 				return { reader, first };
 			} catch (error) {
 				throw new SanitizedProviderError(error);
@@ -570,6 +580,7 @@ async function condenseTranscript(
 	config: MeetingsAiConfig,
 	boundary: string,
 	signal: AbortSignal,
+	charge?: Charge,
 ): Promise<string[]> {
 	const chain = meetingModelChain(config, "condense");
 	const parts = chunkTranscript(input.transcript, NOTES_CHUNK_CHARS);
@@ -602,6 +613,7 @@ async function condenseTranscript(
 							providerOptions: selection.providerOptions,
 							abortSignal: chunkSignal,
 						});
+						if (charge) charge.charged = true;
 						const text = result.text.trim();
 						if (!text) throw new EmptyCompletionError();
 						return text;
@@ -634,6 +646,7 @@ async function generateNotes(
 	send: SseSend,
 	signal: AbortSignal,
 	beforeDone: () => Promise<void> = async () => undefined,
+	charge?: Charge,
 ): Promise<number> {
 	const boundary = createPromptBoundary();
 	const titleRequested = input.title.trim() === "";
@@ -644,7 +657,13 @@ async function generateNotes(
 		input.transcript.length > singlePassChars
 			? {
 					kind: "sections",
-					sections: await condenseTranscript(input, config, boundary, signal),
+					sections: await condenseTranscript(
+						input,
+						config,
+						boundary,
+						signal,
+						charge,
+					),
 				}
 			: { kind: "transcript", text: input.transcript };
 
@@ -661,6 +680,7 @@ async function generateNotes(
 			messages: [{ role: "user", content: prompt.user }],
 		},
 		signal,
+		charge,
 	);
 
 	const splitter = titleRequested ? createTitleSplitter() : null;
@@ -779,6 +799,11 @@ app.post("/notes", async (c) => {
 		return access.response;
 	}
 
+	if (!isJsonContentType(c.req.header("content-type"))) {
+		log({ outcome: "invalid_request", status: 400 });
+		return invalidRequest("content-type: must be application/json");
+	}
+
 	const budget = await consumeMeetingRequestBudget(
 		"notes",
 		user.id,
@@ -795,6 +820,17 @@ app.post("/notes", async (c) => {
 	if (!body.ok) {
 		log({ outcome: body.outcome, status: body.response.status });
 		return body.response;
+	}
+
+	const bodyBudget = await consumeMeetingBodyBudget(
+		"notes",
+		user.id,
+		body.inputBytes,
+		c.req.raw.headers,
+	);
+	if (bodyBudget.limited) {
+		log({ outcome: "rate_limited", status: 429, inputBytes: body.inputBytes });
+		return rateLimited(bodyBudget.retryAfterSeconds);
 	}
 
 	const input = body.data;
@@ -825,6 +861,7 @@ app.post("/notes", async (c) => {
 		NOTES_DEADLINE_MS,
 		async (send, signal) => {
 			let delivered = false;
+			const charge: Charge = { charged: false };
 			const tracked: SseSend = (event, data) => {
 				if (event === "title" || event === "delta") delivered = true;
 				send(event, data);
@@ -833,19 +870,28 @@ app.post("/notes", async (c) => {
 				if (trialMeeting) await completeTrialMeeting(user.id, trialMeeting);
 			};
 			try {
-				return await generateNotes(input, config, tracked, signal, markWritten);
+				return await generateNotes(
+					input,
+					config,
+					tracked,
+					signal,
+					markWritten,
+					charge,
+				);
 			} catch (error) {
 				// Notes that reached the app count as the free meeting, even if the
-				// stream then failed or was dropped. Only a run that showed nothing
-				// and failed on our side gives it back: an app that hangs up keeps
-				// the meeting claimed, so cancelling early can't buy unlimited free
-				// runs. The same meeting can still be written later.
+				// stream then failed or was dropped, and so does a run a model
+				// answered with nothing. Only a run that failed before any model
+				// answered gives it back: an app that hangs up keeps the meeting
+				// claimed, so cancelling early can't buy unlimited free runs. The
+				// same meeting can still be written later.
 				if (trialMeeting) {
-					const settle = delivered
-						? markWritten()
-						: c.req.raw.signal.aborted
-							? Promise.resolve()
-							: releaseTrialMeeting(user.id, trialMeeting);
+					const settle =
+						delivered || charge.charged
+							? markWritten()
+							: c.req.raw.signal.aborted
+								? Promise.resolve()
+								: releaseTrialMeeting(user.id, trialMeeting);
 					await settle.catch(() => undefined);
 				}
 				throw error;
@@ -865,6 +911,11 @@ app.post("/ask", async (c) => {
 		return access.response;
 	}
 
+	if (!isJsonContentType(c.req.header("content-type"))) {
+		log({ outcome: "invalid_request", status: 400 });
+		return invalidRequest("content-type: must be application/json");
+	}
+
 	const budget = await consumeMeetingRequestBudget(
 		"ask",
 		user.id,
@@ -881,6 +932,17 @@ app.post("/ask", async (c) => {
 	if (!body.ok) {
 		log({ outcome: body.outcome, status: body.response.status });
 		return body.response;
+	}
+
+	const bodyBudget = await consumeMeetingBodyBudget(
+		"ask",
+		user.id,
+		body.inputBytes,
+		c.req.raw.headers,
+	);
+	if (bodyBudget.limited) {
+		log({ outcome: "rate_limited", status: 429, inputBytes: body.inputBytes });
+		return rateLimited(bodyBudget.retryAfterSeconds);
 	}
 
 	const input = body.data;

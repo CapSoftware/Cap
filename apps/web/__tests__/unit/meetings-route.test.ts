@@ -772,6 +772,44 @@ describe("POST /notes gates", () => {
 		expect(mocks.streamText).not.toHaveBeenCalled();
 	});
 
+	it("accepts only JSON bodies", async () => {
+		signIn();
+		for (const path of ["/notes", "/ask"]) {
+			for (const type of ["text/plain", "application/x-www-form-urlencoded"]) {
+				const response = await call(path, {
+					body: JSON.stringify({ ...validNotes, question: "q" }),
+					headers: { "content-type": type },
+				});
+				expect(response.status).toBe(400);
+				expect(((await response.json()) as { detail: string }).detail).toBe(
+					"content-type: must be application/json",
+				);
+			}
+		}
+		expect(mocks.streamText).not.toHaveBeenCalled();
+	});
+
+	it("charges large bodies more of the hourly budget", async () => {
+		signIn();
+		mocks.streamText.mockImplementation(() => ({
+			fullStream: textStream(deltas("## Notes\n", "- ok")),
+		}));
+		mocks.generateText.mockResolvedValue({ text: "- part" });
+		// 250 KB: one unit on arrival and two more for the body.
+		const large = {
+			...validNotes,
+			title: "Weekly",
+			transcript: "x".repeat(250_000),
+		};
+		for (let index = 0; index < 20; index++) {
+			const response = await postJson("/notes", large);
+			expect(response.status).toBe(200);
+			await response.text();
+		}
+		expect((await postJson("/notes", large)).status).toBe(429);
+		expect(mocks.streamText).toHaveBeenCalledTimes(20);
+	});
+
 	it("returns 413 for oversize bodies", async () => {
 		signIn();
 		const response = await postJson("/notes", "x".repeat(4_000_001));
@@ -1022,6 +1060,58 @@ describe("free meetings for signed-in users", () => {
 		});
 		await response.text();
 		expect(mocks.trial.get(user.id) ?? []).toEqual([]);
+	});
+
+	it("counts the meeting when the model answers with nothing", async () => {
+		const user = signIn(null);
+		mocks.streamText.mockImplementation(() => ({
+			fullStream: textStream([{ type: "finish" }]),
+		}));
+		const response = await postJson("/notes", {
+			...validNotes,
+			title: "Weekly",
+			meetingId: "m1",
+		});
+		expect((await readEvents(response)).map((event) => event.event)).toEqual([
+			"error",
+		]);
+		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
+		expect(mocks.trialState.get(`${user.id}|m1`)?.completed).toBe(true);
+
+		for (const meetingId of ["m2", "m3"]) {
+			await (
+				await postJson("/notes", { ...validNotes, title: "Weekly", meetingId })
+			).text();
+		}
+		expect(
+			(
+				await postJson("/notes", {
+					...validNotes,
+					title: "Weekly",
+					meetingId: "m4",
+				})
+			).status,
+		).toBe(402);
+	});
+
+	it("counts the meeting when a long transcript was condensed before failing", async () => {
+		const user = signIn(null);
+		mocks.env.MEETINGS_AI_CONFIG = JSON.stringify({
+			notesSinglePassChars: 20_000,
+		});
+		mocks.generateText.mockResolvedValue({ text: "- part" });
+		mocks.streamText.mockImplementation(() => {
+			throw new Error("provider down");
+		});
+		const response = await postJson("/notes", {
+			...validNotes,
+			title: "Weekly",
+			transcript: "Speaker 1: words.\n".repeat(3_000),
+			meetingId: "m1",
+		});
+		await response.text();
+		expect(mocks.generateText).toHaveBeenCalled();
+		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
 	});
 
 	it("keeps the meeting claimed when the app hangs up before any notes", async () => {
