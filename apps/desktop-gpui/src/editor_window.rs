@@ -758,7 +758,6 @@ impl<T> Default for WaitingFrame<T> {
 }
 
 impl<T> WaitingFrame<T> {
-    /// The frames to show now, oldest first, when `frame` arrives.
     fn arrive(&mut self, frame: T, may_wait: bool, previous_unpainted: bool) -> [Option<T>; 2] {
         let earlier = self.waiting.take();
         if !may_wait {
