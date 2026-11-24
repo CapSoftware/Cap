@@ -401,6 +401,106 @@ fn accepting_while_a_meeting_is_still_starting_waits_for_it() {
         .expect(&[(540_000, "dismiss #2 RecordingStarted")]);
 }
 
+fn back_to_back(scheduled_enabled: bool, a_minutes: u64) -> Sim {
+    let mut s = Sim::with(PromptConfig {
+        scheduled_enabled,
+        auto_record: AutoRecord::Scheduled,
+        ..PromptConfig::default()
+    });
+    s.events(vec![
+        ev("a", "A", 0, (a_minutes * MIN) as i64, false),
+        ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Recording {
+        event_id: Some("a".into()),
+    });
+    s.take();
+    s
+}
+
+#[test]
+fn auto_record_hands_a_meeting_that_ran_over_to_the_next_one() {
+    let mut s = back_to_back(true, 10);
+    s.at(9 * MIN)
+        .expect(&[(540_000, "show #2 Scheduled B | 600-2400")]);
+    s.at(10 * MIN - 1).quiet();
+    s.at(10 * MIN)
+        .expect(&[(600_000, "update #2 Scheduled B | 600-2400 countdown 605000")]);
+    s.at(10 * MIN + 5_000).expect(&[
+        (605_000, "record event b"),
+        (605_000, "dismiss #2 RecordingStarted"),
+    ]);
+
+    let mut s = back_to_back(false, 10);
+    s.at(10 * MIN - 1).quiet();
+    s.at(10 * MIN)
+        .expect(&[(600_000, "show #2 Scheduled B | 600-2400 countdown 605000")]);
+    s.at(10 * MIN + 5_000).expect(&[
+        (605_000, "record event b"),
+        (605_000, "dismiss #2 RecordingStarted"),
+    ]);
+}
+
+#[test]
+fn cancelling_the_hand_over_keeps_the_meeting_recording() {
+    let mut s = back_to_back(true, 10);
+    s.at(10 * MIN).take();
+    s.cancel(2).expect(&[(600_000, "dismiss #2 Cancelled")]);
+    s.at(60 * MIN).quiet();
+    assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn auto_record_waits_for_the_recorded_meeting_to_end() {
+    // A ends at 12 min, two minutes into B: B takes over then.
+    let mut s = back_to_back(true, 12);
+    s.at(9 * MIN)
+        .expect(&[(540_000, "show #2 Scheduled B | 600-2400")]);
+    s.at(12 * MIN - 1).quiet();
+    s.at(12 * MIN)
+        .expect(&[(720_000, "update #2 Scheduled B | 600-2400 countdown 725000")]);
+    s.at(12 * MIN + 5_000).expect(&[
+        (725_000, "record event b"),
+        (725_000, "dismiss #2 RecordingStarted"),
+    ]);
+
+    let mut s = back_to_back(false, 12);
+    s.at(12 * MIN - 1).quiet();
+    s.at(12 * MIN)
+        .expect(&[(720_000, "show #2 Scheduled B | 600-2400 countdown 725000")]);
+
+    // A runs past B's reminder: B's prompt ends as usual, nothing switches.
+    let mut s = back_to_back(true, 20);
+    s.at(9 * MIN).take();
+    s.at(60 * MIN).expect(&[(840_000, "dismiss #2 EventOver")]);
+    let mut s = back_to_back(false, 20);
+    s.at(60 * MIN).quiet();
+    assert_eq!(s.planner.next_deadline(), None);
+}
+
+#[test]
+fn auto_record_never_ends_a_recording_the_calendar_does_not_end() {
+    for state in [
+        RecordingState::Recording { event_id: None },
+        RecordingState::Recording {
+            event_id: Some("gone".into()),
+        },
+        RecordingState::Starting {
+            event_id: Some("a".into()),
+        },
+    ] {
+        let mut s = Sim::with(PromptConfig {
+            auto_record: AutoRecord::Scheduled,
+            ..PromptConfig::default()
+        });
+        s.recording(state.clone());
+        s.events(vec![ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false)]);
+        s.at(9 * MIN)
+            .expect(&[(540_000, "show #1 Scheduled B | 600-2400")]);
+        s.at(60 * MIN).expect(&[(840_000, "dismiss #1 EventOver")]);
+    }
+}
+
 #[test]
 fn accept_starts_recording_once() {
     let mut s = Sim::new();
@@ -827,9 +927,14 @@ fn randomised_invariants() {
         for step in 0..600 {
             now += rng.below(30_000);
             let clock = Now::new(Millis(now), wall(now as i64));
-            // Accepting a prompt while a meeting records switches to it: the
-            // app ends that meeting before it starts this one.
-            let mut switching = false;
+            // Accepting a prompt while a meeting records switches to it, and
+            // so does a scheduled one starting after the recorded meeting is
+            // over: the app ends that meeting before it starts this one. A
+            // start while one is still starting never happens.
+            let mut switching = match planner.recording() {
+                RecordingState::Recording { event_id: Some(_) } => auto.for_scheduled(),
+                _ => false,
+            };
             let actions = match rng.below(10) {
                 0 => {
                     let app = rng.pick(&apps).to_string();
@@ -878,7 +983,9 @@ fn randomised_invariants() {
                         1 => RecordingState::Starting {
                             event_id: Some(format!("e{}", rng.below(5))),
                         },
-                        _ => RecordingState::Recording { event_id: None },
+                        _ => RecordingState::Recording {
+                            event_id: rng.chance(50).then(|| format!("e{}", rng.below(5))),
+                        },
                     };
                     if state.is_active() {
                         recording_requested = true;
@@ -891,7 +998,7 @@ fn randomised_invariants() {
                         0 => planner.dismiss(clock, id),
                         1 => planner.cancel(clock, id),
                         2 => {
-                            switching =
+                            switching |=
                                 matches!(planner.recording(), RecordingState::Recording { .. });
                             planner.accept(clock, id)
                         }
