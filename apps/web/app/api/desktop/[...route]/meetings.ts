@@ -549,10 +549,8 @@ async function openTextStream(
 				});
 				const reader = result.fullStream.getReader();
 				const first = await readNextText(reader);
-				if (first === null) {
-					if (charge) charge.charged = true;
-					throw new EmptyCompletionError();
-				}
+				if (charge) charge.charged = true;
+				if (first === null) throw new EmptyCompletionError();
 				return { reader, first };
 			} catch (error) {
 				throw new SanitizedProviderError(error);

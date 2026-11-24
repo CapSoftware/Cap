@@ -1094,6 +1094,24 @@ describe("free meetings for signed-in users", () => {
 		).toBe(402);
 	});
 
+	it("counts the meeting when the stream fails while its title is held", async () => {
+		const user = signIn(null);
+		mocks.streamText.mockImplementation(() => ({
+			fullStream: textStream([
+				{ type: "text-delta", id: "t", text: "Title: Launch" },
+				{ type: "error", error: new Error("provider dropped") },
+			]),
+		}));
+		const response = await postJson("/notes", {
+			...validNotes,
+			meetingId: "m1",
+		});
+		expect((await readEvents(response)).map((event) => event.event)).toEqual([
+			"error",
+		]);
+		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
+	});
+
 	it("counts the meeting when a long transcript was condensed before failing", async () => {
 		const user = signIn(null);
 		mocks.env.MEETINGS_AI_CONFIG = JSON.stringify({
