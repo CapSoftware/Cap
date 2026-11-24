@@ -80,6 +80,9 @@ async function probeWebGpuCanvas() {
 		pass.end();
 		device.queue.submit([encoder.finish()]);
 		await device.queue.onSubmittedWorkDone();
+		// Safari reads a canvas back as black once it has been presented, so
+		// it is read before the next frame.
+		if (await inspectCanvas(canvas)) return true;
 		await new Promise<void>((resolve) =>
 			requestAnimationFrame(() => resolve()),
 		);
@@ -89,16 +92,22 @@ async function probeWebGpuCanvas() {
 	}
 }
 
+// A page's first probe in Safari can read black even before presenting.
+async function probeWebGpuCanvasTwice() {
+	return (
+		(await probeWebGpuCanvas().catch(() => false)) ||
+		(await probeWebGpuCanvas().catch(() => false))
+	);
+}
+
 export function browserWebGpuPresentationWorks() {
 	if (!pending) {
 		pending = new Promise<boolean>((resolve) => {
 			const timeout = window.setTimeout(() => resolve(false), 1500);
-			void probeWebGpuCanvas()
-				.catch(() => false)
-				.then((works) => {
-					window.clearTimeout(timeout);
-					resolve(works);
-				});
+			void probeWebGpuCanvasTwice().then((works) => {
+				window.clearTimeout(timeout);
+				resolve(works);
+			});
 		});
 	}
 	return pending;
