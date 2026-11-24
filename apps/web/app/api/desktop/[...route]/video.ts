@@ -22,6 +22,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { readInstantCleanupReport } from "@/lib/desktop-instant-cleanup";
 import { getDesktopShareUrl } from "@/lib/desktop-share-url";
+import { getFreePlanRecordingLimit } from "@/lib/free-plan-duration";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { maybeStartLiveTranscription } from "@/lib/live-transcribe";
 import { runPromise } from "@/lib/server";
@@ -399,9 +400,21 @@ app.get(
 				);
 			}
 
+			const recordingLimitSecs = isScreenshot
+				? null
+				: await getFreePlanRecordingLimit(user.id, videoOrgId).catch(
+						(error) => {
+							console.error("Error reading the recording limit:", error);
+							return null;
+						},
+					);
+
 			return c.json({
 				id: idToUse,
 				share_url: await getDesktopShareUrl(videoOrgId, idToUse),
+				...(recordingLimitSecs === null
+					? {}
+					: { recording_limit_secs: recordingLimitSecs }),
 				// All deprecated
 				user_id: user.id,
 				aws_region: "n/a",

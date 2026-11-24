@@ -80,6 +80,41 @@ export function exceedsFreePlanMeasuredDuration(
 	return seconds !== null && seconds > FREE_PLAN_MAX_MEASURED_SECONDS;
 }
 
+async function ownerOrOrganizationHasPro(
+	ownerId: User.UserId,
+	orgId: Organisation.OrganisationId,
+): Promise<boolean> {
+	const [owner] = await db()
+		.select({
+			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+		})
+		.from(users)
+		.where(eq(users.id, ownerId))
+		.limit(1);
+	if (hasProPlan(owner)) return true;
+
+	const [organizationOwner] = await db()
+		.select({
+			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+		})
+		.from(organizations)
+		.innerJoin(users, eq(organizations.ownerId, users.id))
+		.where(eq(organizations.id, orgId))
+		.limit(1);
+	return hasProPlan(organizationOwner);
+}
+
+export async function getFreePlanRecordingLimit(
+	ownerId: User.UserId,
+	orgId: Organisation.OrganisationId,
+): Promise<number | null> {
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return null;
+	if (await ownerOrOrganizationHasPro(ownerId, orgId)) return null;
+	return Video.FREE_PLAN_MAX_RECORDING_SECONDS;
+}
+
 // The longest output a processing job may write for this video, or null when
 // the free plan limit does not apply. Pro is decided like multipart uploads
 // and dashboard imports: the video owner or the organization owner being Pro
@@ -100,26 +135,7 @@ export async function getFreePlanDurationLimit(video: {
 	)
 		return null;
 
-	const [owner] = await db()
-		.select({
-			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-		})
-		.from(users)
-		.where(eq(users.id, video.ownerId))
-		.limit(1);
-	if (hasProPlan(owner)) return null;
-
-	const [organizationOwner] = await db()
-		.select({
-			stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-			thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-		})
-		.from(organizations)
-		.innerJoin(users, eq(organizations.ownerId, users.id))
-		.where(eq(organizations.id, video.orgId))
-		.limit(1);
-	if (hasProPlan(organizationOwner)) return null;
+	if (await ownerOrOrganizationHasPro(video.ownerId, video.orgId)) return null;
 
 	const [imported] = await db()
 		.select({ id: importedVideos.id })
