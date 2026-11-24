@@ -887,6 +887,12 @@ app.post(
 							),
 						);
 
+						runAfterResponse(() =>
+							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
+								anyAge: true,
+							}),
+						);
+
 						return c.json({
 							location: result.Location,
 							objectIdentity,
