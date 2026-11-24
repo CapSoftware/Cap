@@ -567,13 +567,20 @@ const getPlaylistResponse = (
 			});
 		}
 
+		const defaultStorage =
+			bucket.provider === "s3" && Option.isNone(customBucket);
+		const servesSidecar = Option.exists(
+			urlParams.fileType,
+			(fileType) =>
+				fileType === "transcription" || fileType === "enhanced-audio",
+		);
 		if (
 			(isMp4Source || urlParams.videoType === "mp4") &&
-			Option.isNone(urlParams.fileType)
+			(defaultStorage || !servesSidecar)
 		)
 			yield* measureBeforeServing(video, mp4Key, viewerIsOwner);
 
-		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
+		if (defaultStorage) {
 			if (isMp4Source || urlParams.videoType === "mp4") {
 				return HttpServerResponse.redirect(
 					yield* bucket.getSignedObjectUrl(mp4Key, playbackUrlValidity()),
