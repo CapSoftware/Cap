@@ -97,41 +97,7 @@ describe("free plan measured lock", () => {
 			readFreePlanMeasure({
 				freePlanMeasure: { key: "k", seconds: "400", at: "t" },
 			}),
-		).toEqual({ key: "k", seconds: null, at: "t", unmeasurable: false });
-		expect(
-			readFreePlanMeasure({
-				freePlanMeasure: {
-					key: "k",
-					seconds: null,
-					at: "t",
-					unmeasurable: true,
-				},
-			}),
-		).toEqual({ key: "k", seconds: null, at: "t", unmeasurable: true });
-	});
-
-	it("holds a file the media server could not measure", async () => {
-		const unmeasurable = {
-			freePlanMeasure: {
-				key: "o/v/result.mp4",
-				seconds: null,
-				at: new Date().toISOString(),
-				unmeasurable: true,
-			},
-		};
-		mocks.rows = [
-			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
-			[],
-			[free],
-			[free],
-		];
-		expect(await isVideoOverFreePlanDuration(video(unmeasurable))).toBe(true);
-		mocks.rows = [
-			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
-			[],
-			[pro],
-		];
-		expect(await isVideoOverFreePlanDuration(video(unmeasurable))).toBe(false);
+		).toEqual({ key: "k", seconds: null, at: "t" });
 	});
 
 	it("never locks without an over-limit measurement and never queries", async () => {

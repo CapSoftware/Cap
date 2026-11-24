@@ -25,23 +25,27 @@ const PROBE_URL_EXPIRES_SECONDS = 10 * 60;
 const MAX_CONCURRENT_MEASUREMENTS = 4;
 
 const UNAVAILABLE_RETRY_MS = 60_000;
+const TIMED_OUT_RETRY_MS = 60_000;
 const MAX_UNAVAILABLE_ENTRIES = 5_000;
 
 const FIRST_VIEW_MEASURE_TIMEOUT_MS = 5_000;
 
 // Measured: the length is known (null when the file has no measurable
 // length, such as an upload that is still being written). Unmeasurable: the
-// media server gave up on this file. Skipped: nothing was measured, because
-// the video is not limited or the media server cannot be reached.
+// media server timed out on this file, so it is tried again later. Skipped:
+// nothing was measured, because the video is not limited or the media server
+// cannot be reached.
 export type FreePlanMeasureOutcome =
 	| { kind: "measured"; seconds: number | null }
 	| { kind: "unmeasurable" }
 	| { kind: "skipped" };
 
 const SKIPPED: FreePlanMeasureOutcome = { kind: "skipped" };
+const UNMEASURED: FreePlanMeasureOutcome = { kind: "unmeasurable" };
 
 const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
 const unavailableUntil = new Map<string, number>();
+const timedOutUntil = new Map<string, number>();
 const waiting: Array<() => void> = [];
 let running = 0;
 
@@ -92,6 +96,8 @@ export function measureFreePlanObject(
 	if (current) return current;
 	if ((unavailableUntil.get(id) ?? 0) > Date.now())
 		return Promise.resolve(SKIPPED);
+	if ((timedOutUntil.get(id) ?? 0) > Date.now())
+		return Promise.resolve(UNMEASURED);
 	const measurement = withMeasurementSlot(() =>
 		measureNow(videoId, key, anyAge),
 	).finally(() => inFlight.delete(id));
@@ -118,15 +124,15 @@ async function measureNow(
 		}
 		unavailableUntil.delete(id);
 		if (outcome.kind === "unmeasurable") {
-			await recordFreePlanMeasure(videoId, key, null, { unmeasurable: true });
+			if (timedOutUntil.size >= MAX_UNAVAILABLE_ENTRIES) timedOutUntil.clear();
+			timedOutUntil.set(id, Date.now() + TIMED_OUT_RETRY_MS);
 			return outcome;
 		}
+		timedOutUntil.delete(id);
 		if (outcome.kind !== "measured") return outcome;
-		if (
-			outcome.seconds === null &&
-			measureHoldsVideo(readFreePlanMeasure(video.metadata))
-		)
-			return { kind: "unmeasurable" };
+		const existing = readFreePlanMeasure(video.metadata);
+		if (outcome.seconds === null && existing && measureHoldsVideo(existing))
+			return { kind: "measured", seconds: existing.seconds };
 		await recordFreePlanMeasure(videoId, key, outcome.seconds);
 		return outcome;
 	} catch (error) {
@@ -143,11 +149,12 @@ async function measureNow(
 export type FirstViewDecision = "play" | "held" | "pending";
 
 const decisionFor = (outcome: FreePlanMeasureOutcome): FirstViewDecision =>
-	outcome.kind === "unmeasurable" ||
-	(outcome.kind === "measured" &&
-		exceedsFreePlanMeasuredDuration(outcome.seconds))
-		? "held"
-		: "play";
+	outcome.kind === "unmeasurable"
+		? "pending"
+		: outcome.kind === "measured" &&
+				exceedsFreePlanMeasuredDuration(outcome.seconds)
+			? "held"
+			: "play";
 
 // Someone other than the owner is about to play an object nobody has
 // measured yet: measure it first, so a video over the limit is never served
