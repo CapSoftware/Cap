@@ -80,6 +80,26 @@ const environment = () =>
 
 const yearlyPriceId = () => STRIPE_PLAN_IDS[environment()].yearly;
 
+// Stripe can't scope a promotion code to one price of a product, and the
+// in-app checkout applies codes from the browser, so a monthly subscription
+// that still arrives with BLACKFRIDAY loses the discount here.
+export async function dropCapFridayFromMonthly(subscriptionId: string) {
+	const subscription = await stripe().subscriptions.retrieve(subscriptionId, {
+		expand: ["discount.promotion_code"],
+	});
+	const monthly = STRIPE_PLAN_IDS[environment()].monthly;
+	const promotion = subscription.discount?.promotion_code;
+	if (
+		!subscription.items.data.some((item) => item.price.id === monthly) ||
+		typeof promotion !== "object" ||
+		!isCapFridayCode(promotion?.code)
+	) {
+		return false;
+	}
+	await stripe().subscriptions.deleteDiscount(subscription.id);
+	return true;
+}
+
 const unavailable = (
 	reason: Extract<CapFridayState, { type: "unavailable" }>["reason"],
 ): CapFridayState => ({ type: "unavailable", reason });
