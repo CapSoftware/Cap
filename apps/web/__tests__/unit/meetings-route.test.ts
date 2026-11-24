@@ -1156,8 +1156,29 @@ describe("free meetings for signed-in users", () => {
 		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
 		expect(sent).not.toContain("\uFFFD");
 		expect(mocks.streamText.mock.calls[0]?.[0].system).toContain(
-			"The transcript stops before the meeting ended",
+			"only the parts most related to the question are included",
 		);
+	});
+
+	it("keeps the part of a long free meeting a question is about", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["m1"]);
+		mocks.streamText.mockReturnValue({
+			fullStream: textStream(deltas("PINEAPPLE")),
+		});
+		const filler = "Speaker 1: we went through the roadmap again.\n".repeat(
+			8_000,
+		);
+		const response = await postJson("/ask", {
+			question: "What is the code word for the launch?",
+			transcript: `${filler}Speaker 2: the code word for the launch is PINEAPPLE.\n`,
+			meetingId: "m1",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const sent = mocks.streamText.mock.calls[0]?.[0].messages[0].content;
+		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
+		expect(sent).toContain("PINEAPPLE");
 	});
 
 	it("refuses a free request that is too large without its transcript", async () => {

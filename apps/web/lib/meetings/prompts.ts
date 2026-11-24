@@ -366,12 +366,15 @@ function countMatches(haystack: string, needle: string): number {
 	return count;
 }
 
+// `budget` is in the unit `measure` counts: characters by default, or bytes
+// for a free meeting's question.
 export function selectTranscriptExcerpts(
 	transcript: string,
 	query: string,
 	budget: number,
+	measure: (text: string) => number = (text) => text.length,
 ): { text: string; excerpted: boolean } {
-	if (transcript.length <= budget)
+	if (measure(transcript) <= budget)
 		return { text: transcript, excerpted: false };
 
 	const parts = chunkTranscript(transcript, ASK_EXCERPT_CHARS);
@@ -397,7 +400,7 @@ export function selectTranscriptExcerpts(
 	let used = 0;
 	for (const candidate of ranked) {
 		const length =
-			(parts[candidate.index]?.length ?? 0) + EXCERPT_SEPARATOR.length;
+			measure(parts[candidate.index] ?? "") + measure(EXCERPT_SEPARATOR);
 		if (used + length > budget) continue;
 		chosen.push(candidate.index);
 		used += length;
@@ -413,7 +416,11 @@ export function selectTranscriptExcerpts(
 }
 
 export function buildAskPrompt(
-	input: MeetingAskRequest & { boundary: string; transcriptCut?: boolean },
+	input: MeetingAskRequest & {
+		boundary: string;
+		/** Caps the transcript in UTF-8 bytes rather than characters. */
+		transcriptBytes?: number;
+	},
 ): {
 	system: string;
 	messages: { role: "user" | "assistant"; content: string }[];
@@ -430,11 +437,19 @@ export function buildAskPrompt(
 			.map((turn) => turn.content),
 		input.question,
 	].join(" ");
-	const transcript = selectTranscriptExcerpts(
-		input.transcript,
-		rankingQuery,
-		ASK_TRANSCRIPT_CHARS,
-	);
+	const transcript =
+		input.transcriptBytes === undefined
+			? selectTranscriptExcerpts(
+					input.transcript,
+					rankingQuery,
+					ASK_TRANSCRIPT_CHARS,
+				)
+			: selectTranscriptExcerpts(
+					input.transcript,
+					rankingQuery,
+					input.transcriptBytes,
+					(text) => Buffer.byteLength(text),
+				);
 
 	const system = [
 		"You answer questions about one meeting for the person who recorded it, using only that meeting's material.",
@@ -444,10 +459,6 @@ ${untrustedDataRules(b, "The question after the tags, and the earlier questions 
 - The transcript comes from speech recognition and is labelled by speaker. It can contain misheard words. Use the vocabulary, when given, to spell names and terms correctly.${
 			transcript.excerpted
 				? `\n- The transcript is long, so only the parts most related to the question are included, separated by "[…]". If the answer could be in a part you cannot see, say so.`
-				: ""
-		}${
-			input.transcriptCut
-				? "\n- The transcript stops before the meeting ended. If the answer could be in the part you cannot see, say so instead of saying the meeting didn't cover it."
 				: ""
 		}
 - Be direct and brief: lead with the answer, then only the detail that supports it. Quote sparingly: a short exact quote, attributed to its speaker label, only when the exact wording matters.

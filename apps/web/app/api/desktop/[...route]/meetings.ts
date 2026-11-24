@@ -80,7 +80,10 @@ import {
 	spendTrialAsk,
 	trialRemaining,
 } from "@/lib/meetings/trial";
-import { fitTrialInput } from "@/lib/meetings/trial-input";
+import {
+	fitTrialInput,
+	trialTranscriptBudget,
+} from "@/lib/meetings/trial-input";
 import {
 	MEETING_CLIP_MAX_BYTES,
 	MEETING_CLIP_MAX_SECONDS,
@@ -754,12 +757,12 @@ async function answerQuestion(
 	config: MeetingsAiConfig,
 	send: SseSend,
 	signal: AbortSignal,
-	transcriptCut = false,
+	transcriptBytes?: number,
 ): Promise<number> {
 	const prompt = buildAskPrompt({
 		...input,
 		boundary: askBoundary(input),
-		transcriptCut,
+		transcriptBytes,
 	});
 	const stream = await openTextStream(
 		meetingModelChain(config, "ask"),
@@ -978,19 +981,18 @@ app.post("/ask", async (c) => {
 		return rateLimited(bodyBudget.retryAfterSeconds);
 	}
 
-	let input = body.data;
-	let transcriptCut = false;
+	const input = body.data;
+	let transcriptBytes: number | undefined;
 	if (access === "trial") {
-		const fit = fitTrialInput(input, body.inputBytes);
+		const budget = trialTranscriptBudget(input, body.inputBytes);
 		if (
-			!fit ||
+			budget === null ||
 			!(input.meetingId && (await spendTrialAsk(user.id, input.meetingId)))
 		) {
 			log({ outcome: "upgrade_required", status: 402 });
 			return upgradeRequired();
 		}
-		input = fit.input;
-		transcriptCut = fit.truncated;
+		transcriptBytes = budget;
 	}
 	return streamGeneration(
 		c.req.raw,
@@ -998,6 +1000,6 @@ app.post("/ask", async (c) => {
 		body.inputBytes,
 		ASK_DEADLINE_MS,
 		(send, signal) =>
-			answerQuestion(input, config, send, signal, transcriptCut),
+			answerQuestion(input, config, send, signal, transcriptBytes),
 	);
 });
