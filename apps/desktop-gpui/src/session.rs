@@ -1225,7 +1225,7 @@ impl RecordingSession {
                     // app through a plan fetch, so one runs shortly before the
                     // limit; the stop itself never waits on the network.
                     plan_checked = true;
-                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).detach();
+                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_plan_only()).detach();
                 }
                 wait = if plan_checked {
                     left

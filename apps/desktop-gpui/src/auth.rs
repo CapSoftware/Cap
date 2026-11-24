@@ -429,24 +429,11 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
     }
     let account = auth_identity(&store::store_section("auth"));
 
-    let mut plan = None;
-    if !snapshot.plan_manual {
-        match authed_request(reqwest::Method::GET, "/api/desktop/plan", None).await {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(body) = response.json::<Value>().await
-                    && let Some(upgraded) = body.get("upgraded").and_then(Value::as_bool)
-                {
-                    plan = Some(json!({
-                        "upgraded": upgraded,
-                        "manual": false,
-                        "last_checked": chrono::Utc::now().timestamp() as i32,
-                    }));
-                }
-            }
-            Ok(response) => tracing::warn!("Plan fetch returned {}", response.status()),
-            Err(error) => tracing::warn!("Failed to fetch plan: {error}"),
-        }
-    }
+    let plan = if snapshot.plan_manual {
+        None
+    } else {
+        fetch_plan().await
+    };
 
     let mut organizations = None;
     let mut organizations_failed = false;
@@ -487,6 +474,60 @@ pub async fn update_auth_plan() -> Result<(), AuthApiError> {
         {
             auth.insert("organizations_updated_at".into(), now);
         }
+        true
+    });
+    if stale {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    if !persisted {
+        return Err(AuthApiError::Other("Failed to persist auth plan".into()));
+    }
+    Ok(())
+}
+
+async fn fetch_plan() -> Option<Value> {
+    match authed_request(reqwest::Method::GET, "/api/desktop/plan", None).await {
+        Ok(response) if response.status().is_success() => {
+            let body = response.json::<Value>().await.ok()?;
+            let upgraded = body.get("upgraded").and_then(Value::as_bool)?;
+            Some(json!({
+                "upgraded": upgraded,
+                "manual": false,
+                "last_checked": chrono::Utc::now().timestamp() as i32,
+            }))
+        }
+        Ok(response) => {
+            tracing::warn!("Plan fetch returned {}", response.status());
+            None
+        }
+        Err(error) => {
+            tracing::warn!("Failed to fetch plan: {error}");
+            None
+        }
+    }
+}
+
+/// Fetches and saves the plan alone, for checks that cannot wait on the
+/// organizations request `update_auth_plan` also makes.
+pub async fn update_plan_only() -> Result<(), AuthApiError> {
+    let snapshot = store::auth_snapshot();
+    if !snapshot.signed_in() {
+        return Err(AuthApiError::InvalidAuthentication);
+    }
+    if snapshot.plan_manual {
+        return Ok(());
+    }
+    let account = auth_identity(&store::store_section("auth"));
+    let plan = fetch_plan()
+        .await
+        .ok_or_else(|| AuthApiError::Other("Failed to fetch plan".into()))?;
+    let mut stale = false;
+    let persisted = store::update_store_section("auth", |auth| {
+        if account.is_none() || auth_identity(auth) != account {
+            stale = true;
+            return false;
+        }
+        auth.insert("plan".into(), plan);
         true
     });
     if stale {
