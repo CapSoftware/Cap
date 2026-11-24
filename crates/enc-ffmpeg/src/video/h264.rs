@@ -2969,9 +2969,8 @@ mod video_bitrate_tests {
     #[test]
     fn software_encoder_is_configured_with_the_video_bitrate() {
         ffmpeg::init().ok();
-        for fps in [60, 240] {
+        for (fps, target) in [(60, 12_000_000u32), (240, 45_000_000)] {
             let config = VideoInfo::from_raw(cap_media_info::RawVideoFormat::Nv12, 1280, 720, fps);
-            let target = 12_345_678u32;
             let bpp = H264EncoderBuilder::bpp_for_video_bitrate(
                 H264EncoderBuilder::QUALITY_BPP,
                 Some(target),
