@@ -185,15 +185,15 @@ fn settings_surfaces_match_the_literals_they_replaced() {
         ),
         (
             tr::settings::quality::studio::frame_rate::description(),
-            "Studio records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
+            "Studio Mode records up to this rate and never faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
         ),
         (
             tr::settings::quality::studio::frame_rate::description_high(),
-            "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio never records faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
+            "Recording above 60 FPS uses more CPU and disk space, and some computers encode it in software. Studio Mode never records faster than your display refreshes. With a camera on, it records at 30 FPS or less.",
         ),
         (
             tr::settings::quality::studio::frame_rate::description_match(),
-            "Records at your display's refresh rate, up to 240 FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio records at 30 FPS or less.",
+            "Records at your display's refresh rate, up to 240 FPS. Recording above 60 FPS uses more CPU and disk space. With a camera on, Studio Mode records at 30 FPS or less.",
         ),
         (
             tr::settings::quality::studio::frame_rate::fps_24(),
