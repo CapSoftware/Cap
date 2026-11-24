@@ -10,6 +10,9 @@ export const NOTES_CHUNK_CHARS = 60_000;
 export const NOTES_MAX_OUTPUT_TOKENS = 16_000;
 export const ASK_TRANSCRIPT_CHARS = 400_000;
 export const ASK_EXCERPT_CHARS = 4_000;
+// The desktop app's line where it left out the middle of a very long meeting.
+export const TRANSCRIPT_MIDDLE_LEFT_OUT =
+	"[The middle of the meeting is left out here.]";
 
 const MAX_TITLE_CHARS = 120;
 const TITLE_PREFIX_MAX_CHARS = 400;
@@ -161,7 +164,9 @@ export function buildNotesPrompt(input: NotesPromptInput): {
 			? `- <user_notes_${b}> holds the note-taker's own notes. They show what mattered to them: keep every point they wrote, expand it with supporting detail from the transcript, and never drop or contradict it. When the transcript seems to disagree with their notes, follow their notes.`
 			: null,
 		input.transcriptTruncated
-			? "- The transcript is incomplete and stops before the meeting ended. Do not state or imply how the meeting ended, and do not treat the last topic as concluded."
+			? input.transcript.includes(TRANSCRIPT_MIDDLE_LEFT_OUT)
+				? `- The meeting was too long to send whole, so a stretch from its middle is left out where the transcript has the line "${TRANSCRIPT_MIDDLE_LEFT_OUT}". Cover the start and the end fully, say once and briefly in the notes that part of the middle of the meeting is not covered, and never guess what was said there.`
+				: "- The transcript is incomplete and stops before the meeting ended. Do not state or imply how the meeting ended, and do not treat the last topic as concluded."
 			: null,
 	].filter(Boolean);
 
