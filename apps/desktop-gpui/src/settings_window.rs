@@ -3670,10 +3670,11 @@ impl SettingsWindow {
             })
     }
 
-    fn render_studio_resolution(&self, quality: StudioQuality) -> gpui::AnyElement {
+    fn render_studio_resolution(&self) -> gpui::AnyElement {
         let theme = self.theme;
         let resolution = self.studio_resolution;
-        let description = if quality == StudioQuality::Compatibility {
+        let description = if self.settings.studio_recording_quality == StudioQuality::Compatibility
+        {
             tr::settings::quality::studio::resolution_description_compatibility()
         } else if resolution.is_some_and(|resolution| resolution.several_displays) {
             tr::settings::quality::studio::resolution_description_several()
@@ -3788,7 +3789,7 @@ impl SettingsWindow {
             })
             .collect();
 
-        rows.insert(0, self.render_studio_resolution(current));
+        rows.insert(0, self.render_studio_resolution());
 
         if self.studio_quality_save_failed {
             rows.push(
