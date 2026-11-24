@@ -384,8 +384,8 @@ export const ShareVideo = forwardRef<
 		const isPlaybackPending = data.playbackPending === true;
 		useEffect(() => {
 			if (!isPlaybackPending) return;
-			const timer = setTimeout(() => router.refresh(), 3000);
-			return () => clearTimeout(timer);
+			const timer = setInterval(() => router.refresh(), 3000);
+			return () => clearInterval(timer);
 		}, [isPlaybackPending, router]);
 		const isActivelyRecording =
 			isSegmentsSource &&
