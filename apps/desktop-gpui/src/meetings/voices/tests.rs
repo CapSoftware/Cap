@@ -96,11 +96,12 @@ fn a_segment_with_two_voices_becomes_one_line_per_voice() {
 #[test]
 fn the_users_echo_on_the_system_track_produces_no_line() {
     let mut v = voices(0, None);
-    let mine = speak(&mut v, Source::Mic, 0, &[(1, 4_000)]);
+    let mine = say(&mut v, Source::Mic, 0, &spoken(1, 0, 4_000, 3, 0));
     assert_eq!(mine.len(), 1);
     let user = mine[0].speaker_id;
     assert!(user.is_some());
-    let echo = speak(&mut v, Source::System, 100, &[(1, 3_800)]);
+    // The far end sends the user back 160 ms later.
+    let echo = say(&mut v, Source::System, 160, &spoken(1, 160, 3_800, 3, 8));
     assert!(echo.is_empty(), "{echo:?}");
     let remote = speak(&mut v, Source::System, 5_000, &[(2, 3_000)]);
     assert_eq!(remote.len(), 1);
@@ -239,14 +240,14 @@ fn a_provisional_split_matches_the_final_one_and_leaves_it_to_come() {
     assert_eq!(v.emitted.len(), emitted + 2);
 }
 
-/// Voice `k` whose loudness follows rhythm `rhythm` frame by frame (20 ms);
-/// the scripted model still hears voice `k`.
-fn spoken(k: usize, start_ms: u64, ms: u64, rhythm: u64) -> Vec<f32> {
+/// Voice `k` whose loudness follows rhythm `rhythm` frame by frame (20 ms),
+/// `lag` frames late; the scripted model still hears voice `k`.
+fn spoken(k: usize, start_ms: u64, ms: u64, rhythm: u64, lag: u64) -> Vec<f32> {
     let base = k as f32 / 100.0;
     (0..(ms * 16) as usize)
         .map(|i| {
             let f = start_ms / 20 + (i / 320) as u64;
-            let mut x = f.wrapping_mul(2_654_435_761) ^ rhythm.wrapping_mul(97);
+            let mut x = f.wrapping_sub(lag).wrapping_mul(2_654_435_761) ^ rhythm.wrapping_mul(97);
             x ^= x >> 13;
             let g = 1.0 + (x % 50) as f32 / 10.0;
             if i % 320 < 192 { base } else { base * g }
@@ -268,10 +269,10 @@ fn lines_that_were_only_the_call_through_the_speakers_go_at_the_end() {
     for i in 0..3u64 {
         let t = i * 4_000;
         // The microphone's copy of the call closes before the call's own.
-        leaked.extend(say(&mut v, Source::Mic, t, &spoken(3, t, 3_900, 7 + i)));
-        call.extend(say(&mut v, Source::System, t, &spoken(2, t, 3_900, 7 + i)));
+        leaked.extend(say(&mut v, Source::Mic, t, &spoken(3, t, 3_900, 7 + i, 0)));
+        call.extend(say(&mut v, Source::System, t, &spoken(2, t, 3_900, 7 + i, 0)));
     }
-    let mine = say(&mut v, Source::Mic, 15_000, &spoken(1, 15_000, 6_000, 50));
+    let mine = say(&mut v, Source::Mic, 15_000, &spoken(1, 15_000, 6_000, 50, 0));
     assert!(!leaked.is_empty() && !call.is_empty() && mine.len() == 1);
     let done = v.finish().expect("the model was loaded");
     let echoes = v.take_echoes();
@@ -438,14 +439,14 @@ fn a_late_microphone_copy_of_the_call_is_still_the_call() {
     let mut call = Vec::new();
     for i in 0..3u64 {
         let t = i * 4_000;
-        call.extend(say(&mut v, Source::System, t, &spoken(2, t, 3_900, 7 + i)));
+        call.extend(say(&mut v, Source::System, t, &spoken(2, t, 3_900, 7 + i, 0)));
     }
-    let mine = say(&mut v, Source::Mic, 15_000, &spoken(1, 15_000, 6_000, 50));
+    let mine = say(&mut v, Source::Mic, 15_000, &spoken(1, 15_000, 6_000, 50, 0));
     // The microphone's copies of the call come back only after Stop.
     let mut leaked = Vec::new();
     for i in 0..3u64 {
         let t = i * 4_000;
-        leaked.extend(say(&mut v, Source::Mic, t, &spoken(3, t, 3_900, 7 + i)));
+        leaked.extend(say(&mut v, Source::Mic, t, &spoken(3, t, 3_900, 7 + i, 0)));
     }
     assert!(!call.is_empty() && mine.len() == 1);
     v.finish().expect("the model was loaded");

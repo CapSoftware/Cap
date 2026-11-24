@@ -23,6 +23,16 @@ const LEVEL_MS: u64 = 20;
 /// (the user's voice returned by the far end), which the reverse check
 /// below catches.
 const LEAK_LAG_FRAMES: (i64, i64) = (-5, 20);
+/// The far end sends the user's voice back this long after the microphone
+/// heard it (the network both ways, jitter buffers and the far end's own
+/// audio path; a slow link can take seconds).
+const RETURN_LAG_FRAMES: (i64, i64) = (6, 150);
+/// Share of a call voice's speech that must follow the microphone for the
+/// whole voice to be the user sent back.
+const RETURN_VOICE_SHARE: f64 = 0.5;
+/// A call voice this close to the user is the user sent back however their
+/// loudness lines up (a far end that pads or reshapes its audio).
+const RETURN_VOICE_SIM: f32 = 0.8;
 /// A copy is the quieter of the two against its own track's speech: a
 /// microphone stretch this much louder (dB, relative to the microphone's
 /// usual level) than the call is (relative to the call's) is the original.
@@ -899,11 +909,17 @@ impl MeetingDiarizer {
         let call_heard_in_the_room = || {
             track == Track::System && self.heard_leak(start_ms, end_ms) >= Some(self.config.leak)
         };
+        // The call only holds the user where the far end sends them back,
+        // a beat after the microphone: music or noise on the call can make
+        // anyone on it sound a little like the user.
+        let call_returns_user = || {
+            track == Track::System && self.returns_user(start_ms, end_ms) >= Some(self.config.leak)
+        };
         if let Some((id, sim)) = other
             && sim >= self.config.assign
             && own.is_none_or(|(_, own)| sim > own)
             && !call_heard_in_the_room()
-            && (track == Track::System || mic_hears_call())
+            && (mic_hears_call() || call_returns_user())
         {
             return Decision::Echo(id);
         }
@@ -1398,6 +1414,48 @@ impl MeetingDiarizer {
             .filter_map(at_lag)
             .max_by(f32::total_cmp);
         (leads.is_none_or(|leads| follows >= leads)).then_some(follows)
+    }
+
+    /// How closely a call stretch's loudness follows the microphone's a beat
+    /// earlier (best correlation over the far end's delay): the user's voice
+    /// sent back by the call. The microphone must be speaking through most of
+    /// it, and the call must follow the microphone better than the
+    /// microphone follows the call (the speakers playing the call).
+    fn returns_user(&self, start_ms: u64, end_ms: u64) -> Option<f32> {
+        let (from, to) = (start_ms.div_ceil(LEVEL_MS), end_ms / LEVEL_MS);
+        if to < from + LEAK_MIN_FRAMES {
+            return None;
+        }
+        let call: Vec<f32> = self
+            .levels(Track::System, from, to)
+            .into_iter()
+            .collect::<Option<Vec<f32>>>()?;
+        let (lo, hi) = (
+            from.saturating_sub(RETURN_LAG_FRAMES.1 as u64),
+            to + LEAK_LAG_FRAMES.1 as u64,
+        );
+        let mic = self.levels(Track::Mic, lo, hi);
+        let floor = mic.iter().flatten().copied().fold(f32::MAX, f32::min);
+        let at = (from - lo) as i64;
+        let at_shift = |shift: i64| {
+            let begin = at + shift;
+            if begin < 0 || begin as usize + call.len() > mic.len() {
+                return None;
+            }
+            let heard = &mic[begin as usize..begin as usize + call.len()];
+            if (heard.iter().flatten().count() as f64) < call.len() as f64 * LEAK_MIN_COVER {
+                return None;
+            }
+            let heard: Vec<f32> = heard.iter().map(|v| v.unwrap_or(floor)).collect();
+            correlation(&call, &heard)
+        };
+        let (early, late) = RETURN_LAG_FRAMES;
+        let returns = (-late..=-early)
+            .filter_map(at_shift)
+            .max_by(f32::total_cmp)?;
+        let (early, late) = LEAK_LAG_FRAMES;
+        let leaks = (early..=late).filter_map(at_shift).max_by(f32::total_cmp);
+        leaks.is_none_or(|leaks| returns > leaks).then_some(returns)
     }
 
     /// How closely the microphone follows a call stretch over the longest
@@ -1965,6 +2023,19 @@ impl MeetingDiarizer {
             (Track::Mic, Track::System) => covered_by(f, &call),
             _ => covered_by(f, &spans[g]),
         };
+        // A call voice is the user sent back only where it follows the
+        // microphone a beat later, through most of its speech.
+        let returned = |f: usize| {
+            let ms: u64 = self
+                .pieces
+                .iter()
+                .zip(assignment.iter())
+                .filter(|(_, a)| matches!(a.map(FinalLabel::from), Some(FinalLabel::Speaker(g)) if g == f))
+                .filter(|(p, _)| self.returns_user(p.start_ms, p.end_ms) >= Some(self.config.leak))
+                .map(|(p, _)| p.ms())
+                .sum();
+            ms as f64 >= speech[f] as f64 * RETURN_VOICE_SHARE
+        };
         let user = self.final_user(finals, assignment);
         let mut echo_of: Vec<Option<usize>> = vec![None; finals.len()];
         for f in 0..finals.len() {
@@ -1987,6 +2058,9 @@ impl MeetingDiarizer {
                 .map(|g| (g, sim(g)))
                 .filter(|&(g, sim)| sim >= self.config.merge && covered(f, g) >= ECHO_COVERAGE)
                 .max_by(|a, b| a.1.total_cmp(&b.1))
+                .filter(|&(_, sim)| {
+                    finals[f].track == Track::Mic || sim >= RETURN_VOICE_SIM || returned(f)
+                })
                 .map(|(g, _)| FinalLabel::Echo(g).into());
             if echo_of[f].is_none()
                 && finals[f].track == Track::Mic
@@ -2081,6 +2155,8 @@ impl MeetingDiarizer {
             if let Some((f, sim)) = best
                 && sim >= self.config.assign
                 && sim > own
+                && (piece.track == Track::Mic
+                    || self.returns_user(piece.start_ms, piece.end_ms) >= Some(self.config.leak))
             {
                 assignment[i] = Some(FinalLabel::Echo(f).into());
             } else if piece.echo {

@@ -280,9 +280,20 @@ fn final_pass_corrects_an_early_mistake_with_full_context() {
 #[test]
 fn the_user_echoed_on_the_system_track_is_not_a_new_person() {
     let mut d = diarizer(speakers(4));
-    let user = only(&push(&mut d, Track::Mic, 0, &[(1, 4_000)]));
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 4_000, 3, 0, 1.0),
+    ));
     assert_eq!(d.user(), Some(user));
-    let echo = push(&mut d, Track::System, 100, &[(1, 3_800)]);
+    // The far end sends the user back 160 ms later.
+    let echo = push_samples(
+        &mut d,
+        Track::System,
+        160,
+        &spoken(1, 160, 3_800, 3, 8, 0.5),
+    );
     let remote = only(&push(&mut d, Track::System, 5_000, &[(2, 3_000)]));
     assert_eq!(echo.spans.len(), 1);
     assert_eq!(echo.spans[0].speaker, user);
@@ -295,9 +306,74 @@ fn the_user_echoed_on_the_system_track_is_not_a_new_person() {
             .count(),
         1
     );
-    let final_echo = pass.segments.iter().find(|s| s.key == 100).unwrap();
+    let final_echo = pass.segments.iter().find(|s| s.key == 160).unwrap();
     assert!(final_echo.spans.iter().all(|s| s.echo && s.speaker == user));
     assert!(pass.speakers.iter().any(|s| s.id == remote));
+}
+
+#[test]
+fn the_user_sent_back_without_their_rhythm_still_folds_into_them_at_the_end() {
+    // A far end that reshapes its audio: the call holds the user's voice but
+    // its loudness no longer lines up with the microphone's.
+    let mut d = diarizer(speakers(4));
+    let mut users = Vec::new();
+    for i in 0..3u64 {
+        let t = i * 6_000;
+        users.push(only(&push_samples(
+            &mut d,
+            Track::Mic,
+            t,
+            &spoken(1, t, 4_000, 30 + i, 0, 1.0),
+        )));
+        push(&mut d, Track::System, t + 300, &[(1, 3_800)]);
+    }
+    let user = users[0];
+    let pass = d.finish();
+    for seg in pass.segments.iter().filter(|s| s.track == Track::System) {
+        assert!(
+            seg.spans.iter().all(|s| s.echo && s.speaker == user),
+            "{seg:?}"
+        );
+    }
+    for seg in pass.segments.iter().filter(|s| s.track == Track::Mic) {
+        assert!(
+            seg.spans.iter().all(|s| !s.echo && s.speaker == user),
+            "{seg:?}"
+        );
+    }
+}
+
+#[test]
+fn the_user_sent_back_two_seconds_late_is_still_their_echo() {
+    let mut d = diarizer(speakers(4));
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    // A slow link: the far end sends the user back two seconds later.
+    let echo = push_samples(
+        &mut d,
+        Track::System,
+        2_000,
+        &spoken(1, 2_000, 5_800, 3, 100, 0.5),
+    );
+    assert!(
+        echo.spans.iter().all(|s| s.echo && s.speaker == user),
+        "{echo:?}"
+    );
+    let pass = d.finish();
+    let final_echo = pass.segments.iter().find(|s| s.key == 2_000).unwrap();
+    assert!(
+        final_echo.spans.iter().all(|s| s.echo && s.speaker == user),
+        "{final_echo:?}"
+    );
+    assert!(
+        pass.speakers.iter().all(|s| s.track != Track::System),
+        "no new person on the call: {:?}",
+        pass.speakers
+    );
 }
 
 #[test]
@@ -569,9 +645,15 @@ fn a_voice_made_only_of_the_users_echo_folds_into_the_user_at_the_end() {
     let mut ghost = None;
     for i in 0..6u64 {
         let t = 10_000 + i * 8_000;
-        let echo = push(&mut d, Track::System, t + 150, &[(1, 3_000)]);
+        // The far end sends the user back 160 ms later; its copy closes first.
+        let echo = push_samples(
+            &mut d,
+            Track::System,
+            t + 160,
+            &spoken(1, t + 160, 3_000, 20 + i, 8, 0.5),
+        );
         ghost.get_or_insert(echo.spans[0].speaker);
-        push(&mut d, Track::Mic, t, &[(1, 3_200)]);
+        push_samples(&mut d, Track::Mic, t, &spoken(1, t, 3_200, 20 + i, 0, 1.0));
         push(&mut d, Track::System, t + 4_000, &[(2, 3_000)]);
     }
     assert!(ghost.is_some());
@@ -587,7 +669,7 @@ fn a_voice_made_only_of_the_users_echo_folds_into_the_user_at_the_end() {
     for seg in pass
         .segments
         .iter()
-        .filter(|s| s.track == Track::System && s.key % 8_000 == 2_150)
+        .filter(|s| s.track == Track::System && s.key % 8_000 == 2_160)
     {
         assert!(
             seg.spans.iter().all(|s| s.echo && s.speaker == user),
@@ -1654,4 +1736,38 @@ fn a_different_remote_borderline_to_a_new_voice_never_merges_into_it() {
     let c = only(&c);
     assert_ne!(c, a);
     assert!(!b_voices.contains(&c), "C taken for B: {:?}", d.speakers());
+}
+
+#[test]
+fn a_remote_who_sounds_like_the_user_talking_over_them_is_never_their_echo() {
+    // Music on the call, or a voice much like the user's: the call sounds
+    // like the user while they talk at the same time. The call does not
+    // rise and fall with the microphone a beat later, so it is someone else.
+    let mut table = speakers(4);
+    table.push(near(1, 2, 0.75));
+    let mut d = diarizer(table);
+    let user = only(&push_samples(
+        &mut d,
+        Track::Mic,
+        0,
+        &spoken(1, 0, 6_000, 3, 0, 1.0),
+    ));
+    for i in 0..3u64 {
+        let t = 8_000 + i * 6_000;
+        push_samples(&mut d, Track::Mic, t, &spoken(1, t, 5_000, 40 + i, 0, 1.0));
+        let call = push_samples(
+            &mut d,
+            Track::System,
+            t,
+            &spoken(4, t, 5_000, 20 + i, 0, 1.0),
+        );
+        assert!(
+            call.spans.iter().all(|s| !s.echo && s.speaker != user),
+            "{call:?}"
+        );
+    }
+    let pass = d.finish();
+    for seg in pass.segments.iter().filter(|s| s.track == Track::System) {
+        assert!(seg.spans.iter().all(|s| !s.echo), "{seg:?}");
+    }
 }
