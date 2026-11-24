@@ -75,6 +75,19 @@ export function encodeLengthLimit(metadata: {
 
 export const LENGTH_LIMIT_ERROR_PREFIX = "media-length-limit-exceeded";
 
+const LENGTH_LIMIT_TOLERANCE_SECONDS = 0.5;
+
+// Whether an output encoded with a length cap ran all the way to it.
+export function reachesRequestedLength(
+	outputSeconds: number,
+	maxSeconds: number,
+): boolean {
+	return (
+		Number.isFinite(outputSeconds) &&
+		outputSeconds >= maxSeconds - LENGTH_LIMIT_TOLERANCE_SECONDS
+	);
+}
+
 // Whether a probed source runs longer than the caller allows. The header
 // length and the length the timestamps span are both measured, and the longer
 // one counts, so a header that understates the file does not pass.

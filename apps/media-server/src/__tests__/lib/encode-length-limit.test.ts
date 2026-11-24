@@ -7,6 +7,7 @@ import {
 	capOutputSeconds,
 	encodeLengthLimit,
 	exceedsRequestedLength,
+	reachesRequestedLength,
 } from "../../lib/media-common";
 import { probeVideoFile } from "../../lib/media-probe";
 import { stopProbeWorkers } from "../../lib/media-probe-pool";
@@ -161,7 +162,9 @@ describe("the encode length limit never cuts a real file short", () => {
 			},
 		);
 		try {
-			expect(await lengthOf(output.path)).toBeGreaterThanOrEqual(SECONDS - 0.2);
+			const length = await lengthOf(output.path);
+			expect(length).toBeGreaterThanOrEqual(SECONDS - 0.2);
+			expect(reachesRequestedLength(length, SECONDS + 20)).toBe(false);
 		} finally {
 			await output.cleanup();
 		}
@@ -200,6 +203,7 @@ describe("a requested length limit", () => {
 			const length = await lengthOf(output.path);
 			expect(length).toBeGreaterThan(3);
 			expect(length).toBeLessThanOrEqual(4.2);
+			expect(reachesRequestedLength(length, 4)).toBe(true);
 		} finally {
 			await output.cleanup();
 		}

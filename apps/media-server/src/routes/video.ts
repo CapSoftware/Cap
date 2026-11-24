@@ -52,6 +52,7 @@ import {
 	createGuardedMediaFetch,
 	exceedsRequestedLength,
 	LENGTH_LIMIT_ERROR_PREFIX,
+	reachesRequestedLength,
 	PROCESS_TIMEOUT_MS,
 	UPLOAD_TIMEOUT_MS,
 } from "../lib/media-common";
@@ -2071,6 +2072,18 @@ async function processVideoAsync(
 				audioIncomplete
 			)
 				throw new Error(DAMAGED_INPUT_MESSAGE);
+		}
+		// The encode stops at the requested length, so an output that reaches it
+		// came from a source longer than its probe showed: it is refused, not
+		// published cut short.
+		if (options.maxOutputSeconds && !options.existingOutput) {
+			const output = await withJobHeartbeat(jobId, () =>
+				probeVideoFile(outputPath),
+			);
+			if (reachesRequestedLength(output.duration, options.maxOutputSeconds))
+				throw new Error(
+					`${LENGTH_LIMIT_ERROR_PREFIX}: the source runs longer than ${options.maxOutputSeconds} seconds`,
+				);
 		}
 		if (
 			options.maxImportBytes &&
