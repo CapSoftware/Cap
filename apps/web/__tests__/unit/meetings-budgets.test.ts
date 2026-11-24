@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ checkRateLimit: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+	checkRateLimit: vi.fn(),
+	daily: vi.fn(),
+}));
 
 vi.mock("@vercel/firewall", () => ({ checkRateLimit: mocks.checkRateLimit }));
+vi.mock("@/lib/meetings/audio-usage", () => ({
+	consumeDailyAudioUnits: mocks.daily,
+}));
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 
 const HOUR_MS = 60 * 60_000;
@@ -22,6 +28,8 @@ beforeEach(() => {
 	vi.setSystemTime(new Date("2026-11-12T10:00:00Z"));
 	vi.stubEnv("NODE_ENV", "test");
 	mocks.checkRateLimit.mockReset();
+	mocks.daily.mockReset();
+	mocks.daily.mockResolvedValue({ allowed: true });
 	vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -323,6 +331,66 @@ describe("meeting budgets", () => {
 			),
 		).toEqual({ limited: false });
 		expect(mocks.checkRateLimit).toHaveBeenCalledTimes(12);
+	});
+
+	it("keeps the daily cap in the database across instances", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.checkRateLimit.mockResolvedValue({ rateLimited: false });
+		mocks.daily.mockResolvedValue({ allowed: false, retryAfterSeconds: 900 });
+		const { budgets } = await load();
+		expect(
+			await budgets.consumeMeetingAudioBudget(
+				"user-1",
+				CLIP_120S,
+				new Headers(),
+			),
+		).toEqual({ limited: true, retryAfterSeconds: 900 });
+		expect(mocks.daily).toHaveBeenCalledWith("user-1", 12, 3_600);
+	});
+
+	it("does not charge the day for a clip the hourly limit refused", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.checkRateLimit.mockResolvedValue({ rateLimited: true });
+		const { budgets } = await load();
+		expect(
+			(
+				await budgets.consumeMeetingAudioBudget(
+					"user-1",
+					CLIP_120S,
+					new Headers(),
+				)
+			).limited,
+		).toBe(true);
+		expect(mocks.daily).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the per-instance day when the database cannot answer", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.checkRateLimit.mockResolvedValue({ rateLimited: false });
+		mocks.daily.mockResolvedValue({ allowed: undefined });
+		const { budgets } = await load();
+		const headers = new Headers();
+		for (let index = 0; index < 300; index++)
+			expect(
+				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
+			).toEqual({ limited: false });
+		const limited = await budgets.consumeMeetingAudioBudget(
+			"user-1",
+			CLIP_120S,
+			headers,
+		);
+		expect(limited.limited).toBe(true);
+	});
+
+	it("needs no fallback while the firewall and the database both answer", async () => {
+		vi.stubEnv("NODE_ENV", "production");
+		mocks.checkRateLimit.mockResolvedValue({ rateLimited: false });
+		const { budgets } = await load();
+		const headers = new Headers();
+		for (let index = 0; index < 400; index++)
+			expect(
+				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
+			).toEqual({ limited: false });
 	});
 
 	it("charges notes and Ask one more unit per started 100 KB of body", async () => {

@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
 		string,
 		{ completed: boolean; runs: number; asks: number }
 	>(),
+	daily: vi.fn(),
+}));
+
+vi.mock("@/lib/meetings/audio-usage", () => ({
+	consumeDailyAudioUnits: mocks.daily,
 }));
 
 // Mirrors lib/meetings/trial.ts (covered against MySQL in
@@ -311,6 +316,8 @@ beforeEach(() => {
 		mocks.generateText,
 	])
 		fn.mockReset();
+	mocks.daily.mockReset();
+	mocks.daily.mockResolvedValue({ allowed: true });
 	mocks.upload.mockResolvedValue("https://cdn.example/upload/1");
 	mocks.remove.mockResolvedValue({});
 	vi.spyOn(console, "log").mockImplementation(() => {});
@@ -539,6 +546,20 @@ describe("POST /transcribe gates", () => {
 			error: "invalid_request",
 			detail: "audio: unsupported_format",
 		});
+		expect(mocks.upload).not.toHaveBeenCalled();
+	});
+
+	it("refuses audio over the daily cap before the provider, until the next day", async () => {
+		const user = signIn();
+		mocks.daily.mockResolvedValue({ allowed: false, retryAfterSeconds: 4_321 });
+		const response = await transcribe(wav(16_000 * 25));
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("4321");
+		expect(await response.json()).toEqual({
+			error: "rate_limited",
+			retryAfterSeconds: 4_321,
+		});
+		expect(mocks.daily).toHaveBeenCalledWith(user.id, 3, 3_600);
 		expect(mocks.upload).not.toHaveBeenCalled();
 	});
 
