@@ -1380,10 +1380,14 @@ fn look_at_outputs(reader: Option<u32>) -> (Option<String>, Option<bool>, Option
 
 #[cfg(target_os = "linux")]
 fn spawn_monitor_reader(sink: Option<&str>) -> std::io::Result<std::process::Child> {
-    let device = match sink {
-        Some(sink) => format!("--device={sink}.monitor"),
-        None => "--device=@DEFAULT_MONITOR@".to_string(),
+    let default = match sink {
+        Some(_) => None,
+        None => sink::parse_default_sink(&pactl(&["info"])),
     };
+    let device = format!(
+        "--device={}",
+        sink::monitor_device(sink, default.as_deref())
+    );
     std::process::Command::new("parec")
         .args([
             device.as_str(),
