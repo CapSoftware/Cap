@@ -16,25 +16,33 @@ use cap_project::redaction::{REDACTIONS_FILE, Redactions};
 use sha2::Digest;
 
 /// The model the analyser runs, by version, with each file's checksum.
-pub const MODEL_VERSION: &str = "ppocrv4-baseline";
+pub const MODEL_VERSION: &str = "redact-v1.1";
 const MODEL_BASE_URL: &str =
-    "https://github.com/CapSoftware/transcription-models/releases/download/redact-v1";
+    "https://github.com/CapSoftware/transcription-models/releases/download/redact-v1.1";
 const MODEL_FILES: &[(&str, &str)] = &[
     (
         "det.onnx",
-        "61f72d72f815ad78c1f5ed2b7298df62c2e6c025cebad4fbfa972b8a5ac33ebd",
+        "ce4664924cc0977346c92a02483adc8aa46d0ca88cf4ee09b633e9a1a8b74017",
     ),
     (
         "rec.onnx",
-        "d13f1c4bb6a74353db6a387b11cc6a59917568954da8444c35492611065e4321",
+        "301364fd2aef7dfdd378a6ab4726ac050d969f0caef46a2a27d0aabc62024b60",
     ),
     (
         "charset.txt",
-        "aab362a7748f5e47d2440f67ecbcb7aab0f1a4d43dda470edb46570fbccf7f82",
+        "0795eaab5495788af7cb3eedff39adf8c7eccb9a2d039a73f2cd7a9b50bde357",
     ),
     (
         "meta.json",
-        "e599f3c5a41a0021504352d5a3fcef0d45bc692d2c386a6173f79154ccbe272e",
+        "9271c7bc6c923e44fe56bf645b5fe9fea1322917428fcd576ef0d7431cd14e53",
+    ),
+    (
+        "det.wgsl.json",
+        "772ab15c0f748fb50bbf824d6aed18eb0f68f2258e31d2982be57a84e694bebf",
+    ),
+    (
+        "det.wgsl.bin",
+        "d69cd49f8b3510d12bc39e6ffdb35b3f1dec07b16934b52addeb7ca59b6382eb",
     ),
 ];
 
