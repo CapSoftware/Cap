@@ -676,3 +676,39 @@ fn findings_cover_whole_words_and_whole_names() {
         }]
     );
 }
+
+#[test]
+fn three_octets_in_an_ip_column_are_a_cut_address() {
+    let line = |text, y| LineContext {
+        text,
+        x: 0.52,
+        y,
+        w: 0.047,
+        h: 0.022,
+    };
+    let lines = [
+        line("IP", 0.17),
+        line("192.87.27.1", 0.28),
+        line("159.182.129", 0.36),
+        line("10.125.58.7", 0.44),
+        LineContext {
+            text: "1.2.3",
+            x: 0.1,
+            y: 0.36,
+            w: 0.02,
+            h: 0.022,
+        },
+    ];
+    let own = lines.iter().map(|l| classify_line(l.text)).collect();
+    let found = classify_frame_with(&lines, own);
+    assert!(
+        found[2]
+            .iter()
+            .any(|f| f.category == Ip && f.start == 0 && f.end == 11),
+        "{found:?}"
+    );
+    assert!(found[4].iter().all(|f| f.category != Ip), "{found:?}");
+    let alone = [line("159.182.129", 0.36)];
+    let own = alone.iter().map(|l| classify_line(l.text)).collect();
+    assert!(classify_frame_with(&alone, own)[0].is_empty());
+}

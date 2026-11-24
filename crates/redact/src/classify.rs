@@ -48,6 +48,12 @@ static IPV4: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// Three octets and a dot at the end of a line: an address cut off by a
 /// window over it or the frame edge.
+/// A whole line of three IPv4 octets: an address its cell or pane cuts off.
+static IPV4_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"^\s*(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2}\.?\s*$",
+    )
+});
 static CUT_IPV4: LazyLock<Regex> = LazyLock::new(|| {
     re(
         r"(?:^|[^0-9A-Za-z.])((?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){2}\.)\s*$",
@@ -482,6 +488,7 @@ pub fn classify_frame_with(
 ) -> Vec<Vec<Finding>> {
     join_wrapped_lines(lines, &mut results);
     names_from_layout(lines, &mut results);
+    ips_from_columns(lines, &mut results);
     for (label_index, label) in lines.iter().enumerate() {
         if !LABEL_ONLY.is_match(label.text) {
             continue;
@@ -524,6 +531,42 @@ pub fn classify_frame_with(
         }
     }
     results
+}
+
+/// Three octets alone on a line, in the same column as a line holding an IP
+/// address (a sheet or table column too narrow for the whole address), are
+/// the visible part of one.
+fn ips_from_columns(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
+    let has_ip = |index: usize| {
+        results[index]
+            .iter()
+            .any(|f| f.category == RedactCategory::Ip)
+    };
+    let cut = (0..lines.len())
+        .filter(|&index| !has_ip(index) && IPV4_PREFIX.is_match(lines[index].text))
+        .filter(|&index| {
+            let line = &lines[index];
+            (0..lines.len()).any(|other| {
+                let o = &lines[other];
+                let shared = (line.x + line.w).min(o.x + o.w) - line.x.max(o.x);
+                other != index
+                    && has_ip(other)
+                    && shared > 0.5 * line.w.min(o.w)
+                    && (o.y - line.y).abs() < line.h * 8.0
+            })
+        })
+        .collect::<Vec<_>>();
+    for index in cut {
+        let text = lines[index].text;
+        let start = text.chars().take_while(|c| c.is_whitespace()).count();
+        let end =
+            text.chars().count() - text.chars().rev().take_while(|c| c.is_whitespace()).count();
+        results[index].push(Finding {
+            category: RedactCategory::Ip,
+            start,
+            end,
+        });
+    }
 }
 
 /// Names the page's layout gives away: the line under a sign-off ("Best" /
