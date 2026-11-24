@@ -6,6 +6,7 @@ import {
 	RATE_LIMIT_IDS,
 	type RollingBudgetRule,
 } from "@/lib/rate-limit";
+import { consumeDailyAudioUnits } from "./audio-usage";
 import { MEETING_CLIP_SAMPLE_RATE } from "./wav";
 
 export type MeetingEndpoint = "transcribe" | "notes" | "ask";
@@ -109,6 +110,9 @@ export async function consumeMeetingBodyBudget(
 		: { limited: true, retryAfterSeconds: decision.retryAfterSeconds };
 }
 
+// The firewall keeps the hourly limit and the database the daily one, both
+// across instances. When either cannot answer, the per-instance daily window
+// stands in.
 export async function consumeMeetingAudioBudget(
 	userId: string,
 	samples: number,
@@ -126,7 +130,15 @@ export async function consumeMeetingAudioBudget(
 			limited: true,
 			retryAfterSeconds: AUDIO_FIREWALL_RETRY_AFTER_SECONDS,
 		};
-	if (firewall === false) return { limited: false };
+
+	const daily = await consumeDailyAudioUnits(
+		userId,
+		units,
+		MEETING_AUDIO_BUDGET.limit,
+	);
+	if (daily.allowed === false)
+		return { limited: true, retryAfterSeconds: daily.retryAfterSeconds };
+	if (firewall === false && daily.allowed) return { limited: false };
 
 	const decision = await consumeRollingBudget(ruleId, {
 		key: userId,

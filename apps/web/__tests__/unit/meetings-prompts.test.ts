@@ -356,6 +356,46 @@ describe("buildAskPrompt", () => {
 		expect(result.text).not.toContain("part 200 ");
 	});
 
+	it("keeps excerpts within a byte budget", () => {
+		const transcript = Array.from(
+			{ length: 100 },
+			(_, index) => `Speaker 1: 第${index}部分 ${"预算".repeat(600)}`,
+		).join("\n");
+		const bytes = (text: string) => Buffer.byteLength(text);
+		const result = prompts.selectTranscriptExcerpts(
+			transcript,
+			"预算",
+			50_000,
+			bytes,
+		);
+		expect(result.excerpted).toBe(true);
+		expect(bytes(result.text)).toBeLessThanOrEqual(50_000);
+		expect(bytes(result.text)).toBeGreaterThan(30_000);
+	});
+
+	it("shortens the most related excerpt when no whole one fits", () => {
+		const transcript = [
+			`Speaker 1: ${"roadmap ".repeat(495)}`,
+			`Speaker 2: the code word is PINEAPPLE ${"€".repeat(1_500)}`,
+		].join("\n");
+		const result = prompts.selectTranscriptExcerpts(
+			transcript,
+			"code word",
+			200,
+			(text) => Buffer.byteLength(text),
+		);
+		expect(
+			result.text.startsWith("Speaker 2: the code word is PINEAPPLE"),
+		).toBe(true);
+		expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(200);
+	});
+
+	it("never splits a character between excerpts", () => {
+		const line = `a${"\u{20000}".repeat(3_000)}`;
+		for (const chunk of prompts.chunkTranscript(line, 4_000))
+			expect(chunk).not.toMatch(/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/);
+	});
+
 	it("ranks non-Latin questions too", () => {
 		expect(prompts.queryTerms("预算是多少")).toContain("预算");
 		expect(prompts.queryTerms("Wann starten wir das Budget?")).toEqual([
