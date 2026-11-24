@@ -78,6 +78,11 @@ export function WebPublishControls() {
 			// stale. A freshly opened editor isn't the tab rendering it, so its
 			// Save stays available and replaces that save.
 			if (resuming && next.inBrowser) return "idle";
+			// A farm save still rendering when the editor opens gets the same
+			// stall check as one this tab started.
+			if (resuming && !farmSave) {
+				farmSave = { progress: next.progress, progressAt: Date.now() };
+			}
 			if (farmSave && !resuming) {
 				const now = Date.now();
 				if (next.progress > farmSave.progress || next.playable) {
