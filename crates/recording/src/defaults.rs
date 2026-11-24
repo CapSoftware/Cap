@@ -84,9 +84,6 @@ pub fn balanced_studio_video_bitrate_for_display(
     balanced_studio_video_bitrate(width, height, fps)
 }
 
-/// What Balanced targets for a Studio screen recording of this size and
-/// frame rate on the default (crash-recoverable) path, rounded to whole
-/// Mbps inside the custom bitrate range.
 pub fn balanced_studio_video_bitrate(width: u32, height: u32, fps: u32) -> u32 {
     let (width, height) =
         crate::calculate_gpu_compatible_size(width, height, crate::H264_MAX_DIMENSION)

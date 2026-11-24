@@ -722,8 +722,6 @@ fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 
     (width as f32 * height as f32 * frame_rate_factor * multiplier) as u32
 }
 
-/// The multiplier that makes [`calculate_bitrate`] produce `bitrate` for this
-/// output size and frame rate.
 pub fn bitrate_multiplier_for(width: u32, height: u32, fps: u32, bitrate: u32) -> f32 {
     let frame_rate_factor = (fps as f64 - 30.0).max(0.0) / 2.0 + 30.0;
     let pixels_per_second = width as f64 * height as f64 * frame_rate_factor;

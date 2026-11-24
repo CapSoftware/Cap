@@ -107,8 +107,6 @@ impl H264EncoderBuilder {
         get_bitrate(ensure_even(width), ensure_even(height), frame_rate, bpp)
     }
 
-    /// The bits per pixel that make the encoder target `video_bitrate` for
-    /// this input and output size, or `bpp` unchanged when there is none.
     pub fn bpp_for_video_bitrate(
         bpp: f32,
         video_bitrate: Option<u32>,
