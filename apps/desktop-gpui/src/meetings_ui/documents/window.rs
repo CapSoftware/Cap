@@ -55,6 +55,8 @@ pub type ToastExpire = Rc<dyn Fn(&mut App)>;
 pub struct Toast {
     serial: u64,
     message: SharedString,
+    /// A second, quieter line: why, when Cap can tell.
+    detail: Option<SharedString>,
     action: Option<(SharedString, ToastAction)>,
     on_expire: Option<ToastExpire>,
 }
@@ -174,7 +176,15 @@ fn open_with(doc_id: Option<String>, type_into: bool, cx: &mut App) {
 
 /// Open the notes window and say `message` there, for something that went
 /// wrong where no window was showing (a start from the tray or a hotkey).
-pub fn open_with_message(message: impl Into<SharedString>, cx: &mut App) {
+/// Open the notes window to say something went wrong elsewhere. The window
+/// may have opened while the person was looking at something else, so the
+/// message stays until they dismiss it (Escape, a click on it, or the next
+/// message) instead of fading after a few seconds.
+pub fn open_with_message(
+    message: impl Into<SharedString>,
+    detail: Option<SharedString>,
+    cx: &mut App,
+) {
     open(None, cx);
     let Some(handle) = MeetingWindows::get(cx).documents else {
         return;
@@ -183,7 +193,7 @@ pub fn open_with_message(message: impl Into<SharedString>, cx: &mut App) {
     handle
         .update(cx, |root, _, cx| {
             if let Ok(root) = root.downcast::<DocumentsWindow>() {
-                root.update(cx, |root, cx| root.show_toast(message, None, None, cx));
+                root.update(cx, |root, cx| root.show_notice(message, detail, cx));
             }
         })
         .ok();
@@ -468,6 +478,37 @@ impl DocumentsWindow {
         on_expire: Option<ToastExpire>,
         cx: &mut Context<Self>,
     ) {
+        let serial = self.replace_toast(message.into(), None, action, on_expire, cx);
+        self.toast_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_FOR).await;
+            this.update(cx, |this, cx| this.expire_toast(serial, cx))
+                .ok();
+        }));
+        cx.notify();
+    }
+
+    /// A message that stays until the person dismisses it or the next one
+    /// replaces it.
+    pub fn show_notice(
+        &mut self,
+        message: SharedString,
+        detail: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = detail.filter(|detail| !detail.is_empty());
+        self.replace_toast(message, detail, None, None, cx);
+        self.toast_task = None;
+        cx.notify();
+    }
+
+    fn replace_toast(
+        &mut self,
+        message: SharedString,
+        detail: Option<SharedString>,
+        action: Option<(SharedString, ToastAction)>,
+        on_expire: Option<ToastExpire>,
+        cx: &mut Context<Self>,
+    ) -> u64 {
         if let Some(previous) = self.toast.take()
             && let Some(expire) = previous.on_expire
         {
@@ -477,16 +518,12 @@ impl DocumentsWindow {
         let serial = self.toast_serial;
         self.toast = Some(Toast {
             serial,
-            message: message.into(),
+            message,
+            detail,
             action,
             on_expire,
         });
-        self.toast_task = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(TOAST_FOR).await;
-            this.update(cx, |this, cx| this.expire_toast(serial, cx))
-                .ok();
-        }));
-        cx.notify();
+        serial
     }
 
     fn expire_toast(&mut self, serial: u64, cx: &mut Context<Self>) {
@@ -647,6 +684,11 @@ impl DocumentsWindow {
         let toast = self.toast.as_ref()?;
         let palette = self.palette;
         let action = toast.action.as_ref().map(|(label, _)| label.clone());
+        let detail = toast
+            .detail
+            .clone()
+            .map(|detail| div().min_w_0().text_color(palette.muted).child(detail));
+        let dismissable = action.is_none();
         Some(
             div()
                 .absolute()
@@ -662,17 +704,29 @@ impl DocumentsWindow {
                         .flex()
                         .items_center()
                         .gap(px(12.))
-                        .h(px(36.))
+                        .min_h(px(36.))
+                        .max_w(px(MIN_WIDTH - 40.))
+                        .when(dismissable, |el| el.py(px(8.)))
                         .pl(px(14.))
                         .pr(px(if action.is_some() { 6. } else { 14. }))
-                        .rounded_full()
+                        .rounded(px(18.))
                         .bg(palette.capsule)
                         .border_1()
                         .border_color(palette.capsule_border)
                         .shadow(palette.shadow())
                         .text_size(px(13.))
                         .text_color(palette.text)
-                        .child(toast.message.clone())
+                        .when(dismissable, |el| {
+                            el.cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| this.dismiss_toast(cx)))
+                        })
+                        .child(
+                            div()
+                                .flex_none()
+                                .whitespace_nowrap()
+                                .child(toast.message.clone()),
+                        )
+                        .children(detail)
                         .children(action.map(|label| {
                             div()
                                 .id("documents-toast-action")
@@ -950,7 +1004,7 @@ impl DocumentsWindow {
 
 #[cfg(test)]
 mod tests {
-    use gpui::TestAppContext;
+    use gpui::{SharedString, TestAppContext};
 
     use crate::meetings_ui::MeetingWindows;
 
@@ -980,23 +1034,82 @@ mod tests {
         assert_eq!(cx.update(|cx| MeetingWindows::get(cx).documents), first);
     }
 
-    /// A start that fails from the tray or a hotkey, with no window showing,
-    /// opens the notes window and says so instead of doing nothing.
+    /// A start that fails from the tray, a hotkey or by itself, with no
+    /// window showing, opens the notes window and says so and why. The
+    /// window may open while the person looks elsewhere, so the message
+    /// stays until they dismiss it.
     #[gpui::test]
     fn a_failed_start_from_outside_the_window_says_so(cx: &mut TestAppContext) {
         assert_eq!(notes_windows(cx), 0);
-        cx.update(|cx| super::open_with_message("Recording couldn't start.", cx));
+        cx.update(|cx| {
+            super::open_with_message(
+                "Recording couldn't start.",
+                Some("Check the free space on your disk and try again.".into()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         assert_eq!(notes_windows(cx), 1);
         let handle = cx.update(|cx| MeetingWindows::get(cx).documents).unwrap();
-        let shown = handle
+        let shown = |cx: &mut TestAppContext| {
+            handle
+                .update(cx, |root, _, cx| {
+                    root.downcast::<super::DocumentsWindow>()
+                        .ok()
+                        .and_then(|root| {
+                            root.read(cx)
+                                .toast
+                                .as_ref()
+                                .map(|t| (t.message.clone(), t.detail.clone()))
+                        })
+                })
+                .unwrap()
+        };
+        let expected = Some((
+            SharedString::from("Recording couldn't start."),
+            Some(SharedString::from(
+                "Check the free space on your disk and try again.",
+            )),
+        ));
+        assert_eq!(shown(cx), expected);
+        cx.executor().advance_clock(super::TOAST_FOR * 10);
+        cx.run_until_parked();
+        assert_eq!(shown(cx), expected);
+        handle
             .update(cx, |root, _, cx| {
-                root.downcast::<super::DocumentsWindow>()
-                    .ok()
-                    .and_then(|root| root.read(cx).toast.as_ref().map(|t| t.message.clone()))
+                if let Ok(root) = root.downcast::<super::DocumentsWindow>() {
+                    root.update(cx, |root, cx| root.dismiss_toast(cx));
+                }
             })
             .unwrap();
-        assert_eq!(shown.as_deref(), Some("Recording couldn't start."));
+        assert_eq!(shown(cx), None);
+    }
+
+    /// An everyday message still fades on its own.
+    #[gpui::test]
+    fn an_everyday_message_fades(cx: &mut TestAppContext) {
+        cx.update(|cx| super::open(None, cx));
+        cx.run_until_parked();
+        let handle = cx.update(|cx| MeetingWindows::get(cx).documents).unwrap();
+        let has_toast = |cx: &mut TestAppContext| {
+            handle
+                .update(cx, |root, _, cx| {
+                    root.downcast::<super::DocumentsWindow>()
+                        .is_ok_and(|root| root.read(cx).toast.is_some())
+                })
+                .unwrap()
+        };
+        handle
+            .update(cx, |root, _, cx| {
+                if let Ok(root) = root.downcast::<super::DocumentsWindow>() {
+                    root.update(cx, |root, cx| root.show_toast("Copied", None, None, cx));
+                }
+            })
+            .unwrap();
+        assert!(has_toast(cx));
+        cx.executor().advance_clock(super::TOAST_FOR * 2);
+        cx.run_until_parked();
+        assert!(!has_toast(cx));
     }
 
     /// A notes window that goes away clears only its own slot, so a newer

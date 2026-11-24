@@ -189,7 +189,8 @@ pub fn start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
         MeetingError::NotFound => crate::i18n::tr::documents::bar::error_not_found(),
         _ => crate::i18n::tr::documents::bar::error_start(),
     };
-    window::open_with_message(message, cx);
+    let reason = start_failure_reason(&error).map(SharedString::from);
+    window::open_with_message(message, reason, cx);
 }
 
 /// Why a start failed, in the person's words, when Cap can tell: a full
@@ -279,7 +280,7 @@ pub fn auto_start_failed(error: crate::meetings::MeetingError, cx: &mut App) {
     };
     let body: SharedString = start_failure_reason(&error).unwrap_or_default().into();
     if !crate::notifications::enabled() {
-        window::open_with_message(title, cx);
+        window::open_with_message(title, Some(body), cx);
         return;
     }
     notify_start_failure(title, body, cx);
@@ -293,13 +294,13 @@ fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
         cx.update(|cx| {
             if !allowed {
                 tracing::info!("notifications are not allowed; opening the notes window");
-                window::open_with_message(title, cx);
+                window::open_with_message(title, Some(body), cx);
                 return;
             }
-            let message = title.clone();
+            let (message, detail) = (title.clone(), body.clone());
             cx.on_system_notification_response(move |response, cx| {
                 if response.tag.as_ref() == START_FAILED_TAG {
-                    window::open_with_message(message.clone(), cx);
+                    window::open_with_message(message.clone(), Some(detail.clone()), cx);
                 }
             });
             cx.show_system_notification(gpui::SystemNotification {
@@ -331,14 +332,14 @@ fn notify_start_failure(title: SharedString, body: SharedString, cx: &mut App) {
         });
     if let Err(error) = spawned {
         tracing::warn!(%error, "could not show the notification; opening the notes window");
-        window::open_with_message(title, cx);
+        window::open_with_message(title, Some(body), cx);
         return;
     }
     cx.spawn(async move |cx| {
         let outcome = rx.recv_async().await.unwrap_or(Outcome::NotShown);
         tracing::info!(?outcome, "start failure notification");
         if outcome != Outcome::Closed {
-            cx.update(|cx| window::open_with_message(title, cx));
+            cx.update(|cx| window::open_with_message(title, Some(body), cx));
         }
     })
     .detach();
