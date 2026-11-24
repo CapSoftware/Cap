@@ -12,8 +12,8 @@ function record(value: unknown): Record<string, unknown> | null {
 		: null;
 }
 
-export function backgroundImagePath(config: unknown) {
-	const source = record(record(record(config)?.background)?.source);
+function imageSourcePath(background: unknown) {
+	const source = record(record(background)?.source);
 	if (
 		!source ||
 		(source.type !== "image" && source.type !== "wallpaper") ||
@@ -22,6 +22,24 @@ export function backgroundImagePath(config: unknown) {
 		return null;
 	}
 	return source.path || null;
+}
+
+export function backgroundImagePath(config: unknown) {
+	return imageSourcePath(record(config)?.background);
+}
+
+/// Images that style segments swap in as the background while they are
+/// active; the renderer reads them by path like the main background.
+export function styleBackgroundImagePaths(config: unknown) {
+	const segments = record(record(config)?.timeline)?.styleSegments;
+	if (!Array.isArray(segments)) return [];
+	const paths = segments.flatMap((segment) => {
+		const path = imageSourcePath(
+			record(record(segment)?.overrides)?.background,
+		);
+		return path ? [path] : [];
+	});
+	return [...new Set(paths)];
 }
 
 export function backgroundImageUrl(path: string) {

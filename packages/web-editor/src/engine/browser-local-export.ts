@@ -1,3 +1,4 @@
+import { styleBackgroundImagePaths } from "./browser-background-preload";
 import {
 	type ExportBitrateSample,
 	exportBitrateSample,
@@ -257,6 +258,7 @@ async function exportJob(
 			background.path
 				? [background.path]
 				: []),
+			...styleBackgroundImagePaths(config),
 			...segmentPaths(timeline?.imageSegments),
 		];
 		const assetUrls: Record<string, string> = {};

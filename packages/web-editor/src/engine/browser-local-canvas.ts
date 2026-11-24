@@ -10,6 +10,7 @@ import {
 import {
 	backgroundImagePath,
 	backgroundImageUrl,
+	styleBackgroundImagePaths,
 	takePreloadedBackground,
 } from "./browser-background-preload";
 import {
@@ -425,12 +426,16 @@ export class BrowserLocalCanvas {
 		const path = backgroundImagePath(config);
 		if (!path) takePreloadedBackground(null);
 		const background = path ? this.loadImageAsset(path) : null;
+		const styleBackgrounds = styleBackgroundImagePaths(config).map(
+			(stylePath) => this.loadImageAsset(stylePath),
+		);
 		const update = this.configQueue.then(async () => {
 			await this.mounted;
 			if (this.disposed || !this.renderer) {
 				throw new Error("Editor canvas is closed");
 			}
 			await background;
+			await Promise.allSettled(styleBackgrounds);
 			this.textRanges = textRanges(config);
 			if (this.textRanges.length > 0 && this.rendered) void this.loadFonts();
 			if (this.disposed || !this.renderer) {
