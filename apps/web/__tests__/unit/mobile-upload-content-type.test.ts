@@ -34,6 +34,11 @@ vi.mock("@cap/database/auth/auth-options", () => ({ authOptions: () => ({}) }));
 vi.mock("@cap/database/emails/config", () => ({ sendEmail: vi.fn() }));
 vi.mock("@cap/database/video-sharing-default", () => ({
 	getNewVideoPublic: vi.fn(async () => true),
+	getNewVideoSharingDefaults: vi.fn(async () => ({
+		public: true,
+		sharedWithOrganization: false,
+	})),
+	newVideoOrganizationShare: vi.fn(),
 }));
 vi.mock("@/app/(org)/dashboard/analytics/data", () => ({}));
 vi.mock("@/lib/account-deletion-request", () => ({}));

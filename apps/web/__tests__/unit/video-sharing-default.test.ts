@@ -1,4 +1,7 @@
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import {
+	getNewVideoPublic,
+	getNewVideoSharingDefaults,
+} from "@cap/database/video-sharing-default";
 import type { Organisation } from "@cap/web-domain";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,5 +56,41 @@ describe("new recording visibility", () => {
 		await expect(getNewVideoPublic(ORGANIZATION_ID)).rejects.toThrow(
 			"Organization not found",
 		);
+	});
+
+	it("keeps new recordings out of the organization library unless the organization opts in", async () => {
+		lookup.limit.mockResolvedValue([
+			{ defaultVideoVisibility: null, settings: null, tombstoneAt: null },
+		]);
+		expect(await getNewVideoSharingDefaults(ORGANIZATION_ID)).toEqual({
+			public: true,
+			sharedWithOrganization: false,
+		});
+
+		lookup.limit.mockResolvedValue([
+			{
+				defaultVideoVisibility: null,
+				settings: { shareNewVideosWithOrganization: false },
+				tombstoneAt: null,
+			},
+		]);
+		expect(
+			(await getNewVideoSharingDefaults(ORGANIZATION_ID))
+				.sharedWithOrganization,
+		).toBe(false);
+	});
+
+	it("shares new recordings with the organization independently of link visibility", async () => {
+		lookup.limit.mockResolvedValue([
+			{
+				defaultVideoVisibility: "private",
+				settings: { shareNewVideosWithOrganization: true },
+				tombstoneAt: null,
+			},
+		]);
+		expect(await getNewVideoSharingDefaults(ORGANIZATION_ID)).toEqual({
+			public: false,
+			sharedWithOrganization: true,
+		});
 	});
 });

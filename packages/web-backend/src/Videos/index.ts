@@ -1,6 +1,6 @@
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import { getNewVideoSharingDefaults } from "@cap/database/video-sharing-default";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { dub } from "@cap/utils";
 import {
@@ -708,14 +708,15 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						},
 					)} ${now.getFullYear()}`;
 
+					const sharingDefaults = yield* Effect.tryPromise({
+						try: () => getNewVideoSharingDefaults(input.orgId),
+						catch: (cause) => new DatabaseError({ cause }),
+					});
 					const createData: RepoCreateVideoInput = {
 						ownerId: user.id,
 						orgId: input.orgId,
 						name: `Cap Recording - ${formattedDate}`,
-						public: yield* Effect.tryPromise({
-							try: () => getNewVideoPublic(input.orgId),
-							catch: (cause) => new DatabaseError({ cause }),
-						}),
+						public: sharingDefaults.public,
 						source: { type: "webMP4" },
 						bucketId,
 						storageIntegrationId,
@@ -731,6 +732,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							(input.supportsUploadProgress ?? true)
 								? { mode: "singlepart" }
 								: undefined,
+						sharedWithOrganization: sharingDefaults.sharedWithOrganization,
 					});
 					const fileKey = `${user.id}/${videoId}/result.mp4`;
 					const upload = yield* writable.access.createUploadTarget(fileKey, {

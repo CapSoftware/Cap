@@ -13,7 +13,11 @@ const deletion = vi.hoisted(() => ({
 	principal: vi.fn(),
 }));
 const defaultSharing = vi.hoisted(() => ({
-	getNewVideoPublic: vi.fn(),
+	getNewVideoSharingDefaults: vi.fn(),
+	newVideoOrganizationShare: (share: Record<string, unknown>) => ({
+		id: "share-1",
+		...share,
+	}),
 }));
 
 const schema = {
@@ -22,6 +26,7 @@ const schema = {
 	users: { table: "users" },
 	videos: { table: "videos" },
 	videoUploads: { table: "videoUploads" },
+	sharedVideos: { table: "sharedVideos" },
 	importedVideos: { table: "importedVideos" },
 	authApiKeys: { table: "authApiKeys" },
 };
@@ -527,7 +532,10 @@ describe("GET /create", () => {
 		vi.clearAllMocks();
 		resetMockDb();
 		stubStorage();
-		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
+		defaultSharing.getNewVideoSharingDefaults.mockResolvedValue({
+			public: true,
+			sharedWithOrganization: false,
+		});
 		const mod = await import("@/app/api/desktop/[...route]/video");
 		app = mod.app;
 	});
@@ -606,7 +614,10 @@ describe("GET /create", () => {
 	});
 
 	it("creates a private recording when the organization default resolves to private", async () => {
-		defaultSharing.getNewVideoPublic.mockResolvedValue(false);
+		defaultSharing.getNewVideoSharingDefaults.mockResolvedValue({
+			public: false,
+			sharedWithOrganization: false,
+		});
 		mockGetCurrentUser.mockResolvedValue({
 			id: "user-1",
 			email: "someone@cap.test",
@@ -623,10 +634,47 @@ describe("GET /create", () => {
 		const response = await app.request("https://cap.test/create");
 
 		expect(response.status).toBe(200);
-		expect(defaultSharing.getNewVideoPublic).toHaveBeenCalledWith("org-1");
+		expect(defaultSharing.getNewVideoSharingDefaults).toHaveBeenCalledWith(
+			"org-1",
+		);
 		expect(insertedValues(schema.videos)).toMatchObject({
 			orgId: "org-1",
 			public: false,
+		});
+		expect(insertedValues(schema.sharedVideos)).toBeUndefined();
+	});
+
+	it("shares a new recording with its organization when the organization opts in", async () => {
+		defaultSharing.getNewVideoSharingDefaults.mockResolvedValue({
+			public: false,
+			sharedWithOrganization: true,
+		});
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+
+		const response = await app.request("https://cap.test/create");
+
+		expect(response.status).toBe(200);
+		const body = await response.json();
+		expect(insertedValues(schema.videos)).toMatchObject({
+			orgId: "org-1",
+			public: false,
+		});
+		expect(insertedValues(schema.sharedVideos)).toEqual({
+			id: "share-1",
+			videoId: body.id,
+			organizationId: "org-1",
+			sharedByUserId: "user-1",
 		});
 	});
 
