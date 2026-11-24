@@ -87,14 +87,6 @@ jobs:
             slug: macos
             target: aarch64-apple-darwin
             runner: blacksmith-6vcpu-macos-15
-          - name: Windows
-            slug: windows
-            target: x86_64-pc-windows-msvc
-            runner: windows-2022
-          - name: Linux X11
-            slug: linux-x11
-            target: x86_64-unknown-linux-gnu
-            runner: blacksmith-8vcpu-ubuntu-2404
     runs-on: ${{ matrix.settings.runner }}
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -150,6 +142,22 @@ jobs:
               ln -sfn "$GITHUB_WORKSPACE/target/Frameworks/Spacedrive.framework" "$frameworks/Spacedrive.framework"
             done
           fi
+
+      - name: Stage the macOS build
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/mac-build"
+          cp "$GITHUB_WORKSPACE/apps/desktop-gpui/target/${{ matrix.settings.target }}/debug/cap-gpui" "$RUNNER_TEMP/mac-build/"
+          git rev-parse HEAD > "$RUNNER_TEMP/mac-build/commit.txt"
+
+      - name: Upload the macOS build
+        if: ${{ runner.os == 'macOS' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cap-gpui-debug-macos
+          path: ${{ runner.temp }}/mac-build
+          retention-days: 2
 
       - name: Screen capture permission
         if: ${{ runner.os == 'macOS' }}
