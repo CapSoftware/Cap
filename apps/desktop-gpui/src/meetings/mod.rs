@@ -710,6 +710,44 @@ fn system_audio_grant() -> health::AudioGrant {
     }
 }
 
+/// Another app is playing sound right now (macOS: Core Audio's per-process
+/// output state). Walking every audio process takes a millisecond or more,
+/// and now and then far longer, so it never runs here on the UI thread: a
+/// short-lived thread refreshes the answer at most every 5 s while the
+/// watchdog asks, and the watchdog reads the last one. Elsewhere a capture
+/// going quiet is normal, so never.
+#[cfg(target_os = "macos")]
+fn others_playing() -> bool {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static PLAYING: AtomicBool = AtomicBool::new(false);
+    static ASKING: AtomicBool = AtomicBool::new(false);
+    // Milliseconds since the first ask, plus one; 0 is "never asked".
+    static ASKED: AtomicU64 = AtomicU64::new(0);
+    static ORIGIN: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let now = ORIGIN.get_or_init(Instant::now).elapsed().as_millis() as u64;
+    let asked = ASKED.load(Ordering::Relaxed);
+    let stale = asked == 0 || now.saturating_sub(asked - 1) >= 5_000;
+    if stale && !ASKING.swap(true, Ordering::AcqRel) {
+        ASKED.store(now + 1, Ordering::Relaxed);
+        let spawned = std::thread::Builder::new()
+            .name("cap-others-playing".into())
+            .spawn(|| {
+                let playing = cap_meeting_platform::others_playing().unwrap_or(false);
+                PLAYING.store(playing, Ordering::Relaxed);
+                ASKING.store(false, Ordering::Release);
+            });
+        if spawned.is_err() {
+            ASKING.store(false, Ordering::Release);
+        }
+    }
+    PLAYING.load(Ordering::Relaxed)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn others_playing() -> bool {
+    false
+}
+
 #[cfg(not(target_os = "macos"))]
 fn system_audio_grant() -> health::AudioGrant {
     health::AudioGrant::Granted
@@ -2999,6 +3037,10 @@ impl Meetings {
             since_sound: stats.system.map(|s| since(s.sound_at_ms)),
             remote_speaking,
             gave_up: stats.tap.is_some_and(|t| t.gave_up),
+            playing_elsewhere: stats.system.is_some_and(|s| {
+                since(s.real_at_ms) >= health::NO_AUDIO_RESTART
+            }) && system_audio_grant() == health::AudioGrant::Granted
+                && others_playing(),
         };
         let verdict = recording.watchdog.check(now, view);
         if verdict.restart {

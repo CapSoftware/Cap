@@ -18,7 +18,8 @@ use windows as platform;
 
 #[cfg(target_os = "macos")]
 pub use macos::system_tap::{
-    SystemAudioTap, TapChunk, TapError, TapStats, system_tap_supported, warm_screen_reader_lookup,
+    SystemAudioTap, TapChunk, TapError, TapStats, others_playing, system_tap_supported,
+    warm_screen_reader_lookup,
 };
 #[cfg(target_os = "macos")]
 pub use macos::tcc::{

@@ -76,6 +76,22 @@ fn tap_functions() -> Option<(CreateTap, DestroyTap)> {
     })
 }
 
+/// Whether a process other than this one (or a screen reader, which the tap
+/// leaves out) is playing audio right now, as Core Audio tracks each
+/// process's output. `None` when it can't say.
+pub fn others_playing() -> Option<bool> {
+    let me = unsafe { libc::getpid() };
+    let processes = System::processes().ok()?;
+    // A screen reader the tap leaves out is not something it should hear.
+    Some(processes.iter().any(|process| {
+        process.pid().is_ok_and(|pid| pid != me)
+            && process.is_running_output().unwrap_or(false)
+            && !process
+                .bundle_id()
+                .is_ok_and(|id| READER_BUNDLES.contains(&id.to_string().as_str()))
+    }))
+}
+
 pub fn system_tap_supported() -> bool {
     tap_functions().is_some()
         && ns::ProcessInfo::current().is_os_at_least_version(ns::OsVersion {
