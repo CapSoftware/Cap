@@ -11,7 +11,11 @@ use serde_json::{Value, json};
 
 use super::cloud::{self, CloudError};
 
-pub const TRANSCRIPT_MAX_CHARS: usize = 400_000;
+/// Room for about 12 hours of dense speech; past it the notes keep the start
+/// and the end of the meeting.
+pub const TRANSCRIPT_MAX_CHARS: usize = 1_000_000;
+/// Questions keep the smaller budget: the server answers from excerpts.
+pub const ASK_TRANSCRIPT_MAX_CHARS: usize = 400_000;
 const USER_NOTES_MAX_CHARS: usize = 50_000;
 const PREVIOUS_MAX_CHARS: usize = 100_000;
 const INSTRUCTION_MAX_CHARS: usize = 2_000;
@@ -383,7 +387,7 @@ pub fn ask_body(
     vocabulary: &[String],
 ) -> Result<Value, NotesError> {
     let transcript = transcript
-        .labelled_for_prompt(TRANSCRIPT_MAX_CHARS, self_name)
+        .labelled_for_prompt(ASK_TRANSCRIPT_MAX_CHARS, self_name)
         .text;
     if question.trim().is_empty() {
         return Err(NotesError::Failed("empty question".into()));

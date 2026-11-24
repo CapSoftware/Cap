@@ -759,6 +759,20 @@ impl Transcript {
                 format!("{}: {}", self.turn_speaker(t).english(self_name), t.text)
             })
             .collect();
+        let total =
+            lines.iter().map(|l| char_count(l)).sum::<usize>() + lines.len().saturating_sub(1);
+        if total <= max_chars {
+            return PromptTranscript {
+                text: lines.join("\n"),
+                truncated: false,
+            };
+        }
+        if let Some(text) = start_and_end(&lines, max_chars) {
+            return PromptTranscript {
+                text,
+                truncated: true,
+            };
+        }
         let mut kept: Vec<String> = Vec::new();
         let mut used = 0usize;
         let mut truncated = false;
@@ -1019,6 +1033,44 @@ pub fn format_timestamp(ms: u64) -> String {
     } else {
         format!("{m:02}:{s:02}")
     }
+}
+
+/// The line that stands for the middle of a meeting too long to send whole.
+/// The notes prompt looks for it.
+pub const MIDDLE_LEFT_OUT: &str = "[The middle of the meeting is left out here.]";
+
+/// The first and last whole lines that fit in half of `max_chars` each, with
+/// [`MIDDLE_LEFT_OUT`] between them, so a long meeting keeps its agenda and
+/// its decisions. `None` when either half has no room for a whole line.
+fn start_and_end(lines: &[String], max_chars: usize) -> Option<String> {
+    let room = max_chars.checked_sub(char_count(MIDDLE_LEFT_OUT) + 2)?;
+    let start = whole_lines(lines.iter(), room / 2);
+    let mut end = whole_lines(lines.iter().rev(), room - room / 2);
+    if start.is_empty() || end.is_empty() || start.len() + end.len() >= lines.len() {
+        return None;
+    }
+    end.reverse();
+    Some(format!(
+        "{}\n{MIDDLE_LEFT_OUT}\n{}",
+        start.join("\n"),
+        end.join("\n")
+    ))
+}
+
+/// The leading lines of `lines` that fit in `budget` characters, newlines
+/// between them counted.
+fn whole_lines<'a>(lines: impl Iterator<Item = &'a String>, budget: usize) -> Vec<&'a str> {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    for line in lines {
+        let cost = char_count(line) + usize::from(!kept.is_empty());
+        if used + cost > budget {
+            break;
+        }
+        used += cost;
+        kept.push(line);
+    }
+    kept
 }
 
 fn tail_chars(line: &str, keep: usize) -> String {
