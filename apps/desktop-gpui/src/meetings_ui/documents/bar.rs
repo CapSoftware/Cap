@@ -23,6 +23,11 @@ use crate::{
 };
 
 const METER_TWEEN: Duration = Duration::from_millis(130);
+/// How often the meter steps while it eases. Levels change up to ten times
+/// a second for as long as anyone talks, so a redraw every display frame
+/// would repaint the window for the whole meeting; 20 steps a second look
+/// the same on a meter this small.
+const METER_FRAME: Duration = Duration::from_millis(50);
 /// Record more ignores presses this long after a stop, so a second click on
 /// Stop does not start recording again.
 pub const RECORD_MORE_GUARD: Duration = Duration::from_millis(1500);
@@ -175,6 +180,7 @@ pub struct RecordingBar {
     pub embedded: bool,
     palette: Palette,
     meter: Meter,
+    meter_frame: Option<Task<()>>,
     permission: Option<&'static str>,
     dismissed: HashSet<Issue>,
     banner_at: Instant,
@@ -271,6 +277,7 @@ impl RecordingBar {
             embedded: false,
             palette,
             meter: Meter::default(),
+            meter_frame: None,
             permission: None,
             dismissed: HashSet::new(),
             banner_at: Instant::now(),
@@ -891,8 +898,15 @@ impl RecordingBar {
                 .into_any_element();
         }
         let (levels, animating) = self.meter.current(now);
-        if animating && surface_visible(window) {
-            window.request_animation_frame();
+        if animating && surface_visible(window) && self.meter_frame.is_none() {
+            self.meter_frame = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(METER_FRAME).await;
+                this.update(cx, |this, cx| {
+                    this.meter_frame = None;
+                    cx.notify();
+                })
+                .ok();
+            }));
         }
         let trouble = !issues(&active).is_empty();
         let elapsed =
