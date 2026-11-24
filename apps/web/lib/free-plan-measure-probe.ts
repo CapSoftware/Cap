@@ -1,6 +1,6 @@
 import type { videos } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
-import { Storage } from "@cap/web-backend";
+import { Storage } from "@cap/web-backend/src/Storage/index";
 import type { Video } from "@cap/web-domain";
 import { after } from "next/server";
 import { measuredMediaSeconds } from "@/lib/free-plan-duration";
@@ -13,8 +13,8 @@ import {
 	isMediaServerConfigured,
 	tryProbeVideoViaMediaServer,
 } from "@/lib/media-client";
-import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
 const PROBE_URL_EXPIRES_SECONDS = 10 * 60;
 const MAX_CONCURRENT_MEASUREMENTS = 4;
@@ -28,10 +28,10 @@ async function probeStoredObject(
 	if (!isMediaServerConfigured()) return null;
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
-	).pipe(runPromise);
+	).pipe(runWorkflowPromise);
 	const url = await bucket
 		.getInternalSignedObjectUrl(key, { expiresIn: PROBE_URL_EXPIRES_SECONDS })
-		.pipe(runPromise);
+		.pipe(runWorkflowPromise);
 	const attempt = await tryProbeVideoViaMediaServer(url);
 	if (attempt.status === "ok")
 		return { seconds: measuredMediaSeconds(attempt.metadata) };
