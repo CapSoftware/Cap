@@ -283,6 +283,7 @@ export async function POST(request: NextRequest) {
 			const processedSeconds = measuredMediaSeconds(payload.metadata);
 			if (
 				currentVideo &&
+				currentUpload &&
 				!isEditUpload &&
 				freePlanLimited &&
 				processedSeconds !== null
