@@ -5,7 +5,7 @@
 # library versions of the Gyan 7.1 build it replaces.
 #
 # Usage: scripts/ffmpeg/build.sh <target> <out-dir>
-#   target: aarch64-darwin-apple | x86_64-darwin-apple | x86_64-linux-gnu | x86_64-windows-gnu
+#   target: aarch64-darwin-apple | x86_64-darwin-apple | x86_64-linux-gnu | aarch64-linux-gnu | x86_64-windows-gnu
 set -euo pipefail
 
 TARGET="${1:?target}"
@@ -15,7 +15,7 @@ WORK="${RUNNER_TEMP:-/tmp}/cap-ffmpeg-${TARGET}"
 
 case "$TARGET" in
   *darwin* | x86_64-windows-gnu) NATIVE_DEPS=047be5031239b2ea914b04b1d0a9ed5183fa327c ;;
-  x86_64-linux-gnu) NATIVE_DEPS=2c9a3fd241f60f0bc4bbc46d5be52134b83ff34a ;;
+  *-linux-gnu) NATIVE_DEPS=2c9a3fd241f60f0bc4bbc46d5be52134b83ff34a ;;
   *)
     echo "unsupported target $TARGET" >&2
     exit 1
@@ -84,7 +84,13 @@ docker build --build-arg TARGET="$TARGET" --build-arg OS_IPHONE=0 --build-arg VE
 out="$WORK/build/out"
 mv "$out/src.tar.xz" "$DEST/cap-ffmpeg-${TARGET}-src.tar.xz"
 find "$out" -name '*.a' -delete
-XZ_OPT='-T0 -9' tar -cJf "$DEST/cap-ffmpeg-${TARGET}.tar.xz" -C "$out" .
-(cd "$DEST" && sha256sum "cap-ffmpeg-${TARGET}.tar.xz" >"cap-ffmpeg-${TARGET}.tar.xz.sha256")
+if [[ "$TARGET" == *windows* ]]; then
+  archive="cap-ffmpeg-${TARGET}.zip"
+  (cd "$out" && zip -qr -9 "$DEST/$archive" .)
+else
+  archive="cap-ffmpeg-${TARGET}.tar.xz"
+  XZ_OPT='-T0 -9' tar -cJf "$DEST/$archive" -C "$out" .
+fi
+(cd "$DEST" && sha256sum "$archive" >"$archive.sha256")
 find "$out" -type f \( -name '*.dll' -o -name '*.dylib' -o -name '*.so*' \) -exec ls -l {} + | awk '{print $5, $NF}'
 du -sh "$out"

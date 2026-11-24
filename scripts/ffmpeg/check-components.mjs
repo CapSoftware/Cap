@@ -70,7 +70,8 @@ export function withoutTestCode(source) {
 		const semicolon = result.indexOf(";", marker);
 		if (open === -1 || (semicolon !== -1 && semicolon < open)) {
 			result =
-				result.slice(0, marker) + result.slice(semicolon === -1 ? result.length : semicolon + 1);
+				result.slice(0, marker) +
+				result.slice(semicolon === -1 ? result.length : semicolon + 1);
 			continue;
 		}
 		let depth = 0;
@@ -111,9 +112,7 @@ export function usages(source, names) {
 		)
 			found.encoders.add(value);
 	}
-	for (const match of code.matchAll(
-		/encoder::find_by_name\(\s*"([^"]+)"/g,
-	))
+	for (const match of code.matchAll(/encoder::find_by_name\(\s*"([^"]+)"/g))
 		found.encoders.add(match[1]);
 	for (const match of code.matchAll(
 		/encoder::find\(\s*(?:ffmpeg::)?(?:codec::)?(?:id::)?Id::([A-Za-z0-9_]+)/g,
@@ -167,6 +166,7 @@ export async function check(root = repoRoot) {
 			...shellList(components, "CAP_ENCODERS_DARWIN"),
 			...shellList(components, "CAP_ENCODERS_WINDOWS"),
 			...shellList(components, "CAP_ENCODERS_LINUX"),
+			...shellList(components, "CAP_ENCODERS_LINUX_X86_64"),
 			...shellList(components, "CAP_PROBE_ONLY_ENCODERS"),
 		]),
 		muxers: new Set(shellList(components, "CAP_MUXERS")),

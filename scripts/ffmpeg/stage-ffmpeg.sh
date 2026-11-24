@@ -98,16 +98,16 @@ case "$TARGET" in
       --enable-pthreads
       --enable-vaapi
       --enable-libdrm
-      --enable-ffnvcodec
-      --enable-nvenc
-      --enable-nvdec
-      --enable-cuvid
       --nvcc=false
       --disable-cuda-llvm
       --disable-cuda-nvcc
       --enable-amf
       --enable-libvpl
     )
+    case "$TARGET" in
+      x86_64*) env_specific_arg+=(--enable-ffnvcodec --enable-nvenc --enable-nvdec --enable-cuvid) ;;
+      *) env_specific_arg+=(--disable-ffnvcodec) ;;
+    esac
     ;;
   *windows*)
     export LTO=0

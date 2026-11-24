@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034 # the lists are read by check-components.mjs and the Rust check
 # The FFmpeg components Cap ships. Sourced by stage-ffmpeg.sh (with TARGET set)
 # and read by scripts/ffmpeg/check-components.mjs, which fails CI when code
 # asks FFmpeg for an encoder, muxer, filter or protocol that is not listed here.
@@ -33,9 +34,11 @@ CAP_ENCODERS_WINDOWS=(
   h264_amf
   hevc_amf
 )
-CAP_ENCODERS_LINUX=(
+CAP_ENCODERS_LINUX_X86_64=(
   h264_nvenc
   hevc_nvenc
+)
+CAP_ENCODERS_LINUX=(
   h264_vaapi
   hevc_vaapi
   h264_qsv
@@ -98,6 +101,7 @@ cap_component_flags() {
   case "${TARGET:?}" in
     *darwin*) encoders+=("${CAP_ENCODERS_DARWIN[@]}") ;;
     *windows*) encoders+=("${CAP_ENCODERS_WINDOWS[@]}") ;;
+    x86_64-linux*) encoders+=("${CAP_ENCODERS_LINUX[@]}" "${CAP_ENCODERS_LINUX_X86_64[@]}") ;;
     *linux*) encoders+=("${CAP_ENCODERS_LINUX[@]}") ;;
   esac
 

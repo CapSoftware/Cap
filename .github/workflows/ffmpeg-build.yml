@@ -29,6 +29,7 @@ jobs:
           - aarch64-darwin-apple
           - x86_64-darwin-apple
           - x86_64-linux-gnu
+          - aarch64-linux-gnu
           - x86_64-windows-gnu
     steps:
       - uses: actions/checkout@v4

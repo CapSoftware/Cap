@@ -30,6 +30,9 @@ fn platform_encoders() -> Vec<&'static str> {
         encoders.extend(list("CAP_ENCODERS_WINDOWS"));
     } else {
         encoders.extend(list("CAP_ENCODERS_LINUX"));
+        if cfg!(target_arch = "x86_64") {
+            encoders.extend(list("CAP_ENCODERS_LINUX_X86_64"));
+        }
     }
     encoders
 }

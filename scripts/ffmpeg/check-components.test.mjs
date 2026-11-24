@@ -3,10 +3,17 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { check, readNames, usages, withoutTestCode } from "./check-components.mjs";
+import {
+	check,
+	readNames,
+	usages,
+	withoutTestCode,
+} from "./check-components.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const names = readNames(await readFile(path.join(here, "ffmpeg-7.1-names.txt"), "utf8"));
+const names = readNames(
+	await readFile(path.join(here, "ffmpeg-7.1-names.txt"), "utf8"),
+);
 
 test("shipped code only uses FFmpeg components that are built", async () => {
 	assert.deepEqual(await check(), []);
@@ -29,9 +36,18 @@ test("finds encoders, muxers and filter graph filters", () => {
 		`,
 		names,
 	);
-	assert.deepEqual([...found.encoders].sort(), ["av1_qsv", "h264_nvenc", "libx265", "mjpeg"]);
+	assert.deepEqual([...found.encoders].sort(), [
+		"av1_qsv",
+		"h264_nvenc",
+		"libx265",
+		"mjpeg",
+	]);
 	assert.deepEqual([...found.muxers], ["matroska"]);
-	assert.deepEqual([...found.filters].sort(), ["abuffer", "highpass", "volume"]);
+	assert.deepEqual([...found.filters].sort(), [
+		"abuffer",
+		"highpass",
+		"volume",
+	]);
 });
 
 test("ignores test code", () => {
