@@ -319,6 +319,26 @@ fn the_sse_parser_handles_split_chunks_and_keep_alives() {
     );
 }
 
+#[test]
+fn generated_titles_and_notes_lose_control_and_override_characters() {
+    let mut parser = SseParser::default();
+    let events = parser.push(
+        "event: title\ndata: {\"title\":\"\\u202etxt.exe\\u202c Q3\\u0007\\u001b[31m review\\nnext\"}\n\n\
+         event: delta\ndata: {\"text\":\"- \\u202eexe.txt\\u202c \\u0007ok\\r\\n\\t- \\u05e9\\u05dc\\u05d5\\u05dd \\ud83d\\udc68\\u200d\\ud83d\\udc69\\n\"}\n\n"
+            .as_bytes(),
+    );
+    assert_eq!(
+        events,
+        vec![
+            SseEvent::Title("txt.exe\u{202c} Q3[31m review next".into()),
+            SseEvent::Delta(
+                "- exe.txt\u{202c} ok\n\t- \u{5e9}\u{5dc}\u{5d5}\u{5dd} \u{1F468}\u{200D}\u{1F469}\n"
+                    .into()
+            ),
+        ]
+    );
+}
+
 fn meeting_meta(title_is_auto: bool) -> cap_meetings::library::DocMeta {
     let now = Utc.with_ymd_and_hms(2026, 11, 12, 9, 30, 0).unwrap();
     let mut meta = cap_meetings::library::DocMeta::new("doc-1".into(), DocKind::Meeting, now);

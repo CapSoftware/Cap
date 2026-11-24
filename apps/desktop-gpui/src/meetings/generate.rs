@@ -170,13 +170,27 @@ impl SseParser {
                 .to_string()
         };
         match event.as_deref().unwrap_or("message") {
-            "title" => Some(SseEvent::Title(text("title"))),
-            "delta" => Some(SseEvent::Delta(text("text"))),
+            "title" => Some(SseEvent::Title(shown_text(&text("title"), false))),
+            "delta" => Some(SseEvent::Delta(shown_text(&text("text"), true))),
             "done" => Some(SseEvent::Done),
             "error" => Some(SseEvent::Error(text("error"))),
             _ => None,
         }
     }
+}
+
+/// Written text without control characters, which show as boxes, or the
+/// left-to-right and right-to-left override marks, which reverse what follows
+/// them. Line breaks and tabs are kept in notes and become spaces in a title.
+fn shown_text(text: &str, multiline: bool) -> String {
+    text.chars()
+        .filter_map(|c| match c {
+            '\n' | '\t' if multiline => Some(c),
+            '\n' | '\t' => Some(' '),
+            c if c.is_control() || matches!(c, '\u{202D}' | '\u{202E}') => None,
+            c => Some(c),
+        })
+        .collect()
 }
 
 fn clip_chars(text: &str, max: usize) -> String {
