@@ -1,0 +1,638 @@
+{
+ "cases": {
+  "export/gif.gif": {
+   "media": {
+    "gif.gif": {
+     "audio_md5": "06f35bbcb2fb182341534db9128d709b",
+     "bytes": 778680,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "gif"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "gif",
+        "codec_type": "video",
+        "height": 360,
+        "index": 0,
+        "nb_frames": "74",
+        "pix_fmt": "bgra",
+        "r_frame_rate": "15/1",
+        "width": 556
+       }
+      ]
+     },
+     "sha256": "dde588fbddfe79ba527b2a92394b7b59f79826b91298c7ce4a95043a44062ac5",
+     "video_frames": 74,
+     "video_md5": "152a94e04c58acab661b7ac61da4bfa48ac0b24a97eb015a1c16fffef7c2a93e"
+    }
+   },
+   "ok": true,
+   "seconds": 1.5
+  },
+  "export/mov-prores.mov": {
+   "media": {
+    "mov-prores.mov": {
+     "audio_md5": "a59c4aea7234ee7a3ee6c3f4d48df830",
+     "bytes": 55576324,
+     "decode_errors": "[null @ 0x556fd5ed6200] Application provided invalid, non monotonically increasing dts to muxer in stream 0: 148 >= 148",
+     "probe": {
+      "format": {
+       "duration": "4.966668",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "prores",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuva444p12le",
+        "profile": "4444",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       }
+      ]
+     },
+     "sha256": "83edf55c17918ad2938e45539f1b56030a80576c78b2a7b1f3e2beb486a58ce4",
+     "video_frames": 150,
+     "video_md5": "21c43b9da8a1bba5cc2227e3f9fdbe4e708eae9339540588ffa4f9c3abfbff64"
+    }
+   },
+   "ok": true,
+   "seconds": 3.6
+  },
+  "export/mp4-crf.mp4": {
+   "media": {
+    "mp4-crf.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 558747,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "c67cefdebed661c22d83be2c7a04d059b69dc998bd71eca60dd64fb41c4a0509",
+     "video_frames": 150,
+     "video_md5": "52edcf44d08b7fdb710821c43a0ec9dce7657a13ccb09ee2a425a128a442542e"
+    }
+   },
+   "ok": true,
+   "seconds": 2.8
+  },
+  "export/mp4-ffmpeg-decoder.mp4": {
+   "media": {
+    "mp4-ffmpeg-decoder.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 4328340,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "b29511a9d3ebd43ae7996df51feb6800cf84cbb158410e95d32f296e5641ee36",
+     "video_frames": 150,
+     "video_md5": "b2fff295fdf55e5c5152b0657aa572f25c761bff81032eca55ea0f783c667152"
+    }
+   },
+   "ok": true,
+   "seconds": 2.9
+  },
+  "export/mp4-maximum.mp4": {
+   "media": {
+    "mp4-maximum.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 4328340,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "b29511a9d3ebd43ae7996df51feb6800cf84cbb158410e95d32f296e5641ee36",
+     "video_frames": 150,
+     "video_md5": "b2fff295fdf55e5c5152b0657aa572f25c761bff81032eca55ea0f783c667152"
+    }
+   },
+   "ok": true,
+   "seconds": 2.8
+  },
+  "export/mp4-native-60.mp4": {
+   "media": {
+    "mp4-native-60.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 14015272,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 1080,
+        "index": 0,
+        "nb_frames": "300",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "60/1",
+        "width": 1664
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "daa0670140993751b540f2000365ac0856fa730533f9fd76a2ace6b0b5a32d92",
+     "video_frames": 300,
+     "video_md5": "78ef043aa33a3772910c6b2ace915b590d1a17c3680884ce83692cb09c00168e"
+    }
+   },
+   "ok": true,
+   "seconds": 6.0
+  },
+  "export/mp4-potato.mp4": {
+   "media": {
+    "mp4-potato.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 762736,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "5f21f614e8519db0eef8f5026e991083bbd0ab0fca5c2780f25b62414c62879a",
+     "video_frames": 150,
+     "video_md5": "55379db3fbba4771b310b5fe132f3ca6b92eb6d1e1c7e3b2dd2980e004577e6d"
+    }
+   },
+   "ok": true,
+   "seconds": 2.4
+  },
+  "export/mp4-social.mp4": {
+   "media": {
+    "mp4-social.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 2372959,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "2dd3279f1348360f02c582a38af29d50d7f8b5f9fe03eeebe03be9b8be4af487",
+     "video_frames": 150,
+     "video_md5": "b402bb6e58aecd1957dfebc1bad83c381d9b98ea048fe62f01b17bab7b2b59fe"
+    }
+   },
+   "ok": true,
+   "seconds": 2.6
+  },
+  "export/mp4-software.mp4": {
+   "media": {
+    "mp4-software.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 4328340,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "b29511a9d3ebd43ae7996df51feb6800cf84cbb158410e95d32f296e5641ee36",
+     "video_frames": 150,
+     "video_md5": "b2fff295fdf55e5c5152b0657aa572f25c761bff81032eca55ea0f783c667152"
+    }
+   },
+   "ok": true,
+   "seconds": 2.6
+  },
+  "export/mp4-web.mp4": {
+   "media": {
+    "mp4-web.mp4": {
+     "audio_md5": "8bbabd1b8b00f21d8b97eaf100037a8d",
+     "bytes": 1358450,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "236",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "0a5ba36cf96dae2455f3453fa8d048d23d8ccec1034f5f2fbc81a2fe93d8e672",
+     "video_frames": 150,
+     "video_md5": "f593e29aad5c58e79379e306c8bb5eadef48e082683c2c00653c681e78579c26"
+    }
+   },
+   "ok": true,
+   "seconds": 2.6
+  },
+  "export/rich-software.mp4": {
+   "media": {
+    "rich-software.mp4": {
+     "audio_md5": "7dd19c64678d4cedacf66eb6a809cd5f",
+     "bytes": 4774813,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "6.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "180",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "283",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "8d818e5e80c81ed49c6e3f89d74f083f6d73582ac0adf448daabb9f21c7aa4a9",
+     "video_frames": 180,
+     "video_md5": "5dae8420ea71d7506c8e85ae4d256f2237604bb53195ad41df438c6626dec47a"
+    }
+   },
+   "ok": true,
+   "seconds": 2.9
+  },
+  "export/rich-studio-sound-speed-music.mp4": {
+   "media": {
+    "rich-studio-sound-speed-music.mp4": {
+     "audio_md5": "7dd19c64678d4cedacf66eb6a809cd5f",
+     "bytes": 4774813,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "6.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 720,
+        "index": 0,
+        "nb_frames": "180",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1108
+       },
+       {
+        "channels": 2,
+        "codec_name": "aac",
+        "codec_type": "audio",
+        "index": 1,
+        "nb_frames": "283",
+        "profile": "LC",
+        "r_frame_rate": "0/0",
+        "sample_fmt": "fltp",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "8d818e5e80c81ed49c6e3f89d74f083f6d73582ac0adf448daabb9f21c7aa4a9",
+     "video_frames": 180,
+     "video_md5": "5dae8420ea71d7506c8e85ae4d256f2237604bb53195ad41df438c6626dec47a"
+    }
+   },
+   "ok": true,
+   "seconds": 2.9
+  },
+  "export/tracks": {
+   "media": {
+    "Camera.mp4": {
+     "audio_md5": "bd2f6a6de30ff1b056a409d31c5184bc",
+     "bytes": 11944524,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 1080,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 1920
+       }
+      ]
+     },
+     "sha256": "b252d93faf89b7d2e807a8755eca8e4be121dad4e601ede43559bb03a7e9cbad",
+     "video_frames": 150,
+     "video_md5": "d098632c4cbcb939aa7ed542d3e9734e8753d3f85dbf9f977f393dc9c5a9788b"
+    },
+    "Microphone.wav": {
+     "audio_md5": "00f776b94bacaa9b14baa2ca974dafb2",
+     "bytes": 1440044,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "wav"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "channels": 2,
+        "codec_name": "pcm_s24le",
+        "codec_type": "audio",
+        "index": 0,
+        "r_frame_rate": "0/0",
+        "sample_fmt": "s32",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "de2afb1a997ac887b6ff5c828ae76e6373c4cfa28e6fb6c811e7e68525b20edc",
+     "video_frames": 352,
+     "video_md5": "513d0372cd9fee2ffac43decd5cf2c9fadc6ec4efc8e2c35770906858f5ce148"
+    },
+    "Screen.mp4": {
+     "audio_md5": "7eae18b4708427f0f1294d49a03d5f46",
+     "bytes": 8705055,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "mov,mp4,m4a,3gp,3g2,mj2"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "codec_name": "h264",
+        "codec_type": "video",
+        "height": 1964,
+        "index": 0,
+        "nb_frames": "150",
+        "pix_fmt": "yuv420p",
+        "profile": "High",
+        "r_frame_rate": "30/1",
+        "width": 3024
+       }
+      ]
+     },
+     "sha256": "8c874b7f7a8f93d728531f7abc656c84487b975dec590591c11549838df3e181",
+     "video_frames": 150,
+     "video_md5": "92d23afb9f66eb41a874ce7a80c699674f78ecd7380ce00dbf00ad00158052b8"
+    },
+    "System audio.wav": {
+     "audio_md5": "abaab7c07fc5dfd93e520384dfc05e9a",
+     "bytes": 1440044,
+     "decode_errors": "",
+     "probe": {
+      "format": {
+       "duration": "5.000000",
+       "format_name": "wav"
+      },
+      "programs": [],
+      "streams": [
+       {
+        "channels": 2,
+        "codec_name": "pcm_s24le",
+        "codec_type": "audio",
+        "index": 0,
+        "r_frame_rate": "0/0",
+        "sample_fmt": "s32",
+        "sample_rate": "48000"
+       }
+      ]
+     },
+     "sha256": "d65e01388e6b4d6db8d10293ee1f8a754b479ba9bd928692eac567cca572186f",
+     "video_frames": 352,
+     "video_md5": "3fd7c27bd77b09038125feb52d3084f1d3e9b4fbd9999d86b266d3d802923cc3"
+    }
+   },
+   "ok": true,
+   "seconds": 1.6
+  }
+ },
+ "ffmpeg_tool": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+ "label": "base2",
+ "os": "Linux"
+}

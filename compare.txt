@@ -1,0 +1,97 @@
+ok    audio/aac.m4a.mp3                         bytes
+ok    audio/aac.m4a.wav                         bytes
+ok    audio/adts.aac.mp3                        bytes
+ok    audio/adts.aac.wav                        bytes
+ok    audio/alac.m4a.mp3                        bytes
+ok    audio/alac.m4a.wav                        bytes
+ok    audio/cbr.mp3.mp3                         bytes
+ok    audio/cbr.mp3.wav                         bytes
+ok    audio/f32.wav.mp3                         bytes
+ok    audio/f32.wav.wav                         bytes
+ok    audio/mono22.wav.mp3                      bytes
+ok    audio/mono22.wav.wav                      bytes
+ok    audio/opus.ogg.mp3                        bytes
+ok    audio/opus.ogg.wav                        bytes
+ok    audio/s16.flac.mp3                        bytes
+ok    audio/s16.flac.wav                        bytes
+ok    audio/s16.wav.mp3                         bytes
+ok    audio/s16.wav.wav                         bytes
+ok    audio/s24.flac.mp3                        bytes
+ok    audio/s24.flac.wav                        bytes
+ok    audio/s24.wav.mp3                         bytes
+ok    audio/s24.wav.wav                         bytes
+ok    audio/speech.opus.mp3                     bytes
+ok    audio/speech.opus.wav                     bytes
+ok    audio/vbr44.mp3.mp3                       bytes
+ok    audio/vbr44.mp3.wav                       bytes
+ok    audio/vorbis.ogg.mp3                      bytes
+ok    audio/vorbis.ogg.wav                      bytes
+ok    export/gif.gif                            bytes
+ok    export/mov-prores.mov                     bytes
+FAIL  export/mp4-crf.mp4                        mp4-crf.mp4 differs (base 558747 B, head 558744 B)
+FAIL  export/mp4-ffmpeg-decoder.mp4             mp4-ffmpeg-decoder.mp4 differs (base 4328340 B, head 4328337 B)
+FAIL  export/mp4-maximum.mp4                    mp4-maximum.mp4 differs (base 4328340 B, head 4328337 B)
+FAIL  export/mp4-native-60.mp4                  mp4-native-60.mp4 differs (base 14015272 B, head 14015269 B)
+FAIL  export/mp4-potato.mp4                     mp4-potato.mp4 differs (base 762736 B, head 762733 B)
+FAIL  export/mp4-social.mp4                     mp4-social.mp4 differs (base 2372959 B, head 2372956 B)
+FAIL  export/mp4-software.mp4                   mp4-software.mp4 differs (base 4328340 B, head 4328337 B)
+FAIL  export/mp4-web.mp4                        mp4-web.mp4 differs (base 1358450 B, head 1358447 B)
+ok    export/rich-software.mp4                  bytes
+ok    export/rich-studio-sound-speed-music.mp4  bytes
+ok    export/tracks                             bytes, decoded
+ok    import/animated.gif                       bytes
+FAIL  import/av1-opus.mp4                       export/import-av1-opus.mp4.mp4 differs (base 929985 B, head 929985 B)
+FAIL  import/av1-opus.webm                      export/import-av1-opus.webm.mp4 differs (base 929983 B, head 929983 B)
+ok    import/bitmap.bmp                         bytes
+FAIL  import/cinepak-pcm.avi                    export/import-cinepak-pcm.avi.mp4 differs (base 907897 B, head 909143 B)
+FAIL  import/dnxhr-pcm.mov                      export/import-dnxhr-pcm.mov.mp4 differs (base 967611 B, head 967612 B)
+FAIL  import/ffv1-pcm.mkv                       export/import-ffv1-pcm.mkv.mp4 differs (base 1009644 B, head 1009645 B)
+FAIL  import/flv1-mp3.flv                       export/import-flv1-mp3.flv.mp4 differs (base 995131 B, head 995207 B)
+ok    import/gray.jpg                           bytes
+ok    import/gray.png                           bytes
+FAIL  import/h264-10bit.mkv                     export/import-h264-10bit.mkv.mp4 differs (base 910733 B, head 910734 B)
+ok    import/h264-aac.flv                       bytes, decoded
+ok    import/h264-aac.m4v                       bytes, decoded
+ok    import/h264-aac.mp4                       bytes, decoded
+FAIL  import/h264-alac.mov                      export/import-h264-alac.mov.mp4 differs (base 909049 B, head 909050 B)
+ok    import/h264-eac3.mkv                      bytes, decoded
+FAIL  import/h264-flac.mkv                      export/import-h264-flac.mkv.mp4 differs (base 909049 B, head 909050 B)
+ok    import/h264-high444.mp4                   bytes, decoded
+ok    import/h264-noaudio.mp4                   bytes
+ok    import/h264-odd.mp4                       bytes, decoded
+ok    import/h264-rotated.mp4                   bytes, decoded
+ok    import/h264-vfr.mp4                       bytes, decoded
+ok    import/hevc-aac.mp4                       bytes, decoded
+FAIL  import/hevc-opus.mkv                      export/import-hevc-opus.mkv.mp4 differs (base 932444 B, head 932444 B)
+ok    import/hevc10-aac.mov                     bytes, decoded
+ok    import/lossless-alpha.webp                bytes
+ok    import/lossy.webp                         bytes
+ok    import/lzw.tif                            bytes
+FAIL  import/mjpeg-pcm.avi                      export/import-mjpeg-pcm.avi.mp4 differs (base 920431 B, head 920432 B)
+FAIL  import/mjpeg-pcm.mov                      export/import-mjpeg-pcm.mov.mp4 differs (base 920431 B, head 920432 B)
+FAIL  import/mpeg2-ac3.mkv                      export/import-mpeg2-ac3.mkv.mp4 differs (base 1018014 B, head 1018010 B)
+FAIL  import/mpeg4-mp3.avi                      export/import-mpeg4-mp3.avi.mp4 differs (base 1052725 B, head 1052724 B)
+ok    import/mpeg4-mp3.mp4                      bytes, decoded
+FAIL  import/msmpeg4-mp3.avi                    export/import-msmpeg4-mp3.avi.mp4 differs (base 1053027 B, head 1053026 B)
+ok    import/photo.jpeg                         bytes
+ok    import/photo.jpg                          bytes
+FAIL  import/prores-pcm.mov                     export/import-prores-pcm.mov.mp4 differs (base 903519 B, head 903520 B)
+FAIL  import/prores4444-alpha.mov               export/import-prores4444-alpha.mov.mp4 differs (base 902377 B, head 902378 B)
+FAIL  import/qtrle-pcm.mov                      export/import-qtrle-pcm.mov.mp4 differs (base 903398 B, head 903399 B)
+ok    import/raw.tiff                           bytes
+ok    import/rgb.png                            bytes
+ok    import/rgb48.png                          bytes
+ok    import/rgb48.tiff                         bytes
+ok    import/rgba.bmp                           bytes
+ok    import/rgba.png                           bytes
+ok    import/still.gif                          bytes
+FAIL  import/vp8-vorbis.webm                    export/import-vp8-vorbis.webm.mp4 differs (base 978381 B, head 978374 B)
+FAIL  import/vp9-alpha.webm                     export/import-vp9-alpha.webm.mp4 differs (base 959672 B, head 959672 B)
+FAIL  import/vp9-opus.webm                      export/import-vp9-opus.webm.mp4 differs (base 959672 B, head 959672 B)
+FAIL  import/vp9-vorbis.mkv                     export/import-vp9-vorbis.mkv.mp4 differs (base 938769 B, head 938762 B)
+FAIL  import/wmv1-wmav2.wmv                     content/segments/segment-0/audio.ogg differs (base 33520 B, head 33516 B); export/import-wmv1-wmav2.wmv.mp4 differs (base 924376 B, head 924444 B)
+FAIL  import/wmv2-wmav2.wmv                     content/segments/segment-0/audio.ogg differs (base 33520 B, head 33516 B); export/import-wmv2-wmav2.wmv.mp4 differs (base 948102 B, head 948170 B)
+note  record/instant                            same failure: base error: No target specified; pass --screen <id> or --window <id> (see `cap targets`)
+note  record/studio                             same failure: base error: No target specified; pass --screen <id> or --window <id> (see `cap targets`)
+
+63/95 match (32 regressions)
