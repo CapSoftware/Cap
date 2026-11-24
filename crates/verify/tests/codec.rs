@@ -215,7 +215,11 @@ fn video_code_survives_compositing_scaling_rounding_bubble_and_blur() {
     let dir = tempfile::tempdir().unwrap();
     // 640x360 is a typical verification output; 320x180 puts the screen at
     // a quarter of its source size and the camera code cells at ~6 px.
-    for (out_w, out_h, bitrate) in [(640, 360, 150_000), (320, 180, 80_000)] {
+    // 320x180 is encoded at the Web export preset (0.08 bpp): at 80 kbps the
+    // paravirtualised VideoToolbox HEVC encoder on the CI macOS VMs
+    // occasionally left a blurred camera cell at margin 0.17, below the
+    // reader's 0.18, while this host's hardware encoder read it at 0.31.
+    for (out_w, out_h, bitrate) in [(640, 360, 150_000), (320, 180, 138_240)] {
         for blur in [false, true] {
             let pairs: Vec<(u32, u32)> = (0..40).map(|i| (i * 3 + 100, i / 2 + 7)).collect();
             let frames: Vec<Rgba> = pairs

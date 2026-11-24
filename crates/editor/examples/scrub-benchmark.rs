@@ -19,7 +19,7 @@ fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 
 fn presented_frame(output: &EditorFrameOutput) -> u32 {
     match output {
-        EditorFrameOutput::Rgba(frame) => frame.frame_number,
+        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => frame.frame_number,
         EditorFrameOutput::Nv12(frame) => frame.frame_number,
         #[cfg(target_os = "macos")]
         EditorFrameOutput::Surface(frame) => frame.frame_number,

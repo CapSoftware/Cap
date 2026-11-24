@@ -61,7 +61,7 @@ fn percentile(sorted: &[f64], fraction: f64) -> f64 {
 
 fn frame_number(output: &EditorFrameOutput) -> u32 {
     match output {
-        EditorFrameOutput::Rgba(frame) => frame.frame_number,
+        EditorFrameOutput::Rgba(frame) | EditorFrameOutput::Bgra(frame) => frame.frame_number,
         EditorFrameOutput::Nv12(frame) => frame.frame_number,
         #[cfg(target_os = "macos")]
         EditorFrameOutput::Surface(frame) => frame.frame_number,
