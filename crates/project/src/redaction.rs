@@ -245,6 +245,36 @@ impl RedactionRegion {
     }
 }
 
+impl RedactionRegion {
+    /// The smallest rect holding the region everywhere in `from..=to`: the
+    /// rects at both ends and every key between. Rects move linearly between
+    /// keys, so this covers the region at any time in the window.
+    pub fn rect_between(&self, from: f64, to: f64) -> Option<RedactRect> {
+        let from = from.max(self.start);
+        let to = to.min(self.end);
+        if to < from {
+            return None;
+        }
+        let mut rect = self.rect_at(from)?;
+        let mut grow = |other: RedactRect| {
+            let x1 = (rect.x + rect.w).max(other.x + other.w);
+            let y1 = (rect.y + rect.h).max(other.y + other.h);
+            rect.x = rect.x.min(other.x);
+            rect.y = rect.y.min(other.y);
+            rect.w = x1 - rect.x;
+            rect.h = y1 - rect.y;
+        };
+        if let Some(end) = self.rect_at(to) {
+            grow(end);
+        }
+        let first = self.keys.partition_point(|key| key.t <= from);
+        for key in self.keys[first..].iter().take_while(|key| key.t < to) {
+            grow(key.rect());
+        }
+        Some(rect)
+    }
+}
+
 impl Redactions {
     pub fn path_for(project_path: &Path) -> PathBuf {
         project_path.join(REDACTIONS_FILE)
@@ -315,6 +345,8 @@ pub struct RedactionIndex {
 #[derive(Debug, Default)]
 struct SegmentIndex {
     segment: u32,
+    /// One frame of the display video, in seconds.
+    frame: f64,
     regions: Vec<RedactionRegion>,
     buckets: Vec<Vec<u32>>,
 }
@@ -336,8 +368,14 @@ impl RedactionIndex {
             let segment = match segments.iter_mut().find(|s| s.segment == region.segment) {
                 Some(segment) => segment,
                 None => {
+                    let fps = redactions
+                        .segment(region.segment)
+                        .map(|segment| segment.fps)
+                        .filter(|fps| fps.is_finite() && *fps >= 1.0)
+                        .unwrap_or(30.0);
                     segments.push(SegmentIndex {
                         segment: region.segment,
+                        frame: 1.0 / fps,
                         ..Default::default()
                     });
                     segments.last_mut().unwrap()
@@ -387,6 +425,43 @@ impl RedactionIndex {
         }
     }
 
+    /// Like [`Self::for_each_at`], but each rect covers the region from a
+    /// frame and a half before `t` to half a frame after it. The decoder shows
+    /// the sample nearest the requested time, which can be the frame before
+    /// it, and edits (speed, cuts) change which times are requested; covering
+    /// the window keeps the shown frame masked whichever one it is.
+    pub fn for_each_around(&self, segment: u32, t: f64, mut visit: impl FnMut(&str, RedactRect)) {
+        let Some(index) = self.segments.iter().find(|s| s.segment == segment) else {
+            return;
+        };
+        if !t.is_finite() {
+            return;
+        }
+        let from = (t - 1.5 * index.frame).max(0.0);
+        let to = t + 0.5 * index.frame;
+        if to < 0.0 {
+            return;
+        }
+        let first = bucket(from);
+        let last = bucket(to).min(index.buckets.len().saturating_sub(1));
+        if first >= index.buckets.len() {
+            return;
+        }
+        let mut seen: Vec<u32> = Vec::new();
+        for bucket in &index.buckets[first..=last] {
+            for id in bucket {
+                if seen.contains(id) {
+                    continue;
+                }
+                seen.push(*id);
+                let region = &index.regions[*id as usize];
+                if let Some(rect) = region.rect_between(from, to).and_then(RedactRect::clamped) {
+                    visit(&region.id, rect);
+                }
+            }
+        }
+    }
+
     pub fn rects_at(&self, segment: u32, t: f64) -> Vec<RedactRect> {
         let mut rects = Vec::new();
         self.for_each_at(segment, t, |_, rect| rects.push(rect));
@@ -426,6 +501,53 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn rect_between_covers_the_region_across_the_window() {
+        let region = region("a", RedactCategory::Email, 1.0, 3.0);
+        let rect = region.rect_between(1.5, 2.5).unwrap();
+        let at = |t: f64| region.rect_at(t).unwrap();
+        for t in [1.5, 1.75, 2.0, 2.25, 2.5] {
+            let r = at(t);
+            assert!(r.x >= rect.x - 1e-6 && r.y >= rect.y - 1e-6);
+            assert!(r.x + r.w <= rect.x + rect.w + 1e-6 && r.y + r.h <= rect.y + rect.h + 1e-6);
+        }
+        assert!(region.rect_between(3.2, 3.5).is_none());
+        let edge = region.rect_between(2.9, 3.4).unwrap();
+        assert!((edge.x + edge.w - (at(3.0).x + at(3.0).w)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn index_around_includes_a_region_that_just_ended() {
+        let mut redactions = Redactions {
+            version: REDACTIONS_VERSION,
+            model: "test".into(),
+            segments: Vec::new(),
+            regions: vec![region("a", RedactCategory::Email, 0.0, 2.0)],
+            scanner: 0,
+        };
+        redactions.segments.push(RedactionSegment {
+            index: 0,
+            source_frames: 60,
+            fps: 30.0,
+            width: 100,
+            height: 100,
+            fingerprint: String::new(),
+            complete: true,
+        });
+        let config = AutoRedactConfiguration {
+            enabled: true,
+            ..Default::default()
+        };
+        let index = RedactionIndex::new(&redactions, &config);
+        assert!(index.rects_at(0, 2.03).is_empty());
+        let mut around = Vec::new();
+        index.for_each_around(0, 2.03, |id, _| around.push(id.to_string()));
+        assert_eq!(around, vec!["a".to_string()]);
+        let mut later = Vec::new();
+        index.for_each_around(0, 2.1, |id, _| later.push(id.to_string()));
+        assert!(later.is_empty());
     }
 
     #[test]

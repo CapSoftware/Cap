@@ -161,7 +161,7 @@ impl RedactionStore {
             Vec::new()
         };
         let mut rects = Vec::new();
-        index.for_each_at(segment, source_time, |id, rect| {
+        index.for_each_around(segment, source_time, |id, rect| {
             rects.push(RedactionRect {
                 x: rect.x,
                 y: rect.y,
