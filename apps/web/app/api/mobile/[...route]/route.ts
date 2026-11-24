@@ -17,7 +17,10 @@ import { getEmailDeliveryStatus, sendEmail } from "@cap/database/emails/config";
 import { OTPEmail } from "@cap/database/emails/otp-email";
 import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import {
+	getNewVideoSharingDefaults,
+	newVideoOrganizationShare,
+} from "@cap/database/video-sharing-default";
 import { buildEnv, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import {
@@ -3345,26 +3348,36 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 		user.id,
 		organizationId,
 	);
+	const sharingDefaults = yield* Effect.tryPromise(() =>
+		getNewVideoSharingDefaults(organizationId),
+	);
 
 	if (screenshotExtension) {
 		// Same shape as the web image import: no upload-progress row and no processing,
 		// so the Cap shows its image as soon as the file lands.
 		const screenshotId = Video.VideoId.make(nanoId());
-		const isPublic = yield* Effect.tryPromise(() =>
-			getNewVideoPublic(organizationId),
-		);
 		yield* database.use((db) =>
-			db.insert(Db.videos).values({
-				id: screenshotId,
-				name: getUploadTitle(input.fileName),
-				ownerId: user.id,
-				orgId: organizationId,
-				source: { type: "webMP4" },
-				isScreenshot: true,
-				bucket: Option.getOrNull(writable.bucketId),
-				storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-				public: isPublic,
-				...(folderId ? { folderId } : {}),
+			db.transaction(async (tx) => {
+				await tx.insert(Db.videos).values({
+					id: screenshotId,
+					name: getUploadTitle(input.fileName),
+					ownerId: user.id,
+					orgId: organizationId,
+					source: { type: "webMP4" },
+					isScreenshot: true,
+					bucket: Option.getOrNull(writable.bucketId),
+					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
+					public: sharingDefaults.public,
+					...(folderId ? { folderId } : {}),
+				});
+				if (sharingDefaults.sharedWithOrganization)
+					await tx.insert(Db.sharedVideos).values(
+						newVideoOrganizationShare({
+							videoId: screenshotId,
+							organizationId,
+							sharedByUserId: user.id,
+						}),
+					);
 			}),
 		);
 		const screenshotKey = `${user.id}/${screenshotId}/screenshot/screen-capture.${screenshotExtension}`;
@@ -3395,7 +3408,7 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 			ownerId: user.id,
 			orgId: organizationId,
 			name: getUploadTitle(input.fileName),
-			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			public: sharingDefaults.public,
 			source: { type: "webMP4" },
 			bucketId: writable.bucketId,
 			storageIntegrationId: writable.storageIntegrationId,
@@ -3411,6 +3424,7 @@ const createUpload = Effect.fn("Mobile.createUpload")(function* (
 				total: input.contentLength ?? 0,
 				mode: "singlepart",
 			},
+			sharedWithOrganization: sharingDefaults.sharedWithOrganization,
 		},
 	);
 	const rawFileKey = `${user.id}/${videoId}/raw-upload.${getFileExtension(input)}`;
@@ -3485,12 +3499,15 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 		user.id,
 		organizationId,
 	);
+	const sharingDefaults = yield* Effect.tryPromise(() =>
+		getNewVideoSharingDefaults(organizationId),
+	);
 	const videoId = yield* repo.create(
 		{
 			ownerId: user.id,
 			orgId: organizationId,
 			name: getUploadTitle(input.fileName),
-			public: yield* Effect.tryPromise(() => getNewVideoPublic(organizationId)),
+			public: sharingDefaults.public,
 			source: { type: "desktopSegments" },
 			bucketId: writable.bucketId,
 			storageIntegrationId: writable.storageIntegrationId,
@@ -3506,6 +3523,7 @@ const createRecording = Effect.fn("Mobile.createRecording")(function* (
 				total: 0,
 				mode: "singlepart",
 			},
+			sharedWithOrganization: sharingDefaults.sharedWithOrganization,
 		},
 	);
 

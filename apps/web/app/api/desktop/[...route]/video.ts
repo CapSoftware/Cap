@@ -5,12 +5,16 @@ import { nanoId } from "@cap/database/helpers";
 import {
 	organizationMembers,
 	organizations,
+	sharedVideos,
 	users,
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import {
+	getNewVideoSharingDefaults,
+	newVideoOrganizationShare,
+} from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { makeCurrentUserLayer, Storage, Videos } from "@cap/web-backend";
@@ -319,6 +323,8 @@ app.get(
 				UPLOAD_PROGRESS_VERSION,
 			);
 
+			const sharingDefaults = await getNewVideoSharingDefaults(videoOrgId);
+
 			await db().transaction(async (tx) => {
 				await tx.insert(videos).values({
 					id: idToUse,
@@ -336,7 +342,7 @@ app.get(
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
 					storageIntegrationId: Option.getOrNull(writable.storageIntegrationId),
-					public: await getNewVideoPublic(videoOrgId),
+					public: sharingDefaults.public,
 					duration: durationInSecs,
 					width,
 					height,
@@ -349,6 +355,15 @@ app.get(
 						videoId: idToUse,
 						mode: "singlepart",
 					});
+
+				if (sharingDefaults.sharedWithOrganization)
+					await tx.insert(sharedVideos).values(
+						newVideoOrganizationShare({
+							videoId: idToUse,
+							organizationId: videoOrgId,
+							sharedByUserId: user.id,
+						}),
+					);
 			});
 
 			if (recordingMode === "desktopSegments" && !isScreenshot) {

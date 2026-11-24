@@ -163,6 +163,7 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 			options?: {
 				id?: Video.VideoId;
 				initialUpload?: Omit<typeof Db.videoUploads.$inferInsert, "videoId">;
+				sharedWithOrganization?: boolean;
 			},
 		) =>
 			Effect.gen(function* () {
@@ -214,6 +215,14 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							await db.insert(Db.videoUploads).values({
 								videoId: id,
 								...options.initialUpload,
+							});
+
+						if (options?.sharedWithOrganization)
+							await db.insert(Db.sharedVideos).values({
+								id: nanoId(),
+								videoId: id,
+								organizationId: data.orgId,
+								sharedByUserId: data.ownerId,
 							});
 					}),
 				);

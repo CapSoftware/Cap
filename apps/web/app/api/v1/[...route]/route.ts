@@ -12,7 +12,11 @@ import { OrganizationInvite } from "@cap/database/emails/organization-invite";
 import { nanoId, nanoIdLong } from "@cap/database/helpers";
 import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription";
 import * as Db from "@cap/database/schema";
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import {
+	getNewVideoPublic,
+	getNewVideoSharingDefaults,
+	newVideoOrganizationShare,
+} from "@cap/database/video-sharing-default";
 import { serverEnv } from "@cap/env";
 import { STRIPE_PLAN_IDS, stripe, userIsPro } from "@cap/utils";
 import {
@@ -7317,6 +7321,8 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 							decodeReplay: Schema.decodeUnknownSync(AgentUploadMutationState),
 							execute: async (tx) => {
 								const now = new Date();
+								const sharingDefaults =
+									await getNewVideoSharingDefaults(organizationId);
 								await tx.insert(Db.videos).values({
 									id: videoId,
 									name: title,
@@ -7328,7 +7334,7 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 										writable.storageIntegrationId,
 									),
 									folderId: payload.folderId ?? null,
-									public: await getNewVideoPublic(organizationId),
+									public: sharingDefaults.public,
 									duration: payload.durationSeconds,
 									width: payload.width,
 									height: payload.height,
@@ -7345,6 +7351,14 @@ const AgentManagementHandlersLive = HttpApiBuilder.group(
 									total: contentLength,
 									mode: "singlepart",
 								});
+								if (sharingDefaults.sharedWithOrganization)
+									await tx.insert(Db.sharedVideos).values(
+										newVideoOrganizationShare({
+											videoId,
+											organizationId,
+											sharedByUserId: principal.id,
+										}),
+									);
 								return {
 									state: "success",
 									response: {

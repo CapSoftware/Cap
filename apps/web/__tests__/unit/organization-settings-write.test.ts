@@ -38,6 +38,18 @@ describe("organization settings writes", () => {
 		);
 	});
 
+	it("reads the new video organization sharing default from the row instead of the submitted snapshot", () => {
+		const query = render({
+			disableComments: true,
+			shareNewVideosWithOrganization: false,
+		});
+
+		expect(query.params).toEqual(['{"disableComments":true}']);
+		expect(query.sql).toContain(
+			"'shareNewVideosWithOrganization', JSON_EXTRACT(`organizations`.`settings`, '$.shareNewVideosWithOrganization')",
+		);
+	});
+
 	it("writes every other submitted key", () => {
 		expect(
 			render({ disableSummary: false, defaultPlaybackSpeed: 1.5 }).params,

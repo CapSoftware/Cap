@@ -254,6 +254,7 @@ export const organizations = mysqlTable(
 			aiGenerationLanguage?: AiGenerationLanguage;
 			defaultPlaybackSpeed?: number;
 			allowPublicLinkOverride?: boolean;
+			shareNewVideosWithOrganization?: boolean;
 			defaultCallToAction?: OrganizationDefaultCallToAction;
 		}>(),
 		iconUrl: varchar("iconUrl", {

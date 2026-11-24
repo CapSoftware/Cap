@@ -6,16 +6,18 @@ type OrganizationSettings = NonNullable<
 >;
 
 // allowPublicLinkOverride gates access to restricted links, and
-// defaultCallToAction has its own editor, so a settings write built from an
-// earlier read must not put a stale value back for either. Both keys are taken
-// from the row at write time instead.
+// defaultCallToAction and shareNewVideosWithOrganization have their own
+// editors, so a settings write built from an earlier read must not put a stale
+// value back for any of them. These keys are taken from the row at write time
+// instead.
 export const organizationSettingsKeepingRowOwnedKeys = (
 	next: OrganizationSettings,
 ) => {
 	const {
 		allowPublicLinkOverride: _staleOverride,
 		defaultCallToAction: _staleCallToAction,
+		shareNewVideosWithOrganization: _staleShareNewVideos,
 		...rest
 	} = next;
-	return sql`JSON_MERGE_PATCH(CAST(${JSON.stringify(rest)} AS JSON), JSON_OBJECT('allowPublicLinkOverride', JSON_EXTRACT(${organizations.settings}, '$.allowPublicLinkOverride'), 'defaultCallToAction', JSON_EXTRACT(${organizations.settings}, '$.defaultCallToAction')))`;
+	return sql`JSON_MERGE_PATCH(CAST(${JSON.stringify(rest)} AS JSON), JSON_OBJECT('allowPublicLinkOverride', JSON_EXTRACT(${organizations.settings}, '$.allowPublicLinkOverride'), 'defaultCallToAction', JSON_EXTRACT(${organizations.settings}, '$.defaultCallToAction'), 'shareNewVideosWithOrganization', JSON_EXTRACT(${organizations.settings}, '$.shareNewVideosWithOrganization')))`;
 };

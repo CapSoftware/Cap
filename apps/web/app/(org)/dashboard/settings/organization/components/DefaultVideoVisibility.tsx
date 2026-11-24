@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { updateDefaultVideoVisibility } from "@/actions/organization/default-video-visibility";
+import { updateShareNewVideosWithOrganization } from "@/actions/organization/share-new-videos";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	SettingsCard,
@@ -14,15 +15,25 @@ import {
 
 export const DefaultVideoVisibility = () => {
 	const router = useRouter();
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, organizationSettings } = useDashboardContext();
 	const savedPrivate =
 		activeOrganization?.organization.defaultVideoVisibility === "private";
 	const [privateByDefault, setPrivateByDefault] = useState(savedPrivate);
 	const [saving, setSaving] = useState(false);
+	const savedShareWithOrganization =
+		organizationSettings?.shareNewVideosWithOrganization === true;
+	const [shareWithOrganization, setShareWithOrganization] = useState(
+		savedShareWithOrganization,
+	);
+	const [savingShare, setSavingShare] = useState(false);
 
 	useEffect(() => {
 		setPrivateByDefault(savedPrivate);
 	}, [savedPrivate]);
+
+	useEffect(() => {
+		setShareWithOrganization(savedShareWithOrganization);
+	}, [savedShareWithOrganization]);
 
 	const handleChange = async (checked: boolean) => {
 		if (!activeOrganization) return;
@@ -47,6 +58,29 @@ export const DefaultVideoVisibility = () => {
 		}
 	};
 
+	const handleShareChange = async (checked: boolean) => {
+		if (!activeOrganization) return;
+		setShareWithOrganization(checked);
+		setSavingShare(true);
+		try {
+			await updateShareNewVideosWithOrganization(
+				checked,
+				activeOrganization.organization.id,
+			);
+			router.refresh();
+			toast.success(
+				checked
+					? "New recordings will be shared with the organization"
+					: "New recordings will only be visible to their owner",
+			);
+		} catch {
+			setShareWithOrganization(!checked);
+			toast.error("Failed to update the recording default");
+		} finally {
+			setSavingShare(false);
+		}
+	};
+
 	return (
 		<SettingsSection title="Sharing default">
 			<SettingsCard>
@@ -58,6 +92,17 @@ export const DefaultVideoVisibility = () => {
 							checked={privateByDefault}
 							disabled={saving}
 							onCheckedChange={handleChange}
+						/>
+					}
+				/>
+				<SettingsRow
+					title="Share new recordings with the organization"
+					description="New recordings and uploads are added to the organization library, so every member can find and view them. Link access is not changed. Owners can remove a recording from the organization in its share settings."
+					control={
+						<Switch
+							checked={shareWithOrganization}
+							disabled={savingShare}
+							onCheckedChange={handleShareChange}
 						/>
 					}
 				/>

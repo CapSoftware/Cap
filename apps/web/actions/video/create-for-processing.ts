@@ -3,8 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { videos, videoUploads } from "@cap/database/schema";
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import { sharedVideos, videos, videoUploads } from "@cap/database/schema";
+import {
+	getNewVideoSharingDefaults,
+	newVideoOrganizationShare,
+} from "@cap/database/video-sharing-default";
 import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
@@ -90,6 +93,8 @@ export async function createVideoForServerProcessing({
 		orgId,
 	).pipe(runPromise);
 
+	const sharingDefaults = await getNewVideoSharingDefaults(orgId);
+
 	await db().transaction(async (tx) => {
 		await tx.insert(videos).values({
 			id: videoId,
@@ -99,7 +104,7 @@ export async function createVideoForServerProcessing({
 			source: { type: "webMP4" as const },
 			bucket: Option.getOrNull(uploadResult.bucketId),
 			storageIntegrationId: Option.getOrNull(uploadResult.storageIntegrationId),
-			public: await getNewVideoPublic(orgId),
+			public: sharingDefaults.public,
 			...(folderId ? { folderId } : {}),
 		});
 
@@ -110,6 +115,15 @@ export async function createVideoForServerProcessing({
 			processingProgress: 0,
 			rawFileKey,
 		});
+
+		if (sharingDefaults.sharedWithOrganization)
+			await tx.insert(sharedVideos).values(
+				newVideoOrganizationShare({
+					videoId,
+					organizationId: orgId,
+					sharedByUserId: user.id,
+				}),
+			);
 	});
 
 	revalidatePath("/dashboard/caps");

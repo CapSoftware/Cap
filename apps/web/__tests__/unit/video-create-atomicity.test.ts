@@ -12,6 +12,7 @@ type Store = {
 	videos: Map<string, Row>;
 	uploads: Map<string, Row>;
 	folders: Map<string, Row>;
+	shares: Map<string, Row>;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -19,8 +20,10 @@ const mocks = vi.hoisted(() => ({
 		videos: new Map<string, Row>(),
 		uploads: new Map<string, Row>(),
 		folders: new Map<string, Row>(),
+		shares: new Map<string, Row>(),
 	} as Store,
 	rejectUpload: false,
+	sharedWithOrganization: false,
 	transactionCalls: 0,
 	currentUser: vi.fn(),
 	organizationAccess: vi.fn(),
@@ -30,7 +33,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@cap/database", () => {
-	type Table = { name: "video" | "upload" | "folder" };
+	type Table = { name: "video" | "upload" | "folder" | "share" };
 	type Client = {
 		insert: (table: Table) => { values: (row: Row | Row[]) => Promise<void> };
 		select: () => {
@@ -47,9 +50,14 @@ vi.mock("@cap/database", () => {
 				values: async (value) => {
 					if (table.name === "upload" && mocks.rejectUpload)
 						throw new Error("Injected upload insert failure");
-					const rows = table.name === "video" ? store.videos : store.uploads;
+					const rows =
+						table.name === "video"
+							? store.videos
+							: table.name === "share"
+								? store.shares
+								: store.uploads;
 					for (const row of Array.isArray(value) ? value : [value]) {
-						const key = String(table.name === "video" ? row.id : row.videoId);
+						const key = String(table.name === "upload" ? row.videoId : row.id);
 						rows.set(key, { ...row });
 					}
 				},
@@ -68,6 +76,7 @@ vi.mock("@cap/database", () => {
 					videos: new Map(store.videos),
 					uploads: new Map(store.uploads),
 					folders: new Map(store.folders),
+					shares: new Map(store.shares),
 				};
 				const result = await run(makeClient(candidate));
 				mocks.store = candidate;
@@ -93,11 +102,19 @@ vi.mock("@cap/database/schema", () => ({
 		spaceId: "spaceId",
 	},
 	videoUploads: { name: "upload", videoId: "videoId" },
+	sharedVideos: { name: "share", id: "id" },
 }));
 // The real lookup reads `organizations`, which this transaction mock does not
 // model; visibility is not what these tests are about.
 vi.mock("@cap/database/video-sharing-default", () => ({
-	getNewVideoPublic: async () => true,
+	getNewVideoSharingDefaults: async () => ({
+		public: true,
+		sharedWithOrganization: mocks.sharedWithOrganization,
+	}),
+	newVideoOrganizationShare: (share: Row) => ({
+		id: "fixture-share",
+		...share,
+	}),
 }));
 vi.mock("@cap/env", () => ({
 	serverEnv: () => ({ CAP_VIDEOS_DEFAULT_PUBLIC: true }),
@@ -156,23 +173,33 @@ const repoCreateData: CreateVideoInput = {
 	duration: Option.none(),
 };
 
-function createRepoVideo(initialUpload?: {
-	mode: "singlepart";
-	total?: number;
-}) {
+function createRepoVideo(
+	initialUpload?: {
+		mode: "singlepart";
+		total?: number;
+	},
+	sharedWithOrganization?: boolean,
+) {
 	return Effect.runPromise(
 		Effect.flatMap(VideosRepo, (repo) =>
 			repo.create(repoCreateData, {
 				id: Video.VideoId.make("fixture-video"),
 				initialUpload,
+				sharedWithOrganization,
 			}),
 		).pipe(Effect.provide(VideosRepo.Default)),
 	);
 }
 
 beforeEach(() => {
-	mocks.store = { videos: new Map(), uploads: new Map(), folders: new Map() };
+	mocks.store = {
+		videos: new Map(),
+		uploads: new Map(),
+		folders: new Map(),
+		shares: new Map(),
+	};
 	mocks.rejectUpload = false;
+	mocks.sharedWithOrganization = false;
 	mocks.transactionCalls = 0;
 	mocks.currentUser.mockResolvedValue({ id: "fixture-user" });
 	mocks.organizationAccess.mockResolvedValue(undefined);
@@ -312,6 +339,69 @@ describe("VideosRepo.create", () => {
 		expect(mocks.transactionCalls).toBe(1);
 		expect(mocks.store.videos.get(id)?.id).toBe(id);
 		expect(mocks.store.uploads.size).toBe(0);
+	});
+});
+
+describe("sharing new videos with the organization", () => {
+	const expectedShare = {
+		id: expect.any(String),
+		videoId: "fixture-video",
+		organizationId: orgId,
+		sharedByUserId: "fixture-user",
+	};
+
+	it.each([
+		{
+			name: "web recording or upload",
+			create: () =>
+				createVideoAndGetUploadUrl({ orgId, supportsUploadProgress: true }),
+		},
+		{
+			name: "server-processed upload",
+			create: () => createVideoForServerProcessing({ orgId }),
+		},
+		{
+			name: "repository create",
+			create: () => createRepoVideo({ mode: "singlepart" }, true),
+		},
+	])("adds a $name to the organization when enabled", async ({ create }) => {
+		mocks.sharedWithOrganization = true;
+		await create();
+		expect(mocks.transactionCalls).toBe(1);
+		expect([...mocks.store.shares.values()]).toEqual([expectedShare]);
+	});
+
+	it.each([
+		{
+			name: "web recording or upload",
+			create: () =>
+				createVideoAndGetUploadUrl({ orgId, supportsUploadProgress: true }),
+		},
+		{
+			name: "server-processed upload",
+			create: () => createVideoForServerProcessing({ orgId }),
+		},
+		{
+			name: "repository create",
+			create: () => createRepoVideo({ mode: "singlepart" }),
+		},
+	])(
+		"keeps a $name out of the organization when disabled",
+		async ({ create }) => {
+			await create();
+			expect(mocks.store.videos.size).toBe(1);
+			expect(mocks.store.shares.size).toBe(0);
+		},
+	);
+
+	it("does not share a video whose creation rolled back", async () => {
+		mocks.sharedWithOrganization = true;
+		mocks.rejectUpload = true;
+		await expect(createVideoForServerProcessing({ orgId })).rejects.toThrow(
+			"Injected upload insert failure",
+		);
+		expect(mocks.store.videos.size).toBe(0);
+		expect(mocks.store.shares.size).toBe(0);
 	});
 });
 

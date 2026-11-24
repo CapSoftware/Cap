@@ -3,8 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { videos, videoUploads } from "@cap/database/schema";
-import { getNewVideoPublic } from "@cap/database/video-sharing-default";
+import { sharedVideos, videos, videoUploads } from "@cap/database/schema";
+import {
+	getNewVideoSharingDefaults,
+	newVideoOrganizationShare,
+} from "@cap/database/video-sharing-default";
 import { userIsPro } from "@cap/utils";
 import { Storage as StorageService } from "@cap/web-backend";
 import {
@@ -221,6 +224,7 @@ export async function createVideoAndGetUploadUrl({
 				videoTitle,
 			});
 
+		const sharingDefaults = await getNewVideoSharingDefaults(orgId);
 		const videoData = {
 			id: idToUse,
 			name: videoTitle,
@@ -230,7 +234,7 @@ export async function createVideoAndGetUploadUrl({
 			isScreenshot,
 			bucket: Option.getOrNull(bucketId),
 			storageIntegrationId: Option.getOrNull(storageIntegrationId),
-			public: await getNewVideoPublic(orgId),
+			public: sharingDefaults.public,
 			...(folderId ? { folderId } : {}),
 		};
 
@@ -241,6 +245,15 @@ export async function createVideoAndGetUploadUrl({
 				await tx.insert(videoUploads).values({
 					videoId: idToUse,
 				});
+
+			if (sharingDefaults.sharedWithOrganization)
+				await tx.insert(sharedVideos).values(
+					newVideoOrganizationShare({
+						videoId: idToUse,
+						organizationId: orgId,
+						sharedByUserId: user.id,
+					}),
+				);
 		});
 
 		revalidatePath("/dashboard/caps");
