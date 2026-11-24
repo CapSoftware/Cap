@@ -433,7 +433,10 @@ describe("sign-in failures", () => {
 		address += 1;
 		return `198.51.100.${address}`;
 	};
-	const capabilities = (ip: string, key = API_KEY) =>
+	const capabilities = (
+		ip: string,
+		key = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+	) =>
 		app.request("https://cap.so/api/desktop/meetings/capabilities", {
 			headers: { authorization: `Bearer ${key}`, "x-forwarded-for": ip },
 		});
@@ -1113,9 +1116,12 @@ describe("free meetings for signed-in users", () => {
 
 	it("cuts a long free meeting's transcript and says it is incomplete", async () => {
 		const user = signIn(null);
+		mocks.env.VERCEL_ENV = "production";
 		streamNotes();
 		const line = `Speaker 1: ${"word ".repeat(40)}\n`;
-		const transcript = line.repeat(Math.ceil(400_000 / line.length)).slice(0, 399_000);
+		const transcript = line
+			.repeat(Math.ceil(400_000 / line.length))
+			.slice(0, 399_000);
 		const response = await postJson("/notes", {
 			...validNotes,
 			transcript,
@@ -1165,6 +1171,7 @@ describe("free meetings for signed-in users", () => {
 
 	it("leaves a Pro meeting's transcript whole", async () => {
 		signIn();
+		mocks.env.VERCEL_ENV = "production";
 		streamNotes();
 		const transcript = `Speaker 1: ${"x".repeat(299_000)}`;
 		const response = await postJson("/notes", { ...validNotes, transcript });

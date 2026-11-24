@@ -53,9 +53,9 @@ describe.runIf(Boolean(databaseUrl))("daily meeting audio in MySQL", () => {
 				),
 			);
 			expect(results.filter((result) => result.allowed)).toHaveLength(6);
-			expect(
-				results.filter((result) => result.allowed === false),
-			).toHaveLength(6);
+			expect(results.filter((result) => result.allowed === false)).toHaveLength(
+				6,
+			);
 			expect(await rows(userId)).toMatchObject([
 				{ day: "2026-11-24", units: 18 },
 			]);
@@ -94,9 +94,9 @@ describe.runIf(Boolean(databaseUrl))("daily meeting audio in MySQL", () => {
 		expect(await usage.consumeDailyAudioUnits(first, 5, 5, now)).toEqual({
 			allowed: true,
 		});
-		expect(
-			(await usage.consumeDailyAudioUnits(first, 1, 5, now)).allowed,
-		).toBe(false);
+		expect((await usage.consumeDailyAudioUnits(first, 1, 5, now)).allowed).toBe(
+			false,
+		);
 		expect(await usage.consumeDailyAudioUnits(second, 5, 5, now)).toEqual({
 			allowed: true,
 		});

@@ -21,9 +21,9 @@ describe("fitTrialInput", () => {
 		const fit = fitTrialInput(input, bodyBytes(input), 300);
 		expect(fit?.truncated).toBe(true);
 		const rest = bodyBytes(input) - bodyBytes(input.transcript);
-		expect(
-			Buffer.byteLength(fit?.input.transcript ?? ""),
-		).toBeLessThanOrEqual(300 - rest);
+		expect(Buffer.byteLength(fit?.input.transcript ?? "")).toBeLessThanOrEqual(
+			300 - rest,
+		);
 		expect(fit?.input.transcript.endsWith("Friday")).toBe(true);
 		expect(fit?.input.title).toBe("t");
 	});
@@ -37,9 +37,9 @@ describe("fitTrialInput", () => {
 	it("bounds bytes, not characters", () => {
 		const input = { transcript: "\uE000".repeat(200_000) };
 		const fit = fitTrialInput(input, bodyBytes(input));
-		expect(
-			Buffer.byteLength(fit?.input.transcript ?? ""),
-		).toBeLessThanOrEqual(MEETING_TRIAL_INPUT_MAX_BYTES);
+		expect(Buffer.byteLength(fit?.input.transcript ?? "")).toBeLessThanOrEqual(
+			MEETING_TRIAL_INPUT_MAX_BYTES,
+		);
 	});
 
 	it("refuses when the rest of the request is over the limit", () => {

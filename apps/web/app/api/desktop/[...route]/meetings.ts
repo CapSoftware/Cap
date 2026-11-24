@@ -18,12 +18,6 @@ import {
 } from "@/lib/assemblyai";
 import { isNoSpokenAudioError } from "@/lib/live-transcribe-core";
 import {
-	MEETING_AUTH_FAILURE_RETRY_SECONDS,
-	meetingAuthBlocked,
-	meetingAuthFailureLimited,
-	rememberAcceptedCredential,
-} from "@/lib/meetings/auth-failures";
-import {
 	gatewayAvailable,
 	getMeetingsAiConfig,
 	type MeetingModelSelection,
@@ -32,6 +26,12 @@ import {
 	meetingsAiConfigured,
 	runMeetingChain,
 } from "@/lib/meetings/ai-config";
+import {
+	MEETING_AUTH_FAILURE_RETRY_SECONDS,
+	meetingAuthBlocked,
+	meetingAuthFailureLimited,
+	rememberAcceptedCredential,
+} from "@/lib/meetings/auth-failures";
 import {
 	consumeMeetingAudioBudget,
 	consumeMeetingBodyBudget,
