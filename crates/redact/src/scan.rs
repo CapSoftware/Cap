@@ -255,6 +255,9 @@ pub struct Prepared {
     rois: Vec<Rect>,
     rgb: Option<(RgbImage, bool)>,
     pending: Option<PendingDetect>,
+    /// The same regions at the frame's scale while [`Scan::detect_scale`] is
+    /// lower, for text too small to be found there.
+    fine: Option<PendingDetect>,
 }
 
 pub struct Scan {
@@ -353,6 +356,7 @@ impl Scan {
                 rois: Vec::new(),
                 rgb: None,
                 pending: None,
+                fine: None,
             });
         }
         let luma_started = Instant::now();
@@ -392,16 +396,22 @@ impl Scan {
             rois = vec![Rect::new(0.0, 0.0, self.width as f32, self.height as f32)];
         }
         stats.track += started.elapsed();
-        let (rgb, pending) = if rois.is_empty() {
-            (None, None)
+        let (rgb, pending, fine) = if rois.is_empty() {
+            (None, None, None)
         } else {
             let rgb_started = Instant::now();
             let rgb = frames.rgb_regions(&frame.video, &rois)?;
             stats.rgb += rgb_started.elapsed();
             let detect_started = Instant::now();
-            let pending = model.detect_begin(&rgb.0, &rois, self.detect_scale())?;
+            let scale = self.detect_scale();
+            let pending = model.detect_begin(&rgb.0, &rois, scale)?;
+            let fine = if scale < self.det_scale {
+                Some(model.detect_begin(&rgb.0, &rois, self.det_scale)?)
+            } else {
+                None
+            };
             stats.detect += detect_started.elapsed();
-            (Some(rgb), Some(pending))
+            (Some(rgb), Some(pending), fine)
         };
         Ok(Prepared {
             time,
@@ -414,6 +424,7 @@ impl Scan {
             rois,
             rgb,
             pending,
+            fine,
         })
     }
 
@@ -437,6 +448,7 @@ impl Scan {
             rois: prepared_rois,
             rgb,
             pending,
+            fine,
         } = prepared;
         if duplicate {
             self.extend_runs(time);
@@ -548,6 +560,19 @@ impl Scan {
                             lines.push(r);
                         }
                     }
+                }
+            }
+            // Text too small for the lowered scale is found at the frame's
+            // scale, so it is never missed and its height brings the scale
+            // back up.
+            if let Some(fine) = fine {
+                let mut found = model.detect_end(fine)?;
+                if !extra.is_empty() {
+                    found.extend(model.detect_all(&rgb, &extra, self.det_scale)?);
+                }
+                for (roi, found) in rois.iter().zip(found) {
+                    stats.det_pixels += f64::from(roi.area() * self.det_scale * self.det_scale);
+                    lines = add_unseen_lines(lines, found.into_iter().map(|line| line.rect));
                 }
             }
             stats.detect += detect_started.elapsed();
@@ -987,8 +1012,9 @@ impl Scan {
 
     /// The detector's scale: the frame's (at most 2048 px on its long side),
     /// lowered while most text on screen is large, so a line reaches the
-    /// detector at about [`TEXT_HEIGHT`] px: large text is found whole and
-    /// costs less.
+    /// detector at about [`TEXT_HEIGHT`] px and large text is found whole.
+    /// The regions are then also detected at the frame's scale for small
+    /// text.
     fn detect_scale(&self) -> f32 {
         if self.heights.len() < HEIGHT_SAMPLES / 10 {
             return self.det_scale;
@@ -1202,6 +1228,20 @@ fn shared_span(text: &[char], known: &[char]) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// Adds the lines of a detection at the frame's scale that no line found
+/// at the lowered scale overlaps (small text the lowered scale cannot see).
+fn add_unseen_lines(mut lines: Vec<Rect>, fine: impl Iterator<Item = Rect>) -> Vec<Rect> {
+    let coarse = lines.len();
+    for r in fine {
+        if !lines[..coarse].iter().any(|l| l.intersection(&r) > 0.0)
+            && !lines[coarse..].iter().any(|l| l.iou(&r) > 0.6)
+        {
+            lines.push(r);
+        }
+    }
+    lines
+}
+
 /// Joins boxes on one row whose horizontal gap is under half a line height
 /// (one line split inside a token): of the same text height on the same
 /// baseline, or, for large text, where the detector splits most, boxes that
@@ -1277,6 +1317,19 @@ mod tests {
             *value = value.saturating_add(n).saturating_sub(noise / 2);
         }
         image
+    }
+
+    #[test]
+    fn small_lines_the_lowered_scale_missed_are_added() {
+        let coarse = vec![Rect::new(100.0, 100.0, 500.0, 60.0)];
+        let fine = [
+            Rect::new(100.0, 100.0, 300.0, 60.0),
+            Rect::new(100.0, 300.0, 400.0, 12.0),
+            Rect::new(101.0, 300.0, 400.0, 12.0),
+            Rect::new(100.0, 318.0, 400.0, 12.0),
+        ];
+        let lines = add_unseen_lines(coarse.clone(), fine.into_iter());
+        assert_eq!(lines, vec![coarse[0], fine[1], fine[3]], "{lines:?}");
     }
 
     #[test]
