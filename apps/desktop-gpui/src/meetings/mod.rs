@@ -991,6 +991,18 @@ impl Meetings {
         entity
     }
 
+    #[cfg(test)]
+    pub(crate) fn add_calendar_account_for_tests(
+        &mut self,
+        provider: accounts::Provider,
+        email: &str,
+    ) -> String {
+        self.calendar.ensure_loaded();
+        self.calendar
+            .add_account(provider, email, "refresh-for-tests")
+            .unwrap()
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn enable_in_memory(&mut self, cx: &mut Context<Self>) {
         self.persist_settings = false;

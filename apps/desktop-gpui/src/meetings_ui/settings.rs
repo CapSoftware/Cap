@@ -272,6 +272,9 @@ pub(crate) struct PageState {
     pub(crate) link_form: bool,
     pub(crate) add_error: Option<CalendarError>,
     pub(crate) added: Option<String>,
+    /// The account just disconnected here, whose row says so until it is
+    /// connected again or the window closes.
+    pub(crate) disconnected: Option<crate::meetings::accounts::Provider>,
     pub(crate) help_open: bool,
     pub(crate) expanded_system: bool,
     pub(crate) audio: Access,
@@ -359,6 +362,7 @@ impl PageState {
             link_form: false,
             add_error: None,
             added: None,
+            disconnected: None,
             help_open: false,
             expanded_system: false,
             audio: Access::NotNeeded,
@@ -801,7 +805,14 @@ impl SettingsWindow {
 
     pub(crate) fn meetings_remove_calendar(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(meetings) = Meetings::try_global(cx) {
-            let _ = meetings.update(cx, |m, cx| m.remove_calendar(id, cx));
+            let account = accounts::source_provider(meetings.read(cx).calendar_sources(), id);
+            if meetings
+                .update(cx, |m, cx| m.remove_calendar(id, cx))
+                .is_ok()
+                && account.is_some()
+            {
+                self.pages.meetings.disconnected = account;
+            }
         }
         if self.pages.meetings.added.as_deref() == Some(id) {
             self.pages.meetings.added = None;
