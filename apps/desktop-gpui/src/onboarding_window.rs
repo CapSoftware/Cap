@@ -117,6 +117,12 @@ fn welcome_scene_moves(focused: bool, reduce_motion: bool, software: bool) -> bo
     focused && !reduce_motion && !software
 }
 
+/// A renderer that draws on the CPU: one that says so, or Windows' Basic
+/// Render Driver (WARP), which DXGI does not always flag as software.
+fn draws_on_cpu(specs: &gpui::GpuSpecs) -> bool {
+    specs.is_software_emulated || specs.device_name.contains("Basic Render Driver")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 enum Step {
@@ -979,7 +985,7 @@ impl OnboardingWindow {
             && now.duration_since(started).as_secs_f32() < WELCOME_ENTRANCE_SECS;
         let software = *self
             .software_render
-            .get_or_insert_with(|| window.gpu_specs().is_some_and(|s| s.is_software_emulated));
+            .get_or_insert_with(|| window.gpu_specs().is_some_and(|s| draws_on_cpu(&s)));
         let running = self.welcome_exit_at.is_some()
             || entering
             || welcome_scene_moves(self.animated, self.reduce_motion, software);
@@ -2906,6 +2912,20 @@ impl Render for OnboardingWindow {
 mod tests {
     use super::*;
     use crate::permissions::{MediaAuthorization, RawPermissions};
+
+    #[test]
+    fn windows_basic_render_driver_draws_on_the_cpu() {
+        let specs = |software: bool, name: &str| gpui::GpuSpecs {
+            is_software_emulated: software,
+            device_name: name.into(),
+            driver_name: String::new(),
+            driver_info: String::new(),
+        };
+        assert!(draws_on_cpu(&specs(false, "Microsoft Basic Render Driver")));
+        assert!(draws_on_cpu(&specs(true, "llvmpipe (LLVM 20.1.2, 256 bits)")));
+        assert!(!draws_on_cpu(&specs(false, "NVIDIA GeForce RTX 4090")));
+        assert!(!draws_on_cpu(&specs(false, "Intel(R) UHD Graphics 620")));
+    }
 
     #[test]
     fn welcome_scene_rests_on_a_software_renderer() {
