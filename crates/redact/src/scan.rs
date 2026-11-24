@@ -104,6 +104,11 @@ const SHORT_LINE: usize = 32;
 /// Box height in frame pixels from which the row merge accepts uneven boxes.
 const LARGE_TEXT: f32 = 28.0;
 const KNOWN_MIN_SHARED: usize = 10;
+/// Frame pixels from the left or right edge within which a line is cut by it.
+const EDGE: f32 = 3.0;
+/// Characters of a known string that a line cut by the frame's edge must show
+/// on its cut side.
+const EDGE_MIN_SHARED: usize = 4;
 /// Mean luma difference under which a block of a line is unchanged
 /// (re-encoding noise), well under one changed character's.
 const LINE_BLOCK_MEAN: u32 = 8;
@@ -113,6 +118,10 @@ struct Reading {
     /// Each character's x-span as a fraction of the line's width.
     spans: Vec<(f32, f32)>,
     own: Vec<Finding>,
+    /// The line ran into the frame's left or right edge when it was read, so
+    /// its text may be the end or the start of a longer string.
+    cut_left: bool,
+    cut_right: bool,
 }
 
 /// A line's full-resolution luma crop.
@@ -698,6 +707,8 @@ impl Scan {
                         .map(|(a, b)| ((a - rect.x) / width, (b - rect.x) / width))
                         .collect(),
                     text: read.text,
+                    cut_left: rect.x <= EDGE,
+                    cut_right: rect.right() >= self.width as f32 - EDGE,
                 });
                 if let Some(thumb) = thumb {
                     self.cache.insert(thumb, index);
@@ -840,6 +851,7 @@ impl Scan {
                     whole_words(&text, known)
                 } else {
                     shared_span(&text, known)
+                        .or_else(|| edge_span(&text, known, reading.cut_left, reading.cut_right))
                 };
                 if let Some((start, end)) = span
                     && !entry.1.iter().any(|f: &Finding| {
@@ -1225,6 +1237,45 @@ fn whole_words(text: &[char], known: &[char]) -> Option<(usize, usize)> {
 /// The span of `text` around its longest run of characters shared with
 /// `known`, widened to whole tokens, when that run is long enough: the whole
 /// of a short known string, or [`KNOWN_MIN_SHARED`] characters of a long one.
+/// The part of a line cut by the frame's edge that is the start of `known`
+/// (cut on the right: the line ends with it) or its end (cut on the left: the
+/// line starts with it), at least [`EDGE_MIN_SHARED`] characters, grown to
+/// whole words.
+fn edge_span(
+    text: &[char],
+    known: &[char],
+    cut_left: bool,
+    cut_right: bool,
+) -> Option<(usize, usize)> {
+    let longest = text.len().min(known.len());
+    if longest < EDGE_MIN_SHARED {
+        return None;
+    }
+    if cut_right
+        && let Some(k) = (EDGE_MIN_SHARED..=longest)
+            .rev()
+            .find(|&k| text[text.len() - k..] == known[..k])
+    {
+        let mut start = text.len() - k;
+        while start > 0 && !text[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        return Some((start, text.len()));
+    }
+    if cut_left
+        && let Some(k) = (EDGE_MIN_SHARED..=longest)
+            .rev()
+            .find(|&k| text[..k] == known[known.len() - k..])
+    {
+        let mut end = k;
+        while end < text.len() && !text[end].is_whitespace() {
+            end += 1;
+        }
+        return Some((0, end));
+    }
+    None
+}
+
 fn shared_span(text: &[char], known: &[char]) -> Option<(usize, usize)> {
     if text.is_empty() || known.is_empty() {
         return None;
@@ -1348,6 +1399,22 @@ mod tests {
     }
 
     #[test]
+    fn a_line_cut_by_the_frame_edge_matches_the_start_or_end_of_a_known_string() {
+        let chars = |s: &str| s.chars().collect::<Vec<_>>();
+        let known = chars("sk_live_51Hq7x2Ab");
+        assert_eq!(
+            edge_span(&chars("key: sk_li"), &known, false, true),
+            Some((5, 10))
+        );
+        assert_eq!(edge_span(&chars("key: sk_li"), &known, true, false), None);
+        assert_eq!(
+            edge_span(&chars("7x2Ab rotated"), &known, true, false),
+            Some((0, 5))
+        );
+        assert_eq!(edge_span(&chars("key: sk"), &known, false, true), None);
+    }
+
+    #[test]
     fn a_held_frame_keeps_its_mask_until_the_next_frame() {
         let mut scan = Scan::new(0, 1000, 500, 960);
         scan.fps_estimate = 30.0;
@@ -1359,6 +1426,8 @@ mod tests {
                 .map(|i| (i as f32 / 7.0, (i + 1) as f32 / 7.0))
                 .collect(),
             own: Vec::new(),
+            cut_left: false,
+            cut_right: false,
         });
         let mut identity = Identity::default();
         identity.findings.insert(
