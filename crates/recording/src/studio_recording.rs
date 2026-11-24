@@ -32,6 +32,7 @@ use crate::output_pipeline::{
     WindowsFragmentedM4SCameraMuxerConfig,
 };
 use anyhow::{Context as _, anyhow, bail};
+use cap_enc_ffmpeg::h264::VideoEncoderChoice;
 use cap_media_info::VideoInfo;
 use cap_project::{
     CursorEvents, KeyboardEvents, MultipleSegment, MultipleSegments, Platform, RecordingMeta,
@@ -2446,6 +2447,7 @@ pub struct ActorBuilder {
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     #[cfg(target_os = "macos")]
     excluded_windows: Vec<scap_targets::WindowId>,
     start_gate: Option<RecordingStartGate>,
@@ -2472,6 +2474,7 @@ impl ActorBuilder {
             use_oop_muxer: false,
             max_fps: 60,
             quality: crate::StudioQuality::Balanced,
+            video_encoder: VideoEncoderChoice::Automatic,
             #[cfg(target_os = "macos")]
             excluded_windows: Vec::new(),
             start_gate: None,
@@ -2538,6 +2541,11 @@ impl ActorBuilder {
         self
     }
 
+    pub fn with_video_encoder(mut self, video_encoder: VideoEncoderChoice) -> Self {
+        self.video_encoder = video_encoder;
+        self
+    }
+
     /// The project name to store in the recording's metadata. Without one,
     /// the recording is named after the date and time it stopped.
     pub fn with_pretty_name(mut self, pretty_name: impl Into<String>) -> Self {
@@ -2593,6 +2601,7 @@ impl ActorBuilder {
             self.use_oop_muxer && !audio_only,
             self.max_fps,
             self.quality,
+            self.video_encoder,
             self.pretty_name,
         );
         #[cfg(windows)]
@@ -2653,6 +2662,7 @@ async fn spawn_studio_recording_actor(
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     pretty_name: Option<String>,
 ) -> anyhow::Result<ActorHandle> {
     use cap_utils::operation_diagnostics::{Field, Operation};
@@ -2733,6 +2743,7 @@ async fn spawn_studio_recording_actor(
         quality,
         completion_tx.clone(),
     );
+    segment_pipeline_factory.video_encoder = video_encoder;
 
     if fragmented || cfg!(any(target_os = "linux", windows)) {
         write_in_progress_meta_for(
@@ -3405,6 +3416,7 @@ struct SegmentPipelineFactory {
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     index: u32,
     completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     #[cfg(windows)]
@@ -3445,6 +3457,7 @@ impl SegmentPipelineFactory {
             use_oop_muxer,
             max_fps,
             quality,
+            video_encoder: VideoEncoderChoice::Automatic,
             index: 0,
             completion_tx,
             #[cfg(windows)]
@@ -3490,6 +3503,7 @@ impl SegmentPipelineFactory {
             self.use_oop_muxer,
             self.max_fps,
             self.quality,
+            self.video_encoder,
             segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
@@ -3530,6 +3544,7 @@ impl SegmentPipelineFactory {
                 self.use_oop_muxer,
                 self.max_fps,
                 self.quality,
+                self.video_encoder,
                 Timestamps::now(),
                 #[cfg(windows)]
                 self.encoder_preferences.clone(),
@@ -3676,6 +3691,7 @@ async fn create_segment_pipeline(
     use_oop_muxer: bool,
     max_fps: u32,
     quality: crate::StudioQuality,
+    video_encoder: VideoEncoderChoice,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
 ) -> anyhow::Result<Pipeline> {
@@ -3883,6 +3899,7 @@ async fn create_segment_pipeline(
             shared_pause_state.clone(),
             output_size,
             quality,
+            video_encoder,
             #[cfg(windows)]
             encoder_preferences.clone(),
         )

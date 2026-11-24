@@ -419,6 +419,7 @@ impl WindowsFragmentedM4SMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            ..Default::default()
         };
 
         let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(
@@ -884,6 +885,7 @@ impl WindowsFragmentedM4SCameraMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            ..Default::default()
         };
 
         let mut encoder = SegmentedVideoEncoder::init_with_timed_fragments(

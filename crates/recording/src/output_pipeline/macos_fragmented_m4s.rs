@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::StorageStalled;
-use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset};
+use cap_enc_ffmpeg::h264::{H264EncoderBuilder, H264Preset, VideoEncoderChoice};
 use cap_enc_ffmpeg::segmented_stream::{
     DiskSpaceCallback, SegmentCompletedEvent, SegmentedVideoEncoder, SegmentedVideoEncoderConfig,
 };
@@ -231,6 +231,7 @@ pub struct MacOSFragmentedM4SMuxer {
     preset: H264Preset,
     bpp: f32,
     output_size: Option<(u32, u32)>,
+    video_encoder: VideoEncoderChoice,
     state: Option<EncoderState>,
     pause: SharedPauseState,
     frame_drops: FrameDropTracker,
@@ -246,6 +247,7 @@ pub struct MacOSFragmentedM4SMuxerConfig {
     pub preset: H264Preset,
     pub bpp: f32,
     pub output_size: Option<(u32, u32)>,
+    pub video_encoder: VideoEncoderChoice,
     pub shared_pause_state: Option<SharedPauseState>,
     pub disk_space_callback: Option<DiskSpaceCallback>,
     pub segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
@@ -259,6 +261,7 @@ impl Default for MacOSFragmentedM4SMuxerConfig {
             preset: H264Preset::Ultrafast,
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
+            video_encoder: VideoEncoderChoice::Automatic,
             shared_pause_state: None,
             disk_space_callback: None,
             segment_tx: None,
@@ -298,6 +301,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             preset: config.preset,
             bpp: config.bpp,
             output_size: config.output_size,
+            video_encoder: config.video_encoder,
             state: None,
             pause,
             frame_drops: FrameDropTracker::new(SharedHealthSender::new(), "muxer:macos-fragmented"),
@@ -368,6 +372,7 @@ impl MacOSFragmentedM4SMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: true,
+            video_encoder: self.video_encoder,
         };
 
         let mut encoder = SegmentedVideoEncoder::init_write_behind(
@@ -383,6 +388,10 @@ impl MacOSFragmentedM4SMuxer {
             encoder.set_segment_callback(tx.clone());
         }
         let hw_input = encoder.is_videotoolbox_hw_input();
+        let codec_name = encoder
+            .current_encoder()
+            .map(|encoder| encoder.codec_name())
+            .unwrap_or_default();
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let video_config = self.video_config;
@@ -572,6 +581,9 @@ impl MacOSFragmentedM4SMuxer {
 
         info!(
             path = %self.base_path.display(),
+            encoder = %codec_name,
+            video_encoder = ?self.video_encoder,
+            hw_input,
             "Started M4S fragmented video encoder"
         );
 
@@ -771,6 +783,7 @@ impl MacOSFragmentedM4SCameraMuxer {
             bpp: self.bpp,
             output_size: self.output_size,
             prefer_videotoolbox_hw_input: false,
+            ..Default::default()
         };
 
         let mut encoder = SegmentedVideoEncoder::init_write_behind(

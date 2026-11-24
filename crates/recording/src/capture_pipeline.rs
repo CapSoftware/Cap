@@ -15,6 +15,7 @@ use cap_enc_ffmpeg::h264::H264EncoderBuilder;
 use cap_enc_ffmpeg::h264::H264Preset;
 #[cfg(windows)]
 use cap_enc_ffmpeg::h264::H264Preset;
+use cap_enc_ffmpeg::h264::VideoEncoderChoice;
 use cap_enc_ffmpeg::segmented_stream::SegmentCompletedEvent;
 use cap_timestamp::Timestamps;
 use std::path::PathBuf;
@@ -66,6 +67,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        video_encoder: VideoEncoderChoice,
         #[cfg(windows)] encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline>
     where
@@ -97,6 +99,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        video_encoder: VideoEncoderChoice,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
         let compatibility = quality == StudioQuality::Compatibility;
@@ -181,6 +184,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                         preset,
                         bpp,
                         output_size,
+                        video_encoder,
                         shared_pause_state,
                         ..Default::default()
                     })
@@ -242,6 +246,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        _video_encoder: VideoEncoderChoice,
         encoder_preferences: EncoderPreferences,
     ) -> anyhow::Result<OutputPipeline> {
         let ultra = quality == StudioQuality::Ultra;
@@ -386,6 +391,7 @@ impl MakeCapturePipeline for screen_capture::X11Capture {
         shared_pause_state: Option<SharedPauseState>,
         output_size: Option<(u32, u32)>,
         quality: StudioQuality,
+        _video_encoder: VideoEncoderChoice,
     ) -> anyhow::Result<OutputPipeline> {
         let fragments_dir = output_path
             .parent()
