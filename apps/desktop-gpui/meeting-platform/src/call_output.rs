@@ -74,18 +74,19 @@ const LAUNCHERS: &[&str] = &[
     "conhost.exe",
 ];
 
-/// Whether two processes are one app: the same process, one started the
-/// other, or the nearest process that started both is an app itself (an
-/// app's helpers, such as its embedded browser's audio service). A
-/// launcher (the shell, a terminal) never joins two apps.
+/// Whether two processes are one app: the same process, or the nearest
+/// process that is or started both (one of them, when one started the other)
+/// is an app itself (an app and its helpers, such as its embedded browser's
+/// audio service). A launcher (the shell, a terminal) never joins two apps,
+/// not even the apps it started itself.
 fn same_app(a: u32, b: u32, procs: &HashMap<u32, Proc>) -> bool {
     if a == b {
         return true;
     }
     let (up_a, up_b) = (chain(a, procs), chain(b, procs));
-    if up_a.contains(&b) || up_b.contains(&a) {
-        return true;
-    }
+    // The nearest process that is or started both: one of the two when one
+    // started the other. A launcher there joins nothing (everything a person
+    // opens from the taskbar is started by the shell).
     let Some(common) = up_a.iter().find(|pid| up_b.contains(pid)) else {
         return false;
     };
@@ -578,5 +579,33 @@ mod tests {
             chooser.choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
             Some(HEADSET.into())
         );
+    }
+
+    #[test]
+    fn a_launcher_never_joins_the_apps_it_started() {
+        // The shell (or a terminal) plays a sound and started the call app:
+        // its sound is not the call's.
+        let tree = procs(&[
+            (10, 1, "explorer.exe"),
+            (20, 10, "chrome.exe"),
+            (21, 20, "chrome.exe"),
+            (50, 1, "powershell.exe"),
+            (51, 50, "chrome.exe"),
+            (52, 51, "chrome.exe"),
+        ]);
+        assert!(!same_app(10, 21, &tree));
+        assert!(!same_app(50, 52, &tree));
+        let recording = [session(HEADSET_MIC, 52)];
+        let playing = [
+            heard(SPEAKERS, 50),
+            session(SPEAKERS, 52),
+            heard(HEADSET, 52),
+        ];
+        assert_eq!(
+            Chooser::default().choose(Some(SPEAKERS), &playing, &recording, &tree, OURS),
+            Some(HEADSET.into())
+        );
+        // An app that started its own helper still is one app.
+        assert!(same_app(20, 21, &tree));
     }
 }
