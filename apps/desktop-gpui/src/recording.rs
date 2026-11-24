@@ -534,7 +534,12 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the Studio Sound default");
         }
-        if crate::store::GeneralSettings::load().macbook_notch_overlay
+        let general = crate::store::GeneralSettings::load();
+        let auto_redact = general.auto_redact_new_recordings;
+        if auto_redact && let Err(error) = enable_auto_redact(&project_path) {
+            tracing::warn!(%error, "Could not apply the auto redact preference");
+        }
+        if general.macbook_notch_overlay
             && completed.meta.display_notch().is_some()
             && matches!(
                 capture_target,
@@ -544,11 +549,12 @@ async fn finalize_studio(
         {
             tracing::warn!(%error, "Could not apply the notch overlay preference");
         }
-        Ok::<_, anyhow::Error>(completed)
+        Ok::<_, anyhow::Error>((completed, auto_redact))
     })
     .await
     .context("studio finalize task")?
     .context("studio finalize")?;
+    let (completed, auto_redact) = completed;
     tracing::info!(
         elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
         "Studio stop remux complete"
@@ -559,6 +565,9 @@ async fn finalize_studio(
     }
 
     let project_path = completed.project_path.clone();
+    if auto_redact {
+        crate::redact::start_background(project_path.clone());
+    }
     let pending = PendingStudioThumbnail::new();
     tokio::task::spawn_blocking(move || {
         let _pending = pending;
@@ -1850,6 +1859,9 @@ pub(crate) fn preparing_presentation(
         config.audio.improve = true;
         config.audio.isolation = crate::store::studio_sound_isolation();
     }
+    if crate::store::GeneralSettings::load().auto_redact_new_recordings {
+        config.auto_redact.enabled = true;
+    }
     if let Some(shape) = recorded_camera_shape(camera_recorded, camera_snapshot) {
         apply_preview_shape(&mut config.camera, shape);
     }
@@ -2066,6 +2078,36 @@ fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
         serde_json::to_value(crate::store::studio_sound_isolation())?,
     );
     let temp = path.with_extension(format!("studio-sound-{}.tmp", crate::store::new_uuid_v4()));
+    let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
+        .and_then(|()| std::fs::rename(&temp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+/// Turns auto redact on in a new recording's project, keeping any other
+/// auto redact settings already there.
+fn enable_auto_redact(project_path: &std::path::Path) -> std::io::Result<()> {
+    let path = project_path.join("project-config.json");
+    let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+    let object = config.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Project configuration is not an object",
+        )
+    })?;
+    let redact = object
+        .entry("autoRedact")
+        .or_insert_with(|| serde_json::json!({}));
+    let redact = redact.as_object_mut().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Auto redact configuration is not an object",
+        )
+    })?;
+    redact.insert("enabled".into(), serde_json::Value::Bool(true));
+    let temp = path.with_extension(format!("auto-redact-{}.tmp", crate::store::new_uuid_v4()));
     let result = std::fs::write(&temp, serde_json::to_vec_pretty(&config)?)
         .and_then(|()| std::fs::rename(&temp, path));
     if result.is_err() {
@@ -4674,6 +4716,40 @@ mod tests {
         assert_eq!(written["futureProjectSetting"], true);
         let parsed: cap_project::ProjectConfiguration = serde_json::from_value(written).unwrap();
         assert!(parsed.background.notch.is_some_and(|notch| notch.enabled));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn auto_redact_is_enabled_keeping_its_other_settings() {
+        let dir = temp_project("auto-redact");
+        let path = dir.join("project-config.json");
+        let mut original =
+            serde_json::to_value(cap_project::ProjectConfiguration::default()).unwrap();
+        original["futureProjectSetting"] = true.into();
+        std::fs::write(&path, serde_json::to_vec(&original).unwrap()).unwrap();
+
+        enable_auto_redact(&dir).unwrap();
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["futureProjectSetting"], true);
+        let parsed: cap_project::ProjectConfiguration = serde_json::from_value(written).unwrap();
+        assert!(parsed.auto_redact.enabled);
+        assert_eq!(
+            parsed.auto_redact.categories,
+            cap_project::RedactCategory::DEFAULTS.to_vec()
+        );
+
+        let mut chosen = original.clone();
+        chosen["autoRedact"] = serde_json::json!({ "categories": ["name"], "style": "blur" });
+        std::fs::write(&path, serde_json::to_vec(&chosen).unwrap()).unwrap();
+        enable_auto_redact(&dir).unwrap();
+        let parsed: cap_project::ProjectConfiguration =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(parsed.auto_redact.enabled);
+        assert_eq!(
+            parsed.auto_redact.categories,
+            vec![cap_project::RedactCategory::Name]
+        );
+        assert_eq!(parsed.auto_redact.style, cap_project::RedactStyle::Blur);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

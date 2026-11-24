@@ -157,6 +157,10 @@ label = "Confirmar antes de grabar sin micrófono"
 description = "Limpia el audio del micrófono automáticamente. Puedes desactivarlo en el editor para cualquier grabación."
 label = "Studio Sound en las grabaciones nuevas"
 
+[settings.general.recording.auto_redact]
+description = "Oculta datos privados como correos y claves en las grabaciones Studio nuevas, para que estén listas al abrir el editor. Se ejecuta en este ordenador, así que no se sube nada."
+label = "Ocultación automática en las grabaciones Studio nuevas"
+
 [settings.general.recording.main_window_start]
 description = "Qué ocurre con la ventana principal cuando empieza una grabación."
 label = "Ventana principal al empezar a grabar"

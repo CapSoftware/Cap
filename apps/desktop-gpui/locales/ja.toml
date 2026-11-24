@@ -157,6 +157,10 @@ label = "マイクなしで録画する前に確認"
 description = "マイク音声を自動でクリーンアップします。エディタで録画ごとにオフにすることもできます。"
 label = "新しい録画でStudio Soundを使用"
 
+[settings.general.recording.auto_redact]
+description = "新しいStudio録画のメールアドレスやキーなどの個人情報を隠し、エディタを開いたときには準備ができています。このコンピュータ上で動作し、何もアップロードされません。"
+label = "新しいStudio録画を自動で隠す"
+
 [settings.general.recording.main_window_start]
 description = "録画が始まったときのメインウィンドウの動作。"
 label = "録画開始時のメインウィンドウ"

@@ -159,6 +159,10 @@ label = "Confirm before recording without a microphone"
 description = "Clean up microphone audio automatically. You can still turn it off for any recording in the editor."
 label = { text = "Studio Sound on new recordings", context = "Studio Sound is the name of Cap's microphone clean-up feature." }
 
+[settings.general.recording.auto_redact]
+description = "Hides private details like emails and keys in new Studio recordings, so they are ready when you open the editor. Runs on this computer, so nothing is uploaded."
+label = "Auto redact new Studio recordings"
+
 [settings.general.recording.main_window_start]
 description = "What happens to the main window once a recording begins."
 label = "Main window when recording starts"

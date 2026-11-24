@@ -157,6 +157,10 @@ label = "无麦克风录制前确认"
 description = "自动优化麦克风音频。你仍可在编辑器中为任意录制关闭此功能。"
 label = "新录制默认开启 Studio Sound"
 
+[settings.general.recording.auto_redact]
+description = "在新的 Studio 录制中隐藏邮箱、密钥等私密信息，打开编辑器时即可就绪。在本机运行，不会上传任何内容。"
+label = "新的 Studio 录制自动打码"
+
 [settings.general.recording.main_window_start]
 description = "录制开始后主窗口的处理方式。"
 label = "开始录制时的主窗口"

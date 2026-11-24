@@ -157,6 +157,10 @@ label = "Confirmer avant d'enregistrer sans micro"
 description = "Nettoie automatiquement l'audio du micro. Vous pouvez toujours le désactiver pour n'importe quel enregistrement dans l'éditeur."
 label = "Studio Sound sur les nouveaux enregistrements"
 
+[settings.general.recording.auto_redact]
+description = "Masque les informations privées comme les e-mails et les clés dans les nouveaux enregistrements Studio, pour qu'ils soient prêts à l'ouverture de l'éditeur. Tout se fait sur cet ordinateur, rien n'est envoyé."
+label = "Masquage automatique des nouveaux enregistrements Studio"
+
 [settings.general.recording.main_window_start]
 description = "Ce que devient la fenêtre principale lorsqu'un enregistrement commence."
 label = "Fenêtre principale au début de l'enregistrement"

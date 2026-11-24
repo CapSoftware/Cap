@@ -157,6 +157,10 @@ label = "Vor Aufnahmen ohne Mikrofon nachfragen"
 description = "Bereinigt das Mikrofon-Audio automatisch. Im Editor können Sie es für jede Aufnahme wieder ausschalten."
 label = "Studio Sound für neue Aufnahmen"
 
+[settings.general.recording.auto_redact]
+description = "Verbirgt private Angaben wie E-Mail-Adressen und Schlüssel in neuen Studio-Aufnahmen, damit sie bereit sind, wenn du den Editor öffnest. Läuft auf diesem Computer, es wird nichts hochgeladen."
+label = "Neue Studio-Aufnahmen automatisch schwärzen"
+
 [settings.general.recording.main_window_start]
 description = "Was mit dem Hauptfenster passiert, sobald eine Aufnahme beginnt."
 label = "Hauptfenster beim Aufnahmestart"
