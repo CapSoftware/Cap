@@ -71,7 +71,7 @@ export const DefaultVideoVisibility = () => {
 			toast.success(
 				checked
 					? "New recordings will be shared with the organization"
-					: "New recordings will only be visible to their owner",
+					: "New recordings will no longer be added to the organization library",
 			);
 		} catch {
 			setShareWithOrganization(!checked);
