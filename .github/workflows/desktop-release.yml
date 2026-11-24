@@ -375,6 +375,33 @@ jobs:
           maximum-size: 24GB
           disk-root: "D:"
 
+      # The AppImage's fallback libva (for hosts without one) is Ubuntu's 2.23
+      # rebuilt on Ubuntu 22.04, so it needs no newer glibc than Cap. It builds
+      # in a container so its build dependencies never reach Cap's build.
+      - name: Build fallback libva (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/fallback-libva"
+          mkdir -p "$out"
+          docker run --rm \
+            --volume "${{ github.workspace }}/scripts:/scripts:ro" \
+            --volume "$out:/out" \
+            ubuntu:22.04@sha256:b682e31336cc8e0a73ed91ab32b7a95e32591c5ff09994490a20accf9b3600f9 \
+            bash -c 'set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::Retries=4 update -qq
+              apt-get -o Acquire::Retries=4 install -y -qq --no-install-recommends \
+                build-essential ca-certificates curl dpkg-dev debhelper meson ninja-build pkg-config \
+                libdrm-dev libgl-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb-dri3-dev \
+                libxcb1-dev libxext-dev libxfixes-dev > /dev/null
+              dir="$(bash /scripts/build-fallback-libva.sh /tmp/libva | tail -n1)"
+              cp -a "$dir"/libva.so.2* "$dir"/libva-drm.so.2* /out/'
+          test -e "$out/libva.so.2"
+          test -e "$out/libva-drm.so.2"
+          echo "CAP_APPIMAGE_LIBVA_DIR=$out" >> "$GITHUB_ENV"
+
       # The Tauri bundler is only the packager here: it lays the prebuilt GPUI
       # binary out in the same app bundle, installer and package formats the
       # Tauri updater already installs, so existing installs update into Cap.
