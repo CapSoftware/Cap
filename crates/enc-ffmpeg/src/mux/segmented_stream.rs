@@ -14,7 +14,7 @@ use std::{
 use crate::base::PacketSink;
 use crate::video::h264::{
     DEFAULT_KEYFRAME_INTERVAL_SECS, H264Encoder, H264EncoderBuilder, H264EncoderError, H264Preset,
-    QueueFrameError as EncodeError,
+    QueueFrameError as EncodeError, VideoEncoderChoice,
 };
 
 /// Consecutive codec errors from a hardware encoder before it is replaced
@@ -334,6 +334,7 @@ pub struct SegmentedVideoEncoderConfig {
     /// [`SegmentedVideoEncoder::queue_hw_pixel_buffer`]) before falling back
     /// to the software-frame path. Ignored on other platforms.
     pub prefer_videotoolbox_hw_input: bool,
+    pub video_encoder: VideoEncoderChoice,
 }
 
 impl Default for SegmentedVideoEncoderConfig {
@@ -344,6 +345,7 @@ impl Default for SegmentedVideoEncoderConfig {
             bpp: H264EncoderBuilder::QUALITY_BPP,
             output_size: None,
             prefer_videotoolbox_hw_input: false,
+            video_encoder: VideoEncoderChoice::Automatic,
         }
     }
 }
@@ -438,7 +440,8 @@ impl SegmentedVideoEncoder {
 
         let mut builder = H264EncoderBuilder::new(video_config)
             .with_preset(config.preset)
-            .with_bpp(config.bpp);
+            .with_bpp(config.bpp)
+            .with_video_encoder(config.video_encoder);
         if let Some(priority) = encoder_priority {
             builder = builder.with_encoder_priority_override(priority);
         }

@@ -38,6 +38,8 @@ pub struct H264EncoderBuilder {
     is_export: bool,
     crf: Option<u8>,
     software_tuning: Option<SoftwareEncoderTuning>,
+    #[cfg(target_os = "macos")]
+    video_encoder: VideoEncoderChoice,
 }
 
 /// libx264 settings for an export split across several encoders running at
@@ -69,6 +71,23 @@ pub enum H264Preset {
     Medium,
     Ultrafast,
     HighThroughput,
+}
+
+/// `Hardware` only changes [`H264EncoderBuilder::build_videotoolbox_hw_input`]
+/// on macOS: past the estimated hardware ceiling it opens VideoToolbox without
+/// the realtime flag or a peak bitrate instead of refusing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VideoEncoderChoice {
+    #[default]
+    Automatic,
+    Hardware,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VideoToolboxHwInputSession {
+    Realtime,
+    NonRealtime,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -114,7 +133,20 @@ impl H264EncoderBuilder {
             is_export: false,
             crf: None,
             software_tuning: None,
+            #[cfg(target_os = "macos")]
+            video_encoder: VideoEncoderChoice::Automatic,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn with_video_encoder(mut self, video_encoder: VideoEncoderChoice) -> Self {
+        self.video_encoder = video_encoder;
+        self
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn with_video_encoder(self, _video_encoder: VideoEncoderChoice) -> Self {
+        self
     }
 
     pub fn with_software_tuning(mut self, tuning: SoftwareEncoderTuning) -> Self {
@@ -490,32 +522,10 @@ impl H264EncoderBuilder {
                 height: output_height,
             });
         }
-        if force_software_encoder()
-            || requires_software_encoder(&input_config, self.preset, self.is_export)
-        {
-            return Err(H264EncoderError::VideoToolboxHwInput(
-                "software encoder required for this resolution/frame rate".to_string(),
-            ));
-        }
-        if self.crf.is_some() {
-            return Err(H264EncoderError::VideoToolboxHwInput(
-                "CRF encoding uses libx264".to_string(),
-            ));
-        }
-
+        let session = self.videotoolbox_hw_input_session()?;
         let codec =
             encoder::find_by_name("h264_videotoolbox").ok_or(H264EncoderError::CodecNotFound)?;
-        let encoder_options = get_codec_and_options(
-            &input_config,
-            self.preset,
-            Some(&["h264_videotoolbox"]),
-            self.is_export,
-            None,
-        )
-        .into_iter()
-        .next()
-        .map(|(_, options)| options)
-        .ok_or(H264EncoderError::CodecNotFound)?;
+        let encoder_options = self.videotoolbox_hw_input_options(session)?;
 
         let hw_frames = VideoToolboxHwFrames::new(output_width, output_height)
             .map_err(|e| H264EncoderError::VideoToolboxHwInput(e.to_string()))?;
@@ -550,7 +560,9 @@ impl H264EncoderBuilder {
                 self.bpp,
             );
             encoder.set_bit_rate(bitrate);
-            encoder.set_max_bit_rate(bitrate * 3 / 2);
+            if session == VideoToolboxHwInputSession::Realtime {
+                encoder.set_max_bit_rate(bitrate * 3 / 2);
+            }
 
             unsafe { hw_frames.attach_to_encoder(encoder.as_mut_ptr()) };
 
@@ -567,6 +579,8 @@ impl H264EncoderBuilder {
             width = output_width,
             height = output_height,
             fps = input_config.frame_rate.0 as f32 / input_config.frame_rate.1.max(1) as f32,
+            video_encoder = ?self.video_encoder,
+            ?session,
             "Selected hardware H264 encoder with zero-copy VideoToolbox input"
         );
 
@@ -588,6 +602,65 @@ impl H264EncoderBuilder {
             injected_failure: None,
             hardware_session: None,
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn videotoolbox_hw_input_session(
+        &self,
+    ) -> Result<VideoToolboxHwInputSession, H264EncoderError> {
+        let past_ceiling =
+            requires_software_encoder(&self.input_config, self.preset, self.is_export);
+        let session = if past_ceiling
+            && self.video_encoder == VideoEncoderChoice::Hardware
+            && self.preset != H264Preset::HighThroughput
+        {
+            VideoToolboxHwInputSession::NonRealtime
+        } else {
+            VideoToolboxHwInputSession::Realtime
+        };
+        if force_software_encoder()
+            || (past_ceiling && session == VideoToolboxHwInputSession::Realtime)
+        {
+            return Err(H264EncoderError::VideoToolboxHwInput(
+                "software encoder required for this resolution/frame rate".to_string(),
+            ));
+        }
+        if self.crf.is_some() {
+            return Err(H264EncoderError::VideoToolboxHwInput(
+                "CRF encoding uses libx264".to_string(),
+            ));
+        }
+        Ok(session)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn videotoolbox_hw_input_options(
+        &self,
+        session: VideoToolboxHwInputSession,
+    ) -> Result<Dictionary<'static>, H264EncoderError> {
+        match session {
+            VideoToolboxHwInputSession::Realtime => get_codec_and_options(
+                &self.input_config,
+                self.preset,
+                Some(&["h264_videotoolbox"]),
+                self.is_export,
+                None,
+            )
+            .into_iter()
+            .next()
+            .map(|(_, options)| options)
+            .ok_or(H264EncoderError::CodecNotFound),
+            VideoToolboxHwInputSession::NonRealtime => {
+                if without_crashed_encoders(&["h264_videotoolbox"], |name| {
+                    hardware_crash::hardware_encoder_disabled(name)
+                })
+                .is_empty()
+                {
+                    return Err(H264EncoderError::CodecNotFound);
+                }
+                Ok(videotoolbox_recording_options(false))
+            }
+        }
     }
 
     pub fn build_standalone(self) -> Result<H264PacketEncoder, H264EncoderError> {
@@ -1698,9 +1771,7 @@ fn get_codec_and_options(
                     options.set("allow_sw", "0");
                     options.set("g", &keyframe_interval_str);
                 } else {
-                    options.set("realtime", "true");
-                    options.set("prio_speed", "true");
-                    options.set("profile", "main");
+                    options = videotoolbox_recording_options(true);
                 }
             }
             "h264_nvenc" => {
@@ -1801,6 +1872,14 @@ fn get_codec_and_options(
     }
 
     encoders
+}
+
+fn videotoolbox_recording_options(realtime: bool) -> Dictionary<'static> {
+    let mut options = Dictionary::new();
+    options.set("realtime", if realtime { "true" } else { "false" });
+    options.set("prio_speed", "true");
+    options.set("profile", "main");
+    options
 }
 
 /// Drops hardware encoders that crashed the app in an earlier session, so the
@@ -2501,6 +2580,311 @@ mod self_test_tests {
 
         cached_hardware_self_test(codec, &options, &config, 640, 360, 0.3, None)
             .expect("a VA-API GPU preserves neutral gray through upload, encode and decode");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod video_encoder_choice_tests {
+    use super::*;
+
+    const SIZES: &[(u32, u32)] = &[
+        (1280, 720),
+        (1920, 1080),
+        (2560, 1440),
+        (2880, 1864),
+        (3024, 1964),
+        (3456, 2234),
+        (3840, 2160),
+        (5120, 2880),
+    ];
+    const RATES: &[u32] = &[24, 30, 60, 90, 120, 144, 165, 180, 240];
+    const PRESETS: &[H264Preset] = &[
+        H264Preset::Ultrafast,
+        H264Preset::Medium,
+        H264Preset::HighThroughput,
+    ];
+
+    type Entries = Vec<(String, String)>;
+
+    fn entries(options: &Dictionary<'static>) -> Entries {
+        options
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn literal(pairs: &[(&str, &str)]) -> Entries {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn builder(
+        width: u32,
+        height: u32,
+        fps: u32,
+        preset: H264Preset,
+        is_export: bool,
+        choice: VideoEncoderChoice,
+    ) -> H264EncoderBuilder {
+        let builder = H264EncoderBuilder::new(VideoInfo::from_raw(
+            cap_media_info::RawVideoFormat::Nv12,
+            width,
+            height,
+            fps,
+        ))
+        .with_preset(preset)
+        .with_video_encoder(choice);
+        if is_export {
+            builder.with_export_settings()
+        } else {
+            builder
+        }
+    }
+
+    fn plan(builder: &H264EncoderBuilder) -> Option<(VideoToolboxHwInputSession, Entries)> {
+        let session = builder.videotoolbox_hw_input_session().ok()?;
+        let options = builder.videotoolbox_hw_input_options(session).unwrap();
+        Some((session, entries(&options)))
+    }
+
+    fn todays_plan(builder: &H264EncoderBuilder) -> Option<Entries> {
+        if force_software_encoder()
+            || requires_software_encoder(&builder.input_config, builder.preset, builder.is_export)
+            || builder.crf.is_some()
+        {
+            return None;
+        }
+        get_codec_and_options(
+            &builder.input_config,
+            builder.preset,
+            Some(&["h264_videotoolbox"]),
+            builder.is_export,
+            None,
+        )
+        .into_iter()
+        .next()
+        .map(|(_, options)| entries(&options))
+    }
+
+    #[test]
+    fn automatic_matches_todays_zero_copy_choice_and_options() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().unwrap();
+        let realtime = literal(&[
+            ("realtime", "true"),
+            ("prio_speed", "true"),
+            ("profile", "main"),
+        ]);
+        for (width, height, fps, expected) in [
+            (1920, 1080, 60, Some(&realtime)),
+            (1920, 1080, 165, Some(&realtime)),
+            (1920, 1080, 180, None),
+            (2560, 1440, 120, Some(&realtime)),
+            (2560, 1440, 144, None),
+            (3024, 1964, 90, Some(&realtime)),
+            (3024, 1964, 120, None),
+            (3840, 2160, 30, Some(&realtime)),
+            (3840, 2160, 60, None),
+        ] {
+            let automatic = builder(
+                width,
+                height,
+                fps,
+                H264Preset::Ultrafast,
+                false,
+                VideoEncoderChoice::Automatic,
+            );
+            assert_eq!(
+                plan(&automatic),
+                expected.map(|options| (VideoToolboxHwInputSession::Realtime, options.clone())),
+                "{width}x{height}@{fps}"
+            );
+        }
+
+        for &(width, height) in SIZES {
+            for &fps in RATES {
+                for &preset in PRESETS {
+                    for is_export in [false, true] {
+                        let automatic = builder(
+                            width,
+                            height,
+                            fps,
+                            preset,
+                            is_export,
+                            VideoEncoderChoice::Automatic,
+                        );
+                        let case = format!("{width}x{height}@{fps} {preset:?} export={is_export}");
+                        assert_eq!(
+                            plan(&automatic),
+                            todays_plan(&automatic)
+                                .map(|options| (VideoToolboxHwInputSession::Realtime, options)),
+                            "{case}"
+                        );
+                        let crf = automatic.with_crf(18);
+                        assert_eq!(plan(&crf), None, "{case} crf");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hardware_changes_only_recordings_past_the_estimated_ceiling() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().unwrap();
+        let non_realtime = literal(&[
+            ("realtime", "false"),
+            ("prio_speed", "true"),
+            ("profile", "main"),
+        ]);
+        let mut past_ceiling = 0;
+        for &(width, height) in SIZES {
+            for &fps in RATES {
+                for &preset in PRESETS {
+                    for is_export in [false, true] {
+                        let case = format!("{width}x{height}@{fps} {preset:?} export={is_export}");
+                        let automatic = builder(
+                            width,
+                            height,
+                            fps,
+                            preset,
+                            is_export,
+                            VideoEncoderChoice::Automatic,
+                        );
+                        let hardware = builder(
+                            width,
+                            height,
+                            fps,
+                            preset,
+                            is_export,
+                            VideoEncoderChoice::Hardware,
+                        );
+                        let expected = match plan(&automatic) {
+                            Some(today) => Some(today),
+                            None if preset == H264Preset::HighThroughput => None,
+                            None => {
+                                past_ceiling += 1;
+                                assert!(!is_export, "{case}");
+                                Some((
+                                    VideoToolboxHwInputSession::NonRealtime,
+                                    non_realtime.clone(),
+                                ))
+                            }
+                        };
+                        assert_eq!(plan(&hardware), expected, "{case}");
+                        assert_eq!(plan(&hardware.with_crf(18)), None, "{case} crf");
+                    }
+                }
+            }
+        }
+        assert!(past_ceiling > 0);
+    }
+
+    fn session_settings(encoder: &H264Encoder) -> (i64, i64, i64) {
+        let mut realtime = -1;
+        unsafe {
+            let context = encoder.encoder.as_ptr();
+            assert!(
+                ffmpeg::ffi::av_opt_get_int(
+                    (*context).priv_data,
+                    c"realtime".as_ptr(),
+                    0,
+                    &mut realtime
+                ) >= 0
+            );
+            ((*context).bit_rate, (*context).rc_max_rate, realtime)
+        }
+    }
+
+    #[test]
+    fn hardware_opens_videotoolbox_past_the_ceiling_without_a_peak_bitrate() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let open = |fps: u32, choice: VideoEncoderChoice| {
+            let path = directory.path().join(format!("{fps}-{choice:?}.mp4"));
+            let mut output = format::output_as(&path, "mp4").unwrap();
+            builder(1920, 1080, fps, H264Preset::Ultrafast, false, choice)
+                .build_videotoolbox_hw_input(&mut output)
+        };
+        let bitrate =
+            |fps: u32| get_bitrate(1920, 1080, fps as f32, H264EncoderBuilder::QUALITY_BPP) as i64;
+
+        let within = match open(60, VideoEncoderChoice::Automatic) {
+            Ok(encoder) => encoder,
+            Err(error) => {
+                assert!(
+                    std::env::var_os("CAP_REQUIRE_VIDEOTOOLBOX").is_none(),
+                    "zero-copy VideoToolbox input is required but unavailable: {error}"
+                );
+                eprintln!("skipped: zero-copy VideoToolbox input unavailable");
+                return;
+            }
+        };
+        let limited = (bitrate(60), bitrate(60) * 3 / 2, 1);
+        assert_eq!(session_settings(&within), limited);
+        drop(within);
+        let hardware_within = open(60, VideoEncoderChoice::Hardware).unwrap();
+        assert_eq!(session_settings(&hardware_within), limited);
+        drop(hardware_within);
+
+        assert!(matches!(
+            open(180, VideoEncoderChoice::Automatic),
+            Err(H264EncoderError::VideoToolboxHwInput(_))
+        ));
+        let mut past = open(180, VideoEncoderChoice::Hardware).unwrap();
+        assert_eq!(past.codec_name(), "h264_videotoolbox");
+        assert!(past.is_videotoolbox_hw_input());
+        assert_eq!(session_settings(&past), (bitrate(180), 0, 0));
+
+        let mut gray = frame::Video::new(format::Pixel::NV12, 1920, 1080);
+        gray.data_mut(0).fill(128);
+        gray.data_mut(1).fill(128);
+        let mut sink = crate::PacketQueue::new(ffmpeg::Rational(1, 90_000));
+        let frames = 60u64;
+        for index in 0..frames {
+            let pixel_buffer = past.test_videotoolbox_frame(&gray);
+            past.queue_frame_to(
+                pixel_buffer,
+                Duration::from_nanos(index * 1_000_000_000 / 180),
+                &mut sink,
+            )
+            .unwrap();
+        }
+        past.flush_to(&mut sink).unwrap();
+        assert_eq!(sink.take().len() as u64, frames);
+    }
+
+    #[test]
+    fn software_input_path_is_unchanged_by_the_hardware_choice() {
+        if force_software_encoder() {
+            return;
+        }
+        ffmpeg::init().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for choice in [VideoEncoderChoice::Automatic, VideoEncoderChoice::Hardware] {
+            let mut output =
+                format::output_as(&directory.path().join(format!("{choice:?}.mp4")), "mp4")
+                    .unwrap();
+            let encoder = H264EncoderBuilder::new(VideoInfo::from_raw(
+                cap_media_info::RawVideoFormat::Bgra,
+                1920,
+                1080,
+                180,
+            ))
+            .with_video_encoder(choice)
+            .build(&mut output)
+            .unwrap();
+            assert_eq!(encoder.codec_name(), "libx264", "{choice:?}");
+        }
     }
 }
 
