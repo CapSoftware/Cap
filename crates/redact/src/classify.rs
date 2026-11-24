@@ -181,6 +181,101 @@ pub fn classify_line(text: &str) -> Vec<Finding> {
     glue_split_tokens(text, findings)
 }
 
+/// Categories whose patterns are strict enough (checksums, fixed shapes) to
+/// accept a match found only in a reading made of runner-up characters.
+const STRICT: [RedactCategory; 4] = [
+    RedactCategory::Card,
+    RedactCategory::Phone,
+    RedactCategory::Email,
+    RedactCategory::Ip,
+];
+
+/// [`classify_line`], plus strict-pattern matches in the reading the
+/// recogniser's runner-up characters make: a digit read as a letter next to
+/// other digits ("ó011-7783-..." for a card), an "@" read as something else,
+/// a space it nearly left out ("168. 144").
+pub fn classify_line_with_alternatives(
+    text: &str,
+    alternatives: &[crate::model::Alternatives],
+) -> Vec<Finding> {
+    let mut findings = classify_line(text);
+    let chars = text.chars().collect::<Vec<_>>();
+    if alternatives.len() != chars.len() {
+        return findings;
+    }
+    let (alternative, origin) = alternative_reading(&chars, alternatives);
+    if alternative == text {
+        return findings;
+    }
+    let before = findings.len();
+    for found in classify_line(&alternative) {
+        if !STRICT.contains(&found.category) || found.end == 0 || found.end > origin.len() {
+            continue;
+        }
+        let start = origin[found.start];
+        let end = origin[found.end - 1] + 1;
+        let covered = findings
+            .iter()
+            .any(|f| f.category == found.category && f.start <= start && f.end >= end);
+        if !covered {
+            findings.push(Finding {
+                category: found.category,
+                start,
+                end,
+            });
+        }
+    }
+    if findings.len() > before {
+        findings = resolve_overlaps(findings);
+    }
+    findings
+}
+
+/// The reading with runner-up characters substituted, and for each of its
+/// characters the index of the character it came from.
+fn alternative_reading(
+    chars: &[char],
+    alternatives: &[crate::model::Alternatives],
+) -> (String, Vec<usize>) {
+    let digit_at = |i: Option<usize>| {
+        i.and_then(|i| chars.get(i))
+            .is_some_and(char::is_ascii_digit)
+    };
+    let mut text = String::with_capacity(chars.len());
+    let mut origin = Vec::with_capacity(chars.len());
+    for (index, (&ch, alternative)) in chars.iter().zip(alternatives).enumerate() {
+        if ch == ' ' && alternative.blank >= 0.1 {
+            continue;
+        }
+        let near_digit = digit_at(index.checked_sub(1))
+            || digit_at(index.checked_sub(2))
+            || digit_at(Some(index + 1))
+            || digit_at(Some(index + 2));
+        let mut out = ch;
+        if near_digit
+            && !ch.is_ascii_digit()
+            && !matches!(ch, ' ' | '-' | '.' | '/' | '(' | ')' | '+' | ':')
+            && let Some((digit, _)) = alternative
+                .options
+                .iter()
+                .find(|(c, p)| c.is_ascii_digit() && *p >= 0.05)
+        {
+            out = *digit;
+        }
+        if ch != '@'
+            && alternative
+                .options
+                .iter()
+                .any(|(c, p)| *c == '@' && *p >= 0.05)
+        {
+            out = '@';
+        }
+        text.push(out);
+        origin.push(index);
+    }
+    (text, origin)
+}
+
 /// The recogniser sometimes reads a space inside small text ("gH1j K21Mn",
 /// "examp le.com"). A partial email takes the next word when the two read
 /// as a whole address, and a long token takes a short next fragment that

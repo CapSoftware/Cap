@@ -461,3 +461,67 @@ fn corpora() {
     }
     assert!(failed.is_empty(), "below the floor: {failed:?}");
 }
+
+fn alternatives_for(
+    text: &str,
+    swaps: &[(usize, char, f32)],
+    blanks: &[(usize, f32)],
+) -> Vec<crate::model::Alternatives> {
+    let mut alternatives = vec![crate::model::Alternatives::default(); text.chars().count()];
+    for (index, ch, p) in swaps {
+        alternatives[*index].options.push((*ch, *p));
+    }
+    for (index, p) in blanks {
+        alternatives[*index].blank = *p;
+    }
+    alternatives
+}
+
+#[test]
+fn a_card_with_a_misread_digit_is_found_through_the_runner_up() {
+    let text = "\u{f3}011-7783-7998-9143";
+    assert!(classify_line(text).iter().all(|f| f.category != Card));
+    let alternatives = alternatives_for(text, &[(0, '6', 0.3)], &[]);
+    let found = classify_line_with_alternatives(text, &alternatives);
+    assert!(
+        found
+            .iter()
+            .any(|f| f.category == Card && f.start == 0 && f.end == 19),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn runner_ups_that_fail_the_checksum_add_nothing() {
+    let text = "\u{f3}011-7783-7998-9144";
+    let alternatives = alternatives_for(text, &[(0, '6', 0.3)], &[]);
+    assert!(
+        classify_line_with_alternatives(text, &alternatives)
+            .iter()
+            .all(|f| f.category != Card)
+    );
+}
+
+#[test]
+fn a_nearly_skipped_space_does_not_hide_an_address() {
+    let text = "from 73.55.168. 144 port 22";
+    let alternatives = alternatives_for(text, &[], &[(15, 0.4)]);
+    let found = classify_line_with_alternatives(text, &alternatives);
+    assert!(
+        found.iter().any(|f| f.category == Ip && f.start == 5),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn an_at_sign_read_as_something_else_is_found() {
+    let text = "mail jesse.kim\u{a9}acme.io now";
+    let alternatives = alternatives_for(text, &[(14, '@', 0.2)], &[]);
+    let found = classify_line_with_alternatives(text, &alternatives);
+    assert!(
+        found
+            .iter()
+            .any(|f| f.category == Email && f.start == 5 && f.end == 22),
+        "{found:?}"
+    );
+}

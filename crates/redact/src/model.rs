@@ -88,6 +88,16 @@ pub struct Recognized {
     pub text: String,
     pub spans: Vec<(f32, f32)>,
     pub confidence: f32,
+    /// Per character, what else the recogniser saw there.
+    pub alternatives: Vec<Alternatives>,
+}
+
+/// The likeliest other characters at a character's strongest timestep, and
+/// how likely that timestep was to be blank (the character not there at all).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Alternatives {
+    pub options: Vec<(char, f32)>,
+    pub blank: f32,
 }
 
 /// Detector pixels per frame below which the CPU detector is faster than a
@@ -402,6 +412,7 @@ impl OcrModel {
             confidence_weight[piece.line] += chars;
             target.text.push_str(&result.text);
             target.spans.extend(result.spans);
+            target.alternatives.extend(result.alternatives);
         }
         for (result, weight) in results.iter_mut().zip(confidence_weight) {
             if weight > 0 {
