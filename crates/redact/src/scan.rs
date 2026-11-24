@@ -1175,7 +1175,7 @@ fn merge_row_boxes(mut lines: Vec<Rect>) -> Vec<Rect> {
             let centre = (a.y + a.h * 0.5 - (b.y + b.h * 0.5)).abs();
             (a.h - b.h).abs() <= height * 0.15 && centre <= height * 0.2
         };
-        b.x >= a.x && aligned && gap < height * 0.5 && gap > -2.0
+        b.x >= a.x && aligned && gap < height * 0.5 && gap > -(height * 0.3).max(2.0)
     };
     loop {
         let n = lines.len();
