@@ -754,8 +754,13 @@ async function answerQuestion(
 	config: MeetingsAiConfig,
 	send: SseSend,
 	signal: AbortSignal,
+	transcriptCut = false,
 ): Promise<number> {
-	const prompt = buildAskPrompt({ ...input, boundary: askBoundary(input) });
+	const prompt = buildAskPrompt({
+		...input,
+		boundary: askBoundary(input),
+		transcriptCut,
+	});
 	const stream = await openTextStream(
 		meetingModelChain(config, "ask"),
 		prompt,
@@ -974,6 +979,7 @@ app.post("/ask", async (c) => {
 	}
 
 	let input = body.data;
+	let transcriptCut = false;
 	if (access === "trial") {
 		const fit = fitTrialInput(input, body.inputBytes);
 		if (
@@ -984,12 +990,14 @@ app.post("/ask", async (c) => {
 			return upgradeRequired();
 		}
 		input = fit.input;
+		transcriptCut = fit.truncated;
 	}
 	return streamGeneration(
 		c.req.raw,
 		log,
 		body.inputBytes,
 		ASK_DEADLINE_MS,
-		(send, signal) => answerQuestion(input, config, send, signal),
+		(send, signal) =>
+			answerQuestion(input, config, send, signal, transcriptCut),
 	);
 });

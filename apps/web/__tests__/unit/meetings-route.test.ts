@@ -1155,6 +1155,9 @@ describe("free meetings for signed-in users", () => {
 			.join("");
 		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
 		expect(sent).not.toContain("\uFFFD");
+		expect(mocks.streamText.mock.calls[0]?.[0].system).toContain(
+			"The transcript stops before the meeting ended",
+		);
 	});
 
 	it("refuses a free request that is too large without its transcript", async () => {

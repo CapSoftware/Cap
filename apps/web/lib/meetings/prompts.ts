@@ -413,7 +413,7 @@ export function selectTranscriptExcerpts(
 }
 
 export function buildAskPrompt(
-	input: MeetingAskRequest & { boundary: string },
+	input: MeetingAskRequest & { boundary: string; transcriptCut?: boolean },
 ): {
 	system: string;
 	messages: { role: "user" | "assistant"; content: string }[];
@@ -444,6 +444,10 @@ ${untrustedDataRules(b, "The question after the tags, and the earlier questions 
 - The transcript comes from speech recognition and is labelled by speaker. It can contain misheard words. Use the vocabulary, when given, to spell names and terms correctly.${
 			transcript.excerpted
 				? `\n- The transcript is long, so only the parts most related to the question are included, separated by "[…]". If the answer could be in a part you cannot see, say so.`
+				: ""
+		}${
+			input.transcriptCut
+				? "\n- The transcript stops before the meeting ended. If the answer could be in the part you cannot see, say so instead of saying the meeting didn't cover it."
 				: ""
 		}
 - Be direct and brief: lead with the answer, then only the detail that supports it. Quote sparingly: a short exact quote, attributed to its speaker label, only when the exact wording matters.
