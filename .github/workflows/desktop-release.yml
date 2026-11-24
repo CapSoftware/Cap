@@ -749,6 +749,23 @@ jobs:
             test ! -e "$root/usr/bin/cap-gpui"
           }
           verify_root "$APPROOT" Cap cap-muxer cap-cli
+          # Every ELF in the AppImage and the rpm, bundled libraries included,
+          # must load on the glibc the deb declares, or Cap cannot start there.
+          GLIBC_FLOOR="$(dpkg-deb -f "$BUNDLE"/deb/*.deb Depends | grep -oP 'libc6 \(>= \K[0-9.]+')"
+          test -n "$GLIBC_FLOOR"
+          verify_glibc_floor() {
+            local root="$1" file needed over=0
+            while IFS= read -r -d '' file; do
+              [[ "$(head -c4 "$file" | od -An -tx1 | tr -d ' ')" == 7f454c46 ]] || continue
+              needed="$(readelf --wide --version-info "$file" | sed -n '/Version needs section/,$p' | { grep -oP 'Name: GLIBC_\K[0-9.]+' || true; } | sort -V | tail -n1)"
+              if [[ -n "$needed" && "$(printf '%s\n%s\n' "$needed" "$GLIBC_FLOOR" | sort -V | tail -n1)" != "$GLIBC_FLOOR" ]]; then
+                echo "::error::${file#"$root"/} needs GLIBC_$needed, above the declared libc6 (>= $GLIBC_FLOOR)"
+                over=1
+              fi
+            done < <(find "$root" -type f -print0)
+            return "$over"
+          }
+          verify_glibc_floor "$APPROOT"
           if [[ -n "$(find "$APPROOT" \( -name 'libwebkit2gtk-*' -o -name 'libgtk-3.so*' -o -name 'WebKitWebProcess' \) -print -quit)" || -e "$APPROOT/apprun-hooks" ]]; then
             echo "::error::The Cap AppImage still bundles the Tauri webview runtime"
             exit 1
@@ -764,6 +781,7 @@ jobs:
             bsdtar -xf "$RPM" -C "$WORK/rpm"
             test "$(cat "$WORK/rpm/usr/lib/cap/package-format")" = rpm
             verify_root "$WORK/rpm" Cap cap-muxer cap-cli
+            verify_glibc_floor "$WORK/rpm"
           fi
           test "$(cat "$APPROOT/usr/lib/cap/package-format")" = appimage
           test -x "$APPROOT/usr/bin/pactl"
