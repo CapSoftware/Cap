@@ -6199,10 +6199,6 @@ fn load_editor_project_candidate(
             return;
         }
 
-        // The pump. Readback frames go to the window as they are and it writes
-        // them into its preview texture; macOS's readback fallback converts
-        // on the background executor (un-padding plus the BGRA swap is a few
-        // megabytes per frame) and delivers an image.
         cx.spawn({
             #[cfg(target_os = "macos")]
             let stats = stats.clone();
