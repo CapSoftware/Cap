@@ -144,10 +144,7 @@ export async function createVideoAndGetUploadUrl({
 	if (!user) throw new Error("Unauthorized");
 
 	try {
-		// A video uploaded here is served as is and never measured, so free plan
-		// video uploads go through createVideoForServerProcessing instead.
-		if (!userIsPro(user) && (!isScreenshot || (duration && duration > 300)))
-			throw new Error("upgrade_required");
+		if (!userIsPro(user)) throw new Error("upgrade_required");
 
 		await requireOrganizationAccess(user.id, orgId);
 

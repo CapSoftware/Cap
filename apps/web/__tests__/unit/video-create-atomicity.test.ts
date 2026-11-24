@@ -396,7 +396,7 @@ describe.each([
 	});
 });
 
-describe("free plan duration limit when an upload is created", () => {
+describe("dashboard imports on the free plan", () => {
 	beforeEach(() => {
 		mocks.isPro = false;
 	});
@@ -405,21 +405,10 @@ describe("free plan duration limit when an upload is created", () => {
 		{ name: "no duration", duration: undefined },
 		{ name: "an understated duration", duration: 120 },
 		{ name: "an honest five minutes", duration: 300 },
-		{ name: "a zero duration", duration: 0 },
-	])(
-		"creates a processed upload with $name, measured when it is processed",
-		async ({ duration }) => {
-			const result = await createVideoForServerProcessing({ orgId, duration });
-			expect(mocks.store.uploads.get(result.id)).toMatchObject({
-				rawFileKey: `fixture-user/${result.id}/raw-upload.mp4`,
-				phase: "uploading",
-			});
-		},
-	);
-
-	it("refuses a declared duration over the limit before signing", async () => {
+		{ name: "a duration over the limit", duration: 301 },
+	])("refuses a processed upload with $name", async ({ duration }) => {
 		await expect(
-			createVideoForServerProcessing({ orgId, duration: 301 }),
+			createVideoForServerProcessing({ orgId, duration }),
 		).rejects.toThrow("upgrade_required");
 		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
 		expect(mocks.store.videos.size).toBe(0);
@@ -429,32 +418,31 @@ describe("free plan duration limit when an upload is created", () => {
 		{ name: "no duration", duration: undefined },
 		{ name: "an understated duration", duration: 120 },
 		{ name: "an honest duration", duration: 299 },
-	])(
-		"refuses an unmeasured video upload URL with $name",
-		async ({ duration }) => {
-			await expect(
-				createVideoAndGetUploadUrl({ orgId, duration, isUpload: true }),
-			).rejects.toThrow("upgrade_required");
-			await expect(
-				createVideoAndGetUploadUrl({
-					orgId,
-					duration,
-					videoId: Video.VideoId.make("existing-video"),
-				}),
-			).rejects.toThrow("upgrade_required");
-			expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
-			expect(mocks.createUploadTargetForVideo).not.toHaveBeenCalled();
-			expect(mocks.store.videos.size).toBe(0);
-		},
-	);
+	])("refuses a video upload URL with $name", async ({ duration }) => {
+		await expect(
+			createVideoAndGetUploadUrl({ orgId, duration, isUpload: true }),
+		).rejects.toThrow("upgrade_required");
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				duration,
+				videoId: Video.VideoId.make("existing-video"),
+			}),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.createUploadTargetForUser).not.toHaveBeenCalled();
+		expect(mocks.createUploadTargetForVideo).not.toHaveBeenCalled();
+		expect(mocks.store.videos.size).toBe(0);
+	});
 
-	it("still signs screenshot uploads", async () => {
-		const result = await createVideoAndGetUploadUrl({
-			orgId,
-			isUpload: true,
-			isScreenshot: true,
-		});
-		expect(mocks.store.videos.get(result.id)?.isScreenshot).toBe(true);
+	it("refuses screenshot imports", async () => {
+		await expect(
+			createVideoAndGetUploadUrl({
+				orgId,
+				isUpload: true,
+				isScreenshot: true,
+			}),
+		).rejects.toThrow("upgrade_required");
+		expect(mocks.store.videos.size).toBe(0);
 	});
 
 	it("leaves Pro uploads unlimited", async () => {

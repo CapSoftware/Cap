@@ -46,17 +46,7 @@ export async function createVideoForServerProcessing({
 
 	if (!user) throw new Error("Unauthorized");
 
-	// `duration` is client-supplied, so a declared duration over the cap is only
-	// refused early. Processing measures the uploaded file and enforces the cap
-	// (see lib/free-plan-duration.ts).
-	if (
-		!userIsPro(user) &&
-		typeof duration === "number" &&
-		Number.isFinite(duration) &&
-		duration > 300
-	) {
-		throw new Error("upgrade_required");
-	}
+	if (!userIsPro(user)) throw new Error("upgrade_required");
 
 	await requireOrganizationAccess(user.id, orgId);
 	if (folderId) await requirePersonalFolder(user.id, orgId, folderId);
