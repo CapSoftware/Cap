@@ -29,7 +29,6 @@ import {
 } from "@/lib/baa/billing";
 import {
 	CAP_FRIDAY_METADATA,
-	dropCapFridayFromMonthly,
 	grantCapFridayCredit,
 	reverseCapFridayCredit,
 } from "@/lib/checkout/cap-friday";
@@ -855,9 +854,6 @@ export const POST = async (req: Request) => {
 				// creation event is the only reliable association signal.
 				if (isSignedBaaSubscription(subscription)) {
 					return await syncSignedBaaStatus(subscription);
-				}
-				if (isProSubscription(subscription)) {
-					await dropCapFridayFromMonthly(subscription.id);
 				}
 			}
 

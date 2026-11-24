@@ -4,9 +4,6 @@ const mocks = vi.hoisted(() => ({
 	checkout: {
 		checkout: { sessions: { retrieve: vi.fn(), update: vi.fn() } },
 	},
-	stripe: {
-		subscriptions: { retrieve: vi.fn(), deleteDiscount: vi.fn() },
-	},
 }));
 
 vi.mock("@cap/database/auth/session", () => ({ getCurrentUser: vi.fn() }));
@@ -37,13 +34,8 @@ vi.mock("@/lib/rate-limit", () => ({
 	RATE_LIMIT_IDS: { GUEST_CHECKOUT: "guest-checkout", CHECKOUT: "checkout" },
 }));
 vi.mock("@/lib/server-analytics", () => ({ trackServerEvent: vi.fn() }));
-vi.mock("@cap/utils", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("@cap/utils")>();
-	return { ...actual, stripe: () => mocks.stripe };
-});
 
 import { changeProCheckoutPlan } from "@/actions/billing/checkout";
-import { dropCapFridayFromMonthly } from "@/lib/checkout/cap-friday";
 
 const YEARLY = "price_1Q3esrFJxA1XpeSsFwp486RN";
 const MONTHLY = "price_1P9C1DFJxA1XpeSsTwwuddnq";
@@ -58,17 +50,10 @@ const session = (code: string | null) => ({
 	discounts: code ? [{ promotion_code: { id: "promo_1", code } }] : [],
 });
 
-const subscription = (price: string, code: string | null) => ({
-	id: "sub_1",
-	items: { data: [{ price: { id: price } }] },
-	discount: code ? { promotion_code: { id: "promo_1", code } } : null,
-});
-
-describe("Cap Friday stays on yearly on the server", () => {
+describe("changeProCheckoutPlan with BLACKFRIDAY", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mocks.checkout.checkout.sessions.update.mockResolvedValue({});
-		mocks.stripe.subscriptions.deleteDiscount.mockResolvedValue({});
 	});
 
 	it("refuses to move a BLACKFRIDAY checkout to monthly", async () => {
@@ -108,32 +93,5 @@ describe("Cap Friday stays on yearly on the server", () => {
 			"cs_test_1",
 			{ line_items: [{ id: "li_1", price: MONTHLY, quantity: 2 }] },
 		);
-	});
-
-	it("removes BLACKFRIDAY from a new monthly subscription", async () => {
-		mocks.stripe.subscriptions.retrieve.mockResolvedValue(
-			subscription(MONTHLY, "BLACKFRIDAY"),
-		);
-
-		expect(await dropCapFridayFromMonthly("sub_1")).toBe(true);
-		expect(mocks.stripe.subscriptions.retrieve).toHaveBeenCalledWith("sub_1", {
-			expand: ["discount.promotion_code"],
-		});
-		expect(mocks.stripe.subscriptions.deleteDiscount).toHaveBeenCalledWith(
-			"sub_1",
-		);
-	});
-
-	it.each([
-		["a yearly BLACKFRIDAY subscription", YEARLY, "BLACKFRIDAY"],
-		["a monthly subscription with another code", MONTHLY, "MIGRATE20"],
-		["a monthly subscription without a code", MONTHLY, null],
-	])("leaves %s alone", async (_, price, code) => {
-		mocks.stripe.subscriptions.retrieve.mockResolvedValue(
-			subscription(price, code),
-		);
-
-		expect(await dropCapFridayFromMonthly("sub_1")).toBe(false);
-		expect(mocks.stripe.subscriptions.deleteDiscount).not.toHaveBeenCalled();
 	});
 });
