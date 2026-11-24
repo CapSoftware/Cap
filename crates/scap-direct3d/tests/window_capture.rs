@@ -436,14 +436,22 @@ fn capture_samples_on(
     samples.clone()
 }
 
+/// Every fixture puts its windows at the same place on the one desktop, so a
+/// second fixture would cover the first.
+static DESKTOP: Mutex<()> = Mutex::new(());
+
 struct Fixture {
     process: FixtureProcess,
     target: WindowId,
     layout: Layout,
+    _desktop: std::sync::MutexGuard<'static, ()>,
 }
 
 impl Fixture {
     fn start() -> Self {
+        let desktop = DESKTOP
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut process = FixtureProcess(
             Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "window_capture_fixture_process", "--nocapture"])
@@ -475,6 +483,7 @@ impl Fixture {
             process,
             target,
             layout: Layout::of_primary_work_area(),
+            _desktop: desktop,
         }
     }
 
