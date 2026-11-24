@@ -87,6 +87,10 @@ static DATE_LIKE: LazyLock<Regex> = LazyLock::new(|| {
         r"^(?:[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4})(?:[ T][0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?)?$",
     )
 });
+/// A date anywhere in a run of digits (its digits are not a number's).
+static DATE_IN_RUN: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"[0-9]{4}[\-/.][0-9]{1,2}[\-/.][0-9]{1,2}|[0-9]{1,2}[\-/.][0-9]{1,2}[\-/.][0-9]{2,4}")
+});
 static NANP: LazyLock<Regex> = LazyLock::new(|| {
     re(r"^(?:\+?1[ .\-]?)?(?:\([2-9][0-9]{2}\) ?|[2-9][0-9]{2}([ .\-]))[0-9]{3}[ .\-][0-9]{4}$")
 });
@@ -564,7 +568,15 @@ fn cut_by_the_frame(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
             .next();
         let Some(found) = found else { continue };
         let value = found.as_str();
-        let digits = value.chars().filter(char::is_ascii_digit).count();
+        let in_dates = DATE_IN_RUN
+            .find_iter(value)
+            .filter(|date| {
+                !value[..date.start()].ends_with(|c: char| c.is_ascii_digit())
+                    && !value[date.end()..].starts_with(|c: char| c.is_ascii_digit())
+            })
+            .map(|date| date.as_str().chars().filter(char::is_ascii_digit).count())
+            .sum::<usize>();
+        let digits = value.chars().filter(char::is_ascii_digit).count() - in_dates;
         let token = value.len() >= 20
             && value.chars().any(|c| c.is_ascii_uppercase())
             && value.chars().any(|c| c.is_ascii_lowercase());
