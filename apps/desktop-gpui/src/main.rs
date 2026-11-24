@@ -17,8 +17,9 @@ mod camera_blur;
 #[cfg(any(not(target_os = "macos"), test))]
 mod camera_blur_portable;
 mod camera_loading;
-mod caption_export;
+mod camera_picture;
 mod camera_window;
+mod caption_export;
 mod controls_window;
 mod crash_capture;
 mod deeplink;
@@ -47,19 +48,23 @@ mod editor_shapes;
 mod editor_side_panel;
 mod editor_sidebar;
 mod editor_tabs;
-mod editor_voice_eq;
 mod editor_timeline;
+mod editor_voice_eq;
 mod editor_window;
 mod encoder_recovery;
 mod feeds;
 mod focus_border;
+mod foreign_window;
+#[cfg(debug_assertions)]
+mod glass_probe;
 mod hotkeys;
 mod i18n;
 mod import;
 mod installer;
 mod jpeg_thumbnail;
+mod keylat;
 mod library;
-mod live_draw;
+mod library_window;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod linux_dialog;
 #[cfg(target_os = "linux")]
@@ -68,8 +73,12 @@ mod linux_display;
 mod linux_portal_id;
 #[cfg(target_os = "linux")]
 mod linux_wallpaper;
+mod live_draw;
+mod local_page;
 mod main_window;
 mod media_access;
+mod meetings;
+mod meetings_ui;
 mod menus;
 mod mode_select_window;
 mod notifications;
@@ -84,15 +93,12 @@ mod permissions_ui;
 #[cfg(test)]
 mod picker_benchmark;
 #[cfg(debug_assertions)]
-mod glass_probe;
-#[cfg(debug_assertions)]
 mod picker_probe;
 #[cfg(debug_assertions)]
 mod picker_ui_benchmark;
 mod platform;
 mod power;
 mod presets;
-mod style_presets;
 mod project_save;
 mod recording;
 mod recordings_overlay;
@@ -111,18 +117,20 @@ mod single_instance;
 mod snapshot;
 mod startup;
 mod store;
+mod style_presets;
 mod target_overlay;
 mod target_thumbnails;
 mod teleprompter_window;
 mod theme;
 mod transcript;
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod parakeet_split;
 mod transcription;
 mod tray;
 mod ui;
 mod unused_media;
 mod updates;
 mod upload;
-mod foreign_window;
 mod window_arrange;
 
 use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
@@ -415,15 +423,20 @@ fn main() {
         // binding consumes the keystroke before any `on_key_down` listener on
         // the path runs (`gpui/src/window.rs:5280-5296`).
         ui::bind_text_input_keys(cx);
+        cap_notes_ui::bind_keys(cx);
+        crate::meetings_ui::documents::bind_keys(cx);
         let general_settings = crate::store::GeneralSettings::load();
         crate::i18n::init(general_settings.ui_language.as_deref());
         crate::theme::init(general_settings.theme, cx);
         platform::follow_system_reduce_motion(cx);
+        keylat::install(cx);
 
         let session = RecordingSession::init(cx);
         crate::sign_in::SignIn::init(cx);
         crate::feeds::Feeds::init(cx);
         crate::media_access::MediaAccess::init(cx);
+        crate::meetings::Meetings::init(cx);
+        crate::meetings_ui::init(cx);
         crate::target_overlay::TargetSelect::init(cx);
 
         let dev_restore = dev_restore::load();
@@ -728,8 +741,20 @@ fn main() {
         }
 
         permissions_ui::auto_open_from_env(cx); // `CAP_GPUI_AUTO_PERMISSIONS=1`: the permissions surface.
+        library_window::auto_open_from_env(cx); // `CAP_GPUI_AUTO_LIBRARY=home`: the library window.
+        library_window::bench::run_from_env(cx); // `CAP_GPUI_LIBRARY_BENCH=window|panel`: perf gate.
         #[cfg(debug_assertions)]
         snapshot::arm_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::live::debug::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::setup::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::documents::dev::run_from_env(cx);
+        #[cfg(debug_assertions)]
+        meetings_ui::cap_ai::run_from_env(cx);
 
         // `CAP_GPUI_AUTO_MODE_SELECT=1`: open the 580x340 mode picker the way
         // the mode dot does, main window hidden included. A mode name instead
@@ -990,7 +1015,9 @@ mod logging_tests {
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
                 .with_writer(move || writer.clone())
-                .with_filter(tracing_subscriber::EnvFilter::new(super::DEFAULT_LOG_FILTER)),
+                .with_filter(tracing_subscriber::EnvFilter::new(
+                    super::DEFAULT_LOG_FILTER,
+                )),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(target: "zbus::proxy", "Failed to populate properties cache");
@@ -999,9 +1026,15 @@ mod logging_tests {
             tracing::info!(target: "cap_gpui::session", "recording started");
         });
         let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(!logged.contains("Failed to populate properties cache"), "{logged}");
+        assert!(
+            !logged.contains("Failed to populate properties cache"),
+            "{logged}"
+        );
         assert!(logged.contains("a zbus error still shows"), "{logged}");
-        assert!(logged.contains("other zbus warnings still show"), "{logged}");
+        assert!(
+            logged.contains("other zbus warnings still show"),
+            "{logged}"
+        );
         assert!(logged.contains("recording started"), "{logged}");
     }
 

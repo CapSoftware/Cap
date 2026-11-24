@@ -435,6 +435,18 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (tr::editor::tabs::camera::blur::heavy(), "Heavy Blur"),
         (tr::editor::tabs::camera::blur::light(), "Light Blur"),
         (tr::editor::tabs::camera::blur::off(), "Off"),
+        (tr::editor::tabs::camera::picture::title(), "Picture"),
+        (
+            tr::editor::tabs::camera::picture::empty(),
+            "Add a picture to show where your camera would be.",
+        ),
+        (
+            tr::editor::tabs::camera::picture::shown(),
+            "Shown where your camera would be.",
+        ),
+        (tr::editor::tabs::camera::picture::add(), "Add picture"),
+        (tr::editor::tabs::camera::picture::replace(), "Replace"),
+        (tr::editor::tabs::camera::picture::remove(), "Remove"),
         (
             tr::editor::tabs::camera::blur::remove(),
             "Remove Background",
@@ -1542,6 +1554,14 @@ fn editor_shell_surfaces_match_the_literals_they_replaced() {
         (
             tr::editor::timeline::picker::shape(),
             "Draw arrows, boxes, circles and highlights over your recording.",
+        ),
+        (
+            tr::editor::export::audio::failed_title(),
+            "Couldn't save the audio",
+        ),
+        (
+            tr::editor::export::audio::failed_message(),
+            "Try again, or save it somewhere else.",
         ),
     ];
     for (translated, literal) in pairs {

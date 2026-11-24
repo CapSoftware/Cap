@@ -5,7 +5,7 @@
 # gpui's tree does not want.
 [workspace]
 resolver = "2"
-members = [".", "kernels", "i18n-build", "glass"]
+members = [".", "kernels", "i18n-build", "glass", "notes", "notes-ui", "calendar", "meetings", "meeting-platform", "diarize"]
 
 [package]
 name = "cap-desktop-gpui"
@@ -24,10 +24,18 @@ name = "studio-finalization-benchmark"
 path = "../../crates/recording/examples/studio-finalization-benchmark.rs"
 
 [dependencies]
+memmap2 = "0.9"
 cap-audio = { path = "../../crates/audio" }
 cap-cli-install = { path = "../../crates/cli-install" }
 cap-gpui-kernels = { path = "kernels" }
 cap-glass = { path = "glass" }
+cap-meetings = { path = "meetings" }
+cap-meeting-platform = { path = "meeting-platform" }
+cap-calendar = { path = "calendar" }
+cap-diarize = { path = "diarize" }
+cap-notes = { path = "notes" }
+cap-notes-ui = { path = "notes-ui" }
+iana-time-zone = "0.1"
 # gpui — the wingleeio/zed fork Comet ships. The pinned rev carries f596cde
 # ("destination alpha on transparent windows: Porter-Duff OVER, not additive"),
 # which our transparent rounded main-window shell depends on.
@@ -137,6 +145,7 @@ chrono = "0.4"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sanitize-filename = "0.6.0"
+tempfile = "3"
 # Moves media of clips removed from a project to the OS trash, so the user
 # can still recover it. Its platform deps (objc2 0.6, windows 0.62) are
 # already in the tree.
@@ -177,6 +186,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 futures-util = "0.3"
+getrandom = "0.2"
 dirs = "6"
 dunce = "1.0.5"
 # Caption transcription (`src/transcription.rs`): the engine pin 0.6.0
@@ -214,6 +224,7 @@ libc = "0.2"
 clipboard-rs = "0.2.4"
 raw-window-handle = "0.6"
 same-file = "1.0.6"
+scap-cpal = { path = "../../crates/scap-cpal" }
 tray-icon = { version = "0.21.1", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -225,6 +236,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_System_Kernel",
     "Win32_System_LibraryLoader",
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -269,11 +281,16 @@ objc2-core-graphics = { version = "0.3.2", features = ["CGColor"] }
 # NSRect/NSPoint/NSSize for `setFrame:display:`. Already in the tree as
 # objc2-app-kit's own dependency, so this adds nothing to the build.
 objc2-foundation = { version = "0.3.2", features = [
+    "NSBundle",
+    "NSError",
     "NSNotification",
     "NSOperation",
     "NSString",
     "block2",
 ] }
+# Asks for notification permission when Cap first needs it (a failed automatic
+# start). Already in the tree through gpui_macos, so this adds nothing to the build.
+objc2-user-notifications = "0.3.2"
 block2 = "0.6"
 raw-window-handle = "0.6"
 core-foundation = "0.10"

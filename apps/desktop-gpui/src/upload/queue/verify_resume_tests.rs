@@ -710,3 +710,63 @@ fn verification_pending_past_the_fast_rechecks_still_verifies() {
         assert_eq!(mock.count("POST", "recording-complete"), 36);
     });
 }
+
+/// A camera-only Instant recording saves its share link when it stops and
+/// uploads one MP4 through the queue. That upload is the recording itself,
+/// not a replacement of a published video, so it verifies once and is never
+/// sent again.
+#[test]
+fn camera_only_instant_upload_verifies_without_replacing_its_own_link() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_camera_only_instant_upload");
+    virtual_time(async {
+        let mock = MockCap::start(Vec::new()).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        let mut meta = RecordingMeta::load_for_project(&project).unwrap();
+        let Some(UploadMeta::SegmentUpload {
+            pre_created_video, ..
+        }) = meta.upload.take()
+        else {
+            panic!("fixture is not a saved Instant upload");
+        };
+        meta.upload = Some(UploadMeta::MultipartUpload {
+            video_id: VIDEO_ID.into(),
+            file_path: project.join("content/output.mp4"),
+            pre_created_video,
+            recording_dir: project.clone(),
+        });
+        meta.save_for_project().unwrap();
+        let mut state = read_state(&project).unwrap().unwrap();
+        state.kind = UploadKind::Mp4;
+        write_state(&project, &state).unwrap();
+
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        run_queue(&manager, &project, Duration::from_secs(20 * 60)).await;
+
+        let state = read_state(&project).unwrap().unwrap();
+        assert_eq!(
+            state.phase,
+            UploadPhase::Verified,
+            "{state:?}\n{}",
+            mock.timeline()
+        );
+        assert!(mock.replaced().is_empty(), "{}", mock.timeline());
+        assert_eq!(
+            mock.count("POST", "multipart/initiate"),
+            1,
+            "{}",
+            mock.timeline()
+        );
+        assert_eq!(mock.count("POST", "recording-complete"), 1);
+        assert_eq!(
+            mock.object(&format!("{VIDEO_ID}/result.mp4")).as_deref(),
+            Some(SAMPLE_MP4)
+        );
+        assert!(matches!(
+            RecordingMeta::load_for_project(&project).unwrap().upload,
+            Some(UploadMeta::Complete)
+        ));
+        mock.assert_clean();
+    });
+}

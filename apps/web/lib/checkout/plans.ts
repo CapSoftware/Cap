@@ -1,4 +1,5 @@
 import { STRIPE_PLAN_IDS } from "@cap/utils";
+import { CODE as CAP_FRIDAY_CODE } from "@/components/pages/blackfriday/content";
 import { MAX_CHECKOUT_QUANTITY } from "@/lib/checkout-quantity";
 
 export type CheckoutPlan = "monthly" | "yearly";
@@ -36,6 +37,19 @@ const PROMOTION_CODE = /^[A-Za-z0-9][A-Za-z0-9_-]{1,39}$/;
 export const parsePromotionCode = (value: unknown): string | null =>
 	typeof value === "string" && PROMOTION_CODE.test(value.trim())
 		? value.trim().toUpperCase()
+		: null;
+
+// Stripe applies a promotion code to every price of a product, so the
+// yearly-only rule for the Cap Friday code is enforced here.
+export const isYearlyOnlyPromotion = (value: unknown): boolean =>
+	parsePromotionCode(value) === CAP_FRIDAY_CODE;
+
+export const promotionForPlan = (
+	plan: CheckoutPlan | null,
+	value: unknown,
+): string | null =>
+	plan === "yearly" || !isYearlyOnlyPromotion(value)
+		? parsePromotionCode(value)
 		: null;
 
 export const checkoutPath = ({

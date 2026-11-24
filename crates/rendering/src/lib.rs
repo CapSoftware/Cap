@@ -43,6 +43,7 @@ use tokio::sync::mpsc;
 mod audio_levels;
 pub mod audio_visualizer;
 pub mod camera3d;
+pub mod camera_picture;
 pub mod composite_frame;
 mod coord;
 pub mod cpu_yuv;
@@ -2878,6 +2879,7 @@ pub struct RenderVideoConstants {
     pub recording_meta: RecordingMeta,
     pub background_textures: std::sync::Arc<BackgroundTextureCache>,
     pub is_software_adapter: bool,
+    camera_picture: camera_picture::CameraPictureCache,
     adapter_name: String,
     frozen_recorded_cursors: Option<FrozenRecordedCursorAssets>,
     project_styles: ProjectStyleCache,
@@ -3093,6 +3095,17 @@ impl RenderVideoConstants {
         self.meta.is_audio_only()
     }
 
+    /// The project's camera picture, for a recording with no camera track.
+    /// A recorded camera always wins over a picture.
+    pub fn camera_picture(&self, project: &ProjectConfiguration) -> Option<DecodedFrame> {
+        if self.options.camera_size.is_some() {
+            return None;
+        }
+        let picture = project.camera_picture.as_deref()?;
+        self.camera_picture
+            .frame(&self.recording_meta.project_path, picture)
+    }
+
     pub fn set_audio_levels(&self, levels: Option<Arc<AudioLevels>>) {
         if let Ok(mut current) = self.audio_levels.write() {
             *current = levels;
@@ -3154,6 +3167,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             audio_levels: Default::default(),
             waveform_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
@@ -3187,6 +3201,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             audio_levels: Default::default(),
             waveform_levels: AudioLevelStore::default(),
             is_software_adapter: shared.is_software_adapter,
@@ -3253,6 +3268,7 @@ impl RenderVideoConstants {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             audio_levels: Default::default(),
             waveform_levels: AudioLevelStore::default(),
             is_software_adapter,
@@ -3444,6 +3460,9 @@ pub struct ProjectUniforms {
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     camera_only: Option<CompositeVideoFrameUniforms>,
+    /// The camera slot shows the project's still picture: there is nothing
+    /// for the per-frame background blur to do.
+    camera_is_picture: bool,
     /// Decorative frame chrome around the display; `None` when no frame style
     /// is active.
     pub frame_chrome: Option<frame_chrome::FrameChromeUniforms>,
@@ -4492,6 +4511,9 @@ impl ProjectUniforms {
     }
 
     fn camera_background_effect_mode(&self) -> Option<cap_camera_effects::BlurMode> {
+        if self.camera_is_picture {
+            return None;
+        }
         blur_mode_from_config(&self.project.camera.background_blur).filter(|mode| {
             *mode != cap_camera_effects::BlurMode::Remove
                 || (self.camera.is_some() && self.scene.regular_camera_transition_opacity() > 0.01)
@@ -4825,12 +4847,16 @@ impl ProjectUniforms {
     ) -> Self {
         let project = shared_project.as_ref();
         let options = &constants.options;
-        let camera_size = options.camera_size.map(|size| {
-            segment_frames
-                .camera_frame
-                .as_ref()
-                .map_or(size, |frame| XY::new(frame.width(), frame.height()))
-        });
+        let camera_picture = constants.camera_picture(project);
+        let camera_size = match &camera_picture {
+            Some(picture) => Some(XY::new(picture.width(), picture.height())),
+            None => options.camera_size.map(|size| {
+                segment_frames
+                    .camera_frame
+                    .as_ref()
+                    .map_or(size, |frame| XY::new(frame.width(), frame.height()))
+            }),
+        };
         let output_size = Self::get_output_size(options, project, resolution_base);
         let source_size = segment_frames
             .screen_frame
@@ -5162,7 +5188,7 @@ impl ProjectUniforms {
             let (prev_start, prev_end) =
                 Self::display_bounds(&motion_prev_zoom, display_offset, display_size);
 
-            let scene_blur_strength = if options.camera_size.is_some() && !project.camera.hide {
+            let scene_blur_strength = if camera_size.is_some() && !project.camera.hide {
                 scene.camera_only_motion(&prev_scene)
             } else {
                 0.0
@@ -5973,6 +5999,7 @@ impl ProjectUniforms {
             display,
             camera,
             camera_only,
+            camera_is_picture: camera_picture.is_some(),
             frame_chrome,
             notch,
             display_outer_bounds,
@@ -7331,6 +7358,7 @@ mod style_image_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             audio_levels: Default::default(),
             waveform_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
@@ -7730,6 +7758,7 @@ mod export_order_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             audio_levels: Default::default(),
             waveform_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
@@ -8071,6 +8100,7 @@ mod nv12_flush_tests {
             recording_meta,
             frozen_recorded_cursors: None,
             project_styles: ProjectStyleCache::default(),
+            camera_picture: Default::default(),
             audio_levels: Default::default(),
             waveform_levels: AudioLevelStore::default(),
             background_textures: Arc::new(BackgroundTextureCache::default()),
@@ -9241,6 +9271,10 @@ pub struct RendererLayers {
     camera_blur_init_failed: bool,
     camera_blur_unavailable: bool,
     realtime_camera_effects: bool,
+    /// The camera picture the camera layers last showed. A replaced picture
+    /// arrives at the same recording time as the old one, which the layers
+    /// would otherwise take for the frame they already have.
+    camera_picture_shown: Option<decoder::DecodedFrameStorageIdentity>,
     #[cfg(test)]
     split_layer_passes: bool,
 }
@@ -9284,6 +9318,25 @@ impl RendererLayers {
         self.display.reset_frame_state();
         self.camera.reset_frame_state();
         self.camera_only.reset_frame_state();
+        self.camera_picture_shown = None;
+    }
+
+    fn follow_camera_picture(&mut self, picture: Option<&DecodedFrame>) {
+        let Some(picture) = picture else {
+            self.camera_picture_shown = None;
+            return;
+        };
+        let identity = picture.storage_identity();
+        if self
+            .camera_picture_shown
+            .as_ref()
+            .is_some_and(|shown| shown.matches(&identity))
+        {
+            return;
+        }
+        self.camera.reset_frame_state();
+        self.camera_only.reset_frame_state();
+        self.camera_picture_shown = Some(identity);
     }
 
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -9395,6 +9448,7 @@ impl RendererLayers {
                 camera_blur_init_failed: false,
                 camera_blur_unavailable: false,
                 realtime_camera_effects: false,
+                camera_picture_shown: None,
                 #[cfg(test)]
                 split_layer_passes: false,
             }
@@ -9640,7 +9694,16 @@ impl RendererLayers {
         self.cursor
             .prepare(segment_frames, cursor, uniforms, constants);
 
-        let camera_frame_data = if segment_frames.segment_has_camera {
+        let camera_picture = constants.camera_picture(&uniforms.project);
+        self.follow_camera_picture(camera_picture.as_ref());
+        let has_camera = segment_frames.segment_has_camera || camera_picture.is_some();
+        let camera_frame_data = if let Some(picture) = &camera_picture {
+            Some((
+                XY::new(picture.width(), picture.height()),
+                picture,
+                segment_frames.recording_time,
+            ))
+        } else if segment_frames.segment_has_camera {
             constants.options.camera_size.and_then(|_| {
                 segment_frames.camera_frame.as_ref().map(|frame| {
                     // Use the decoded frame's own dimensions rather than the project's
@@ -9662,7 +9725,7 @@ impl RendererLayers {
         self.camera.prepare(
             &constants.device,
             &constants.queue,
-            if render_display && segment_frames.segment_has_camera {
+            if render_display && has_camera {
                 uniforms.camera
             } else {
                 None
@@ -9673,7 +9736,7 @@ impl RendererLayers {
         self.camera_only.prepare(
             &constants.device,
             &constants.queue,
-            if render_display && segment_frames.segment_has_camera {
+            if render_display && has_camera {
                 uniforms.camera_only
             } else {
                 None
@@ -9811,7 +9874,16 @@ impl RendererLayers {
             .prepare(segment_frames, cursor, uniforms, constants);
         timings.cursor_prepare_duration = start.elapsed();
 
-        let camera_frame_data = if segment_frames.segment_has_camera {
+        let camera_picture = constants.camera_picture(&uniforms.project);
+        self.follow_camera_picture(camera_picture.as_ref());
+        let has_camera = segment_frames.segment_has_camera || camera_picture.is_some();
+        let camera_frame_data = if let Some(picture) = &camera_picture {
+            Some((
+                XY::new(picture.width(), picture.height()),
+                picture,
+                segment_frames.recording_time,
+            ))
+        } else if segment_frames.segment_has_camera {
             constants.options.camera_size.and_then(|_| {
                 segment_frames.camera_frame.as_ref().map(|frame| {
                     // Use the decoded frame's own dimensions rather than the project's
@@ -9834,7 +9906,7 @@ impl RendererLayers {
         self.camera.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            if render_display && segment_frames.segment_has_camera {
+            if render_display && has_camera {
                 uniforms.camera
             } else {
                 None
@@ -9848,7 +9920,7 @@ impl RendererLayers {
         self.camera_only.prepare_with_encoder(
             &constants.device,
             &constants.queue,
-            if render_display && segment_frames.segment_has_camera {
+            if render_display && has_camera {
                 uniforms.camera_only
             } else {
                 None
