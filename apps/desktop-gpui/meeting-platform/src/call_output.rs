@@ -7,6 +7,11 @@
 //! default, that output is followed. Otherwise the default output is kept,
 //! exactly as before. The rule is Linux's (`capture/sink.rs`): music playing
 //! elsewhere is never taken for the call.
+//!
+//! A browser keeps silent streams open (a page's audio context plays to the
+//! default output even when the call itself goes to a headset), so once the
+//! call app is heard, only the outputs it is heard on count. While it is
+//! silent everywhere the last such choice stands.
 
 use std::collections::HashMap;
 
@@ -18,6 +23,8 @@ pub struct Session {
     pub pid: u32,
     /// A stream of the session is running (not only opened before).
     pub active: bool,
+    /// Sound came out of the session in one of the last few looks.
+    pub heard: bool,
 }
 
 /// A running process: its parent and lowercase executable file name.
@@ -88,9 +95,89 @@ fn same_app(a: u32, b: u32, procs: &HashMap<u32, Proc>) -> bool {
         .is_some_and(|exe| !exe.is_empty() && !LAUNCHERS.contains(&exe))
 }
 
-/// The output to loop back, or `None` for the default output. `ours` is
-/// Cap's own process, whose sessions (its sounds, its own recording) never
-/// count; process 0 is the system sounds.
+/// The sessions the calling apps (the programs recording the microphone)
+/// play. `ours` is Cap's own process, whose sessions (its sounds, its own
+/// recording) never count; process 0 is the system sounds. `None` when no
+/// one is recording the microphone.
+fn call_sessions<'a>(
+    playing: &'a [Session],
+    recording: &[Session],
+    procs: &HashMap<u32, Proc>,
+    ours: u32,
+) -> Option<Vec<&'a Session>> {
+    let foreign = |s: &&Session| s.active && s.pid != 0 && s.pid != ours;
+    let callers: Vec<u32> = recording.iter().filter(foreign).map(|s| s.pid).collect();
+    if callers.is_empty() {
+        return None;
+    }
+    Some(
+        playing
+            .iter()
+            .filter(foreign)
+            .filter(|s| callers.iter().any(|c| same_app(s.pid, *c, procs)))
+            .collect(),
+    )
+}
+
+/// One process can play several things: a browser plays every tab from one
+/// audio service, so a music tab on the speakers and a call on a headset
+/// share it. Only when all of them go to one output other than the default
+/// is that output followed.
+fn only_output(sessions: &[&Session], default: Option<&str>) -> Option<String> {
+    let mut outputs: Vec<&str> = sessions.iter().map(|s| s.endpoint.as_str()).collect();
+    outputs.sort_unstable();
+    outputs.dedup();
+    match outputs.as_slice() {
+        [only] if Some(*only) != default => Some((*only).to_string()),
+        _ => None,
+    }
+}
+
+/// The output to loop back from one look, or `None` for the default output,
+/// remembering what the call app was last heard on.
+#[derive(Debug, Default)]
+pub struct Chooser {
+    /// The choice made the last time the call app was heard, while the same
+    /// call goes on.
+    heard: Option<Option<String>>,
+}
+
+impl Chooser {
+    pub fn choose(
+        &mut self,
+        default: Option<&str>,
+        playing: &[Session],
+        recording: &[Session],
+        procs: &HashMap<u32, Proc>,
+        ours: u32,
+    ) -> Option<String> {
+        let Some(sessions) = call_sessions(playing, recording, procs, ours) else {
+            self.heard = None;
+            return None;
+        };
+        let heard: Vec<&Session> = sessions.iter().copied().filter(|s| s.heard).collect();
+        if !heard.is_empty() {
+            let choice = only_output(&heard, default);
+            self.heard = Some(choice.clone());
+            return choice;
+        }
+        // Silent everywhere: the last heard choice, while the call app still
+        // plays to that output.
+        match &self.heard {
+            Some(None) => None,
+            Some(Some(id)) if sessions.iter().any(|s| &s.endpoint == id) => Some(id.clone()),
+            _ => only_output(&sessions, default),
+        }
+    }
+
+    /// Nothing plays anywhere but the default output: a new call starts afresh.
+    pub fn reset(&mut self) {
+        self.heard = None;
+    }
+}
+
+/// [`Chooser::choose`] with nothing heard before.
+#[cfg(test)]
 pub fn choose(
     default: Option<&str>,
     playing: &[Session],
@@ -98,27 +185,7 @@ pub fn choose(
     procs: &HashMap<u32, Proc>,
     ours: u32,
 ) -> Option<String> {
-    let foreign = |s: &&Session| s.active && s.pid != 0 && s.pid != ours;
-    let callers: Vec<u32> = recording.iter().filter(foreign).map(|s| s.pid).collect();
-    if callers.is_empty() {
-        return None;
-    }
-    // One process can play several things: a browser plays every tab from
-    // one audio service, so a music tab on the speakers and a call on a
-    // headset share it. Only when everything the calling apps play goes to
-    // one output other than the default is that output followed.
-    let mut outputs: Vec<&str> = playing
-        .iter()
-        .filter(foreign)
-        .filter(|s| callers.iter().any(|c| same_app(s.pid, *c, procs)))
-        .map(|s| s.endpoint.as_str())
-        .collect();
-    outputs.sort_unstable();
-    outputs.dedup();
-    match outputs.as_slice() {
-        [only] if Some(*only) != default => Some((*only).to_string()),
-        _ => None,
-    }
+    Chooser::default().choose(default, playing, recording, procs, ours)
 }
 
 #[cfg(test)]
@@ -135,6 +202,14 @@ mod tests {
             endpoint: endpoint.into(),
             pid,
             active: true,
+            heard: false,
+        }
+    }
+
+    fn heard(endpoint: &str, pid: u32) -> Session {
+        Session {
+            heard: true,
+            ..session(endpoint, pid)
         }
     }
 
@@ -382,6 +457,125 @@ mod tests {
         let recording = [session(HEADSET_MIC, 4100)];
         assert_eq!(
             choose(None, &playing, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+    }
+
+    #[test]
+    fn a_silent_stream_on_the_default_does_not_hold_a_heard_call() {
+        // A browser call on the headset; the page's audio context keeps a
+        // silent stream on the speakers.
+        let recording = [session(HEADSET_MIC, 4100)];
+        let mut chooser = Chooser::default();
+        let quiet = [session(SPEAKERS, 4100), session(HEADSET, 4100)];
+        assert_eq!(
+            chooser.choose(Some(SPEAKERS), &quiet, &recording, &HashMap::new(), OURS),
+            None,
+            "nothing heard yet: both outputs count"
+        );
+        let talking = [session(SPEAKERS, 4100), heard(HEADSET, 4100)];
+        assert_eq!(
+            chooser.choose(Some(SPEAKERS), &talking, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+        // A pause in the call: still the headset.
+        assert_eq!(
+            chooser.choose(Some(SPEAKERS), &quiet, &recording, &HashMap::new(), OURS),
+            Some(HEADSET.into())
+        );
+    }
+
+    #[test]
+    fn a_call_heard_on_the_default_never_moves() {
+        // The control: the call on the speakers, a silent stream on the
+        // headset, then silence.
+        let recording = [session(HEADSET_MIC, 4100)];
+        let mut chooser = Chooser::default();
+        let talking = [heard(SPEAKERS, 4100), session(HEADSET, 4100)];
+        assert_eq!(
+            chooser.choose(Some(SPEAKERS), &talking, &recording, &HashMap::new(), OURS),
+            None
+        );
+        let quiet = [session(SPEAKERS, 4100), session(HEADSET, 4100)];
+        for _ in 0..5 {
+            assert_eq!(
+                chooser.choose(Some(SPEAKERS), &quiet, &recording, &HashMap::new(), OURS),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn a_call_heard_on_both_outputs_keeps_the_default() {
+        let recording = [session(HEADSET_MIC, 4100)];
+        let mut chooser = Chooser::default();
+        let both = [heard(SPEAKERS, 4100), heard(HEADSET, 4100)];
+        assert_eq!(
+            chooser.choose(Some(SPEAKERS), &both, &recording, &HashMap::new(), OURS),
+            None
+        );
+    }
+
+    #[test]
+    fn the_last_heard_output_holds_only_while_the_call_plays_there() {
+        let recording = [session(HEADSET_MIC, 4100)];
+        let mut chooser = Chooser::default();
+        assert_eq!(
+            chooser.choose(
+                Some(SPEAKERS),
+                &[heard(HEADSET, 4100)],
+                &recording,
+                &HashMap::new(),
+                OURS
+            ),
+            Some(HEADSET.into())
+        );
+        // The headset is gone (unplugged): the silent stream on the speakers
+        // is all the call app plays.
+        assert_eq!(
+            chooser.choose(
+                Some(SPEAKERS),
+                &[session(SPEAKERS, 4100)],
+                &recording,
+                &HashMap::new(),
+                OURS
+            ),
+            None
+        );
+        // The call ends (no one records): a new call starts afresh.
+        assert_eq!(
+            chooser.choose(
+                Some(SPEAKERS),
+                &[session(HEADSET, 4100)],
+                &[],
+                &HashMap::new(),
+                OURS
+            ),
+            None
+        );
+        assert_eq!(
+            chooser.choose(
+                Some(SPEAKERS),
+                &[session(SPEAKERS, 4100), session(HEADSET, 4100)],
+                &recording,
+                &HashMap::new(),
+                OURS
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn music_heard_elsewhere_in_another_app_is_not_the_call() {
+        let recording = [session(HEADSET_MIC, 4100)];
+        let mut chooser = Chooser::default();
+        let playing = [
+            heard(SPEAKERS, 5200),
+            session(SPEAKERS, 4100),
+            heard(HEADSET, 4100),
+        ];
+        assert_eq!(
+            chooser.choose(Some(SPEAKERS), &playing, &recording, &HashMap::new(), OURS),
             Some(HEADSET.into())
         );
     }

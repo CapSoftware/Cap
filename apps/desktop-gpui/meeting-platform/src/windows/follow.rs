@@ -20,10 +20,11 @@ use windows::{
             AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
             AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
             AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-            AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow, IAudioCaptureClient,
-            IAudioClient, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
-            IMMDeviceEnumerator, MMDeviceEnumerator, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
-            WAVEFORMATEXTENSIBLE_0, eCapture, eConsole, eRender,
+            AudioSessionStateActive, DEVICE_STATE_ACTIVE, EDataFlow,
+            Endpoints::IAudioMeterInformation, IAudioCaptureClient, IAudioClient,
+            IAudioSessionControl2, IAudioSessionManager2, IMMDevice, IMMDeviceEnumerator,
+            MMDeviceEnumerator, WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+            eCapture, eConsole, eRender,
         },
         System::{
             Com::{
@@ -36,7 +37,7 @@ use windows::{
     core::{Interface, PCWSTR},
 };
 
-use crate::call_output::{Session, choose};
+use crate::call_output::{Chooser, Session};
 
 struct ComGuard(bool);
 
@@ -72,14 +73,36 @@ fn active_endpoints(enumerator: &IMMDeviceEnumerator, flow: EDataFlow) -> Vec<(S
         .collect()
 }
 
+/// A session is heard when its peak is above this (about -60 dBFS): a
+/// silent stream kept open plays exact zeros.
+const AUDIBLE_PEAK: f32 = 0.001;
+
+/// For how many looks a session counts as heard after its last sound. The
+/// peak is read at each look, so pauses between words are bridged.
+const HEARD_LOOKS: u64 = 3;
+
 /// The audio sessions of every endpoint looked at, by endpoint id. A
 /// session manager is kept for as long as its endpoint is there.
 #[derive(Default)]
-struct Managers(HashMap<String, IAudioSessionManager2>);
+struct Managers {
+    managers: HashMap<String, IAudioSessionManager2>,
+    /// The look a playing session (endpoint, process) was last heard in.
+    heard: HashMap<(String, u32), u64>,
+    looks: u64,
+}
 
 impl Managers {
-    fn sessions(&mut self, id: &str, device: &IMMDevice, out: &mut Vec<Session>) {
-        let manager = match self.0.get(id) {
+    /// Starts a look: sessions not heard for a while are forgotten.
+    fn next_look(&mut self) {
+        self.looks += 1;
+        let now = self.looks;
+        self.heard.retain(|_, at| now - *at < HEARD_LOOKS);
+    }
+
+    /// The sessions of one endpoint. `meter`: whether to read how loud
+    /// they are (playing sessions; a recording session's level is not used).
+    fn sessions(&mut self, id: &str, device: &IMMDevice, meter: bool, out: &mut Vec<Session>) {
+        let manager = match self.managers.get(id) {
             Some(manager) => manager.clone(),
             None => {
                 let Ok(manager) =
@@ -87,13 +110,13 @@ impl Managers {
                 else {
                     return;
                 };
-                self.0.insert(id.to_string(), manager.clone());
+                self.managers.insert(id.to_string(), manager.clone());
                 manager
             }
         };
         let Ok(list) = (unsafe { manager.GetSessionEnumerator() }) else {
             // The endpoint went away under its manager: ask again next time.
-            self.0.remove(id);
+            self.managers.remove(id);
             return;
         };
         let count = unsafe { list.GetCount() }.unwrap_or(0);
@@ -112,27 +135,45 @@ impl Managers {
                 continue;
             };
             let active = unsafe { control.GetState() }.is_ok_and(|s| s == AudioSessionStateActive);
+            let key = (id.to_string(), pid);
+            if meter
+                && active
+                && control
+                    .cast::<IAudioMeterInformation>()
+                    .and_then(|m| unsafe { m.GetPeakValue() })
+                    .is_ok_and(|peak| peak > AUDIBLE_PEAK)
+            {
+                self.heard.insert(key.clone(), self.looks);
+            }
+            let heard = meter && self.heard.contains_key(&key);
             out.push(Session {
-                endpoint: id.to_string(),
+                endpoint: key.0,
                 pid,
                 active,
+                heard,
             });
         }
     }
 
     fn keep_only(&mut self, ids: &[&str]) {
-        self.0.retain(|id, _| ids.contains(&id.as_str()));
+        self.managers.retain(|id, _| ids.contains(&id.as_str()));
     }
 }
 
 /// One look: the output a call plays to, or `None` for the default output.
 /// Cheap unless another program is playing to an output other than the
 /// default: only then are the microphone's users and the process list read.
-fn look(enumerator: &IMMDeviceEnumerator, managers: &mut Managers) -> Option<String> {
+fn look(
+    enumerator: &IMMDeviceEnumerator,
+    managers: &mut Managers,
+    chooser: &mut Chooser,
+) -> Option<String> {
+    managers.next_look();
     let outputs = active_endpoints(enumerator, eRender);
     let ids: Vec<&str> = outputs.iter().map(|(id, _)| id.as_str()).collect();
     managers.keep_only(&ids);
     if outputs.len() < 2 {
+        chooser.reset();
         return None;
     }
     let default = unsafe { enumerator.GetDefaultAudioEndpoint(eRender, eConsole) }
@@ -144,18 +185,19 @@ fn look(enumerator: &IMMDeviceEnumerator, managers: &mut Managers) -> Option<Str
         .iter()
         .filter(|(id, _)| Some(id) != default.as_ref())
     {
-        managers.sessions(id, device, &mut playing);
+        managers.sessions(id, device, true, &mut playing);
     }
     let elsewhere = |s: &Session| s.active && s.pid != 0 && s.pid != ours;
     if !playing.iter().any(elsewhere) {
+        chooser.reset();
         return None;
     }
     if let Some((id, device)) = outputs.iter().find(|(id, _)| Some(id) == default.as_ref()) {
-        managers.sessions(id, device, &mut playing);
+        managers.sessions(id, device, true, &mut playing);
     }
     let mut recording = Vec::new();
     for (id, device) in active_endpoints(enumerator, eCapture) {
-        managers.sessions(&id, &device, &mut recording);
+        managers.sessions(&id, &device, false, &mut recording);
     }
     // Only when a program plays but does not itself record is the process
     // tree needed (a call app's helper playing for it).
@@ -168,7 +210,7 @@ fn look(enumerator: &IMMDeviceEnumerator, managers: &mut Managers) -> Option<Str
     } else {
         HashMap::new()
     };
-    choose(default.as_deref(), &playing, &recording, &procs, ours)
+    chooser.choose(default.as_deref(), &playing, &recording, &procs, ours)
 }
 
 /// Looks for the output a call plays to every `every`, on its own thread,
@@ -195,9 +237,10 @@ impl CallOutputWatch {
                         return;
                     };
                     let mut managers = Managers::default();
+                    let mut chooser = Chooser::default();
                     let mut last: Option<Option<String>> = None;
                     while !stop.load(Ordering::Acquire) {
-                        let now = look(&enumerator, &mut managers);
+                        let now = look(&enumerator, &mut managers, &mut chooser);
                         if last.as_ref() != Some(&now) {
                             if changes.send(now.clone()).is_err() {
                                 return;
@@ -526,7 +569,8 @@ mod tests {
             return;
         };
         let mut managers = Managers::default();
-        let _ = look(&enumerator, &mut managers);
-        let _ = look(&enumerator, &mut managers);
+        let mut chooser = Chooser::default();
+        let _ = look(&enumerator, &mut managers, &mut chooser);
+        let _ = look(&enumerator, &mut managers, &mut chooser);
     }
 }
