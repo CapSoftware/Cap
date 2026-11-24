@@ -51,13 +51,16 @@ export function chunkTranscript(text: string, maxChars: number): string[] {
 	return chunks.filter((chunk) => chunk.trim().length > 0);
 }
 
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+
 function splitLongLine(line: string, maxChars: number): string[] {
 	const pieces: string[] = [];
 	let rest = line;
 	while (rest.length > maxChars) {
 		const window = rest.slice(0, maxChars);
 		const space = window.lastIndexOf(" ");
-		const cut = space > maxChars / 2 ? space : maxChars;
+		let cut = space > maxChars / 2 ? space : maxChars;
+		if (isHighSurrogate(rest.charCodeAt(cut - 1))) cut -= 1;
 		pieces.push(rest.slice(0, cut));
 		rest = rest.slice(cut).trimStart();
 	}
@@ -406,6 +409,15 @@ export function selectTranscriptExcerpts(
 		used += length;
 	}
 
+	// With room for less than one whole excerpt, the most related one is
+	// shortened to fit rather than left out.
+	const best = ranked[0];
+	if (chosen.length === 0 && best)
+		return {
+			text: prefixWithin(parts[best.index] ?? "", budget, measure),
+			excerpted: true,
+		};
+
 	return {
 		text: chosen
 			.sort((left, right) => left - right)
@@ -415,10 +427,26 @@ export function selectTranscriptExcerpts(
 	};
 }
 
+function prefixWithin(
+	text: string,
+	budget: number,
+	measure: (text: string) => number,
+): string {
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (measure(text.slice(0, mid)) <= budget) low = mid;
+		else high = mid - 1;
+	}
+	return isHighSurrogate(text.charCodeAt(low - 1))
+		? text.slice(0, low - 1)
+		: text.slice(0, low);
+}
+
 export function buildAskPrompt(
 	input: MeetingAskRequest & {
 		boundary: string;
-		/** Caps the transcript in UTF-8 bytes rather than characters. */
 		transcriptBytes?: number;
 	},
 ): {
