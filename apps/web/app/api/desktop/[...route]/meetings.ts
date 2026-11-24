@@ -9,6 +9,7 @@ import {
 	type ToolSet,
 } from "ai";
 import { Hono } from "hono";
+import { createMiddleware } from "hono/factory";
 import { after } from "next/server";
 import { isAiGenerationEnabledForUser } from "@/lib/ai-generation-entitlement";
 import {
@@ -16,6 +17,12 @@ import {
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
 import { isNoSpokenAudioError } from "@/lib/live-transcribe-core";
+import {
+	MEETING_AUTH_FAILURE_RETRY_SECONDS,
+	meetingAuthBlocked,
+	meetingAuthFailureLimited,
+	rememberAcceptedCredential,
+} from "@/lib/meetings/auth-failures";
 import {
 	gatewayAvailable,
 	getMeetingsAiConfig,
@@ -79,9 +86,36 @@ import {
 	MEETING_CLIP_MIN_SAMPLES,
 	parseWavClip,
 } from "@/lib/meetings/wav";
-import { withAuth } from "../../utils";
+import { getAuth } from "../../utils";
 
-export const app = new Hono().use(withAuth);
+const rateLimited = (retryAfterSeconds: number) =>
+	Response.json(
+		{ error: "rate_limited", retryAfterSeconds },
+		{ status: 429, headers: { "Retry-After": String(retryAfterSeconds) } },
+	);
+
+// Signed-in requests are limited per user by the budgets below; only
+// requests whose sign-in was not accepted are limited per address.
+const withMeetingsAuth = createMiddleware<{
+	Variables: {
+		user: NonNullable<Awaited<ReturnType<typeof getAuth>>>["user"];
+	};
+}>(async (c, next) => {
+	const headers = c.req.raw.headers;
+	if (await meetingAuthBlocked(headers))
+		return rateLimited(MEETING_AUTH_FAILURE_RETRY_SECONDS);
+	const auth = await getAuth(c);
+	if (!auth) {
+		if (await meetingAuthFailureLimited(headers))
+			return rateLimited(MEETING_AUTH_FAILURE_RETRY_SECONDS);
+		return c.text("User not authenticated", 401);
+	}
+	await rememberAcceptedCredential(headers);
+	c.set("user", auth.user);
+	await next();
+});
+
+export const app = new Hono().use(withMeetingsAuth);
 
 const TRANSCRIBE_DEADLINE_MS = 90_000;
 const TRANSCRIBE_POLL_MS = 1_000;
@@ -155,13 +189,6 @@ const errorResponse = (
 
 const invalidRequest = (detail: string) =>
 	errorResponse(400, { error: "invalid_request", detail });
-
-const rateLimited = (retryAfterSeconds: number) =>
-	errorResponse(
-		429,
-		{ error: "rate_limited", retryAfterSeconds },
-		{ "Retry-After": String(retryAfterSeconds) },
-	);
 
 function admit(
 	user: MeetingUser,

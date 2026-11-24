@@ -420,6 +420,53 @@ describe("mounting", () => {
 	});
 });
 
+describe("sign-in failures", () => {
+	let address = 0;
+	const fromAddress = () => {
+		address += 1;
+		return `198.51.100.${address}`;
+	};
+	const capabilities = (ip: string, key = API_KEY) =>
+		app.request("https://cap.so/api/desktop/meetings/capabilities", {
+			headers: { authorization: `Bearer ${key}`, "x-forwarded-for": ip },
+		});
+
+	it("limits refused sign-ins per address, then answers without a lookup", async () => {
+		const ip = fromAddress();
+		for (let index = 0; index < 60; index++)
+			expect((await capabilities(ip)).status).toBe(401);
+		const limited = await capabilities(ip);
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("retry-after")).toBe("60");
+		expect(await limited.json()).toEqual({
+			error: "rate_limited",
+			retryAfterSeconds: 60,
+		});
+		signIn();
+		expect((await capabilities(ip)).status).toBe(429);
+		expect((await capabilities(fromAddress())).status).toBe(200);
+	});
+
+	it("still serves a credential this instance accepted from that address", async () => {
+		const ip = fromAddress();
+		signIn();
+		const accepted = "fedcba9876543210fedcba9876543210fedc";
+		expect((await capabilities(ip, accepted)).status).toBe(200);
+		mocks.user = null;
+		for (let index = 0; index < 61; index++) await capabilities(ip);
+		expect((await capabilities(ip)).status).toBe(429);
+		signIn();
+		expect((await capabilities(ip, accepted)).status).toBe(200);
+	});
+
+	it("never counts signed-in requests against the address", async () => {
+		const ip = fromAddress();
+		signIn();
+		for (let index = 0; index < 150; index++)
+			expect((await capabilities(ip)).status).toBe(200);
+	});
+});
+
 describe("POST /transcribe gates", () => {
 	it("rejects missing auth before anything else", async () => {
 		const response = await transcribe(wav(16_000), "", {});

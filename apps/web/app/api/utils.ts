@@ -479,7 +479,7 @@ function debouncedLastUsedUpdate(keyHash: string) {
 		.catch((err) => console.error("Failed to update lastUsedAt:", err));
 }
 
-async function getAuth(c: Context) {
+export async function getAuth(c: Context) {
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 
 	let user: Awaited<ReturnType<typeof getCurrentUser>> | undefined;
