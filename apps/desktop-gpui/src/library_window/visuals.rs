@@ -253,8 +253,19 @@ fn save_cache(path: &Path, cache: &Cache) {
     }
 }
 
+/// Also drops the entries of items no longer in `jobs` (deleted, or emptied
+/// from the trash), so their waveform and first words leave the disk now
+/// rather than at the next pass that has something to decode.
 pub fn cached(jobs: Vec<Job>, dir: &Path) -> (HashMap<ItemKey, Visual>, Vec<(Job, String)>) {
-    let cache = load_cache(&dir.join(CACHE_FILE));
+    let path = dir.join(CACHE_FILE);
+    let mut cache = load_cache(&path);
+    let listed: std::collections::HashSet<String> =
+        jobs.iter().map(|job| key_string(&job.key)).collect();
+    let before = cache.items.len();
+    cache.items.retain(|key, _| listed.contains(key));
+    if cache.items.len() != before {
+        save_cache(&path, &cache);
+    }
     let mut known = HashMap::with_capacity(jobs.len());
     let mut todo = Vec::new();
     for job in jobs {
@@ -812,6 +823,49 @@ mod tests {
             &images.get(&stranger, false, (52., 28.), ink),
             &kept_image
         ));
+    }
+
+    #[test]
+    fn a_deleted_meeting_leaves_the_cache_even_when_nothing_needs_working_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("doc-1");
+        std::fs::create_dir_all(&doc).unwrap();
+        std::fs::write(
+            doc.join(cap_meetings::library::TRANSCRIPT_FILE),
+            "{\"op\":\"upsert\",\"utterance\":{\"id\":\"u1\",\"source\":\"mic\",\"speaker\":null,\"speakerId\":1,\"startMs\":0,\"endMs\":1000,\"text\":\"Quarterly numbers for Acme\"}}\n",
+        )
+        .unwrap();
+        let meeting: cap_meetings::library::MeetingDetails =
+            serde_json::from_value(serde_json::json!({ "transcriptChars": 26 })).unwrap();
+        let cache = dir.path().join("cache");
+        let job = |id: &str| meeting_job(ItemKey::Doc(id.into()), doc.clone(), &meeting, true);
+        let (_, todo) = cached(vec![job("a").unwrap(), job("b").unwrap()], &cache);
+        let frames = dir.path().join("frames");
+        let done: Vec<_> = todo
+            .into_iter()
+            .map(|(job, stamp)| {
+                let visual = work(&job, &frames);
+                (job.key, stamp, visual)
+            })
+            .collect();
+        let keep: Vec<ItemKey> = done.iter().map(|(k, _, _)| k.clone()).collect();
+        remember(&cache, &done, &keep);
+        let file = cache.join(CACHE_FILE);
+        assert!(std::fs::read_to_string(&file).unwrap().contains("Acme"));
+
+        // "b" is deleted; "a" is already known, so nothing is decoded.
+        let (known, todo) = cached(vec![job("a").unwrap()], &cache);
+        assert_eq!((known.len(), todo.len()), (1, 0));
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            saved.contains("doc:a") && !saved.contains("doc:b"),
+            "{saved}"
+        );
+
+        // The last item goes too.
+        let (known, todo) = cached(Vec::new(), &cache);
+        assert_eq!((known.len(), todo.len()), (0, 0));
+        assert!(!std::fs::read_to_string(&file).unwrap().contains("Acme"));
     }
 
     #[test]
