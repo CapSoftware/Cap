@@ -613,3 +613,14 @@ fn names_come_from_mail_structure() {
     assert!(found[2].iter().any(|f| f.category == Name), "{found:?}");
     assert!(found[4].iter().all(|f| f.category != Name), "{found:?}");
 }
+
+#[test]
+fn an_unspaced_iban_with_a_letter_digits_look_like_is_found() {
+    let found = classify_line("ES4266405477316390573152");
+    assert!(
+        found
+            .iter()
+            .any(|f| f.category == Card && f.start == 0 && f.end == 24),
+        "{found:?}"
+    );
+}

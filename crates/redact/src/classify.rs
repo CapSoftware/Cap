@@ -1097,15 +1097,19 @@ fn cards_and_banks(text: &str, normalized: &str, index: &CharIndex, findings: &m
             );
         }
     }
-    for found in IBAN.find_iter(normalized) {
-        if iban_valid(found.as_str()) {
-            push_bytes(
-                findings,
-                index,
-                RedactCategory::Card,
-                found.start(),
-                found.end(),
-            );
+    // The country code is letters, which digit normalisation turns into
+    // digits ("ES42..." -> "E542..."), so both forms are tried.
+    for source in [text, normalized] {
+        for found in IBAN.find_iter(source) {
+            if iban_valid(found.as_str()) {
+                push_bytes(
+                    findings,
+                    index,
+                    RedactCategory::Card,
+                    found.start(),
+                    found.end(),
+                );
+            }
         }
     }
     if ACCOUNT_CONTEXT.is_match(text) {
