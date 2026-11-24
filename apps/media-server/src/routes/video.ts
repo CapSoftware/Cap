@@ -52,8 +52,8 @@ import {
 	createGuardedMediaFetch,
 	exceedsRequestedLength,
 	LENGTH_LIMIT_ERROR_PREFIX,
-	reachesRequestedLength,
 	PROCESS_TIMEOUT_MS,
+	reachesRequestedLength,
 	UPLOAD_TIMEOUT_MS,
 } from "../lib/media-common";
 import {
