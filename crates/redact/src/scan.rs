@@ -576,8 +576,12 @@ impl Scan {
                     }
                     Some(index) => {
                         let known = self.live[index].rect;
-                        let grew =
-                            line.w > known.w * 1.15 + 2.0 || line.x < known.x - known.h * 0.5;
+                        // A line that reaches past either end of its known box,
+                        // by more than about half a character, has text added
+                        // there (typed at its end) even if its old box did
+                        // not change.
+                        let grew = line.right() > known.right() + known.h * 0.4
+                            || line.x < known.x - known.h * 0.4;
                         if grew {
                             claimed[index] = true;
                             targets.push((line, Some(index)));
