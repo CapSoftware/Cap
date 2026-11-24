@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	read: vi.fn(),
+	internalDownload: vi.fn(),
 	locked: vi.fn(),
 	signedKeys: [] as string[],
 	signedUrl: null as string | null,
@@ -48,7 +49,10 @@ vi.mock("@cap/web-backend", async () => {
 										return `${mocks.signedUrl}/${key}`;
 									}),
 							}
-						: { getObjectResponse: mocks.read },
+						: {
+								getObjectResponse: mocks.read,
+								getInternalDownload: mocks.internalDownload,
+							},
 				]),
 		},
 		Videos: Effect.succeed({
@@ -75,6 +79,7 @@ vi.mock("@/utils/helpers", () => ({ CACHE_CONTROL_HEADERS: {} }));
 import { GET } from "@/app/api/storage/object/route";
 
 const RESULT_KEY = "owner/video/result.mp4";
+const INTERNAL_TARGET = { url: "https://bucket.test/owner/video/result.mp4" };
 
 const objectUrl = (key: string, token?: string) =>
 	`https://cap.test/api/storage/object?videoId=video&key=${encodeURIComponent(key)}${token ? `&token=${token}` : ""}`;
@@ -88,6 +93,9 @@ describe("storage object route for videos over the free shareable link limit", (
 				}),
 			),
 		);
+		mocks.internalDownload
+			.mockReset()
+			.mockReturnValue(Effect.succeed(INTERNAL_TARGET));
 		mocks.locked.mockReset().mockResolvedValue(true);
 		mocks.signedKeys = [];
 		mocks.signedUrl = null;
@@ -161,7 +169,6 @@ describe("storage object route for videos over the free shareable link limit", (
 	});
 
 	it("serves the media server's internal download", async () => {
-		mocks.read.mockReset();
 		const response = await GET(
 			new NextRequest(objectUrl(RESULT_KEY), {
 				headers: {
@@ -170,7 +177,12 @@ describe("storage object route for videos over the free shareable link limit", (
 				},
 			}),
 		);
-		expect(response.status).not.toBe(404);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual(INTERNAL_TARGET);
+		expect(mocks.internalDownload).toHaveBeenCalledWith(RESULT_KEY, {
+			objectIdentity: undefined,
+			signal: expect.any(AbortSignal),
+		});
 		expect(mocks.locked).not.toHaveBeenCalled();
 	});
 });
