@@ -209,8 +209,10 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
             arch: x86_64
+          # Ubuntu 22.04 (glibc 2.35) so Cap runs on Debian 12, Ubuntu 22.04
+          # and the distributions built on them, not just glibc 2.39 and later.
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
             arch: x86_64
     env:
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
@@ -267,10 +269,12 @@ jobs:
       # both the root workspace and the standalone GPUI workspace). Save it
       # even when the job fails later, because the Windows job most often dies
       # at SignPath approval, long after the compile it would have cached.
+      # The Linux key names its build image: objects built against a newer
+      # glibc must never be restored into the older image's build.
       - uses: ./.github/actions/setup-rust-cache
         with:
           target: ${{ matrix.settings.target }}
-          prefix-key: v1-rust-release
+          prefix-key: ${{ runner.os == 'Linux' && format('v1-rust-release-{0}', matrix.settings.runner) || 'v1-rust-release' }}
           save-cache: true
           cache-on-failure: true
           workspaces: |
