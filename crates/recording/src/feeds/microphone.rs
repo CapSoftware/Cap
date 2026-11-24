@@ -118,8 +118,9 @@ fn audio_follows_confirmed_route(
 /// gap, insert silence and then trim the late audio as overlap. Here each
 /// buffer is placed by the frames delivered so far from the earliest anchor
 /// its arrivals allow: steady delivery keeps the arrival times exactly, a
-/// late callback no longer moves its audio, and real loss or clock drift
-/// moves the anchor once a whole window of arrivals agrees.
+/// late callback no longer moves its audio, an arrival later than any burst
+/// marks lost frames where they were lost, and slow clock drift moves the
+/// anchor once a whole window of arrivals agrees.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 struct SteadyDeliveryClock {
@@ -133,6 +134,9 @@ struct SteadyDeliveryClock {
 #[cfg(target_os = "linux")]
 impl SteadyDeliveryClock {
     const WINDOW: Duration = Duration::from_secs(2);
+    /// Bursts seen from PipeWire's pulse server hold back about three 25 ms
+    /// buffers; an arrival this much later means frames were lost.
+    const LOSS: Duration = Duration::from_millis(150);
 
     fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
         if rate == 0 {
@@ -159,13 +163,19 @@ impl SteadyDeliveryClock {
             return Timestamp::Instant(received);
         }
         let lag = received - predicted;
+        if lag > Self::LOSS {
+            self.anchor = Some(anchor + lag);
+            self.window_started = Some(received);
+            self.window_min_lag = None;
+            return Timestamp::Instant(received);
+        }
         self.window_min_lag = Some(self.window_min_lag.map_or(lag, |min| min.min(lag)));
         if self
             .window_started
             .is_some_and(|started| received.saturating_duration_since(started) >= Self::WINDOW)
         {
-            // Every arrival in the window was late by at least this much: frames
-            // were lost or the device clock runs slow, not a burst.
+            // Every arrival in the window was late by at least this much: the
+            // device clock runs slow, not a burst.
             if let Some(min_lag) = self.window_min_lag.take() {
                 self.anchor = Some(anchor + min_lag);
             }
@@ -5610,19 +5620,31 @@ mod steady_delivery_clock_tests {
     }
 
     #[test]
-    fn lost_frames_move_the_anchor_after_a_window() {
+    fn lost_frames_are_marked_where_they_were_lost() {
         let start = Instant::now();
         let mut clock = SteadyDeliveryClock::default();
         let loss = Duration::from_millis(200);
-        let mut last_gap = Duration::ZERO;
         for buffer in 1..=400u32 {
             let received =
                 start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
             let stamped = instant(clock.timestamp(received, FRAMES, RATE));
-            last_gap = received.max(stamped) - received.min(stamped);
+            let off = received.max(stamped) - received.min(stamped);
+            assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
         }
-        // Long after the loss the timeline has caught up with the clock again.
-        assert!(last_gap < Duration::from_millis(5), "{last_gap:?}");
+    }
+
+    #[test]
+    fn a_slow_device_clock_is_followed_within_a_window() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        // 0.1% slow: each buffer arrives a little later than its frames say.
+        let mut last_off = Duration::ZERO;
+        for buffer in 1..=2_000u32 {
+            let received = start + period().mul_f64(1.001) * buffer;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_off = received.max(stamped) - received.min(stamped);
+        }
+        assert!(last_off < Duration::from_millis(5), "{last_off:?}");
     }
 
     #[test]
