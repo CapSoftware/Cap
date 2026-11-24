@@ -85,6 +85,7 @@ mod frame;
 mod loading;
 mod markers;
 mod redact;
+pub(crate) mod redact_bench;
 mod scenes;
 mod snap;
 mod style_preset_ui;
