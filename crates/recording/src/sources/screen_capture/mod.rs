@@ -542,8 +542,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
-        let target_refresh = validated_refresh_rate(display.refresh_rate());
-        let fps = std::cmp::max(1, std::cmp::min(max_fps, target_refresh));
+        let fps = capture_fps(max_fps, display.refresh_rate());
 
         // Read exactly as many pixels as the frame holds (see `even_pixel_crop`).
         #[cfg(target_os = "macos")]
@@ -642,6 +641,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     pub fn audio_info(&self) -> AudioInfo {
         TCaptureFormat::audio_info()
     }
+}
+
+pub fn capture_fps<T>(max_fps: u32, reported_refresh_rate: T) -> u32
+where
+    T: Into<f64>,
+{
+    std::cmp::max(
+        1,
+        std::cmp::min(max_fps, validated_refresh_rate(reported_refresh_rate)),
+    )
 }
 
 fn validated_refresh_rate<T>(reported_refresh_rate: T) -> u32
@@ -798,6 +807,37 @@ fn list_windows_inner(_include_accessory_panels: bool) -> Vec<(CaptureWindow, Wi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_rate_follows_the_display_up_to_the_studio_ceiling() {
+        let ceiling = crate::defaults::MAX_STUDIO_FPS;
+        for (refresh, expected) in [
+            (60.0, 60),
+            (59.94, 60),
+            (120.0, 120),
+            (144.0, 144),
+            (165.0, 165),
+            (240.0, 240),
+            (360.0, 240),
+            (0.0, 60),
+            (f64::NAN, 60),
+        ] {
+            assert_eq!(capture_fps(ceiling, refresh), expected, "{refresh} Hz");
+        }
+        for (max_fps, refresh, expected) in [
+            (60, 144.0, 60),
+            (144, 60.0, 60),
+            (144, 165.0, 144),
+            (24, 60.0, 24),
+            (0, 60.0, 1),
+        ] {
+            assert_eq!(
+                capture_fps(max_fps, refresh),
+                expected,
+                "{max_fps} fps on {refresh} Hz"
+            );
+        }
+    }
 
     #[test]
     fn h264_bounded_capture_matches_the_encoder_downscale() {

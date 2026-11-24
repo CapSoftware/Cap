@@ -56,7 +56,7 @@ pub struct RecordParams {
         help = "New '.cap' project path (defaults to <recordingId>.cap in the working directory). The path must not already exist, including an empty directory."
     )]
     path: Option<PathBuf>,
-    /// Maximum fps to record at (clamped to 1-120; camera recordings follow the desktop camera cap)
+    /// Maximum fps to record at, never above the display's refresh rate (Studio 1-240, Instant 1-120; camera recordings follow the desktop camera cap)
     #[arg(long)]
     fps: Option<u32>,
     /// Stop automatically after N seconds
