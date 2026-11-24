@@ -10,10 +10,12 @@ import {
 } from "@cap/web-backend";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
-import { Storage as StorageDomain, Video } from "@cap/web-domain";
+import { CurrentUser, Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
+import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
+import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import { runPromise } from "@/lib/server";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
@@ -167,6 +169,11 @@ const getPolicyVideo = (videoId: Video.VideoId) =>
 		return maybeVideo[0];
 	});
 
+const isPlayableMediaKey = (key: string) =>
+	/\.(mp4|m4v|mov|webm|mkv|m4s|ts|m3u8|aac|m4a|mp3|opus|ogg|wav)$/i.test(key);
+
+const isWholeVideoKey = (key: string) => /\.(mp4|m4v|mov|webm|mkv)$/i.test(key);
+
 export async function GET(request: NextRequest) {
 	const internalDownload =
 		request.headers.get("x-cap-internal-download") === "1";
@@ -225,6 +232,32 @@ export async function GET(request: NextRequest) {
 			)
 		) {
 			return yield* Effect.fail("not-found" as const);
+		}
+
+		if (!internalDownload && isPlayableMediaKey(key)) {
+			const viewer = yield* Effect.serviceOption(CurrentUser);
+			if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
+				const decision = yield* Effect.tryPromise(async () => {
+					const freePlanVideo = {
+						id: video.id,
+						createdAt: video.createdAt,
+						metadata: Option.getOrNull(video.metadata),
+					};
+					if (
+						await isVideoOverFreePlanDuration({
+							...freePlanVideo,
+							ownerId: video.ownerId,
+							orgId: video.orgId,
+						})
+					)
+						return "held";
+					return isWholeVideoKey(key)
+						? firstViewDecision(freePlanVideo, key)
+						: "play";
+				}).pipe(Effect.orElseSucceed(() => "play" as const));
+				if (decision !== "play")
+					return yield* Effect.fail("not-found" as const);
+			}
 		}
 
 		const [storage] = yield* Storage.getAccessForVideo(video);
