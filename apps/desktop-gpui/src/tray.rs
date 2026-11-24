@@ -1306,8 +1306,7 @@ mod mac {
         previous: Vec<PreviousItem>,
         previous_generation: u64,
         recording: bool,
-        /// A Notes meeting records while its floating indicator is hidden:
-        /// the icon is the one sign left, so it shows the recording.
+        /// A Notes meeting is recording: the icon shows it, as for Studio.
         notes_recording: bool,
     }
 

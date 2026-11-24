@@ -34,7 +34,7 @@ struct Tray {
     mode: Mode,
     previous: Vec<PreviousItem>,
     recording: bool,
-    /// A Notes meeting records while its floating indicator is hidden.
+    /// A Notes meeting is recording: the icon shows it, as for Studio.
     notes_recording: bool,
     previous_generation: u64,
     /// The next meeting, shown in the tooltip the way macOS shows it beside
@@ -244,11 +244,9 @@ pub fn set_notes_recording(on: bool, cx: &mut App) {
 }
 
 fn apply_icon(tray: &Tray) {
-    let bytes = if tray.recording || tray.notes_recording {
-        STOP_ICON
-    } else {
-        DEFAULT_ICON
-    };
+    let recording = tray.recording || tray.notes_recording;
+    let bytes = if recording { STOP_ICON } else { DEFAULT_ICON };
+    tracing::info!(recording, "tray icon set");
     match decode_tray_icon(bytes) {
         Ok(icon) => {
             if let Err(error) = tray.icon.set_icon(Some(icon)) {
