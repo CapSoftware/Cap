@@ -30,7 +30,6 @@ import {
 	MEETING_AUTH_FAILURE_RETRY_SECONDS,
 	meetingAuthBlocked,
 	meetingAuthFailureLimited,
-	rememberAcceptedCredential,
 } from "@/lib/meetings/auth-failures";
 import {
 	consumeMeetingAudioBudget,
@@ -106,7 +105,7 @@ const withMeetingsAuth = createMiddleware<{
 	};
 }>(async (c, next) => {
 	const headers = c.req.raw.headers;
-	if (await meetingAuthBlocked(headers))
+	if (meetingAuthBlocked(headers))
 		return rateLimited(MEETING_AUTH_FAILURE_RETRY_SECONDS);
 	const auth = await getAuth(c);
 	if (!auth) {
@@ -114,7 +113,6 @@ const withMeetingsAuth = createMiddleware<{
 			return rateLimited(MEETING_AUTH_FAILURE_RETRY_SECONDS);
 		return c.text("User not authenticated", 401);
 	}
-	await rememberAcceptedCredential(headers);
 	c.set("user", auth.user);
 	await next();
 });
