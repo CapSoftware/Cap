@@ -1368,6 +1368,20 @@ impl MicrophoneFeed {
                 if setup_cancel.is_cancelled() || ready_tx.is_canceled() {
                     return;
                 }
+                #[cfg(target_os = "linux")]
+                let label = match (pulse_input_role
+                    == crate::sources::screen_capture::PulseInputRole::Microphone)
+                    .then(|| crate::sources::screen_capture::microphone_input_device(&label))
+                    .flatten()
+                {
+                    Some(device) => {
+                        info!(
+                            "🎤 ALSA '{label}' opens the sound card directly; recording it through the sound server's '{device}' input"
+                        );
+                        device
+                    }
+                    None => label,
+                };
                 let Some((device, config)) = Self::device_with_settings(&label, settings.as_ref())
                 else {
                     let _ = ready_tx.send(Err(SetInputError::DeviceNotFound));
