@@ -287,18 +287,21 @@ impl OcrModel {
             3 => (shape[1] as usize, shape[2] as usize),
             _ => bail!("unexpected det output shape {shape:?}"),
         };
+        // The map may be at the input's resolution or a fraction of it (a
+        // head that stops at half resolution): boxes are scaled by the ratio.
+        let (fx, fy) = (in_w as f32 / map_w as f32, in_h as f32 / map_h as f32);
         let boxes = crate::db::boxes_from_probability(
             probs,
             map_w,
             map_h,
-            out_w.min(map_w),
-            out_h.min(map_h),
+            ((out_w as f32 / fx).ceil() as usize).min(map_w),
+            ((out_h as f32 / fy).ceil() as usize).min(map_h),
             self.meta.det.prob_threshold,
             self.meta.det.box_threshold,
             self.meta.det.unclip,
         );
-        let sx = roi.w / out_w as f32;
-        let sy = roi.h / out_h as f32;
+        let sx = roi.w / out_w as f32 * fx;
+        let sy = roi.h / out_h as f32 * fy;
         Ok(boxes
             .into_iter()
             .map(|(rect, score)| DetectedLine {
