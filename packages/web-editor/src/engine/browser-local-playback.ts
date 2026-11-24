@@ -167,6 +167,7 @@ const SCRUB_REFINE_MS = 40;
 const KEY_FRAME_TIME_OFFSET = 0.002;
 
 const PLAYBACK_SCALE_SETTLED_MS = 3000;
+const TICK_SECS = 1 / 60;
 const STALL_MS = 300;
 const SEEK_HOLD_MS = 250;
 const FIRST_FRAME_ATTEMPTS = 3;
@@ -317,6 +318,11 @@ export class BrowserLocalPlayback {
 	private averageFrameCostMs = 0;
 	private lastRenderedAt = 0;
 	private playClockAligned = false;
+	private frameEdge: number | null = null;
+	private frameEdgeSegment = -1;
+	private phasedSegment = -1;
+	private phasedAt = Number.NaN;
+	private phasedTime = Number.NaN;
 	private stalled = false;
 	private renderStartedAt = 0;
 	private awaitingPlayingFrame = false;
@@ -1294,19 +1300,44 @@ export class BrowserLocalPlayback {
 		if (transition && outgoingClip !== null) {
 			sync(outgoingClip, mapped[4], mapped[6], "overlap", outgoingGain);
 		}
-		if (playing && !this.playClockAligned && this.playing) {
-			this.playClockAligned = true;
+		if (playing && this.playing) {
 			const sourceTime = this.times.source_times(incomingClip, mapped[3])[0];
 			const drift =
 				(incomingPair.screen.mediaTime - sourceTime) /
 				this.speed(incomingSegment);
 			if (Number.isFinite(drift)) {
-				this.playStartedAt = performance.now();
-				this.playStartedTime = time + Math.max(-0.05, Math.min(drift, 0.05));
+				this.frameEdge = time + drift;
+				this.frameEdgeSegment = incomingSegment;
+				if (!this.playClockAligned) {
+					this.playStartedAt = performance.now();
+					this.playStartedTime = time + Math.max(-0.05, Math.min(drift, 0.05));
+				}
 			}
+			this.playClockAligned = true;
 		}
 		this.outputTime = time;
 		return true;
+	}
+
+	/// Moves a clock that was just set by at most half a tick so ticks fall
+	/// midway between the source's frame changes: on a frame change, timing
+	/// jitter flips each tick between two frames and the picture stutters.
+	private phaseClock(time: number) {
+		const edge = this.frameEdge;
+		if (
+			edge === null ||
+			(this.phasedAt === this.playStartedAt &&
+				this.phasedTime === this.playStartedTime &&
+				this.phasedSegment === this.frameEdgeSegment)
+		)
+			return 0;
+		const offset = (((time - edge) % TICK_SECS) + TICK_SECS) % TICK_SECS;
+		const shift = TICK_SECS / 2 - offset;
+		this.playStartedTime += shift;
+		this.phasedAt = this.playStartedAt;
+		this.phasedTime = this.playStartedTime;
+		this.phasedSegment = this.frameEdgeSegment;
+		return shift;
 	}
 
 	private samplePlaybackFrameCost(elapsedMs: number, now = performance.now()) {
@@ -1365,6 +1396,7 @@ export class BrowserLocalPlayback {
 			this.playStartedAt = performance.now();
 			this.playStartedTime = time;
 			this.playClockAligned = false;
+			this.frameEdge = null;
 			this.audioClockAligned = false;
 			this.audioOffsets = [];
 			return this.renderAt(time, true, true);
@@ -1470,6 +1502,7 @@ export class BrowserLocalPlayback {
 		this.playStartedTime = this.outputTime;
 		this.lastRequestedFrame = -1;
 		this.playClockAligned = false;
+		this.frameEdge = null;
 		this.audioClockAligned = false;
 		this.audioOffsets = [];
 		this.averageFrameCostMs = 0;
@@ -1504,8 +1537,9 @@ export class BrowserLocalPlayback {
 				this.playStartedAt = performance.now();
 				firstTick = false;
 			}
-			const time =
+			let time =
 				this.playStartedTime + (performance.now() - this.playStartedAt) / 1000;
+			time += this.phaseClock(time);
 			const frame = Math.floor(time * 60);
 			if (frame === this.lastRequestedFrame) return;
 			this.lastRequestedFrame = frame;
