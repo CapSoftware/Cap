@@ -162,10 +162,13 @@ describe("buildNotesPrompt", () => {
 			transcriptTruncated: true,
 			transcript: `Speaker 1: agenda\n${prompts.TRANSCRIPT_MIDDLE_LEFT_OUT}\nSpeaker 2: decision`,
 		}).system;
-		expect(middle).toContain("part of the middle of the meeting is not covered");
+		expect(middle).toContain(
+			"part of the middle of the meeting is not covered",
+		);
 		expect(middle).not.toContain("stops before the meeting ended");
 		expect(
-			buildNotes({ transcript: `a\n${prompts.TRANSCRIPT_MIDDLE_LEFT_OUT}\nb` }).system,
+			buildNotes({ transcript: `a\n${prompts.TRANSCRIPT_MIDDLE_LEFT_OUT}\nb` })
+				.system,
 		).not.toContain("middle of the meeting is not covered");
 		expect(buildNotes({ summaryLanguage: "de" }).system).toContain("in German");
 		expect(buildNotes().system).toContain(
