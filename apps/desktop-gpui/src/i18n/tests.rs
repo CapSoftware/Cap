@@ -563,6 +563,14 @@ fn english_matches_the_literals_it_replaced() {
             tr::settings::general::privacy::telemetry::label(),
             "Share anonymous telemetry".into(),
         ),
+        (
+            tr::settings::general::recording::auto_redact::label(),
+            "Auto redact new Studio recordings".into(),
+        ),
+        (
+            tr::settings::general::recording::auto_redact::description(),
+            "Hides private details like emails and keys in new Studio recordings, so they are ready when you open the editor. Runs on this computer, so nothing is uploaded.".into(),
+        ),
     ];
     for (translated, literal) in pairs {
         assert_eq!(*translated, literal.as_str());
@@ -581,8 +589,9 @@ fn english_matches_the_literals_it_replaced() {
         .count()
         // `tray.version`, `excluded_windows.missing_body`, `self_host.confirm_change`,
         // `menu.update.badge_progress`, `menu.update.badge_version`,
-        // `editor.redact.hidden` and `editor.redact.scanning` take arguments.
-        - 7;
+        // `editor.redact.hidden`, `editor.redact.found` and
+        // `editor.redact.scanning` take arguments.
+        - 8;
     assert_eq!(
         pairs.len(),
         plain_keys,
