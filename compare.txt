@@ -1,0 +1,97 @@
+ok    audio/aac.m4a.mp3                         bytes
+ok    audio/aac.m4a.wav                         bytes
+ok    audio/adts.aac.mp3                        bytes
+ok    audio/adts.aac.wav                        bytes
+ok    audio/alac.m4a.mp3                        bytes
+ok    audio/alac.m4a.wav                        bytes
+ok    audio/cbr.mp3.mp3                         bytes
+ok    audio/cbr.mp3.wav                         bytes
+ok    audio/f32.wav.mp3                         bytes
+ok    audio/f32.wav.wav                         bytes
+ok    audio/mono22.wav.mp3                      bytes
+ok    audio/mono22.wav.wav                      bytes
+ok    audio/opus.ogg.mp3                        bytes
+ok    audio/opus.ogg.wav                        bytes
+ok    audio/s16.flac.mp3                        bytes
+ok    audio/s16.flac.wav                        bytes
+ok    audio/s16.wav.mp3                         bytes
+ok    audio/s16.wav.wav                         bytes
+ok    audio/s24.flac.mp3                        bytes
+ok    audio/s24.flac.wav                        bytes
+ok    audio/s24.wav.mp3                         bytes
+ok    audio/s24.wav.wav                         bytes
+ok    audio/speech.opus.mp3                     bytes
+ok    audio/speech.opus.wav                     bytes
+ok    audio/vbr44.mp3.mp3                       bytes
+ok    audio/vbr44.mp3.wav                       bytes
+ok    audio/vorbis.ogg.mp3                      bytes
+ok    audio/vorbis.ogg.wav                      bytes
+ok    export/gif.gif                            bytes
+ok    export/mov-prores.mov                     bytes
+ok    export/mp4-crf.mp4                        bytes
+ok    export/mp4-ffmpeg-decoder.mp4             decoded
+ok    export/mp4-maximum.mp4                    decoded
+ok    export/mp4-native-60.mp4                  decoded
+ok    export/mp4-potato.mp4                     decoded
+ok    export/mp4-social.mp4                     decoded
+ok    export/mp4-software.mp4                   bytes
+ok    export/mp4-web.mp4                        decoded
+ok    export/rich-software.mp4                  bytes
+ok    export/rich-studio-sound-speed-music.mp4  decoded
+ok    export/tracks                             bytes, decoded
+ok    import/animated.gif                       bytes
+ok    import/av1-opus.mp4                       bytes, decoded
+ok    import/av1-opus.webm                      bytes, decoded
+ok    import/bitmap.bmp                         bytes
+ok    import/cinepak-pcm.avi                    bytes, decoded
+ok    import/dnxhr-pcm.mov                      bytes, decoded
+ok    import/ffv1-pcm.mkv                       bytes, decoded
+ok    import/flv1-mp3.flv                       bytes, decoded
+ok    import/gray.jpg                           bytes
+ok    import/gray.png                           bytes
+ok    import/h264-10bit.mkv                     bytes, decoded
+ok    import/h264-aac.flv                       bytes, decoded
+ok    import/h264-aac.m4v                       bytes, decoded
+ok    import/h264-aac.mp4                       bytes, decoded
+ok    import/h264-alac.mov                      bytes, decoded
+ok    import/h264-eac3.mkv                      bytes, decoded
+ok    import/h264-flac.mkv                      bytes, decoded
+ok    import/h264-high444.mp4                   bytes, decoded
+ok    import/h264-noaudio.mp4                   bytes, decoded
+ok    import/h264-odd.mp4                       bytes, decoded
+ok    import/h264-rotated.mp4                   bytes, decoded
+ok    import/h264-vfr.mp4                       bytes, decoded
+ok    import/hevc-aac.mp4                       bytes, decoded
+ok    import/hevc-opus.mkv                      bytes, decoded
+ok    import/hevc10-aac.mov                     bytes, decoded
+ok    import/lossless-alpha.webp                bytes
+ok    import/lossy.webp                         bytes
+ok    import/lzw.tif                            bytes
+ok    import/mjpeg-pcm.avi                      bytes, decoded
+ok    import/mjpeg-pcm.mov                      bytes, decoded
+ok    import/mpeg2-ac3.mkv                      bytes, decoded
+ok    import/mpeg4-mp3.avi                      bytes, decoded
+ok    import/mpeg4-mp3.mp4                      bytes, decoded
+ok    import/msmpeg4-mp3.avi                    bytes, decoded
+ok    import/photo.jpeg                         bytes
+ok    import/photo.jpg                          bytes
+ok    import/prores-pcm.mov                     bytes, decoded
+ok    import/prores4444-alpha.mov               bytes, decoded
+ok    import/qtrle-pcm.mov                      bytes, decoded
+ok    import/raw.tiff                           bytes
+ok    import/rgb.png                            bytes
+ok    import/rgb48.png                          bytes
+ok    import/rgb48.tiff                         bytes
+ok    import/rgba.bmp                           bytes
+ok    import/rgba.png                           bytes
+ok    import/still.gif                          bytes
+ok    import/vp8-vorbis.webm                    bytes, decoded
+ok    import/vp9-alpha.webm                     bytes, decoded
+ok    import/vp9-opus.webm                      bytes, decoded
+ok    import/vp9-vorbis.mkv                     bytes, decoded
+ok    import/wmv1-wmav2.wmv                     bytes, decoded
+ok    import/wmv2-wmav2.wmv                     bytes, decoded
+note  record/instant                            same failure: base error: No target specified; pass --screen <id> or --window <id> (see `cap targets`)
+note  record/studio                             same failure: base error: No target specified; pass --screen <id> or --window <id> (see `cap targets`)
+
+95/95 match (0 regressions)

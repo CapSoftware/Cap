@@ -1,0 +1,30 @@
+[2m2026-11-24T11:12:17.831103Z[0m [32m INFO[0m [2mcap_gpui::startup[0m[2m:[0m Cap starting [3mversion[0m[2m=[0m"0.6.3" [3mpid[0m[2m=[0m18812 [3mexecutable[0m[2m=[0m/Users/runner/_work/_temp/sides/head/bin/cap-gpui
+[2m2026-11-24T11:12:17.831595Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_exception_guard[0m[2m:[0m guarded the Touch Bar finder's observation teardown
+[2m2026-11-24T11:12:17.859469Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m dock icon set [3mfrom_installed_app[0m[2m=[0mfalse
+[2m2026-11-24T11:12:17.892142Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item icon set [3micon[0m[2m=[0m"instant" [3mbytes[0m[2m=[0m2747
+[2m2026-11-24T11:12:17.892178Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item created [3mhas_button[0m[2m=[0mtrue [3mvisible[0m[2m=[0mtrue [3mwidth[0m[2m=[0m34.0 [3mheight[0m[2m=[0m22.0 [3mmode[0m[2m=[0mInstant
+[2m2026-11-24T11:12:17.892264Z[0m [32m INFO[0m [2mcap_gpui::tray::mac_mode_picker[0m[2m:[0m key hook installed
+[2m2026-11-24T11:12:17.895742Z[0m [32m INFO[0m [2mcap_gpui::hotkeys[0m[2m:[0m global hotkeys registered [3mcount[0m[2m=[0m0
+[2m2026-11-24T11:12:17.896922Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIWindow
+[2m2026-11-24T11:12:17.896953Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIPanel
+[2m2026-11-24T11:12:17.896960Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIWindow
+[2m2026-11-24T11:12:17.896968Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIPanel
+[2m2026-11-24T11:12:17.897705Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m main window opened [3mnumber[0m[2m=[0m1736
+[2m2026-11-24T11:12:17.897732Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m starting audio import [3msource[0m[2m=[0m/Users/runner/_work/Cap/Cap/scripts/ffmpeg-probe/corpus/audio/vbr44.mp3
+[2m2026-11-24T11:12:17.915903Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m installed main window material [3mkind[0m[2m=[0mVibrancy
+[2m2026-11-24T11:12:17.939747Z[0m [32m INFO[0m [2mcap_gpui::audio_project[0m[2m:[0m created audio-only project [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/audio-vbr44.mp3-mp3/recordings/vbr44 2026-11-24 at 11.12.17.cap
+[2m2026-11-24T11:12:17.952268Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor window opened [3mnumber[0m[2m=[0m1744 [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/audio-vbr44.mp3-mp3/recordings/vbr44 2026-11-24 at 11.12.17.cap
+[2m2026-11-24T11:12:17.952312Z[0m [32m INFO[0m [2mcap_gpui::feeds[0m[2m:[0m camera preview parked
+[2m2026-11-24T11:12:17.962781Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m main window hidden
+[2m2026-11-24T11:12:17.965023Z[0m [32m INFO[0m [2mcap_gpui::main_window[0m[2m:[0m enumerated capture devices [3mcameras[0m[2m=[0m0 [3mmicrophones[0m[2m=[0m0 [3mdisplays[0m[2m=[0m1 [3mwindows[0m[2m=[0m0
+[2m2026-11-24T11:12:17.966937Z[0m [33m WARN[0m [2mcap_gpui::tray::mac[0m[2m:[0m no thumbnail for a previous row [3mtitle[0m[2m=[0m🎬 vbr44 2026-11-24 at 11.12.17
+[2m2026-11-24T11:12:18.085111Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m shared wgpu device ready [3melapsed_ms[0m[2m=[0m132.713625 [3msoftware[0m[2m=[0mfalse
+[2m2026-11-24T11:12:18.998678Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor project validated [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/audio-vbr44.mp3-mp3/recordings/vbr44 2026-11-24 at 11.12.17.cap [3mclips[0m[2m=[0m1 [3mduration[0m[2m=[0m"3.030" [3mcamera[0m[2m=[0mfalse [3mcursor[0m[2m=[0mfalse
+[2m2026-11-24T11:12:18.998728Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"3.030" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:12:19.023295Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor instance ready [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/audio-vbr44.mp3-mp3/recordings/vbr44 2026-11-24 at 11.12.17.cap
+[2m2026-11-24T11:12:19.023335Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"3.030" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:12:19.035430Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor waveforms ready [3mmic[0m[2m=[0m1 [3msystem[0m[2m=[0m0
+[2m2026-11-24T11:12:19.109924Z[0m [32m INFO[0m [2mcap_gpui::editor_window[0m[2m:[0m editor frame size [3moutput_size[0m[2m=[0m[1920, 1080] [3mdisplay[0m[2m=[0m[0.0, 0.0, 1920.0, 1080.0] [3mcamera[0m[2m=[0mNone [3mactive[0m[2m=[0mtrue
+[2m2026-11-24T11:12:19.344357Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m auto editor export requested [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/exports/audio-vbr44.mp3.mp3
+[2m2026-11-24T11:12:19.399787Z[0m [32m INFO[0m [2mcap_gpui::editor_export[0m[2m:[0m editor audio export completed [3mformat[0m[2m=[0m"mp3" [3mbytes[0m[2m=[0m74348 [3melapsed_ms[0m[2m=[0m53
+[2m2026-11-24T11:12:20.882679Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m launch render warmup finished [3mfonts_ms[0m[2m=[0m0.16924999999999998 [3mrenderer_ms[0m[2m=[0mNone

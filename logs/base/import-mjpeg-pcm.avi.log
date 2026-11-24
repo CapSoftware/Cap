@@ -1,0 +1,29 @@
+[2m2026-11-24T11:04:59.529293Z[0m [32m INFO[0m [2mcap_gpui::startup[0m[2m:[0m Cap starting [3mversion[0m[2m=[0m"0.6.3" [3mpid[0m[2m=[0m17524 [3mexecutable[0m[2m=[0m/Users/runner/_work/_temp/sides/base/bin/cap-gpui
+[2m2026-11-24T11:04:59.529785Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_exception_guard[0m[2m:[0m guarded the Touch Bar finder's observation teardown
+[2m2026-11-24T11:04:59.560128Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m dock icon set [3mfrom_installed_app[0m[2m=[0mfalse
+[2m2026-11-24T11:04:59.594621Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item icon set [3micon[0m[2m=[0m"instant" [3mbytes[0m[2m=[0m2747
+[2m2026-11-24T11:04:59.594668Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item created [3mhas_button[0m[2m=[0mtrue [3mvisible[0m[2m=[0mtrue [3mwidth[0m[2m=[0m34.0 [3mheight[0m[2m=[0m22.0 [3mmode[0m[2m=[0mInstant
+[2m2026-11-24T11:04:59.594785Z[0m [32m INFO[0m [2mcap_gpui::tray::mac_mode_picker[0m[2m:[0m key hook installed
+[2m2026-11-24T11:04:59.598329Z[0m [32m INFO[0m [2mcap_gpui::hotkeys[0m[2m:[0m global hotkeys registered [3mcount[0m[2m=[0m0
+[2m2026-11-24T11:04:59.599377Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIWindow
+[2m2026-11-24T11:04:59.599407Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIPanel
+[2m2026-11-24T11:04:59.599413Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIWindow
+[2m2026-11-24T11:04:59.599419Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIPanel
+[2m2026-11-24T11:04:59.600177Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m main window opened [3mnumber[0m[2m=[0m263
+[2m2026-11-24T11:04:59.600220Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m starting video import [3msource[0m[2m=[0m/Users/runner/_work/Cap/Cap/scripts/ffmpeg-probe/corpus/video/mjpeg-pcm.avi
+[2m2026-11-24T11:04:59.616909Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m installed main window material [3mkind[0m[2m=[0mVibrancy
+[2m2026-11-24T11:04:59.637443Z[0m [33m WARN[0m [2mcap_gpui::tray::mac[0m[2m:[0m no thumbnail for a previous row [3mtitle[0m[2m=[0m🎬 mjpeg-pcm 2026-11-24 at 11.04…
+[2m2026-11-24T11:04:59.668647Z[0m [32m INFO[0m [2mcap_gpui::main_window[0m[2m:[0m enumerated capture devices [3mcameras[0m[2m=[0m0 [3mmicrophones[0m[2m=[0m0 [3mdisplays[0m[2m=[0m1 [3mwindows[0m[2m=[0m0
+[2m2026-11-24T11:04:59.670065Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m import H264 encoder ready [3mencoder[0m[2m=[0m"h264_videotoolbox" [3mwidth[0m[2m=[0m320 [3mheight[0m[2m=[0m240 [3mfps[0m[2m=[0m30
+[2m2026-11-24T11:04:59.725787Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m import keeps only the re-encode [3mreason[0m[2m=[0m"container"
+[2m2026-11-24T11:04:59.733311Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m video import complete [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/import-mjpeg-pcm.avi/recordings/mjpeg-pcm 2026-11-24 at 11.04.59.cap
+[2m2026-11-24T11:04:59.745121Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor window opened [3mnumber[0m[2m=[0m271 [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/import-mjpeg-pcm.avi/recordings/mjpeg-pcm 2026-11-24 at 11.04.59.cap
+[2m2026-11-24T11:04:59.745184Z[0m [32m INFO[0m [2mcap_gpui::feeds[0m[2m:[0m camera preview parked
+[2m2026-11-24T11:04:59.762235Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m main window hidden
+[2m2026-11-24T11:04:59.777440Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor project validated [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/import-mjpeg-pcm.avi/recordings/mjpeg-pcm 2026-11-24 at 11.04.59.cap [3mclips[0m[2m=[0m1 [3mduration[0m[2m=[0m"2.000" [3mcamera[0m[2m=[0mfalse [3mcursor[0m[2m=[0mfalse
+[2m2026-11-24T11:04:59.777498Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"2.000" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:04:59.804035Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m shared wgpu device ready [3melapsed_ms[0m[2m=[0m58.75425 [3msoftware[0m[2m=[0mfalse
+[2m2026-11-24T11:04:59.828040Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor instance ready [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/import-mjpeg-pcm.avi/recordings/mjpeg-pcm 2026-11-24 at 11.04.59.cap
+[2m2026-11-24T11:04:59.828083Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"2.000" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:04:59.828518Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor waveforms ready [3mmic[0m[2m=[0m0 [3msystem[0m[2m=[0m1
+[2m2026-11-24T11:05:00.019678Z[0m [32m INFO[0m [2mcap_gpui::editor_window[0m[2m:[0m editor frame size [3moutput_size[0m[2m=[0m[1440, 1080] [3mdisplay[0m[2m=[0m[0.0, 0.0, 1440.0, 1080.0] [3mcamera[0m[2m=[0mNone [3mactive[0m[2m=[0mtrue

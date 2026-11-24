@@ -1,0 +1,29 @@
+[2m2026-11-24T11:09:53.351369Z[0m [32m INFO[0m [2mcap_gpui::startup[0m[2m:[0m Cap starting [3mversion[0m[2m=[0m"0.6.3" [3mpid[0m[2m=[0m18567 [3mexecutable[0m[2m=[0m/Users/runner/_work/_temp/sides/head/bin/cap-gpui
+[2m2026-11-24T11:09:53.351898Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_exception_guard[0m[2m:[0m guarded the Touch Bar finder's observation teardown
+[2m2026-11-24T11:09:53.381161Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m dock icon set [3mfrom_installed_app[0m[2m=[0mfalse
+[2m2026-11-24T11:09:53.414575Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item icon set [3micon[0m[2m=[0m"instant" [3mbytes[0m[2m=[0m2747
+[2m2026-11-24T11:09:53.414604Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item created [3mhas_button[0m[2m=[0mtrue [3mvisible[0m[2m=[0mtrue [3mwidth[0m[2m=[0m34.0 [3mheight[0m[2m=[0m22.0 [3mmode[0m[2m=[0mInstant
+[2m2026-11-24T11:09:53.414716Z[0m [32m INFO[0m [2mcap_gpui::tray::mac_mode_picker[0m[2m:[0m key hook installed
+[2m2026-11-24T11:09:53.418656Z[0m [32m INFO[0m [2mcap_gpui::hotkeys[0m[2m:[0m global hotkeys registered [3mcount[0m[2m=[0m0
+[2m2026-11-24T11:09:53.419936Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIWindow
+[2m2026-11-24T11:09:53.419971Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIPanel
+[2m2026-11-24T11:09:53.419978Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIWindow
+[2m2026-11-24T11:09:53.419983Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIPanel
+[2m2026-11-24T11:09:53.420797Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m main window opened [3mnumber[0m[2m=[0m1251
+[2m2026-11-24T11:09:53.420928Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m starting video import [3msource[0m[2m=[0m/Users/runner/_work/Cap/Cap/scripts/ffmpeg-probe/corpus/video/vp9-alpha.webm
+[2m2026-11-24T11:09:53.438612Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m installed main window material [3mkind[0m[2m=[0mVibrancy
+[2m2026-11-24T11:09:53.452514Z[0m [33m WARN[0m [2mcap_gpui::tray::mac[0m[2m:[0m no thumbnail for a previous row [3mtitle[0m[2m=[0m🎬 vp9-alpha 2026-11-24 at 11.09…
+[2m2026-11-24T11:09:53.491459Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m import H264 encoder ready [3mencoder[0m[2m=[0m"h264_videotoolbox" [3mwidth[0m[2m=[0m320 [3mheight[0m[2m=[0m240 [3mfps[0m[2m=[0m30
+[2m2026-11-24T11:09:53.493914Z[0m [32m INFO[0m [2mcap_gpui::main_window[0m[2m:[0m enumerated capture devices [3mcameras[0m[2m=[0m0 [3mmicrophones[0m[2m=[0m0 [3mdisplays[0m[2m=[0m1 [3mwindows[0m[2m=[0m0
+[2m2026-11-24T11:09:53.546619Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m import keeps only the re-encode [3mreason[0m[2m=[0m"container"
+[2m2026-11-24T11:09:53.553333Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m video import complete [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/import-vp9-alpha.webm/recordings/vp9-alpha 2026-11-24 at 11.09.53.cap
+[2m2026-11-24T11:09:53.574270Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor window opened [3mnumber[0m[2m=[0m1259 [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/import-vp9-alpha.webm/recordings/vp9-alpha 2026-11-24 at 11.09.53.cap
+[2m2026-11-24T11:09:53.574315Z[0m [32m INFO[0m [2mcap_gpui::feeds[0m[2m:[0m camera preview parked
+[2m2026-11-24T11:09:53.585064Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m shared wgpu device ready [3melapsed_ms[0m[2m=[0m10.667541 [3msoftware[0m[2m=[0mfalse
+[2m2026-11-24T11:09:53.592928Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m main window hidden
+[2m2026-11-24T11:09:53.605174Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor project validated [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/import-vp9-alpha.webm/recordings/vp9-alpha 2026-11-24 at 11.09.53.cap [3mclips[0m[2m=[0m1 [3mduration[0m[2m=[0m"2.000" [3mcamera[0m[2m=[0mfalse [3mcursor[0m[2m=[0mfalse
+[2m2026-11-24T11:09:53.605216Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"2.000" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:09:53.627865Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor instance ready [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/import-vp9-alpha.webm/recordings/vp9-alpha 2026-11-24 at 11.09.53.cap
+[2m2026-11-24T11:09:53.627908Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"2.000" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:09:53.628351Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor waveforms ready [3mmic[0m[2m=[0m0 [3msystem[0m[2m=[0m1
+[2m2026-11-24T11:09:53.817730Z[0m [32m INFO[0m [2mcap_gpui::editor_window[0m[2m:[0m editor frame size [3moutput_size[0m[2m=[0m[1440, 1080] [3mdisplay[0m[2m=[0m[0.0, 0.0, 1440.0, 1080.0] [3mcamera[0m[2m=[0mNone [3mactive[0m[2m=[0mtrue

@@ -1,0 +1,30 @@
+[2m2026-11-24T11:06:09.905166Z[0m [32m INFO[0m [2mcap_gpui::startup[0m[2m:[0m Cap starting [3mversion[0m[2m=[0m"0.6.3" [3mpid[0m[2m=[0m17807 [3mexecutable[0m[2m=[0m/Users/runner/_work/_temp/sides/base/bin/cap-gpui
+[2m2026-11-24T11:06:09.905726Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_exception_guard[0m[2m:[0m guarded the Touch Bar finder's observation teardown
+[2m2026-11-24T11:06:09.934586Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m dock icon set [3mfrom_installed_app[0m[2m=[0mfalse
+[2m2026-11-24T11:06:09.968299Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item icon set [3micon[0m[2m=[0m"instant" [3mbytes[0m[2m=[0m2747
+[2m2026-11-24T11:06:09.968336Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item created [3mhas_button[0m[2m=[0mtrue [3mvisible[0m[2m=[0mtrue [3mwidth[0m[2m=[0m34.0 [3mheight[0m[2m=[0m22.0 [3mmode[0m[2m=[0mInstant
+[2m2026-11-24T11:06:09.968434Z[0m [32m INFO[0m [2mcap_gpui::tray::mac_mode_picker[0m[2m:[0m key hook installed
+[2m2026-11-24T11:06:09.971741Z[0m [32m INFO[0m [2mcap_gpui::hotkeys[0m[2m:[0m global hotkeys registered [3mcount[0m[2m=[0m0
+[2m2026-11-24T11:06:09.972847Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIWindow
+[2m2026-11-24T11:06:09.972870Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIPanel
+[2m2026-11-24T11:06:09.972876Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIWindow
+[2m2026-11-24T11:06:09.972881Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIPanel
+[2m2026-11-24T11:06:09.973602Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m main window opened [3mnumber[0m[2m=[0m624
+[2m2026-11-24T11:06:09.973633Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m starting audio import [3msource[0m[2m=[0m/Users/runner/_work/Cap/Cap/scripts/ffmpeg-probe/corpus/audio/adts.aac
+[2m2026-11-24T11:06:09.997958Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m installed main window material [3mkind[0m[2m=[0mVibrancy
+[2m2026-11-24T11:06:10.030975Z[0m [32m INFO[0m [2mcap_gpui::audio_project[0m[2m:[0m created audio-only project [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/audio-adts.aac-mp3/recordings/adts 2026-11-24 at 11.06.09.cap
+[2m2026-11-24T11:06:10.042749Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor window opened [3mnumber[0m[2m=[0m632 [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/audio-adts.aac-mp3/recordings/adts 2026-11-24 at 11.06.09.cap
+[2m2026-11-24T11:06:10.042797Z[0m [32m INFO[0m [2mcap_gpui::feeds[0m[2m:[0m camera preview parked
+[2m2026-11-24T11:06:10.062367Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m main window hidden
+[2m2026-11-24T11:06:10.062756Z[0m [32m INFO[0m [2mcap_gpui::main_window[0m[2m:[0m enumerated capture devices [3mcameras[0m[2m=[0m0 [3mmicrophones[0m[2m=[0m0 [3mdisplays[0m[2m=[0m1 [3mwindows[0m[2m=[0m0
+[2m2026-11-24T11:06:10.065207Z[0m [33m WARN[0m [2mcap_gpui::tray::mac[0m[2m:[0m no thumbnail for a previous row [3mtitle[0m[2m=[0m🎬 adts 2026-11-24 at 11.06.09
+[2m2026-11-24T11:06:10.071298Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor project validated [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/audio-adts.aac-mp3/recordings/adts 2026-11-24 at 11.06.09.cap [3mclips[0m[2m=[0m1 [3mduration[0m[2m=[0m"3.035" [3mcamera[0m[2m=[0mfalse [3mcursor[0m[2m=[0mfalse
+[2m2026-11-24T11:06:10.071318Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"3.035" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:06:10.165638Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m shared wgpu device ready [3melapsed_ms[0m[2m=[0m122.759042 [3msoftware[0m[2m=[0mfalse
+[2m2026-11-24T11:06:10.196936Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor instance ready [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/profiles/audio-adts.aac-mp3/recordings/adts 2026-11-24 at 11.06.09.cap
+[2m2026-11-24T11:06:10.196977Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor timeline model [3mrows[0m[2m=[0m2 [3mtrack_height[0m[2m=[0m44.0 [3mtotal[0m[2m=[0m"3.035" [3mclip[0m[2m=[0m1 [3mzoom[0m[2m=[0m0 [3mscene[0m[2m=[0m0 [3mthree_d[0m[2m=[0m0 [3mtext[0m[2m=[0m0 [3mmask[0m[2m=[0m0 [3maudio[0m[2m=[0m0 [3mcaption[0m[2m=[0m0 [3mkeyboard[0m[2m=[0m0
+[2m2026-11-24T11:06:10.209584Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m editor waveforms ready [3mmic[0m[2m=[0m1 [3msystem[0m[2m=[0m0
+[2m2026-11-24T11:06:10.280306Z[0m [32m INFO[0m [2mcap_gpui::editor_window[0m[2m:[0m editor frame size [3moutput_size[0m[2m=[0m[1920, 1080] [3mdisplay[0m[2m=[0m[0.0, 0.0, 1920.0, 1080.0] [3mcamera[0m[2m=[0mNone [3mactive[0m[2m=[0mtrue
+[2m2026-11-24T11:06:10.509422Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m auto editor export requested [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/base/exports/audio-adts.aac.mp3
+[2m2026-11-24T11:06:10.566472Z[0m [32m INFO[0m [2mcap_gpui::editor_export[0m[2m:[0m editor audio export completed [3mformat[0m[2m=[0m"mp3" [3mbytes[0m[2m=[0m74924 [3melapsed_ms[0m[2m=[0m55
+[2m2026-11-24T11:06:12.965913Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m launch render warmup finished [3mfonts_ms[0m[2m=[0m0.181291 [3mrenderer_ms[0m[2m=[0mNone

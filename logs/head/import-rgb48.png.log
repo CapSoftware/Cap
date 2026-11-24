@@ -1,0 +1,19 @@
+[2m2026-11-24T11:10:22.671172Z[0m [32m INFO[0m [2mcap_gpui::startup[0m[2m:[0m Cap starting [3mversion[0m[2m=[0m"0.6.3" [3mpid[0m[2m=[0m18664 [3mexecutable[0m[2m=[0m/Users/runner/_work/_temp/sides/head/bin/cap-gpui
+[2m2026-11-24T11:10:22.671841Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_exception_guard[0m[2m:[0m guarded the Touch Bar finder's observation teardown
+[2m2026-11-24T11:10:22.699972Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m dock icon set [3mfrom_installed_app[0m[2m=[0mfalse
+[2m2026-11-24T11:10:22.732029Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item icon set [3micon[0m[2m=[0m"instant" [3mbytes[0m[2m=[0m2747
+[2m2026-11-24T11:10:22.732065Z[0m [32m INFO[0m [2mcap_gpui::tray::mac[0m[2m:[0m status item created [3mhas_button[0m[2m=[0mtrue [3mvisible[0m[2m=[0mtrue [3mwidth[0m[2m=[0m34.0 [3mheight[0m[2m=[0m22.0 [3mmode[0m[2m=[0mInstant
+[2m2026-11-24T11:10:22.732152Z[0m [32m INFO[0m [2mcap_gpui::tray::mac_mode_picker[0m[2m:[0m key hook installed
+[2m2026-11-24T11:10:22.735518Z[0m [32m INFO[0m [2mcap_gpui::hotkeys[0m[2m:[0m global hotkeys registered [3mcount[0m[2m=[0m0
+[2m2026-11-24T11:10:22.736654Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIWindow
+[2m2026-11-24T11:10:22.736678Z[0m [32m INFO[0m [2mcap_gpui::platform::macos_occlusion[0m[2m:[0m installed macOS occlusion shim [3mname[0m[2m=[0mGPUIPanel
+[2m2026-11-24T11:10:22.736684Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIWindow
+[2m2026-11-24T11:10:22.736690Z[0m [32m INFO[0m [2mcap_gpui::platform::mac[0m[2m:[0m installed frame-constraint shim on GPUIPanel
+[2m2026-11-24T11:10:22.737423Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m main window opened [3mnumber[0m[2m=[0m1421
+[2m2026-11-24T11:10:22.737467Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m starting image import [3msource[0m[2m=[0m/Users/runner/_work/Cap/Cap/scripts/ffmpeg-probe/corpus/image/rgb48.png
+[2m2026-11-24T11:10:22.753990Z[0m [32m INFO[0m [2mcap_gpui[0m[2m:[0m installed main window material [3mkind[0m[2m=[0mVibrancy
+[2m2026-11-24T11:10:22.754246Z[0m [32m INFO[0m [2mcap_gpui::import[0m[2m:[0m image import complete [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/import-rgb48.png/screenshots/rgb48 2026-11-24 at 11.10.22.cap
+[2m2026-11-24T11:10:22.774088Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m screenshot editor window opened [3mnumber[0m[2m=[0m1428 [3mpath[0m[2m=[0m/Users/runner/_work/_temp/ffmpeg-probe/head/profiles/import-rgb48.png/screenshots/rgb48 2026-11-24 at 11.10.22.cap
+[2m2026-11-24T11:10:22.792229Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m main window hidden
+[2m2026-11-24T11:10:22.800563Z[0m [32m INFO[0m [2mcap_gpui::main_window[0m[2m:[0m enumerated capture devices [3mcameras[0m[2m=[0m0 [3mmicrophones[0m[2m=[0m0 [3mdisplays[0m[2m=[0m1 [3mwindows[0m[2m=[0m0
+[2m2026-11-24T11:10:22.907434Z[0m [32m INFO[0m [2mcap_gpui::app_windows[0m[2m:[0m shared wgpu device ready [3melapsed_ms[0m[2m=[0m133.280833 [3msoftware[0m[2m=[0mfalse
