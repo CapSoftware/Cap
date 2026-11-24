@@ -1191,7 +1191,8 @@ impl RecordingSession {
         self.limit_monitor = None;
         let generation = self.recording_generation;
         let task = cx.spawn(async move |this, cx| {
-            let mut wait = limit;
+            let mut plan_checked = false;
+            let mut wait = limit.saturating_sub(PLAN_CHECK_BEFORE_LIMIT);
             loop {
                 cx.background_executor()
                     .timer(wait.max(Duration::from_millis(50)))
@@ -1219,7 +1220,18 @@ impl RecordingSession {
                 let Some(left) = next else {
                     return;
                 };
-                wait = left;
+                if !plan_checked && left <= PLAN_CHECK_BEFORE_LIMIT {
+                    // An upgrade made elsewhere mid-recording only reaches the
+                    // app through a plan fetch, so one runs shortly before the
+                    // limit; the stop itself never waits on the network.
+                    plan_checked = true;
+                    gpui_tokio::Tokio::spawn(cx, crate::auth::update_auth_plan()).detach();
+                }
+                wait = if plan_checked {
+                    left
+                } else {
+                    left.saturating_sub(PLAN_CHECK_BEFORE_LIMIT)
+                };
             }
         });
         self.limit_monitor = Some(task);
@@ -3173,6 +3185,9 @@ mod studio_editor_presentation_tests {
         assert_eq!(state, StudioEditorPresentation::Dismissed);
     }
 }
+
+/// How long before the recording limit the plan is fetched again.
+const PLAN_CHECK_BEFORE_LIMIT: Duration = Duration::from_secs(15);
 
 /// The server only sets a recording limit for a free account, so a Pro plan
 /// saved before the recording started is out of date. Only a plan fetched
