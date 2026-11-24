@@ -140,18 +140,42 @@ describe("free plan measured duration", () => {
 		await expect(getFreePlanDurationLimit(video())).resolves.toBeNull();
 	});
 
+	const beforeCutoff = new Date(
+		FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM.getTime() - 1,
+	);
+
+	it("limits every source type it processes", async () => {
+		mocks.rows = [[free], [free], []];
+		await expect(
+			getFreePlanDurationLimit(video({ source: { type: "desktopMP4" } })),
+		).resolves.toBe(330);
+	});
+
+	it("leaves an older video alone unless its upload is new", async () => {
+		mocks.rows = [[{ startedAt: beforeCutoff }]];
+		await expect(
+			getFreePlanDurationLimit(video({ createdAt: beforeCutoff })),
+		).resolves.toBeNull();
+		expect(mocks.queries).toBe(1);
+
+		mocks.rows = [[]];
+		await expect(
+			getFreePlanDurationLimit(video({ createdAt: beforeCutoff })),
+		).resolves.toBeNull();
+
+		mocks.rows = [
+			[{ startedAt: FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM }],
+			[free],
+			[free],
+			[],
+		];
+		await expect(
+			getFreePlanDurationLimit(video({ createdAt: beforeCutoff })),
+		).resolves.toBe(330);
+	});
+
 	it.each([
 		["self-hosted deployments", {}, undefined],
-		[
-			"videos created before the limit was measured",
-			{
-				createdAt: new Date(
-					FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM.getTime() - 1,
-				),
-			},
-			"true",
-		],
-		["desktop recordings", { source: { type: "desktopMP4" } }, "true"],
 		[
 			"Loom originals",
 			{

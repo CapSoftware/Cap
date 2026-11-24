@@ -1,5 +1,10 @@
 import { db } from "@cap/database";
-import { importedVideos, organizations, users } from "@cap/database/schema";
+import {
+	importedVideos,
+	organizations,
+	users,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import { type Organisation, type User, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
@@ -11,8 +16,8 @@ export const FREE_PLAN_DURATION_GRACE_SECONDS = 30;
 export const FREE_PLAN_MAX_MEASURED_SECONDS =
 	Video.FREE_PLAN_MAX_RECORDING_SECONDS + FREE_PLAN_DURATION_GRACE_SECONDS;
 
-// Videos created before this date are never measured against the limit, so
-// reprocessing an older upload cannot remove it.
+// Content uploaded before this date is never held by the limit, so
+// reprocessing an older upload cannot hold it.
 export const FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM = new Date(
 	"2026-11-23T00:00:00.000Z",
 );
@@ -115,6 +120,20 @@ export async function getFreePlanRecordingLimit(
 	return Video.FREE_PLAN_MAX_RECORDING_SECONDS;
 }
 
+// An upload started on or after this date is new content, even for an
+// older video.
+async function hasUploadSince(
+	videoId: Video.VideoId,
+	since: Date,
+): Promise<boolean> {
+	const [upload] = await db()
+		.select({ startedAt: videoUploads.startedAt })
+		.from(videoUploads)
+		.where(eq(videoUploads.videoId, videoId))
+		.limit(1);
+	return upload !== undefined && upload.startedAt >= since;
+}
+
 // The longest output a processing job may write for this video, or null when
 // the free plan limit does not apply. Pro is decided like multipart uploads
 // and dashboard imports: the video owner or the organization owner being Pro
@@ -123,15 +142,14 @@ export async function getFreePlanDurationLimit(video: {
 	id: Video.VideoId;
 	ownerId: User.UserId;
 	orgId: Organisation.OrganisationId;
-	source: { type: string };
 	createdAt: Date;
 	metadata?: { loomDeferredProcessing?: unknown } | null;
 }): Promise<number | null> {
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP || video.metadata?.loomDeferredProcessing)
+		return null;
 	if (
-		!buildEnv.NEXT_PUBLIC_IS_CAP ||
-		video.source.type !== "webMP4" ||
-		video.createdAt < FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM ||
-		video.metadata?.loomDeferredProcessing
+		video.createdAt < FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM &&
+		!(await hasUploadSince(video.id, FREE_PLAN_MEASURED_DURATION_ENFORCED_FROM))
 	)
 		return null;
 
