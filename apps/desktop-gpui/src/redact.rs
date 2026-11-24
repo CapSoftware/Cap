@@ -1,13 +1,16 @@
 //! Auto redact's background work: fetching the text model once, then
 //! analysing the recording on a thread of its own while the editor shows
-//! what has been found so far.
+//! what has been found so far. A recording has at most one scan: an editor
+//! that opens while one runs (started when the recording stopped) watches it
+//! instead of starting another.
 
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex, PoisonError, Weak,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -147,8 +150,33 @@ pub enum JobPhase {
 struct Shared {
     phase: JobPhase,
     progress: f32,
+    /// Each display video's length, for the progress fraction; the editor
+    /// supplies them when it attaches to a scan started without one.
+    durations: Option<Vec<f64>>,
     snapshot: Option<Arc<Redactions>>,
     snapshot_generation: u64,
+}
+
+struct Scan {
+    project: PathBuf,
+    shared: Mutex<Shared>,
+    cancel: Arc<AtomicBool>,
+    /// Started for a recording that just finished: it runs to the end even
+    /// when no editor watches it.
+    background: AtomicBool,
+    watchers: AtomicUsize,
+}
+
+impl Scan {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+static SCANS: LazyLock<Mutex<HashMap<PathBuf, Weak<Scan>>>> = LazyLock::new(Default::default);
+
+fn scan_key(project: &Path) -> PathBuf {
+    std::fs::canonicalize(project).unwrap_or_else(|_| project.to_path_buf())
 }
 
 /// What the editor reads back on each poll.
@@ -158,53 +186,26 @@ pub struct JobUpdate {
     pub snapshot: Option<Arc<Redactions>>,
 }
 
+/// An editor's handle on a recording's scan.
 pub struct RedactJob {
-    shared: Arc<Mutex<Shared>>,
-    cancel: Arc<AtomicBool>,
+    scan: Arc<Scan>,
     seen_generation: u64,
 }
 
 impl RedactJob {
-    /// Starts analysing `project`, whose display videos last `durations`
-    /// seconds each, on a background thread.
-    pub fn start(project: PathBuf, durations: Vec<f64>) -> Self {
-        let shared = Arc::new(Mutex::new(Shared {
-            phase: JobPhase::Preparing,
-            progress: 0.0,
-            snapshot: None,
-            snapshot_generation: 0,
-        }));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let thread_shared = shared.clone();
-        let thread_cancel = cancel.clone();
-        let spawned = std::thread::Builder::new()
-            .name("cap-auto-redact".into())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                let result = run(&project, &durations, &thread_shared, &thread_cancel);
-                let mut shared = thread_shared.lock().unwrap_or_else(PoisonError::into_inner);
-                shared.phase = match result {
-                    Ok(()) => JobPhase::Done,
-                    Err(_) if thread_cancel.load(Ordering::Relaxed) => JobPhase::Cancelled,
-                    Err(error) => {
-                        tracing::warn!(%error, "Auto redact analysis failed");
-                        JobPhase::Failed(format!("{error:#}"))
-                    }
-                };
-            });
-        if let Err(error) = spawned {
-            shared.lock().unwrap_or_else(PoisonError::into_inner).phase =
-                JobPhase::Failed(error.to_string());
-        }
+    /// Watches the scan of `project`, starting one if none is running.
+    /// `durations` are the display videos' lengths in seconds.
+    pub fn attach_or_start(project: PathBuf, durations: Vec<f64>) -> Self {
+        let scan = scan_for(project, Some(durations), false);
+        scan.watchers.fetch_add(1, Ordering::AcqRel);
         Self {
-            shared,
-            cancel,
+            scan,
             seen_generation: 0,
         }
     }
 
     pub fn poll(&mut self) -> JobUpdate {
-        let shared = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        let shared = self.scan.lock();
         let snapshot = (shared.snapshot_generation != self.seen_generation)
             .then(|| shared.snapshot.clone())
             .flatten();
@@ -216,45 +217,187 @@ impl RedactJob {
         }
     }
 
+    /// Stops the scan, including one started when the recording stopped.
     pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        self.scan.background.store(false, Ordering::Release);
+        self.scan.cancel.store(true, Ordering::Relaxed);
     }
 }
 
 impl Drop for RedactJob {
     fn drop(&mut self) {
-        self.cancel();
+        let last = self.scan.watchers.fetch_sub(1, Ordering::AcqRel) == 1;
+        if last && !self.scan.background.load(Ordering::Acquire) {
+            self.scan.cancel.store(true, Ordering::Relaxed);
+        }
     }
 }
 
-fn run(
-    project: &Path,
-    durations: &[f64],
-    shared: &Arc<Mutex<Shared>>,
-    cancel: &Arc<AtomicBool>,
-) -> anyhow::Result<()> {
-    let model_dir = match installed_model_dir() {
+/// Scans a recording that just finished, at low priority, with no editor
+/// watching; an editor opened on it later attaches to this scan.
+pub fn start_background(project: PathBuf) {
+    scan_for(project, None, true);
+}
+
+/// Whether a scan of `project` is running now.
+#[cfg(test)]
+fn is_scanning(project: &Path) -> bool {
+    SCANS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&scan_key(project))
+        .and_then(Weak::upgrade)
+        .is_some_and(|scan| matches!(scan.lock().phase, JobPhase::Preparing | JobPhase::Scanning))
+}
+
+fn scan_for(project: PathBuf, durations: Option<Vec<f64>>, background: bool) -> Arc<Scan> {
+    let key = scan_key(&project);
+    let mut scans = SCANS.lock().unwrap_or_else(PoisonError::into_inner);
+    scans.retain(|_, scan| scan.strong_count() > 0);
+    if let Some(scan) = scans.get(&key).and_then(Weak::upgrade)
+        && !scan.cancel.load(Ordering::Relaxed)
+        && !matches!(scan.lock().phase, JobPhase::Failed(_) | JobPhase::Cancelled)
+    {
+        tracing::info!(background, "Auto redact joined the running scan");
+        if background {
+            scan.background.store(true, Ordering::Release);
+        }
+        if let Some(durations) = durations {
+            let mut shared = scan.lock();
+            if shared.durations.is_none() {
+                shared.durations = Some(durations);
+            }
+        }
+        return scan;
+    }
+    let scan = Arc::new(Scan {
+        project,
+        shared: Mutex::new(Shared {
+            phase: JobPhase::Preparing,
+            progress: 0.0,
+            durations,
+            snapshot: None,
+            snapshot_generation: 0,
+        }),
+        cancel: Arc::new(AtomicBool::new(false)),
+        background: AtomicBool::new(background),
+        watchers: AtomicUsize::new(0),
+    });
+    scans.insert(key, Arc::downgrade(&scan));
+    drop(scans);
+    tracing::info!(background, "Auto redact scan started");
+    let thread_scan = scan.clone();
+    let spawned = std::thread::Builder::new()
+        .name("cap-auto-redact".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            // Below the editor and the recorder, so playback and the next
+            // recording keep their frames; the model's worker threads start
+            // on this thread and inherit it on macOS and Linux.
+            crate::transcription::refine::lower_thread_priority();
+            let result = run(&thread_scan);
+            let cancelled = thread_scan.cancel.load(Ordering::Relaxed);
+            let mut shared = thread_scan.lock();
+            shared.phase = match result {
+                Ok(()) => JobPhase::Done,
+                Err(_) if cancelled => JobPhase::Cancelled,
+                Err(error) => {
+                    tracing::warn!(%error, "Auto redact analysis failed");
+                    JobPhase::Failed(format!("{error:#}"))
+                }
+            };
+        });
+    if let Err(error) = spawned {
+        scan.lock().phase = JobPhase::Failed(error.to_string());
+    }
+    scan
+}
+
+fn model_version(model_dir: Option<&Path>) -> String {
+    model_dir
+        .and_then(|dir| std::fs::read(dir.join("meta.json")).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|meta| meta.get("version")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| MODEL_VERSION.to_string())
+}
+
+fn first_frame_fingerprint(path: &Path) -> anyhow::Result<String> {
+    let mut frames = cap_redact::frames::FrameSource::open(path)?;
+    let mut first = None;
+    frames.for_each(|frames, frame| {
+        first = Some(frames.gray(&frame.video)?);
+        Ok(false)
+    })?;
+    let first = first.ok_or_else(|| anyhow::anyhow!("video has no frames"))?;
+    Ok(cap_redact::frames::fingerprint(path, &first))
+}
+
+/// The saved scan when it already covers every segment as recorded now,
+/// with this model, so opening the editor needs no model at all.
+fn reusable_scan(
+    previous: Option<&Redactions>,
+    sources: &[cap_redact::SegmentSource],
+    model: &str,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    if previous.model != model || !previous.is_complete() || sources.is_empty() {
+        return false;
+    }
+    sources.iter().all(|source| {
+        previous.segment(source.index).is_some_and(|segment| {
+            first_frame_fingerprint(&source.path)
+                .is_ok_and(|fingerprint| fingerprint == segment.fingerprint)
+        })
+    })
+}
+
+fn publish(scan: &Scan, snapshot: Redactions, progress: f32) {
+    let mut shared = scan.lock();
+    shared.progress = progress;
+    shared.snapshot = Some(Arc::new(snapshot));
+    shared.snapshot_generation += 1;
+}
+
+fn run(scan: &Scan) -> anyhow::Result<()> {
+    let project = scan.project.as_path();
+    let cancel = &scan.cancel;
+    let sources = cap_redact::segment_sources(project)?;
+    let previous = Redactions::load(project);
+    let installed = installed_model_dir();
+    if reusable_scan(
+        previous.as_ref(),
+        &sources,
+        &model_version(installed.as_deref()),
+    ) && let Some(previous) = previous.clone()
+    {
+        tracing::info!(
+            segments = sources.len(),
+            "Auto redact reused the saved scan"
+        );
+        publish(scan, previous, 1.0);
+        return Ok(());
+    }
+    let model_dir = match installed {
         Some(dir) => dir,
         None => download_model(cancel)?,
     };
     let mut model = cap_redact::OcrModel::load(&model_dir)?;
-    let sources = cap_redact::segment_sources(project)?;
-    let previous = Redactions::load(project);
-    let total: f64 = durations.iter().sum::<f64>().max(1e-3);
     let mut stats = cap_redact::Stats::default();
-    shared.lock().unwrap_or_else(PoisonError::into_inner).phase = JobPhase::Scanning;
+    scan.lock().phase = JobPhase::Scanning;
     let mut analyzer = cap_redact::Analyzer::new(&mut model);
     analyzer.cancel = cancel.clone();
     let result = analyzer.analyze(
         &sources,
         previous.as_ref(),
         |progress| {
-            let before: f64 = durations.iter().take(progress.segment as usize).sum();
-            let fraction = ((before + progress.source_time) / total).clamp(0.0, 1.0) as f32;
-            let mut shared = shared.lock().unwrap_or_else(PoisonError::into_inner);
-            shared.progress = fraction;
-            shared.snapshot = Some(Arc::new(progress.snapshot.clone()));
-            shared.snapshot_generation += 1;
+            let fraction = scan.lock().durations.as_ref().map_or(0.0, |durations| {
+                let before: f64 = durations.iter().take(progress.segment as usize).sum();
+                let total: f64 = durations.iter().sum::<f64>().max(1e-3);
+                ((before + progress.source_time) / total).clamp(0.0, 1.0) as f32
+            });
+            publish(scan, progress.snapshot.clone(), fraction);
         },
         &mut stats,
     )?;
@@ -263,13 +406,109 @@ fn run(
         .map_err(|error| anyhow::anyhow!("save {}: {error}", REDACTIONS_FILE))?;
     tracing::info!(
         regions = result.regions.len(),
+        frames = stats.frames,
         seconds = stats.total.as_secs_f64(),
         source_seconds = stats.source_seconds,
         "Auto redact analysis finished"
     );
-    let mut shared = shared.lock().unwrap_or_else(PoisonError::into_inner);
-    shared.progress = 1.0;
-    shared.snapshot = Some(Arc::new(result));
-    shared.snapshot_generation += 1;
+    publish(scan, result, 1.0);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_scan(project: &Path, background: bool) -> Arc<Scan> {
+        let scan = Arc::new(Scan {
+            project: project.to_path_buf(),
+            shared: Mutex::new(Shared {
+                phase: JobPhase::Scanning,
+                progress: 0.25,
+                durations: None,
+                snapshot: None,
+                snapshot_generation: 0,
+            }),
+            cancel: Arc::new(AtomicBool::new(false)),
+            background: AtomicBool::new(background),
+            watchers: AtomicUsize::new(0),
+        });
+        SCANS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(scan_key(project), Arc::downgrade(&scan));
+        scan
+    }
+
+    /// An editor opened on a recording whose scan is already running
+    /// watches that scan, hands it the durations it lacked, and leaves it
+    /// running when it closes; an editor-started scan stops with its editor.
+    #[test]
+    fn editor_attaches_to_a_running_background_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = test_scan(dir.path(), true);
+        let job = RedactJob::attach_or_start(dir.path().to_path_buf(), vec![12.0]);
+        assert!(Arc::ptr_eq(&job.scan, &running));
+        assert_eq!(running.lock().durations, Some(vec![12.0]));
+        assert!(is_scanning(dir.path()));
+        drop(job);
+        assert!(!running.cancel.load(Ordering::Relaxed));
+
+        let other = tempfile::tempdir().unwrap();
+        let editor_scan = test_scan(other.path(), false);
+        let job = RedactJob::attach_or_start(other.path().to_path_buf(), vec![3.0]);
+        assert!(Arc::ptr_eq(&job.scan, &editor_scan));
+        drop(job);
+        assert!(editor_scan.cancel.load(Ordering::Relaxed));
+    }
+
+    /// Turning auto redact off in the editor stops a background scan too.
+    #[test]
+    fn cancel_stops_a_background_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = test_scan(dir.path(), true);
+        let job = RedactJob::attach_or_start(dir.path().to_path_buf(), vec![1.0]);
+        job.cancel();
+        drop(job);
+        assert!(running.cancel.load(Ordering::Relaxed));
+        assert!(!running.background.load(Ordering::Relaxed));
+    }
+
+    /// A saved scan is reused only when it is complete, made by this model,
+    /// and covers every segment.
+    #[test]
+    fn saved_scan_needs_this_model_and_every_segment() {
+        let complete = Redactions {
+            version: cap_project::redaction::REDACTIONS_VERSION,
+            model: "m1".into(),
+            segments: vec![cap_project::redaction::RedactionSegment {
+                index: 0,
+                source_frames: 30,
+                fps: 30.0,
+                width: 1920,
+                height: 1080,
+                fingerprint: "1-2-3".into(),
+                complete: true,
+            }],
+            regions: Vec::new(),
+            scanner: 0,
+        };
+        assert!(complete.is_complete());
+        assert!(!reusable_scan(None, &[], "m1"));
+        assert!(!reusable_scan(Some(&complete), &[], "m1"));
+        let source = cap_redact::SegmentSource {
+            index: 0,
+            path: PathBuf::from("/nonexistent/display.mp4"),
+        };
+        assert!(!reusable_scan(
+            Some(&complete),
+            std::slice::from_ref(&source),
+            "m1"
+        ));
+        assert!(!reusable_scan(
+            Some(&complete),
+            std::slice::from_ref(&source),
+            "m2"
+        ));
+    }
 }
