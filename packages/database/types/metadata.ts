@@ -6,6 +6,12 @@
  * Video metadata structure
  */
 export interface VideoMetadata {
+	freePlanMeasure?: {
+		key: string;
+		seconds: number | null;
+		at: string;
+	};
+	freePlanUploadOpenUntil?: string;
 	loomImportRun?: {
 		runId: string;
 		dispatch: "pending" | "accepted" | "rejected" | "uncertain";

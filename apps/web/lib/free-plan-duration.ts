@@ -80,7 +80,7 @@ export function exceedsFreePlanMeasuredDuration(
 	return seconds !== null && seconds > FREE_PLAN_MAX_MEASURED_SECONDS;
 }
 
-async function ownerOrOrganizationHasPro(
+export async function ownerOrOrganizationHasPro(
 	ownerId: User.UserId,
 	orgId: Organisation.OrganisationId,
 ): Promise<boolean> {
