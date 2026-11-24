@@ -43,14 +43,27 @@ export type FreePlanMeasureOutcome =
 const SKIPPED: FreePlanMeasureOutcome = { kind: "skipped" };
 const UNMEASURED: FreePlanMeasureOutcome = { kind: "unmeasurable" };
 
-// A video has a handful of playable files, so probing more distinct files of
-// one video than this in the window means someone is making names up.
+// Beyond a video's own files, probing more distinct files of one video than
+// this in the window means someone is making names up.
 const MAX_FILES_PER_VIDEO = 4;
 const FILES_PER_VIDEO_WINDOW_MS = 10 * 60_000;
 const MAX_TRACKED_VIDEOS = 5_000;
 
 const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
 const probedFiles = new Map<string, { keys: Set<string>; until: number }>();
+
+// The files a video itself plays: its MP4 output and its raw upload.
+function isVideosOwnFile(
+	video: typeof videos.$inferSelect,
+	key: string,
+): boolean {
+	const prefix = `${video.ownerId}/${video.id}/`;
+	return (
+		key === `${prefix}result.mp4` ||
+		key.startsWith(`${prefix}raw-upload.`) ||
+		("outputKey" in video.source && key === video.source.outputKey)
+	);
+}
 
 // Whether this file may be probed now for this video; counts it if so.
 function admitFile(videoId: string, key: string): boolean {
@@ -136,7 +149,8 @@ async function measureNow(
 		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return SKIPPED;
 		const video = await loadLimitedVideo(videoId, { anyAge });
 		if (!video) return SKIPPED;
-		if (!admitFile(videoId, key)) return UNMEASURED;
+		if (!isVideosOwnFile(video, key) && !admitFile(videoId, key))
+			return UNMEASURED;
 		const outcome = await probeStoredObject(video, key);
 		const id = objectKey(videoId, key);
 		if (outcome === "unavailable") {
