@@ -342,6 +342,10 @@ jobs:
       - name: Test desktop build preparation
         run: node --test scripts/prepare-gpui-dependency.test.mjs scripts/build-macos-packages.test.mjs scripts/bundle-gpui.test.mjs scripts/finalize-macos-packages.test.mjs
 
+      - name: Test the FFmpeg components shipped code uses
+        if: ${{ runner.os == 'Linux' }}
+        run: node --test scripts/ffmpeg/check-components.test.mjs
+
       - name: Test Linux packaging
         if: ${{ runner.os == 'Linux' }}
         run: node --test scripts/linux-bundle-config.test.mjs scripts/finalize-linux-appimage.test.mjs scripts/finalize-linux-gpui-packages.test.mjs
