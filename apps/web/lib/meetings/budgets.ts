@@ -68,6 +68,47 @@ export async function consumeMeetingRequestBudget(
 	return { limited: false };
 }
 
+// Notes and Ask send the meeting with every request. On top of the unit paid
+// on arrival, a request is charged one more unit per started
+// MEETING_BODY_UNIT_BYTES of body past the first, against the same rule. A
+// model never reads more tokens than the UTF-8 bytes it is sent.
+export const MEETING_BODY_UNIT_BYTES = 100_000;
+
+export function meetingBodyUnits(bytes: number): number {
+	return Math.max(1, Math.ceil(bytes / MEETING_BODY_UNIT_BYTES));
+}
+
+export async function consumeMeetingBodyBudget(
+	endpoint: "notes" | "ask",
+	userId: string,
+	bodyBytes: number,
+	headers: Headers,
+): Promise<MeetingBudgetResult> {
+	const units = meetingBodyUnits(bodyBytes) - 1;
+	if (units < 1) return { limited: false };
+	const ruleId = MEETING_REQUEST_RULE_IDS[endpoint];
+	const firewall = await checkFirewallRateLimitUnits(ruleId, {
+		key: userId,
+		units,
+		headers,
+	});
+	if (firewall === true)
+		return {
+			limited: true,
+			retryAfterSeconds: FIREWALL_RETRY_AFTER_SECONDS,
+		};
+	if (firewall === false) return { limited: false };
+
+	const decision = await consumeRollingBudget(ruleId, {
+		key: userId,
+		rule: meetingRequestBudget(endpoint),
+		cost: units,
+	});
+	return decision.allowed
+		? { limited: false }
+		: { limited: true, retryAfterSeconds: decision.retryAfterSeconds };
+}
+
 export async function consumeMeetingAudioBudget(
 	userId: string,
 	samples: number,

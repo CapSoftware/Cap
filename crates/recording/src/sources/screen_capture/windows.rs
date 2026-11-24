@@ -203,6 +203,11 @@ impl WindowsFrameScaler {
         }
     }
 
+    fn replace_device(&mut self, d3d_device: ID3D11Device) {
+        self.d3d_device = d3d_device;
+        self.state = None;
+    }
+
     fn scale_frame(&mut self, frame: &scap_direct3d::Frame) -> Option<ScreenFrame> {
         let src_width = frame.width();
         let src_height = frame.height();
@@ -922,6 +927,10 @@ impl output_pipeline::VideoSource for VideoSource {
                                 Ok(new_device) => {
                                     info!("Recreated D3D device after device-lost");
                                     d3d_device = new_device;
+                                    frame_scaler
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .replace_device(d3d_device.clone());
                                 }
                                 Err(e) => {
                                     error!(error = %e, "Failed to recreate D3D device");
@@ -1711,5 +1720,97 @@ mod capture_target_tests {
     fn a_window_target_captures_the_window_rather_than_a_crop_of_the_display() {
         let window: WindowId = "1234".parse().unwrap();
         assert!(crop_for_target(Some(&window), Some(bounds())).is_none());
+    }
+}
+
+#[cfg(test)]
+mod frame_scaler_tests {
+    use super::*;
+    use ::windows::{
+        Win32::{
+            Foundation::HMODULE,
+            Graphics::{
+                Direct3D::D3D_DRIVER_TYPE_WARP,
+                Direct3D11::{
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice,
+                },
+            },
+        },
+        core::{IUnknown, Interface},
+    };
+
+    fn warp_device() -> ID3D11Device {
+        let mut device = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+        }
+        .expect("create WARP device");
+        device.expect("WARP device")
+    }
+
+    #[test]
+    fn scaled_frames_are_created_on_the_recreated_device() {
+        let recreated = warp_device();
+        let scaler = Arc::new(Mutex::new(WindowsFrameScaler::new(
+            64,
+            36,
+            Direct3DCapture::PIXEL_FORMAT,
+            warp_device(),
+        )));
+        scaler.lock().unwrap().replace_device(recreated.clone());
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let item = Display::primary()
+            .raw_handle()
+            .try_as_capture_item()
+            .expect("display capture item");
+        let mut capturer = scap_direct3d::Capturer::new(
+            item,
+            scap_direct3d::Settings {
+                is_border_required: Some(false),
+                is_cursor_capture_enabled: Some(false),
+                pixel_format: Direct3DCapture::PIXEL_FORMAT,
+                ..Default::default()
+            },
+            {
+                let scaler = scaler.clone();
+                move |frame| {
+                    let scaled = scaler.lock().unwrap().scale_frame(&frame).map(|scaled| {
+                        let device = unsafe { scaled.texture().GetDevice() };
+                        (scaled.width(), scaled.height(), device)
+                    });
+                    let _ = tx.try_send(scaled);
+                    Ok(())
+                }
+            },
+            || Ok(()),
+            Some(recreated.clone()),
+        )
+        .expect("create capturer");
+        capturer.start().expect("start capture");
+        let scaled = rx.recv_timeout(Duration::from_secs(10));
+        capturer.stop().expect("stop capture");
+
+        let (width, height, device) = scaled
+            .expect("a captured frame")
+            .expect("the frame is scaled after the device is recreated");
+        assert_eq!((width, height), (64, 36));
+        assert_eq!(
+            device
+                .expect("scaled texture device")
+                .cast::<IUnknown>()
+                .unwrap(),
+            recreated.cast::<IUnknown>().unwrap()
+        );
     }
 }
