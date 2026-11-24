@@ -3,10 +3,11 @@ import "server-only";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { VideosPolicy } from "@cap/web-backend";
-import { CurrentUser, type Video } from "@cap/web-domain";
+import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
+import { isHeldOnFirstView } from "@/lib/free-plan-measure-probe";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
@@ -48,7 +49,20 @@ async function viewerPassesViewGates(video: VideoRow, viewer: Viewer) {
 	if (!canView) return false;
 
 	if (await isVideoLockedByShareableLinkLimit(video.id)) return false;
-	return !(await isVideoOverFreePlanDuration(video).catch(() => false));
+	if (await isVideoOverFreePlanDuration(video).catch(() => false)) return false;
+	if (
+		Option.exists(viewer, (user) => user.id === video.ownerId) ||
+		video.isScreenshot ||
+		(video.source.type !== "desktopMP4" && video.source.type !== "webMP4")
+	)
+		return true;
+	const key =
+		Video.getRetainedRecordingOutputKey(
+			video.ownerId,
+			video.id,
+			video.source.outputKey,
+		) ?? `${video.ownerId}/${video.id}/result.mp4`;
+	return !(await isHeldOnFirstView(video, key));
 }
 
 // Owners and members of an organization or space the cap is shared with keep

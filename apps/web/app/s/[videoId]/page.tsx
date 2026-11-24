@@ -33,7 +33,7 @@ import {
 	type ImageUpload,
 	type Organisation,
 	type Policy,
-	type Video,
+	Video,
 } from "@cap/web-domain";
 import { and, eq, type InferSelectModel, isNull, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -53,6 +53,7 @@ import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
 import {
+	isHeldOnFirstView,
 	measureFreePlanObjectIfNeeded,
 	remeasureHeldVideoIfNeeded,
 } from "@/lib/free-plan-measure-probe";
@@ -644,6 +645,17 @@ async function AuthorizedContent({
 				);
 				return false;
 			});
+	const firstViewKey =
+		user?.id !== video.owner.id &&
+		!video.isScreenshot &&
+		!hasActiveUpload &&
+		(video.source.type === "desktopMP4" || video.source.type === "webMP4")
+			? (Video.getRetainedRecordingOutputKey(
+					video.owner.id,
+					videoId,
+					video.source.outputKey,
+				) ?? `${video.owner.id}/${videoId}/result.mp4`)
+			: null;
 	const overDurationLimitPromise = ownerIsPro
 		? Promise.resolve(false)
 		: isVideoOverFreePlanDuration({
@@ -652,13 +664,27 @@ async function AuthorizedContent({
 				orgId: video.orgId,
 				isScreenshot: video.isScreenshot,
 				metadata: video.metadata,
-			}).catch((error) => {
-				console.error(
-					`[ShareVideoPage] Free plan duration check failed for ${videoId}:`,
-					error,
-				);
-				return false;
-			});
+			})
+				.then(
+					(overDurationLimit) =>
+						overDurationLimit ||
+						(firstViewKey !== null &&
+							isHeldOnFirstView(
+								{
+									id: videoId,
+									createdAt: video.createdAt,
+									metadata: video.metadata,
+								},
+								firstViewKey,
+							)),
+				)
+				.catch((error) => {
+					console.error(
+						`[ShareVideoPage] Free plan duration check failed for ${videoId}:`,
+						error,
+					);
+					return false;
+				});
 	void overDurationLimitPromise.then((overDurationLimit) => {
 		if (overDurationLimit)
 			remeasureHeldVideoIfNeeded({

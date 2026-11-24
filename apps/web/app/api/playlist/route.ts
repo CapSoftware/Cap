@@ -23,6 +23,7 @@ import {
 	recordFreePlanOverLength,
 } from "@/lib/free-plan-measure";
 import {
+	isHeldOnFirstView,
 	measureFreePlanObjectIfNeeded,
 	remeasureHeldVideoIfNeeded,
 	runAfterResponse,
@@ -155,6 +156,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								requestUrl,
 								requestHost,
 							),
+							Option.exists(viewer, (user) => user.id === video.ownerId),
 						);
 					}).pipe(
 						provideOptionalAuth,
@@ -243,6 +245,29 @@ const scheduleFreePlanMeasure = (video: Video.Video, key: string) =>
 		),
 	);
 
+const measureBeforeServing = (
+	video: Video.Video,
+	key: string,
+	viewerIsOwner: boolean,
+) =>
+	viewerIsOwner
+		? scheduleFreePlanMeasure(video, key)
+		: Effect.tryPromise(() =>
+				isHeldOnFirstView(
+					{
+						id: video.id,
+						createdAt: video.createdAt,
+						metadata: Option.getOrNull(video.metadata),
+					},
+					key,
+				),
+			).pipe(
+				Effect.orElseSucceed(() => false),
+				Effect.flatMap((held) =>
+					held ? Effect.fail(new HttpApiError.Forbidden()) : Effect.void,
+				),
+			);
+
 const scheduleFreePlanOverLength = (
 	video: Video.Video,
 	key: string,
@@ -265,6 +290,7 @@ const getPlaylistResponse = (
 	video: Video.Video,
 	urlParams: (typeof GetPlaylistParams)["Type"],
 	publicOrigin: string,
+	viewerIsOwner: boolean,
 ) =>
 	Effect.gen(function* () {
 		const [bucket, customBucket] = yield* Storage.getAccessForVideo(video);
@@ -276,7 +302,7 @@ const getPlaylistResponse = (
 
 		if (urlParams.videoType === "raw-preview") {
 			const rawFileKey = yield* resolveRawPreviewKey(video);
-			yield* scheduleFreePlanMeasure(video, rawFileKey);
+			yield* measureBeforeServing(video, rawFileKey, viewerIsOwner);
 			return yield* bucket
 				.getSignedObjectUrl(rawFileKey, playbackUrlValidity())
 				.pipe(Effect.map(HttpServerResponse.redirect));
@@ -545,7 +571,7 @@ const getPlaylistResponse = (
 			(isMp4Source || urlParams.videoType === "mp4") &&
 			Option.isNone(urlParams.fileType)
 		)
-			yield* scheduleFreePlanMeasure(video, mp4Key);
+			yield* measureBeforeServing(video, mp4Key, viewerIsOwner);
 
 		if (bucket.provider === "s3" && Option.isNone(customBucket)) {
 			if (isMp4Source || urlParams.videoType === "mp4") {
