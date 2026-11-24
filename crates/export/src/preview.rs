@@ -309,7 +309,12 @@ async fn render_preview_frame(
         &zoom_timeline,
         &cursor_timeline,
     )
-    .with_quality(RenderQuality::Export);
+    .with_quality(RenderQuality::Export)
+    .with_redaction(
+        render_constants,
+        segment.recording_clip,
+        segment_frames.segment_time,
+    );
 
     let mut frame_renderer = FrameRenderer::new(render_constants);
     let mut layers = layers_cache
@@ -391,7 +396,12 @@ async fn render_preview_frame(
                 .as_ref()
                 .unwrap_or(&cursor_timeline),
         )
-        .with_quality(RenderQuality::Export);
+        .with_quality(RenderQuality::Export)
+        .with_redaction(
+            render_constants,
+            outgoing.segment.recording_clip,
+            outgoing_frames.segment_time,
+        );
 
         frame_renderer
             .render_transition_immediate(
