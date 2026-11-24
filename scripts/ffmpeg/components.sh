@@ -87,8 +87,9 @@ CAP_REQUIRED_DECODERS=(
 )
 # Windows imports decoded these through external libraries before, so the
 # Windows build keeps them (scripts/ffmpeg/stage-windows-decoders.sh).
+# libxevd registers its decoder as "evc"; FFmpeg has no native EVC decoder.
 CAP_REQUIRED_DECODERS_WINDOWS=(
-  libjxl libdavs2 libuavs3d libxevd libcodec2 liblc3
+  libjxl libdavs2 libuavs3d evc libcodec2 liblc3
 )
 CAP_REQUIRED_DEMUXERS=(
   mov matroska avi asf flv ogg wav mp3 aac flac concat image2 png_pipe jpeg_pipe webp_pipe gif bmp_pipe tiff_pipe
