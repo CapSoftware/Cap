@@ -1354,9 +1354,11 @@ pub enum SegmentDetail {
     Scene {
         mode: SceneMode,
     },
-    /// How many detections the span hides.
+    /// How many detections the span hides, and each detection's own time on
+    /// the timeline packed into a few rows, drawn as thin marks in the span.
     Redact {
         count: u32,
+        marks: std::sync::Arc<[RedactMark]>,
     },
     /// A 3D shot, named by the look it is sitting on (`camera3d_shot_label`).
     ThreeD {
@@ -1987,6 +1989,46 @@ fn source_interval_spans(
 /// `video_offsets[clip]` is how far the clip's display video timestamps run
 /// ahead of its segment time (see `cap_rendering::display_video_offset`);
 /// detections are stamped in video time.
+/// One detection inside a redact span: its time on the timeline and the row
+/// it is drawn in, so overlapping detections sit on separate rows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RedactMark {
+    pub start: f64,
+    pub end: f64,
+    pub row: u8,
+}
+
+/// Rows a span's marks are packed into; more overlapping detections than this
+/// share the row that frees up first.
+pub const REDACT_MARK_ROWS: usize = 3;
+
+/// Packs time ranges sorted by start into rows, each range into the first row
+/// that has ended before it starts.
+fn pack_redact_marks(ranges: &[(f64, f64)]) -> Vec<RedactMark> {
+    let mut row_ends = [f64::NEG_INFINITY; REDACT_MARK_ROWS];
+    ranges
+        .iter()
+        .map(|&(start, end)| {
+            let row = row_ends
+                .iter()
+                .position(|row_end| *row_end <= start)
+                .unwrap_or_else(|| {
+                    row_ends
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| a.1.total_cmp(b.1))
+                        .map_or(0, |(row, _)| row)
+                });
+            row_ends[row] = row_ends[row].max(end);
+            RedactMark {
+                start,
+                end,
+                row: row as u8,
+            }
+        })
+        .collect()
+}
+
 pub fn redact_region_spans<'a>(
     config: &ProjectConfiguration,
     redactions: &'a cap_project::redaction::Redactions,
@@ -2086,7 +2128,7 @@ impl TimelineModel {
             .collect::<Vec<_>>();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         const JOIN: f64 = 0.4;
-        let mut merged: Vec<(f64, f64, Vec<&str>)> = Vec::new();
+        let mut merged: Vec<(f64, f64, Vec<&str>, Vec<(f64, f64)>)> = Vec::new();
         for (start, end, id) in spans {
             match merged.last_mut() {
                 Some(last) if start <= last.1 + JOIN => {
@@ -2094,18 +2136,20 @@ impl TimelineModel {
                     if !last.2.contains(&id) {
                         last.2.push(id);
                     }
+                    last.3.push((start, end));
                 }
-                _ => merged.push((start, end, vec![id])),
+                _ => merged.push((start, end, vec![id], vec![(start, end)])),
             }
         }
         self.redact = merged
             .into_iter()
-            .map(|(start, end, ids)| Segment {
+            .map(|(start, end, ids, ranges)| Segment {
                 start,
                 end,
                 lane: 0,
                 detail: SegmentDetail::Redact {
                     count: ids.iter().filter(|id| !settings.is_excluded(id)).count() as u32,
+                    marks: pack_redact_marks(&ranges).into(),
                 },
             })
             .collect();
@@ -3481,6 +3525,10 @@ fn render_segment(
         ));
     }
 
+    if let SegmentDetail::Redact { marks, .. } = &segment.detail {
+        fill = fill.child(render_redact_marks(segment, marks, secs_per_pixel, height));
+    }
+
     if let SegmentDetail::Audio {
         path,
         trim_start,
@@ -4548,6 +4596,45 @@ fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> Any
 
 /// The eleven tracks' label bodies: a primary name and, where the track has
 /// one, the value that qualifies it.
+/// Each detection of a redact span as a thin mark at its own time, rows
+/// stacked from the bottom of the span, under the label.
+fn render_redact_marks(
+    segment: &Segment,
+    marks: &[RedactMark],
+    secs_per_pixel: f64,
+    height: f32,
+) -> AnyElement {
+    // Three thin rows in the band under the label, so the label stays clear.
+    const MARK_HEIGHT: f32 = 2.;
+    const MARK_GAP: f32 = 2.;
+    const BOTTOM: f32 = 5.;
+    let mut layer = div().absolute().inset_0().overflow_hidden();
+    // Marks that would add no visible pixel to their row are skipped, so a
+    // long recording with thousands of detections stays a few hundred boxes.
+    let mut drawn_to = [f32::NEG_INFINITY; REDACT_MARK_ROWS];
+    for mark in marks {
+        let left = ((mark.start - segment.start) / secs_per_pixel) as f32;
+        let width = (((mark.end - mark.start) / secs_per_pixel) as f32).max(2.);
+        let row = usize::from(mark.row).min(REDACT_MARK_ROWS - 1);
+        if left + width <= drawn_to[row] + 1. {
+            continue;
+        }
+        drawn_to[row] = drawn_to[row].max(left + width);
+        let top = height - BOTTOM - MARK_HEIGHT - row as f32 * (MARK_HEIGHT + MARK_GAP);
+        layer = layer.child(
+            div()
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(width))
+                .h(px(MARK_HEIGHT))
+                .rounded_full()
+                .bg(gpui::white().opacity(0.3)),
+        );
+    }
+    layer.into_any_element()
+}
+
 fn label_body(
     theme: &Theme,
     color: Hsla,
@@ -4695,11 +4782,11 @@ fn label_body(
         }
 
         // -- Redact: what the span hides --------------------------------
-        (SegmentDetail::Redact { count }, LabelTier::Full) => label_row()
+        (SegmentDetail::Redact { count, .. }, LabelTier::Full) => label_row()
             .child(label_primary(theme, color).child(tr::editor::redact::lane()))
             .child(label_secondary(theme, color).child(count.to_string()))
             .into_any_element(),
-        (SegmentDetail::Redact { count }, LabelTier::Compact) => label_row()
+        (SegmentDetail::Redact { count, .. }, LabelTier::Compact) => label_row()
             .child(label_primary(theme, color).child(count.to_string()))
             .into_any_element(),
         (SegmentDetail::Redact { .. }, LabelTier::Glyph) => {
@@ -5041,7 +5128,7 @@ mod tests {
         assert_eq!(model.redact.len(), 2);
         assert!(matches!(
             model.redact[0].detail,
-            SegmentDetail::Redact { count: 0 }
+            SegmentDetail::Redact { count: 0, .. }
         ));
         config.auto_redact.enabled = false;
         model.set_redact(&config, Some(&redactions), &[0.5]);
