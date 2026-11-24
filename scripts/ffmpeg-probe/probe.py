@@ -230,7 +230,7 @@ def stop(process):
 def wait_for_log(log_path, patterns, process, timeout):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        text = open(log_path, errors="replace").read()
+        text = clean(open(log_path, errors="replace").read())
         for pattern in patterns:
             match = re.search(pattern, text)
             if match:
@@ -238,7 +238,7 @@ def wait_for_log(log_path, patterns, process, timeout):
         if process.poll() is not None:
             return None, text
         time.sleep(0.5)
-    return None, open(log_path, errors="replace").read()
+    return None, clean(open(log_path, errors="replace").read())
 
 
 DONE = [
