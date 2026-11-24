@@ -86,6 +86,14 @@ fn studio_max_capture_size(
         .or_else(|| cfg!(target_os = "macos").then_some((H264_MAX_DIMENSION, H264_MAX_DIMENSION)))
 }
 
+pub fn studio_display_recording_size(physical_width: u32, physical_height: u32) -> (u32, u32) {
+    let (width, height) = (
+        cap_media_info::ensure_even(physical_width),
+        cap_media_info::ensure_even(physical_height),
+    );
+    calculate_gpu_compatible_size(width, height, H264_MAX_DIMENSION).unwrap_or((width, height))
+}
+
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
     Recording {
