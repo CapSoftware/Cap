@@ -697,7 +697,10 @@ app.post(
 						).pipe(Effect.catchAll(Effect.logWarning));
 					}
 					runAfterResponse(() =>
-						measureFreePlanObject(videoId, outputKey, { anyAge: true }),
+						measureFreePlanObject(videoId, outputKey, {
+							anyAge: true,
+							fresh: true,
+						}),
 					);
 					return c.json({
 						success: true,
@@ -890,6 +893,7 @@ app.post(
 						runAfterResponse(() =>
 							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
 								anyAge: true,
+								fresh: true,
 							}),
 						);
 
@@ -1072,6 +1076,7 @@ app.post(
 						runAfterResponse(() =>
 							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
 								anyAge: true,
+								fresh: true,
 							}),
 						);
 

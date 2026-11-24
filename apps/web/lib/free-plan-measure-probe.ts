@@ -136,24 +136,41 @@ async function probeStoredObject(
 	return "unavailable";
 }
 
+// A completed upload passes fresh, so the file it just wrote is measured
+// rather than an earlier one under the same name.
 export function measureFreePlanObject(
 	videoId: Video.VideoId,
 	key: string,
-	{ anyAge = false }: { anyAge?: boolean } = {},
+	{ anyAge = false, fresh = false }: { anyAge?: boolean; fresh?: boolean } = {},
 ): Promise<FreePlanMeasureOutcome> {
 	const id = objectKey(videoId, key);
-	const measured = measuredFiles.get(id);
-	if (measured && measured.until > Date.now())
-		return Promise.resolve(measured.outcome);
-	const current = inFlight.get(id);
-	if (current) return current;
-	if ((unavailableUntil.get(id) ?? 0) > Date.now())
-		return Promise.resolve(SKIPPED);
-	if ((timedOutUntil.get(id) ?? 0) > Date.now())
-		return Promise.resolve(UNMEASURED);
-	const measurement = withMeasurementSlot(() =>
-		measureNow(videoId, key, anyAge),
-	).finally(() => inFlight.delete(id));
+	const previous = inFlight.get(id);
+	if (fresh) {
+		measuredFiles.delete(id);
+		timedOutUntil.delete(id);
+		unavailableUntil.delete(id);
+	} else {
+		const measured = measuredFiles.get(id);
+		if (measured && measured.until > Date.now())
+			return Promise.resolve(measured.outcome);
+		if (previous) return previous;
+		if ((unavailableUntil.get(id) ?? 0) > Date.now())
+			return Promise.resolve(SKIPPED);
+		if ((timedOutUntil.get(id) ?? 0) > Date.now())
+			return Promise.resolve(UNMEASURED);
+	}
+	const measurement: Promise<FreePlanMeasureOutcome> = (
+		previous
+			? previous.then(
+					() => undefined,
+					() => undefined,
+				)
+			: Promise.resolve()
+	)
+		.then(() => withMeasurementSlot(() => measureNow(videoId, key, anyAge)))
+		.finally(() => {
+			if (inFlight.get(id) === measurement) inFlight.delete(id);
+		});
 	inFlight.set(id, measurement);
 	return measurement;
 }

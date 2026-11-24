@@ -45,7 +45,7 @@ export async function rejectFreePlanOverLimitVideo(
 		await recordFreePlanMeasure(video.id, sourceKey, measuredSeconds);
 	else if (sourceKey)
 		runAfterResponse(() =>
-			measureFreePlanObject(video.id, sourceKey, { anyAge: true }),
+			measureFreePlanObject(video.id, sourceKey, { anyAge: true, fresh: true }),
 		);
 	return "rejected";
 }

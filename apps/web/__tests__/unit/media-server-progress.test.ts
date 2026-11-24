@@ -1179,7 +1179,7 @@ describe("free plan duration limit at processing", () => {
 			expect(mocks.measureObject).toHaveBeenCalledExactlyOnceWith(
 				videoId,
 				rawFileKey,
-				{ anyAge: true },
+				{ anyAge: true, fresh: true },
 			);
 			expect(mocks.recordMeasure).not.toHaveBeenCalled();
 		} else {
