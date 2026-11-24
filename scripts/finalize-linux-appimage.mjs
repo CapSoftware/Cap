@@ -151,8 +151,9 @@ const libvaPattern = /^libva(?:-drm)?\.so\.2(?:\..+)?$/;
 // The fallback libva, for hosts without one. It must be new enough for the
 // host's own FFmpeg, which host PipeWire plugins load into Cap: NixOS's
 // FFmpeg 9 needs vaMapBuffer2, which the build image's libva 2.20 lacks. A
-// newer libva keeps the ABI the bundled FFmpeg was built against. These need
-// glibc 2.38, older than the build image's.
+// newer libva keeps the ABI the bundled FFmpeg was built against. These
+// packages need glibc 2.38, so release builds pass CAP_APPIMAGE_LIBVA_DIR
+// with the same libva rebuilt on the build image (build-fallback-libva.sh).
 export const fallbackLibvaPackages = [
 	{
 		url: "http://archive.ubuntu.com/ubuntu/pool/main/libv/libva/libva2_2.23.0-1ubuntu1_amd64.deb",
