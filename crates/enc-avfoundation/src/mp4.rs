@@ -131,6 +131,7 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Balanced,
             false,
+            None,
         )
     }
 
@@ -147,6 +148,7 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Ultra,
             false,
+            None,
         )
     }
 
@@ -163,6 +165,7 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Compatibility,
             false,
+            None,
         )
     }
 
@@ -179,6 +182,26 @@ impl MP4Encoder {
             output_height,
             BitrateProfile::Balanced,
             true,
+            None,
+        )
+    }
+
+    pub fn init_with_video_bitrate(
+        output: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+        output_height: Option<u32>,
+        bitrate_profile: BitrateProfile,
+        video_bitrate: u32,
+    ) -> Result<Self, InitError> {
+        Self::init_with_options(
+            output,
+            video_config,
+            audio_config,
+            output_height,
+            bitrate_profile,
+            false,
+            Some(video_bitrate),
         )
     }
 
@@ -189,6 +212,7 @@ impl MP4Encoder {
         output_height: Option<u32>,
         bitrate_profile: BitrateProfile,
         instant_mode: bool,
+        video_bitrate: Option<u32>,
     ) -> Result<Self, InitError> {
         let ultra_quality = matches!(bitrate_profile, BitrateProfile::Ultra);
         info!(
@@ -278,21 +302,14 @@ impl MP4Encoder {
                 ns::Number::with_u32(output_height).as_id_ref(),
             );
 
-            let bitrate = if instant_mode {
-                get_instant_mode_bitrate(output_width as f32, output_height as f32, fps)
-            } else {
-                match bitrate_profile {
-                    BitrateProfile::Ultra => {
-                        get_ultra_bitrate(output_width as f32, output_height as f32, fps)
-                    }
-                    BitrateProfile::Balanced => {
-                        get_average_bitrate(output_width as f32, output_height as f32, fps)
-                    }
-                    BitrateProfile::Compatibility => {
-                        get_compatibility_bitrate(output_width as f32, output_height as f32, fps)
-                    }
-                }
-            };
+            let bitrate = target_bitrate(
+                video_bitrate,
+                instant_mode,
+                bitrate_profile,
+                output_width as f32,
+                output_height as f32,
+                fps,
+            );
 
             debug!(
                 instant_mode,
@@ -1106,6 +1123,27 @@ pub enum BitrateProfile {
     Ultra,
 }
 
+fn target_bitrate(
+    video_bitrate: Option<u32>,
+    instant_mode: bool,
+    bitrate_profile: BitrateProfile,
+    width: f32,
+    height: f32,
+    fps: f32,
+) -> f32 {
+    if let Some(video_bitrate) = video_bitrate {
+        video_bitrate as f32
+    } else if instant_mode {
+        get_instant_mode_bitrate(width, height, fps)
+    } else {
+        match bitrate_profile {
+            BitrateProfile::Ultra => get_ultra_bitrate(width, height, fps),
+            BitrateProfile::Balanced => get_average_bitrate(width, height, fps),
+            BitrateProfile::Compatibility => get_compatibility_bitrate(width, height, fps),
+        }
+    }
+}
+
 fn get_average_bitrate(width: f32, height: f32, fps: f32) -> f32 {
     let pixels = width * height;
     let fps_factor = fps.min(60.0) / 30.0;
@@ -1340,6 +1378,39 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn explicit_video_bitrate_replaces_only_the_studio_target() {
+        for (width, height) in [(1920.0, 1080.0), (3024.0, 1964.0), (3840.0, 2160.0)] {
+            for fps in [30.0, 60.0, 120.0, 240.0] {
+                for (profile, expected) in [
+                    (
+                        BitrateProfile::Balanced,
+                        get_average_bitrate(width, height, fps),
+                    ),
+                    (BitrateProfile::Ultra, get_ultra_bitrate(width, height, fps)),
+                    (
+                        BitrateProfile::Compatibility,
+                        get_compatibility_bitrate(width, height, fps),
+                    ),
+                ] {
+                    assert_eq!(
+                        target_bitrate(None, false, profile, width, height, fps).to_bits(),
+                        expected.to_bits()
+                    );
+                    assert_eq!(
+                        target_bitrate(Some(45_000_000), false, profile, width, height, fps),
+                        45_000_000.0
+                    );
+                }
+                assert_eq!(
+                    target_bitrate(None, true, BitrateProfile::Balanced, width, height, fps)
+                        .to_bits(),
+                    get_instant_mode_bitrate(width, height, fps).to_bits()
+                );
+            }
+        }
     }
 
     #[test]
