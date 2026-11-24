@@ -51,7 +51,7 @@ describe("meeting notes request schema", () => {
 	it.each([
 		["title", text(300), text(301)],
 		["rawNotesMarkdown", text(50_000), text(50_001)],
-		["transcript", text(400_000), text(400_001)],
+		["transcript", text(1_000_000), text(1_000_001)],
 	])("enforces the %s length limit", (field, atLimit, overLimit) => {
 		expect(notes({ [field]: atLimit }).ok).toBe(true);
 		const over = notes({ [field]: overLimit });
@@ -128,7 +128,7 @@ describe("meeting notes request schema", () => {
 
 	it("never echoes submitted content in the error detail", () => {
 		const results = [
-			notes({ transcript: `${SECRET}${text(400_000)}` }),
+			notes({ transcript: `${SECRET}${text(1_000_000)}` }),
 			notes({ title: 42, transcript: SECRET }),
 			notes({ summaryLanguage: SECRET }),
 			notes({ timezone: SECRET }),

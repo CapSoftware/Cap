@@ -297,6 +297,7 @@ impl super::Adapter {
             casting_fully_typed_format_supported,
             // See https://github.com/gfx-rs/wgpu/issues/3552
             suballocation_supported: !info.name.contains("Iris(R) Xe"),
+            avoid_cpu_descriptor_overwrites: workarounds.avoid_cpu_descriptor_overwrites,
             shader_model,
             max_sampler_descriptor_heap_size,
         };

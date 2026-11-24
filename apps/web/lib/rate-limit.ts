@@ -350,7 +350,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 	[RATE_LIMIT_IDS.MEETINGS_NOTES]: { limit: 60, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.MEETINGS_ASK]: { limit: 120, windowMs: 60 * MINUTE_MS },
 	[RATE_LIMIT_IDS.MEETINGS_AUDIO]: {
-		limit: 3_600,
+		limit: 5_760,
 		windowMs: 24 * 60 * MINUTE_MS,
 	},
 	[RATE_LIMIT_IDS.MEETINGS_AUTH_FAILURE]: { limit: 60, windowMs: MINUTE_MS },
