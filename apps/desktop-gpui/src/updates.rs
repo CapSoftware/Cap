@@ -220,6 +220,7 @@ pub(crate) fn work_in_flight(cx: &mut App) -> bool {
         || crate::import::imports_in_flight(cx)
         || crate::transcription::work_in_flight()
         || crate::recordings_overlay::work_in_flight(cx)
+        || crate::meetings::Meetings::try_global(cx).is_some_and(|m| m.read(cx).is_recording())
 }
 
 pub(crate) fn status(cx: &App) -> UpdateStatus {
