@@ -22,6 +22,15 @@ export function hasDesktopFeature(request: HonoRequest, feature: string) {
 	);
 }
 
+const DESKTOP_VERSION_PATTERN =
+	/^v?\d{1,4}\.\d{1,4}\.\d{1,6}(?:[-+][0-9A-Za-z.-]{1,40})?$/;
+
+export function desktopClientInfo(request: HonoRequest) {
+	const version = request.header("X-Cap-Desktop-Version")?.trim();
+	if (!version || !DESKTOP_VERSION_PATTERN.test(version)) return undefined;
+	return { version, gpui: hasDesktopFeature(request, "gpui") };
+}
+
 export function isAtLeastSemver(
 	versionString: string,
 	major: number,

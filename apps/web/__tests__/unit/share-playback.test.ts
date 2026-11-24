@@ -57,6 +57,7 @@ describe("share page playback URL", () => {
 			});
 			expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
 				"owner/video/result.mp4",
+				{ expiresIn: 24 * 60 * 60 },
 			);
 		},
 	);
@@ -85,6 +86,7 @@ describe("share page playback URL", () => {
 		});
 		expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(
 			publishedVideo.source.outputKey,
+			{ expiresIn: 24 * 60 * 60 },
 		);
 	});
 
@@ -107,7 +109,9 @@ describe("share page playback URL", () => {
 				audioLevelOutputKey,
 			},
 		});
-		expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(audioLevelOutputKey);
+		expect(mocks.sign).toHaveBeenCalledExactlyOnceWith(audioLevelOutputKey, {
+			expiresIn: 24 * 60 * 60,
+		});
 	});
 
 	it("allows the player to use its existing route when storage resolution fails", async () => {

@@ -31,6 +31,7 @@ export const SERVICES: ServiceDefinition[] = [
 		description: "Access to recordings on Cap’s storage and CDN.",
 		env: "STATUS_STORAGE_URL",
 		method: "HEAD",
+		signedUrl: true,
 	},
 	{
 		id: "media",

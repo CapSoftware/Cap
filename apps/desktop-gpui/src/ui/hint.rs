@@ -63,6 +63,9 @@ pub struct Hint {
     /// The side to try first, for a control whose neighbours a hint above
     /// would cover.
     pub side: Option<Side>,
+    /// Keep to `side` even when the pointer is in the way, for a row of
+    /// controls whose hints should all drop the same way.
+    pub pinned: bool,
 }
 
 impl Hint {
@@ -71,11 +74,18 @@ impl Hint {
             title: title.into(),
             body: None,
             side: None,
+            pinned: false,
         }
     }
 
     pub fn side(mut self, side: Side) -> Self {
         self.side = Some(side);
+        self
+    }
+
+    pub fn pinned(mut self, side: Side) -> Self {
+        self.side = Some(side);
+        self.pinned = true;
         self
     }
 
@@ -216,6 +226,24 @@ pub fn place(
     }
 }
 
+/// [`place`] for a [`Hint::pinned`] hint: on `side` whenever it fits in the
+/// window, wherever the pointer is.
+pub fn place_pinned(
+    control: Bounds<Pixels>,
+    bubble: Size<Pixels>,
+    window: Size<Pixels>,
+    side: Side,
+) -> Placement {
+    place(
+        control,
+        bubble,
+        point(px(-1e6), px(-1e6)),
+        window,
+        Some(side),
+        &[],
+    )
+}
+
 struct Anchor {
     bounds: Bounds<Pixels>,
     hint: Hint,
@@ -262,6 +290,12 @@ impl Hints {
     pub fn anchor(&self, id: &'static str, hint: Hint) -> impl IntoElement {
         let anchors = self.anchors.clone();
         let frame = self.frame;
+        // A hint that is up reads its text from here before this frame's
+        // prepaint, so a control that changes on click shows its new text
+        // straight away rather than the one it had a frame ago.
+        if let Some(anchor) = anchors.borrow_mut().get_mut(id) {
+            anchor.hint = hint.clone();
+        }
         canvas(
             move |bounds, _, _| {
                 anchors.borrow_mut().insert(
@@ -397,7 +431,10 @@ impl Hints {
             )
         };
 
-        let text = measure(window, &hint);
+        let viewport = window.viewport_size();
+        let text_width =
+            TEXT_WIDTH.min((f32::from(viewport.width) - 2. * (MARGIN + PAD_X) - 2.).max(80.));
+        let text = measure(window, &hint, text_width);
         let bubble = size(
             px((text.0 + 2. * PAD_X + 2.).ceil()),
             px((text.1 + 2. * PAD_Y + 2.).ceil()),
@@ -409,14 +446,17 @@ impl Hints {
             .filter(|(_, frame)| frame + 1 >= self.frame)
             .map(|(bounds, _)| *bounds)
             .collect();
-        let placed = place(
-            bounds,
-            bubble,
-            window.mouse_position(),
-            window.viewport_size(),
-            self.side.get().or(hint.side),
-            &keep_clear,
-        );
+        let placed = match hint.side.filter(|_| hint.pinned) {
+            Some(side) => place_pinned(bounds, bubble, viewport, side),
+            None => place(
+                bounds,
+                bubble,
+                window.mouse_position(),
+                viewport,
+                self.side.get().or(hint.side),
+                &keep_clear,
+            ),
+        };
         self.side.set(Some(placed.side));
 
         let (w, h) = (
@@ -542,9 +582,10 @@ impl Hints {
     }
 }
 
-/// The text block's size: the title and body wrapped at [`TEXT_WIDTH`], as
-/// wide as the longest line.
-fn measure(window: &Window, hint: &Hint) -> (f32, f32) {
+/// The text block's size: the title and body wrapped at `text_width` (at most
+/// [`TEXT_WIDTH`], less in a window too narrow for it), as wide as the
+/// longest line.
+fn measure(window: &Window, hint: &Hint, text_width: f32) -> (f32, f32) {
     let shape = |text: &SharedString, font_size: f32, weight: FontWeight| {
         let mut font = gpui::font(crate::theme::UI_FONT);
         font.weight = weight;
@@ -562,7 +603,7 @@ fn measure(window: &Window, hint: &Hint) -> (f32, f32) {
                 text.clone(),
                 px(font_size),
                 &[run],
-                Some(px(TEXT_WIDTH)),
+                Some(px(text_width)),
                 None,
             )
             .map(|lines| {
@@ -573,7 +614,7 @@ fn measure(window: &Window, hint: &Hint) -> (f32, f32) {
                     )
                 })
             })
-            .unwrap_or((TEXT_WIDTH, 1))
+            .unwrap_or((text_width, 1))
     };
     let (title_w, title_lines) = shape(&hint.title, TITLE_SIZE, FontWeight::SEMIBOLD);
     let (mut width, mut height) = (title_w, title_lines as f32 * TITLE_LINE);
@@ -616,6 +657,23 @@ mod tests {
 
     fn window() -> Size<Pixels> {
         size(px(1440.), px(900.))
+    }
+
+    #[test]
+    fn a_pinned_hint_keeps_its_side_under_the_pointer() {
+        let control = rect(100., 9., 38., 38.);
+        let wide = size(px(600.), px(286.));
+        let bubble = size(px(180.), px(52.));
+        let cursor = point(px(119.), px(40.));
+        assert_ne!(
+            place(control, bubble, cursor, wide, Some(Side::Below), &[]).side,
+            Side::Below
+        );
+        let placed = place_pinned(control, bubble, wide, Side::Below);
+        assert_eq!(placed.side, Side::Below);
+        assert_eq!(placed.bubble.origin.y, px(9. + 38. + GAP + ARROW));
+        assert_eq!(placed.bubble.origin.x, px(29.));
+        assert_eq!(placed.arrow_at, px(90.));
     }
 
     #[test]

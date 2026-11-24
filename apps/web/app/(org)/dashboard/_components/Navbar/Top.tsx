@@ -56,6 +56,7 @@ import {
 	TopBarCrumbSeparator,
 	useTopBarTitleWidth,
 } from "../TopBarTitle";
+import { nextCompactSearch } from "../top-bar-search-fit";
 import { DashboardSearch } from "./DashboardSearch";
 
 const Top = () => {
@@ -91,7 +92,9 @@ const Top = () => {
 		);
 		const roomWithFullSearch =
 			box.clientWidth + search.offsetWidth - fullSearchWidth;
-		setCompactSearch(titleWidth > roomWithFullSearch);
+		setCompactSearch((compact) =>
+			nextCompactSearch(compact, titleWidth, roomWithFullSearch),
+		);
 	}, [slotTitleWidth, activeSpace]);
 
 	useLayoutEffect(() => {

@@ -35,6 +35,9 @@ struct Tray {
     previous: Vec<PreviousItem>,
     recording: bool,
     previous_generation: u64,
+    /// The next meeting, shown in the tooltip the way macOS shows it beside
+    /// the menu bar icon.
+    meeting_title: Option<String>,
 }
 
 impl Global for Tray {}
@@ -108,6 +111,7 @@ fn create_tray(mode: Mode, entries: &[Entry]) -> anyhow::Result<Tray> {
         previous: Vec::new(),
         recording: false,
         previous_generation: 0,
+        meeting_title: None,
     })
 }
 
@@ -230,14 +234,31 @@ pub fn set_recording(recording: bool, cx: &mut App) {
         }
         Err(error) => tracing::warn!("failed to decode the Windows tray icon: {error:#}"),
     }
-    let tooltip = if recording {
-        tr::tray::tooltip_recording()
-    } else {
-        "Cap"
+    apply_tooltip(tray);
+}
+
+fn apply_tooltip(tray: &Tray) {
+    let tooltip = match (&tray.meeting_title, tray.recording) {
+        (_, true) => tr::tray::tooltip_recording().to_string(),
+        (Some(title), false) => format!("Cap · {title}"),
+        (None, false) => "Cap".to_string(),
     };
     if let Err(error) = tray.icon.set_tooltip(Some(tooltip)) {
         tracing::warn!("failed to update the Windows tray tooltip: {error}");
     }
+}
+
+/// The next meeting ("Standup in 5 min"), or none.
+pub fn set_meeting_title(title: Option<&str>, cx: &mut App) {
+    if !cx.has_global::<Tray>() {
+        return;
+    }
+    let tray = cx.global_mut::<Tray>();
+    if tray.meeting_title.as_deref() == title {
+        return;
+    }
+    tray.meeting_title = title.map(str::to_owned);
+    apply_tooltip(tray);
 }
 
 pub fn mode_changed(mode: Mode, cx: &mut App) {

@@ -15,6 +15,8 @@ import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
 import { runPromise } from "@/lib/server";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
+import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 
 export const dynamic = "force-dynamic";
@@ -196,17 +198,21 @@ export async function GET(request: NextRequest) {
 	const effect = Effect.gen(function* () {
 		const tokenPayload = token ? verifyStorageObjectToken(token) : null;
 		const videoId = Video.VideoId.make(videoIdParam);
-		const video =
-			tokenPayload?.videoId === videoIdParam && tokenPayload.key === key
-				? yield* getTokenVideo(videoId)
-				: yield* getPolicyVideo(videoId);
+		const hasKeyToken =
+			tokenPayload?.videoId === videoIdParam && tokenPayload.key === key;
+		const video = hasKeyToken
+			? yield* getTokenVideo(videoId)
+			: yield* getPolicyVideo(videoId);
 
 		if (!key.startsWith(`${video.ownerId}/${video.id}/`)) {
 			return yield* Effect.fail("not-found" as const);
 		}
+		if (isEditSourceObjectKey(key) && !hasKeyToken) {
+			return yield* Effect.fail("not-found" as const);
+		}
 		if (
 			isInternalRecordingKey(key) &&
-			!(tokenPayload?.videoId === videoIdParam && tokenPayload.key === key) &&
+			!hasKeyToken &&
 			!(
 				key === Video.getAudioLevelOutputKey(video) ||
 				((video.source.type === "desktopMP4" ||
@@ -225,7 +231,7 @@ export async function GET(request: NextRequest) {
 		if (!("getObjectResponse" in storage)) {
 			const url = downloadName
 				? yield* storage.getSignedDownloadUrl(key, downloadName)
-				: yield* storage.getSignedObjectUrl(key);
+				: yield* storage.getSignedObjectUrl(key, playbackUrlValidity());
 			return Response.redirect(url);
 		}
 

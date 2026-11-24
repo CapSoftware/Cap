@@ -2,6 +2,7 @@
 
 import { Dialog, DialogContent, DialogTitle } from "@cap/ui";
 import { useCallback, useLayoutEffect, useRef } from "react";
+import { watchExpiredMediaSource } from "../media-source-refresh";
 import {
 	MediaPlayer,
 	MediaPlayerControls,
@@ -51,6 +52,7 @@ export function CommentMiniPlayer({
 	const attachVideo = useCallback((el: HTMLVideoElement | null) => {
 		videoRef.current = el;
 		if (!el) return;
+		watchExpiredMediaSource(el);
 		claimPlayback(el, () => el.pause());
 		suspendMainVideo();
 	}, []);

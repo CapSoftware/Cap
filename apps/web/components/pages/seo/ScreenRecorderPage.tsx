@@ -83,11 +83,6 @@ export const screenRecorderContent: SeoPageContent = {
 				"Yes, Cap offers a powerful free version, making it one of the best free screen recorders available. The local version is 100% free with no usage limits, but Cap Pro is available for users who need additional features.",
 		},
 		{
-			question: "How does Cap compare to OBS?",
-			answer:
-				"Cap is designed to be highly user-friendly while delivering high recording quality. It’s a simpler, yet powerful, alternative to OBS for users seeking an intuitive experience.",
-		},
-		{
 			question: "Can I download Cap on multiple devices?",
 			answer:
 				"Yes, Cap is cross-platform and can be downloaded on macOS and Windows, allowing you to use it across multiple devices.",

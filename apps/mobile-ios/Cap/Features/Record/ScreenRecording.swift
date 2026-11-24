@@ -23,6 +23,14 @@ enum CaptureMode: String, CaseIterable, Identifiable {
         }
     }
 
+    var shortTitle: String {
+        switch self {
+        case .instant: "Instant"
+        case .studio: "Studio"
+        case .screenshot: "Screenshot"
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .instant: "bolt.fill"
@@ -278,6 +286,7 @@ struct ScreenModePanel: View {
             VStack(spacing: 14) {
                 Text(recorder.isCapturing ? "Recording your screen" : title)
                     .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
                 if recorder.isCapturing {
                     Text("Use any app. To stop, tap the Dynamic Island or the Stop button on the Lock Screen, or come back here. Cap opens your recording.")
                         .font(.subheadline)
