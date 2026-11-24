@@ -470,14 +470,48 @@ fn prepare_pending_samples(pending_samples: &mut VecDeque<MicrophoneSamples>, sa
     }
 }
 
+const ENQUEUE_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A feed that falls behind fails the hand-off for every callback buffer, on
+/// the realtime audio thread, so only the first failure is logged and then at
+/// most one summary per interval. `dropped_message_count` still counts each.
+#[derive(Default)]
+struct EnqueueFailureLog {
+    last_logged: Option<Instant>,
+    unlogged: u64,
+}
+
+impl EnqueueFailureLog {
+    fn record(&mut self, error: impl std::fmt::Display, now: Instant) {
+        match self.last_logged {
+            Some(last) if now.saturating_duration_since(last) < ENQUEUE_FAILURE_LOG_INTERVAL => {
+                self.unlogged += 1;
+            }
+            Some(_) => {
+                warn!(
+                    dropped_since_last_report = self.unlogged + 1,
+                    "Failed to enqueue microphone samples: {error}"
+                );
+                self.last_logged = Some(now);
+                self.unlogged = 0;
+            }
+            None => {
+                warn!("Failed to enqueue microphone samples: {error}");
+                self.last_logged = Some(now);
+            }
+        }
+    }
+}
+
 fn enqueue_microphone_samples(
     actor_ref: &ActorRef<MicrophoneFeed>,
     dropped_message_count: &AtomicU64,
+    failure_log: &mut EnqueueFailureLog,
     samples: MicrophoneSamples,
 ) {
     if let Err(error) = actor_ref.tell(samples).try_send() {
         dropped_message_count.fetch_add(1, Ordering::Relaxed);
-        warn!("Failed to enqueue microphone samples: {error}");
+        failure_log.record(error, Instant::now());
     }
 }
 
@@ -1451,6 +1485,7 @@ impl MicrophoneFeed {
                         #[cfg(target_os = "linux")]
                         let system_stream_cancel = system_stream_cancel.clone();
                         let mut callback_count = 0u64;
+                        let mut enqueue_failures = EnqueueFailureLog::default();
                         move |data, info| {
                             #[cfg(windows)]
                             register_microphone_callback_thread();
@@ -1522,6 +1557,7 @@ impl MicrophoneFeed {
                                         enqueue_microphone_samples(
                                             &actor_ref,
                                             &dropped_message_count,
+                                            &mut enqueue_failures,
                                             pending,
                                         );
                                     }
@@ -1537,6 +1573,7 @@ impl MicrophoneFeed {
                                 enqueue_microphone_samples(
                                     &actor_ref,
                                     &dropped_message_count,
+                                    &mut enqueue_failures,
                                     pending,
                                 );
                             }
@@ -1544,6 +1581,7 @@ impl MicrophoneFeed {
                             enqueue_microphone_samples(
                                 &actor_ref,
                                 &dropped_message_count,
+                                &mut enqueue_failures,
                                 samples,
                             );
                         }
@@ -3192,7 +3230,7 @@ pub mod synthetic {
     /// cpal has no public constructor for `InputCallbackInfo`, and a
     /// synthetic device has no device callback. Consumers time samples from
     /// `MicrophoneSamples::timestamp`; this info reads as stream instant 0.
-    fn zero_callback_info() -> InputCallbackInfo {
+    pub(super) fn zero_callback_info() -> InputCallbackInfo {
         // SAFETY: `InputCallbackInfo` (cpal pinned by git rev) holds two
         // `StreamInstant { secs: i64, nanos: u32 }` values and nothing else,
         // so the all-zero bit pattern is a valid value (instant 0) whatever
@@ -3346,6 +3384,110 @@ pub mod synthetic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct EnqueueFailureWarnings(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl EnqueueFailureWarnings {
+        fn count(&self) -> usize {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for EnqueueFailureWarnings {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Message(bool);
+            impl tracing::field::Visit for Message {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message" {
+                        self.0 =
+                            format!("{value:?}").contains("Failed to enqueue microphone samples");
+                    }
+                }
+            }
+            let mut message = Message(false);
+            event.record(&mut message);
+            if message.0 && *event.metadata().level() == tracing::Level::WARN {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn count_enqueue_failure_warnings()
+    -> (EnqueueFailureWarnings, tracing::subscriber::DefaultGuard) {
+        use tracing_subscriber::layer::SubscriberExt;
+        let warnings = EnqueueFailureWarnings::default();
+        let guard =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(warnings.clone()));
+        (warnings, guard)
+    }
+
+    #[tokio::test]
+    async fn a_stalled_feed_logs_its_first_dropped_buffer_rather_than_every_one() {
+        let (warnings, _subscriber) = count_enqueue_failure_warnings();
+        let (error_tx, _error_rx) = flume::unbounded();
+        let feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+        let _ = feed
+            .tell(crate::feeds::Stall(Duration::from_secs(30)))
+            .try_send();
+
+        const BUFFERS: u64 = 400;
+        let dropped = AtomicU64::new(0);
+        let mut failure_log = EnqueueFailureLog::default();
+        for _ in 0..BUFFERS {
+            enqueue_microphone_samples(
+                &feed,
+                &dropped,
+                &mut failure_log,
+                MicrophoneSamples {
+                    stream_id: 1,
+                    data: vec![0; 480 * 4],
+                    format: SampleFormat::F32,
+                    sample_rate: 48_000,
+                    channels: 1,
+                    info: synthetic::zero_callback_info(),
+                    timestamp: Timestamp::Instant(Instant::now()),
+                },
+            );
+        }
+
+        let dropped = dropped.load(Ordering::Relaxed);
+        assert!(
+            dropped > BUFFERS / 2,
+            "a stalled feed must refuse buffers once its mailbox is full, refused {dropped} of {BUFFERS}"
+        );
+        assert_eq!(
+            warnings.count(),
+            1,
+            "{dropped} refused buffers must log once, not once each"
+        );
+    }
+
+    #[test]
+    fn enqueue_failures_are_summarised_once_per_interval() {
+        let (warnings, _subscriber) = count_enqueue_failure_warnings();
+        let mut failure_log = EnqueueFailureLog::default();
+        let start = Instant::now();
+
+        failure_log.record("full", start);
+        for millis in 1..100 {
+            failure_log.record("full", start + Duration::from_millis(millis * 10));
+        }
+        assert_eq!(warnings.count(), 1);
+        assert_eq!(failure_log.unlogged, 99);
+
+        failure_log.record("full", start + ENQUEUE_FAILURE_LOG_INTERVAL);
+        assert_eq!(warnings.count(), 2);
+        assert_eq!(failure_log.unlogged, 0);
+    }
 
     #[tokio::test]
     async fn dropping_microphone_readiness_cancels_queued_native_work() {

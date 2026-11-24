@@ -268,12 +268,14 @@ export const RATE_LIMIT_IDS = {
 	DEVELOPER_AUTH_FAILURE: "rl_developer_auth_failure",
 	/** Desktop meeting clip transcription (speech provider cost). Suggested: 1200 / 1h per key (user). */
 	MEETINGS_TRANSCRIBE: "rl_meetings_transcribe",
-	/** Desktop meeting notes generation (LLM cost). Suggested: 60 / 1h per key (user). */
+	/** Desktop meeting notes generation (LLM cost): one unit per request plus one per started 100 KB of body past the first. Suggested: 60 / 1h per key (user). */
 	MEETINGS_NOTES: "rl_meetings_notes",
-	/** Desktop meeting questions (LLM cost). Suggested: 120 / 1h per key (user). */
+	/** Desktop meeting questions (LLM cost): one unit per request plus one per started 100 KB of body past the first. Suggested: 120 / 1h per key (user). */
 	MEETINGS_ASK: "rl_meetings_ask",
-	/** Desktop meeting audio, charged one unit per started 10 s of audio (see `checkFirewallRateLimitUnits`). Suggested: 720 / 1h per key (user); firewall windows stop at one hour, so the daily cap only exists in the in-process fallback. */
+	/** Desktop meeting audio, charged one unit per started 10 s of audio (see `checkFirewallRateLimitUnits`). Suggested: 720 / 1h per key (user). Firewall windows stop at one hour; the daily cap is kept in the database (lib/meetings/audio-usage.ts). */
 	MEETINGS_AUDIO: "rl_meetings_audio",
+	/** Desktop meeting requests whose sign-in was not accepted. Suggested: 60 / 1m per IP. */
+	MEETINGS_AUTH_FAILURE: "rl_meetings_auth_failure",
 } as const;
 
 type FallbackRateLimit = { limit: number; windowMs: number };
@@ -351,6 +353,7 @@ const FALLBACK_RATE_LIMITS: Record<string, FallbackRateLimit> = {
 		limit: 3_600,
 		windowMs: 24 * 60 * MINUTE_MS,
 	},
+	[RATE_LIMIT_IDS.MEETINGS_AUTH_FAILURE]: { limit: 60, windowMs: MINUTE_MS },
 };
 
 const DEFAULT_FALLBACK_RATE_LIMIT: FallbackRateLimit = {

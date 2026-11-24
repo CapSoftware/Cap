@@ -51,13 +51,16 @@ export function chunkTranscript(text: string, maxChars: number): string[] {
 	return chunks.filter((chunk) => chunk.trim().length > 0);
 }
 
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+
 function splitLongLine(line: string, maxChars: number): string[] {
 	const pieces: string[] = [];
 	let rest = line;
 	while (rest.length > maxChars) {
 		const window = rest.slice(0, maxChars);
 		const space = window.lastIndexOf(" ");
-		const cut = space > maxChars / 2 ? space : maxChars;
+		let cut = space > maxChars / 2 ? space : maxChars;
+		if (isHighSurrogate(rest.charCodeAt(cut - 1))) cut -= 1;
 		pieces.push(rest.slice(0, cut));
 		rest = rest.slice(cut).trimStart();
 	}
@@ -366,12 +369,15 @@ function countMatches(haystack: string, needle: string): number {
 	return count;
 }
 
+// `budget` is in the unit `measure` counts: characters by default, or bytes
+// for a free meeting's question.
 export function selectTranscriptExcerpts(
 	transcript: string,
 	query: string,
 	budget: number,
+	measure: (text: string) => number = (text) => text.length,
 ): { text: string; excerpted: boolean } {
-	if (transcript.length <= budget)
+	if (measure(transcript) <= budget)
 		return { text: transcript, excerpted: false };
 
 	const parts = chunkTranscript(transcript, ASK_EXCERPT_CHARS);
@@ -397,11 +403,20 @@ export function selectTranscriptExcerpts(
 	let used = 0;
 	for (const candidate of ranked) {
 		const length =
-			(parts[candidate.index]?.length ?? 0) + EXCERPT_SEPARATOR.length;
+			measure(parts[candidate.index] ?? "") + measure(EXCERPT_SEPARATOR);
 		if (used + length > budget) continue;
 		chosen.push(candidate.index);
 		used += length;
 	}
+
+	// With room for less than one whole excerpt, the most related one is
+	// shortened to fit rather than left out.
+	const best = ranked[0];
+	if (chosen.length === 0 && best)
+		return {
+			text: prefixWithin(parts[best.index] ?? "", budget, measure),
+			excerpted: true,
+		};
 
 	return {
 		text: chosen
@@ -412,8 +427,28 @@ export function selectTranscriptExcerpts(
 	};
 }
 
+function prefixWithin(
+	text: string,
+	budget: number,
+	measure: (text: string) => number,
+): string {
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (measure(text.slice(0, mid)) <= budget) low = mid;
+		else high = mid - 1;
+	}
+	return isHighSurrogate(text.charCodeAt(low - 1))
+		? text.slice(0, low - 1)
+		: text.slice(0, low);
+}
+
 export function buildAskPrompt(
-	input: MeetingAskRequest & { boundary: string },
+	input: MeetingAskRequest & {
+		boundary: string;
+		transcriptBytes?: number;
+	},
 ): {
 	system: string;
 	messages: { role: "user" | "assistant"; content: string }[];
@@ -430,11 +465,19 @@ export function buildAskPrompt(
 			.map((turn) => turn.content),
 		input.question,
 	].join(" ");
-	const transcript = selectTranscriptExcerpts(
-		input.transcript,
-		rankingQuery,
-		ASK_TRANSCRIPT_CHARS,
-	);
+	const transcript =
+		input.transcriptBytes === undefined
+			? selectTranscriptExcerpts(
+					input.transcript,
+					rankingQuery,
+					ASK_TRANSCRIPT_CHARS,
+				)
+			: selectTranscriptExcerpts(
+					input.transcript,
+					rankingQuery,
+					input.transcriptBytes,
+					(text) => Buffer.byteLength(text),
+				);
 
 	const system = [
 		"You answer questions about one meeting for the person who recorded it, using only that meeting's material.",

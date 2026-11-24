@@ -3,7 +3,9 @@ import datetime, json, os, re, sys
 R, DOC = sys.argv[1], sys.argv[2]
 meta = json.load(open(os.path.join(DOC, "doc.json")))
 st = (meta.get("meeting") or {}).get("startedAt")
-st_ms = int(datetime.datetime.fromisoformat(st.replace("Z", "+00:00")).timestamp() * 1000)
+# Python before 3.11 parses at most six fractional digits; the app writes nine.
+st = re.sub(r"(\.\d{6})\d+", r"\1", st.replace("Z", "+00:00"))
+st_ms = int(datetime.datetime.fromisoformat(st).timestamp() * 1000)
 mic = sys_ = None
 for line in open(os.path.join(R, "run.txt")):
     if line.startswith("mic "):

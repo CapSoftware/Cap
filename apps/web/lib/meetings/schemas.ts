@@ -232,6 +232,10 @@ export function parseTranscribeQuery(input: {
 	};
 }
 
+export function isJsonContentType(value: string | undefined): boolean {
+	return value?.split(";")[0]?.trim().toLowerCase() === "application/json";
+}
+
 export function isWavContentType(value: string | undefined): boolean {
 	const mediaType = value?.split(";")[0]?.trim().toLowerCase();
 	return mediaType === "audio/wav" || mediaType === "audio/x-wav";

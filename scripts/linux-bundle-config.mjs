@@ -4,20 +4,24 @@ export function supportedLinuxBundles(version) {
 		: ["deb", "rpm", "appimage"];
 }
 
+// Libraries are required by soname, which every rpm distribution provides
+// under the same name (Fedora and openSUSE name the packages differently).
 export const RPM_DEPENDS = [
-	"libva",
+	"libva.so.2()(64bit)",
+	"libva-drm.so.2()(64bit)",
 	"pulseaudio-utils",
-	"pipewire-libs",
-	"alsa-lib",
-	"alsa-plugins-pulseaudio",
-	"libxkbcommon",
-	"libxkbcommon-x11",
-	"libX11",
-	"openssl-libs",
-	"libwayland-client",
-	"libwayland-egl",
-	"libglvnd-egl",
-	"vulkan-loader",
+	"libpipewire-0.3.so.0()(64bit)",
+	"libasound.so.2()(64bit)",
+	"(alsa-plugins-pulseaudio or alsa-plugins-pulse)",
+	"libxkbcommon.so.0()(64bit)",
+	"libxkbcommon-x11.so.0()(64bit)",
+	"libX11.so.6()(64bit)",
+	"libssl.so.3()(64bit)",
+	"libcrypto.so.3()(64bit)",
+	"libwayland-client.so.0()(64bit)",
+	"libwayland-egl.so.1()(64bit)",
+	"libEGL.so.1()(64bit)",
+	"libvulkan.so.1()(64bit)",
 ];
 
 // Paths are relative to apps/desktop-gpui, where the config is written.
