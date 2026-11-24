@@ -110,6 +110,8 @@ type InstantRecordingCreateInput = Schema.Type<
 >;
 type OptionValue<T> = T extends Option.Option<infer Value> ? Value : never;
 type RepoMetadataValue = OptionValue<RepoCreateVideoInput["metadata"]>;
+
+const INSTANT_UPLOAD_OPEN_MS = (1800 + 60) * 1000;
 type RepoTranscriptionStatusValue = OptionValue<
 	RepoCreateVideoInput["transcriptionStatus"]
 >;
@@ -723,7 +725,11 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						width,
 						height,
 						duration,
-						metadata: Option.none<RepoMetadataValue>(),
+						metadata: Option.some<RepoMetadataValue>({
+							freePlanUploadOpenUntil: new Date(
+								now.getTime() + INSTANT_UPLOAD_OPEN_MS,
+							).toISOString(),
+						}),
 						transcriptionStatus: Option.none<RepoTranscriptionStatusValue>(),
 					};
 					const videoId = yield* repo.create(createData, {

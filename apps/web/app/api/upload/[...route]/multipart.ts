@@ -27,6 +27,10 @@ import {
 } from "@/lib/desktop-reupload-token";
 import { startFaststartRemux } from "@/lib/faststart-remux";
 import { FREE_PLAN_DURATION_GRACE_SECONDS } from "@/lib/free-plan-duration";
+import {
+	measureFreePlanObject,
+	runAfterResponse,
+} from "@/lib/free-plan-measure-probe";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import {
 	getMediaProcessingRejection,
@@ -692,6 +696,9 @@ app.post(
 							queueVideoTranscription(videoId),
 						).pipe(Effect.catchAll(Effect.logWarning));
 					}
+					runAfterResponse(() =>
+						measureFreePlanObject(videoId, outputKey, { anyAge: true }),
+					);
 					return c.json({
 						success: true,
 						fileKey: outputKey,
@@ -1054,6 +1061,13 @@ app.post(
 							),
 						);
 					}
+
+					if (subpath === "result.mp4")
+						runAfterResponse(() =>
+							measureFreePlanObject(Video.VideoId.make(videoId), fileKey, {
+								anyAge: true,
+							}),
+						);
 
 					return c.json({
 						location: result.Location,
