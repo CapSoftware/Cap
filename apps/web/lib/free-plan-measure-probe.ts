@@ -9,6 +9,7 @@ import {
 } from "@/lib/free-plan-duration";
 import {
 	loadLimitedVideo,
+	measureHoldsVideo,
 	needsFreePlanMeasure,
 	readFreePlanMeasure,
 	recordFreePlanMeasure,
@@ -23,21 +24,46 @@ import { runWorkflowPromise } from "@/lib/workflow-runtime";
 const PROBE_URL_EXPIRES_SECONDS = 10 * 60;
 const MAX_CONCURRENT_MEASUREMENTS = 4;
 
-const FAILED_PROBE_RETRY_MS = 60_000;
-const MAX_FAILED_PROBES = 5_000;
+const UNAVAILABLE_RETRY_MS = 60_000;
+const MAX_UNAVAILABLE_ENTRIES = 5_000;
 
 const FIRST_VIEW_MEASURE_TIMEOUT_MS = 5_000;
 
-const inFlight = new Map<string, Promise<number | null | undefined>>();
-const failedUntil = new Map<string, number>();
+// Measured: the length is known (null when the file has no measurable
+// length, such as an upload that is still being written). Unmeasurable: the
+// media server gave up on this file. Skipped: nothing was measured, because
+// the video is not limited or the media server cannot be reached.
+export type FreePlanMeasureOutcome =
+	| { kind: "measured"; seconds: number | null }
+	| { kind: "unmeasurable" }
+	| { kind: "skipped" };
 
-const failureKey = (videoId: string, key: string) => `${videoId}:${key}`;
+const SKIPPED: FreePlanMeasureOutcome = { kind: "skipped" };
+
+const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
+const unavailableUntil = new Map<string, number>();
+const waiting: Array<() => void> = [];
+let running = 0;
+
+const objectKey = (videoId: string, key: string) => `${videoId}:${key}`;
+
+async function withMeasurementSlot<T>(task: () => Promise<T>): Promise<T> {
+	if (running >= MAX_CONCURRENT_MEASUREMENTS)
+		await new Promise<void>((resolve) => waiting.push(resolve));
+	running += 1;
+	try {
+		return await task();
+	} finally {
+		running -= 1;
+		waiting.shift()?.();
+	}
+}
 
 async function probeStoredObject(
 	video: typeof videos.$inferSelect,
 	key: string,
-): Promise<{ seconds: number | null } | null> {
-	if (!isMediaServerConfigured()) return null;
+): Promise<FreePlanMeasureOutcome | "unavailable"> {
+	if (!isMediaServerConfigured()) return "unavailable";
 	const [bucket] = await Storage.getAccessForVideo(
 		decodeStorageVideo(video),
 	).pipe(runWorkflowPromise);
@@ -46,29 +72,30 @@ async function probeStoredObject(
 		.pipe(runWorkflowPromise);
 	const attempt = await tryProbeVideoViaMediaServer(url);
 	if (attempt.status === "ok")
-		return { seconds: measuredMediaSeconds(attempt.metadata) };
+		return {
+			kind: "measured",
+			seconds: measuredMediaSeconds(attempt.metadata),
+		};
+	if (attempt.status === "timed_out") return { kind: "unmeasurable" };
 	if (attempt.status === "rejected" && attempt.unusable)
-		return { seconds: null };
-	return null;
+		return { kind: "measured", seconds: null };
+	return "unavailable";
 }
 
-// Resolves to the measured length, null when it cannot be known, or
-// undefined when nothing was measured.
 export function measureFreePlanObject(
 	videoId: Video.VideoId,
 	key: string,
 	{ anyAge = false }: { anyAge?: boolean } = {},
-): Promise<number | null | undefined> {
-	const running = inFlight.get(videoId);
-	if (running) return running;
-	if (inFlight.size >= MAX_CONCURRENT_MEASUREMENTS)
-		return Promise.resolve(undefined);
-	if ((failedUntil.get(failureKey(videoId, key)) ?? 0) > Date.now())
-		return Promise.resolve(undefined);
-	const measurement = measureNow(videoId, key, anyAge).finally(() =>
-		inFlight.delete(videoId),
-	);
-	inFlight.set(videoId, measurement);
+): Promise<FreePlanMeasureOutcome> {
+	const id = objectKey(videoId, key);
+	const current = inFlight.get(id);
+	if (current) return current;
+	if ((unavailableUntil.get(id) ?? 0) > Date.now())
+		return Promise.resolve(SKIPPED);
+	const measurement = withMeasurementSlot(() =>
+		measureNow(videoId, key, anyAge),
+	).finally(() => inFlight.delete(id));
+	inFlight.set(id, measurement);
 	return measurement;
 }
 
@@ -76,30 +103,32 @@ async function measureNow(
 	videoId: Video.VideoId,
 	key: string,
 	anyAge: boolean,
-): Promise<number | null | undefined> {
+): Promise<FreePlanMeasureOutcome> {
 	try {
-		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return undefined;
+		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return SKIPPED;
 		const video = await loadLimitedVideo(videoId, { anyAge });
-		if (!video) return undefined;
-		const measured = await probeStoredObject(video, key);
-		if (!measured) {
-			if (failedUntil.size >= MAX_FAILED_PROBES) failedUntil.clear();
-			failedUntil.set(
-				failureKey(videoId, key),
-				Date.now() + FAILED_PROBE_RETRY_MS,
-			);
-			return undefined;
+		if (!video) return SKIPPED;
+		const outcome = await probeStoredObject(video, key);
+		const id = objectKey(videoId, key);
+		if (outcome === "unavailable") {
+			if (unavailableUntil.size >= MAX_UNAVAILABLE_ENTRIES)
+				unavailableUntil.clear();
+			unavailableUntil.set(id, Date.now() + UNAVAILABLE_RETRY_MS);
+			return SKIPPED;
 		}
-		failedUntil.delete(failureKey(videoId, key));
+		unavailableUntil.delete(id);
+		if (outcome.kind === "unmeasurable") {
+			await recordFreePlanMeasure(videoId, key, null, { unmeasurable: true });
+			return outcome;
+		}
+		if (outcome.kind !== "measured") return outcome;
 		if (
-			measured.seconds === null &&
-			exceedsFreePlanMeasuredDuration(
-				readFreePlanMeasure(video.metadata)?.seconds ?? null,
-			)
+			outcome.seconds === null &&
+			measureHoldsVideo(readFreePlanMeasure(video.metadata))
 		)
-			return undefined;
-		await recordFreePlanMeasure(videoId, key, measured.seconds);
-		return measured.seconds;
+			return { kind: "unmeasurable" };
+		await recordFreePlanMeasure(videoId, key, outcome.seconds);
+		return outcome;
 	} catch (error) {
 		console.error(
 			"[free-plan-measure] Could not measure %s (%s):",
@@ -107,33 +136,47 @@ async function measureNow(
 			key,
 			error,
 		);
-		return undefined;
+		return SKIPPED;
 	}
 }
 
+export type FirstViewDecision = "play" | "held" | "pending";
+
+const decisionFor = (outcome: FreePlanMeasureOutcome): FirstViewDecision =>
+	outcome.kind === "unmeasurable" ||
+	(outcome.kind === "measured" &&
+		exceedsFreePlanMeasuredDuration(outcome.seconds))
+		? "held"
+		: "play";
+
 // Someone other than the owner is about to play an object nobody has
 // measured yet: measure it first, so a video over the limit is never served
-// before it is held.
-export async function isHeldOnFirstView(
+// before it is held. A measurement still running after a few seconds leaves
+// the video pending, and the viewer tries again. An unreachable media server
+// leaves the video playable, as it was before measuring.
+export async function firstViewDecision(
 	video: { id: Video.VideoId; createdAt: Date; metadata: object | null },
 	key: string,
-): Promise<boolean> {
+): Promise<FirstViewDecision> {
 	try {
-		if (!needsFreePlanMeasure(video, key)) return false;
+		if (!needsFreePlanMeasure(video, key)) return "play";
 		let timer: Parameters<typeof clearTimeout>[0];
-		const seconds = await Promise.race([
+		const outcome = await Promise.race([
 			measureFreePlanObject(video.id, key),
-			new Promise<undefined>((resolve) => {
-				timer = setTimeout(resolve, FIRST_VIEW_MEASURE_TIMEOUT_MS);
+			new Promise<"pending">((resolve) => {
+				timer = setTimeout(
+					() => resolve("pending"),
+					FIRST_VIEW_MEASURE_TIMEOUT_MS,
+				);
 			}),
 		]).finally(() => clearTimeout(timer));
-		return exceedsFreePlanMeasuredDuration(seconds ?? null);
+		return outcome === "pending" ? "pending" : decisionFor(outcome);
 	} catch (error) {
 		console.error(
 			"[free-plan-measure] Could not measure before viewing:",
 			error,
 		);
-		return false;
+		return "play";
 	}
 }
 

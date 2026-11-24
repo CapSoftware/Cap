@@ -19,6 +19,7 @@ export type FreePlanMeasure = {
 	key: string;
 	seconds: number | null;
 	at: string;
+	unmeasurable: boolean;
 };
 
 type MetadataInput = object | null | undefined;
@@ -31,14 +32,24 @@ export function readFreePlanMeasure(
 ): FreePlanMeasure | null {
 	const value = metadataField(metadata, FREE_PLAN_MEASURE_KEY);
 	if (!value || typeof value !== "object") return null;
-	const { key, seconds, at } = value as Record<string, unknown>;
+	const { key, seconds, at, unmeasurable } = value as Record<string, unknown>;
 	if (typeof key !== "string" || typeof at !== "string") return null;
 	return {
 		key,
 		seconds:
 			typeof seconds === "number" && Number.isFinite(seconds) ? seconds : null,
 		at,
+		unmeasurable: unmeasurable === true,
 	};
+}
+
+// A measurement that holds the video: longer than the limit, or a file the
+// media server gave up measuring.
+export function measureHoldsVideo(measure: FreePlanMeasure | null): boolean {
+	return (
+		measure !== null &&
+		(measure.unmeasurable || exceedsFreePlanMeasuredDuration(measure.seconds))
+	);
 }
 
 function readUploadOpenUntil(metadata: MetadataInput): number | null {
@@ -118,8 +129,7 @@ export async function isVideoOverFreePlanDuration(video: {
 }): Promise<boolean> {
 	if (!buildEnv.NEXT_PUBLIC_IS_CAP || video.isScreenshot) return false;
 	const measure = readFreePlanMeasure(video.metadata);
-	if (!measure || !exceedsFreePlanMeasuredDuration(measure.seconds))
-		return false;
+	if (!measureHoldsVideo(measure)) return false;
 	if (!(await desktopLimitApplies(video.id))) return false;
 	const [imported] = await db()
 		.select({ id: importedVideos.id })
@@ -153,11 +163,14 @@ export async function recordFreePlanMeasure(
 	videoId: Video.VideoId,
 	key: string,
 	seconds: number | null,
+	{ unmeasurable = false }: { unmeasurable?: boolean } = {},
 ): Promise<void> {
 	await db()
 		.update(videos)
 		.set({
-			metadata: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.freePlanMeasure', JSON_OBJECT('key', ${key}, 'seconds', ${seconds}, 'at', ${new Date().toISOString()}))`,
+			metadata: unmeasurable
+				? sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.freePlanMeasure', JSON_OBJECT('key', ${key}, 'seconds', ${seconds}, 'at', ${new Date().toISOString()}, 'unmeasurable', TRUE))`
+				: sql`JSON_SET(COALESCE(${videos.metadata}, JSON_OBJECT()), '$.freePlanMeasure', JSON_OBJECT('key', ${key}, 'seconds', ${seconds}, 'at', ${new Date().toISOString()}))`,
 		})
 		.where(eq(videos.id, videoId));
 }
@@ -223,24 +236,26 @@ export async function loadLimitedVideo(
 	return video;
 }
 
+// Resolves to whether the video is held by this length.
 export async function recordFreePlanOverLength(
 	videoId: Video.VideoId,
 	key: string,
 	seconds: number,
 	{ anyAge = false }: { anyAge?: boolean } = {},
-): Promise<void> {
-	if (!exceedsFreePlanMeasuredDuration(seconds)) return;
+): Promise<boolean> {
+	if (!exceedsFreePlanMeasuredDuration(seconds)) return false;
 	try {
-		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return;
+		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return false;
 		const video = await loadLimitedVideo(videoId, { anyAge });
-		if (!video) return;
+		if (!video) return false;
 		const measure = readFreePlanMeasure(video.metadata);
 		if (
 			measure?.key === key &&
 			exceedsFreePlanMeasuredDuration(measure.seconds)
 		)
-			return;
+			return true;
 		await recordFreePlanMeasure(videoId, key, seconds);
+		return true;
 	} catch (error) {
 		console.error(
 			"[free-plan-measure] Could not record %s (%s):",
@@ -248,5 +263,6 @@ export async function recordFreePlanOverLength(
 			key,
 			error,
 		);
+		return false;
 	}
 }
