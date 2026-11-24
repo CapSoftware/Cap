@@ -39,7 +39,8 @@ export const parsePromotionCode = (value: unknown): string | null =>
 		? value.trim().toUpperCase()
 		: null;
 
-// Cap Friday is half off Cap Pro Yearly only.
+// Stripe applies a promotion code to every price of a product, so the
+// yearly-only rule for the Cap Friday code is enforced here.
 export const isYearlyOnlyPromotion = (value: unknown): boolean =>
 	parsePromotionCode(value) === CAP_FRIDAY_CODE;
 
