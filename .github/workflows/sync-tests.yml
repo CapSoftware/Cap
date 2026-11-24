@@ -142,10 +142,10 @@ jobs:
           RUST_TARGET_TRIPLE: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-gnu' || runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
         run: node scripts/setup.js
 
-      - name: Add FFmpeg DLLs to PATH
+      - name: FFmpeg DLLs and tools on PATH
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg\\bin"
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\\target\\ffmpeg-tools\\bin", "${{ github.workspace }}\\target\\ffmpeg\\bin"
 
       - name: RNNoise lifecycle regression tests
         if: contains(format(',{0},', matrix.parts), ',units,')

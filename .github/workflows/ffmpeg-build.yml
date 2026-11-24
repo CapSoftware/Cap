@@ -2,9 +2,6 @@ name: FFmpeg build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - "build/cap-ffmpeg"
   pull_request:
     paths:
       - "scripts/ffmpeg/**"

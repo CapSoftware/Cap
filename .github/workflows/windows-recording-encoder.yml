@@ -85,9 +85,9 @@ jobs:
           RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
         run: node scripts/setup.js
 
-      - name: FFmpeg DLLs on PATH
+      - name: FFmpeg DLLs and tools on PATH
         shell: pwsh
-        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\target\ffmpeg\bin"
+        run: Add-Content -Path $env:GITHUB_PATH -Value "${{ github.workspace }}\target\ffmpeg-tools\bin", "${{ github.workspace }}\target\ffmpeg\bin"
 
       - name: Segmented encoder tests
         run: cargo test --locked -p cap-enc-ffmpeg --lib mux::segmented_stream -- --nocapture
