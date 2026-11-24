@@ -138,6 +138,44 @@ describe("free plan measured lock", () => {
 		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(true);
 	});
 
+	it("exempts only recordings published by the desktop pipeline", async () => {
+		const desktopMp4 = (outputKey?: string) => [
+			{
+				id: "video-1",
+				ownerId: "owner-1",
+				source: { type: "desktopMP4", outputKey },
+				createdAt: afterCutoff,
+			},
+		];
+		mocks.rows = [
+			desktopMp4("owner-1/video-1/.recording/outputs/abc/result.mp4"),
+		];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
+		mocks.rows = [desktopMp4(), [], [free], [free]];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(true);
+		mocks.rows = [
+			desktopMp4("owner-2/video-1/.recording/outputs/abc/result.mp4"),
+			[],
+			[free],
+			[free],
+		];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(true);
+		mocks.rows = [
+			[
+				{
+					id: "video-1",
+					ownerId: "owner-1",
+					source: { type: "MediaConvert" },
+					createdAt: afterCutoff,
+				},
+			],
+			[],
+			[free],
+			[free],
+		];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(true);
+	});
+
 	it("unlocks when the owner or the organization owner has Pro", async () => {
 		mocks.rows = [
 			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],

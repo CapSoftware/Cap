@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { importedVideos, videos } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
+import { getPublishedRecordingOutputKey } from "@cap/web-backend/src/Storage/recording-output";
 import type { Video } from "@cap/web-domain";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -73,27 +74,33 @@ export function needsFreePlanMeasure(
 	return measuredAt <= openUntil && now - measuredAt >= REMEASURE_INTERVAL_MS;
 }
 
-const DESKTOP_SOURCE_TYPES = new Set([
-	"desktopMP4",
-	"desktopSegments",
-	"local",
-	"MediaConvert",
-]);
-
-// Desktop recordings are only held once the desktop release that stops free
-// recordings at the limit is out, and never ones made before it.
+// Recordings published by the desktop recording pipeline are only held once
+// the desktop release that stops free recordings at the limit is out, and
+// never ones made before it. Anything else, including other desktop uploads,
+// is held as soon as it is measured.
 function desktopLimitAppliesTo(video: {
-	source: { type: string };
+	id: string;
+	ownerId: string;
+	source: { type: string; outputKey?: string };
 	createdAt: Date;
 }): boolean {
-	if (!DESKTOP_SOURCE_TYPES.has(video.source.type)) return true;
+	const fromRecordingPipeline =
+		video.source.type === "desktopSegments" ||
+		(video.source.type === "desktopMP4" &&
+			getPublishedRecordingOutputKey(video) !== undefined);
+	if (!fromRecordingPipeline) return true;
 	const from = serverEnv().CAP_FREE_PLAN_DESKTOP_LIMIT_FROM;
 	return from !== undefined && video.createdAt >= new Date(from);
 }
 
 async function desktopLimitApplies(videoId: Video.VideoId): Promise<boolean> {
 	const [video] = await db()
-		.select({ source: videos.source, createdAt: videos.createdAt })
+		.select({
+			id: videos.id,
+			ownerId: videos.ownerId,
+			source: videos.source,
+			createdAt: videos.createdAt,
+		})
 		.from(videos)
 		.where(eq(videos.id, videoId))
 		.limit(1);
