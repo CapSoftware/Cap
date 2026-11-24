@@ -467,7 +467,7 @@ pub struct RecordingSession {
     paused_since: Option<Instant>,
     storage_monitor: Option<Task<()>>,
     limit_monitor: Option<Task<()>>,
-    limit_started_upgraded: bool,
+    limit_started_at: i64,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
@@ -533,7 +533,7 @@ impl RecordingSession {
             paused_since: None,
             storage_monitor: None,
             limit_monitor: None,
-            limit_started_upgraded: false,
+            limit_started_at: 0,
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
@@ -1092,7 +1092,7 @@ impl RecordingSession {
             .as_ref()
             .and_then(ActiveRecording::recording_limit)
         {
-            self.limit_started_upgraded = crate::store::auth_snapshot().is_upgraded();
+            self.limit_started_at = chrono::Utc::now().timestamp();
             self.monitor_recording_limit(limit, project_dir.clone(), cx);
         }
         self.monitor_storage(project_dir, cx);
@@ -1173,12 +1173,10 @@ impl RecordingSession {
     }
 
     /// Time left before the plan's recording limit stops this recording, or
-    /// `None` when it has no limit or the account was upgraded after it
-    /// started. The server only sets a limit for a free account, so a Pro plan
-    /// saved before the recording started is out of date and does not lift it.
+    /// `None` when it has no limit or a plan fetched since it started is Pro.
     pub fn recording_time_left(&self) -> Option<Duration> {
         let limit = self.active.as_ref()?.recording_limit()?;
-        if !self.limit_started_upgraded && crate::store::auth_snapshot().is_upgraded() {
+        if upgrade_lifts_limit(&crate::store::auth_snapshot(), self.limit_started_at) {
             return None;
         }
         Some(limit.saturating_sub(self.elapsed()))
@@ -3173,5 +3171,43 @@ mod studio_editor_presentation_tests {
         assert_eq!(state, StudioEditorPresentation::Opened(2));
         state.closed(2);
         assert_eq!(state, StudioEditorPresentation::Dismissed);
+    }
+}
+
+/// The server only sets a recording limit for a free account, so a Pro plan
+/// saved before the recording started is out of date. Only a plan fetched
+/// after it started can lift the limit.
+fn upgrade_lifts_limit(auth: &crate::store::AuthSnapshot, started_at: i64) -> bool {
+    auth.plan_upgraded
+        && auth
+            .plan_checked_at
+            .is_some_and(|checked_at| checked_at > started_at)
+}
+
+#[cfg(test)]
+mod recording_limit_tests {
+    use super::upgrade_lifts_limit;
+    use crate::store::AuthSnapshot;
+
+    fn plan(upgraded: bool, checked_at: Option<i64>) -> AuthSnapshot {
+        AuthSnapshot {
+            plan_upgraded: upgraded,
+            plan_checked_at: checked_at,
+            ..AuthSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn only_a_pro_plan_fetched_after_the_start_lifts_the_limit() {
+        let started = 1_000;
+        assert!(!upgrade_lifts_limit(&plan(true, Some(900)), started));
+        assert!(!upgrade_lifts_limit(&plan(true, None), started));
+        assert!(!upgrade_lifts_limit(&plan(false, Some(1_010)), started));
+        assert!(upgrade_lifts_limit(&plan(true, Some(1_010)), started));
+        let manual = AuthSnapshot {
+            plan_manual: true,
+            ..AuthSnapshot::default()
+        };
+        assert!(!upgrade_lifts_limit(&manual, started));
     }
 }

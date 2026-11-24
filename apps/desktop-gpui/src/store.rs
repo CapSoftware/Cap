@@ -1964,6 +1964,8 @@ pub struct AuthSnapshot {
     pub token: Option<String>,
     pub plan_upgraded: bool,
     pub plan_manual: bool,
+    /// When the plan was last fetched from the server, in Unix seconds.
+    pub plan_checked_at: Option<i64>,
     pub organizations: Vec<AuthOrganization>,
 }
 
@@ -2019,6 +2021,9 @@ pub fn auth_snapshot() -> AuthSnapshot {
         .and_then(|plan| plan.get("manual"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let plan_checked_at = plan
+        .and_then(|plan| plan.get("last_checked"))
+        .and_then(Value::as_i64);
     let organizations = auth
         .get("organizations")
         .and_then(Value::as_array)
@@ -2048,6 +2053,7 @@ pub fn auth_snapshot() -> AuthSnapshot {
         token,
         plan_upgraded,
         plan_manual,
+        plan_checked_at,
         organizations,
     }
 }
