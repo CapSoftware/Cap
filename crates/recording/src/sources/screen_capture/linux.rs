@@ -1970,24 +1970,17 @@ pub(crate) fn microphone_input_device(label: &str) -> Option<String> {
     .then(|| "pulse".to_string())
 }
 
-/// The output Cap plays its own sounds through when ALSA "default" playback
-/// is the bare sound card and a sound server runs. Opening the card would
-/// take the speakers from the server, which silences other apps and the
+/// The ALSA output Cap plays its own sounds through when ALSA "default"
+/// playback is the bare sound card and a sound server runs. Opening the card
+/// would take the speakers from the server, which silences other apps and the
 /// server's monitor that Cap records system audio from.
-pub fn sound_server_output_device() -> Option<cpal::Device> {
+pub fn sound_server_output() -> Option<&'static str> {
     use alsa_input_backend::{CaptureBackend, playback_backend};
-    use cpal::traits::{DeviceTrait, HostTrait};
 
-    if playback_backend("default").ok()? != CaptureBackend::Hardware
-        || playback_backend("pulse").ok()? != CaptureBackend::Pulse
-        || pactl_default_sink().is_none()
-    {
-        return None;
-    }
-    cpal::default_host()
-        .output_devices()
-        .ok()?
-        .find(|device| device.name().is_ok_and(|name| name == "pulse"))
+    (playback_backend("default").ok()? == CaptureBackend::Hardware
+        && playback_backend("pulse").ok()? == CaptureBackend::Pulse
+        && pactl_default_sink().is_some())
+    .then_some("pulse")
 }
 
 fn routes_default_microphone_through_server(

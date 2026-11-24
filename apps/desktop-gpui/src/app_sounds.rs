@@ -119,10 +119,18 @@ mod tests {
 pub(crate) fn open_output() -> Result<(OutputStream, rodio::OutputStreamHandle), rodio::StreamError>
 {
     #[cfg(target_os = "linux")]
-    if let Some(device) = cap_recording::sources::screen_capture::sound_server_output_device()
-        && let Ok(output) = OutputStream::try_from_device(&device)
-    {
-        return Ok(output);
+    if let Some(name) = cap_recording::sources::screen_capture::sound_server_output() {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+        if let Some(output) = rodio::cpal::default_host()
+            .output_devices()
+            .ok()
+            .and_then(|mut devices| {
+                devices.find(|device| device.name().is_ok_and(|device_name| device_name == name))
+            })
+            .and_then(|device| OutputStream::try_from_device(&device).ok())
+        {
+            return Ok(output);
+        }
     }
     OutputStream::try_default()
 }

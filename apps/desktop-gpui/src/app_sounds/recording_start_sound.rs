@@ -1,7 +1,7 @@
 use std::{io::Cursor, sync::mpsc, time::Duration};
 
 use cap_recording::RecordingStartGate;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, Sink};
 
 // The cue is under half a second; a device that has not finished it by now
 // (route change mid-countdown, stalled engine) must not hold the recording back.
