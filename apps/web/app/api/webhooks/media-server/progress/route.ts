@@ -22,6 +22,7 @@ import {
 	measuredMediaSeconds,
 } from "@/lib/free-plan-duration";
 import { rejectFreePlanOverLimitVideo } from "@/lib/free-plan-duration-rejection";
+import { recordFreePlanMeasure } from "@/lib/free-plan-measure";
 import { invalidateGoogleDriveStorageQuotaCache } from "@/lib/google-drive-storage-quota";
 import { signalLoomImportFinished } from "@/lib/loom-import-signal";
 import { MEDIA_SERVER_SHUTDOWN_MESSAGE } from "@/lib/media-client";
@@ -276,6 +277,24 @@ export async function POST(request: NextRequest) {
 			) {
 				return NextResponse.json({ success: true, status: "rejected" });
 			}
+			const processedSeconds = measuredMediaSeconds(payload.metadata);
+			if (
+				currentVideo &&
+				!isEditUpload &&
+				freePlanLimited &&
+				processedSeconds !== null
+			)
+				await recordFreePlanMeasure(
+					currentVideo.id,
+					`${currentVideo.ownerId}/${currentVideo.id}/result.mp4`,
+					processedSeconds,
+				).catch((error) =>
+					console.error(
+						"[media-server-webhook] Could not record the length of %s:",
+						currentVideo.id,
+						error,
+					),
+				);
 			const receipt = proof
 				? currentVideo && payload.metadata
 					? await createVerifiedRecordingReceipt(
