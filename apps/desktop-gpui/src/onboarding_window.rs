@@ -109,6 +109,14 @@ const WELCOME_CLOUD_LAYERS: [CloudLayer; 3] = [
 /// window is inactive, so it never freezes half-faded.
 const WELCOME_ENTRANCE_SECS: f32 = 3.4;
 
+/// Whether the welcome scene keeps moving after its entrance: in a focused
+/// window, unless motion is reduced or the window draws on the CPU, where
+/// every frame of the scene kept several cores busy. It then rests as it
+/// does in an unfocused window.
+fn welcome_scene_moves(focused: bool, reduce_motion: bool, software: bool) -> bool {
+    focused && !reduce_motion && !software
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 enum Step {
@@ -281,6 +289,8 @@ pub struct OnboardingWindow {
     welcome_scene: f32,
     welcome_tick: Option<std::time::Instant>,
     reduce_motion: bool,
+    /// The window draws on the CPU (no GPU), read on the first welcome frame.
+    software_render: Option<bool>,
     step_delay: Duration,
     audio: Option<OnboardingAudio>,
     muted: bool,
@@ -335,6 +345,7 @@ impl OnboardingWindow {
             welcome_scene: 0.,
             welcome_tick: None,
             reduce_motion: cx.reduce_motion(),
+            software_render: None,
             step_delay: Duration::ZERO,
             audio: welcome.then(|| OnboardingAudio::new(muted, cx)),
             muted,
@@ -966,8 +977,12 @@ impl OnboardingWindow {
         let started = *self.welcome_at.get_or_insert(now);
         let entering = !self.reduce_motion
             && now.duration_since(started).as_secs_f32() < WELCOME_ENTRANCE_SECS;
-        let running =
-            self.welcome_exit_at.is_some() || entering || (self.animated && !self.reduce_motion);
+        let software = *self
+            .software_render
+            .get_or_insert_with(|| window.gpu_specs().is_some_and(|s| s.is_software_emulated));
+        let running = self.welcome_exit_at.is_some()
+            || entering
+            || welcome_scene_moves(self.animated, self.reduce_motion, software);
         if running {
             if let Some(last) = self.welcome_tick {
                 self.welcome_scene += now.duration_since(last).as_secs_f32().min(0.1);
@@ -2891,6 +2906,14 @@ impl Render for OnboardingWindow {
 mod tests {
     use super::*;
     use crate::permissions::{MediaAuthorization, RawPermissions};
+
+    #[test]
+    fn welcome_scene_rests_on_a_software_renderer() {
+        assert!(welcome_scene_moves(true, false, false));
+        assert!(!welcome_scene_moves(true, false, true));
+        assert!(!welcome_scene_moves(true, true, false));
+        assert!(!welcome_scene_moves(false, false, false));
+    }
 
     #[test]
     fn first_run_visits_every_platform_stage_and_back_never_opens_an_omitted_step() {
