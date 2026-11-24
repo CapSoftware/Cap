@@ -37,6 +37,43 @@ export function delimit(
 
 const singleLine = (value: string) => value.replace(/\s+/g, " ").trim();
 
+// The labels each condensed part ends with, so its decisions and tasks reach
+// the final notes as a list rather than only inside the part's summary.
+export const CARRIED_DECISIONS_LABEL = "Decisions:";
+export const CARRIED_TASKS_LABEL = "Action items:";
+
+export type CarriedItems = { decisions: string[]; tasks: string[] };
+
+// Every decision and task the condensed parts list under their labels, in
+// order, without repeats.
+export function carriedItems(sections: string[]): CarriedItems {
+	const carried: CarriedItems = { decisions: [], tasks: [] };
+	const seen = new Set<string>();
+	for (const section of sections) {
+		let list: string[] | null = null;
+		for (const raw of section.split("\n")) {
+			const line = raw.trim();
+			const label = line.toLowerCase();
+			if (label === CARRIED_DECISIONS_LABEL.toLowerCase()) {
+				list = carried.decisions;
+				continue;
+			}
+			if (label === CARRIED_TASKS_LABEL.toLowerCase()) {
+				list = carried.tasks;
+				continue;
+			}
+			if (!list) continue;
+			const item = line.replace(/^[-*•]\s*/, "").trim();
+			if (!item || item === line || /^none\.?$/i.test(item)) continue;
+			const key = `${list === carried.tasks ? "t" : "d"}:${item.toLowerCase()}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			list.push(singleLine(item));
+		}
+	}
+	return carried;
+}
+
 export function chunkTranscript(text: string, maxChars: number): string[] {
 	const chunks: string[] = [];
 	let current = "";
@@ -146,6 +183,12 @@ export function buildNotesPrompt(input: NotesPromptInput): {
 	const hasUserNotes = input.rawNotesMarkdown.trim().length > 0;
 	const hasTranscript =
 		input.source.kind === "sections" || input.source.text.trim().length > 0;
+	const found =
+		input.source.kind === "sections"
+			? carriedItems(input.source.sections)
+			: null;
+	const carried =
+		found && found.decisions.length + found.tasks.length > 0 ? found : null;
 
 	const materialRules = [
 		untrustedDataRules(
@@ -159,6 +202,9 @@ export function buildNotesPrompt(input: NotesPromptInput): {
 			: "- There is no transcript for this meeting, only the note-taker's notes. Organise and tidy them without adding anything.",
 		input.source.kind === "sections"
 			? `- The meeting was long, so its transcript was first condensed into notes for each consecutive part, given in order in <section_notes_${b}>. Treat them as the transcript.`
+			: null,
+		carried
+			? `- <decisions_and_tasks_${b}> lists every decision and agreed task found in those parts, in meeting order. Every one of them must appear in the notes: each decision under the topic it belongs to, each task in the action items. Merge only items that say the same thing.`
 			: null,
 		hasUserNotes
 			? `- <user_notes_${b}> holds the note-taker's own notes. They show what mattered to them: keep every point they wrote, expand it with supporting detail from the transcript, and never drop or contradict it. When the transcript seems to disagree with their notes, follow their notes.`
@@ -238,6 +284,22 @@ export function buildNotesPrompt(input: NotesPromptInput): {
 		: null;
 
 	const source = input.source;
+	const carriedBlock = carried
+		? delimit(
+				"decisions_and_tasks",
+				b,
+				[
+					carried.decisions.length > 0
+						? `Decisions\n${carried.decisions.map((d) => `- ${d}`).join("\n")}`
+						: null,
+					carried.tasks.length > 0
+						? `Action items\n${carried.tasks.map((t) => `- ${t}`).join("\n")}`
+						: null,
+				]
+					.filter(Boolean)
+					.join("\n\n"),
+			)
+		: null;
 	const sourceBlock =
 		source.kind === "sections"
 			? delimit(
@@ -262,6 +324,7 @@ export function buildNotesPrompt(input: NotesPromptInput): {
 		template ? delimit("template", b, template) : null,
 		hasUserNotes ? delimit("user_notes", b, input.rawNotesMarkdown) : null,
 		sourceBlock,
+		carriedBlock,
 		input.previous
 			? delimit("previous_notes", b, input.previous.markdown)
 			: null,
@@ -294,6 +357,7 @@ ${untrustedDataRules(b)}
 - Write "-" bullets in the order things were discussed, covering every topic, decision, open question, number, date, name, commitment and task, with its owner when stated. Keep the speaker label on a statement when it matters who said it.
 - Use only what this part says. Never invent or infer facts, names, numbers or owners. Skip small talk and filler.
 - No headings, preamble or closing remarks.
+- After the bullets, write the line "${CARRIED_DECISIONS_LABEL}" followed by a "-" bullet for every decision made in this part, then the line "${CARRIED_TASKS_LABEL}" followed by a "-" bullet for every task agreed in this part, with its owner and due date when stated. Write both labels exactly as shown, in English, and write "- none" under a label that has nothing.
 - ${languageInstruction(input.summaryLanguage, "the notes")}`,
 	].join("\n\n");
 
