@@ -225,3 +225,160 @@ fn megabytes_of_mixed_hostile_input_finish_quickly() {
         Duration::from_millis(3_000),
     );
 }
+
+fn expand_all(text: &str) -> (Vec<cap_calendar::CalendarEvent>, Duration, usize) {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let opts = ParseOptions {
+        default_zone: Tz::UTC,
+        ..ParseOptions::default()
+    };
+    let baseline = LIVE.load(Ordering::Relaxed);
+    PEAK.store(baseline, Ordering::Relaxed);
+    let started = Instant::now();
+    let cal = parse_calendar(text, &opts);
+    let events = expand(
+        &cal,
+        utc("2026-01-01T00:00:00Z")..utc("2026-03-01T00:00:00Z"),
+        &[],
+    );
+    let elapsed = started.elapsed();
+    let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
+    (events, elapsed, peak)
+}
+
+#[test]
+fn a_huge_description_is_not_copied_to_every_occurrence() {
+    let filler = "agenda ".repeat(MB / 7);
+    let text = feed(1, |i| {
+        vevent(
+            i,
+            &format!(
+                "DTSTART:20260101T000000Z\r\nRRULE:FREQ=HOURLY\r\nDESCRIPTION:{filler}https://zoom.us/j/123456789\r\n"
+            ),
+        )
+    });
+    let (events, elapsed, peak) = expand_all(&text);
+    eprintln!(
+        "1 MB description hourly: {} events, {elapsed:?}, peak {} MB",
+        events.len(),
+        peak / MB
+    );
+    assert_eq!(events.len(), 1_000);
+    assert!(peak < 32 * MB, "peak {} MB", peak / MB);
+    assert!(elapsed < Duration::from_millis(1_500), "took {elapsed:?}");
+    for event in &events {
+        let link = event
+            .link
+            .as_ref()
+            .expect("the link at the end of the description");
+        assert_eq!(link.url, "https://zoom.us/j/123456789");
+        assert!(event.description.as_ref().unwrap().len() <= cap_calendar::MAX_TEXT_BYTES);
+    }
+}
+
+#[test]
+fn thousands_of_attendees_on_a_series_are_cheap() {
+    let people: String = (0..3_000)
+        .map(|n| format!("ATTENDEE;CN=Person {n}:mailto:p{n}@example.com\r\n"))
+        .collect();
+    let text = feed(1, |i| {
+        vevent(
+            i,
+            &format!("DTSTART:20260101T000000Z\r\nRRULE:FREQ=HOURLY\r\n{people}"),
+        )
+    });
+    let (events, elapsed, peak) = expand_all(&text);
+    eprintln!(
+        "3000 attendees hourly: {} events, {elapsed:?}, peak {} MB",
+        events.len(),
+        peak / MB
+    );
+    assert!(!events.is_empty());
+    assert!(peak < 96 * MB, "peak {} MB", peak / MB);
+    assert!(elapsed < Duration::from_millis(1_500), "took {elapsed:?}");
+    assert!(
+        events
+            .iter()
+            .all(|e| e.attendees.len() == cap_calendar::MAX_ATTENDEES)
+    );
+}
+
+#[test]
+fn a_huge_uid_gives_short_stable_ids() {
+    let uid = "u".repeat(MB);
+    let text = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:{uid}\r\nSUMMARY:Standup\r\nDTSTART:20260101T090000Z\r\nRRULE:FREQ=DAILY\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let (first, elapsed, peak) = expand_all(&text);
+    let (second, _, _) = expand_all(&text);
+    eprintln!(
+        "1 MB uid daily: {} events, {elapsed:?}, peak {} MB",
+        first.len(),
+        peak / MB
+    );
+    assert_eq!(first.len(), 59);
+    assert!(peak < 16 * MB, "peak {} MB", peak / MB);
+    let ids: Vec<&str> = first.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        second.iter().map(|e| e.id.as_str()).collect::<Vec<_>>()
+    );
+    assert!(ids.iter().all(|id| id.len() < 128));
+    let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+    assert_eq!(unique.len(), ids.len());
+    assert!(first.iter().all(|e| e.series_id == first[0].series_id));
+}
+
+#[test]
+fn bounding_keeps_the_user_among_many_people() {
+    use cap_calendar::{CalendarEvent, MAX_ATTENDEES, MAX_TITLE_BYTES, Person, Response};
+    let mut attendees: Vec<Person> = (0..MAX_ATTENDEES + 500)
+        .map(|n| Person {
+            name: Some(format!("Person {n}")),
+            email: Some(format!("p{n}@example.com")),
+            ..Person::default()
+        })
+        .collect();
+    attendees.push(Person {
+        email: Some("me@example.com".into()),
+        is_self: true,
+        response: Response::Declined,
+        ..Person::default()
+    });
+    let event = CalendarEvent {
+        id: "e1".into(),
+        title: "é".repeat(MAX_TITLE_BYTES),
+        attendees,
+        ..CalendarEvent::default()
+    }
+    .bounded();
+    assert_eq!(event.id, "e1");
+    assert!(event.title.len() <= MAX_TITLE_BYTES);
+    assert!(event.title.chars().all(|c| c == 'é'));
+    assert_eq!(event.attendees.len(), MAX_ATTENDEES + 1);
+    assert!(
+        event
+            .attendees
+            .iter()
+            .any(|p| p.is_self && p.response == Response::Declined)
+    );
+}
+
+#[test]
+fn titles_and_names_lose_control_and_override_characters() {
+    let text = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:t1\r\nDTSTART:20260105T090000Z\r\n\
+        SUMMARY:\u{202e}exe.txt\u{202c} Q3\u{7}\u{1b}[31m review\\nnext \u{200b}\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} مرحبا\r\n\
+        LOCATION:Room\u{7} 4\r\n\
+        ATTENDEE;CN=\"\u{202e}LAHS\u{202c} Mallory\":mailto:m@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let (events, _, _) = expand_all(text);
+    let event = &events[0];
+    assert_eq!(
+        event.title,
+        "exe.txt\u{202c} Q3[31m review next \u{200b}\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} مرحبا"
+    );
+    assert_eq!(event.location.as_deref(), Some("Room 4"));
+    assert_eq!(
+        event.attendees[0].name.as_deref(),
+        Some("LAHS\u{202c} Mallory")
+    );
+}
