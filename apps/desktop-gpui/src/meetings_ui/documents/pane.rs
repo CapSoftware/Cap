@@ -184,6 +184,8 @@ pub fn notes_error_action(error: &NotesError, palette: &Palette) -> Option<AnyEl
             } else {
                 "notes-sign-in"
             })
+            .role(gpui::Role::Button)
+            .aria_label(label)
             .h(px(26.))
             .px(px(11.))
             .flex()
@@ -1660,12 +1662,20 @@ impl Pane {
             .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
             .when(self.doc.is_some(), |el| {
                 el.child(
-                    style::icon_button(&palette, "toolbar-more", "icons/more-horizontal.svg", 30.)
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(|this, e: &gpui::ClickEvent, _, cx| {
+                    style::icon_button(
+                        &palette,
+                        "toolbar-more",
+                        "icons/more-horizontal.svg",
+                        30.,
+                        tr::meeting::prompt::more(),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(
+                        |this, e: &gpui::ClickEvent, _, cx| {
                             let at = e.position();
                             this.open_doc_menu(point(at.x - px(190.), at.y + px(14.)), cx)
-                        })),
+                        },
+                    )),
                 )
             })
             .into_any_element()
@@ -1753,7 +1763,7 @@ impl Pane {
     fn render_transcript_head(&mut self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.palette;
         let tool = |id: &'static str, icon: &'static str, label: &'static str| {
-            style::icon_button(&palette, id, icon, 28.).tooltip(move |_, cx| {
+            style::icon_button(&palette, id, icon, 28., label).tooltip(move |_, cx| {
                 crate::ui::Tooltip::new(&Theme::new(crate::theme::Appearance::Dark), label).view(cx)
             })
         };
@@ -1791,6 +1801,8 @@ impl Pane {
                         div().flex_1().min_w_0().flex().child(
                             div()
                                 .id("page-transcript-toggle")
+                                .role(gpui::Role::Button)
+                                .aria_label(toggle_label)
                                 .ml(px(-8.))
                                 .h(px(28.))
                                 .pl(px(4.))
@@ -3195,6 +3207,8 @@ impl Pane {
         let palette = self.palette;
         div()
             .id(id)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
             .h(px(24.))
             .px(px(6.))
             .mx(px(-6.))
@@ -3459,17 +3473,23 @@ impl Pane {
             }
         }
         let add_folder = folder.is_none().then(|| {
-            style::icon_button(&palette, "meta-add-folder", "icons/folder-plus.svg", 24.)
-                .tooltip(move |_, cx| {
-                    crate::ui::Tooltip::new(
-                        &Theme::new(crate::theme::Appearance::Dark),
-                        tr::documents::note::add_folder(),
-                    )
-                    .view(cx)
-                })
-                .on_click(cx.listener(|this, e: &gpui::ClickEvent, _, cx| {
-                    this.open_folder_menu(chip_anchor(e), cx)
-                }))
+            style::icon_button(
+                &palette,
+                "meta-add-folder",
+                "icons/folder-plus.svg",
+                24.,
+                tr::documents::note::add_folder(),
+            )
+            .tooltip(move |_, cx| {
+                crate::ui::Tooltip::new(
+                    &Theme::new(crate::theme::Appearance::Dark),
+                    tr::documents::note::add_folder(),
+                )
+                .view(cx)
+            })
+            .on_click(cx.listener(|this, e: &gpui::ClickEvent, _, cx| {
+                this.open_folder_menu(chip_anchor(e), cx)
+            }))
         });
         if let Some(name) = folder {
             parts.push(
@@ -3639,6 +3659,9 @@ impl Pane {
             let selected = self.view == view;
             div()
                 .id(id)
+                .role(gpui::Role::Tab)
+                .aria_label(label)
+                .aria_selected(selected)
                 .h(px(28.))
                 .flex()
                 .items_center()
@@ -3666,20 +3689,28 @@ impl Pane {
             .gap(px(4.))
             .when(regen, |el| {
                 el.child(
-                    style::icon_button(&palette, "notes-regenerate", "icons/rotate-ccw.svg", 30.)
-                        .tooltip(move |_, cx| {
-                            crate::ui::Tooltip::new(
-                                &Theme::new(crate::theme::Appearance::Dark),
-                                tr::documents::notes::regenerate(),
-                            )
-                            .view(cx)
-                        })
-                        .on_click(cx.listener(|this, e: &gpui::ClickEvent, _, cx| {
+                    style::icon_button(
+                        &palette,
+                        "notes-regenerate",
+                        "icons/rotate-ccw.svg",
+                        30.,
+                        tr::documents::notes::regenerate(),
+                    )
+                    .tooltip(move |_, cx| {
+                        crate::ui::Tooltip::new(
+                            &Theme::new(crate::theme::Appearance::Dark),
+                            tr::documents::notes::regenerate(),
+                        )
+                        .view(cx)
+                    })
+                    .on_click(cx.listener(
+                        |this, e: &gpui::ClickEvent, _, cx| {
                             let at = e.position();
                             this.popover =
                                 Some(Popover::Regenerate(point(at.x - px(230.), at.y + px(16.))));
                             cx.notify();
-                        })),
+                        },
+                    )),
                 )
             })
             .child(
@@ -3735,7 +3766,7 @@ impl Pane {
     fn render_inline_transcript(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let palette = self.palette;
         let tool = |id: &'static str, icon: &'static str, label: &'static str| {
-            style::icon_button(&palette, id, icon, 28.).tooltip(move |_, cx| {
+            style::icon_button(&palette, id, icon, 28., label).tooltip(move |_, cx| {
                 crate::ui::Tooltip::new(&Theme::new(crate::theme::Appearance::Dark), label).view(cx)
             })
         };
@@ -3855,13 +3886,15 @@ impl Pane {
             bar.recording(cx) || !bar.has_transcript
         };
         let tool = |id: &'static str, icon: &'static str, label: &'static str| {
-            style::icon_button(&palette, id, icon, 30.).tooltip(move |_, cx| {
+            style::icon_button(&palette, id, icon, 30., label).tooltip(move |_, cx| {
                 crate::ui::Tooltip::new(&Theme::new(crate::theme::Appearance::Dark), label).view(cx)
             })
         };
         let picker = |id: &'static str, icon: &'static str, label: SharedString| {
             div()
                 .id(id)
+                .role(gpui::Role::Button)
+                .aria_label(label.clone())
                 .h(px(32.))
                 .px(px(10.))
                 .flex()
@@ -4194,6 +4227,8 @@ impl Pane {
                 let button = |id: &'static str, label: &'static str, primary: bool| {
                     div()
                         .id(id)
+                        .role(gpui::Role::Button)
+                        .aria_label(label)
                         .h(px(26.))
                         .px(px(11.))
                         .flex()
@@ -4322,6 +4357,9 @@ impl Pane {
                             .child(
                                 div()
                                     .id(("participant-remove", i))
+                                    .role(gpui::Role::Button)
+                                    .aria_label(tr::settings::cli::remove())
+                                    .aria_description(person.clone())
                                     .size(px(20.))
                                     .flex()
                                     .items_center()
@@ -4401,6 +4439,13 @@ impl Pane {
                 let item = |id: SharedString, label: SharedString, checked: bool| {
                     div()
                         .id(id)
+                        .role(gpui::Role::MenuItemCheckBox)
+                        .aria_label(label.clone())
+                        .aria_toggled(if checked {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
                         .h(px(28.))
                         .px(px(8.))
                         .flex()
@@ -4529,6 +4574,8 @@ impl Pane {
             let label = name.clone();
             div()
                 .id(("mention", i))
+                .role(gpui::Role::MenuItem)
+                .aria_label(label.clone())
                 .h(px(28.))
                 .px(px(8.))
                 .flex()

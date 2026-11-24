@@ -3414,6 +3414,12 @@ title = "मार्कर"
 [ui]
 coming_soon = "जल्द आ रहा है"
 
+[ui.caption]
+close = "बंद करें"
+maximize = "बड़ा करें"
+minimize = "छोटा करें"
+restore = "पुनर्स्थापित करें"
+
 [ui.selection]
 audio = { one = "{count} ऑडियो सेगमेंट चुना गया", other = "{count} ऑडियो सेगमेंट चुने गए" }
 caption = { one = "{count} कैप्शन सेगमेंट चुना गया", other = "{count} कैप्शन सेगमेंट चुने गए" }
@@ -4251,6 +4257,7 @@ engine = "ट्रांसक्राइब करें"
 setup = "सेटअप"
 setup_description = "अनुमतियाँ, ट्रांसक्रिप्शन और कैलेंडर फिर से देखें।"
 [documents.home]
+clear_search = "खोज साफ़ करें"
 trash_count = "ट्रैश · {count}"
 recording_now = "रिकॉर्ड हो रहा है"
 notes = "नोट्स"

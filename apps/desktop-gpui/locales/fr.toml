@@ -3414,6 +3414,12 @@ title = "Repères"
 [ui]
 coming_soon = "Bientôt disponible"
 
+[ui.caption]
+close = "Fermer"
+maximize = "Agrandir"
+minimize = "Réduire"
+restore = "Niveau inférieur"
+
 [ui.selection]
 audio = { one = "{count} segment audio sélectionné", other = "{count} segments audio sélectionnés" }
 caption = { one = "{count} segment de sous-titres sélectionné", other = "{count} segments de sous-titres sélectionnés" }
@@ -4251,6 +4257,7 @@ engine = "Transcrire"
 setup = "Configuration"
 setup_description = "Revoir les autorisations, la transcription et les calendriers."
 [documents.home]
+clear_search = "Effacer la recherche"
 trash_count = "Corbeille · {count}"
 recording_now = "Enregistrement"
 notes = "Notes"

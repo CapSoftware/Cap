@@ -3414,6 +3414,12 @@ title = "标记"
 [ui]
 coming_soon = "即将推出"
 
+[ui.caption]
+close = "关闭"
+maximize = "最大化"
+minimize = "最小化"
+restore = "向下还原"
+
 [ui.selection]
 audio = { other = "已选择 {count} 个音频分段" }
 caption = { other = "已选择 {count} 个字幕分段" }
@@ -4251,6 +4257,7 @@ engine = "转写"
 setup = "设置向导"
 setup_description = "重新设置权限、转写和日历。"
 [documents.home]
+clear_search = "清除搜索"
 trash_count = "废纸篓 · {count}"
 recording_now = "正在录制"
 notes = "笔记"

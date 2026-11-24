@@ -1914,12 +1914,14 @@ macro_rules! input_actions {
 impl RenderOnce for TextInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.state.clone();
-        let (focus, multi_line, disabled) = {
+        let (focus, multi_line, disabled, label, value) = {
             let read = state.read(cx);
             (
                 read.focus.clone().tab_stop(!read.disabled),
                 read.multi_line,
                 read.disabled,
+                read.placeholder.clone(),
+                read.content.clone(),
             )
         };
         let focused = focus.is_focused(window);
@@ -1954,6 +1956,13 @@ impl RenderOnce for TextInput {
 
         let element = div()
             .id(self.id.clone())
+            .role(if multi_line {
+                gpui::Role::MultilineTextInput
+            } else {
+                gpui::Role::TextInput
+            })
+            .when(!label.is_empty(), |this| this.aria_label(label))
+            .aria_value(value)
             .key_context(KEY_CONTEXT)
             .track_focus(&focus)
             .when(keyboard_nav::active(window, cx), keyboard_nav::ring)

@@ -3416,6 +3416,12 @@ title = "Markers"
 [ui]
 coming_soon = "Coming Soon"
 
+[ui.caption]
+close = "Close"
+maximize = "Maximize"
+minimize = "Minimize"
+restore = "Restore Down"
+
 [ui.selection]
 audio = { one = "{count} audio segment selected", other = "{count} audio segments selected" }
 caption = { one = "{count} caption segment selected", other = "{count} caption segments selected" }
@@ -4253,6 +4259,7 @@ engine = "Transcribe"
 setup = "Setup"
 setup_description = "Go through permissions, transcription and calendars again."
 [documents.home]
+clear_search = "Clear search"
 trash_count = { text = "Trash · {count}", context = "Link at the bottom of the notes list. {count} is how many notes are in the trash." }
 recording_now = "Recording"
 notes = "Notes"

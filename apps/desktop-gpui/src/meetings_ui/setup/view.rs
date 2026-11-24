@@ -72,6 +72,8 @@ fn small_button(
     };
     div()
         .id(id.into())
+        .role(gpui::Role::Button)
+        .aria_label(label)
         .flex()
         .flex_none()
         .items_center()
@@ -107,6 +109,8 @@ fn quiet_link(
     let paper = *paper;
     div()
         .id(id.into())
+        .role(gpui::Role::Link)
+        .aria_label(label)
         .text_size(px(13.))
         .text_color(paper.soft)
         .cursor_pointer()
@@ -499,6 +503,14 @@ impl SetupWindow {
         };
         let card = paper_card(&paper)
             .id(("meeting-setup-engine", index))
+            .role(gpui::Role::RadioButton)
+            .aria_label(title)
+            .aria_description(body)
+            .aria_toggled(if selected {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .relative()
             .w_full()
             .flex_1()

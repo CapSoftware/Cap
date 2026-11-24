@@ -735,6 +735,7 @@ impl AskPanel {
             .children(label.map(|label| {
                 div().flex().child(
                     super::style::ink_pill(&palette, ("ask-locked", index))
+                        .aria_label(label)
                         .h(px(28.))
                         .px(px(13.))
                         .text_size(px(12.5))
@@ -889,6 +890,7 @@ impl AskPanel {
                 .gap(px(8.))
                 .children(suggestions().into_iter().enumerate().map(|(i, text)| {
                     glass::chip(&palette, ("ask-sheet-suggestion", i), &self.chip_focus[i])
+                        .aria_label(text)
                         .h(px(30.))
                         .px(px(14.))
                         .text_size(px(13.))
@@ -912,15 +914,21 @@ impl AskPanel {
                     .items_center()
                     .justify_end()
                     .child(
-                        super::style::icon_button(&palette, "ask-sheet-close", "icons/x.svg", 28.)
-                            .tooltip(|_, cx| {
-                                crate::ui::Tooltip::new(
-                                    &Theme::new(Appearance::Dark),
-                                    tr::common::close(),
-                                )
-                                .view(cx)
-                            })
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(AskEvent::CloseSheet))),
+                        super::style::icon_button(
+                            &palette,
+                            "ask-sheet-close",
+                            "icons/x.svg",
+                            28.,
+                            tr::common::close(),
+                        )
+                        .tooltip(|_, cx| {
+                            crate::ui::Tooltip::new(
+                                &Theme::new(Appearance::Dark),
+                                tr::common::close(),
+                            )
+                            .view(cx)
+                        })
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(AskEvent::CloseSheet))),
                     ),
             )
             .children(live)
@@ -972,6 +980,8 @@ impl AskPanel {
                             .child(
                                 div()
                                     .id("ask-sheet-send")
+                                    .role(gpui::Role::Button)
+                                    .aria_label(tr::cap_ai::ask::send_now())
                                     .size(px(34.))
                                     .flex()
                                     .flex_shrink_0()
@@ -1046,6 +1056,8 @@ impl Render for AskPanel {
                             div().absolute().top(px(6.)).right(px(6.)).child(
                                 div()
                                     .id("ask-close")
+                                    .role(gpui::Role::Button)
+                                    .aria_label(tr::common::close())
                                     .size(px(22.))
                                     .flex()
                                     .items_center()
@@ -1130,6 +1142,7 @@ impl Render for AskPanel {
                 })
                 .children(suggestions().into_iter().enumerate().map(|(i, text)| {
                     glass::chip(&palette, ("ask-suggestion", i), &self.chip_focus[i])
+                        .aria_label(text)
                         .child(text)
                         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                             window.prevent_default()
@@ -1166,6 +1179,7 @@ impl Render for AskPanel {
                     .children(chip.map(|chip| {
                         match chip {
                             AskChip::WriteNotes => super::style::ink_pill(&palette, "ask-chip")
+                                .aria_label(tr::documents::bar::write_notes())
                                 .flex_shrink_0()
                                 .h(px(32.))
                                 .px(px(14.))
@@ -1183,6 +1197,8 @@ impl Render for AskPanel {
                     .child(
                         div()
                             .id("ask-send")
+                            .role(gpui::Role::Button)
+                            .aria_label(tr::cap_ai::ask::send_now())
                             .size(px(34.))
                             .flex()
                             .flex_shrink_0()

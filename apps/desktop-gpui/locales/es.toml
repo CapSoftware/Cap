@@ -3414,6 +3414,12 @@ title = "Marcadores"
 [ui]
 coming_soon = "Próximamente"
 
+[ui.caption]
+close = "Cerrar"
+maximize = "Maximizar"
+minimize = "Minimizar"
+restore = "Restaurar"
+
 [ui.selection]
 audio = { one = "{count} segmento de audio seleccionado", other = "{count} segmentos de audio seleccionados" }
 caption = { one = "{count} segmento de subtítulos seleccionado", other = "{count} segmentos de subtítulos seleccionados" }
@@ -4251,6 +4257,7 @@ engine = "Transcribir"
 setup = "Configuración"
 setup_description = "Repasa de nuevo los permisos, la transcripción y los calendarios."
 [documents.home]
+clear_search = "Borrar búsqueda"
 trash_count = "Papelera · {count}"
 recording_now = "Grabando"
 notes = "Notas"

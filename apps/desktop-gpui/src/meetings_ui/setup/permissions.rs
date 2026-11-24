@@ -277,6 +277,9 @@ impl SetupWindow {
                 "meeting-perm-row-{}",
                 perm.slug()
             )))
+            .role(gpui::Role::Button)
+            .aria_label(perm.name())
+            .aria_description(caption)
             .flex()
             .flex_row()
             .items_center()

@@ -272,8 +272,8 @@ pub(super) fn notice_bar(
                             "documents-notice-dismiss",
                             "icons/x.svg",
                             24.,
+                            dismiss,
                         ))
-                        .aria_label(dismiss)
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(move |_, _, cx| {
                             root.update(cx, |root, cx| root.dismiss_notice(cx)).ok();

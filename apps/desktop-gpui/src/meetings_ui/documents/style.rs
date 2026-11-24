@@ -323,10 +323,11 @@ pub fn heading(palette: &Palette, title: impl Into<SharedString>, shown_at: Inst
 pub const SPEAKER_COLOURS: usize = SPEAKERS.len();
 
 pub fn ink_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
-    use gpui::InteractiveElement;
+    use gpui::{InteractiveElement, StatefulInteractiveElement};
     let palette = *palette;
     div()
         .id(id)
+        .role(gpui::Role::Button)
         .h(px(34.))
         .px(px(16.))
         .flex()
@@ -342,10 +343,11 @@ pub fn ink_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stat
 }
 
 pub fn quiet_pill(palette: &Palette, id: impl Into<gpui::ElementId>) -> gpui::Stateful<Div> {
-    use gpui::InteractiveElement;
+    use gpui::{InteractiveElement, StatefulInteractiveElement};
     let palette = *palette;
     div()
         .id(id)
+        .role(gpui::Role::Button)
         .h(px(30.))
         .px(px(13.))
         .flex()
@@ -366,11 +368,14 @@ pub fn icon_button(
     id: impl Into<gpui::ElementId>,
     icon: &'static str,
     size: f32,
+    label: impl Into<SharedString>,
 ) -> gpui::Stateful<Div> {
-    use gpui::InteractiveElement;
+    use gpui::{InteractiveElement, StatefulInteractiveElement};
     let palette = *palette;
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
         .size(px(size))
         .flex()
         .flex_shrink_0()

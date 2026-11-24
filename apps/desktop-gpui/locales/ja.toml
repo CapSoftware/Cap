@@ -3414,6 +3414,12 @@ title = "マーカー"
 [ui]
 coming_soon = "近日公開"
 
+[ui.caption]
+close = "閉じる"
+maximize = "最大化"
+minimize = "最小化"
+restore = "元に戻す (縮小)"
+
 [ui.selection]
 audio = { other = "{count}個の音声セグメントを選択中" }
 caption = { other = "{count}個の字幕セグメントを選択中" }
@@ -4251,6 +4257,7 @@ engine = "文字起こし"
 setup = "セットアップ"
 setup_description = "権限、文字起こし、カレンダーをもう一度設定します。"
 [documents.home]
+clear_search = "検索をクリア"
 trash_count = "ゴミ箱・{count}"
 recording_now = "録音中"
 notes = "メモ"

@@ -3414,6 +3414,12 @@ title = "Marker"
 [ui]
 coming_soon = "Demnächst verfügbar"
 
+[ui.caption]
+close = "Schließen"
+maximize = "Maximieren"
+minimize = "Minimieren"
+restore = "Verkleinern"
+
 [ui.selection]
 audio = { one = "{count} Audiosegment ausgewählt", other = "{count} Audiosegmente ausgewählt" }
 caption = { one = "{count} Untertitelsegment ausgewählt", other = "{count} Untertitelsegmente ausgewählt" }
@@ -4251,6 +4257,7 @@ engine = "Transkribieren"
 setup = "Einrichtung"
 setup_description = "Berechtigungen, Transkription und Kalender noch einmal durchgehen."
 [documents.home]
+clear_search = "Suche löschen"
 trash_count = "Papierkorb · {count}"
 recording_now = "Aufnahme läuft"
 notes = "Notizen"

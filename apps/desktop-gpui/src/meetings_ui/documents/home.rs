@@ -1528,6 +1528,7 @@ impl Home {
                                 "documents-search-clear",
                                 "icons/x.svg",
                                 28.,
+                                tr::documents::home::clear_search(),
                             )
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.clear_search(window, cx)),

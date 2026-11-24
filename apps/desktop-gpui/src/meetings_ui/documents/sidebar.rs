@@ -283,6 +283,8 @@ impl Sidebar {
         // Quiet glyphs: the selection alone says where you are.
         div()
             .id(id)
+            .role(gpui::Role::Button)
+            .aria_label(label.clone())
             .mx(px(10.))
             .h(px(glass::ROW_HEIGHT))
             .px(px(9.))
@@ -407,6 +409,8 @@ impl Render for Sidebar {
                     let id = row.id.clone();
                     div()
                         .id(SharedString::from(format!("recent-{}", row.id)))
+                        .role(gpui::Role::Button)
+                        .aria_label(row.title.clone())
                         .mx(px(10.))
                         .h(px(glass::ROW_HEIGHT))
                         .px(px(9.))
@@ -439,6 +443,8 @@ impl Render for Sidebar {
                 header(tr::documents::sidebar::folders()).child(
                     div()
                         .id("documents-add-folder")
+                        .role(gpui::Role::Button)
+                        .aria_label(tr::documents::sidebar::new_folder())
                         .size(px(22.))
                         .flex()
                         .items_center()
