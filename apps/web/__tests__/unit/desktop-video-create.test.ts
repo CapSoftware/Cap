@@ -630,6 +630,21 @@ describe("GET /create", () => {
 		expect(insertedValues(schema.videos)).toBeUndefined();
 	});
 
+	it("never gives a screenshot a legacy recording source", async () => {
+		freePlan.getFreePlanRecordingLimit.mockResolvedValue(300);
+		memberOfOrg();
+
+		const response = await app.request(
+			"https://cap.test/create?isScreenshot=true&recordingMode=hls",
+		);
+
+		expect(response.status).toBe(200);
+		expect(insertedValues(schema.videos)).toMatchObject({
+			isScreenshot: true,
+			source: { type: "desktopMP4" },
+		});
+	});
+
 	it("keeps legacy recordings for accounts the limit does not apply to", async () => {
 		memberOfOrg();
 

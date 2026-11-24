@@ -344,12 +344,12 @@ app.get(
 					ownerId: user.id,
 					orgId: videoOrgId,
 					source:
-						recordingMode === "hls"
-							? { type: "local" as const }
-							: recordingMode === "desktopMP4"
+						recordingMode === "desktopSegments"
+							? { type: "desktopSegments" as const }
+							: recordingMode === "desktopMP4" || isScreenshot
 								? { type: "desktopMP4" as const }
-								: recordingMode === "desktopSegments"
-									? { type: "desktopSegments" as const }
+								: recordingMode === "hls"
+									? { type: "local" as const }
 									: undefined,
 					isScreenshot,
 					bucket: Option.getOrNull(writable.bucketId),
