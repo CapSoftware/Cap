@@ -75,16 +75,25 @@ export function encodeLengthLimit(metadata: {
 
 export const LENGTH_LIMIT_ERROR_PREFIX = "media-length-limit-exceeded";
 
+// A capped encode runs a little past the requested length, so a source that
+// fits keeps every frame and one that does not is seen to run over. The
+// tolerance covers an encode rounding a fitting source up.
+const LENGTH_LIMIT_ENCODE_MARGIN_SECONDS = 2;
 const LENGTH_LIMIT_TOLERANCE_SECONDS = 0.5;
 
-// Whether an output encoded with a length cap ran all the way to it.
-export function reachesRequestedLength(
+export function encodeCapForRequestedLength(maxSeconds: number): number {
+	return maxSeconds + LENGTH_LIMIT_ENCODE_MARGIN_SECONDS;
+}
+
+// Whether an output encoded with encodeCapForRequestedLength runs past the
+// requested length.
+export function runsPastRequestedLength(
 	outputSeconds: number,
 	maxSeconds: number,
 ): boolean {
 	return (
 		Number.isFinite(outputSeconds) &&
-		outputSeconds >= maxSeconds - LENGTH_LIMIT_TOLERANCE_SECONDS
+		outputSeconds > maxSeconds + LENGTH_LIMIT_TOLERANCE_SECONDS
 	);
 }
 

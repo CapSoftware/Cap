@@ -50,10 +50,11 @@ import { logReason } from "../lib/log-redaction";
 import { MediaAddressError } from "../lib/media-address-guard";
 import {
 	createGuardedMediaFetch,
+	encodeCapForRequestedLength,
 	exceedsRequestedLength,
 	LENGTH_LIMIT_ERROR_PREFIX,
 	PROCESS_TIMEOUT_MS,
-	reachesRequestedLength,
+	runsPastRequestedLength,
 	UPLOAD_TIMEOUT_MS,
 } from "../lib/media-common";
 import {
@@ -2026,7 +2027,14 @@ async function processVideoAsync(
 					processingInputPath,
 					input.path,
 					metadata,
-					options,
+					options.maxOutputSeconds
+						? {
+								...options,
+								maxOutputSeconds: encodeCapForRequestedLength(
+									options.maxOutputSeconds,
+								),
+							}
+						: options,
 					isWebm,
 					jobId,
 					workSignal,
@@ -2073,14 +2081,14 @@ async function processVideoAsync(
 			)
 				throw new Error(DAMAGED_INPUT_MESSAGE);
 		}
-		// The encode stops at the requested length, so an output that reaches it
-		// came from a source longer than its probe showed: it is refused, not
-		// published cut short.
+		// The encode stops just past the requested length, so an output that
+		// runs past it came from a source longer than its probe showed: it is
+		// refused, not published cut short.
 		if (options.maxOutputSeconds && !options.existingOutput) {
 			const output = await withJobHeartbeat(jobId, () =>
 				probeVideoFile(outputPath),
 			);
-			if (reachesRequestedLength(output.duration, options.maxOutputSeconds))
+			if (runsPastRequestedLength(output.duration, options.maxOutputSeconds))
 				throw new Error(
 					`${LENGTH_LIMIT_ERROR_PREFIX}: the source runs longer than ${options.maxOutputSeconds} seconds`,
 				);
