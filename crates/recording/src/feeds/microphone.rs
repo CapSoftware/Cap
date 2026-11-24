@@ -120,11 +120,7 @@ fn audio_follows_confirmed_route(
 /// its arrivals allow: steady delivery keeps the arrival times exactly, a
 /// late callback no longer moves its audio, an arrival later than any burst
 /// marks lost frames where they were lost, and slow clock drift moves the
-/// anchor once a whole window of arrivals agrees. Arrivals are first
-/// corrected by how much the capture delay the device reports has grown
-/// since the stream started, so the server buffering more is not mistaken
-/// for lost frames. The baseline is the smallest delay seen, so a held-back
-/// first callback cannot offset the whole track.
+/// anchor once a whole window of arrivals agrees.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 struct SteadyDeliveryClock {
@@ -133,7 +129,6 @@ struct SteadyDeliveryClock {
     frames: u64,
     window_started: Option<Instant>,
     window_min_lag: Option<Duration>,
-    min_delay: Option<Duration>,
 }
 
 #[cfg(target_os = "linux")]
@@ -143,16 +138,7 @@ impl SteadyDeliveryClock {
     /// buffers; an arrival this much later means frames were lost.
     const LOSS: Duration = Duration::from_millis(150);
 
-    /// Reported delays further than this above the smallest are not trusted.
-    const MAX_DELAY_CHANGE: Duration = Duration::from_secs(1);
-
-    fn timestamp(
-        &mut self,
-        received: Instant,
-        delay: Option<Duration>,
-        frame_count: usize,
-        rate: u32,
-    ) -> Timestamp {
+    fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
         if rate == 0 {
             return Timestamp::Instant(received);
         }
@@ -162,7 +148,6 @@ impl SteadyDeliveryClock {
                 ..Self::default()
             };
         }
-        let received = self.without_delay_change(received, delay);
         let frames = self.frames + frame_count as u64;
         self.frames = frames;
         let delivered = Duration::from_secs_f64(frames as f64 / f64::from(rate));
@@ -199,19 +184,6 @@ impl SteadyDeliveryClock {
             return Timestamp::Instant(self.anchor.unwrap_or(anchor) + delivered);
         }
         Timestamp::Instant(predicted)
-    }
-
-    fn without_delay_change(&mut self, received: Instant, delay: Option<Duration>) -> Instant {
-        let Some(delay) = delay else {
-            return received;
-        };
-        let min = self.min_delay.map_or(delay, |min| min.min(delay));
-        self.min_delay = Some(min);
-        let grown = delay.saturating_sub(min);
-        if grown > Self::MAX_DELAY_CHANGE {
-            return received;
-        }
-        received.checked_sub(grown).unwrap_or(received)
     }
 }
 
@@ -1667,7 +1639,6 @@ impl MicrophoneFeed {
                             let timestamp = match delivery_clock.as_mut() {
                                 Some(clock) => clock.timestamp(
                                     callback_received,
-                                    input_timestamp.callback.duration_since(&input_timestamp.capture),
                                     frame_count,
                                     effective_sample_rate.sample_rate,
                                 ),
@@ -5610,6 +5581,11 @@ mod steady_delivery_clock_tests {
         Duration::from_secs_f64(FRAMES as f64 / f64::from(RATE))
     }
 
+    fn apart(a: Instant, b: Instant) -> Duration {
+        a.saturating_duration_since(b)
+            .max(b.saturating_duration_since(a))
+    }
+
     fn instant(timestamp: Timestamp) -> Instant {
         match timestamp {
             Timestamp::Instant(instant) => instant,
@@ -5623,8 +5599,8 @@ mod steady_delivery_clock_tests {
         let mut clock = SteadyDeliveryClock::default();
         for buffer in 1..=200u32 {
             let received = start + period() * buffer;
-            let stamped = instant(clock.timestamp(received, None, FRAMES, RATE));
-            assert!(stamped.max(received) - stamped.min(received) < Duration::from_micros(50));
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            assert!(apart(stamped, received) < Duration::from_micros(50));
         }
     }
 
@@ -5641,11 +5617,11 @@ mod steady_delivery_clock_tests {
             } else {
                 on_time
             };
-            stamps.push(instant(clock.timestamp(received, None, FRAMES, RATE)));
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
         }
         for pair in stamps.windows(2) {
-            let step = pair[1] - pair[0];
-            assert!(step.max(period()) - step.min(period()) < Duration::from_micros(50));
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(step.abs_diff(period()) < Duration::from_micros(50));
         }
     }
 
@@ -5657,8 +5633,8 @@ mod steady_delivery_clock_tests {
         for buffer in 1..=400u32 {
             let received =
                 start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
-            let stamped = instant(clock.timestamp(received, None, FRAMES, RATE));
-            let off = received.max(stamped) - received.min(stamped);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
             assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
         }
     }
@@ -5671,8 +5647,8 @@ mod steady_delivery_clock_tests {
         let mut last_off = Duration::ZERO;
         for buffer in 1..=2_000u32 {
             let received = start + period().mul_f64(1.001) * buffer;
-            let stamped = instant(clock.timestamp(received, None, FRAMES, RATE));
-            last_off = received.max(stamped) - received.min(stamped);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_off = apart(received, stamped);
         }
         assert!(last_off < Duration::from_millis(5), "{last_off:?}");
     }
@@ -5681,56 +5657,8 @@ mod steady_delivery_clock_tests {
     fn a_new_rate_starts_a_new_timeline() {
         let start = Instant::now();
         let mut clock = SteadyDeliveryClock::default();
-        let _ = clock.timestamp(start, None, FRAMES, RATE);
+        let _ = clock.timestamp(start, FRAMES, RATE);
         let later = start + Duration::from_secs(5);
-        assert_eq!(instant(clock.timestamp(later, None, 960, 48_000)), later);
-    }
-
-    #[test]
-    fn a_held_back_first_callback_does_not_offset_the_track() {
-        let start = Instant::now();
-        let mut clock = SteadyDeliveryClock::default();
-        let delay = Duration::from_millis(40);
-        let held = Duration::from_millis(75);
-        let mut last_off = Duration::ZERO;
-        for buffer in 1..=200u32 {
-            let (late, reported) = if buffer == 1 {
-                (held, delay + held)
-            } else {
-                (Duration::ZERO, delay)
-            };
-            let received = start + period() * buffer + late;
-            let stamped = instant(clock.timestamp(received, Some(reported), FRAMES, RATE));
-            let on_time = start + period() * buffer;
-            last_off = on_time.max(stamped) - on_time.min(stamped);
-        }
-        assert!(last_off < Duration::from_millis(1), "{last_off:?}");
-    }
-
-    #[test]
-    fn the_server_buffering_more_keeps_the_audio_continuous() {
-        let start = Instant::now();
-        let mut clock = SteadyDeliveryClock::default();
-        let base_delay = Duration::from_millis(40);
-        let step = Duration::from_millis(144);
-        let mut stamps = Vec::new();
-        for buffer in 1..=300u32 {
-            let (late, delay) = if buffer > 120 {
-                (step, base_delay + step)
-            } else {
-                (Duration::ZERO, base_delay)
-            };
-            let received = start + period() * buffer + late;
-            stamps.push(instant(clock.timestamp(
-                received,
-                Some(delay),
-                FRAMES,
-                RATE,
-            )));
-        }
-        for pair in stamps.windows(2) {
-            let step = pair[1] - pair[0];
-            assert!(step.max(period()) - step.min(period()) < Duration::from_micros(50));
-        }
+        assert_eq!(instant(clock.timestamp(later, 960, 48_000)), later);
     }
 }
