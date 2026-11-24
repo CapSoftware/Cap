@@ -272,8 +272,11 @@ export async function POST(request: NextRequest) {
 				exceedsFreePlanMeasuredDuration(
 					measuredMediaSeconds(payload.metadata),
 				) &&
-				(await rejectFreePlanOverLimitVideo(currentVideo, currentUpload)) ===
-					"rejected"
+				(await rejectFreePlanOverLimitVideo(
+					currentVideo,
+					currentUpload,
+					measuredMediaSeconds(payload.metadata),
+				)) === "rejected"
 			) {
 				return NextResponse.json({ success: true, status: "rejected" });
 			}
