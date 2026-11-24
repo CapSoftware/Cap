@@ -711,7 +711,7 @@ async function expandArchive(archivePath, destination) {
 
 // Cap's FFmpeg builds: only the components Cap uses, built by
 // scripts/ffmpeg/build.sh. Bump the version and hashes when they are rebuilt.
-const CAP_FFMPEG_VERSION = "7.1-cap.1";
+const CAP_FFMPEG_VERSION = "7.1-cap.2";
 const CAP_FFMPEG_URL = `https://github.com/CapSoftware/transcription-models/releases/download/ffmpeg-${CAP_FFMPEG_VERSION}`;
 const CAP_FFMPEG_ARCHIVES = {
 	"aarch64-darwin-apple": {
@@ -732,7 +732,7 @@ const CAP_FFMPEG_ARCHIVES = {
 	},
 	"x86_64-windows-gnu": {
 		file: "cap-ffmpeg-x86_64-windows-gnu.zip",
-		sha256: "769cb918817d31e4f8bba29d12bf52b59ea06dd7d806991ccd2e6bb5d6a22c6a",
+		sha256: "cf934c95f34195c61073bba492fa56d7c3a753983d7cbe040dfa18eedc384d98",
 	},
 };
 
