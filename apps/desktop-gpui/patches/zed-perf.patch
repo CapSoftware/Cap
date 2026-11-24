@@ -1706,3 +1706,50 @@ diff --git a/crates/gpui_macos/src/text_system.rs b/crates/gpui_macos/src/text_s
                  }
                  break_ligature = !break_ligature;
              }
+diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -1241,6 +1241,13 @@ pub trait StatefulInteractiveElement: InteractiveElement {
+         self
+     }
+ 
++    /// Make this element a live region: assistive technology announces
++    /// changes to its content, after current speech when polite.
++    fn aria_live(mut self, live: accesskit::Live) -> Self {
++        self.interactivity().aria.live = Some(live);
++        self
++    }
++
+     /// Set the keyboard shortcut(s) that activate this element, announced by
+     /// assistive technology (maps to AccessKit's `keyboard_shortcut`).
+     ///
+@@ -1942,6 +1949,7 @@ pub(crate) struct AriaProperties {
+     pub(crate) column_index: Option<usize>,
+     pub(crate) row_count: Option<usize>,
+     pub(crate) column_count: Option<usize>,
++    pub(crate) live: Option<accesskit::Live>,
+ }
+ 
+ /// The interactivity struct. Powers all of the general-purpose
+@@ -3276,6 +3284,9 @@ impl Interactivity {
+         if let Some(description) = &self.aria.description {
+             node.set_description(description.to_string());
+         }
++        if let Some(live) = self.aria.live {
++            node.set_live(live);
++        }
+         if let Some(keyshortcuts) = &self.aria.keyshortcuts {
+             node.set_keyboard_shortcut(keyshortcuts.to_string());
+         }
+diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
+--- a/crates/gpui/src/gpui.rs
++++ b/crates/gpui/src/gpui.rs
+@@ -87,7 +87,7 @@ mod seal {
+ 
+ pub use accesskit;
+ pub use accesskit::Action as AccessibleAction;
+-pub use accesskit::{Orientation, Role, Toggled};
++pub use accesskit::{Live, Orientation, Role, Toggled};
+ pub use action::*;
+ pub use anyhow::Result;
+ pub use app::*;
