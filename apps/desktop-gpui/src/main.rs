@@ -871,6 +871,15 @@ fn main() {
             import::import_audio_from_path(std::path::PathBuf::from(path), cx);
         }
 
+        if let Some(path) = std::env::var_os("CAP_GPUI_AUTO_IMPORT_MEDIA") {
+            let path = std::path::PathBuf::from(path);
+            if import::is_supported_image_import_path(&path) {
+                import::import_image_from_path(path, cx);
+            } else {
+                import::import_video_from_path(path, cx);
+            }
+        }
+
         // `CAP_GPUI_AUTO_RECORD=studio:5` / `instant:4` / `screenshot`: arm
         // the primary display and record for N seconds (or capture once). The
         // end-to-end check drives the recorder this way because unprivileged

@@ -1,0 +1,220 @@
+name: FFmpeg probe (real app)
+
+on:
+  push:
+    branches:
+      - "probe/ffmpeg-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ffmpeg-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: FFmpeg probe (${{ matrix.settings.name }})
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: macOS
+            slug: macos
+            target: aarch64-apple-darwin
+            runner: blacksmith-6vcpu-macos-15
+          - name: Linux
+            slug: linux
+            target: x86_64-unknown-linux-gnu
+            runner: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.settings.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout the reference recording
+        uses: actions/checkout@v4
+        with:
+          repository: CapSoftware/cap-performance-fixtures
+          path: performance-fixtures
+          persist-credentials: false
+
+      - name: Install Linux desktop dependencies
+        if: ${{ runner.os == 'Linux' }}
+        uses: ./.github/actions/install-desktop-deps
+
+      - name: Linux display and ffmpeg
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo apt-get install -y openbox mesa-vulkan-drivers libvulkan1 ffmpeg
+
+      - name: macOS ffmpeg
+        if: ${{ runner.os == 'macOS' }}
+        run: brew install ffmpeg
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Setup (new FFmpeg)
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+        run: |
+          node scripts/setup.js
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+
+      - name: Build release app and CLI
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: |
+          cargo +1.95.0 build --release --locked --manifest-path apps/desktop-gpui/Cargo.toml --target ${{ matrix.settings.target }} --bin cap-gpui
+          cargo +1.95.0 build --release --locked -p cap --bin cap --target ${{ matrix.settings.target }}
+
+      - name: Assemble old and new FFmpeg side by side
+        shell: bash
+        run: |
+          set -euxo pipefail
+          W="$RUNNER_TEMP/sides"
+          mkdir -p "$W/old-src"
+          gpui="apps/desktop-gpui/target/${{ matrix.settings.target }}/release/cap-gpui"
+          cli="target/${{ matrix.settings.target }}/release/cap"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            curl -sL -o "$W/old.tar.xz" https://github.com/spacedriveapp/native-deps/releases/download/v0.25/native-deps-aarch64-darwin-apple.tar.xz
+            tar xf "$W/old.tar.xz" -C "$W/old-src"
+            for side in base head base2; do
+              mkdir -p "$W/$side/bin" "$W/$side/Frameworks"
+              cp "$gpui" "$cli" "$W/$side/bin/"
+            done
+            for side in base base2; do cp -R "$W/old-src/Spacedrive.framework" "$W/$side/Frameworks/"; done
+            cp -R target/native-deps/Spacedrive.framework "$W/head/Frameworks/"
+            for side in base head base2; do
+              lib="$W/$side/Frameworks/Spacedrive.framework/Versions/A/Libraries"
+              find "$lib" -mindepth 1 -maxdepth 1 ! -name 'libav*' ! -name 'libsw*' ! -name 'libpostproc*' -exec rm -rf {} +
+              find "$lib" -type f -name '*.dylib' -exec codesign -s - -f {} \;
+              ls "$lib"
+            done
+          else
+            curl -sL -o "$W/old.tar.xz" https://github.com/spacedriveapp/native-deps/releases/download/v0.26/native-deps-x86_64-linux-gnu.tar.xz
+            tar xf "$W/old.tar.xz" -C "$W/old-src"
+            for side in base head base2; do
+              mkdir -p "$W/$side/bin"
+              cp "$gpui" "$cli" "$W/$side/bin/"
+            done
+            for side in base base2; do cp -P "$W/old-src/lib/"lib{av,sw,postproc}*.so* "$W/$side/bin/"; done
+            cp -P target/native-deps/lib/lib{av,sw}*.so* "$W/head/bin/"
+            for side in base head base2; do ls "$W/$side/bin"; done
+            ldd "$W/head/bin/cap-gpui" | grep -E 'libav|libsw'
+          fi
+          echo "SIDES=$W" >> "$GITHUB_ENV"
+
+      - name: Screen capture permission
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          set -euo pipefail
+          sudo pmset -a displaysleep 0 sleep 0 || true
+          caffeinate -u -t 2
+          db="/Library/Application Support/com.apple.TCC/TCC.db"
+          now=$(date +%s)
+          for client in "$SIDES"/*/bin/cap-gpui "$SIDES"/*/bin/cap /bin/bash /usr/sbin/screencapture /Users/runner/bin/Runner.Worker /Users/runner/bin/Runner.Listener; do
+            sudo sqlite3 "$db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,indirect_object_identifier,flags,last_modified) VALUES ('kTCCServiceScreenCapture','$client',1,2,4,1,'UNUSED',0,$now);"
+          done
+          sudo killall tccd || true
+
+      - name: Probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/ffmpeg-probe"
+          ref="$GITHUB_WORKSPACE/performance-fixtures/reference-recording.cap"
+          corpus="$GITHUB_WORKSPACE/scripts/ffmpeg-probe/corpus"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            Xvfb :99 -screen 0 1600x1000x24 -noreset &
+            export DISPLAY=:99
+            sleep 1
+            openbox &
+            sleep 1
+          fi
+          export PROBE_RECORD=1
+          python3 scripts/ffmpeg-probe/probe.py base "$SIDES/base/bin" "$out" "$corpus" "$ref" | tee "$RUNNER_TEMP/base.txt"
+          python3 scripts/ffmpeg-probe/probe.py head "$SIDES/head/bin" "$out" "$corpus" "$ref" | tee "$RUNNER_TEMP/head.txt"
+          PROBE_ONLY=export python3 scripts/ffmpeg-probe/probe.py base2 "$SIDES/base2/bin" "$out" "$corpus" "$ref" | tee "$RUNNER_TEMP/base2.txt"
+          python3 scripts/ffmpeg-probe/compare.py "$out" base head base2 | tee "$out/compare.txt"
+          echo "compare exit ${PIPESTATUS[0]}"
+
+      - name: Publish results
+        if: always()
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/ffmpeg-probe"
+          branch="media/ffmpeg-4499-${{ matrix.settings.slug }}"
+          dest="$RUNNER_TEMP/media"
+          mkdir -p "$dest/logs"
+          cp "$out"/*.json "$out"/compare.txt "$RUNNER_TEMP"/*.txt "$dest/" 2>/dev/null || true
+          for side in base head; do cp -R "$out/$side/logs" "$dest/logs/$side" 2>/dev/null || true; done
+          cd "$dest"
+          git init -q
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -q -b "$branch"
+          git add -A
+          git commit -q -m "ffmpeg probe ${{ matrix.settings.slug }} ${{ github.sha }}"
+          git push -q "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "+HEAD:refs/heads/$branch"
+
+  windows-build:
+    name: Windows release build for the GPU rig
+    runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Setup (new FFmpeg)
+        shell: bash
+        env:
+          RUST_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: |
+          node scripts/setup.js
+          node scripts/sync-desktop-versions.mjs
+          ./scripts/prepare-gpui-dependency.sh
+      - name: Build release app and CLI
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: |
+          cargo +1.95.0 build --release --locked --manifest-path apps/desktop-gpui/Cargo.toml --bin cap-gpui
+          cargo +1.95.0 build --release --locked -p cap --bin cap
+      - name: Package old and new sides
+        shell: bash
+        run: |
+          set -euxo pipefail
+          out="$RUNNER_TEMP/pkg"
+          mkdir -p "$out/old-src"
+          curl -sL -o "$out/gyan.zip" https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-full_build-shared.zip
+          unzip -q "$out/gyan.zip" -d "$out/old-src"
+          rm "$out/gyan.zip"
+          for side in base head base2; do
+            mkdir -p "$out/$side/bin"
+            cp apps/desktop-gpui/target/release/cap-gpui.exe target/release/cap.exe "$out/$side/bin/"
+            cp target/native-deps/dxc/*.dll "$out/$side/bin/" || true
+            cp target/native-deps/onnxruntime/lib/*.dll "$out/$side/bin/" || true
+            cp target/native-deps/vcruntime/*.dll "$out/$side/bin/" || true
+          done
+          for side in base base2; do cp "$out"/old-src/*/bin/*.dll "$out/$side/bin/"; done
+          cp target/ffmpeg/bin/*.dll "$out/head/bin/"
+          rm -rf "$out/old-src"
+          mkdir -p "$out/repo/scripts"
+          cp -R scripts/ffmpeg-probe "$out/repo/scripts/"
+          mkdir -p "$out/tools"
+          cp target/ffmpeg-tools/bin/ffmpeg.exe target/ffmpeg-tools/bin/ffprobe.exe "$out/tools/"
+          git rev-parse HEAD > "$out/SHA"
+          ls -la "$out"/*/bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-probe-win
+          path: ${{ runner.temp }}/pkg
+          retention-days: 3
