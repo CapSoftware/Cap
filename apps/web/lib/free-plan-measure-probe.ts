@@ -156,7 +156,7 @@ export function measureFreePlanObject(
 	const id = objectKey(videoId, key);
 	const known = identity ? measuredIdentities.get(id) : undefined;
 	if (known && known.identity === identity)
-		return Promise.resolve(known.outcome);
+		return restoreMeasure(videoId, key, known.outcome, anyAge);
 	const previous = inFlight.get(id);
 	if (fresh) {
 		measuredFiles.delete(id);
@@ -194,6 +194,32 @@ export function measureFreePlanObject(
 		});
 	inFlight.set(id, measurement);
 	return measurement;
+}
+
+// The same object completed again: no probe, but its length is written back
+// if another upload replaced the saved measurement in the meantime.
+async function restoreMeasure(
+	videoId: Video.VideoId,
+	key: string,
+	outcome: FreePlanMeasureOutcome,
+	anyAge: boolean,
+): Promise<FreePlanMeasureOutcome> {
+	if (outcome.kind !== "measured") return outcome;
+	try {
+		const video = await loadLimitedVideo(videoId, { anyAge });
+		if (!video) return SKIPPED;
+		const saved = readFreePlanMeasure(video.metadata);
+		if (saved?.key !== key || saved.seconds !== outcome.seconds)
+			await recordFreePlanMeasure(videoId, key, outcome.seconds);
+	} catch (error) {
+		console.error(
+			"[free-plan-measure] Could not restore %s (%s):",
+			videoId,
+			key,
+			error,
+		);
+	}
+	return outcome;
 }
 
 async function measureNow(
