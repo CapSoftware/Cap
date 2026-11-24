@@ -35,6 +35,7 @@ import {
 	type RecordingMode,
 	RecordingModeSelector,
 } from "./RecordingModeSelector";
+import { DEFAULT_RECORDING_QUALITY } from "./recording-quality";
 import { SettingsButton } from "./SettingsButton";
 import { SettingsPanel } from "./SettingsPanel";
 import { SystemAudioToggle } from "./SystemAudioToggle";
@@ -505,6 +506,7 @@ const InstantRecorderDialog = ({ trigger }: { trigger?: ReactElement }) => {
 			{showCameraPreview && (
 				<CameraPreviewWindow
 					ref={cameraPreviewRef}
+					captureHeight={DEFAULT_RECORDING_QUALITY.cameraHeight}
 					cameraId={selectedCameraId}
 					onClose={() => handleCameraChange(null)}
 				/>
