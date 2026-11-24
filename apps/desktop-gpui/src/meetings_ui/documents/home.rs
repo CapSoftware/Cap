@@ -1616,6 +1616,7 @@ impl Render for Home {
                     // for when the sidebar is closed.
                     .when(!sidebar_open, |el| el.child(self.start.clone())),
             )
+            .children(super::window::notice_bar(&self.root, &palette, cx))
             .child(
                 div()
                     .id("documents-list")

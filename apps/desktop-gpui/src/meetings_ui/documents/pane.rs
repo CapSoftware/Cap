@@ -4898,6 +4898,7 @@ impl Render for Pane {
             .flex_col()
             .bg(palette.content)
             .child(self.render_toolbar(cx))
+            .children(super::window::notice_bar(&self.root, &palette, cx))
             .child(
                 div()
                     .flex_1()
