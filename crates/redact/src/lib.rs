@@ -7,10 +7,12 @@ mod ctc;
 mod db;
 pub mod frames;
 mod gitleaks;
+mod gpu;
 pub mod image;
 pub mod model;
 pub mod motion;
 mod names;
+mod wdet;
 
 pub use analyze::{Analyzer, Progress, SegmentSource, Stats, segment_sources};
 pub use classify::{Finding, LineContext, classify_frame, classify_line};

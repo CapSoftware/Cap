@@ -90,6 +90,16 @@ pub struct Recognized {
     pub confidence: f32,
 }
 
+/// Detector pixels per frame below which the CPU detector is faster than a
+/// round trip to the GPU (whose submit and wait alone take a few ms).
+const GPU_MIN_PIXELS: f32 = 150_000.0;
+
+/// Detection started by [`OcrModel::detect_begin`].
+pub enum PendingDetect {
+    Ready(Vec<Vec<DetectedLine>>),
+    Gpu(crate::gpu::Ticket),
+}
+
 pub struct OcrModel {
     pub meta: ModelMeta,
     charset: Vec<String>,
@@ -98,6 +108,7 @@ pub struct OcrModel {
     /// line on CPU), spread over a few sessions in parallel.
     rec: Vec<Session>,
     det_input: Vec<f32>,
+    gpu: Option<crate::gpu::GpuDetector>,
 }
 
 impl OcrModel {
@@ -120,17 +131,98 @@ impl OcrModel {
         let rec = (0..recognition_sessions())
             .map(|_| session(&dir.join("rec.onnx"), 2))
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let gpu = if std::env::var_os("CAP_REDACT_ORT_DET").is_some() {
+            None
+        } else {
+            crate::gpu::GpuDetector::new(dir).unwrap_or_else(|error| {
+                tracing::warn!(%error, "GPU text detector unavailable");
+                None
+            })
+        };
         Ok(Self {
             meta,
             charset,
             det,
             rec,
             det_input: Vec::new(),
+            gpu,
         })
     }
 
     pub fn version(&self) -> &str {
         &self.meta.version
+    }
+
+    /// Where detection runs: the GPU adapter, or the ONNX runtime.
+    pub fn detector(&self) -> String {
+        match &self.gpu {
+            Some(gpu) => format!(
+                "gpu {} ({:.1} Mpx run, {} tiles made; prepare {:.2}s, wait {:.2}s, post {:.2}s)",
+                gpu.adapter,
+                gpu.processed as f64 / 1e6,
+                gpu.created,
+                gpu.prepare.as_secs_f64(),
+                gpu.wait.as_secs_f64(),
+                gpu.post.as_secs_f64()
+            ),
+            None => "onnx".to_string(),
+        }
+    }
+
+    /// [`Self::detect`] for several regions of one frame: on the GPU when it
+    /// is available and the regions are large enough to be worth a round
+    /// trip, otherwise here.
+    pub fn detect_all(
+        &mut self,
+        frame: &RgbImage,
+        rois: &[Rect],
+        scale: f32,
+    ) -> anyhow::Result<Vec<Vec<DetectedLine>>> {
+        let pixels: f32 = rois
+            .iter()
+            .map(|roi| roi.clamp_to(frame.width, frame.height).area() * scale * scale)
+            .sum();
+        if pixels >= GPU_MIN_PIXELS {
+            let pending = self.detect_begin(frame, rois, scale)?;
+            return self.detect_end(pending);
+        }
+        rois.iter()
+            .map(|roi| self.detect(frame, *roi, scale))
+            .collect()
+    }
+
+    /// Starts detecting several regions of one frame; on the GPU this
+    /// returns before the work is done, so frames can overlap.
+    pub fn detect_begin(
+        &mut self,
+        frame: &RgbImage,
+        rois: &[Rect],
+        scale: f32,
+    ) -> anyhow::Result<PendingDetect> {
+        if let Some(gpu) = &mut self.gpu {
+            return Ok(PendingDetect::Gpu(gpu.submit(
+                frame,
+                rois,
+                scale,
+                &self.meta.det,
+            )?));
+        }
+        Ok(PendingDetect::Ready(
+            rois.iter()
+                .map(|roi| self.detect(frame, *roi, scale))
+                .collect::<anyhow::Result<_>>()?,
+        ))
+    }
+
+    /// The lines of a [`Self::detect_begin`], per region.
+    pub fn detect_end(&mut self, pending: PendingDetect) -> anyhow::Result<Vec<Vec<DetectedLine>>> {
+        match pending {
+            PendingDetect::Ready(lines) => Ok(lines),
+            PendingDetect::Gpu(ticket) => match &mut self.gpu {
+                Some(gpu) => gpu.collect(ticket, &self.meta.det),
+                None => anyhow::bail!("GPU detection without a GPU detector"),
+            },
+        }
     }
 
     /// Detects text lines inside `roi` of `frame`, running the detector at

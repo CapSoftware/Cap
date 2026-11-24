@@ -12,15 +12,18 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+bytemuck = { version = "1.7", features = ["derive"] }
 cap-camera-effects = { path = "../camera-effects" }
 cap-project = { path = "../project" }
 cap-video-decode = { path = "../video-decode" }
 ffmpeg.workspace = true
+pollster = "0.4.0"
 regex = "1.11"
 serde = { workspace = true }
 serde_json = "1.0"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
+wgpu.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [target.'cfg(target_os = "linux")'.dependencies]

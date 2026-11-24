@@ -160,6 +160,40 @@ impl RgbImage {
         planes: &mut [f32],
         map: impl Fn(usize, f32) -> f32,
     ) {
+        self.resample(src, out_w, out_h, |ox, oy, value| {
+            let index = oy * stride + ox;
+            for (c, v) in value.iter().enumerate() {
+                planes[c * plane + index] = map(c, *v);
+            }
+        });
+    }
+
+    /// [`Self::resize_into_planes`] into interleaved RGBA8 (row stride
+    /// `stride` pixels), alpha opaque.
+    pub fn resize_into_rgba(
+        &self,
+        src: Rect,
+        out_w: usize,
+        out_h: usize,
+        stride: usize,
+        rgba: &mut [u8],
+    ) {
+        self.resample(src, out_w, out_h, |ox, oy, value| {
+            let index = (oy * stride + ox) * 4;
+            for (c, v) in value.iter().enumerate() {
+                rgba[index + c] = v.round().clamp(0.0, 255.0) as u8;
+            }
+            rgba[index + 3] = 255;
+        });
+    }
+
+    fn resample(
+        &self,
+        src: Rect,
+        out_w: usize,
+        out_h: usize,
+        mut put: impl FnMut(usize, usize, [f32; 3]),
+    ) {
         if out_w == 0 || out_h == 0 || self.width == 0 || self.height == 0 {
             return;
         }
@@ -217,10 +251,7 @@ impl RgbImage {
                     }
                     out
                 };
-                let index = oy * stride + ox;
-                for (c, v) in value.iter().enumerate() {
-                    planes[c * plane + index] = map(c, *v);
-                }
+                put(ox, oy, value);
             }
         }
     }

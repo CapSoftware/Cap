@@ -1690,17 +1690,20 @@ name = "cap-redact"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "cap-camera-effects",
  "cap-project",
  "cap-video-decode",
  "ffmpeg-next",
  "ort",
+ "pollster",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "wgpu",
  "workspace-hack",
 ]
 
