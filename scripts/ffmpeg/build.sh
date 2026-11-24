@@ -68,6 +68,9 @@ if [[ "$TARGET" == *windows* ]]; then
   grep -q "_tag='1.4.2'" stages/45-dav1d.sh
 fi
 
+sed -i 's#^mv "${OUT}/models" .*#[ ! -d "${OUT}/models" ] || mv "${OUT}/models" "${OUT}/${_framework}/Versions/A/Resources/Models"#' scripts/create-macos-framework.sh
+grep -q '\[ ! -d "${OUT}/models" \]' scripts/create-macos-framework.sh
+
 # Only FFmpeg goes into the final image; the other native-deps outputs
 # (heif, pdfium, onnx, protoc, yolo) are not built.
 sed -i -E '/COPY --from=layer-99-(heif|protoc|pdfium|yolo|onnx) /d' Dockerfile
