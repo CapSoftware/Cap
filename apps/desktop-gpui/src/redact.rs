@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock, Mutex, PoisonError, Weak,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -313,6 +313,58 @@ fn scan_for(project: PathBuf, durations: Option<Vec<f64>>, background: bool) -> 
     scan
 }
 
+/// The model of the last scan, kept loaded for two minutes so a scan right
+/// after another (auto redact off and on again, the next recording) skips
+/// loading it.
+struct WarmModel {
+    dir: PathBuf,
+    model: cap_redact::OcrModel,
+    generation: u64,
+}
+
+static WARM_MODEL: Mutex<Option<WarmModel>> = Mutex::new(None);
+static WARM_GENERATION: AtomicU64 = AtomicU64::new(0);
+const WARM_FOR: Duration = Duration::from_secs(120);
+
+fn take_model(dir: &Path) -> anyhow::Result<cap_redact::OcrModel> {
+    let warm = WARM_MODEL
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    match warm {
+        Some(warm) if warm.dir == dir => Ok(warm.model),
+        _ => cap_redact::OcrModel::load(dir),
+    }
+}
+
+fn keep_model(dir: PathBuf, model: cap_redact::OcrModel) {
+    let generation = WARM_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    *WARM_MODEL.lock().unwrap_or_else(PoisonError::into_inner) = Some(WarmModel {
+        dir,
+        model,
+        generation,
+    });
+    let spawned = std::thread::Builder::new()
+        .name("cap-auto-redact-warm".into())
+        .spawn(move || {
+            std::thread::sleep(WARM_FOR);
+            let mut warm = WARM_MODEL.lock().unwrap_or_else(PoisonError::into_inner);
+            if warm
+                .as_ref()
+                .is_some_and(|warm| warm.generation == generation)
+            {
+                *warm = None;
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "Could not schedule the auto redact model release");
+        WARM_MODEL
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+    }
+}
+
 fn model_version(model_dir: Option<&Path>) -> String {
     model_dir
         .and_then(|dir| std::fs::read(dir.join("meta.json")).ok())
@@ -383,12 +435,12 @@ fn run(scan: &Scan) -> anyhow::Result<()> {
         Some(dir) => dir,
         None => download_model(cancel)?,
     };
-    let mut model = cap_redact::OcrModel::load(&model_dir)?;
+    let mut model = take_model(&model_dir)?;
     let mut stats = cap_redact::Stats::default();
     scan.lock().phase = JobPhase::Scanning;
     let mut analyzer = cap_redact::Analyzer::new(&mut model);
     analyzer.cancel = cancel.clone();
-    let result = analyzer.analyze(
+    let analyzed = analyzer.analyze(
         &sources,
         previous.as_ref(),
         |progress| {
@@ -400,7 +452,10 @@ fn run(scan: &Scan) -> anyhow::Result<()> {
             publish(scan, progress.snapshot.clone(), fraction);
         },
         &mut stats,
-    )?;
+    );
+    drop(analyzer);
+    keep_model(model_dir, model);
+    let result = analyzed?;
     result
         .save(project)
         .map_err(|error| anyhow::anyhow!("save {}: {error}", REDACTIONS_FILE))?;
