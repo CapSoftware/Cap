@@ -112,6 +112,70 @@ fn audio_follows_confirmed_route(
             .is_some_and(|(captured_at, routed_at)| captured_at >= routed_at.instant())
 }
 
+/// Timestamps for a microphone whose callbacks arrive in bursts, as ALSA's
+/// pulse plugin delivers them from PipeWire's pulse server. Linux stamps
+/// audio with the time its callback runs, so a burst made the muxer see a
+/// gap, insert silence and then trim the late audio as overlap. Here each
+/// buffer is placed by the frames delivered so far from the earliest anchor
+/// its arrivals allow: steady delivery keeps the arrival times exactly, a
+/// late callback no longer moves its audio, and real loss or clock drift
+/// moves the anchor once a whole window of arrivals agrees.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct SteadyDeliveryClock {
+    anchor: Option<Instant>,
+    rate: u32,
+    frames: u64,
+    window_started: Option<Instant>,
+    window_min_lag: Option<Duration>,
+}
+
+#[cfg(target_os = "linux")]
+impl SteadyDeliveryClock {
+    const WINDOW: Duration = Duration::from_secs(2);
+
+    fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
+        if rate == 0 {
+            return Timestamp::Instant(received);
+        }
+        if rate != self.rate {
+            *self = Self {
+                rate,
+                ..Self::default()
+            };
+        }
+        let frames = self.frames + frame_count as u64;
+        self.frames = frames;
+        let delivered = Duration::from_secs_f64(frames as f64 / f64::from(rate));
+        let Some(anchor) = self.anchor else {
+            self.anchor = Some(received.checked_sub(delivered).unwrap_or(received));
+            self.window_started = Some(received);
+            return Timestamp::Instant(received);
+        };
+        let predicted = anchor + delivered;
+        if received < predicted {
+            // Arrivals are never early, so this one shows the anchor was late.
+            self.anchor = Some(anchor.checked_sub(predicted - received).unwrap_or(anchor));
+            return Timestamp::Instant(received);
+        }
+        let lag = received - predicted;
+        self.window_min_lag = Some(self.window_min_lag.map_or(lag, |min| min.min(lag)));
+        if self
+            .window_started
+            .is_some_and(|started| received.saturating_duration_since(started) >= Self::WINDOW)
+        {
+            // Every arrival in the window was late by at least this much: frames
+            // were lost or the device clock runs slow, not a burst.
+            if let Some(min_lag) = self.window_min_lag.take() {
+                self.anchor = Some(anchor + min_lag);
+            }
+            self.window_started = Some(received);
+            return Timestamp::Instant(self.anchor.unwrap_or(anchor) + delivered);
+        }
+        Timestamp::Instant(predicted)
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn cancellable_system_stream_ready(
     ready: StreamReadyFuture,
@@ -1514,6 +1578,11 @@ impl MicrophoneFeed {
                         let system_stream_cancel = system_stream_cancel.clone();
                         let mut callback_count = 0u64;
                         let mut enqueue_failures = EnqueueFailureLog::default();
+                        #[cfg(target_os = "linux")]
+                        let mut delivery_clock = (route_required
+                            && pulse_input_role
+                                == crate::sources::screen_capture::PulseInputRole::Microphone)
+                            .then(SteadyDeliveryClock::default);
                         move |data, info| {
                             #[cfg(target_os = "linux")]
                             if system_stream_cancel.is_cancelled() {
@@ -1555,6 +1624,15 @@ impl MicrophoneFeed {
                             ) {
                                 return;
                             }
+                            #[cfg(target_os = "linux")]
+                            let timestamp = match delivery_clock.as_mut() {
+                                Some(clock) => clock.timestamp(
+                                    callback_received,
+                                    frame_count,
+                                    effective_sample_rate.sample_rate,
+                                ),
+                                None => timestamp,
+                            };
                             #[cfg(windows)]
                             let timestamp = capture_clock.timestamp(
                                 timestamp,
@@ -5476,5 +5554,83 @@ mod recording_subscription_tests {
             expected: true,
         });
         assert!(!expected.failed.load(Ordering::Acquire));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod steady_delivery_clock_tests {
+    use super::SteadyDeliveryClock;
+    use cap_timestamp::Timestamp;
+    use std::time::{Duration, Instant};
+
+    const RATE: u32 = 44_100;
+    const FRAMES: usize = 1_102;
+
+    fn period() -> Duration {
+        Duration::from_secs_f64(FRAMES as f64 / f64::from(RATE))
+    }
+
+    fn instant(timestamp: Timestamp) -> Instant {
+        match timestamp {
+            Timestamp::Instant(instant) => instant,
+            other => panic!("expected an Instant timestamp, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn steady_delivery_keeps_the_arrival_times() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        for buffer in 1..=200u32 {
+            let received = start + period() * buffer;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            assert!(stamped.max(received) - stamped.min(received) < Duration::from_micros(50));
+        }
+    }
+
+    #[test]
+    fn a_burst_of_late_callbacks_keeps_its_audio_in_place() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=60u32 {
+            let on_time = start + period() * buffer;
+            // Buffers 20 to 22 arrive together, 75 ms after the first was due.
+            let received = if (20..=22).contains(&buffer) {
+                start + period() * 20 + Duration::from_millis(75)
+            } else {
+                on_time
+            };
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        for pair in stamps.windows(2) {
+            let step = pair[1] - pair[0];
+            assert!(step.max(period()) - step.min(period()) < Duration::from_micros(50));
+        }
+    }
+
+    #[test]
+    fn lost_frames_move_the_anchor_after_a_window() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let loss = Duration::from_millis(200);
+        let mut last_gap = Duration::ZERO;
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_gap = received.max(stamped) - received.min(stamped);
+        }
+        // Long after the loss the timeline has caught up with the clock again.
+        assert!(last_gap < Duration::from_millis(5), "{last_gap:?}");
+    }
+
+    #[test]
+    fn a_new_rate_starts_a_new_timeline() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let _ = clock.timestamp(start, FRAMES, RATE);
+        let later = start + Duration::from_secs(5);
+        assert_eq!(instant(clock.timestamp(later, 960, 48_000)), later);
     }
 }
