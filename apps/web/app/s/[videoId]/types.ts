@@ -28,6 +28,7 @@ export type VideoData = Omit<
 	activeUploadRawFileKey?: string | null;
 	ownerIsOverShareLimit?: boolean;
 	ownerIsOverDurationLimit?: boolean;
+	playbackPending?: boolean;
 	callToAction?: ShareCallToAction | null;
 	callToActionSource?: CallToActionSource | null;
 	workspaceCallToAction?: ShareCallToAction | null;

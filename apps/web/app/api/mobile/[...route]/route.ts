@@ -78,7 +78,7 @@ import {
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
-import { isHeldOnFirstView } from "@/lib/free-plan-measure-probe";
+import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import {
 	describeLinkAccessChoice,
 	isLinkRestricted,
@@ -3055,7 +3055,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 		if (
 			viewer.id !== video.ownerId &&
 			(yield* Effect.promise(() =>
-				isHeldOnFirstView(
+				firstViewDecision(
 					{
 						id: video.id,
 						createdAt: video.createdAt,
@@ -3063,7 +3063,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 					},
 					source.getFileKey(),
 				),
-			))
+			)) !== "play"
 		)
 			return yield* Effect.fail(new HttpApiError.Forbidden());
 		const signedUrl = yield* bucket.getSignedObjectUrl(

@@ -23,7 +23,7 @@ import {
 	recordFreePlanOverLength,
 } from "@/lib/free-plan-measure";
 import {
-	isHeldOnFirstView,
+	firstViewDecision,
 	measureFreePlanObjectIfNeeded,
 	remeasureHeldVideoIfNeeded,
 	runAfterResponse,
@@ -83,7 +83,8 @@ class Api extends HttpApi.make("CapWebApi").add(
 			.addError(HttpApiError.BadRequest)
 			.addError(HttpApiError.Unauthorized)
 			.addError(HttpApiError.InternalServerError)
-			.addError(HttpApiError.NotFound),
+			.addError(HttpApiError.NotFound)
+			.addError(HttpApiError.ServiceUnavailable),
 	),
 ) {}
 
@@ -253,7 +254,7 @@ const measureBeforeServing = (
 	viewerIsOwner
 		? scheduleFreePlanMeasure(video, key)
 		: Effect.tryPromise(() =>
-				isHeldOnFirstView(
+				firstViewDecision(
 					{
 						id: video.id,
 						createdAt: video.createdAt,
@@ -262,21 +263,43 @@ const measureBeforeServing = (
 					key,
 				),
 			).pipe(
-				Effect.orElseSucceed(() => false),
-				Effect.flatMap((held) =>
-					held ? Effect.fail(new HttpApiError.Forbidden()) : Effect.void,
+				Effect.orElseSucceed(() => "play" as const),
+				Effect.flatMap(
+					(
+						decision,
+					): Effect.Effect<
+						void,
+						HttpApiError.Forbidden | HttpApiError.ServiceUnavailable
+					> =>
+						decision === "held"
+							? Effect.fail(new HttpApiError.Forbidden())
+							: decision === "pending"
+								? Effect.fail(new HttpApiError.ServiceUnavailable())
+								: Effect.void,
 				),
 			);
 
-const scheduleFreePlanOverLength = (
+// A playlist declares its own length. Over the limit, it is held before any
+// media URL in it is signed for someone other than the owner.
+const holdDeclaredOverLength = (
 	video: Video.Video,
 	key: string,
 	seconds: () => number,
+	viewerIsOwner: boolean,
 ) =>
-	runFreePlanCheck(() => {
-		const length = seconds();
-		if (exceedsFreePlanMeasuredDuration(length))
+	Effect.gen(function* () {
+		const length = yield* Effect.try(seconds).pipe(
+			Effect.orElseSucceed(() => 0),
+		);
+		if (!exceedsFreePlanMeasuredDuration(length)) return;
+		if (viewerIsOwner) {
 			runAfterResponse(() => recordFreePlanOverLength(video.id, key, length));
+			return;
+		}
+		const held = yield* Effect.promise(() =>
+			recordFreePlanOverLength(video.id, key, length),
+		);
+		if (held) return yield* Effect.fail(new HttpApiError.Forbidden());
 	});
 
 const declaredPlaylistSeconds = (text: string) =>
@@ -339,10 +362,14 @@ const getPlaylistResponse = (
 			let manifest = yield* Schema.decodeUnknown(Video.SegmentManifest)(
 				parsed,
 			).pipe(Effect.mapError(() => new HttpApiError.InternalServerError()));
-			yield* scheduleFreePlanOverLength(video, manifestKey, () =>
-				totalSegmentDuration(
-					manifest.video_segments.map(Video.normalizeSegmentEntry),
-				),
+			yield* holdDeclaredOverLength(
+				video,
+				manifestKey,
+				() =>
+					totalSegmentDuration(
+						manifest.video_segments.map(Video.normalizeSegmentEntry),
+					),
+				viewerIsOwner,
 			);
 			if (
 				manifest.version === 1 &&
@@ -621,8 +648,11 @@ const getPlaylistResponse = (
 				playlist = yield* readPlaylist(resolveUri(variant));
 			}
 
-			yield* scheduleFreePlanOverLength(video, playlist.key, () =>
-				declaredPlaylistSeconds(playlist.text),
+			yield* holdDeclaredOverLength(
+				video,
+				playlist.key,
+				() => declaredPlaylistSeconds(playlist.text),
+				viewerIsOwner,
 			);
 
 			const playlistLines = playlist.text.split("\n");

@@ -53,7 +53,7 @@ import { completeDesktopSegmentsManifestAndQueue } from "@/lib/desktop-segments-
 import { isEarlyInstantPlaybackEnabled } from "@/lib/early-instant-playback";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
 import {
-	isHeldOnFirstView,
+	firstViewDecision,
 	measureFreePlanObjectIfNeeded,
 	remeasureHeldVideoIfNeeded,
 } from "@/lib/free-plan-measure-probe";
@@ -656,27 +656,32 @@ async function AuthorizedContent({
 					video.source.outputKey,
 				) ?? `${video.owner.id}/${videoId}/result.mp4`)
 			: null;
+	const firstViewPromise =
+		ownerIsPro || firstViewKey === null
+			? Promise.resolve("play" as const)
+			: firstViewDecision(
+					{
+						id: videoId,
+						createdAt: video.createdAt,
+						metadata: video.metadata,
+					},
+					firstViewKey,
+				);
 	const overDurationLimitPromise = ownerIsPro
 		? Promise.resolve(false)
-		: isVideoOverFreePlanDuration({
-				id: videoId,
-				ownerId: video.owner.id,
-				orgId: video.orgId,
-				isScreenshot: video.isScreenshot,
-				metadata: video.metadata,
-			})
+		: Promise.all([
+				isVideoOverFreePlanDuration({
+					id: videoId,
+					ownerId: video.owner.id,
+					orgId: video.orgId,
+					isScreenshot: video.isScreenshot,
+					metadata: video.metadata,
+				}),
+				firstViewPromise,
+			])
 				.then(
-					(overDurationLimit) =>
-						overDurationLimit ||
-						(firstViewKey !== null &&
-							isHeldOnFirstView(
-								{
-									id: videoId,
-									createdAt: video.createdAt,
-									metadata: video.metadata,
-								},
-								firstViewKey,
-							)),
+					([overDurationLimit, firstView]) =>
+						overDurationLimit || firstView === "held",
 				)
 				.catch((error) => {
 					console.error(
@@ -685,6 +690,9 @@ async function AuthorizedContent({
 					);
 					return false;
 				});
+	const playbackPendingPromise = firstViewPromise.then(
+		(firstView) => firstView === "pending",
+	);
 	void overDurationLimitPromise.then((overDurationLimit) => {
 		if (overDurationLimit)
 			remeasureHeldVideoIfNeeded({
@@ -696,8 +704,9 @@ async function AuthorizedContent({
 	const playbackLockedPromise = Promise.all([
 		overShareLimitPromise,
 		overDurationLimitPromise,
-	]).then(([overShareLimit, overDurationLimit]) =>
-		Boolean(overShareLimit || overDurationLimit),
+		playbackPendingPromise,
+	]).then(([overShareLimit, overDurationLimit, playbackPending]) =>
+		Boolean(overShareLimit || overDurationLimit || playbackPending),
 	);
 	const initialPlaybackSourcePromise =
 		!video.isScreenshot &&
@@ -1025,6 +1034,7 @@ async function AuthorizedContent({
 		videoHasEdits,
 		ownerIsOverShareLimit,
 		ownerIsOverDurationLimit,
+		playbackPending,
 		resolvedImages,
 		dashboardDestination,
 		serverPlaybackSource,
@@ -1043,6 +1053,7 @@ async function AuthorizedContent({
 		videoHasEditsPromise,
 		overShareLimitPromise,
 		overDurationLimitPromise,
+		playbackPendingPromise,
 		imagesPromise,
 		dashboardDestinationPromise,
 		serverPlaybackSourcePromise,
@@ -1125,6 +1136,7 @@ async function AuthorizedContent({
 		hasActiveUpload,
 		ownerIsOverShareLimit,
 		ownerIsOverDurationLimit,
+		playbackPending,
 		owner: {
 			id: video.owner.id,
 			name: video.owner.name,

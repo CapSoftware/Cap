@@ -34,6 +34,7 @@ import { notFound } from "next/navigation";
 import { after } from "next/server";
 import { type EmbedOptions, parseEmbedOptions } from "@/lib/embed-options";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
+import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import {
 	getPendingLoomProcessing,
 	startDeferredLoomProcessing,
@@ -358,7 +359,25 @@ async function EmbedContent({
 			return false;
 		}));
 
-	if (overShareLimit || overDurationLimit) {
+	const firstView =
+		overShareLimit ||
+		overDurationLimit ||
+		ownerIsProUser ||
+		user?.id === video.ownerId
+			? "play"
+			: await embedFirstViewDecision(video);
+
+	if (firstView === "pending") {
+		return (
+			<div className="flex flex-col gap-3 justify-center items-center px-6 min-h-screen text-center bg-black">
+				<meta httpEquiv="refresh" content="3" />
+				<Logo className="w-auto h-7" white />
+				<p className="text-sm text-white/60">Preparing video…</p>
+			</div>
+		);
+	}
+
+	if (overShareLimit || overDurationLimit || firstView === "held") {
 		return (
 			<div className="flex flex-col gap-3 justify-center items-center px-6 min-h-screen text-center bg-black">
 				<Logo className="w-auto h-7" white />
@@ -487,4 +506,34 @@ async function EmbedContent({
 			}
 		/>
 	);
+}
+
+async function embedFirstViewDecision(video: {
+	id: Video.VideoId;
+	ownerId: string;
+	createdAt: Date;
+	isScreenshot: boolean;
+	hasActiveUpload?: boolean;
+	metadata: object | null;
+	source: { type: string; outputKey?: string };
+}) {
+	try {
+		if (
+			video.isScreenshot ||
+			video.hasActiveUpload ||
+			(video.source.type !== "desktopMP4" && video.source.type !== "webMP4")
+		)
+			return "play";
+		return await firstViewDecision(
+			{ id: video.id, createdAt: video.createdAt, metadata: video.metadata },
+			Video.getRetainedRecordingOutputKey(
+				video.ownerId,
+				video.id,
+				video.source.outputKey,
+			) ?? `${video.ownerId}/${video.id}/result.mp4`,
+		);
+	} catch (error) {
+		console.error("[EmbedVideoPage] Free plan first view check failed:", error);
+		return "play";
+	}
 }

@@ -7,7 +7,7 @@ import { CurrentUser, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { isVideoOverFreePlanDuration } from "@/lib/free-plan-measure";
-import { isHeldOnFirstView } from "@/lib/free-plan-measure-probe";
+import { firstViewDecision } from "@/lib/free-plan-measure-probe";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { runPromise } from "@/lib/server";
 import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
@@ -62,7 +62,7 @@ async function viewerPassesViewGates(video: VideoRow, viewer: Viewer) {
 			video.id,
 			video.source.outputKey,
 		) ?? `${video.ownerId}/${video.id}/result.mp4`;
-	return !(await isHeldOnFirstView(video, key));
+	return (await firstViewDecision(video, key)) === "play";
 }
 
 // Owners and members of an organization or space the cap is shared with keep

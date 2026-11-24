@@ -381,6 +381,12 @@ export const ShareVideo = forwardRef<
 		const isSegmentsSource = data.source.type === "desktopSegments";
 		const isOverShareLimit = data.ownerIsOverShareLimit === true;
 		const isOverDurationLimit = data.ownerIsOverDurationLimit === true;
+		const isPlaybackPending = data.playbackPending === true;
+		useEffect(() => {
+			if (!isPlaybackPending) return;
+			const timer = setTimeout(() => router.refresh(), 3000);
+			return () => clearTimeout(timer);
+		}, [isPlaybackPending, router]);
 		const isActivelyRecording =
 			isSegmentsSource &&
 			(data.hasActiveUpload ?? false) &&
@@ -573,7 +579,7 @@ export const ShareVideo = forwardRef<
 								/>
 							</div>
 						</div>
-					) : isProcessingInProgress ? (
+					) : isProcessingInProgress || isPlaybackPending ? (
 						<PreparingVideoOverlay className="h-full" />
 					) : isOverShareLimit || isOverDurationLimit ? (
 						// Quota gate: the player is never mounted, so the video is not
