@@ -467,6 +467,7 @@ pub struct RecordingSession {
     paused_since: Option<Instant>,
     storage_monitor: Option<Task<()>>,
     limit_monitor: Option<Task<()>>,
+    limit_started_upgraded: bool,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
@@ -532,6 +533,7 @@ impl RecordingSession {
             paused_since: None,
             storage_monitor: None,
             limit_monitor: None,
+            limit_started_upgraded: false,
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
@@ -1090,6 +1092,7 @@ impl RecordingSession {
             .as_ref()
             .and_then(ActiveRecording::recording_limit)
         {
+            self.limit_started_upgraded = crate::store::auth_snapshot().is_upgraded();
             self.monitor_recording_limit(limit, project_dir.clone(), cx);
         }
         self.monitor_storage(project_dir, cx);
@@ -1170,12 +1173,14 @@ impl RecordingSession {
     }
 
     /// Time left before the plan's recording limit stops this recording, or
-    /// `None` when it has no limit or the account has since been upgraded.
+    /// `None` when it has no limit or the account was upgraded after it
+    /// started. The server only sets a limit for a free account, so a Pro plan
+    /// saved before the recording started is out of date and does not lift it.
     pub fn recording_time_left(&self) -> Option<Duration> {
-        if crate::store::auth_snapshot().is_upgraded() {
+        let limit = self.active.as_ref()?.recording_limit()?;
+        if !self.limit_started_upgraded && crate::store::auth_snapshot().is_upgraded() {
             return None;
         }
-        let limit = self.active.as_ref()?.recording_limit()?;
         Some(limit.saturating_sub(self.elapsed()))
     }
 
