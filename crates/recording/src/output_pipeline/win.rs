@@ -145,6 +145,7 @@ pub struct WindowsMuxerConfig {
     pub d3d_device: ID3D11Device,
     pub frame_rate: u32,
     pub bitrate_multiplier: f32,
+    pub video_bitrate: Option<u32>,
     pub output_size: Option<SizeInt32>,
     pub encoder_preferences: crate::capture_pipeline::EncoderPreferences,
     pub fragmented: bool,
@@ -236,6 +237,12 @@ impl Muxer for WindowsMuxer {
                         };
 
                         cap_enc_ffmpeg::h264::H264Encoder::builder(video_config)
+                            .with_bpp(cap_enc_ffmpeg::h264::H264EncoderBuilder::bpp_for_video_bitrate(
+                                cap_enc_ffmpeg::h264::H264EncoderBuilder::QUALITY_BPP,
+                                config.video_bitrate,
+                                &video_config,
+                                Some((fallback_width, fallback_height)),
+                            ))
                             .with_output_size(fallback_width, fallback_height)
                             .and_then(|builder| builder.build(&mut output_guard))
                             .map(either::Right)
@@ -264,7 +271,17 @@ impl Muxer for WindowsMuxer {
                         input_size,
                         output_size,
                         config.frame_rate,
-                        config.bitrate_multiplier,
+                        match config.video_bitrate {
+                            Some(video_bitrate) => {
+                                cap_enc_mediafoundation::video::bitrate_multiplier_for(
+                                    output_size.Width.max(0) as u32,
+                                    output_size.Height.max(0) as u32,
+                                    config.frame_rate,
+                                    video_bitrate,
+                                )
+                            }
+                            None => config.bitrate_multiplier,
+                        },
                     ) {
                         Ok(encoder) => {
                             if let Err(e) = encoder.validate() {

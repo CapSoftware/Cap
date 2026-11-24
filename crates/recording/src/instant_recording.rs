@@ -829,6 +829,7 @@ async fn create_pipeline(
                 timed_fragments: false,
                 segment_duration: std::time::Duration::from_secs(2),
                 preset: cap_enc_ffmpeg::h264::H264Preset::Ultrafast,
+                video_bitrate: None,
                 output_size: Some(output_resolution),
                 shared_pause_state: None,
                 segment_tx: segment_tx_for_video,
