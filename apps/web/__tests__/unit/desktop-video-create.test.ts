@@ -15,6 +15,9 @@ const deletion = vi.hoisted(() => ({
 const defaultSharing = vi.hoisted(() => ({
 	getNewVideoPublic: vi.fn(),
 }));
+const freePlan = vi.hoisted(() => ({
+	getFreePlanRecordingLimit: vi.fn(),
+}));
 
 const schema = {
 	organizations: { table: "organizations" },
@@ -46,6 +49,7 @@ vi.mock("@cap/database", () => ({
 	db: () => mockDb,
 }));
 vi.mock("@cap/database/video-sharing-default", () => defaultSharing);
+vi.mock("@/lib/free-plan-duration", () => freePlan);
 
 vi.mock("@cap/database/auth/session", () => ({
 	getCurrentUser: vi.fn(),
@@ -528,6 +532,7 @@ describe("GET /create", () => {
 		resetMockDb();
 		stubStorage();
 		defaultSharing.getNewVideoPublic.mockResolvedValue(true);
+		freePlan.getFreePlanRecordingLimit.mockResolvedValue(null);
 		const mod = await import("@/app/api/desktop/[...route]/video");
 		app = mod.app;
 	});
@@ -578,6 +583,60 @@ describe("GET /create", () => {
 
 		const body = await response.json();
 		expect(body.id).toBeTruthy();
+	});
+
+	const memberOfOrg = () => {
+		mockGetCurrentUser.mockResolvedValue({
+			id: "user-1",
+			email: "someone@cap.test",
+			defaultOrgId: "org-1",
+			activeOrganizationId: "org-1",
+		});
+		mockDb.where
+			.mockResolvedValueOnce([
+				{ id: "org-1", name: "Acme", createdAt: new Date() },
+			])
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce([{ count: 5 }]);
+	};
+
+	it("returns the recording limit for a free plan recording", async () => {
+		freePlan.getFreePlanRecordingLimit.mockResolvedValue(300);
+		memberOfOrg();
+
+		const response = await app.request(
+			"https://cap.test/create?recordingMode=desktopMP4",
+		);
+
+		expect(response.status).toBe(200);
+		expect((await response.json()).recording_limit_secs).toBe(300);
+		expect(freePlan.getFreePlanRecordingLimit).toHaveBeenCalledWith(
+			"user-1",
+			"org-1",
+		);
+	});
+
+	it.each([
+		["no recording mode", ""],
+		["the HLS recording mode", "?recordingMode=hls"],
+	])("refuses a free plan legacy recording with %s", async (_, query) => {
+		freePlan.getFreePlanRecordingLimit.mockResolvedValue(300);
+		memberOfOrg();
+
+		const response = await app.request(`https://cap.test/create${query}`);
+
+		expect(response.status).toBe(403);
+		expect(await response.json()).toEqual({ error: "upgrade_required" });
+		expect(insertedValues(schema.videos)).toBeUndefined();
+	});
+
+	it("keeps legacy recordings for accounts the limit does not apply to", async () => {
+		memberOfOrg();
+
+		const response = await app.request("https://cap.test/create");
+
+		expect(response.status).toBe(200);
+		expect((await response.json()).recording_limit_secs).toBeUndefined();
 	});
 
 	it("does not provision when the user already belongs to an org", async () => {
@@ -986,7 +1045,7 @@ describe("GET /create", () => {
 		vi.spyOn(console, "error").mockImplementation(() => undefined);
 
 		const response = await app.request(
-			"https://cap.test/create?recordingMode=desktopSegments",
+			"https://cap.test/create?recordingMode=desktopMP4",
 			{ headers: { "X-Cap-Desktop-Version": "0.3.68" } },
 		);
 

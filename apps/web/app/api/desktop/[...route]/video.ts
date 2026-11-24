@@ -276,6 +276,23 @@ app.get(
 				videoOrgId = userOrganizations[0].id;
 			}
 
+			const recordingLimitSecs = isScreenshot
+				? null
+				: await getFreePlanRecordingLimit(user.id, videoOrgId).catch(
+						(error) => {
+							console.error("Error reading the recording limit:", error);
+							return null;
+						},
+					);
+
+			// Legacy HLS recordings declare their own length and are only made
+			// by very old clients, so the free plan cannot create them.
+			if (
+				recordingLimitSecs !== null &&
+				(recordingMode === undefined || recordingMode === "hls")
+			)
+				return c.json({ error: "upgrade_required" }, { status: 403 });
+
 			const idToUse = Video.VideoId.make(
 				createWithId && videoId ? videoId : nanoId(),
 			);
@@ -399,15 +416,6 @@ app.get(
 					error,
 				);
 			}
-
-			const recordingLimitSecs = isScreenshot
-				? null
-				: await getFreePlanRecordingLimit(user.id, videoOrgId).catch(
-						(error) => {
-							console.error("Error reading the recording limit:", error);
-							return null;
-						},
-					);
 
 			return c.json({
 				id: idToUse,
