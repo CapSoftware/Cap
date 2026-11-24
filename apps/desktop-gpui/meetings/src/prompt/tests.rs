@@ -368,6 +368,40 @@ fn auto_record_cancel_suppresses_for_call() {
 }
 
 #[test]
+fn accepting_the_next_meeting_while_one_records_switches_to_it() {
+    let mut s = Sim::new();
+    s.events(vec![
+        ev("a", "A", 0, 10 * MIN as i64, false),
+        ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Recording {
+        event_id: Some("a".into()),
+    });
+    s.take();
+    s.at(9 * MIN)
+        .expect(&[(540_000, "show #2 Scheduled B | 600-2400")]);
+    s.accept(2).expect(&[
+        (540_000, "record event b"),
+        (540_000, "dismiss #2 RecordingStarted"),
+    ]);
+}
+
+#[test]
+fn accepting_while_a_meeting_is_still_starting_waits_for_it() {
+    let mut s = Sim::new();
+    s.events(vec![
+        ev("a", "A", 0, 10 * MIN as i64, false),
+        ev("b", "B", 10 * MIN as i64, 30 * MIN as i64, false),
+    ]);
+    s.recording(RecordingState::Starting {
+        event_id: Some("a".into()),
+    });
+    s.at(9 * MIN).take();
+    s.accept(2)
+        .expect(&[(540_000, "dismiss #2 RecordingStarted")]);
+}
+
+#[test]
 fn accept_starts_recording_once() {
     let mut s = Sim::new();
     s.started("zoom").started("teams").take();
@@ -793,6 +827,9 @@ fn randomised_invariants() {
         for step in 0..600 {
             now += rng.below(30_000);
             let clock = Now::new(Millis(now), wall(now as i64));
+            // Accepting a prompt while a meeting records switches to it: the
+            // app ends that meeting before it starts this one.
+            let mut switching = false;
             let actions = match rng.below(10) {
                 0 => {
                     let app = rng.pick(&apps).to_string();
@@ -853,7 +890,11 @@ fn randomised_invariants() {
                     match rng.below(4) {
                         0 => planner.dismiss(clock, id),
                         1 => planner.cancel(clock, id),
-                        2 => planner.accept(clock, id),
+                        2 => {
+                            switching =
+                                matches!(planner.recording(), RecordingState::Recording { .. });
+                            planner.accept(clock, id)
+                        }
                         _ => planner.hover(clock, id, rng.chance(50)),
                     }
                 }
@@ -881,7 +922,7 @@ fn randomised_invariants() {
                     }
                     PromptAction::StartRecording { .. } => {
                         assert!(
-                            !recording_requested,
+                            !recording_requested || switching,
                             "seed {seed} step {step}: double start"
                         );
                         recording_requested = true;

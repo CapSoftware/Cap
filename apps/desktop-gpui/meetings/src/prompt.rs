@@ -413,7 +413,11 @@ impl PromptPlanner {
         let now = self.sync(now);
         let mut out = self.advance(now);
         if let Some(index) = self.slots.iter().position(|s| s.prompt.id == id) {
-            if self.recording.is_active() {
+            // While a meeting records, the prompts left are for other meetings
+            // (the next one on the calendar): taking notes for one switches to
+            // it, and the app ends the meeting it was recording first, as it
+            // does for any start. One that is still starting is waited for.
+            if matches!(self.recording, RecordingState::Starting { .. }) {
                 self.remove(id, DismissReason::RecordingStarted, &mut out);
             } else {
                 self.start_from(index, &mut out);
