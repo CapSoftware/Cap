@@ -30,6 +30,10 @@ pub enum Concern {
     CloudCatchingUp,
     /// The cloud isn't answering; this computer transcribes meanwhile.
     CloudLocal,
+    /// The day's cloud audio is used up; the audio waits for the reset.
+    CloudLimitWaiting,
+    /// The day's cloud audio is used up; this computer transcribes.
+    CloudLimitLocal,
     /// Words did not land and the meeting keeps no audio to find them in.
     WordsMissing,
     /// The microphone sends nothing but digital silence.
@@ -61,10 +65,12 @@ impl Concern {
             Concern::SignIn => 7,
             Concern::CloudCatchingUp => 8,
             Concern::CloudLocal => 9,
-            Concern::WordsMissing => 10,
-            Concern::MicSilent => 11,
-            Concern::NoModel => 12,
-            Concern::TapUnsupported => 13,
+            Concern::CloudLimitWaiting => 10,
+            Concern::CloudLimitLocal => 11,
+            Concern::WordsMissing => 12,
+            Concern::MicSilent => 13,
+            Concern::NoModel => 14,
+            Concern::TapUnsupported => 15,
         }
     }
 
@@ -172,6 +178,8 @@ pub fn concerns_with(active: &ActiveMeeting, audio_missed: bool) -> Vec<Concern>
         CloudState::SignIn { .. } => out.push(Concern::SignIn),
         CloudState::Down { local: false } => out.push(Concern::CloudCatchingUp),
         CloudState::Down { local: true } => out.push(Concern::CloudLocal),
+        CloudState::DailyLimit { local: false } => out.push(Concern::CloudLimitWaiting),
+        CloudState::DailyLimit { local: true } => out.push(Concern::CloudLimitLocal),
         CloudState::Ok => {}
     }
     if active.engine.unrepairable > 0 || audio_missed {

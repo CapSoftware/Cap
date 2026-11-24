@@ -3584,6 +3584,7 @@ disk_full = "Disk almost full"
 sign_in = "Sign in to finish the transcript"
 offline = "Offline, the audio is saved"
 cloud_local = "Transcribing on this computer"
+cloud_limit = "Today's cloud transcription is used up"
 words_missing = "Some words may be missing"
 
 [meeting.shortcuts]
@@ -4207,6 +4208,8 @@ disk_full = "Your disk is almost full. Free some space so Cap can keep saving th
 sign_in_again = "Sign in again to finish the transcript. Cap is keeping the audio."
 offline_catching_up = "You're offline. Cap is saving the audio and will finish the transcript when you're back."
 cloud_local = "Cap Cloud isn't answering, so this computer is transcribing for now."
+cloud_limit_waiting = "You've used today's cloud transcription. Cap is saving the audio and will finish the transcript when it resets."
+cloud_limit_local = "You've used today's cloud transcription, so this computer is transcribing until it resets."
 words_missing = { text = "Cap couldn't transcribe part of this meeting, so some words may be missing.", context = "Shown while recording when words were lost and the meeting keeps no audio to recover them from." }
 
 [documents.ask]

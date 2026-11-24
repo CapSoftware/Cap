@@ -108,6 +108,9 @@ pub enum CloudState {
     Down { local: bool },
     /// The sign-in was refused; the audio waits for a new one.
     SignIn { local: bool },
+    /// The day's cloud audio is used up: this computer's words stand in
+    /// (`local`), or the audio waits until the reset.
+    DailyLimit { local: bool },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -646,7 +649,10 @@ impl CloudLane {
                         };
                         tracing::warn!(?error, attempt, probe = job.probe, "cloud meeting transcription failed");
                         match error {
-                            CloudError::UpgradeRequired => break result,
+                            // Neither clears within a clip's retries.
+                            CloudError::UpgradeRequired | CloudError::DailyLimit { .. } => {
+                                break result;
+                            }
                             // A sign-in that changed since is tried at once.
                             CloudError::NotSignedIn => {
                                 let now = current_token();
@@ -1747,6 +1753,12 @@ impl Worker {
     /// minute or so (doubling to ten) finds out when the cloud is back.
     fn cloud_down(&mut self, error: &CloudError) {
         let sign_in = matches!(error, CloudError::NotSignedIn);
+        let daily = match error {
+            CloudError::DailyLimit { retry_after_secs } => {
+                Some(Duration::from_secs(*retry_after_secs))
+            }
+            _ => None,
+        };
         let now = Instant::now();
         match self.bridge.as_mut() {
             Some(bridge) => {
@@ -1767,9 +1779,16 @@ impl Worker {
                 });
             }
         }
+        // Used up for the day: ask again only once the day resets.
+        if let (Some(reset), Some(bridge)) = (daily, self.bridge.as_mut()) {
+            bridge.interval = reset;
+            bridge.next_probe = now + reset + self.policy.probe_jitter.mul_f64(jitter());
+        }
         let local = self.config.fallback.is_some();
         self.status.cloud = if sign_in {
             CloudState::SignIn { local }
+        } else if daily.is_some() {
+            CloudState::DailyLimit { local }
         } else {
             CloudState::Down { local }
         };

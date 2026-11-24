@@ -3582,6 +3582,7 @@ disk_full = "磁盘快满了"
 sign_in = "登录以完成转写"
 offline = "已离线，音频已保存"
 cloud_local = "正在这台电脑上转写"
+cloud_limit = "今天的云端转写额度已用完"
 words_missing = "可能缺少部分内容"
 
 [meeting.shortcuts]
@@ -4205,6 +4206,8 @@ disk_full = "磁盘快满了。请释放一些空间，以便 Cap 继续保存�
 sign_in_again = "请重新登录以完成转写。Cap 会保留音频。"
 offline_catching_up = "你已离线。Cap 正在保存音频，恢复联网后会完成转写。"
 cloud_local = "Cap Cloud 暂无响应，目前由这台电脑进行转写。"
+cloud_limit_waiting = "你今天的云端转写额度已用完。Cap 正在保存音频，额度重置后会完成转写。"
+cloud_limit_local = "你今天的云端转写额度已用完，额度重置前由这台电脑进行转写。"
 words_missing = "Cap 未能转写这场会议的一部分，可能缺少一些内容。"
 
 [documents.ask]

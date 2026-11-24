@@ -113,6 +113,9 @@ pub fn health_text(active: &ActiveMeeting) -> Option<String> {
         Concern::SignIn => tr::meeting::health::sign_in().into(),
         Concern::CloudCatchingUp => tr::meeting::health::offline().into(),
         Concern::CloudLocal => tr::meeting::health::cloud_local().into(),
+        Concern::CloudLimitWaiting | Concern::CloudLimitLocal => {
+            tr::meeting::health::cloud_limit().into()
+        }
         Concern::WordsMissing => tr::meeting::health::words_missing().into(),
         Concern::NoModel => return None,
     })

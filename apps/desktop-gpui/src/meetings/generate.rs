@@ -100,7 +100,8 @@ impl From<CloudError> for NotesError {
         match error {
             CloudError::NotSignedIn => NotesError::NotSignedIn,
             CloudError::UpgradeRequired => NotesError::UpgradeRequired,
-            CloudError::RateLimited { retry_after_secs } => {
+            CloudError::RateLimited { retry_after_secs }
+            | CloudError::DailyLimit { retry_after_secs } => {
                 NotesError::RateLimited { retry_after_secs }
             }
             CloudError::NotConfigured => NotesError::NotConfigured,

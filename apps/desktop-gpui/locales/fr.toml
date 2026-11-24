@@ -3582,6 +3582,7 @@ disk_full = "Disque presque plein"
 sign_in = "Connectez-vous pour terminer la transcription"
 offline = "Hors ligne, l'audio est enregistré"
 cloud_local = "Transcription sur cet ordinateur"
+cloud_limit = "Transcription cloud épuisée pour aujourd'hui"
 words_missing = "Des mots peuvent manquer"
 
 [meeting.shortcuts]
@@ -4205,6 +4206,8 @@ disk_full = "Votre disque est presque plein. Libérez de l'espace pour que Cap c
 sign_in_again = "Reconnectez-vous pour terminer la transcription. Cap conserve l'audio."
 offline_catching_up = "Vous êtes hors ligne. Cap enregistre l'audio et terminera la transcription à votre retour."
 cloud_local = "Cap Cloud ne répond pas, cet ordinateur transcrit en attendant."
+cloud_limit_waiting = "Vous avez épuisé la transcription cloud d'aujourd'hui. Cap enregistre l'audio et terminera la transcription à sa réinitialisation."
+cloud_limit_local = "Vous avez épuisé la transcription cloud d'aujourd'hui, cet ordinateur transcrit en attendant sa réinitialisation."
 words_missing = "Cap n'a pas pu transcrire une partie de cette réunion, certains mots peuvent manquer."
 
 [documents.ask]

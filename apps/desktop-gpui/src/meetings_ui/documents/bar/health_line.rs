@@ -28,6 +28,8 @@ impl Concern {
             Concern::SignIn => tr::documents::health::sign_in_again().into(),
             Concern::CloudCatchingUp => tr::documents::health::offline_catching_up().into(),
             Concern::CloudLocal => tr::documents::health::cloud_local().into(),
+            Concern::CloudLimitWaiting => tr::documents::health::cloud_limit_waiting().into(),
+            Concern::CloudLimitLocal => tr::documents::health::cloud_limit_local().into(),
             Concern::WordsMissing => tr::documents::health::words_missing().into(),
             Concern::NoModel => tr::documents::health::no_model().into(),
         }

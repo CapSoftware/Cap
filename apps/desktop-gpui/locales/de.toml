@@ -3582,6 +3582,7 @@ disk_full = "Speicher fast voll"
 sign_in = "Anmelden, um das Transkript fertigzustellen"
 offline = "Offline, die Aufnahme ist gesichert"
 cloud_local = "Transkription auf diesem Computer"
+cloud_limit = "Cloud-Transkription für heute aufgebraucht"
 words_missing = "Eventuell fehlen Wörter"
 
 [meeting.shortcuts]
@@ -4205,6 +4206,8 @@ disk_full = "Ihr Speicher ist fast voll. Geben Sie etwas Platz frei, damit Cap d
 sign_in_again = "Melden Sie sich erneut an, um das Transkript fertigzustellen. Cap behält die Aufnahme."
 offline_catching_up = "Sie sind offline. Cap speichert die Aufnahme und stellt das Transkript fertig, sobald Sie wieder online sind."
 cloud_local = "Cap Cloud antwortet nicht, daher transkribiert vorerst dieser Computer."
+cloud_limit_waiting = "Sie haben die Cloud-Transkription für heute aufgebraucht. Cap speichert die Aufnahme und stellt das Transkript fertig, sobald sie zurückgesetzt wird."
+cloud_limit_local = "Sie haben die Cloud-Transkription für heute aufgebraucht, daher transkribiert dieser Computer, bis sie zurückgesetzt wird."
 words_missing = "Cap konnte einen Teil dieses Meetings nicht transkribieren, daher fehlen eventuell einige Wörter."
 
 [documents.ask]
