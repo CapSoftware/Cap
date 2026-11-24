@@ -1734,6 +1734,23 @@ fn instant_capture_window(
 mod tests {
     use super::*;
 
+    #[test]
+    fn instant_frame_rate_keeps_its_own_ceiling() {
+        let builder = |fps| {
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly)
+                .with_max_fps(fps)
+                .max_fps
+        };
+        assert_eq!(
+            ActorBuilder::new(PathBuf::from("unused.cap"), ScreenCaptureTarget::CameraOnly).max_fps,
+            crate::defaults::DEFAULT_INSTANT_MODE_FPS
+        );
+        assert_eq!(builder(60), 60);
+        assert_eq!(builder(120), 120);
+        assert_eq!(builder(144), 120);
+        assert_eq!(builder(240), 120);
+    }
+
     #[cfg(any(target_os = "macos", windows))]
     #[test]
     fn instant_captures_the_window_only_when_asked_and_without_a_camera() {

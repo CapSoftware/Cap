@@ -329,38 +329,41 @@ fn english_matches_the_literals_it_replaced() {
                 .into(),
         ),
         (
-            tr::settings::general::recording::max_fps::description(),
-            "Maximum framerate for screen capture.".into(),
-        ),
-        (
-            tr::settings::general::recording::max_fps::description_high(),
-            "Maximum framerate for screen capture. Higher values may cause \
-                             drops or increased CPU usage on some systems."
+            tr::settings::quality::studio::frame_rate::description(),
+            "Studio records up to this rate and never faster than your display \
+                             refreshes. With a camera on, it records at 30 FPS or less."
                 .into(),
         ),
         (
-            tr::settings::general::recording::max_fps::fps_120(),
+            tr::settings::quality::studio::frame_rate::description_high(),
+            "Recording above 60 FPS uses more CPU and disk space, and some computers \
+                             encode it in software. Studio never records faster than your \
+                             display refreshes. With a camera on, it records at 30 FPS or less."
+                .into(),
+        ),
+        (
+            tr::settings::quality::studio::frame_rate::fps_120(),
             "120 FPS".into(),
         ),
         (
-            tr::settings::general::recording::max_fps::fps_24(),
+            tr::settings::quality::studio::frame_rate::fps_24(),
             "24 FPS".into(),
         ),
         (
-            tr::settings::general::recording::max_fps::fps_25(),
+            tr::settings::quality::studio::frame_rate::fps_25(),
             "25 FPS".into(),
         ),
         (
-            tr::settings::general::recording::max_fps::fps_30(),
+            tr::settings::quality::studio::frame_rate::fps_30(),
             "30 FPS".into(),
         ),
         (
-            tr::settings::general::recording::max_fps::fps_60(),
+            tr::settings::quality::studio::frame_rate::fps_60(),
             "60 FPS (Recommended)".into(),
         ),
         (
-            tr::settings::general::recording::max_fps::label(),
-            "Max capture framerate".into(),
+            tr::settings::quality::studio::frame_rate::label(),
+            "Frame rate".into(),
         ),
         (
             tr::settings::general::storage::choose_folder(),
