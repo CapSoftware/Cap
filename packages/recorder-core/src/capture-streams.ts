@@ -301,6 +301,14 @@ export const createAudioMixer = async ({
 		limiter.release.value = 0.05;
 		limiter.connect(destination);
 
+		// Chrome's MediaStreamAudioDestinationNode stops producing samples while no
+		// source feeds it, and MediaRecorder then closes the gap, so every later
+		// sound plays early. A silent source keeps it clocked.
+		const clock = context.createConstantSource();
+		clock.offset.value = 0;
+		clock.connect(limiter);
+		clock.start();
+
 		if (systemAudioTracks.length > 0) {
 			context
 				.createMediaStreamSource(new MediaStream(systemAudioTracks))

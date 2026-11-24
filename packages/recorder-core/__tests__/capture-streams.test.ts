@@ -178,26 +178,40 @@ describe("createAudioMixer", () => {
 			stream: { id: "mixed", getAudioTracks: () => [{ id: "mixed-track" }] },
 		});
 		const sources: FakeNode[] = [];
+		const clocks: Array<
+			FakeNode & { offset: { value: number }; started: boolean }
+		> = [];
 		const context = {
 			state: "running",
 			resume: vi.fn(async () => {}),
 			close: vi.fn(async () => {}),
 			createMediaStreamDestination: () => destination,
 			createDynamicsCompressor: () => new FakeCompressor(),
+			createConstantSource: () => {
+				const clock = Object.assign(new FakeNode(), {
+					offset: { value: 1 },
+					started: false,
+					start() {
+						clock.started = true;
+					},
+				});
+				clocks.push(clock);
+				return clock;
+			},
 			createMediaStreamSource: vi.fn(() => {
 				const node = new FakeNode();
 				sources.push(node);
 				return node;
 			}),
 		};
-		return { context, destination, sources };
+		return { context, destination, sources, clocks };
 	};
 
 	const micStream = (id: string) =>
 		({ getAudioTracks: () => [{ id }] }) as unknown as MediaStream;
 
 	it("connects the mic and swaps it live without changing the output stream", async () => {
-		const { context, sources } = makeContext();
+		const { context, sources, clocks } = makeContext();
 		vi.stubGlobal(
 			"AudioContext",
 			vi.fn(() => context),
@@ -216,6 +230,10 @@ describe("createAudioMixer", () => {
 
 		mixer.setMicStream(null);
 		expect(sources[1]?.connections).toHaveLength(0);
+		expect(clocks).toHaveLength(1);
+		expect(clocks[0]?.offset.value).toBe(0);
+		expect(clocks[0]?.started).toBe(true);
+		expect(clocks[0]?.connections).toEqual([expect.any(FakeCompressor)]);
 
 		await mixer.close();
 		expect(context.close).toHaveBeenCalledTimes(1);
