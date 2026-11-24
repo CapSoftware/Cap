@@ -466,6 +466,7 @@ pub struct RecordingSession {
     paused_accum: Duration,
     paused_since: Option<Instant>,
     storage_monitor: Option<Task<()>>,
+    limit_monitor: Option<Task<()>>,
     failure_monitor: Option<Task<()>>,
     recording_generation: u64,
     countdown_remaining: Option<u32>,
@@ -530,6 +531,7 @@ impl RecordingSession {
             paused_accum: Duration::ZERO,
             paused_since: None,
             storage_monitor: None,
+            limit_monitor: None,
             failure_monitor: None,
             recording_generation: 0,
             countdown_remaining: None,
@@ -787,6 +789,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.failure_monitor = None;
         self.recording_generation = self.recording_generation.wrapping_add(1);
         self.preparing_studio_editor = None;
@@ -1082,6 +1085,9 @@ impl RecordingSession {
         if self.mode() == Some(recording::RecordingMode::Studio) {
             crate::app_windows::prewarm_shared_wgpu_device(cx);
         }
+        if let Some(limit) = self.active.as_ref().and_then(ActiveRecording::recording_limit) {
+            self.monitor_recording_limit(limit, project_dir.clone(), cx);
+        }
         self.monitor_storage(project_dir, cx);
         self.monitor_recording_failure(done, cx);
         self.start_input_watch(cx);
@@ -1157,6 +1163,59 @@ impl RecordingSession {
             })
             .ok();
         }));
+    }
+
+    /// Time left before the plan's recording limit stops this recording, or
+    /// `None` when it has no limit or the account has since been upgraded.
+    pub fn recording_time_left(&self) -> Option<Duration> {
+        if crate::store::auth_snapshot().is_upgraded() {
+            return None;
+        }
+        let limit = self.active.as_ref()?.recording_limit()?;
+        Some(limit.saturating_sub(self.elapsed()))
+    }
+
+    fn monitor_recording_limit(
+        &mut self,
+        limit: Duration,
+        project_dir: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        self.limit_monitor = None;
+        let generation = self.recording_generation;
+        let task = cx.spawn(async move |this, cx| {
+            let mut wait = limit;
+            loop {
+                cx.background_executor()
+                    .timer(wait.max(Duration::from_millis(50)))
+                    .await;
+                let Ok(next) = this.update(cx, |this, cx| {
+                    let current = this.recording_generation == generation
+                        && matches!(this.phase, Phase::Recording { .. })
+                        && this
+                            .active
+                            .as_ref()
+                            .is_some_and(|active| active.project_dir == project_dir);
+                    if !current {
+                        return None;
+                    }
+                    let left = this.recording_time_left()?;
+                    if !left.is_zero() {
+                        return Some(left);
+                    }
+                    tracing::info!("stopping at the plan's recording limit");
+                    this.stop(cx);
+                    None
+                }) else {
+                    return;
+                };
+                let Some(left) = next else {
+                    return;
+                };
+                wait = left;
+            }
+        });
+        self.limit_monitor = Some(task);
     }
 
     fn monitor_storage(&mut self, project_dir: std::path::PathBuf, cx: &mut Context<Self>) {
@@ -1284,6 +1343,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
+        self.limit_monitor = None;
         #[cfg(not(windows))]
         {
             self.failure_monitor = None;
@@ -1883,6 +1943,7 @@ impl RecordingSession {
             return;
         }
         self.storage_monitor = None;
+        self.limit_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
@@ -1953,6 +2014,7 @@ impl RecordingSession {
         #[cfg(target_os = "linux")]
         let restart_generation = self.recording_generation;
         self.storage_monitor = None;
+        self.limit_monitor = None;
         let Some(active) = self.active.take() else {
             return;
         };
@@ -2042,6 +2104,7 @@ impl RecordingSession {
         let generation = self.recording_generation;
         let phase = self.phase;
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.phase = Phase::Stopping;
         cx.notify();
         let task = gpui_tokio::Tokio::spawn(cx, future);
@@ -2116,6 +2179,7 @@ impl RecordingSession {
             operation,
         };
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.failure_monitor = None;
         self.clean_control.invalidate();
         self.phase = Phase::Stopping;
@@ -2211,6 +2275,7 @@ impl RecordingSession {
         self.paused_for_sleep = false;
         self.pipeline_failed = false;
         self.storage_monitor = None;
+        self.limit_monitor = None;
         self.countdown_remaining = None;
         self.phase = Phase::Idle;
         self.mic_muted = false;

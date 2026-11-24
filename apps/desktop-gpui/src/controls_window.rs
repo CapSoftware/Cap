@@ -691,7 +691,8 @@ impl ControlsWindow {
         } else if session.error.is_some() {
             tr::controls::stop::error().into()
         } else {
-            Self::format_elapsed(session.elapsed()).into()
+            Self::format_elapsed(session.recording_time_left().unwrap_or_else(|| session.elapsed()))
+                .into()
         };
 
         div()
