@@ -349,7 +349,6 @@ async function EmbedContent({
 			id: video.id,
 			ownerId: video.ownerId,
 			orgId: video.orgId,
-			isScreenshot: video.isScreenshot,
 			metadata: video.metadata,
 		}).catch((error) => {
 			console.error(

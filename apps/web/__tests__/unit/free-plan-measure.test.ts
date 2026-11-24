@@ -192,19 +192,28 @@ describe("free plan measured lock", () => {
 		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
 	});
 
-	it("never locks imported videos, screenshots or self-hosted servers", async () => {
+	it("never locks imported videos or self-hosted servers", async () => {
 		mocks.rows = [
 			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
 			[{ id: "video-1" }],
 		];
 		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
+		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
+	});
+
+	it("locks a video flagged as a screenshot that measures over the limit", async () => {
+		mocks.rows = [
+			[{ source: { type: "desktopMP4" }, createdAt: afterCutoff }],
+			[],
+			[free],
+			[free],
+		];
 		expect(
 			await isVideoOverFreePlanDuration(
 				video(measured(400), { isScreenshot: true }),
 			),
-		).toBe(false);
-		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = undefined;
-		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
+		).toBe(true);
 	});
 
 	it("measures new videos once per playable object", () => {

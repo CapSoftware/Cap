@@ -98,10 +98,9 @@ export async function isVideoOverFreePlanDuration(video: {
 	id: Video.VideoId;
 	ownerId: Video.Video["ownerId"];
 	orgId: Video.Video["orgId"];
-	isScreenshot?: boolean;
 	metadata: MetadataInput;
 }): Promise<boolean> {
-	if (!buildEnv.NEXT_PUBLIC_IS_CAP || video.isScreenshot) return false;
+	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return false;
 	const measure = readFreePlanMeasure(video.metadata);
 	if (!measureHoldsVideo(measure)) return false;
 	if (!(await desktopLimitApplies(video.id))) return false;
@@ -123,7 +122,6 @@ export async function isVideoLockedByFreePlanDuration(
 			id: videos.id,
 			ownerId: videos.ownerId,
 			orgId: videos.orgId,
-			isScreenshot: videos.isScreenshot,
 			metadata: videos.metadata,
 		})
 		.from(videos)
@@ -183,7 +181,7 @@ export async function loadLimitedVideo(
 		.from(videos)
 		.where(eq(videos.id, videoId))
 		.limit(1);
-	if (!video || video.isScreenshot) return null;
+	if (!video) return null;
 	if (!desktopLimitAppliesTo(video)) {
 		remember(notLimitedUntil, videoId);
 		return null;

@@ -2714,7 +2714,6 @@ const isMobileVideoOverShareLimit = (
 					id: videoId,
 					ownerId: rules.ownerId,
 					orgId: rules.orgId,
-					isScreenshot: rules.isScreenshot,
 					metadata: rules.metadata,
 				}).catch(() => false);
 			});

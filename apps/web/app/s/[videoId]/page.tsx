@@ -674,7 +674,6 @@ async function AuthorizedContent({
 					id: videoId,
 					ownerId: video.owner.id,
 					orgId: video.orgId,
-					isScreenshot: video.isScreenshot,
 					metadata: video.metadata,
 				}),
 				firstViewPromise,
