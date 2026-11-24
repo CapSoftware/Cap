@@ -3,12 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	buildEnv: { NEXT_PUBLIC_IS_CAP: "true" as string | undefined },
+	serverEnv: {
+		CAP_FREE_PLAN_DESKTOP_LIMIT_FROM: undefined as string | undefined,
+	},
 	rows: [] as unknown[][],
 	queries: 0,
 	updates: [] as unknown[],
 }));
 
-vi.mock("@cap/env", () => ({ buildEnv: mocks.buildEnv }));
+vi.mock("@cap/env", () => ({
+	buildEnv: mocks.buildEnv,
+	serverEnv: () => mocks.serverEnv,
+}));
 vi.mock("@cap/database", () => {
 	const query = {
 		from: () => query,
@@ -76,6 +82,7 @@ const video = (metadata: object | null, overrides: object = {}) => ({
 describe("free plan measured lock", () => {
 	beforeEach(() => {
 		mocks.buildEnv.NEXT_PUBLIC_IS_CAP = "true";
+		mocks.serverEnv.CAP_FREE_PLAN_DESKTOP_LIMIT_FROM = undefined;
 		mocks.rows = [];
 		mocks.queries = 0;
 		mocks.updates = [];
@@ -102,19 +109,55 @@ describe("free plan measured lock", () => {
 	});
 
 	it("locks a free video measured over the limit", async () => {
-		mocks.rows = [[], [free], [free]];
+		mocks.rows = [
+			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
+			[],
+			[free],
+			[free],
+		];
 		expect(await isVideoOverFreePlanDuration(video(measured(331)))).toBe(true);
 	});
 
-	it("unlocks when the owner or the organization owner has Pro", async () => {
-		mocks.rows = [[], [pro]];
+	it("holds desktop recordings only from the desktop limit date", async () => {
+		const desktop = (createdAt: Date) => [
+			{ source: { type: "desktopSegments" }, createdAt },
+		];
+		mocks.rows = [desktop(afterCutoff)];
 		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
-		mocks.rows = [[], [free], [pro]];
+		mocks.serverEnv.CAP_FREE_PLAN_DESKTOP_LIMIT_FROM =
+			"2026-12-01T00:00:00.000Z";
+		mocks.rows = [desktop(new Date("2026-11-30T23:59:59.000Z"))];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
+		mocks.rows = [
+			desktop(new Date("2026-12-01T00:00:00.000Z")),
+			[],
+			[free],
+			[free],
+		];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(true);
+	});
+
+	it("unlocks when the owner or the organization owner has Pro", async () => {
+		mocks.rows = [
+			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
+			[],
+			[pro],
+		];
+		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
+		mocks.rows = [
+			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
+			[],
+			[free],
+			[pro],
+		];
 		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
 	});
 
 	it("never locks imported videos, screenshots or self-hosted servers", async () => {
-		mocks.rows = [[{ id: "video-1" }]];
+		mocks.rows = [
+			[{ source: { type: "webMP4" }, createdAt: afterCutoff }],
+			[{ id: "video-1" }],
+		];
 		expect(await isVideoOverFreePlanDuration(video(measured(400)))).toBe(false);
 		expect(
 			await isVideoOverFreePlanDuration(
