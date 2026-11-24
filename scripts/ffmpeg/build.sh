@@ -66,6 +66,14 @@ if [[ "$TARGET" == *windows* ]]; then
   grep -q "c24e06c2e184345ceb33eb20a15d1024d9fd3497" stages/50-x264.sh
   grep -q "_tag='2.13.0'" stages/50-onevpl.sh
   grep -q "_tag='1.4.2'" stages/45-dav1d.sh
+
+  # Compile every Windows dependency to machine code in its own build. Left as
+  # LTO bitcode, its code is generated at the FFmpeg DLL link, where zig spills
+  # 32-byte AVX2 values with aligned moves to a 16-byte aligned stack (seen in
+  # libopus's silk_NSQ_del_dec_avx2), which crashes when the stack lands on an
+  # odd 16 bytes.
+  sed -i 's/^set -euo pipefail$/set -euo pipefail\ncase "$TARGET" in *windows*) export LTO=0 ;; esac/' scripts/build.sh
+  grep -q '^case "$TARGET" in \*windows\*) export LTO=0 ;; esac$' scripts/build.sh
 fi
 
 sed -i 's#^mv "${OUT}/models" .*#[ ! -d "${OUT}/models" ] || mv "${OUT}/models" "${OUT}/${_framework}/Versions/A/Resources/Models"#' scripts/create-macos-framework.sh
