@@ -43,7 +43,29 @@ export type FreePlanMeasureOutcome =
 const SKIPPED: FreePlanMeasureOutcome = { kind: "skipped" };
 const UNMEASURED: FreePlanMeasureOutcome = { kind: "unmeasurable" };
 
+// A video has a handful of playable files, so probing more distinct files of
+// one video than this in the window means someone is making names up.
+const MAX_FILES_PER_VIDEO = 4;
+const FILES_PER_VIDEO_WINDOW_MS = 10 * 60_000;
+const MAX_TRACKED_VIDEOS = 5_000;
+
 const inFlight = new Map<string, Promise<FreePlanMeasureOutcome>>();
+const probedFiles = new Map<string, { keys: Set<string>; until: number }>();
+
+// Whether this file may be probed now for this video; counts it if so.
+function admitFile(videoId: string, key: string): boolean {
+	const now = Date.now();
+	let entry = probedFiles.get(videoId);
+	if (!entry || entry.until <= now) {
+		if (probedFiles.size >= MAX_TRACKED_VIDEOS) probedFiles.clear();
+		entry = { keys: new Set(), until: now + FILES_PER_VIDEO_WINDOW_MS };
+		probedFiles.set(videoId, entry);
+	}
+	if (entry.keys.has(key)) return true;
+	if (entry.keys.size >= MAX_FILES_PER_VIDEO) return false;
+	entry.keys.add(key);
+	return true;
+}
 const unavailableUntil = new Map<string, number>();
 const timedOutUntil = new Map<string, number>();
 const waiting: Array<() => void> = [];
@@ -114,6 +136,7 @@ async function measureNow(
 		if (!buildEnv.NEXT_PUBLIC_IS_CAP) return SKIPPED;
 		const video = await loadLimitedVideo(videoId, { anyAge });
 		if (!video) return SKIPPED;
+		if (!admitFile(videoId, key)) return UNMEASURED;
 		const outcome = await probeStoredObject(video, key);
 		const id = objectKey(videoId, key);
 		if (outcome === "unavailable") {
