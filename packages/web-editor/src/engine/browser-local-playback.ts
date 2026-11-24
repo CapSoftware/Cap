@@ -335,6 +335,10 @@ export class BrowserLocalPlayback {
 	private audioClockAligned = false;
 	private audioOffsets: number[] = [];
 	private configJson: string;
+	private configSequence = 0;
+	private configUpdate: Promise<void> = Promise.resolve();
+	private timelineJson: string;
+	private clipsJson: string;
 	private slowFrames = 0;
 	private slowStreakMs = 0;
 	private fastFrames = 0;
@@ -384,10 +388,12 @@ export class BrowserLocalPlayback {
 	) {
 		const timeline = timelineConfig(config, sourceDurations);
 		this.segments = segmentSettings(timeline);
-		this.timeline = new module.BrowserTimeline(JSON.stringify(timeline));
+		this.timelineJson = JSON.stringify(timeline);
+		this.timeline = new module.BrowserTimeline(this.timelineJson);
+		this.clipsJson = JSON.stringify(record(config)?.clips ?? []);
 		this.times = new module.BrowserRecordingTimes(
 			JSON.stringify(recordingMeta(sources)),
-			JSON.stringify(record(config)?.clips ?? []),
+			this.clipsJson,
 		);
 		this.configJson = JSON.stringify(config);
 		this.visual = new module.BrowserVisualConfig(this.configJson);
@@ -569,38 +575,60 @@ export class BrowserLocalPlayback {
 		}
 	}
 
-	async setConfig(config: unknown) {
+	// Updates run one at a time, since an update may keep the current timeline
+	// or times; one replaced by a newer update before it starts is skipped.
+	setConfig(input: unknown) {
+		const sequence = ++this.configSequence;
+		const update = this.configUpdate.then(() =>
+			sequence === this.configSequence ? this.applyConfig(input) : undefined,
+		);
+		this.configUpdate = update.catch(() => {});
+		return update;
+	}
+
+	private async applyConfig(input: unknown) {
 		if (this.disposed) throw new Error("Editor playback is closed");
-		const json = JSON.stringify(config);
+		const json = JSON.stringify(input);
 		if (json === this.configJson) return;
+		// The editor passes its reactive store, whose every property read
+		// is tracked, so the rest of the update reads a plain copy.
+		const config: unknown = JSON.parse(json);
 		const timeline = timelineConfig(config, this.sourceDurations);
 		const segments = segmentSettings(timeline);
-		const nextTimeline = new this.module.BrowserTimeline(
-			JSON.stringify(timeline),
-		);
+		const timelineJson = JSON.stringify(timeline);
+		const clipsJson = JSON.stringify(record(config)?.clips ?? []);
+		const keepTimeline = timelineJson === this.timelineJson;
+		const keepTimes = clipsJson === this.clipsJson;
+		const nextTimeline = keepTimeline
+			? this.timeline
+			: new this.module.BrowserTimeline(timelineJson);
 		let nextTimes: BrowserRecordingTimes | null = null;
 		let nextVisual: BrowserVisualConfig | null = null;
 		try {
-			nextTimes = new this.module.BrowserRecordingTimes(
-				JSON.stringify(recordingMeta(this.sources)),
-				JSON.stringify(record(config)?.clips ?? []),
-			);
+			nextTimes = keepTimes
+				? this.times
+				: new this.module.BrowserRecordingTimes(
+						JSON.stringify(recordingMeta(this.sources)),
+						clipsJson,
+					);
 			nextVisual = new this.module.BrowserVisualConfig(json);
 			await this.canvas.setProjectConfig(config);
 		} catch (error) {
-			nextTimeline.free();
-			nextTimes?.free();
+			if (!keepTimeline) nextTimeline.free();
+			if (!keepTimes) nextTimes?.free();
 			nextVisual?.free();
 			throw error;
 		}
 		this.frameController?.abort();
 		this.frameSequence++;
-		this.timeline.free();
-		this.times.free();
+		if (!keepTimeline) this.timeline.free();
+		if (!keepTimes) this.times.free();
 		this.visual.free();
 		this.timeline = nextTimeline;
 		this.times = nextTimes;
 		this.visual = nextVisual;
+		this.timelineJson = timelineJson;
+		this.clipsJson = clipsJson;
 		this.segments = segments;
 		this.configJson = json;
 		this.motion = motionRanges(config, this.hasCursor);

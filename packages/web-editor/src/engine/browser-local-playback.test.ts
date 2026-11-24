@@ -741,3 +741,109 @@ test("a loading frame stays while a scrub keeps asking and gives way once it sto
 	clearTimeout(Reflect.get(playback, "seekHoldTimer"));
 	clearTimeout(Reflect.get(playback, "seekSettleTimer"));
 });
+
+function configPlayback() {
+	class Freeable {
+		freed = false;
+		constructor(readonly json = "") {}
+		free() {
+			if (this.freed) throw new Error("freed twice");
+			this.freed = true;
+		}
+	}
+	const applied: unknown[] = [];
+	const pending: Array<() => void> = [];
+	const playback = Object.create(
+		BrowserLocalPlayback.prototype,
+	) as BrowserLocalPlayback;
+	const sourceDurations = [10];
+	const defaultTimeline = JSON.stringify({
+		segments: [{ recordingSegment: 0, timescale: 1, start: 0, end: 10 }],
+		transitions: [],
+		zoomSegments: [],
+	});
+	Reflect.set(playback, "disposed", false);
+	Reflect.set(playback, "configJson", "{}");
+	Reflect.set(playback, "configSequence", 0);
+	Reflect.set(playback, "configUpdate", Promise.resolve());
+	Reflect.set(playback, "timelineJson", defaultTimeline);
+	Reflect.set(playback, "clipsJson", "[]");
+	Reflect.set(playback, "timeline", new Freeable(defaultTimeline));
+	Reflect.set(playback, "times", new Freeable());
+	Reflect.set(playback, "visual", new Freeable());
+	Reflect.set(playback, "module", {
+		BrowserTimeline: Freeable,
+		BrowserRecordingTimes: Freeable,
+		BrowserVisualConfig: Freeable,
+	});
+	Reflect.set(playback, "canvas", {
+		setProjectConfig: (config: unknown) => {
+			applied.push(config);
+			return new Promise<void>((resolve) => pending.push(resolve));
+		},
+		resetFrameState: () => undefined,
+	});
+	Reflect.set(playback, "sourceDurations", sourceDurations);
+	Reflect.set(playback, "sources", []);
+	Reflect.set(playback, "hasCursor", false);
+	Reflect.set(playback, "frameController", null);
+	Reflect.set(playback, "frameSequence", 0);
+	Reflect.set(playback, "audio", { setConfig: () => undefined });
+	Reflect.set(playback, "previewBase", null);
+	Reflect.set(playback, "outputTime", 0);
+	Reflect.set(playback, "jumpCamera", () => undefined);
+	Reflect.set(playback, "seek", async () => undefined);
+	const settle = async () => {
+		for (let step = 0; step < 10; step++) await Promise.resolve();
+	};
+	const release = async (which: "first" | "last" = "first") => {
+		await settle();
+		(which === "first" ? pending.shift() : pending.pop())?.();
+		await settle();
+	};
+	return { playback, applied, release, settle };
+}
+
+const trimmed = {
+	padding: 4,
+	timeline: {
+		segments: [{ recordingSegment: 0, timescale: 1, start: 0, end: 5 }],
+		transitions: [],
+		zoomSegments: [],
+	},
+};
+
+test("a style change that overlaps a trim never brings back the freed timeline", async () => {
+	const { playback, release, settle } = configPlayback();
+	const original = Reflect.get(playback, "timeline") as { freed: boolean };
+	const style = playback.setConfig({ padding: 2 });
+	await settle();
+	const trim = playback.setConfig(trimmed);
+	await release("last");
+	await release("last");
+	await Promise.all([style, trim]);
+	const current = Reflect.get(playback, "timeline") as {
+		freed: boolean;
+		json: string;
+	};
+	expect(original.freed).toBe(true);
+	expect(current.freed).toBe(false);
+	expect(JSON.parse(current.json).segments[0].end).toBe(5);
+	expect(JSON.parse(Reflect.get(playback, "configJson"))).toEqual(trimmed);
+});
+
+test("a queued config update gives way to a newer one", async () => {
+	const { playback, applied, release } = configPlayback();
+	const first = playback.setConfig({ padding: 1 });
+	await Promise.resolve();
+	await Promise.resolve();
+	const skipped = playback.setConfig({ padding: 2 });
+	const latest = playback.setConfig({ padding: 3 });
+	await release();
+	await release();
+	await Promise.all([first, skipped, latest]);
+	expect(applied).toEqual([{ padding: 1 }, { padding: 3 }]);
+	expect(JSON.parse(Reflect.get(playback, "configJson"))).toEqual({
+		padding: 3,
+	});
+});
