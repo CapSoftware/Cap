@@ -207,6 +207,19 @@ module.exports = (__app, _options) => {
 						from: { opacity: "0", transform: "translateY(14px)" },
 						to: { opacity: "1", transform: "none" },
 					},
+					bfLine: {
+						from: { transform: "scaleY(0)" },
+						to: { transform: "scaleY(1)" },
+					},
+					bfPop: {
+						"0%": { opacity: "0", transform: "scale(0.4)" },
+						"60%": { opacity: "1", transform: "scale(1.25)" },
+						"100%": { opacity: "1", transform: "scale(1)" },
+					},
+					bfRing: {
+						from: { opacity: "0.9", transform: "scale(0.6)" },
+						to: { opacity: "0", transform: "scale(2.6)" },
+					},
 					bfRiseFrame: {
 						from: {
 							opacity: "0.35",
@@ -226,6 +239,9 @@ module.exports = (__app, _options) => {
 					"bf-fade": "bfGlowIn 0.8s ease-out both",
 					"bf-rise": "bfRise 0.8s cubic-bezier(0.16,1,0.3,1) both",
 					"bf-rise-frame": "bfRiseFrame 1.1s cubic-bezier(0.16,1,0.3,1) both",
+					"bf-line": "bfLine 1.2s cubic-bezier(0.65,0,0.35,1) both",
+					"bf-pop": "bfPop 0.5s cubic-bezier(0.34,1.56,0.64,1) both",
+					"bf-ring": "bfRing 1.4s cubic-bezier(0.16,1,0.3,1) both",
 				},
 			},
 		},

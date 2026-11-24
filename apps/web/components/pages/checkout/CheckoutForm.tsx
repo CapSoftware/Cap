@@ -24,6 +24,11 @@ import {
 	setProCheckoutUsEin,
 } from "@/actions/billing/checkout";
 import { trackEvent } from "@/app/utils/analytics";
+import { useEnded } from "@/components/pages/blackfriday/Claim";
+import {
+	CODE as CAP_FRIDAY_CODE,
+	ENDS_LABEL,
+} from "@/components/pages/blackfriday/content";
 import {
 	BODY_TEXT,
 	BTN_PRIMARY,
@@ -78,6 +83,36 @@ const perUserAmount = (
 	);
 };
 
+const discountedPerUser = (
+	checkout: Checkout,
+	lineItem: Checkout["lineItems"][number],
+) => {
+	const discounts = checkout.discountAmounts ?? [];
+	const discount = discounts.reduce(
+		(total, entry) => total + entry.minorUnitsAmount,
+		0,
+	);
+	if (discount <= 0 || lineItem.quantity < 1) return null;
+	const recurring = discounts[0]?.recurring ?? null;
+	return {
+		amount: new Intl.NumberFormat(undefined, {
+			style: "currency",
+			currency: checkout.currency,
+		}).format(
+			(checkout.total.subtotal.minorUnitsAmount - discount) /
+				lineItem.quantity /
+				checkout.minorUnitsAmountDivisor,
+		),
+		recurring: recurring?.type ?? "once",
+		months: recurring?.type === "repeating" ? recurring.durationInMonths : 0,
+	};
+};
+
+const CAP_FRIDAY_COPY = {
+	title: "50% off Cap Pro Yearly",
+	subtitle: `Your Cap Friday price is applied. The offer ends ${ENDS_LABEL}.`,
+};
+
 const INPUT =
 	"h-[44px] w-full rounded-[10px] border border-[#D3DCE6] bg-white px-3 text-[16px] text-[#111111] shadow-[0_1px_1px_rgba(17,17,17,0.03)] sm:text-[15px] outline-none transition-[border-color,box-shadow] placeholder:text-[rgba(17,17,17,0.38)] hover:border-[#B9C6D4] focus:border-[#55A0EA] focus:shadow-[0_0_0_3px_rgba(85,160,234,0.22)] aria-[invalid=true]:border-[#B4322E]";
 
@@ -102,6 +137,7 @@ export function CheckoutForm({
 }) {
 	const state = useCheckoutElements();
 	const copy = purchaseCopy(onboarding);
+	const offerEnded = useEnded();
 	const [seatsPending, setSeatsPending] = useState(false);
 
 	if (state.type === "loading") {
@@ -160,14 +196,24 @@ export function CheckoutForm({
 		);
 	}
 
+	const capFriday =
+		!offerEnded &&
+		(checkout.discountAmounts ?? []).some(
+			(discount) => discount.promotionCode?.toUpperCase() === CAP_FRIDAY_CODE,
+		);
+
 	return (
 		<CheckoutShell
 			{...copy}
+			{...(capFriday ? CAP_FRIDAY_COPY : {})}
+			capFriday={capFriday}
+			summaryTone="light"
 			summary={
 				<OrderSummary
 					checkout={checkout}
 					clientSecret={clientSecret}
 					onSeatsPendingChange={setSeatsPending}
+					capFriday={capFriday}
 				/>
 			}
 		>
@@ -185,27 +231,39 @@ function OrderSummary({
 	checkout,
 	clientSecret,
 	onSeatsPendingChange,
+	capFriday,
 }: {
 	checkout: Checkout;
 	clientSecret: Promise<string>;
 	onSeatsPendingChange: (pending: boolean) => void;
+	capFriday: boolean;
 }) {
 	const lineItem = checkout.lineItems[0];
 	const plan: CheckoutPlan =
 		lineItem?.recurring?.interval === "year" ? "yearly" : "monthly";
 	const [pendingPlan, setPendingPlan] = useState<CheckoutPlan | null>(null);
 	const [planError, setPlanError] = useState(false);
+	const [yearlyOnly, setYearlyOnly] = useState(false);
+	const capFridayApplied = (checkout.discountAmounts ?? []).some(
+		(discount) => discount.promotionCode?.toUpperCase() === CAP_FRIDAY_CODE,
+	);
 
 	if (!lineItem) return <SummarySkeleton />;
 
 	const yearly = (pendingPlan ?? plan) === "yearly";
 	const period = plan === "yearly" ? "year" : "month";
+	const discounted = discountedPerUser(checkout, lineItem);
 	const renewal = checkout.recurring?.dueNext.total.amount;
 
 	const changePlan = async (next: CheckoutPlan) => {
 		if (next === plan || pendingPlan) return;
-		setPendingPlan(next);
 		setPlanError(false);
+		if (next !== "yearly" && capFridayApplied) {
+			setYearlyOnly(true);
+			return;
+		}
+		setYearlyOnly(false);
+		setPendingPlan(next);
 		try {
 			const result = await checkout.runServerUpdate(async () => {
 				const update = await changeProCheckoutPlan({
@@ -223,14 +281,26 @@ function OrderSummary({
 
 	return (
 		<div className="flex flex-col">
-			<PlanHeading tag="Most popular" />
+			<PlanHeading
+				tag={capFriday ? "Cap Friday" : "Most popular"}
+				accent={capFriday}
+			/>
 
 			<div className="mt-4 flex flex-wrap items-baseline gap-x-2 gap-y-1.5 sm:mt-6">
 				<span className="whitespace-nowrap text-[38px] sm:text-[46px] font-normal leading-none tracking-[-0.03em] tabular-nums">
-					{perUserAmount(checkout, lineItem)}
+					{discounted?.amount ?? perUserAmount(checkout, lineItem)}
 				</span>
+				{discounted ? (
+					<span className="text-[16px] tabular-nums text-[rgba(17,17,17,0.45)] line-through decoration-[rgba(17,17,17,0.45)]">
+						{perUserAmount(checkout, lineItem)}
+					</span>
+				) : null}
 				<span className="text-[14px] text-[rgba(17,17,17,0.5)]">
-					per user, per {period}
+					{!discounted || discounted.recurring === "forever"
+						? `per user, per ${period}`
+						: discounted.recurring === "repeating"
+							? `per user, per ${period} for ${discounted.months} months`
+							: `per user, first ${period}`}
 				</span>
 				{pendingPlan ? (
 					<Loader2
@@ -259,6 +329,12 @@ function OrderSummary({
 				{planError ? (
 					<p role="alert" className="text-[13px] text-[#B4322E]">
 						Couldn't switch plans. Please try again.
+					</p>
+				) : null}
+				{yearlyOnly && capFridayApplied ? (
+					<p role="alert" className="text-[13px] text-[#B4322E]">
+						{CAP_FRIDAY_CODE} is for annual plans only. Remove it to pay
+						monthly.
 					</p>
 				) : null}
 			</div>
@@ -296,7 +372,7 @@ function OrderSummary({
 				/>
 			</dl>
 
-			<PromotionCode checkout={checkout} />
+			<PromotionCode checkout={checkout} plan={plan} />
 
 			{renewal ? (
 				<p className="mt-4 text-[13px] leading-[1.5] text-[rgba(17,17,17,0.5)]">
@@ -309,7 +385,25 @@ function OrderSummary({
 	);
 }
 
-export function PlanHeading({ tag }: { tag: string }) {
+const FRIDAY_CHIP = {
+	background: "rgba(255,77,141,0.16)",
+	color: "#FFB59A",
+} as const;
+
+const FRIDAY_CHIP_LIGHT = {
+	background: "rgba(255,77,141,0.12)",
+	color: "#C4245E",
+} as const;
+
+export function PlanHeading({
+	tag,
+	dark,
+	accent,
+}: {
+	tag: string;
+	dark?: boolean;
+	accent?: boolean;
+}) {
 	const theme = MODE_THEME.instant;
 	return (
 		<>
@@ -318,14 +412,20 @@ export function PlanHeading({ tag }: { tag: string }) {
 					Cap Pro
 				</h2>
 				<span
-					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em]"
-					style={{ background: theme.chip, color: theme.glyph }}
+					className="shrink-0 rounded-full px-2.5 py-[6px] text-[12px] font-medium leading-none tracking-[-0.01em] transition-colors duration-700"
+					style={
+						dark
+							? FRIDAY_CHIP
+							: accent
+								? FRIDAY_CHIP_LIGHT
+								: { background: theme.chip, color: theme.glyph }
+					}
 				>
 					{tag}
 				</span>
 			</div>
 			<p
-				className={`${BODY_TEXT} mt-3 text-[15px] leading-[1.5] text-[rgba(17,17,17,0.72)] max-sm:hidden`}
+				className={`${BODY_TEXT} mt-3 text-[15px] leading-[1.5] transition-colors duration-700 max-sm:hidden ${dark ? "text-[rgba(245,241,234,0.66)]" : "text-[rgba(17,17,17,0.72)]"}`}
 			>
 				Everything in Desktop, plus unlimited cloud sharing, AI, and team
 				collaboration.
@@ -334,10 +434,12 @@ export function PlanHeading({ tag }: { tag: string }) {
 	);
 }
 
-export function PlanFeatures() {
+export function PlanFeatures({ dark }: { dark?: boolean }) {
 	const theme = MODE_THEME.instant;
 	return (
-		<div className="mt-7 hidden border-t border-[#E1E7EE] pt-6 lg:block">
+		<div
+			className={`mt-7 hidden border-t pt-6 transition-colors duration-700 lg:block ${dark ? "border-[rgba(245,241,234,0.1)]" : "border-[#E1E7EE]"}`}
+		>
 			<p className="text-[13px] font-medium">
 				Everything in Desktop License, plus:
 			</p>
@@ -345,12 +447,18 @@ export function PlanFeatures() {
 				{HIGHLIGHTS.map((feature) => (
 					<li key={feature} className="flex items-start gap-3">
 						<span
-							className="mt-px grid size-5 shrink-0 place-items-center rounded-full"
-							style={{ background: theme.chip, color: theme.glyph }}
+							className="mt-px grid size-5 shrink-0 place-items-center rounded-full transition-colors duration-700"
+							style={
+								dark
+									? FRIDAY_CHIP
+									: { background: theme.chip, color: theme.glyph }
+							}
 						>
 							<Check className="size-3" strokeWidth={2.5} />
 						</span>
-						<span className="text-[14px] leading-snug text-[rgba(17,17,17,0.72)]">
+						<span
+							className={`text-[14px] leading-snug transition-colors duration-700 ${dark ? "text-[rgba(245,241,234,0.72)]" : "text-[rgba(17,17,17,0.72)]"}`}
+						>
 							{feature}
 						</span>
 					</li>
@@ -502,7 +610,13 @@ function SeatControl({
 	);
 }
 
-function PromotionCode({ checkout }: { checkout: Checkout }) {
+function PromotionCode({
+	checkout,
+	plan,
+}: {
+	checkout: Checkout;
+	plan: CheckoutPlan;
+}) {
 	const applied = checkout.discountAmounts?.find(
 		(discount) => discount.promotionCode,
 	);
@@ -558,6 +672,12 @@ function PromotionCode({ checkout }: { checkout: Checkout }) {
 		event.preventDefault();
 		const value = code.trim();
 		if (!value || busy) return;
+		if (plan !== "yearly" && value.toUpperCase() === CAP_FRIDAY_CODE) {
+			setError(
+				`${CAP_FRIDAY_CODE} is for annual plans only. Switch to Annual to use it.`,
+			);
+			return;
+		}
 		setBusy(true);
 		setError(null);
 		const result = await checkout.applyPromotionCode(value);

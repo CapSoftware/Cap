@@ -98,6 +98,7 @@ import { clientAddress, isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { apiToHandler } from "@/lib/server";
 import { acceptsClientEvents, sendClientEvents } from "@/lib/server-analytics";
 import { isVideoOverShareableLinkLimit } from "@/lib/shareable-link-quota";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { canViewSpaceAnalytics } from "@/lib/space-analytics-access";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { userPreferencesObject } from "@/lib/user-preferences-sql";
@@ -3049,7 +3050,10 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 		: null;
 
 	if (source instanceof Video.Mp4Source) {
-		const signedUrl = yield* bucket.getSignedObjectUrl(source.getFileKey());
+		const signedUrl = yield* bucket.getSignedObjectUrl(
+			source.getFileKey(),
+			playbackUrlValidity(),
+		);
 		const url = resolveMobileWebResourceUrl(
 			signedUrl,
 			serverEnv().WEB_URL,
@@ -3061,6 +3065,7 @@ const getPlayback = Effect.fn("Mobile.getPlayback")(function* (
 	if (source instanceof Video.M3U8Source) {
 		const signedUrl = yield* bucket.getSignedObjectUrl(
 			source.getPlaylistFileKey(),
+			playbackUrlValidity(),
 		);
 		const url = resolveMobileWebResourceUrl(
 			signedUrl,

@@ -3,6 +3,7 @@ import { Storage } from "@cap/web-backend";
 import { type User, Video } from "@cap/web-domain";
 import { Effect, Option, Schema } from "effect";
 import { runPromise } from "@/lib/server";
+import { playbackUrlValidity } from "@/lib/signed-url-validity";
 
 type SharePlaybackVideo = Omit<
 	typeof videos.$inferSelect,
@@ -33,7 +34,7 @@ export const getSharePlaybackSource = (
 		const source = Video.Video.getSource(loadedVideo);
 		if (!(source instanceof Video.Mp4Source)) return null;
 		const key = source.getFileKey();
-		const url = yield* bucket.getSignedObjectUrl(key);
+		const url = yield* bucket.getSignedObjectUrl(key, playbackUrlValidity());
 		return {
 			url,
 			key,

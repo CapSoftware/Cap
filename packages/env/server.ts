@@ -197,6 +197,22 @@ function createServerEnv() {
 				.string()
 				.optional()
 				.describe("API key for the 'openai-compatible' provider"),
+			AI_GATEWAY_API_KEY: z
+				.string()
+				.optional()
+				.describe(
+					"Vercel AI Gateway key. Not needed on Vercel deployments, which authenticate to the gateway with their OIDC token.",
+				),
+			MEETINGS_AI_CONFIG: z
+				.string()
+				.optional()
+				.describe(
+					"JSON overrides for desktop meeting AI (models, limits, kill switches). An Edge Config item named meetingsAi, when EDGE_CONFIG is set, takes precedence and applies without a redeploy.",
+				),
+			EDGE_CONFIG: z
+				.string()
+				.optional()
+				.describe("Vercel Edge Config connection string"),
 			REPLICATE_API_TOKEN: z
 				.string()
 				.optional()

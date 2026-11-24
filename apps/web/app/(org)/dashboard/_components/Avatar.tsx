@@ -67,8 +67,8 @@ export const Avatar: React.FC<{
 	className?: string;
 	letterClass?: string;
 }> = ({ name, className = "", letterClass = "text-xs" }) => {
-	const initial = name?.[0]?.toUpperCase() || "A";
-	const charCode = initial.charCodeAt(0);
+	const initial = Array.from(name?.trim() ?? "")[0]?.toUpperCase() || "A";
+	const charCode = initial.codePointAt(0) ?? 0;
 	const isAlpha = charCode >= 65 && charCode <= 90;
 	const colorIndex = isAlpha ? charCode - 65 : 25; // fallback to last color for non-alpha
 	const bgColor = avatarDefaultPalette[colorIndex];
