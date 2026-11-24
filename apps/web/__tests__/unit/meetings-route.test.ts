@@ -93,7 +93,7 @@ vi.mock("@/lib/meetings/trial", () => {
 		spendTrialAsk: async (userId: string, meetingId: string) => {
 			if (!claimed(userId).includes(meetingId)) return false;
 			const row = state(userId, meetingId);
-			if (!row.completed || row.asks >= 20) return false;
+			if (!row.completed || row.asks >= 5) return false;
 			row.asks += 1;
 			return true;
 		},
@@ -1044,7 +1044,7 @@ describe("free meetings for signed-in users", () => {
 		mocks.trialState.set(`${user.id}|m1`, {
 			completed: true,
 			runs: 3,
-			asks: 20,
+			asks: 5,
 		});
 		expect(
 			(await postJson("/notes", { ...validNotes, meetingId: "m1" })).status,
@@ -1088,6 +1088,70 @@ describe("free meetings for signed-in users", () => {
 		expect(events.map((event) => event.event)).not.toContain("done");
 		expect(events.at(-1)?.event).toBe("error");
 		expect(mocks.trial.get(user.id)).toEqual(["m1"]);
+	});
+
+	it("cuts a long free meeting's transcript and says it is incomplete", async () => {
+		const user = signIn(null);
+		streamNotes();
+		const line = `Speaker 1: ${"word ".repeat(40)}\n`;
+		const transcript = line.repeat(Math.ceil(400_000 / line.length)).slice(0, 399_000);
+		const response = await postJson("/notes", {
+			...validNotes,
+			transcript,
+			meetingId: "long",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const prompt = mocks.streamText.mock.calls[0]?.[0];
+		const sent = prompt.messages[0].content as string;
+		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
+		expect(sent).toContain(line.slice(0, 40));
+		expect(prompt.system).toContain("The transcript is incomplete");
+		expect(mocks.trial.get(user.id)).toEqual(["long"]);
+	});
+
+	it("bounds what a free question sends, whatever the characters", async () => {
+		const user = signIn(null);
+		mocks.trial.set(user.id, ["m1"]);
+		mocks.streamText.mockReturnValue({
+			fullStream: textStream(deltas("Friday")),
+		});
+		const response = await postJson("/ask", {
+			question: "When?",
+			transcript: "\u{20000}".repeat(199_000),
+			meetingId: "m1",
+		});
+		expect(response.status).toBe(200);
+		await response.text();
+		const sent = mocks.streamText.mock.calls[0]?.[0].messages
+			.map((message: { content: string }) => message.content)
+			.join("");
+		expect(Buffer.byteLength(sent)).toBeLessThan(260_000);
+		expect(sent).not.toContain("\uFFFD");
+	});
+
+	it("refuses a free request that is too large without its transcript", async () => {
+		const user = signIn(null);
+		const response = await postJson("/notes", {
+			...validNotes,
+			meetingId: "huge",
+			previous: { markdown: "€".repeat(99_000), instruction: "shorter" },
+		});
+		expect(response.status).toBe(402);
+		expect(mocks.trial.get(user.id)).toBeUndefined();
+		expect(mocks.streamText).not.toHaveBeenCalled();
+	});
+
+	it("leaves a Pro meeting's transcript whole", async () => {
+		signIn();
+		streamNotes();
+		const transcript = `Speaker 1: ${"x".repeat(299_000)}`;
+		const response = await postJson("/notes", { ...validNotes, transcript });
+		expect(response.status).toBe(200);
+		await response.text();
+		const prompt = mocks.streamText.mock.calls[0]?.[0];
+		expect(prompt.messages[0].content).toContain(transcript);
+		expect(prompt.system).not.toContain("The transcript is incomplete");
 	});
 
 	it("needs a meeting id to count against", async () => {

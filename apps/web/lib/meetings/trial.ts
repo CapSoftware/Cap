@@ -7,7 +7,7 @@ export const MEETING_NOTES_TRIAL_MEETINGS = 3;
 // A free meeting may be rewritten and asked about, but not reused without end
 // for other material under the same meeting id.
 export const TRIAL_NOTES_RUNS_PER_MEETING = 3;
-export const TRIAL_ASKS_PER_MEETING = 20;
+export const TRIAL_ASKS_PER_MEETING = 5;
 // Longer than a notes request may run, so a pending claim older than this was
 // abandoned (its instance died before releasing it).
 export const TRIAL_PENDING_STALE_MS = 330_000;

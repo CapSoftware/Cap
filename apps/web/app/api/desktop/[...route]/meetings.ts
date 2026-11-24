@@ -80,6 +80,7 @@ import {
 	spendTrialAsk,
 	trialRemaining,
 } from "@/lib/meetings/trial";
+import { fitTrialInput } from "@/lib/meetings/trial-input";
 import {
 	MEETING_CLIP_MAX_BYTES,
 	MEETING_CLIP_MAX_SECONDS,
@@ -858,13 +859,15 @@ app.post("/notes", async (c) => {
 		return rateLimited(bodyBudget.retryAfterSeconds);
 	}
 
-	const input = body.data;
+	let input = body.data;
 	const trialMeeting = access === "trial" ? input.meetingId : undefined;
 	if (access === "trial") {
-		if (!trialMeeting) {
+		const fit = fitTrialInput(input, body.inputBytes);
+		if (!trialMeeting || !fit) {
 			log({ outcome: "upgrade_required", status: 402 });
 			return upgradeRequired();
 		}
+		if (fit.truncated) input = { ...fit.input, transcriptTruncated: true };
 		const claim = await claimTrialMeeting(
 			user.id,
 			trialMeeting,
@@ -970,13 +973,17 @@ app.post("/ask", async (c) => {
 		return rateLimited(bodyBudget.retryAfterSeconds);
 	}
 
-	const input = body.data;
-	if (
-		access === "trial" &&
-		!(input.meetingId && (await spendTrialAsk(user.id, input.meetingId)))
-	) {
-		log({ outcome: "upgrade_required", status: 402 });
-		return upgradeRequired();
+	let input = body.data;
+	if (access === "trial") {
+		const fit = fitTrialInput(input, body.inputBytes);
+		if (
+			!fit ||
+			!(input.meetingId && (await spendTrialAsk(user.id, input.meetingId)))
+		) {
+			log({ outcome: "upgrade_required", status: 402 });
+			return upgradeRequired();
+		}
+		input = fit.input;
 	}
 	return streamGeneration(
 		c.req.raw,
