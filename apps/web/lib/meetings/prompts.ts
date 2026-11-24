@@ -44,8 +44,6 @@ export const CARRIED_TASKS_LABEL = "Action items:";
 
 export type CarriedItems = { decisions: string[]; tasks: string[] };
 
-// Every decision and task the condensed parts list under their labels, in
-// order, without repeats.
 export function carriedItems(sections: string[]): CarriedItems {
 	const carried: CarriedItems = { decisions: [], tasks: [] };
 	const seen = new Set<string>();

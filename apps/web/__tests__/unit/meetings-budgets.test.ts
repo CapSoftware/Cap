@@ -300,7 +300,7 @@ describe("meeting budgets", () => {
 			return { rateLimited: false };
 		});
 		const headers = new Headers();
-		for (let index = 0; index < 300; index++) {
+		for (let index = 0; index < 480; index++) {
 			expect(
 				await budgets.consumeMeetingAudioBudget("user-1", CLIP_120S, headers),
 			).toEqual({ limited: false });
