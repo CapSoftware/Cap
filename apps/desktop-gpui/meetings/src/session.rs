@@ -220,6 +220,13 @@ impl Session {
         self.offer_on_wake
     }
 
+    /// A Resume of the stopped meeting may still come: offered now, to be
+    /// offered at the wake, or already asked for.
+    pub fn resume_may_follow(&self) -> bool {
+        self.has_meeting
+            && (self.resume_offer_until.is_some() || self.offer_on_wake || self.resume_queued)
+    }
+
     /// The call app to look for on the microphone: the meeting was
     /// recording it when the computer slept, the wake was moments ago and
     /// its Resume is still offered.

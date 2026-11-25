@@ -602,6 +602,32 @@ fn a_call_still_on_after_the_wake_resumes_the_same_meeting_by_itself() {
 }
 
 #[test]
+fn a_resume_may_follow_a_sleep_until_its_offer_ends() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    assert!(!s.session.resume_may_follow());
+    s.at(5 * MIN).sleep().take();
+    assert!(s.session.resume_may_follow(), "the wake will offer it");
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN).wake().take();
+    assert!(s.session.resume_may_follow(), "offered");
+    s.at(25 * MIN).expect(&[(1_500_000, "notes")]);
+    assert!(!s.session.resume_may_follow(), "the offer ended");
+
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.at(5 * MIN).sleep().take();
+    s.at(20 * MIN).wake().take();
+    s.at(20 * MIN + 500).call_still_on().quiet();
+    assert!(s.session.resume_may_follow(), "asked for before the capture stopped");
+
+    let mut s = Sim::new();
+    s.recording(None);
+    s.at(MIN).stop(StopReason::User).stopped(0);
+    assert!(!s.session.resume_may_follow());
+}
+
+#[test]
 fn a_call_on_the_microphone_long_after_the_wake_does_not_resume() {
     let mut s = Sim::new();
     s.recording(Some("zoom"));

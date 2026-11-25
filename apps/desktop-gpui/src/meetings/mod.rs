@@ -603,6 +603,9 @@ pub struct Meetings {
     /// The next capture is the meeting resuming by itself after a sleep.
     resuming_after_sleep: bool,
     resumed_line: Option<Task<()>>,
+    /// A note a sleep stopped before anything was heard, kept out of Trash
+    /// as long as its Resume may still come.
+    sleep_kept: Option<String>,
     calendar: calendar::CalendarState,
     calendar_active: bool,
     calendar_next: Option<Millis>,
@@ -859,6 +862,7 @@ impl Meetings {
             wake_look: None,
             resuming_after_sleep: false,
             resumed_line: None,
+            sleep_kept: None,
             calendar: calendar::CalendarState::default(),
             calendar_active: false,
             calendar_next: None,
@@ -1582,6 +1586,7 @@ impl Meetings {
             self.mark_active(cx);
         }
         self.apply_session_actions(actions, cx);
+        self.settle_sleep_kept(cx);
         self.rearm(cx);
     }
 
@@ -2678,6 +2683,9 @@ impl Meetings {
         });
         self.resume_doc = Some(doc_id.clone());
         self.session_doc = Some(doc_id.clone());
+        if self.sleep_kept.as_deref() == Some(doc_id.as_str()) {
+            self.sleep_kept = None;
+        }
         if after_sleep {
             tracing::info!(doc_id, "the meeting resumed by itself after the sleep");
             let shown = doc_id.clone();
@@ -3239,7 +3247,13 @@ impl Meetings {
             }
             drop(lock);
             let again = self.recording.as_ref().is_some_and(|r| r.doc_id == doc_id);
-            if !again && false_start(&library, &meta, chars) {
+            // A sleep's note waits for its Resume: one the call went on
+            // through resumes into it even if nobody had spoken yet.
+            let resumable = self.session.last_stop_reason() == Some(StopReason::Sleep)
+                && self.session.resume_may_follow();
+            if resumable && !again && false_start(&library, &meta, chars) {
+                self.sleep_kept = Some(doc_id.clone());
+            } else if !again && false_start(&library, &meta, chars) {
                 // A false start: nothing heard, nothing typed. Trash keeps it
                 // restorable while home stays clean.
                 heard_nothing = true;
@@ -4288,6 +4302,7 @@ impl Meetings {
             self.active = None;
             self.mark_active(cx);
         }
+        self.settle_sleep_kept(cx);
         if self.calendar_next.is_some_and(|at| at <= now) {
             self.calendar_next = None;
             self.refresh_calendar(cx);
@@ -4326,6 +4341,36 @@ impl Meetings {
                 }
                 this.rearm(cx);
             });
+        }
+    }
+
+    /// A note kept for a sleep's Resume that did not come goes to Trash as
+    /// any note that heard nothing does.
+    fn settle_sleep_kept(&mut self, cx: &mut Context<Self>) {
+        if self.session.resume_may_follow() || self.recording.is_some() {
+            return;
+        }
+        let Some(doc_id) = self.sleep_kept.take() else {
+            return;
+        };
+        let Some(library) = self.library().cloned() else {
+            return;
+        };
+        let (lock, meta) = (lock_meta(), library.load(&doc_id));
+        drop(lock);
+        let Ok(meta) = meta else {
+            return;
+        };
+        let chars = meta
+            .meeting
+            .as_ref()
+            .map_or(0, |m| m.transcript_chars as usize);
+        if false_start(&library, &meta, chars) {
+            match library.trash(&doc_id, Utc::now()) {
+                Ok(_) => tracing::info!(doc_id, "a meeting note that heard nothing went to Trash"),
+                Err(error) => tracing::warn!(%error, "could not trash an empty meeting note"),
+            }
+            cx.emit(MeetingEvent::LibraryChanged);
         }
     }
 
