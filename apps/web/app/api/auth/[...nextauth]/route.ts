@@ -25,7 +25,9 @@ import {
 	isEmailCodeSendLimited,
 	isEmailCodeVerifyLimited,
 } from "@/lib/email-code-rate-limit";
+import { logNewAccountAddress } from "@/lib/ip-reputation";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
+import { shouldRefuseTorExit } from "@/lib/tor-exit-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -153,6 +155,40 @@ async function emailCodeLimitResponse(
 	return null;
 }
 
+async function torExitResponse(request: NextRequest, nextauth: string[]) {
+	if (nextauth[0] !== "signin" && nextauth[0] !== "callback") return null;
+	if (!nextauth[1]) return null;
+	if (!(await shouldRefuseTorExit("web-sign-in", request.headers))) return null;
+	const url = new URL("/login", serverEnv().WEB_URL);
+	url.searchParams.set("error", "SignupBlocked");
+	const body = await readSignInBody(request);
+	return body?.json
+		? NextResponse.json({ url: url.toString() }, { status: 403 })
+		: NextResponse.redirect(url, 302);
+}
+
+function signInFlow(request: NextRequest) {
+	const callbackUrl = request.cookies.get("next-auth.callback-url")?.value;
+	if (!callbackUrl) return "web";
+	try {
+		const { pathname } = new URL(callbackUrl, serverEnv().WEB_URL);
+		if (pathname.startsWith("/api/desktop/")) return "desktop";
+		if (pathname.startsWith("/api/mobile/")) return "mobile";
+	} catch {}
+	return "web";
+}
+
+function newAccountHooks(request: NextRequest, nextauth: string[]) {
+	return {
+		onUserCreated: () => {
+			logNewAccountAddress("web-sign-in", request.headers, {
+				provider: nextauth[1],
+				flow: signInFlow(request),
+			});
+		},
+	};
+}
+
 function withSignInEmailIdentifier(request: NextRequest, nextauth: string[]) {
 	if (nextauth[0] !== "callback" || nextauth[1] !== "email") return request;
 	const email = request.nextUrl.searchParams.get("email");
@@ -168,6 +204,8 @@ async function handler(
 	context: { params: Promise<{ nextauth: string[] }> },
 ) {
 	const { nextauth } = await context.params;
+	const refusedResponse = await torExitResponse(request, nextauth);
+	if (refusedResponse) return refusedResponse;
 	const limitedResponse = await emailCodeLimitResponse(request, nextauth);
 	if (limitedResponse) return limitedResponse;
 	if (
@@ -208,7 +246,11 @@ async function handler(
 				{ status: 400 },
 			);
 		}
-		const response: Response = await NextAuth(request, context, authOptions());
+		const response: Response = await NextAuth(
+			request,
+			context,
+			authOptions(undefined, newAccountHooks(request, nextauth)),
+		);
 		response.headers.append(
 			"set-cookie",
 			googleOneTapNonceSetCookie(
@@ -222,7 +264,7 @@ async function handler(
 		return NextAuth(
 			withSignInEmailIdentifier(request, nextauth),
 			context,
-			authOptions(),
+			authOptions(undefined, newAccountHooks(request, nextauth)),
 		);
 	}
 	const env = serverEnv();
@@ -282,7 +324,7 @@ async function handler(
 	const response: Response = await NextAuth(
 		request,
 		context,
-		authOptions({ intent, actorId }),
+		authOptions({ intent, actorId }, newAccountHooks(request, nextauth)),
 	);
 	if (nextauth[0] === "callback") {
 		response.headers.append(

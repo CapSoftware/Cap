@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { authOptions } from "@cap/database/auth/auth-options";
+import { type AuthHooks, authOptions } from "@cap/database/auth/auth-options";
 import { normalizeSignInEmail } from "@cap/database/auth/domain-utils";
 
 import { is, SQL } from "drizzle-orm";
@@ -190,6 +190,7 @@ async function callNextAuth(request: {
 	nextauth: string[];
 	query?: Record<string, string>;
 	body?: Record<string, string>;
+	hooks?: AuthHooks;
 }) {
 	let redirect = "";
 	const headers = new Map<string, unknown>();
@@ -216,7 +217,7 @@ async function callNextAuth(request: {
 			headers: { host: "cap.example" },
 		} as never,
 		response as never,
-		authOptions(),
+		authOptions(undefined, request.hooks),
 	);
 	const cookies = [headers.get("set-cookie") ?? []].flat().map(String);
 	const sessionCookie = cookies
@@ -226,8 +227,9 @@ async function callNextAuth(request: {
 	return { redirect, sessionCookie };
 }
 
-const requestCode = (email: string) =>
+const requestCode = (email: string, hooks?: AuthHooks) =>
 	callNextAuth({
+		hooks,
 		method: "POST",
 		nextauth: ["signin", "email"],
 		body: {
@@ -238,14 +240,15 @@ const requestCode = (email: string) =>
 		},
 	});
 
-async function signInWithMailedCode(typedEmail: string) {
-	await requestCode(typedEmail);
+async function signInWithMailedCode(typedEmail: string, hooks?: AuthHooks) {
+	await requestCode(typedEmail, hooks);
 	const mail = store.sentTo.at(-1);
 	if (!mail) throw new Error("No code was sent");
 	const callbackEmail = normalizeSignInEmail(mail.email) ?? mail.email;
 	const { redirect, sessionCookie } = await callNextAuth({
 		method: "GET",
 		nextauth: ["callback", "email"],
+		hooks,
 		query: {
 			email: callbackEmail,
 			token: mail.code,
@@ -426,6 +429,88 @@ describe("DrizzleAdapter stored-email checks", () => {
 			}),
 		).toBeNull();
 		expect(rowsOf(verificationTokens)).toHaveLength(1);
+	});
+});
+
+describe("new account hook", () => {
+	const ssoIdentity = {
+		organizationId: "org",
+		workosOrganizationId: "workos-org",
+		connectionId: "connection",
+		profileId: "profile",
+		email: "person@example.com",
+	};
+	const newUser = {
+		email: "person@example.com",
+		emailVerified: new Date(),
+		name: null,
+		image: null,
+	};
+
+	it("runs once when an email sign-in creates the account", async () => {
+		const onUserCreated = vi.fn();
+
+		const { session } = await signInWithMailedCode("person@example.com", {
+			onUserCreated,
+		});
+
+		expect(session?.email).toBe("person@example.com");
+		expect(rowsOf(users)).toHaveLength(1);
+		expect(onUserCreated).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not run when an existing account signs in", async () => {
+		seedUser("existing", "person@example.com");
+		const onUserCreated = vi.fn();
+
+		const { session } = await signInWithMailedCode("person@example.com", {
+			onUserCreated,
+		});
+
+		expect(session?.id).toBe("existing");
+		expect(onUserCreated).not.toHaveBeenCalled();
+	});
+
+	it("does not run when createUser meets a row created by a parallel sign-in", async () => {
+		seedUser("existing", "person@example.com");
+		const onUserCreated = vi.fn();
+		const adapter = DrizzleAdapter(collatingDb as never, {
+			getSsoIdentity: () => null,
+			onUserCreated,
+		});
+
+		expect((await adapter.createUser?.(newUser))?.id).toBe("existing");
+		expect(onUserCreated).not.toHaveBeenCalled();
+	});
+
+	it("runs for an SSO account only when the row is new", async () => {
+		rowsOf(organizations).push({ id: "org" });
+		const onUserCreated = vi.fn();
+		const adapter = DrizzleAdapter(collatingDb as never, {
+			getSsoIdentity: () => ssoIdentity as never,
+			onUserCreated,
+		});
+
+		await adapter.createUser?.(newUser);
+		expect(onUserCreated).toHaveBeenCalledTimes(1);
+
+		store.skipNextUserSelect = true;
+		await adapter.createUser?.(newUser);
+		expect(rowsOf(users)).toHaveLength(1);
+		expect(onUserCreated).toHaveBeenCalledTimes(1);
+	});
+
+	it("still creates the account when the hook throws", async () => {
+		const adapter = DrizzleAdapter(collatingDb as never, {
+			getSsoIdentity: () => null,
+			onUserCreated: () => {
+				throw new Error("hook failed");
+			},
+		});
+
+		expect((await adapter.createUser?.(newUser))?.email).toBe(
+			"person@example.com",
+		);
 	});
 });
 

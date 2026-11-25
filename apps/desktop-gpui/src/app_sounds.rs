@@ -61,7 +61,7 @@ impl AppSound {
     }
 
     fn play_to_end(self) -> anyhow::Result<()> {
-        let (_stream, handle) = OutputStream::try_default().context("opening audio output")?;
+        let (_stream, handle) = open_output().context("opening audio output")?;
         let source = Decoder::new(Cursor::new(self.bytes())).context("decoding app sound")?;
         let sink = Sink::try_new(&handle).context("creating app sound sink")?;
         sink.set_volume(self.volume());
@@ -112,4 +112,25 @@ mod tests {
             sound.play_to_end().unwrap();
         }
     }
+}
+
+/// The default output, or on Linux the sound server's when ALSA's default
+/// would open the sound card itself and take it from every other app.
+pub(crate) fn open_output() -> Result<(OutputStream, rodio::OutputStreamHandle), rodio::StreamError>
+{
+    #[cfg(target_os = "linux")]
+    if let Some(name) = cap_recording::sources::screen_capture::sound_server_output() {
+        use rodio::cpal::traits::{DeviceTrait, HostTrait};
+        if let Some(output) = rodio::cpal::default_host()
+            .output_devices()
+            .ok()
+            .and_then(|mut devices| {
+                devices.find(|device| device.name().is_ok_and(|device_name| device_name == name))
+            })
+            .and_then(|device| OutputStream::try_from_device(&device).ok())
+        {
+            return Ok(output);
+        }
+    }
+    OutputStream::try_default()
 }

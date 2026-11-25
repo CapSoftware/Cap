@@ -51,6 +51,7 @@ function makeFixture() {
 	});
 	const policy = FoldersPolicy.make({
 		canCreateIn: () => Effect.void,
+		canCreateInOrganization: () => Effect.void,
 		canEdit: () => Effect.void,
 	});
 	const database = Database.make({

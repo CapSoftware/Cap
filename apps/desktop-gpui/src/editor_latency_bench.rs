@@ -534,6 +534,21 @@ fn frame_bgra(frame: &crate::editor_window::EditorPreviewFrame) -> Option<(u32, 
                 image.as_bytes(0)?.to_vec(),
             ))
         }
+        #[cfg(not(target_os = "macos"))]
+        crate::editor_window::EditorPreviewFrame::Stream(stream) => {
+            let frame = stream.current()?;
+            let (width, height) = (
+                frame.size().width.0 as usize,
+                frame.size().height.0 as usize,
+            );
+            let pixels = cap_gpui_kernels::frame::unpad_rgba_to_bgra(
+                frame.bytes(),
+                width,
+                frame.stride(),
+                height,
+            )?;
+            Some((width as u32, height as u32, pixels))
+        }
         #[cfg(target_os = "macos")]
         crate::editor_window::EditorPreviewFrame::Surface(buffer) => {
             use core_video::pixel_buffer::kCVPixelBufferLock_ReadOnly;

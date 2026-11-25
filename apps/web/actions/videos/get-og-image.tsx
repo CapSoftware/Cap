@@ -1,17 +1,21 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
-import { findScreenshotObjectKey, Storage } from "@cap/web-backend";
+import {
+	findScreenshotObjectKey,
+	Storage,
+	VideosPolicy,
+} from "@cap/web-backend";
 import {
 	getCustomThumbnailKey,
 	getCustomThumbnailVersion,
 } from "@cap/web-backend/src/Storage/custom-thumbnail";
 import { getPublishedRecordingThumbnailKey } from "@cap/web-backend/src/Storage/recording-output";
-import type { Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Cause, Effect, Exit, Option } from "effect";
 import { extractPosterFrameDataUri } from "@/lib/og/poster-frame";
 import { renderVideoOg, renderVideoOgStatus } from "@/lib/og/video-og";
-import { runPromise } from "@/lib/server";
+import { runPromise, runPromiseExit } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
 
 export async function generateVideoOgImage(
@@ -26,6 +30,8 @@ export async function generateVideoOgImage(
 
 	if (video.password) return renderVideoOgStatus("password");
 	if (video.public === false) return renderVideoOgStatus("locked");
+	const access = await anonymousViewAccess(video);
+	if (access !== "allowed") return renderVideoOgStatus(access);
 
 	// A version only names an image that exists. Anything else goes to the
 	// current URL, so made-up versions cannot each cost a fresh render.
@@ -88,6 +94,23 @@ export async function generateVideoOgImage(
 			screenshotUrl,
 		},
 	});
+}
+
+// Link previews are cached publicly, so they only show what a signed-out
+// viewer without a password could see.
+async function anonymousViewAccess(video: typeof videos.$inferSelect) {
+	const exit = await Effect.flatMap(VideosPolicy, (policy) =>
+		policy.canViewLoaded(video, Option.fromNullable(video.password)),
+	).pipe(
+		Effect.provideService(Video.VideoPasswordAttachment, { passwords: [] }),
+		runPromiseExit,
+	);
+	if (Exit.isSuccess(exit)) return "allowed" as const;
+	const failure = Cause.failureOption(exit.cause);
+	return Option.isSome(failure) &&
+		failure.value._tag === "VerifyVideoPasswordError"
+		? ("password" as const)
+		: ("locked" as const);
 }
 
 async function getData(videoId: Video.VideoId) {

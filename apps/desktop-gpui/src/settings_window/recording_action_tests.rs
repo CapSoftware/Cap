@@ -33,6 +33,9 @@ pub(crate) fn settings_fixture(
         plan_refresh_failed: false,
         instant_quality_notice: None,
         studio_quality_save_failed: false,
+        studio_resolution: None,
+        #[cfg(target_os = "linux")]
+        studio_resolution_task: None,
         pages: crate::settings_pages::PagesState::new(window, cx),
         project_name: String::new(),
         server_url: String::new(),
