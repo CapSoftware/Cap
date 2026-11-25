@@ -80,6 +80,13 @@ pub struct Stats {
     pub compile: Duration,
     /// Time the analysis waited for the decoding thread.
     pub frame_wait: Duration,
+    /// Analysis time per frame (preparing it and finishing the frames it
+    /// lets through), for the spread of frame costs.
+    pub frame_costs: Vec<Duration>,
+    /// Time in the per-frame preparation (change map, regions, detection
+    /// start) and in finishing frames (lines, reading, classifying).
+    pub prepare: Duration,
+    pub finish: Duration,
     pub total: Duration,
     pub source_seconds: f64,
     pub hardware_decode: bool,
@@ -267,6 +274,7 @@ impl<'a> Analyzer<'a> {
                     anyhow::bail!("cancelled");
                 }
                 let time = decoded.frame.time;
+                let frame_started = Instant::now();
                 let prepared = scan.prepare(
                     model,
                     &mut convert,
@@ -274,13 +282,17 @@ impl<'a> Analyzer<'a> {
                     Arc::new(decoded.gray),
                     stats,
                 )?;
+                stats.prepare += frame_started.elapsed();
                 in_flight.push_back(prepared);
+                let finish_started = Instant::now();
                 while in_flight.len() > LOOKAHEAD {
                     if let Some(oldest) = in_flight.pop_front() {
                         scan.finish(model, &mut convert, oldest, stats)?;
                     }
                 }
+                stats.finish += finish_started.elapsed();
                 stats.frames += 1;
+                stats.frame_costs.push(frame_started.elapsed());
                 if last_progress.elapsed() >= Duration::from_millis(500) {
                     last_progress = Instant::now();
                     segment_info.source_frames = scan.frame_count;

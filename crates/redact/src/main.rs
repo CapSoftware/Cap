@@ -177,6 +177,25 @@ fn analyze(args: &[String]) -> anyhow::Result<()> {
             stats.compile.as_secs_f64(),
             stats.frame_wait.as_secs_f64()
         );
+        let mut costs = stats.frame_costs.clone();
+        costs.sort();
+        let at = |q: f64| {
+            costs
+                .get(((costs.len() as f64 - 1.0) * q).round() as usize)
+                .map_or(0.0, |d| d.as_secs_f64() * 1e3)
+        };
+        eprintln!(
+            "analysis prepare {:.2}s finish {:.2}s",
+            stats.prepare.as_secs_f64(),
+            stats.finish.as_secs_f64()
+        );
+        eprintln!(
+            "frame ms p50 {:.2} p90 {:.2} p99 {:.2} max {:.2}",
+            at(0.5),
+            at(0.9),
+            at(0.99),
+            at(1.0)
+        );
         eprintln!("regions {} -> {}", redactions.regions.len(), out.display());
     }
     Ok(())
