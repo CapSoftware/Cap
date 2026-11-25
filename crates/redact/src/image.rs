@@ -224,59 +224,72 @@ impl RgbImage {
         }
         let max_x = self.width as usize - 1;
         let max_y = self.height as usize - 1;
+        let width = self.width as usize;
         let sx = src.w / out_w as f32;
         let sy = src.h / out_h as f32;
-        for oy in 0..out_h {
-            let y0 = src.y + oy as f32 * sy;
-            let y1 = y0 + sy;
-            for ox in 0..out_w {
-                let x0 = src.x + ox as f32 * sx;
-                let x1 = x0 + sx;
-                let value = if sx > 1.0 || sy > 1.0 {
-                    let xa = (x0.floor() as usize).min(max_x);
-                    let xb = ((x1.ceil() as usize).max(xa + 1)).min(max_x + 1);
-                    let ya = (y0.floor() as usize).min(max_y);
-                    let yb = ((y1.ceil() as usize).max(ya + 1)).min(max_y + 1);
-                    let step_x = ((xb - xa) / 4).max(1);
-                    let step_y = ((yb - ya) / 4).max(1);
+        // Each output column's and row's source span is worked out once,
+        // with the same expressions as per pixel, so every value is the
+        // same bit for bit.
+        if sx > 1.0 || sy > 1.0 {
+            let span = |start: f32, scale: f32, index: usize, max: usize| {
+                let from = start + index as f32 * scale;
+                let to = from + scale;
+                let a = (from.floor() as usize).min(max);
+                let b = ((to.ceil() as usize).max(a + 1)).min(max + 1);
+                (a, b, ((b - a) / 4).max(1))
+            };
+            let columns = (0..out_w)
+                .map(|ox| span(src.x, sx, ox, max_x))
+                .collect::<Vec<_>>();
+            for oy in 0..out_h {
+                let (ya, yb, step_y) = span(src.y, sy, oy, max_y);
+                for (ox, &(xa, xb, step_x)) in columns.iter().enumerate() {
                     let mut sum = [0.0f32; 3];
                     let mut count = 0.0;
                     let mut y = ya;
                     while y < yb {
+                        let row = &self.data[y * width * 3..(y + 1) * width * 3];
                         let mut x = xa;
                         while x < xb {
-                            let p = self.pixel(x, y);
-                            sum[0] += p[0];
-                            sum[1] += p[1];
-                            sum[2] += p[2];
+                            let p = &row[x * 3..x * 3 + 3];
+                            sum[0] += f32::from(p[0]);
+                            sum[1] += f32::from(p[1]);
+                            sum[2] += f32::from(p[2]);
                             count += 1.0;
                             x += step_x;
                         }
                         y += step_y;
                     }
-                    [sum[0] / count, sum[1] / count, sum[2] / count]
-                } else {
-                    let fx = (x0 + sx * 0.5 - 0.5).clamp(0.0, max_x as f32);
-                    let fy = (y0 + sy * 0.5 - 0.5).clamp(0.0, max_y as f32);
-                    let ix = fx as usize;
-                    let iy = fy as usize;
-                    let ax = fx - ix as f32;
-                    let ay = fy - iy as f32;
-                    let ix1 = (ix + 1).min(max_x);
-                    let iy1 = (iy + 1).min(max_y);
-                    let p00 = self.pixel(ix, iy);
-                    let p10 = self.pixel(ix1, iy);
-                    let p01 = self.pixel(ix, iy1);
-                    let p11 = self.pixel(ix1, iy1);
-                    let mut out = [0.0f32; 3];
-                    for c in 0..3 {
-                        let top = p00[c] + (p10[c] - p00[c]) * ax;
-                        let bottom = p01[c] + (p11[c] - p01[c]) * ax;
-                        out[c] = top + (bottom - top) * ay;
-                    }
-                    out
-                };
-                put(ox, oy, value);
+                    put(ox, oy, [sum[0] / count, sum[1] / count, sum[2] / count]);
+                }
+            }
+            return;
+        }
+        let tap = |start: f32, scale: f32, index: usize, max: usize| {
+            let from = start + index as f32 * scale;
+            let f = (from + scale * 0.5 - 0.5).clamp(0.0, max as f32);
+            let i = f as usize;
+            (i, (i + 1).min(max), f - i as f32)
+        };
+        let columns = (0..out_w)
+            .map(|ox| tap(src.x, sx, ox, max_x))
+            .collect::<Vec<_>>();
+        for oy in 0..out_h {
+            let (iy, iy1, ay) = tap(src.y, sy, oy, max_y);
+            let top_row = &self.data[iy * width * 3..(iy + 1) * width * 3];
+            let bottom_row = &self.data[iy1 * width * 3..(iy1 + 1) * width * 3];
+            for (ox, &(ix, ix1, ax)) in columns.iter().enumerate() {
+                let mut out = [0.0f32; 3];
+                for (c, value) in out.iter_mut().enumerate() {
+                    let p00 = f32::from(top_row[ix * 3 + c]);
+                    let p10 = f32::from(top_row[ix1 * 3 + c]);
+                    let p01 = f32::from(bottom_row[ix * 3 + c]);
+                    let p11 = f32::from(bottom_row[ix1 * 3 + c]);
+                    let top = p00 + (p10 - p00) * ax;
+                    let bottom = p01 + (p11 - p01) * ax;
+                    *value = top + (bottom - top) * ay;
+                }
+                put(ox, oy, out);
             }
         }
     }
@@ -324,6 +337,112 @@ impl RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-pixel resampling the detector and recogniser inputs are
+    /// defined by.
+    fn reference_resample(
+        image: &RgbImage,
+        src: Rect,
+        out_w: usize,
+        out_h: usize,
+        mut put: impl FnMut(usize, usize, [f32; 3]),
+    ) {
+        if out_w == 0 || out_h == 0 || image.width == 0 || image.height == 0 {
+            return;
+        }
+        let max_x = image.width as usize - 1;
+        let max_y = image.height as usize - 1;
+        let sx = src.w / out_w as f32;
+        let sy = src.h / out_h as f32;
+        for oy in 0..out_h {
+            let y0 = src.y + oy as f32 * sy;
+            let y1 = y0 + sy;
+            for ox in 0..out_w {
+                let x0 = src.x + ox as f32 * sx;
+                let x1 = x0 + sx;
+                let value = if sx > 1.0 || sy > 1.0 {
+                    let xa = (x0.floor() as usize).min(max_x);
+                    let xb = ((x1.ceil() as usize).max(xa + 1)).min(max_x + 1);
+                    let ya = (y0.floor() as usize).min(max_y);
+                    let yb = ((y1.ceil() as usize).max(ya + 1)).min(max_y + 1);
+                    let step_x = ((xb - xa) / 4).max(1);
+                    let step_y = ((yb - ya) / 4).max(1);
+                    let mut sum = [0.0f32; 3];
+                    let mut count = 0.0;
+                    let mut y = ya;
+                    while y < yb {
+                        let mut x = xa;
+                        while x < xb {
+                            let p = image.pixel(x, y);
+                            sum[0] += p[0];
+                            sum[1] += p[1];
+                            sum[2] += p[2];
+                            count += 1.0;
+                            x += step_x;
+                        }
+                        y += step_y;
+                    }
+                    [sum[0] / count, sum[1] / count, sum[2] / count]
+                } else {
+                    let fx = (x0 + sx * 0.5 - 0.5).clamp(0.0, max_x as f32);
+                    let fy = (y0 + sy * 0.5 - 0.5).clamp(0.0, max_y as f32);
+                    let ix = fx as usize;
+                    let iy = fy as usize;
+                    let ax = fx - ix as f32;
+                    let ay = fy - iy as f32;
+                    let ix1 = (ix + 1).min(max_x);
+                    let iy1 = (iy + 1).min(max_y);
+                    let p00 = image.pixel(ix, iy);
+                    let p10 = image.pixel(ix1, iy);
+                    let p01 = image.pixel(ix, iy1);
+                    let p11 = image.pixel(ix1, iy1);
+                    let mut out = [0.0f32; 3];
+                    for c in 0..3 {
+                        let top = p00[c] + (p10[c] - p00[c]) * ax;
+                        let bottom = p01[c] + (p11[c] - p01[c]) * ax;
+                        out[c] = top + (bottom - top) * ay;
+                    }
+                    out
+                };
+                put(ox, oy, value);
+            }
+        }
+    }
+
+    #[test]
+    fn resampling_matches_the_per_pixel_reference_bit_for_bit() {
+        let mut seed = 23u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            seed >> 8
+        };
+        for _ in 0..400 {
+            let (w, h) = (1 + next() % 120, 1 + next() % 90);
+            let mut image = RgbImage::new(w, h);
+            for value in &mut image.data {
+                *value = next() as u8;
+            }
+            let unit = |n: u32| (n % 10_000) as f32 / 10_000.0;
+            let x = unit(next()) * w as f32 * 0.8 - 2.0;
+            let y = unit(next()) * h as f32 * 0.8 - 2.0;
+            let rect = Rect::new(
+                x,
+                y,
+                1.0 + unit(next()) * w as f32,
+                1.0 + unit(next()) * h as f32,
+            );
+            let (out_w, out_h) = (1 + next() as usize % 160, 1 + next() as usize % 120);
+            let mut fast = Vec::new();
+            image.resample(rect, out_w, out_h, |ox, oy, v| {
+                fast.push((ox, oy, v.map(f32::to_bits)))
+            });
+            let mut slow = Vec::new();
+            reference_resample(&image, rect, out_w, out_h, |ox, oy, v| {
+                slow.push((ox, oy, v.map(f32::to_bits)))
+            });
+            assert_eq!(fast, slow, "{w}x{h} {rect:?} -> {out_w}x{out_h}");
+        }
+    }
 
     #[test]
     fn unscaled_regions_copy_exactly_what_resampling_gives() {
