@@ -661,6 +661,34 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 
 					if (user.activeOrganizationId !== input.orgId)
 						return yield* Effect.fail(new Policy.PolicyDeniedError());
+					const [organization] = yield* db.use((db) =>
+						db
+							.select({ id: Db.organizations.id })
+							.from(Db.organizations)
+							.leftJoin(
+								Db.organizationMembers,
+								Dz.and(
+									Dz.eq(
+										Db.organizationMembers.organizationId,
+										Db.organizations.id,
+									),
+									Dz.eq(Db.organizationMembers.userId, user.id),
+								),
+							)
+							.where(
+								Dz.and(
+									Dz.eq(Db.organizations.id, input.orgId),
+									Dz.isNull(Db.organizations.tombstoneAt),
+									Dz.or(
+										Dz.eq(Db.organizations.ownerId, user.id),
+										Dz.eq(Db.organizationMembers.userId, user.id),
+									),
+								),
+							)
+							.limit(1),
+					);
+					if (!organization)
+						return yield* Effect.fail(new Policy.PolicyDeniedError());
 
 					const folderId: RepoCreateVideoInput["folderId"] =
 						input.folderId ?? Option.none<Folder.FolderId>();
