@@ -1325,3 +1325,270 @@ index 587315debfa8..e58084906c1f 100644
  
              // Invalidate intermediate textures — they'll be recreated lazily.
              res.invalidate_intermediate_textures();
+diff --git a/crates/gpui/src/view.rs b/crates/gpui/src/view.rs
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -287,6 +287,9 @@ struct ViewElementState {
+     paint_range: Range<PaintIndex>,
+     cache_key: ViewElementCacheKey,
+     accessed_entities: FxHashSet<EntityId>,
++    /// The view's accessibility nodes when it last laid itself out with a
++    /// screen reader active, put back on frames that reuse the view.
++    a11y: Option<crate::window::a11y::CachedA11y>,
+ }
+ 
+ struct ViewElementCacheKey {
+@@ -389,9 +392,13 @@ impl<V: View> Element for ViewElement<V> {
+                             && element_state.cache_key.text_style == text_style
+                             && !window.dirty_views.contains(&entity_id)
+                             && !window.refreshing
++                            && (element_state.a11y.is_some() || !window.a11y.is_active())
+                         {
+                             let prepaint_start = window.prepaint_index();
+                             window.reuse_prepaint(element_state.prepaint_range.clone());
++                            if let Some(cached) = &element_state.a11y {
++                                window.a11y.replay(cached);
++                            }
+                             cx.entities
+                                 .extend_accessed(&element_state.accessed_entities);
+                             let prepaint_end = window.prepaint_index();
+@@ -402,6 +409,7 @@ impl<V: View> Element for ViewElement<V> {
+ 
+                         let refreshing = mem::replace(&mut window.refreshing, true);
+                         let prepaint_start = window.prepaint_index();
++                        let a11y_mark = window.a11y.mark();
+                         let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+                             let mut element = self
+                                 .view
+@@ -416,10 +424,12 @@ impl<V: View> Element for ViewElement<V> {
+ 
+                         let prepaint_end = window.prepaint_index();
+                         window.refreshing = refreshing;
++                        let a11y = a11y_mark.map(|mark| window.a11y.capture(mark));
+ 
+                         (
+                             Some(element),
+                             ViewElementState {
++                                a11y,
+                                 accessed_entities,
+                                 prepaint_range: prepaint_start..prepaint_end,
+                                 paint_range: PaintIndex::default()..PaintIndex::default(),
+@@ -473,6 +483,9 @@ impl<V: View> Element for ViewElement<V> {
+                                 window.refreshing = refreshing;
+                             } else {
+                                 window.reuse_paint(element_state.paint_range.clone());
++                                if let Some(cached) = &element_state.a11y {
++                                    window.a11y.reuse_action_listeners(cached);
++                                }
+                             }
+ 
+                             let paint_end = window.paint_index();
+diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
+--- a/crates/gpui/src/window/a11y.rs
++++ b/crates/gpui/src/window/a11y.rs
+@@ -115,6 +115,28 @@ use std::sync::{
+ /// The fixed AccessKit node ID used for the root of every window's a11y tree.
+ pub(crate) const ROOT_NODE_ID: NodeId = NodeId(0);
+ 
++/// The tree's position before a cached view lays itself out ([`A11y::mark`]).
++pub(crate) struct A11yMark {
++    nodes: usize,
++    children: usize,
++    focus: Option<NodeId>,
++    active_descendant: Option<NodeId>,
++}
++
++/// What a cached view added to the accessibility tree the last time it laid
++/// itself out. A frame that reuses the view's prepaint builds no nodes for it,
++/// so without this its whole subtree would drop out of the tree for that frame
++/// and come back on the next, and screen readers would be told about every
++/// one of those changes.
++pub(crate) struct CachedA11y {
++    children: Vec<NodeId>,
++    nodes: Vec<(NodeId, accesskit::Node)>,
++    focus_ids: Vec<(NodeId, FocusId)>,
++    bounds: Vec<(NodeId, Bounds<Pixels>)>,
++    focus: Option<NodeId>,
++    active_descendant: Option<NodeId>,
++}
++
+ /// A listener for an accessibility action on a specific node.
+ pub(crate) type A11yActionListener =
+     Box<dyn FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static>;
+@@ -149,6 +171,9 @@ pub(crate) struct A11y {
+     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
+     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
++    /// Last frame's action listeners, for cached views that reuse their paint
++    /// this frame (see [`CachedA11y`]).
++    prev_action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+     /// The window's title, used to label the root node so assistive
+     /// technology can tell windows apart.
+     window_title: Option<SharedString>,
+@@ -177,6 +202,7 @@ impl A11y {
+             focus_ids: FxHashMap::default(),
+             node_bounds: FxHashMap::default(),
+             action_listeners: FxHashMap::default(),
++            prev_action_listeners: FxHashMap::default(),
+             window_title,
+             last_focus_without_node: None,
+             debug: debug::A11yDebug::default(),
+@@ -271,10 +297,100 @@ impl A11y {
+     pub(crate) fn begin_frame(&mut self) {
+         self.focus_ids.clear();
+         self.node_bounds.clear();
+-        self.action_listeners.clear();
++        self.prev_action_listeners = std::mem::take(&mut self.action_listeners);
+         self.nodes.begin_frame(self.window_title.as_ref());
+     }
+ 
++    /// Where the tree stands before a cached view lays itself out, so what the
++    /// view adds can be kept for frames that reuse it. `None` while inactive.
++    pub(crate) fn mark(&self) -> Option<A11yMark> {
++        if !self.is_active() {
++            return None;
++        }
++        Some(A11yMark {
++            nodes: self.nodes.all_nodes.len(),
++            children: self
++                .nodes
++                .nodes_stack
++                .last()
++                .map_or(0, |n| n.children().len()),
++            focus: self.nodes.focus,
++            active_descendant: self.nodes.active_descendant,
++        })
++    }
++
++    /// What a cached view added to the tree since `mark`.
++    pub(crate) fn capture(&self, mark: A11yMark) -> CachedA11y {
++        let nodes = self.nodes.all_nodes[mark.nodes.min(self.nodes.all_nodes.len())..].to_vec();
++        let children = self
++            .nodes
++            .nodes_stack
++            .last()
++            .map(|n| n.children().get(mark.children..).unwrap_or(&[]).to_vec())
++            .unwrap_or_default();
++        let ids: FxHashSet<NodeId> = nodes.iter().map(|(id, _)| *id).collect();
++        let inside = |id: Option<NodeId>, before: Option<NodeId>| {
++            id.filter(|id| before != Some(*id) && ids.contains(id))
++        };
++        CachedA11y {
++            focus_ids: ids
++                .iter()
++                .filter_map(|id| self.focus_ids.get(id).map(|f| (*id, *f)))
++                .collect(),
++            bounds: ids
++                .iter()
++                .filter_map(|id| self.node_bounds.get(id).map(|b| (*id, *b)))
++                .collect(),
++            focus: inside(self.nodes.focus, mark.focus),
++            active_descendant: inside(self.nodes.active_descendant, mark.active_descendant),
++            children,
++            nodes,
++        }
++    }
++
++    /// Puts back what a cached view added when it last laid itself out, for a
++    /// frame that reuses the view's prepaint instead (which builds no nodes).
++    pub(crate) fn replay(&mut self, cached: &CachedA11y) {
++        if !self.is_active() {
++            return;
++        }
++        for (id, node) in &cached.nodes {
++            if self.nodes.seen_ids.insert(*id) {
++                self.nodes.all_nodes.push((*id, node.clone()));
++            }
++        }
++        if let Some(parent) = self.nodes.nodes_stack.last_mut() {
++            for id in &cached.children {
++                parent.push_child(*id);
++            }
++        }
++        self.focus_ids.extend(cached.focus_ids.iter().copied());
++        self.node_bounds.extend(cached.bounds.iter().copied());
++        if let Some(id) = cached.focus
++            && self.nodes.focus.is_none()
++        {
++            self.nodes.focus = Some(id);
++        }
++        if let Some(id) = cached.active_descendant
++            && self.nodes.active_descendant.is_none()
++        {
++            self.nodes.active_descendant = Some(id);
++        }
++    }
++
++    /// Keeps last frame's action listeners for a cached view that reuses its
++    /// paint this frame (which registers none).
++    pub(crate) fn reuse_action_listeners(&mut self, cached: &CachedA11y) {
++        for (id, _) in &cached.nodes {
++            if let Some(listeners) = self.prev_action_listeners.remove(id) {
++                self.action_listeners
++                    .entry(*id)
++                    .or_default()
++                    .extend(listeners);
++            }
++        }
++    }
++
+     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
+     pub(crate) fn end_frame(&mut self, frame: debug::FrameDebugInfo) -> TreeUpdate {
+         let update = self.nodes.finalize();
+@@ -885,4 +1001,56 @@ mod tests {
+         let update = a11y.end_frame(Default::default());
+         assert_eq!(update.focus, a);
+     }
++
++    /// A frame that reuses a cached view's prepaint builds no nodes for it; the
++    /// nodes, the parent's children and the focus it recorded come back as
++    /// they were, so the tree a screen reader sees does not flicker.
++    #[test]
++    fn a_reused_cached_view_keeps_its_nodes_and_focus() {
++        let page = NodeId(1);
++        let button = NodeId(2);
++        let label = NodeId(3);
++        let frame = |a11y: &mut A11y, fresh: Option<&super::CachedA11y>| {
++            a11y.begin_frame();
++            a11y.sync_active_flag();
++            assert!(a11y.nodes.push(page, test_node()));
++            let cached = match fresh {
++                Some(cached) => {
++                    a11y.replay(cached);
++                    None
++                }
++                None => {
++                    let mark = a11y.mark().expect("active");
++                    assert!(a11y.nodes.push(button, test_node()));
++                    a11y.set_focusable(button, FocusId::default());
++                    a11y.set_focus(button);
++                    assert!(a11y.nodes.push_leaf(label, test_node()));
++                    a11y.nodes.pop();
++                    Some(a11y.capture(mark))
++                }
++            };
++            a11y.nodes.pop();
++            let update = a11y.end_frame(Default::default());
++            let mut nodes: Vec<_> = update
++                .nodes
++                .iter()
++                .map(|(id, node)| (*id, node.children().to_vec()))
++                .collect();
++            nodes.sort_by_key(|(id, _)| id.0);
++            (cached, nodes, update.focus)
++        };
++        let mut a11y = new_a11y();
++        let (cached, fresh_nodes, fresh_focus) = frame(&mut a11y, None);
++        let cached = cached.expect("captured");
++        let (_, reused_nodes, reused_focus) = frame(&mut a11y, Some(&cached));
++        assert_eq!(fresh_nodes, reused_nodes);
++        assert_eq!(fresh_focus, button);
++        assert_eq!(reused_focus, button);
++    }
++
++    #[test]
++    fn nothing_is_kept_while_inactive() {
++        let a11y = A11y::new(Arc::new(AtomicBool::new(false)), false, None);
++        assert!(a11y.mark().is_none());
++    }
+ }
