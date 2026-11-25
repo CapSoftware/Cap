@@ -586,6 +586,30 @@ fn cap_deleted_on_the_web_after_upload_stops_confirming() {
     });
 }
 
+/// The owner deletes the cap on the web while its upload waits for cloud
+/// verification, and the delete is still in progress: the server answers the
+/// completion call with 409 code "video-deleting". The queue stops there, as
+/// for a finished delete, instead of uploading the recording again.
+#[test]
+fn cap_being_deleted_on_the_web_is_not_uploaded_again() {
+    let _shared_client = crate::auth::SHARED_API_CLIENT_TEST_LOCK.blocking_lock();
+    let scratch = Scratch::new("queue_deleting_on_web_during_verification");
+    virtual_time(async {
+        let mock = MockCap::start(vec![rule(Route::Api("recording-complete"), Fault::Hang)]).await;
+        scratch.sign_in(&mock.url);
+        let (project, _, _) = saved_instant_project(&scratch.0, &mock.url);
+        upload_then_quit_before_verification(&mock, &project).await;
+        let initiated = mock.count("POST", "multipart/initiate");
+
+        mock.start_deleting_on_web(VIDEO_ID);
+        let manager = Arc::new(Manager::new(LiveBackend, CONFIRMATION_TIMEOUT));
+        let window = Duration::from_secs(30 * 60);
+        run_queue(&manager, &project, window).await;
+        assert_eq!(mock.count("POST", "multipart/initiate"), initiated);
+        assert_deleted_on_web(&mock, &project, window);
+    });
+}
+
 /// A cap deleted on the web before its upload starts gets 404 from the upload
 /// URL routes, so the queue never reaches cloud verification and retries the
 /// transfer with the usual bounded backoff.
