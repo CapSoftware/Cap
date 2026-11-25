@@ -1549,6 +1549,16 @@ mod tests {
             }
         }
         masked
+            .lines()
+            .map(|line| {
+                if line.starts_with("#EXT-X-PROGRAM-DATE-TIME:") {
+                    "#EXT-X-PROGRAM-DATE-TIME:"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn output_files(base_path: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
@@ -1558,7 +1568,7 @@ mod tests {
             .map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let bytes = std::fs::read(entry.path()).unwrap();
-                let bytes = if name.ends_with(".mpd") {
+                let bytes = if name.ends_with(".mpd") || name.ends_with(".m3u8") {
                     mask_wall_clock(&String::from_utf8(bytes).unwrap()).into_bytes()
                 } else {
                     bytes
@@ -1589,7 +1599,7 @@ mod tests {
         }
     }
 
-    const RECORDED_FRAMES: u64 = 240;
+    const RECORDED_FRAMES: u64 = 600;
 
     fn queue_test_frames(encoder: &mut SegmentedVideoEncoder, frames: std::ops::Range<u64>) {
         for i in frames {
