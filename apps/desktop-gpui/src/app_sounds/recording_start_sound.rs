@@ -1,7 +1,7 @@
 use std::{io::Cursor, sync::mpsc, time::Duration};
 
 use cap_recording::RecordingStartGate;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, Sink};
 
 // The cue is under half a second; a device that has not finished it by now
 // (route change mid-countdown, stalled engine) must not hold the recording back.
@@ -145,7 +145,7 @@ mod fallback {
         rx: mpsc::Receiver<PlayCommand>,
         opened: tokio::sync::watch::Sender<bool>,
     ) {
-        let output = OutputStream::try_default()
+        let output = crate::app_sounds::open_output()
             .map_err(|error| error.to_string())
             .and_then(|(stream, handle)| {
                 let sink = Sink::try_new(&handle).map_err(|error| error.to_string())?;

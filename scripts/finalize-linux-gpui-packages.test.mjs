@@ -641,7 +641,7 @@ for (const payload of ["usr/bin/Cap", "usr/lib/cap/libmedia.so"]) {
 			const declared = config.bundle.linux.deb.depends.find((dependency) =>
 				dependency.startsWith("libc6"),
 			);
-			assert.equal(declared, "libc6 (>= 2.39)");
+			assert.equal(declared, "libc6 (>= 2.35)");
 			const deb = path.join(root, "cap.deb");
 			for (const dependency of ["", "libc6", "libc6 (>= 2.0)", declared]) {
 				await writeFile(

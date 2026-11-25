@@ -20,6 +20,7 @@ import {
 	type AssignableOrganizationRole,
 	normalizeAssignableOrganizationRole,
 } from "@/lib/permissions/roles";
+import { sharesInviterCompanyDomain } from "@/lib/public-email-domains";
 import { isRateLimited, RATE_LIMIT_IDS } from "@/lib/rate-limit";
 import { requireOrganizationSettingsManager } from "./authorization";
 
@@ -93,6 +94,8 @@ export async function sendOrganizationInvites(
 			success: true,
 			failedEmails: [] as string[],
 			skippedEmails: [] as string[],
+			pendingEmails: [] as string[],
+			addedEmails: [] as string[],
 		};
 	}
 
@@ -111,29 +114,42 @@ export async function sendOrganizationInvites(
 		}
 	};
 
-	if (options.sendEmailNotifications === false) {
-		await assertInviteLimit();
+	const sendEmailNotifications = options.sendEmailNotifications !== false;
+	if (!sendEmailNotifications) await assertInviteLimit();
 
-		const provisionResults = await Promise.allSettled(
-			validInvites.map((invite) =>
-				provisionOrganizationInvitee({
+	const directInvites = sendEmailNotifications
+		? []
+		: validInvites.filter((invite) =>
+				sharesInviterCompanyDomain(user.email, invite.email),
+			);
+	const recordInvites = validInvites.filter(
+		(invite) => !directInvites.includes(invite),
+	);
+	const recordEmails = recordInvites.map((invite) => invite.email);
+
+	// One at a time, so each add sees the seats the previous one took.
+	const provisionResults: PromiseSettledResult<
+		Awaited<ReturnType<typeof provisionOrganizationInvitee>>
+	>[] = [];
+	for (const invite of directInvites) {
+		try {
+			provisionResults.push({
+				status: "fulfilled",
+				value: await provisionOrganizationInvitee({
 					organizationId,
 					email: invite.email,
 					invitedByUserId: user.id,
 					role: invite.role,
 				}),
-			),
-		);
-		const failedEmails = validInvites
-			.filter((_, index) => provisionResults[index]?.status === "rejected")
-			.map((invite) => invite.email);
-
-		revalidatePath("/dashboard/settings/organization");
-
-		return { success: true, failedEmails, skippedEmails: [] as string[] };
+			});
+		} catch (reason) {
+			provisionResults.push({ status: "rejected", reason });
+		}
 	}
 
+	let alreadyMemberEmails = new Set<string>();
 	const inviteRecords = await db().transaction(async (tx) => {
+		if (recordInvites.length === 0) return [];
 		const [existingInvites, existingMembers] = await Promise.all([
 			tx
 				.select({ invitedEmail: organizationInvites.invitedEmail })
@@ -141,7 +157,7 @@ export async function sendOrganizationInvites(
 				.where(
 					and(
 						eq(organizationInvites.organizationId, organizationId),
-						inArray(organizationInvites.invitedEmail, validEmails),
+						inArray(organizationInvites.invitedEmail, recordEmails),
 					),
 				),
 			tx
@@ -151,7 +167,7 @@ export async function sendOrganizationInvites(
 				.where(
 					and(
 						eq(organizationMembers.organizationId, organizationId),
-						inArray(users.email, validEmails),
+						inArray(users.email, recordEmails),
 					),
 				),
 		]);
@@ -163,15 +179,16 @@ export async function sendOrganizationInvites(
 		const existingMemberEmails = new Set(
 			existingMembers.map((m) => m.email.toLowerCase()),
 		);
+		alreadyMemberEmails = existingMemberEmails;
 
-		const invitesToSend = validInvites.filter(
+		const invitesToSend = recordInvites.filter(
 			(invite) =>
 				!existingInviteEmails.has(invite.email) &&
 				!existingMemberEmails.has(invite.email),
 		);
 		if (invitesToSend.length === 0) return [];
 
-		await assertInviteLimit();
+		if (sendEmailNotifications) await assertInviteLimit();
 
 		const records = invitesToSend.map((invite) => ({
 			id: nanoId(),
@@ -193,6 +210,29 @@ export async function sendOrganizationInvites(
 
 		return records;
 	});
+
+	if (!sendEmailNotifications) {
+		const failedEmails = directInvites
+			.filter((_, index) => provisionResults[index]?.status === "rejected")
+			.map((invite) => invite.email);
+
+		revalidatePath("/dashboard/settings/organization");
+
+		return {
+			success: true,
+			failedEmails,
+			skippedEmails: [] as string[],
+			pendingEmails: recordEmails.filter(
+				(email) => !alreadyMemberEmails.has(email),
+			),
+			addedEmails: directInvites
+				.filter((_, index) => {
+					const result = provisionResults[index];
+					return result?.status === "fulfilled" && result.value.memberCreated;
+				})
+				.map((invite) => invite.email),
+		};
+	}
 
 	const emailResults = await Promise.allSettled(
 		inviteRecords.map((record) => {
@@ -250,5 +290,11 @@ export async function sendOrganizationInvites(
 
 	revalidatePath("/dashboard/settings/organization");
 
-	return { success: true, failedEmails, skippedEmails };
+	return {
+		success: true,
+		failedEmails,
+		skippedEmails,
+		pendingEmails: [] as string[],
+		addedEmails: [] as string[],
+	};
 }

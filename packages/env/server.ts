@@ -9,6 +9,9 @@ const boolString = (_default = false) =>
 		.transform((v) => v === "true")
 		.pipe(z.boolean());
 
+const mergeCommaLists = (...lists: Array<string | undefined>) =>
+	lists.filter((list) => list?.trim()).join(",") || undefined;
+
 function createServerEnv() {
 	return createEnv({
 		server: {
@@ -136,6 +139,12 @@ function createServerEnv() {
 				.optional()
 				.describe(
 					"Comma-separated domains or full email addresses refused at sign-in",
+				),
+			CAP_BLOCKED_SIGNUP_DOMAINS_EXTRA: z
+				.string()
+				.optional()
+				.describe(
+					"More entries for CAP_BLOCKED_SIGNUP_DOMAINS, merged with it",
 				),
 
 			/// AI providers
@@ -299,6 +308,10 @@ function createServerEnv() {
 			S3_PUBLIC_ENDPOINT: process.env.CAP_AWS_ENDPOINT,
 			S3_INTERNAL_ENDPOINT: process.env.CAP_AWS_ENDPOINT,
 			...process.env,
+			CAP_BLOCKED_SIGNUP_DOMAINS: mergeCommaLists(
+				process.env.CAP_BLOCKED_SIGNUP_DOMAINS,
+				process.env.CAP_BLOCKED_SIGNUP_DOMAINS_EXTRA,
+			),
 			NODE_ENV: process.env.NODE_ENV ?? "production",
 			VERCEL_URL_HOST: process.env.VERCEL_URL,
 			VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL,

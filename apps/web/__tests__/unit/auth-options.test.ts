@@ -523,6 +523,32 @@ describe("authOptions", () => {
 		});
 	});
 
+	it("expires existing sessions once the account's current email is blocked", async () => {
+		const { encode } = await import("next-auth/jwt");
+		const secret = "next-auth-secret";
+		const token = await encode({
+			token: { id: "user-1", email: "before@open.example", sessionVersion: 0 },
+			secret,
+		});
+		const stored = (email: string) =>
+			mocks.select.mockReturnValueOnce({
+				from: () => ({
+					where: () => ({
+						limit: async () => [{ authSessionVersion: 0, email }],
+					}),
+				}),
+			} as never);
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = "blocked.example";
+
+		stored("before@open.example");
+		await expect(decodeSessionToken({ token, secret })).resolves.toMatchObject({
+			id: "user-1",
+		});
+		stored("after@blocked.example");
+		await expect(decodeSessionToken({ token, secret })).resolves.toBeNull();
+		env.CAP_BLOCKED_SIGNUP_DOMAINS = undefined;
+	});
+
 	it("sends new accounts on disposable addresses to the login page with DisposableEmail", async () => {
 		mocks.disposableSignup.mockImplementation(
 			async (email) => email === "new@throwaway.example",
