@@ -113,6 +113,27 @@ describe("isRateLimited outside production", () => {
 		expect(await invite()).toBe(false);
 	});
 
+	it("allows 10 desktop feedback submissions per user each hour", async () => {
+		vi.useFakeTimers();
+		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
+		const feedback = (userId: string) =>
+			isRateLimited(RATE_LIMIT_IDS.DESKTOP_FEEDBACK, {
+				key: `desktop-feedback:${userId}`,
+			});
+
+		expect(await callTimes(10, () => feedback("user-1"))).toEqual(
+			Array(10).fill(false),
+		);
+		expect(await feedback("user-1")).toBe(true);
+		expect(await feedback("user-2")).toBe(false);
+
+		vi.advanceTimersByTime(59 * 60_000);
+		expect(await feedback("user-1")).toBe(true);
+
+		vi.advanceTimersByTime(60_000);
+		expect(await feedback("user-1")).toBe(false);
+	});
+
 	it("allows 20 checkouts per account every ten minutes", async () => {
 		vi.useFakeTimers();
 		const { isRateLimited, RATE_LIMIT_IDS } = await loadRateLimit();
