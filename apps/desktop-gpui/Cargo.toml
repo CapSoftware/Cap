@@ -207,6 +207,10 @@ tokio = { version = "1", features = [
 cap-verify = { path = "../../crates/verify" }
 tempfile = "3"
 
+[features]
+default = []
+experimental-redesign = []
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
@@ -272,6 +276,7 @@ objc2-foundation = { version = "0.3.2", features = [
     "NSNotification",
     "NSOperation",
     "NSString",
+    "NSUserDefaults",
     "block2",
 ] }
 block2 = "0.6"

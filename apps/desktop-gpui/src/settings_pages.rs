@@ -2954,7 +2954,7 @@ impl SettingsWindow {
         // the only implementation, so the 0.6.0 page's experimental switch has
         // nothing to switch. The store key (`enableNativeCameraPreview`) stays
         // readable in `store.rs` and is left untouched in the store.
-        vec![
+        let mut sections = vec![
             self.section(
                 tr::settings::experimental::reliability(),
                 None,
@@ -2983,7 +2983,42 @@ impl SettingsWindow {
                 ],
             )
             .into_any_element(),
-        ]
+        ];
+        if cfg!(feature = "experimental-redesign")
+            && crate::experimental::is_desktop_redesign_unlocked()
+        {
+            sections.push(
+                self.section(
+                    "Desktop redesign",
+                    None,
+                    None,
+                    vec![
+                        self.rows(vec![
+                            self.setting_row(
+                                "Native Desktop Redesign",
+                                Some("Try the in-progress native desktop redesign."),
+                                self.toggle(
+                                    "experimental-desktop-redesign",
+                                    "Native Desktop Redesign",
+                                    self.settings.experimental_desktop_redesign,
+                                    cx,
+                                    |this, cx| {
+                                        this.settings.experimental_desktop_redesign =
+                                            !this.settings.experimental_desktop_redesign;
+                                        let value = this.settings.experimental_desktop_redesign;
+                                        this.write_bool("experimentalDesktopRedesign", value, cx);
+                                    },
+                                )
+                                .into_any_element(),
+                            ),
+                        ])
+                        .into_any_element(),
+                    ],
+                )
+                .into_any_element(),
+            );
+        }
+        sections
     }
 }
 
