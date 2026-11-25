@@ -703,14 +703,17 @@ impl EditorWindow {
                         .text_color(Hsla::from(editor.text_1))
                         .child(category_label(category)),
                 )
-                .when(count > 0, |this| {
-                    this.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(Hsla::from(editor.text_2))
-                            .child(count.to_string()),
-                    )
-                })
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(Hsla::from(if count > 0 {
+                            editor.text_2
+                        } else {
+                            editor.text_3
+                        }))
+                        .child(count.to_string()),
+                )
         };
         let rows = RedactCategory::ALL
             .into_iter()
@@ -1240,6 +1243,11 @@ impl EditorWindow {
         categories.dedup();
         for category in categories {
             let enabled = config.has_category(category);
+            let count: usize = groups
+                .iter()
+                .filter(|g| g.category == category)
+                .map(|g| g.ids.len())
+                .sum();
             let mut group_el = div().flex().flex_col().gap(px(2.)).child(
                 div()
                     .id(SharedString::from(format!(
@@ -1262,7 +1270,20 @@ impl EditorWindow {
                             .text_color(Hsla::from(editor.text_1))
                             .child(category_label(category)),
                     )
-                    .child(redact_switch(&theme, enabled)),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(Hsla::from(editor.text_2))
+                                    .child(count.to_string()),
+                            )
+                            .child(redact_switch(&theme, enabled)),
+                    ),
             );
             for (row, group) in groups
                 .iter()
