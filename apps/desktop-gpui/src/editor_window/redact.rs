@@ -1069,6 +1069,14 @@ impl EditorWindow {
             );
             if !same_redact_lane(&before, &self.timeline.redact) {
                 self.timeline_view.update(cx, |_, cx| cx.notify());
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.track == TrackKind::Redact)
+                {
+                    self.refresh_redact_highlight();
+                    self.sidebar_view.update(cx, |_, cx| cx.notify());
+                }
             }
         }
         if !running {
