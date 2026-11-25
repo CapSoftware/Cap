@@ -117,26 +117,53 @@ fn audio_follows_confirmed_route(
 /// audio with the time its callback runs, so a burst made the muxer see a
 /// gap, insert silence and then trim the late audio as overlap. Here each
 /// buffer is placed by the frames delivered so far from the earliest anchor
-/// its arrivals allow: steady delivery keeps the arrival times exactly, a
-/// late callback no longer moves its audio, an arrival later than any burst
-/// marks lost frames where they were lost, and slow clock drift moves the
-/// anchor once a whole window of arrivals agrees.
+/// its arrivals allow: steady delivery keeps the arrival times exactly and a
+/// late callback no longer moves its audio.
+///
+/// Arrivals falling behind the frames is not lost audio by itself: after the
+/// sound card wakes, PipeWire 1.0 delivers every frame but builds up about
+/// 200 ms of latency over the first seconds. So only an arrival that jumps
+/// past the arrivals just before it marks lost frames, and only drift that
+/// shows once the stream has settled moves the anchor, a little per window,
+/// as a device clock that runs slow or fast does. Lost frames can take the audio the
+/// server held with them, its latency then building up again: for a while
+/// after a loss the anchor follows the arrivals back to the lag they had.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 struct SteadyDeliveryClock {
     anchor: Option<Instant>,
     rate: u32,
     frames: u64,
+    /// When the stream (or its recovery from a loss) has settled.
+    settle_at: Option<Instant>,
+    /// Recent arrivals, each with the anchor it implies: the arrival minus
+    /// the frames delivered by then.
+    recent: std::collections::VecDeque<(Instant, Instant)>,
     window_started: Option<Instant>,
-    window_min_lag: Option<Duration>,
+    window_earliest: Option<Instant>,
+    /// How far behind the anchor arrivals settled once the stream had.
+    settled_lag: Option<Duration>,
+    /// The last window's lag behind the anchor.
+    last_lag: Option<Duration>,
+    /// After a loss: until when, and the lag arrivals had before it.
+    recovery: Option<(Instant, Duration)>,
 }
 
 #[cfg(target_os = "linux")]
 impl SteadyDeliveryClock {
     const WINDOW: Duration = Duration::from_secs(2);
     /// Bursts seen from PipeWire's pulse server hold back about three 25 ms
-    /// buffers; an arrival this much later means frames were lost.
+    /// buffers, and a latency ramp adds far less between nearby arrivals: an
+    /// arrival this much later than them means frames were lost.
     const LOSS: Duration = Duration::from_millis(150);
+    const RECENT: Duration = Duration::from_millis(500);
+    /// Long after the latency a stream starts with has settled.
+    const SETTLE: Duration = Duration::from_secs(30);
+    /// The most drift followed per window, 1000 ppm: well past any sound
+    /// card's clock, far below a latency ramp.
+    const MAX_DRIFT_STEP: Duration = Duration::from_millis(2);
+    /// How long after a loss the anchor follows the arrivals' lag back.
+    const RECOVERY: Duration = Duration::from_secs(15);
 
     fn timestamp(&mut self, received: Instant, frame_count: usize, rate: u32) -> Timestamp {
         if rate == 0 {
@@ -151,39 +178,93 @@ impl SteadyDeliveryClock {
         let frames = self.frames + frame_count as u64;
         self.frames = frames;
         let delivered = Duration::from_secs_f64(frames as f64 / f64::from(rate));
-        let Some(anchor) = self.anchor else {
-            self.anchor = Some(received.checked_sub(delivered).unwrap_or(received));
+        let implied = received.checked_sub(delivered).unwrap_or(received);
+        let Some(mut anchor) = self.anchor else {
+            self.anchor = Some(implied);
+            self.settle_at = Some(received + Self::SETTLE);
             self.window_started = Some(received);
+            self.recent.push_back((received, implied));
             return Timestamp::Instant(received);
         };
-        let predicted = anchor + delivered;
-        if received < predicted {
+        if implied < anchor {
             // Arrivals are never early, so this one shows the anchor was late.
-            let early = predicted.saturating_duration_since(received);
-            self.anchor = Some(anchor.checked_sub(early).unwrap_or(anchor));
-            return Timestamp::Instant(received);
+            if let Some(settled) = self.settled_lag.as_mut() {
+                *settled += anchor.saturating_duration_since(implied);
+            }
+            anchor = implied;
         }
-        let lag = received.saturating_duration_since(predicted);
-        if lag > Self::LOSS {
-            self.anchor = Some(anchor + lag);
+        // The last arrival always stays: after a stall longer than the window
+        // it is what the first arrival since is measured against.
+        while self.recent.len() > 1
+            && self
+                .recent
+                .front()
+                .is_some_and(|(at, _)| received.saturating_duration_since(*at) > Self::RECENT)
+        {
+            self.recent.pop_front();
+        }
+        if let Some(earliest) = self.recent.iter().map(|(_, implied)| *implied).min()
+            && implied.saturating_duration_since(earliest) > Self::LOSS
+        {
+            // The arrivals just before were this much earlier: the frames
+            // between were lost, so the audio after them moves on by as much.
+            anchor += implied.saturating_duration_since(earliest);
+            self.recent.clear();
             self.window_started = Some(received);
-            self.window_min_lag = None;
-            return Timestamp::Instant(received);
+            self.window_earliest = None;
+            let before = self.settled_lag.or(self.last_lag).unwrap_or_default();
+            self.recovery = Some((received + Self::RECOVERY, before));
+            self.settled_lag = None;
+            self.settle_at = Some(received + Self::RECOVERY);
         }
-        self.window_min_lag = Some(self.window_min_lag.map_or(lag, |min| min.min(lag)));
+        self.recent.push_back((received, implied));
+        self.window_earliest = Some(
+            self.window_earliest
+                .map_or(implied, |earliest| earliest.min(implied)),
+        );
         if self
             .window_started
             .is_some_and(|started| received.saturating_duration_since(started) >= Self::WINDOW)
         {
-            // Every arrival in the window was late by at least this much: the
-            // device clock runs slow, not a burst.
-            if let Some(min_lag) = self.window_min_lag.take() {
-                self.anchor = Some(anchor + min_lag);
+            let lag = self
+                .window_earliest
+                .take()
+                .map_or(Duration::ZERO, |earliest| {
+                    earliest.saturating_duration_since(anchor)
+                });
+            match (self.recovery, self.settled_lag) {
+                // Since the loss, arrivals lag the anchor by more (or less)
+                // than before it: the audio the server held went with the
+                // lost frames, or less was lost than the arrivals showed.
+                (Some((until, before)), _) if received < until => {
+                    if lag > before {
+                        anchor += lag - before;
+                    } else {
+                        anchor = anchor.checked_sub(before - lag).unwrap_or(anchor);
+                    }
+                }
+                // The window's arrivals lag the anchor by more than once the
+                // stream settled (the device clock runs slow) or by less (it
+                // runs fast): follow, a little per window.
+                (_, Some(settled)) => {
+                    if lag > settled {
+                        anchor += (lag - settled).min(Self::MAX_DRIFT_STEP);
+                    } else {
+                        let step = (settled - lag).min(Self::MAX_DRIFT_STEP);
+                        anchor = anchor.checked_sub(step).unwrap_or(anchor);
+                    }
+                }
+                (_, None) if self.settle_at.is_some_and(|at| received >= at) => {
+                    self.settled_lag = Some(lag);
+                    self.recovery = None;
+                }
+                _ => {}
             }
+            self.last_lag = Some(lag);
             self.window_started = Some(received);
-            return Timestamp::Instant(self.anchor.unwrap_or(anchor) + delivered);
         }
-        Timestamp::Instant(predicted)
+        self.anchor = Some(anchor);
+        Timestamp::Instant(anchor + delivered)
     }
 }
 
@@ -5661,6 +5742,52 @@ mod steady_delivery_clock_tests {
     }
 
     #[test]
+    fn a_stall_longer_than_the_recent_arrivals_still_marks_its_loss() {
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        // Nothing arrives for a second, and that second of audio is gone.
+        let loss = Duration::from_secs(1);
+        for buffer in 1..=400u32 {
+            let received =
+                start + period() * buffer + if buffer > 50 { loss } else { Duration::ZERO };
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            let off = apart(received, stamped);
+            assert!(off < Duration::from_millis(1), "buffer {buffer}: {off:?}");
+        }
+    }
+
+    #[test]
+    fn audio_the_server_held_is_counted_when_a_stall_drops_it() {
+        // As measured on PipeWire 1.0.5: latency settles at 155 ms, then a
+        // 1 s stall drops the 155 ms the server held as well, and latency
+        // builds up again over 10 s. Each buffer's capture time is known.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let stall_at = Duration::from_secs(40);
+        let stall = Duration::from_secs(1);
+        let held = Duration::from_millis(155);
+        let mut worst_after = Duration::ZERO;
+        for buffer in 1..=3_200u32 {
+            let mut captured = period() * buffer;
+            let latency_ms = if captured < stall_at {
+                (20.0 * captured.as_secs_f64()).min(155.0)
+            } else {
+                // Frames from the stall and the held audio before it are gone.
+                captured += stall + held;
+                let since = (captured - stall_at - stall).as_secs_f64();
+                (15.5 * since).min(155.0)
+            };
+            let received = start + captured + Duration::from_secs_f64(latency_ms / 1000.0);
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            if captured > stall_at + stall + Duration::from_secs(20) {
+                // Stamps line up with the capture times again.
+                worst_after = worst_after.max(apart(stamped, start + captured));
+            }
+        }
+        assert!(worst_after < Duration::from_millis(15), "{worst_after:?}");
+    }
+
+    #[test]
     fn lost_frames_are_marked_where_they_were_lost() {
         let start = Instant::now();
         let mut clock = SteadyDeliveryClock::default();
@@ -5675,17 +5802,83 @@ mod steady_delivery_clock_tests {
     }
 
     #[test]
-    fn a_slow_device_clock_is_followed_within_a_window() {
+    fn a_fast_device_clock_is_followed_once_the_stream_settles() {
+        // As measured on a PipeWire 1.0.5 guest: arrivals settle 155 ms
+        // behind, then the card's clock runs 90 ppm fast for half an hour.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut settled_off = None;
+        let mut last_off = Duration::ZERO;
+        for buffer in 1..=72_000u32 {
+            let due = period().mul_f64(1.0 - 0.000_09) * buffer;
+            let latency = Duration::from_secs_f64((20.0 * due.as_secs_f64()).min(155.0) / 1000.0);
+            let received = start + due + latency;
+            let stamped = instant(clock.timestamp(received, FRAMES, RATE));
+            last_off = apart(received, stamped);
+            if due >= Duration::from_secs(34) {
+                settled_off.get_or_insert(last_off);
+            }
+        }
+        let settled_off = settled_off.unwrap();
+        assert!(
+            last_off.abs_diff(settled_off) < Duration::from_millis(5),
+            "{last_off:?} vs {settled_off:?}"
+        );
+    }
+
+    #[test]
+    fn a_slow_device_clock_is_followed_once_the_stream_settles() {
         let start = Instant::now();
         let mut clock = SteadyDeliveryClock::default();
         // 0.1% slow: each buffer arrives a little later than its frames say.
+        let mut settled_off = None;
         let mut last_off = Duration::ZERO;
-        for buffer in 1..=2_000u32 {
+        for buffer in 1..=4_000u32 {
             let received = start + period().mul_f64(1.001) * buffer;
             let stamped = instant(clock.timestamp(received, FRAMES, RATE));
             last_off = apart(received, stamped);
+            if received.saturating_duration_since(start) >= Duration::from_secs(34) {
+                settled_off.get_or_insert(last_off);
+            }
         }
-        assert!(last_off < Duration::from_millis(5), "{last_off:?}");
+        // The drift no longer adds up once followed: 100 s in, the stamps
+        // trail the arrivals by what they did when the stream settled.
+        let settled_off = settled_off.unwrap();
+        assert!(
+            last_off.abs_diff(settled_off) < Duration::from_millis(5),
+            "{last_off:?} vs {settled_off:?}"
+        );
+    }
+
+    #[test]
+    fn latency_that_builds_as_the_card_wakes_is_not_lost_audio() {
+        // As measured on PipeWire 1.0.5: every frame arrives, but arrivals
+        // fall behind to 200 ms over 10 s, settle at 155 ms by 14 s and stay
+        // there; every sixth buffer comes 20 ms late on top.
+        let start = Instant::now();
+        let mut clock = SteadyDeliveryClock::default();
+        let mut stamps = Vec::new();
+        for buffer in 1..=4_000u32 {
+            let due = period() * buffer;
+            let secs = due.as_secs_f64();
+            let latency_ms = if secs < 10.0 {
+                20.0 * secs
+            } else if secs < 14.0 {
+                200.0 - 45.0 * (secs - 10.0) / 4.0
+            } else {
+                155.0
+            };
+            let burst = if buffer % 6 == 0 { 20.0 } else { 0.0 };
+            let received = start + due + Duration::from_secs_f64((latency_ms + burst) / 1000.0);
+            stamps.push(instant(clock.timestamp(received, FRAMES, RATE)));
+        }
+        for (index, pair) in stamps.windows(2).enumerate() {
+            let step = pair[1].saturating_duration_since(pair[0]);
+            assert!(
+                step.abs_diff(period()) < Duration::from_micros(50),
+                "buffer {index}: {step:?}"
+            );
+        }
     }
 
     #[test]
