@@ -41,9 +41,16 @@ fn average(@builtin(global_invocation_id) id: vec3<u32>) {
     let local = block - region.offset;
     let bx = local % region.blocks_x;
     let by = local / region.blocks_x;
-    let start = region.origin + vec2<u32>(bx, by) * region.block;
+    let full = vec2<u32>(region.block);
     let limit = min(region.origin + region.size, params.frame_size);
-    let end = min(start + vec2<u32>(region.block), limit);
+    // A block cut short by the region's edge averages a full block ending at
+    // that edge: a sliver a pixel or two wide averages to the source column
+    // itself and shows it.
+    let start = max(
+        min(region.origin + vec2<u32>(bx, by) * region.block, max(limit, full) - full),
+        region.origin,
+    );
+    let end = min(start + full, limit);
     let step = max(1u, region.block / 8u);
     var sum = vec4<f32>(0.0);
     var count = 0.0;

@@ -248,6 +248,51 @@ async fn pixelation_covers_the_region_and_nothing_else() {
 }
 
 #[tokio::test]
+async fn blocks_cut_short_by_the_region_edge_hide_the_stripes_under_them() {
+    let size = XY::new(320, 180);
+    let fixture = fixture(size).await;
+    let mut data = Vec::with_capacity((size.x * size.y * 4) as usize);
+    for _ in 0..size.y {
+        for x in 0..size.x {
+            let v = if x % 4 < 2 { 255 } else { 0 };
+            data.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let frame = DecodedFrame::new(data, size.x, size.y);
+    let regions = (0..5)
+        .map(|i| {
+            region(
+                &format!("r{i}"),
+                0.1,
+                0.1 + i as f32 * 0.15,
+                (100 + i) as f32 / size.x as f32,
+                0.04,
+            )
+        })
+        .collect();
+    fixture.constants.redactions.set(Some(redactions(regions)));
+    let mut layers = RendererLayers::new(&fixture.constants.device, &fixture.constants.queue);
+    let hidden = render(
+        &fixture,
+        &mut layers,
+        &project(on(RedactStyle::Pixelate)),
+        &frame,
+        1.0,
+    )
+    .await;
+    for i in 0..5u32 {
+        let y = ((0.12 + i as f32 * 0.15) * size.y as f32) as u32;
+        for x in 31..=132 + i {
+            let [r, ..] = px(&hidden, size.x, x, y);
+            assert!(
+                (40..=215).contains(&r),
+                "region {i} shows a stripe at {x},{y} ({r})"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_reused_frame_follows_changed_regions() {
     let size = XY::new(320, 180);
     let fixture = fixture(size).await;
