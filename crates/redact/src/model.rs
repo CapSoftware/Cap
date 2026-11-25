@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, bail};
 use ort::{
@@ -500,7 +500,7 @@ fn recognition_sessions() -> usize {
     (cores / 3).clamp(1, 3)
 }
 
-fn session(path: &PathBuf, threads: usize) -> anyhow::Result<Session> {
+fn session(path: &Path, threads: usize) -> anyhow::Result<Session> {
     let builder = Session::builder()
         .context("ONNX session builder")?
         .with_intra_threads(threads)
