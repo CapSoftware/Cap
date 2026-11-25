@@ -3,11 +3,13 @@ import { releaseProSeatSubscription } from "@cap/database/pro-seat-subscription"
 import {
 	organizationInvites,
 	organizationMembers,
+	organizations,
 	spaceMembers,
 	spaces,
+	users,
 } from "@cap/database/schema";
-import type { Organisation, User } from "@cap/web-domain";
-import { and, eq, inArray } from "drizzle-orm";
+import { Organisation, type User } from "@cap/web-domain";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 type Transaction = Parameters<
 	Parameters<ReturnType<typeof db>["transaction"]>[0]
@@ -63,4 +65,72 @@ export async function deleteOrganizationMembership(
 				eq(organizationInvites.invitedEmail, member.email.toLowerCase()),
 			),
 		);
+
+	await moveOrganizationPointersAway(tx, organizationId, member.userId);
+}
+
+async function moveOrganizationPointersAway(
+	tx: Transaction,
+	organizationId: Organisation.OrganisationId,
+	userId: User.UserId,
+) {
+	const [user] = await tx
+		.select({
+			activeOrganizationId: users.activeOrganizationId,
+			defaultOrgId: users.defaultOrgId,
+		})
+		.from(users)
+		.where(eq(users.id, userId))
+		.limit(1);
+	if (
+		!user ||
+		(user.activeOrganizationId !== organizationId &&
+			user.defaultOrgId !== organizationId)
+	)
+		return;
+
+	const [owned] = await tx
+		.select({ id: organizations.id })
+		.from(organizations)
+		.where(
+			and(
+				eq(organizations.ownerId, userId),
+				ne(organizations.id, organizationId),
+				isNull(organizations.tombstoneAt),
+			),
+		)
+		.limit(1);
+	const [joined] = owned
+		? []
+		: await tx
+				.select({ id: organizations.id })
+				.from(organizationMembers)
+				.innerJoin(
+					organizations,
+					eq(organizations.id, organizationMembers.organizationId),
+				)
+				.where(
+					and(
+						eq(organizationMembers.userId, userId),
+						ne(organizations.id, organizationId),
+						isNull(organizations.tombstoneAt),
+					),
+				)
+				.limit(1);
+	const fallback = owned?.id ?? joined?.id ?? null;
+
+	await tx
+		.update(users)
+		.set({
+			...(user.activeOrganizationId === organizationId
+				? {
+						activeOrganizationId:
+							fallback ?? Organisation.OrganisationId.make(""),
+					}
+				: {}),
+			...(user.defaultOrgId === organizationId
+				? { defaultOrgId: fallback }
+				: {}),
+		})
+		.where(eq(users.id, userId));
 }
