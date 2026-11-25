@@ -1,4 +1,10 @@
-import { type Folder, Policy, type Space } from "@cap/web-domain";
+import { findAccessibleOrganization } from "@cap/database/organization-pointer";
+import {
+	type Folder,
+	type Organisation,
+	Policy,
+	type Space,
+} from "@cap/web-domain";
 import { Effect } from "effect";
 
 import { Database } from "../Database.ts";
@@ -11,6 +17,7 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 	"FoldersPolicy",
 	{
 		effect: Effect.gen(function* () {
+			const db = yield* Database;
 			const repo = yield* FoldersRepo;
 			const spacesPolicy = yield* SpacesPolicy;
 			const orgsPolicy = yield* OrganisationsPolicy;
@@ -55,7 +62,18 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 			const canCreateIn = (spaceId: Space.SpaceIdOrOrganisationId) =>
 				Policy.policy(() => canManageSpaceOrOrg(spaceId));
 
-			return { canEdit, canCreateIn };
+			const canCreateInOrganization = (
+				organizationId: Organisation.OrganisationId,
+			) =>
+				Policy.policy((user) =>
+					db
+						.use((db) =>
+							findAccessibleOrganization(db, user.id, organizationId),
+						)
+						.pipe(Effect.map(Boolean)),
+				);
+
+			return { canEdit, canCreateIn, canCreateInOrganization };
 		}),
 		dependencies: [
 			FoldersRepo.Default,
