@@ -554,7 +554,15 @@ impl PromptPlanner {
 
     fn timeout_at(&self, slot: &Slot) -> Millis {
         let cap = slot.prompt.shown_at.plus(self.config.max_visible_ms);
-        if slot.prompt.countdown.is_some() || slot.hovered {
+        // A call app often shows its own card in the same corner when a call
+        // starts and outlasts a short prompt, so the prompt for a call that is
+        // still on stays until it is answered, the call ends, or the cap.
+        let live_call = slot.prompt.kind == PromptKind::Detected
+            && slot
+                .call
+                .as_ref()
+                .is_some_and(|key| self.calls.iter().any(|c| &c.key == key));
+        if slot.prompt.countdown.is_some() || slot.hovered || live_call {
             return cap;
         }
         let remaining = self.config.visible_ms.saturating_sub(slot.unhovered_used);
