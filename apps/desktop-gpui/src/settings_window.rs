@@ -2028,6 +2028,16 @@ impl SettingsWindow {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
+            .map(|el| {
+                #[cfg(feature = "gpui-rubber-band")]
+                {
+                    el.overscroll_none()
+                }
+                #[cfg(not(feature = "gpui-rubber-band"))]
+                {
+                    el
+                }
+            })
             .children(Page::ALL.iter().copied().map(|page| {
                 let selected = page == self.page;
                 div()

@@ -23,41 +23,85 @@ index 268fa89..920ebe2 100644
      }
  
 diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
-index c02bd16..cf81fca 100644
+index c02bd16..de829d7 100644
 --- a/crates/gpui/src/elements/div.rs
 +++ b/crates/gpui/src/elements/div.rs
-@@ -997,6 +997,13 @@ pub trait InteractiveElement: Sized {
+@@ -997,6 +997,56 @@ pub trait InteractiveElement: Sized {
          self.interactivity().capture_pinch(listener);
          self
      }
-+    /// Enable or disable macOS-style rubber-band overscroll on this scrollable element.
++    /// Enable or disable macOS-style rubber-band overscroll on both axes.
 +    #[cfg(feature = "rubber-band")]
-+    fn scroll_rubber_band(mut self, enabled: bool) -> Self {
-+        self.interactivity().disable_scroll_rubber_band = !enabled;
++    fn scroll_rubber_band(self, enabled: bool) -> Self {
++        let behavior = if enabled {
++            crate::OverscrollBehavior::Auto
++        } else {
++            crate::OverscrollBehavior::None
++        };
++        self.overscroll_behavior(behavior)
++    }
++
++    /// Set overscroll rubber-banding behavior on both axes (CSS `overscroll-behavior`).
++    #[cfg(feature = "rubber-band")]
++    fn overscroll_behavior(mut self, behavior: crate::OverscrollBehavior) -> Self {
++        self.interactivity().overscroll_behavior = point(behavior, behavior);
 +        self
++    }
++
++    /// Set horizontal overscroll rubber-banding behavior (CSS `overscroll-behavior-x`).
++    #[cfg(feature = "rubber-band")]
++    fn overscroll_behavior_x(mut self, behavior: crate::OverscrollBehavior) -> Self {
++        self.interactivity().overscroll_behavior.x = behavior;
++        self
++    }
++
++    /// Set vertical overscroll rubber-banding behavior (CSS `overscroll-behavior-y`).
++    #[cfg(feature = "rubber-band")]
++    fn overscroll_behavior_y(mut self, behavior: crate::OverscrollBehavior) -> Self {
++        self.interactivity().overscroll_behavior.y = behavior;
++        self
++    }
++
++    /// Disable overscroll rubber-banding on both axes.
++    #[cfg(feature = "rubber-band")]
++    fn overscroll_none(self) -> Self {
++        self.overscroll_behavior(crate::OverscrollBehavior::None)
++    }
++
++    /// Disable horizontal overscroll rubber-banding.
++    #[cfg(feature = "rubber-band")]
++    fn overscroll_x_none(self) -> Self {
++        self.overscroll_behavior_x(crate::OverscrollBehavior::None)
++    }
++
++    /// Disable vertical overscroll rubber-banding.
++    #[cfg(feature = "rubber-band")]
++    fn overscroll_y_none(self) -> Self {
++        self.overscroll_behavior_y(crate::OverscrollBehavior::None)
 +    }
 +
      /// Capture the given action, before normal action dispatch can fire.
      /// The fluent API equivalent to [`Interactivity::capture_action`].
      ///
-@@ -1963,6 +1970,10 @@ pub struct Interactivity {
+@@ -1963,6 +2013,10 @@ pub struct Interactivity {
      pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
      pub(crate) scroll_anchor: Option<ScrollAnchor>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
 +    #[cfg(feature = "rubber-band")]
-+    pub(crate) disable_scroll_rubber_band: bool,
++    pub(crate) overscroll_behavior: Point<crate::OverscrollBehavior>,
 +    #[cfg(feature = "rubber-band")]
 +    pub(crate) rubber_band_state: Option<Rc<RefCell<crate::RubberBandScrollState>>>,
      pub(crate) group: Option<SharedString>,
      /// The base style of the element, before any modifications are applied
      /// by focus, active, etc.
-@@ -2097,6 +2108,19 @@ impl Interactivity {
+@@ -2097,6 +2151,20 @@ impl Interactivity {
                      );
                  }
  
 +                #[cfg(feature = "rubber-band")]
 +                if self.scroll_offset.is_some()
-+                    && !self.disable_scroll_rubber_band
++                    && (self.overscroll_behavior.x != crate::OverscrollBehavior::None
++                        || self.overscroll_behavior.y != crate::OverscrollBehavior::None)
 +                    && let Some(element_state) = element_state.as_mut()
 +                {
 +                    self.rubber_band_state = Some(
@@ -71,7 +115,7 @@ index c02bd16..cf81fca 100644
                  let style = self.compute_style_internal(None, element_state.as_mut(), window, cx);
                  let layout_id = f(style, window, cx);
                  (layout_id, element_state)
-@@ -2271,11 +2295,66 @@ impl Interactivity {
+@@ -2271,11 +2339,66 @@ impl Interactivity {
              // were removed or the bounds became larger).
              let mut scroll_offset = scroll_offset.borrow_mut();
  
@@ -142,17 +186,63 @@ index c02bd16..cf81fca 100644
              }
  
              if let Some(mut scroll_handle_state) = tracked_scroll_handle {
-@@ -3091,6 +3170,8 @@ impl Interactivity {
+@@ -3091,17 +3214,25 @@ impl Interactivity {
              let line_height = window.line_height();
              let hitbox = hitbox.clone();
              let current_view = window.current_view();
 +            #[cfg(feature = "rubber-band")]
 +            let rubber_band_state = self.rubber_band_state.clone();
++            #[cfg(feature = "rubber-band")]
++            let overscroll_behavior = self.overscroll_behavior;
              window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                  if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                      let mut scroll_offset = scroll_offset.borrow_mut();
-@@ -3120,8 +3201,92 @@ impl Interactivity {
-                             delta_x = Pixels::ZERO;
+                     let old_scroll_offset = *scroll_offset;
+                     let delta = event.delta.pixel_delta(line_height);
++                    let is_precise = event.delta.precise();
+ 
+                     let mut delta_x = Pixels::ZERO;
+                     if overflow.x == Overflow::Scroll {
+                         if !delta.x.is_zero() {
+                             delta_x = delta.x;
+-                        } else if !restrict_scroll_to_axis && overflow.y != Overflow::Scroll {
++                        } else if !is_precise
++                            && !restrict_scroll_to_axis
++                            && overflow.y != Overflow::Scroll
++                        {
+                             delta_x = delta.y;
+                         }
+                     }
+@@ -3109,19 +3240,123 @@ impl Interactivity {
+                     if overflow.y == Overflow::Scroll {
+                         if !delta.y.is_zero() {
+                             delta_y = delta.y;
+-                        } else if !restrict_scroll_to_axis && overflow.x != Overflow::Scroll {
++                        } else if !is_precise
++                            && !restrict_scroll_to_axis
++                            && overflow.x != Overflow::Scroll
++                        {
+                             delta_y = delta.x;
+                         }
+                     }
+-                    if !allow_concurrent_scroll && !delta_x.is_zero() && !delta_y.is_zero() {
+-                        if delta_x.abs() > delta_y.abs() {
+-                            delta_y = Pixels::ZERO;
+-                        } else {
+-                            delta_x = Pixels::ZERO;
++                    if !allow_concurrent_scroll {
++                        if is_precise && !delta.x.is_zero() && !delta.y.is_zero() {
++                            if delta.x.abs() > delta.y.abs() {
++                                delta_y = Pixels::ZERO;
++                            } else {
++                                delta_x = Pixels::ZERO;
++                            }
++                        } else if !delta_x.is_zero() && !delta_y.is_zero() {
++                            if delta_x.abs() > delta_y.abs() {
++                                delta_y = Pixels::ZERO;
++                            } else {
++                                delta_x = Pixels::ZERO;
++                            }
                          }
                      }
 -                    scroll_offset.y += delta_y;
@@ -164,6 +254,11 @@ index c02bd16..cf81fca 100644
 +                        let mut rb = rb_state.borrow_mut();
 +                        let config = crate::rubber_band_config();
 +                        let now = std::time::Instant::now();
++                        let dt = rb
++                            .last_event_at
++                            .map(|last| now.saturating_duration_since(last).as_secs_f32())
++                            .unwrap_or(1.0 / 60.0);
++                        rb.last_event_at = Some(now);
 +                        if matches!(
 +                            event.scroll_phase,
 +                            crate::ScrollPhase::Began | crate::ScrollPhase::MayBegin
@@ -190,7 +285,9 @@ index c02bd16..cf81fca 100644
 +                                max_x,
 +                                dx,
 +                                w,
++                                dt,
 +                                is_momentum,
++                                overscroll_behavior.x != crate::OverscrollBehavior::None,
 +                                now,
 +                                &config,
 +                            );
@@ -200,7 +297,9 @@ index c02bd16..cf81fca 100644
 +                                max_y,
 +                                dy,
 +                                h,
++                                dt,
 +                                is_momentum,
++                                overscroll_behavior.y != crate::OverscrollBehavior::None,
 +                                now,
 +                                &config,
 +                            );
@@ -246,7 +345,7 @@ index c02bd16..cf81fca 100644
                      if *scroll_offset != old_scroll_offset {
                          cx.notify(current_view);
                      }
-@@ -3360,6 +3525,8 @@ pub struct InteractiveElementState {
+@@ -3360,6 +3595,8 @@ pub struct InteractiveElementState {
      /// blur). `None` means no activation key is pending.
      pub(crate) pending_keyboard_down: Option<Rc<RefCell<Option<u64>>>>,
      pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
@@ -330,15 +429,22 @@ index 1feee49..1c95a05 100644
  impl Sealed for ScrollWheelEvent {}
 diff --git a/crates/gpui/src/rubber_band.rs b/crates/gpui/src/rubber_band.rs
 new file mode 100644
-index 0000000..36bc79b
+index 0000000..8cdcb81
 --- /dev/null
 +++ b/crates/gpui/src/rubber_band.rs
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,328 @@
 +use std::f32::consts::PI;
 +use std::sync::RwLock;
 +use std::time::Instant;
 +
 +use crate::{Pixels, Point, Size};
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum OverscrollBehavior {
++    #[default]
++    Auto,
++    None,
++}
 +
 +#[derive(Clone, Copy, Debug, PartialEq)]
 +pub struct RubberBandConfig {
@@ -522,6 +628,7 @@ index 0000000..36bc79b
 +    pub(crate) scroll_max: Point<Pixels>,
 +    pub(crate) bounds_size: Size<Pixels>,
 +    pub(crate) momentum_bounced: bool,
++    pub(crate) last_event_at: Option<Instant>,
 +}
 +
 +impl RubberBandScrollState {
@@ -554,7 +661,9 @@ index 0000000..36bc79b
 +    max_scroll: f32,
 +    delta: f32,
 +    dim: f32,
++    dt: f32,
 +    is_momentum: bool,
++    allow_overscroll: bool,
 +    now: Instant,
 +    config: &RubberBandConfig,
 +) {
@@ -563,6 +672,13 @@ index 0000000..36bc79b
 +    }
 +    let min = -max_scroll.max(0.0);
 +    let max = 0.0;
++
++    if !allow_overscroll {
++        axis.raw_overscroll = 0.0;
++        axis.spring = None;
++        *offset = (*offset + delta).clamp(min, max);
++        return;
++    }
 +
 +    if axis.raw_overscroll == 0.0 {
 +        let next = *offset + delta;
@@ -573,7 +689,8 @@ index 0000000..36bc79b
 +                    *offset = max;
 +                } else {
 +                    let visual = rubber_band_offset(excess * config.momentum_carry, dim, config);
-+                    let velocity = (delta * 60.0 * config.momentum_carry).clamp(-2000.0, 2000.0);
++                    let velocity =
++                        (delta / dt.clamp(0.004, 0.05) * config.momentum_carry).clamp(-2400.0, 2400.0);
 +                    axis.spring = Some(SpringState::new(visual, velocity, true, now, config));
 +                    *offset = max + visual;
 +                }
@@ -588,7 +705,8 @@ index 0000000..36bc79b
 +                    *offset = min;
 +                } else {
 +                    let visual = rubber_band_offset(excess * config.momentum_carry, dim, config);
-+                    let velocity = (delta * 60.0 * config.momentum_carry).clamp(-2000.0, 2000.0);
++                    let velocity =
++                        (delta / dt.clamp(0.004, 0.05) * config.momentum_carry).clamp(-2400.0, 2400.0);
 +                    axis.spring = Some(SpringState::new(visual, velocity, false, now, config));
 +                    *offset = min + visual;
 +                }
