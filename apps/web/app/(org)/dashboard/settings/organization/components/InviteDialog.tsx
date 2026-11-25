@@ -123,13 +123,26 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 				toast.warning(
 					sendEmailNotifications
 						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
-						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
+						: `Could not add: ${result.failedEmails.join(", ")}`,
 				);
-			} else if (result.skippedEmails.length === 0) {
+			}
+			if (result.pendingEmails.length > 0) {
+				const pendingList = result.pendingEmails.join(", ");
+				toast.success(
+					result.addedEmails.length > 0
+						? `${result.addedEmails.length} added. ${pendingList} join after they sign in and accept the invite.`
+						: `${pendingList} join after they sign in and accept the invite.`,
+				);
+			} else if (
+				result.failedEmails.length === 0 &&
+				result.skippedEmails.length === 0
+			) {
 				toast.success(
 					sendEmailNotifications
 						? "Invites sent successfully"
-						: "Users added successfully",
+						: result.addedEmails.length > 0
+							? "Users added successfully"
+							: "Everyone is already a member",
 				);
 			}
 			setIsOpen(false);
@@ -237,7 +250,8 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 								Send invite email
 							</p>
 							<p className="mt-1 text-xs text-gray-10">
-								Turn off to add users without emailing them.
+								Turn off to add users on your email domain without emailing
+								them. Anyone else gets an invite to accept when they sign in.
 							</p>
 						</div>
 						<Switch
