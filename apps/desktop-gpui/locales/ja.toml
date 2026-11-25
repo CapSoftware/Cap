@@ -333,8 +333,13 @@ save_failed = "録画設定を保存できませんでした。もう一度お�
 [settings.quality.studio]
 balanced = "バランス"
 balanced_description = "適度なファイルサイズで鮮明なディテール。ほとんどの録画に最適です。"
+bitrate = "ビットレート"
+bitrate_description = "値を高くするとディテールが増え、ファイルも大きくなります。非常に高い値は、コンピュータのエンコーダが出せない場合があります。"
+bitrate_value = "{value} Mbps"
 compatibility = "小さいファイル"
 compatibility_description = "ディスク容量を節約します。細部がやわらかくなることがあり、特にカメラ映像で目立ちます。"
+custom = "カスタム"
+custom_description = "画面録画のビットレートを自分で設定します。"
 description = "画面をフル解像度（最大4K）、最高画質で録画し、編集用にコンピュータへ保存します。書き出しサイズは後でエディタで選びます。"
 recommended = "推奨"
 resolution = "解像度"

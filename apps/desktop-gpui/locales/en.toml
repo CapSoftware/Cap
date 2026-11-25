@@ -335,8 +335,13 @@ save_failed = "Couldn't save your recording settings. Please try again."
 [settings.quality.studio]
 balanced = "Balanced"
 balanced_description = "Sharp detail at a sensible file size. Right for most recordings."
+bitrate = "Bitrate"
+bitrate_description = "Higher keeps more detail and makes larger files. Very high values can be more than your computer's encoder delivers."
+bitrate_value = { text = "{value} Mbps", context = "{value} is a whole number of megabits per second, for example 30." }
 compatibility = "Smaller files"
 compatibility_description = "Saves disk space. Fine detail can soften, most of all on camera."
+custom = "Custom"
+custom_description = "Set the screen recording bitrate yourself."
 description = "Records your screen at full resolution, up to 4K, in the highest quality, and saves it to your computer for editing. You choose the export size later, in the editor."
 recommended = "Recommended"
 resolution = "Resolution"

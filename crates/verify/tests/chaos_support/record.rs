@@ -477,6 +477,7 @@ mod mac {
                             instant_mode: false,
                             ultra_quality: false,
                             compatibility_quality: false,
+                            video_bitrate: None,
                         },
                     )
                     .await

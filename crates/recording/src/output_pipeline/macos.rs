@@ -326,6 +326,7 @@ pub struct AVFoundationMp4MuxerConfig {
     pub instant_mode: bool,
     pub ultra_quality: bool,
     pub compatibility_quality: bool,
+    pub video_bitrate: Option<u32>,
 }
 
 impl Muxer for AVFoundationMp4Muxer {
@@ -360,6 +361,21 @@ impl Muxer for AVFoundationMp4Muxer {
                 video_config,
                 audio_config,
                 config.output_height,
+            )
+        } else if let Some(video_bitrate) = config.video_bitrate {
+            cap_enc_avfoundation::MP4Encoder::init_with_video_bitrate(
+                output_path.clone(),
+                video_config,
+                audio_config,
+                config.output_height,
+                if config.ultra_quality {
+                    cap_enc_avfoundation::BitrateProfile::Ultra
+                } else if config.compatibility_quality {
+                    cap_enc_avfoundation::BitrateProfile::Compatibility
+                } else {
+                    cap_enc_avfoundation::BitrateProfile::Balanced
+                },
+                video_bitrate,
             )
         } else if config.ultra_quality {
             cap_enc_avfoundation::MP4Encoder::init_ultra(
