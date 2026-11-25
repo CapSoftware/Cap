@@ -392,6 +392,15 @@ fn active(state: crate::meetings::ActiveState) -> crate::meetings::ActiveMeeting
 }
 
 #[test]
+fn the_resumed_after_sleep_line_ending_refreshes_the_indicator() {
+    let mut live = active(crate::meetings::ActiveState::Recording);
+    live.resumed_after_sleep = true;
+    let shown = super::ActiveKey::of(&live);
+    live.resumed_after_sleep = false;
+    assert_ne!(shown, super::ActiveKey::of(&live));
+}
+
+#[test]
 fn the_indicator_says_a_meeting_resumed_after_a_sleep_with_stop_at_hand() {
     use super::indicator::{Banner, banner, banner_title, countdown_until};
     use crate::meetings::{ActiveState, MeetingWarning};
