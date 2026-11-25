@@ -10,11 +10,12 @@ import {
 } from "@cap/web-backend";
 import { getRecordingObjectIdentity } from "@cap/web-backend/src/Storage/recording-object-identity";
 import { isInternalRecordingKey } from "@cap/web-backend/src/Storage/recording-output";
-import { Storage as StorageDomain, Video } from "@cap/web-domain";
+import { CurrentUser, Storage as StorageDomain, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
 import { isPrivateEditTranscriptObjectKey } from "@/lib/edit-transcript";
 import { runPromise } from "@/lib/server";
+import { isVideoLockedByShareableLinkLimit } from "@/lib/shareable-link-quota";
 import { playbackUrlValidity } from "@/lib/signed-url-validity";
 import { isEditSourceObjectKey } from "@/lib/video-edit-processing";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
@@ -225,6 +226,23 @@ export async function GET(request: NextRequest) {
 			)
 		) {
 			return yield* Effect.fail("not-found" as const);
+		}
+
+		if (
+			!hasKeyToken &&
+			!internalDownload &&
+			!key.startsWith(`${video.ownerId}/${video.id}/comments/`)
+		) {
+			const viewer = yield* Effect.serviceOption(CurrentUser);
+			if (!Option.exists(viewer, (user) => user.id === video.ownerId)) {
+				const locked = yield* Effect.tryPromise(() =>
+					isVideoLockedByShareableLinkLimit(video.id),
+				).pipe(
+					Effect.tapError(Effect.logError),
+					Effect.orElseSucceed(() => false),
+				);
+				if (locked) return yield* Effect.fail("not-found" as const);
+			}
 		}
 
 		const [storage] = yield* Storage.getAccessForVideo(video);

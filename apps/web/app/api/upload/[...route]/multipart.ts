@@ -46,6 +46,7 @@ import { runPromise } from "@/lib/server";
 import { startVideoProcessingWorkflow } from "@/lib/video-processing";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { zValidator } from "@/utils/zod-validator";
+import { hasDotSegment } from "../utils";
 import {
 	getSubpath,
 	isRawRecorderUpload,
@@ -113,6 +114,9 @@ app.post(
 		if ("error" in resolved)
 			return c.json({ error: resolved.error }, resolved.status);
 		const { fileKey } = resolved;
+		if (hasDotSegment(fileKey)) {
+			return c.json({ error: "Invalid file path" }, 400);
+		}
 		if (isNonMediaRawUploadKey(fileKey)) {
 			return c.json({ error: nonMediaUploadMessage }, 400);
 		}

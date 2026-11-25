@@ -23,6 +23,7 @@ import {
 	SPACE_RATE_MESSAGE,
 	spaceCreationLimited,
 } from "@/lib/workspace-creation-limits";
+import { getOrganizationAccess } from "./authorization";
 import { filterUsersInOrganization } from "./organization-member-ids";
 import {
 	getSpaceSettingsFromFormData,
@@ -44,7 +45,11 @@ export async function createSpace(
 	try {
 		const user = await getCurrentUser();
 
-		if (!user || !user.activeOrganizationId) {
+		if (
+			!user ||
+			!user.activeOrganizationId ||
+			!(await getOrganizationAccess(user.id, user.activeOrganizationId))
+		) {
 			return {
 				success: false,
 				error: "User not logged in or no active organization",
