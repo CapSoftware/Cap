@@ -158,17 +158,17 @@ static BEARER: LazyLock<Regex> = LazyLock::new(|| {
     re(r#"(?i)\b(?:bearer|basic)\s+([^\s"']{8,})|\btoken\s+([A-Za-z0-9_\-.=+/]{16,})"#)
 });
 /// A capitalised name of two to four words before an address in angle
-/// brackets: "Vesta Toro <vesta@example.com>".
+/// brackets: "Jane Roe <jane@example.com>".
 static DISPLAY_NAME: LazyLock<Regex> = LazyLock::new(|| {
     re(r"(?:^|[:\s,])(\p{Lu}[\p{L}'.\-]*(?:\s+\p{Lu}[\p{L}'.\-]*){1,3})\s*<[^<>\s]+@[^<>\s]+>")
 });
-/// A person field: "From: Vesta Toro", "Organizer: Mark Landis".
+/// A person field: "From: Jane Roe", "Organizer: John Roe".
 static PERSON_FIELD: LazyLock<Regex> = LazyLock::new(|| {
     re(
         r"^\s*(?:From|To|Cc|Bcc|Reply-To|Sender|Attendees?|Organi[sz]er|Assignee|Owner|Reporter|Host)\s*:\s*(\p{Lu}[\p{L}'.\-]*(?:\s+\p{Lu}[\p{L}'.\-]*){1,3})\s*(?:$|<|,|\()",
     )
 });
-/// "Hi Shelly,", "Dear Vesta Toro,".
+/// "Hi Juno,", "Dear Jane Roe,".
 static SALUTATION: LazyLock<Regex> = LazyLock::new(|| {
     re(
         r"^\s*(?:Hi|Hello|Hey|Dear|Thanks|Thank you)\s+(\p{Lu}[\p{L}'\-]+(?:\s+\p{Lu}[\p{L}'\-]+){0,2})\s*[,!]",
@@ -248,7 +248,7 @@ const NOT_NAMES: [&str; 16] = [
 ];
 
 /// Grows every finding to whole tokens, and a name over the capitalised
-/// words and initials right next to it ("Chong" in "Chong Casper" when only
+/// words and initials right next to it ("Rosa" in "Rosa Testa" when only
 /// the surname is a known name), so a mask never stops inside a word.
 fn widen(text: &str, findings: Vec<Finding>) -> Vec<Finding> {
     let chars = text.chars().collect::<Vec<_>>();
@@ -646,7 +646,7 @@ fn ips_from_columns(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
 }
 
 /// Names the page's layout gives away: the line under a sign-off ("Best" /
-/// "Vesta Toro"), and a name with a clock time beside it on its row (a
+/// "Jane Roe"), and a name with a clock time beside it on its row (a
 /// sender in a message list).
 fn names_from_layout(lines: &[LineContext<'_>], results: &mut [Vec<Finding>]) {
     let whole = |text: &str| {

@@ -32,23 +32,23 @@ fn none_of(text: &str, category: RedactCategory) {
 #[test]
 fn emails_inside_sentences() {
     has(
-        "Send it to jane.doe+cap@example.co.uk today",
+        "Send it to jane.doe+cap@example.org today",
         Email,
-        "jane.doe+cap@example.co.uk",
+        "jane.doe+cap@example.org",
     );
     has(
-        "From: Bob <bob_smith@mail.company.io>",
+        "From: Bob <bob_smith@mail.example.com>",
         Email,
-        "bob_smith@mail.company.io",
+        "bob_smith@mail.example.com",
     );
-    has("contact richie @ cap.so", Email, "richie @ cap.so");
+    has("contact jane @ example.com", Email, "jane @ example.com");
     has("typing jane.doe@exam", Email, "jane.doe@exam");
 }
 
 #[test]
 fn email_lookalikes() {
     none_of("@Override public void run()", Email);
-    none_of("follow @capdotso for updates", Email);
+    none_of("follow @exampleapp for updates", Email);
     none_of("npm i @types/node", Email);
 }
 
@@ -161,7 +161,7 @@ fn assigned_passwords_and_tokens() {
         "abcdef1234567890ABCDEF",
     );
     has(
-        "postgres://admin:s3cr3tpass@db.internal:5432/app",
+        "postgres://admin:s3cr3tpass@db.example.com:5432/app",
         Secret,
         "s3cr3tpass",
     );
@@ -224,11 +224,7 @@ fn links() {
 
 #[test]
 fn addresses() {
-    has(
-        "Ship to 1600 Pennsylvania Avenue NW",
-        Address,
-        "1600 Pennsylvania Avenue",
-    );
+    has("Ship to 1742 Maple Avenue NW", Address, "1742 Maple Avenue");
     has("Springfield, IL 62704", Address, "Springfield, IL 62704");
     has("London SW1A 1AA", Address, "SW1A 1AA");
     none_of("Updated 3 Files Today", Address);
@@ -504,7 +500,7 @@ fn runner_ups_that_fail_the_checksum_add_nothing() {
 
 #[test]
 fn a_nearly_skipped_space_does_not_hide_an_address() {
-    let text = "from 73.55.168. 144 port 22";
+    let text = "from 203.0.113. 144 port 22";
     let alternatives = alternatives_for(text, &[], &[(15, 0.4)]);
     let found = classify_line_with_alternatives(text, &alternatives);
     assert!(
@@ -561,7 +557,7 @@ fn a_phone_wrapped_after_its_hyphen_is_found_on_both_lines() {
 
 #[test]
 fn an_address_cut_off_at_the_end_of_a_line_is_hidden() {
-    let found = classify_line("VPN 100.22.195.");
+    let found = classify_line("VPN 198.51.100.");
     assert!(
         found
             .iter()
@@ -589,10 +585,8 @@ fn names_come_from_mail_structure() {
             })
             .collect::<Vec<_>>()
     };
-    assert!(
-        spans("From: Vesta Toro <myrtis+test@outlook.com>").contains(&"Vesta Toro".to_string())
-    );
-    assert!(spans("Hi Shelly,").contains(&"Shelly".to_string()));
+    assert!(spans("From: Jane Roe <juno+test@example.org>").contains(&"Jane Roe".to_string()));
+    assert!(spans("Hi Juno,").contains(&"Juno".to_string()));
     let at = |text, x: f32, y: f32| LineContext {
         text,
         x,
@@ -602,8 +596,8 @@ fn names_come_from_mail_structure() {
     };
     let lines = [
         at("Best", 0.33, 0.42),
-        at("Vesta Toro", 0.33, 0.44),
-        at("Chong Casper", 0.13, 0.37),
+        at("Jane Roe", 0.33, 0.44),
+        at("Rosa Testa", 0.13, 0.37),
         at("8:59 PM", 0.28, 0.374),
         at("Quick question", 0.13, 0.16),
         at("4:33 PM", 0.28, 0.16),
@@ -627,19 +621,19 @@ fn an_unspaced_iban_with_a_letter_digits_look_like_is_found() {
 
 #[test]
 fn findings_cover_whole_words_and_whole_names() {
-    let text = "Chong Casper replied to jane.doe@exam";
+    let text = "Rosa Testa replied to jane.doe@exam";
     let found = widen(
         text,
         vec![
             Finding {
                 category: Name,
-                start: 6,
-                end: 12,
+                start: 5,
+                end: 10,
             },
             Finding {
                 category: Email,
-                start: 25,
-                end: 33,
+                start: 23,
+                end: 31,
             },
         ],
     );
@@ -647,24 +641,24 @@ fn findings_cover_whole_words_and_whole_names() {
         found.contains(&Finding {
             category: Name,
             start: 0,
-            end: 12
+            end: 10
         }),
         "{found:?}"
     );
     assert!(
         found.contains(&Finding {
             category: Email,
-            start: 24,
-            end: 37
+            start: 22,
+            end: 35
         }),
         "{found:?}"
     );
     let greeting = widen(
-        "Hi Shelly,",
+        "Hi Juno,",
         vec![Finding {
             category: Name,
             start: 3,
-            end: 9,
+            end: 7,
         }],
     );
     assert_eq!(
@@ -672,7 +666,7 @@ fn findings_cover_whole_words_and_whole_names() {
         vec![Finding {
             category: Name,
             start: 3,
-            end: 9
+            end: 7
         }]
     );
 }
@@ -688,8 +682,8 @@ fn three_octets_in_an_ip_column_are_a_cut_address() {
     };
     let lines = [
         line("IP", 0.17),
-        line("192.87.27.1", 0.28),
-        line("159.182.129", 0.36),
+        line("198.51.100.7", 0.28),
+        line("198.51.100", 0.36),
         line("10.125.58.7", 0.44),
         LineContext {
             text: "1.2.3",
@@ -704,11 +698,11 @@ fn three_octets_in_an_ip_column_are_a_cut_address() {
     assert!(
         found[2]
             .iter()
-            .any(|f| f.category == Ip && f.start == 0 && f.end == 11),
+            .any(|f| f.category == Ip && f.start == 0 && f.end == 10),
         "{found:?}"
     );
     assert!(found[4].iter().all(|f| f.category != Ip), "{found:?}");
-    let alone = [line("159.182.129", 0.36)];
+    let alone = [line("198.51.100", 0.36)];
     let own = alone.iter().map(|l| classify_line(l.text)).collect();
     assert!(classify_frame_with(&alone, own)[0].is_empty());
 }

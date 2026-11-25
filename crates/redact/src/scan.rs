@@ -1163,7 +1163,7 @@ fn tile_blocks(map: &ChangeMap) -> Vec<Rect> {
 /// Remembers a sensitive string for matching other readings: long strings
 /// of the categories without shared boilerplate, names of two or more
 /// words (matched as whole words), and the name an address's local part
-/// spells ("brooks_mccann@" -> "brooks mccann").
+/// spells ("jane_roe@" -> "jane roe").
 fn record_known(
     known: &mut Vec<(RedactCategory, Vec<char>)>,
     category: RedactCategory,
@@ -1421,9 +1421,9 @@ mod tests {
         scan.end_time = Some(5.0);
         scan.frame_times = vec![0.0, 0.03, 2.0, 2.03];
         scan.readings.push(Reading {
-            text: "jo@x.io".into(),
-            spans: (0..7)
-                .map(|i| (i as f32 / 7.0, (i + 1) as f32 / 7.0))
+            text: "jo@example.net".into(),
+            spans: (0..14)
+                .map(|i| (i as f32 / 14.0, (i + 1) as f32 / 14.0))
                 .collect(),
             own: Vec::new(),
             cut_left: false,
@@ -1435,7 +1435,7 @@ mod tests {
             vec![Finding {
                 category: RedactCategory::Email,
                 start: 0,
-                end: 7,
+                end: 14,
             }],
         );
         let run = |t0, t1, y| Run {
@@ -1469,7 +1469,7 @@ mod tests {
 
     #[test]
     fn same_line_matches_at_another_place_and_after_reencoding() {
-        let glyphs = b"jesse@example.nl";
+        let glyphs = b"jess@example.net";
         let a = frame_with_line(20, 10, glyphs, 0);
         let b = frame_with_line(117, 63, glyphs, 6);
         let ta = thumbnail(&a.luma(), Rect::new(20.0, 10.0, 160.0, 20.0)).unwrap();
@@ -1523,33 +1523,33 @@ mod tests {
     fn known_names_match_whole_words_and_addresses_seed_them() {
         let mut known = Vec::new();
         let chars = |s: &str| s.chars().collect::<Vec<_>>();
-        record_known(&mut known, RedactCategory::Name, &chars("Vesta Toro"));
+        record_known(&mut known, RedactCategory::Name, &chars("Jane Roe"));
         record_known(
             &mut known,
             RedactCategory::Email,
-            &chars("brooks_mccann@proton.me"),
+            &chars("rosa_testa@example.org"),
         );
         record_known(
             &mut known,
             RedactCategory::Email,
-            &chars("myrtis+test99@outlook.com"),
+            &chars("juno+test99@example.org"),
         );
         let names = known
             .iter()
             .filter(|(c, _)| *c == RedactCategory::Name)
             .map(|(_, k)| k.iter().collect::<String>())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["vesta toro", "brooks mccann", "myrtis test"]);
+        assert_eq!(names, vec!["jane roe", "rosa testa", "juno test"]);
         assert_eq!(
-            whole_words(&chars("Best, Vesta Toro"), &chars("vesta toro")),
-            Some((6, 16))
+            whole_words(&chars("Best, Jane Roe"), &chars("jane roe")),
+            Some((6, 14))
         );
         assert_eq!(
-            whole_words(&chars("Brooks McCann joined"), &chars("brooks mccann")),
-            Some((0, 13))
+            whole_words(&chars("Rosa Testa joined"), &chars("rosa testa")),
+            Some((0, 10))
         );
         assert_eq!(
-            whole_words(&chars("Vesta Torosian"), &chars("vesta toro")),
+            whole_words(&chars("Jane Roebuck"), &chars("jane roe")),
             None
         );
     }
