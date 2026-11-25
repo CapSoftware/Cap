@@ -226,6 +226,7 @@ struct MockState {
     deleted: Vec<String>,
     deleted_on_web: Vec<String>,
     delete_on_completion: Vec<String>,
+    deleting_on_web: Vec<String>,
     replaced: Vec<String>,
     identities: BTreeMap<String, String>,
     problems: Vec<String>,
@@ -481,6 +482,12 @@ impl MockCap {
     /// found".
     pub(super) fn delete_on_web(&self, video_id: &str) {
         self.lock().deleted_on_web.push(video_id.to_string());
+    }
+
+    /// Starts deleting the cap on the web: its processing job is retired, so
+    /// the server answers completion calls with 409 code "video-deleting".
+    pub(super) fn start_deleting_on_web(&self, video_id: &str) {
+        self.lock().deleting_on_web.push(video_id.to_string());
     }
 
     /// Deletes the cap on the web just before its first completion call, after
@@ -1002,6 +1009,12 @@ impl Server {
                 }
                 if state.deleted_on_web.contains(&video_id) {
                     return reply(404, json!({ "error": "Video not found" }));
+                }
+                if state.deleting_on_web.contains(&video_id) {
+                    return reply(
+                        409,
+                        json!({ "success": false, "status": "reupload-required", "code": "video-deleting" }),
+                    );
                 }
                 state.confirmations.push(request.clone());
                 let Some(verification) = request.get("verification") else {

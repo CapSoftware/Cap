@@ -119,6 +119,39 @@ function run(ids: string[]) {
 	);
 }
 
+function readClickHouseInList(sql: string) {
+	const start = sql.indexOf("pathname IN (") + "pathname IN (".length;
+	const values: string[] = [];
+	let index = start;
+	while (sql[index] !== ")") {
+		if (sql[index] === "," || sql[index] === " ") {
+			index += 1;
+			continue;
+		}
+		if (sql[index] !== "'") throw new Error(`Unquoted SQL at ${index}`);
+		index += 1;
+		let value = "";
+		while (index < sql.length) {
+			const char = sql[index];
+			if (char === "\\") {
+				value += sql[index + 1];
+				index += 2;
+			} else if (char === "'" && sql[index + 1] === "'") {
+				value += "'";
+				index += 2;
+			} else if (char === "'") {
+				index += 1;
+				break;
+			} else {
+				value += char;
+				index += 1;
+			}
+		}
+		values.push(value);
+	}
+	return values;
+}
+
 beforeEach(() => {
 	mocks.readError = undefined;
 	mocks.rows = ["owned", "denied", "protected"].map((id) => ({
@@ -156,6 +189,21 @@ describe("bulk video analytics", () => {
 			expect.objectContaining({ id: "protected" }),
 			Option.some("password-hash"),
 		);
+	});
+
+	it("quotes ids with backslashes and quotes as single string values", async () => {
+		const ids = ["ab\\", "\\',x", "a\\\\'b"];
+		mocks.rows = ids.map((id) => ({
+			id,
+			ownerId: "owner",
+			orgId: "org",
+			public: false,
+			password: null,
+		}));
+		await run(ids);
+		const sql = String(mocks.query.mock.calls.at(-1)?.[0]);
+		expect(readClickHouseInList(sql)).toEqual(ids.map((id) => `/s/${id}`));
+		expect(sql).toContain("AND date BETWEEN");
 	});
 
 	it("does not read the database for an empty batch", async () => {
