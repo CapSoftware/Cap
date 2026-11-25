@@ -762,6 +762,11 @@ impl Actor {
                 return Err(self.preserve_failure_evidence(error));
             }
         };
+        #[cfg(target_os = "macos")]
+        let recording = CompletedRecording {
+            screen_frames: self.segment_factory.screen_frames.totals(),
+            ..recording
+        };
 
         if !self.all_tracks_stopped {
             return Err(self.preserve_failure_evidence(anyhow!(UNCONFIRMED_CAPTURE_CLEANUP)));
@@ -2970,6 +2975,7 @@ pub struct CompletedRecording {
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
     pub clean_stopped: Option<CleanStoppedStudio>,
+    pub screen_frames: Option<sources::screen_capture::frame_accounting::ScreenFrameTotals>,
 }
 
 /// Tracks starting within one audio output buffer of each other are treated
@@ -3380,6 +3386,7 @@ async fn stop_recording(
         meta,
         cursor_data: Default::default(),
         clean_stopped,
+        screen_frames: None,
         // display_source: actor.options.capture_target,
         // segments: actor.segments,
     })
@@ -3412,6 +3419,8 @@ struct SegmentPipelineFactory {
     /// The camera input of the segment built last, which a camera switch
     /// moves to another camera while that segment records.
     live_camera: Option<StudioCameraInput>,
+    #[cfg(target_os = "macos")]
+    screen_frames: sources::screen_capture::frame_accounting::ScreenFrameLedger,
 }
 
 #[cfg(target_os = "linux")]
@@ -3450,6 +3459,8 @@ impl SegmentPipelineFactory {
             #[cfg(windows)]
             encoder_preferences: crate::capture_pipeline::EncoderPreferences::new(),
             live_camera: None,
+            #[cfg(target_os = "macos")]
+            screen_frames: Default::default(),
         }
     }
 
@@ -3493,6 +3504,8 @@ impl SegmentPipelineFactory {
             segment_start_time,
             #[cfg(windows)]
             self.encoder_preferences.clone(),
+            #[cfg(target_os = "macos")]
+            &self.screen_frames,
         )
         .await
     }
@@ -3533,6 +3546,8 @@ impl SegmentPipelineFactory {
                 Timestamps::now(),
                 #[cfg(windows)]
                 self.encoder_preferences.clone(),
+                #[cfg(target_os = "macos")]
+                &self.screen_frames,
             )
             .await
         };
@@ -3678,6 +3693,8 @@ async fn create_segment_pipeline(
     quality: crate::StudioQuality,
     start_time: Timestamps,
     #[cfg(windows)] encoder_preferences: crate::capture_pipeline::EncoderPreferences,
+    #[cfg(target_os = "macos")]
+    screen_frames: &sources::screen_capture::frame_accounting::ScreenFrameLedger,
 ) -> anyhow::Result<Pipeline> {
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()
@@ -3872,6 +3889,8 @@ async fn create_segment_pipeline(
         {
             start_time = Timestamps::now();
         }
+        #[cfg(target_os = "macos")]
+        screen_frames.register(capture_source.frame_accounting());
 
         let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
             capture_source,
@@ -7971,6 +7990,7 @@ mod clean_stop_receipt_tests {
             meta: studio.as_ref().clone(),
             cursor_data: Default::default(),
             clean_stopped: receipt(metadata),
+            screen_frames: None,
         };
         let second = completed.clone();
         let first_receipt = completed.clean_stopped.as_ref().unwrap();
@@ -8017,6 +8037,7 @@ mod clean_stop_receipt_tests {
             meta: studio.as_ref().clone(),
             cursor_data: Default::default(),
             clean_stopped: receipt(oversized),
+            screen_frames: None,
         };
         assert!(completed.clean_stopped.is_none());
         let StudioRecordingMeta::MultipleSegments { inner } = completed.meta else {

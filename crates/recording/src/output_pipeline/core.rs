@@ -437,6 +437,13 @@ pub enum PipelineHealthEvent {
     EncoderTailLost {
         encoder: String,
     },
+    FramesLost {
+        source: String,
+        displayed: u64,
+        lost_in_capture: u64,
+        lost_before_encoder: u64,
+        lost_in_encoder: u64,
+    },
 }
 
 pub type HealthSender = tokio::sync::mpsc::Sender<PipelineHealthEvent>;
@@ -504,6 +511,22 @@ pub fn emit_health(tx: &HealthSender, event: PipelineHealthEvent) {
             health_event(14, "microphone_digital_silence", &[])
         }
         PipelineHealthEvent::EncoderTailLost { .. } => health_event(15, "encoder_tail_lost", &[]),
+        PipelineHealthEvent::FramesLost {
+            displayed,
+            lost_in_capture,
+            lost_before_encoder,
+            lost_in_encoder,
+            ..
+        } => health_event(
+            16,
+            "frames_lost",
+            &[
+                Field::number("displayed", *displayed),
+                Field::number("lost_in_capture", *lost_in_capture),
+                Field::number("lost_before_encoder", *lost_before_encoder),
+                Field::number("lost_in_encoder", *lost_in_encoder),
+            ],
+        ),
     }
     let _ = tx.try_send(event);
 }

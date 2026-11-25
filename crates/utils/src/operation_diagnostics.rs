@@ -26,7 +26,7 @@ static EMISSION_BUDGET: ByteBudget = ByteBudget(AtomicU64::new(0));
 pub const MAX_BYTES_PER_SECOND: u32 = 32 * 1024;
 type QueueLossCounter = Box<dyn Fn() -> usize + Send + Sync>;
 static QUEUE_LOSS_COUNTER: OnceLock<QueueLossCounter> = OnceLock::new();
-const HEALTH_KINDS: usize = 16;
+const HEALTH_KINDS: usize = 17;
 static HEALTH_COUNTS: [AtomicU64; HEALTH_KINDS] = [const { AtomicU64::new(0) }; HEALTH_KINDS];
 static HEALTH_LAST_MS: [AtomicU64; HEALTH_KINDS] = [const { AtomicU64::new(0) }; HEALTH_KINDS];
 

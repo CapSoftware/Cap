@@ -491,6 +491,7 @@ mod tests {
             meta: studio.as_ref().clone(),
             cursor_data: Default::default(),
             clean_stopped: CleanStoppedStudio::for_test(metadata, ProjectConfiguration::default()),
+            screen_frames: None,
         }
     }
 

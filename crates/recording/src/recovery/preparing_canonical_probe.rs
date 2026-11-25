@@ -1066,6 +1066,7 @@ async fn run_probe(config: &ProbeConfig, evidence: &mut Value) -> Result<()> {
         meta: studio,
         cursor_data: Default::default(),
         clean_stopped: Some(receipt),
+        screen_frames: None,
     };
     let (job, observer) =
         PreparingStudioJob::claim(&completed, 1).context("Fresh receipt claim failed")?;

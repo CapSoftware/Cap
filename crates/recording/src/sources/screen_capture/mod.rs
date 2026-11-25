@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use tracing::*;
 
 pub mod cadence;
+pub mod frame_accounting;
 
 #[cfg(target_os = "windows")]
 mod windows;
