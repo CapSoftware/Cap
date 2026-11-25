@@ -153,10 +153,12 @@ fn sound_server_output_device() -> Option<rodio::cpal::Device> {
 /// Finds the output Cap's sounds play through before anything plays.
 #[cfg(target_os = "linux")]
 pub(crate) fn prepare_output() {
-    std::thread::Builder::new()
+    if let Err(error) = std::thread::Builder::new()
         .name("app-sound-output".into())
         .spawn(|| {
-            sound_server_output_device();
+            let _ = sound_server_output_device();
         })
-        .ok();
+    {
+        tracing::warn!("could not look up the sound output early: {error}");
+    }
 }
