@@ -423,3 +423,82 @@ fn reverting_one_choice_keeps_the_others() {
     assert_eq!(both.left_out(SpeakerId(2)), None);
     assert_eq!(both.left_out(SpeakerId(3)), Some(true));
 }
+
+/// A real Zoom call: a partial line was first heard as voice 1, its final
+/// words went to voice 3, and voice 1 never had a line again. The people
+/// shown live are Person 1 and Person 2, and the notes keep them.
+#[test]
+fn a_voice_left_with_no_line_gives_its_number_to_the_next_person() {
+    let mut names = SpeakerNames::new(None);
+    let user = info(2, Track::Mic, 0, 1, true);
+    names.observe_speaking(&[user.clone()]);
+    names.observe_speaking(&[user.clone(), info(1, Track::System, 3_700, 1, false)]);
+    assert_eq!(names.label(SpeakerId(1)), Some(Label::Person(1)));
+    names.observe_speaking(&[user.clone(), info(3, Track::System, 3_700, 1, false)]);
+    names.observe_speaking(&[
+        user.clone(),
+        info(3, Track::System, 3_700, 1, false),
+        info(4, Track::System, 18_600, 1, false),
+    ]);
+    assert_eq!(names.label(SpeakerId(1)), None);
+    assert_eq!(names.label(SpeakerId(3)), Some(Label::Person(1)));
+    assert_eq!(names.label(SpeakerId(4)), Some(Label::Person(2)));
+    let changes = names.apply_final(&pass(
+        vec![
+            user,
+            info(3, Track::System, 3_700, 1, false),
+            info(4, Track::System, 18_600, 1, false),
+        ],
+        vec![],
+    ));
+    assert!(
+        changes
+            .iter()
+            .all(|c| c.id != SpeakerId(3) && c.id != SpeakerId(4)),
+        "{changes:?}"
+    );
+}
+
+/// A voice numbered before it was known as the user leaves no gap.
+#[test]
+fn the_user_found_after_a_number_leaves_no_gap() {
+    let mut names = SpeakerNames::new(None);
+    names.observe_speaking(&[info(2, Track::Mic, 0, 1, false)]);
+    assert_eq!(names.label(SpeakerId(2)), Some(Label::Person(1)));
+    names.observe_speaking(&[
+        info(2, Track::Mic, 0, 1, true),
+        info(3, Track::System, 900, 1, false),
+    ]);
+    assert_eq!(names.label(SpeakerId(2)), Some(Label::User));
+    assert_eq!(names.label(SpeakerId(3)), Some(Label::Person(1)));
+}
+
+/// Only a voice with no line and no choice of the person's gives its number
+/// back; everyone still shown keeps theirs, and a voice that comes back
+/// takes the lowest free number.
+#[test]
+fn named_or_chosen_voices_keep_their_numbers_and_shown_ones_never_move() {
+    let mut names = SpeakerNames::new(None);
+    let user = info(1, Track::Mic, 0, 1, true);
+    names.observe_speaking(&[
+        user.clone(),
+        info(2, Track::System, 900, 1, false),
+        info(3, Track::System, 1_800, 1, false),
+        info(4, Track::System, 2_700, 1, false),
+        info(5, Track::System, 3_600, 1, false),
+    ]);
+    names.rename(SpeakerId(2), "Dana");
+    names.set_left_out(SpeakerId(3), true);
+    names.observe_speaking(&[user.clone(), info(5, Track::System, 3_600, 1, false)]);
+    assert_eq!(names.label(SpeakerId(2)), Some(Label::Named("Dana".into())));
+    assert_eq!(names.label(SpeakerId(3)), Some(Label::Person(2)));
+    assert_eq!(names.label(SpeakerId(4)), None);
+    assert_eq!(names.label(SpeakerId(5)), Some(Label::Person(4)));
+    names.observe_speaking(&[
+        user,
+        info(4, Track::System, 2_700, 1, false),
+        info(5, Track::System, 3_600, 1, false),
+    ]);
+    assert_eq!(names.label(SpeakerId(4)), Some(Label::Person(3)));
+    assert_eq!(names.label(SpeakerId(5)), Some(Label::Person(4)));
+}
