@@ -66,7 +66,7 @@ jobs:
       - name: Red on the base, the same sequences through the base caller (observe)
         continue-on-error: true
         run: |
-          git checkout -q HEAD~2 -- apps/desktop-gpui/diarize/src/names.rs apps/desktop-gpui/diarize/src/names/tests.rs
+          git fetch -q --depth=1 origin 63c2c09f8e811a387149fa87b73e776a67991d0e && git checkout -q FETCH_HEAD -- apps/desktop-gpui/diarize/src/names.rs apps/desktop-gpui/diarize/src/names/tests.rs
           cat .ci/red.rs >> apps/desktop-gpui/diarize/src/names/tests.rs
           cargo +1.95.0 test --manifest-path apps/desktop-gpui/Cargo.toml --locked -p cap-diarize --lib names::tests::red_ 2>&1 | tail -40
 
