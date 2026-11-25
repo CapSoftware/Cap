@@ -1213,7 +1213,54 @@ impl AudioMuxer for WindowsFragmentedM4SCameraMuxer {
 
 #[cfg(test)]
 mod tests {
-    use super::reference_video_frame;
+    use super::{
+        EncoderFinishWait, FinishableEncoderState, SharedHealthSender,
+        finish_segmented_encoder_impl, reference_video_frame,
+    };
+    use std::{thread::JoinHandle, time::Duration};
+
+    struct ExitedEncoder(Option<JoinHandle<anyhow::Result<()>>>);
+
+    impl FinishableEncoderState for ExitedEncoder {
+        fn close_channel(&self, _: &str) {}
+
+        fn take_handle(&mut self) -> Option<JoinHandle<anyhow::Result<()>>> {
+            self.0.take()
+        }
+
+        fn finish_encoder(
+            &self,
+            _: Duration,
+            _: &str,
+            _: &SharedHealthSender,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn late_stop_still_ends_promptly_when_the_encoder_thread_died() {
+        let wait = EncoderFinishWait::default();
+        wait.wait_without_limit();
+        let limit = EncoderFinishWait::limit(Some(&wait));
+        assert_eq!(limit, Duration::MAX);
+        let failed = std::thread::spawn(|| Err(anyhow::anyhow!("encoder failed")));
+        let panicked = std::thread::spawn(|| -> anyhow::Result<()> { panic!("encoder panicked") });
+        for (thread, expected) in [(failed, "encoder failed"), (panicked, "panicked")] {
+            let started = std::time::Instant::now();
+            let error = finish_segmented_encoder_impl(
+                &mut ExitedEncoder(Some(thread)),
+                Duration::ZERO,
+                "test encoder",
+                "Failed to finish test encoder",
+                &SharedHealthSender::new(),
+                limit,
+            )
+            .expect_err("an encoder thread that died must fail the finish");
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+    }
 
     #[test]
     fn instant_fragment_frames_reuse_reference_counted_pixels() {

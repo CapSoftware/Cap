@@ -99,7 +99,7 @@ jobs:
         run: cargo test --locked -p cap-enc-ffmpeg --lib mux::segmented_stream -- --nocapture
 
       - name: Studio stop keeps recordings whose tracks finish late
-        run: cargo test --locked -p cap-recording --lib studio_recording::tests::late_stop_ -- --nocapture
+        run: cargo test --locked -p cap-recording --lib late_stop_ -- --nocapture
 
       - name: Encoder selection and isolated self-test tests
         run: cargo test --locked -p cap-media-info --lib intel_h264_mft && cargo test --locked -p cap-enc-ffmpeg --lib self_test -- --nocapture
