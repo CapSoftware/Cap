@@ -1133,9 +1133,6 @@ pub struct GeneralSettings {
     pub default_zoom_amount: Option<f32>,
     pub capture_keyboard_events: bool,
     pub macbook_notch_overlay: bool,
-    /// GPUI-only [`AUTO_REDACT_NEW_RECORDINGS_KEY`]: new Studio recordings
-    /// start with auto redact on and are scanned without waiting for the
-    /// editor. Off by default.
     pub auto_redact_new_recordings: bool,
     /// GPUI-only `recordingMarkerSound`: a short cue when a marker is added
     /// during a Studio recording. Off by default, because a microphone or

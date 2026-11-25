@@ -1354,8 +1354,6 @@ pub enum SegmentDetail {
     Scene {
         mode: SceneMode,
     },
-    /// How many detections the span hides, and each detection's own time on
-    /// the timeline packed into a few rows, drawn as thin marks in the span.
     Redact {
         count: u32,
         marks: std::sync::Arc<[RedactMark]>,
@@ -1948,9 +1946,6 @@ fn lane_count(segments: &[Segment]) -> u32 {
         .unwrap_or(0)
 }
 
-/// Where `start..end` of recording clip `recording_clip` (seconds of its
-/// segment time) plays on the timeline: once for every clip that shows part of
-/// it, at the clip's speed and past any holds.
 fn source_interval_spans(
     timeline: &TimelineConfiguration,
     offsets: &[f64],
@@ -1989,8 +1984,6 @@ fn source_interval_spans(
 /// `video_offsets[clip]` is how far the clip's display video timestamps run
 /// ahead of its segment time (see `cap_rendering::display_video_offset`);
 /// detections are stamped in video time.
-/// One detection inside a redact span: its time on the timeline and the row
-/// it is drawn in, so overlapping detections sit on separate rows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RedactMark {
     pub start: f64,
@@ -1998,12 +1991,8 @@ pub struct RedactMark {
     pub row: u8,
 }
 
-/// Rows a span's marks are packed into; more overlapping detections than this
-/// share the row that frees up first.
 pub const REDACT_MARK_ROWS: usize = 3;
 
-/// Packs time ranges sorted by start into rows, each range into the first row
-/// that has ended before it starts.
 fn pack_redact_marks(ranges: &[(f64, f64)]) -> Vec<RedactMark> {
     let mut row_ends = [f64::NEG_INFINITY; REDACT_MARK_ROWS];
     ranges
@@ -4596,15 +4585,12 @@ fn label_glyph(theme: &Theme, color: Hsla, path: &'static str, size: f32) -> Any
 
 /// The eleven tracks' label bodies: a primary name and, where the track has
 /// one, the value that qualifies it.
-/// Each detection of a redact span as a thin mark at its own time, rows
-/// stacked from the bottom of the span, under the label.
 fn render_redact_marks(
     segment: &Segment,
     marks: &[RedactMark],
     secs_per_pixel: f64,
     height: f32,
 ) -> AnyElement {
-    // Three thin rows in the band under the label, so the label stays clear.
     const MARK_HEIGHT: f32 = 2.;
     const MARK_GAP: f32 = 2.;
     const BOTTOM: f32 = 5.;
@@ -5135,9 +5121,6 @@ mod tests {
         assert!(model.redact.is_empty());
     }
 
-    /// The unread part of a recording lands on the timeline through every
-    /// clip that shows it, and only the piece that starts where the scan is
-    /// reading carries the reading edge.
     #[test]
     fn redact_pending_spans_follow_clips_and_mark_the_reading_edge() {
         let mut config = ProjectConfiguration::default();

@@ -186,15 +186,12 @@ pub struct JobUpdate {
     pub snapshot: Option<Arc<Redactions>>,
 }
 
-/// An editor's handle on a recording's scan.
 pub struct RedactJob {
     scan: Arc<Scan>,
     seen_generation: u64,
 }
 
 impl RedactJob {
-    /// Watches the scan of `project`, starting one if none is running.
-    /// `durations` are the display videos' lengths in seconds.
     pub fn attach_or_start(project: PathBuf, durations: Vec<f64>) -> Self {
         let scan = scan_for(project, Some(durations), false);
         scan.watchers.fetch_add(1, Ordering::AcqRel);
@@ -233,13 +230,10 @@ impl Drop for RedactJob {
     }
 }
 
-/// Scans a recording that just finished, at low priority, with no editor
-/// watching; an editor opened on it later attaches to this scan.
 pub fn start_background(project: PathBuf) {
     scan_for(project, None, true);
 }
 
-/// Whether a scan of `project` is running now.
 #[cfg(test)]
 fn is_scanning(project: &Path) -> bool {
     SCANS
@@ -495,9 +489,6 @@ mod tests {
         scan
     }
 
-    /// An editor opened on a recording whose scan is already running
-    /// watches that scan, hands it the durations it lacked, and leaves it
-    /// running when it closes; an editor-started scan stops with its editor.
     #[test]
     fn editor_attaches_to_a_running_background_scan() {
         let dir = tempfile::tempdir().unwrap();
@@ -529,8 +520,6 @@ mod tests {
         assert!(!running.background.load(Ordering::Relaxed));
     }
 
-    /// A saved scan is reused only when it is complete, made by this model,
-    /// and covers every segment.
     #[test]
     fn saved_scan_needs_this_model_and_every_segment() {
         let complete = Redactions {

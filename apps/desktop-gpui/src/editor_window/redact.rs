@@ -19,12 +19,9 @@ const CARD_DELAY: Duration = Duration::from_millis(350);
 const CARD_CLOSE_GRACE: Duration = Duration::from_millis(220);
 const CARD_WIDTH: f32 = 304.;
 const POLL: Duration = Duration::from_millis(250);
-/// How long the finished check stays in the chip before the icon returns.
 const FINISH_HOLD: Duration = Duration::from_millis(1600);
-/// How long the reading edge takes to fade once the scan is done.
 const FINISH_FADE: Duration = Duration::from_millis(500);
 const RING: f32 = 14.;
-/// One spin of the ring while the model loads.
 const SPIN_SECONDS: f32 = 1.1;
 
 #[derive(Default)]
@@ -41,12 +38,8 @@ pub(crate) struct RedactUi {
     pub(crate) redactions: Option<Arc<Redactions>>,
     loaded_for: Option<PathBuf>,
     highlighted: Vec<String>,
-    /// When the scan the user watched finished, for the chip's check.
     finished_at: Option<Instant>,
-    /// When the model started loading, for the ring's spin.
     preparing_since: Option<Instant>,
-    /// The detections of the "Hidden here" row under the pointer, outlined
-    /// in the preview instead of the whole selected span.
     hover_ids: Option<Vec<String>>,
     /// Set while the editor checks a saved scan that is probably still
     /// current: nothing shows unless it turns out to need a real scan.
@@ -130,8 +123,6 @@ fn redact_switch(theme: &Theme, on: bool) -> impl IntoElement {
         )
 }
 
-/// A ring that fills clockwise from twelve o'clock; `spin` instead turns a
-/// short arc, for while the scan has no progress to show yet.
 fn progress_ring(fraction: f32, spin: Option<f32>, arc: Hsla, track: Hsla) -> impl IntoElement {
     gpui::canvas(
         |_, _, _| {},
@@ -198,7 +189,6 @@ fn paint_arc(
     }
 }
 
-/// A round line cap, as the disc it is.
 fn paint_dot(window: &mut Window, center: gpui::Point<Pixels>, radius: f32, color: Hsla) {
     let mut builder = PathBuilder::fill();
     let steps = 12;
@@ -217,8 +207,6 @@ fn paint_dot(window: &mut Window, center: gpui::Point<Pixels>, radius: f32, colo
 }
 
 impl EditorWindow {
-    /// Whether the chip and the lane show a scan: one is preparing or running
-    /// and it is not the silent check of a saved scan.
     fn redact_scan_shown(&self) -> bool {
         self.project.auto_redact.enabled
             && !self.redact.quiet
@@ -228,8 +216,6 @@ impl EditorWindow {
             )
     }
 
-    /// The chip's icon: the eye, the progress ring while scanning, or a check
-    /// for a moment after the scan the user watched finishes.
     fn redact_chip_glyph(&self, ink: Hsla, window: &mut Window, cx: &gpui::App) -> AnyElement {
         let editor = self.theme.editor;
         let now = Instant::now();
@@ -355,9 +341,6 @@ impl EditorWindow {
             )
     }
 
-    /// Over the redact lane while a scan runs: the part of the timeline not
-    /// read yet is dimmed, and a soft accent edge marks where the scan is
-    /// reading, so the lane fills in left to right as detections arrive.
     pub(super) fn render_redact_scan_veil(
         &self,
         viewport_width: f32,
@@ -496,7 +479,6 @@ impl EditorWindow {
         Some(layer.into_any_element())
     }
 
-    /// Whether a scan is preparing or running.
     pub(crate) fn redact_running(&self) -> bool {
         matches!(
             self.redact.phase,
@@ -504,7 +486,6 @@ impl EditorWindow {
         )
     }
 
-    /// Whether a scan is reading frames (past loading the model).
     pub(crate) fn redact_scanning(&self) -> bool {
         matches!(self.redact.phase, Some(JobPhase::Scanning))
     }
@@ -525,8 +506,6 @@ impl EditorWindow {
         }
     }
 
-    /// Repaints what the scan's progress draws: the chip and the overlay
-    /// above the timeline rows. Nothing else re-renders.
     fn invalidate_redact_progress(&mut self, cx: &mut Context<Self>) {
         self.redact_chip_view.update(cx, |_, cx| cx.notify());
         self.invalidate_playhead_layer(cx);
@@ -949,8 +928,7 @@ impl EditorWindow {
 
     /// Starts, keeps or stops the scan to match the project, and hands the
     /// renderer what is known. Called after every project change, undo and
-    /// redo, and when the editor opens. A scan already running for this
-    /// recording (one started when it stopped) is watched, not restarted.
+    /// redo, and when the editor opens.
     pub(crate) fn sync_redact(&mut self, cx: &mut Context<Self>) {
         let Some(instance) = self.instance.clone() else {
             return;
@@ -1021,10 +999,7 @@ impl EditorWindow {
         self.invalidate_redact_progress(cx);
     }
 
-    /// Reads the scan's progress; returns whether it is still running. A
-    /// progress tick repaints the chip and the overlay; new detections also
-    /// rebuild the redact lane and, while paused, the preview frame. Only a
-    /// change of phase re-renders the editor.
+    /// Reads the scan's progress; returns whether it is still running.
     fn poll_redact(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(job) = self.redact.job.as_mut() else {
             return false;
@@ -1226,10 +1201,7 @@ impl EditorWindow {
     }
 
     /// The sidebar for selected redact spans: what is hidden there, by
-    /// category. Detections of one category that share a time range are one
-    /// row; rows are in reading order of where they sit on screen, each with a
-    /// small map of that place. Hovering a row outlines it in the preview,
-    /// clicking it moves the playhead there, and the eye keeps it visible.
+    /// category.
     pub(crate) fn render_redact_panel(
         &self,
         selection: &Selection,
@@ -1390,14 +1362,11 @@ impl EditorWindow {
     }
 }
 
-/// One "Hidden here" row: detections of one category over the same time on
-/// the timeline.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RedactPanelGroup {
     pub category: RedactCategory,
     pub start: f64,
     pub end: f64,
-    /// Where the first detection sits on screen, normalized.
     pub rect: cap_project::redaction::RedactRect,
     pub ids: Vec<String>,
 }
@@ -1443,7 +1412,6 @@ pub(crate) fn redact_panel_groups(
     groups
 }
 
-/// A small picture of the frame with the detection's place marked.
 fn redact_place_map(theme: &Theme, rect: cap_project::redaction::RedactRect) -> impl IntoElement {
     const W: f32 = 44.;
     const H: f32 = 27.;
@@ -1538,9 +1506,6 @@ mod tests {
         (start, end, region)
     }
 
-    /// Rows join detections of one category over the same time and read top
-    /// to bottom, left to right, so a panel of identical time ranges becomes a
-    /// few rows that can be told apart by place.
     #[test]
     fn place_mark_stays_inside_the_map_for_boxes_past_the_frame() {
         let rect = cap_project::redaction::RedactRect {

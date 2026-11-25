@@ -2086,8 +2086,6 @@ fn enable_studio_sound(project_path: &std::path::Path) -> std::io::Result<()> {
     result
 }
 
-/// Turns auto redact on in a new recording's project, keeping any other
-/// auto redact settings already there.
 fn enable_auto_redact(project_path: &std::path::Path) -> std::io::Result<()> {
     let path = project_path.join("project-config.json");
     let mut config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
