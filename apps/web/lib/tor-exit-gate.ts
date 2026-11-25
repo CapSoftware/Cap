@@ -29,7 +29,8 @@ export type TorExitSurface =
 	| "cli-authorize"
 	| "mcp-authorize";
 
-type LoadedList = { addresses: ReadonlySet<string>; loadedAt: number };
+type FetchedList = { addresses: ReadonlySet<string>; listedAt: number };
+type LoadedList = FetchedList & { loadedAt: number };
 
 let loadedList: LoadedList | null = null;
 let pendingLoad: Promise<LoadedList | null> | null = null;
@@ -74,7 +75,16 @@ export function parseTorExitList(text: string): ReadonlySet<string> | null {
 	return addresses.size >= MIN_LIST_ENTRIES ? addresses : null;
 }
 
-async function fetchTorExitList(): Promise<ReadonlySet<string>> {
+// The framework cache keeps serving its last good response when revalidation
+// fails, so the list's age comes from the upstream headers, not the fetch time.
+function upstreamListedAt(headers: Headers, now: number): number {
+	const stamp = Date.parse(
+		headers.get("last-modified") ?? headers.get("date") ?? "",
+	);
+	return Number.isFinite(stamp) ? Math.min(stamp, now) : now;
+}
+
+async function fetchTorExitList(): Promise<FetchedList> {
 	const response = await fetch(TOR_EXIT_LIST_URL, {
 		next: { revalidate: LIST_REVALIDATE_SECONDS },
 		signal: AbortSignal.timeout(LIST_FETCH_TIMEOUT_MS),
@@ -86,15 +96,18 @@ async function fetchTorExitList(): Promise<ReadonlySet<string>> {
 	if (text.length > MAX_LIST_BYTES) throw new Error("List too large");
 	const addresses = parseTorExitList(text);
 	if (!addresses) throw new Error("Unexpected list format");
-	return addresses;
+	const now = Date.now();
+	const listedAt = upstreamListedAt(response.headers, now);
+	if (now - listedAt >= LIST_MAX_AGE_MS) throw new Error("List is out of date");
+	return { addresses, listedAt };
 }
 
 function startListLoad(): Promise<LoadedList | null> {
 	if (pendingLoad) return pendingLoad;
 	pendingLoadStartedAt = Date.now();
 	const load = fetchTorExitList().then(
-		(addresses) => {
-			loadedList = { addresses, loadedAt: Date.now() };
+		(fetched) => {
+			loadedList = { ...fetched, loadedAt: Date.now() };
 			return loadedList;
 		},
 		(error: unknown) => {
@@ -130,12 +143,11 @@ function waitAtMost<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 export async function getTorExitList(
 	now = Date.now(),
 ): Promise<ReadonlySet<string> | null> {
-	if (loadedList && now - loadedList.loadedAt < LIST_FRESH_MS)
-		return loadedList.addresses;
 	const usable =
-		loadedList && now - loadedList.loadedAt < LIST_MAX_AGE_MS
+		loadedList && now - loadedList.listedAt < LIST_MAX_AGE_MS
 			? loadedList
 			: null;
+	if (usable && now - usable.loadedAt < LIST_FRESH_MS) return usable.addresses;
 	if (now - lastFailureAt < RETRY_AFTER_FAILURE_MS)
 		return usable?.addresses ?? null;
 	const loading = startListLoad();

@@ -180,6 +180,38 @@ describe("getTorExitList cache", () => {
 		expect(await getTorExitList(now + 25 * 60 * 60_000)).toBeNull();
 	});
 
+	it("refuses a list whose upstream copy is more than a day old", async () => {
+		const lastModified = new Date(Date.now() - 25 * 60 * 60_000).toUTCString();
+		fetchMock.mockResolvedValue(
+			listResponse(exitList(), { headers: { "last-modified": lastModified } }),
+		);
+
+		expect(await getTorExitList()).toBeNull();
+		expect(console.warn).toHaveBeenCalledWith(
+			"[tor-exit] List unavailable, allowing requests",
+			{ error: "List is out of date" },
+		);
+	});
+
+	it("does not extend a list's age when the cache keeps returning the same copy", async () => {
+		vi.useFakeTimers();
+		const start = Date.now();
+		const lastModified = new Date(start - 23 * 60 * 60_000).toUTCString();
+		fetchMock.mockImplementation(async () =>
+			listResponse(exitList(), { headers: { "last-modified": lastModified } }),
+		);
+
+		expect((await getTorExitList())?.has(LISTED)).toBe(true);
+
+		vi.setSystemTime(start + 30 * 60_000);
+		expect((await getTorExitList())?.has(LISTED)).toBe(true);
+		await pendingTorExitListLoad();
+
+		vi.setSystemTime(start + 61 * 60_000);
+		expect(await getTorExitList()).toBeNull();
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
 	it("fails open when the list cannot be fetched", async () => {
 		fetchMock.mockRejectedValue(new Error("offline"));
 
