@@ -14,6 +14,9 @@ pub struct MicClient {
     pub platform_id: String,
     pub pid: u32,
     pub device_uid: Option<String>,
+    /// Every input device the client records from (all sub-devices of an aggregate);
+    /// `device_uid` is the first. Empty where the platform reports one device or none.
+    pub device_uids: Vec<String>,
 }
 
 impl MicClient {
@@ -22,11 +25,20 @@ impl MicClient {
             platform_id: platform_id.into(),
             pid,
             device_uid: None,
+            device_uids: Vec::new(),
         }
     }
 
     pub fn on_device(mut self, device_uid: impl Into<String>) -> Self {
-        self.device_uid = Some(device_uid.into());
+        let device_uid = device_uid.into();
+        self.device_uids = vec![device_uid.clone()];
+        self.device_uid = Some(device_uid);
+        self
+    }
+
+    pub fn on_devices(mut self, device_uids: &[&str]) -> Self {
+        self.device_uids = device_uids.iter().map(|uid| uid.to_string()).collect();
+        self.device_uid = self.device_uids.first().cloned();
         self
     }
 }
@@ -387,9 +399,18 @@ impl Detector {
         if self.config.own_pids.contains(&client.pid) || apps::is_own_process(&client.platform_id) {
             return true;
         }
-        let Some(device) = &client.device_uid else {
-            return false;
+        // A client on an aggregate device reports every sub-device, in the aggregate's order: it
+        // is on a virtual input only when all of them are virtual (a real microphone aggregated
+        // with a loopback device is still a real microphone, whichever comes first).
+        let devices: Vec<&String> = if client.device_uids.is_empty() {
+            client.device_uid.iter().collect()
+        } else {
+            client.device_uids.iter().collect()
         };
+        !devices.is_empty() && devices.iter().all(|device| self.virtual_device(device))
+    }
+
+    fn virtual_device(&self, device: &str) -> bool {
         let device = device.to_lowercase();
         self.config
             .ignored_device_substrings

@@ -195,6 +195,9 @@ pub struct MicClient {
     pub raw_id: String,
     pub pid: u32,
     pub device_uid: Option<String>,
+    /// Every input device the process records from. On an aggregate device macOS reports each
+    /// sub-device in the aggregate's order, never the aggregate; `device_uid` is the first.
+    pub device_uids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

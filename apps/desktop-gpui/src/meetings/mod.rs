@@ -1154,6 +1154,7 @@ impl Meetings {
                 platform_id: c.id.clone(),
                 pid: c.pid,
                 device_uid: c.device_uid.clone(),
+                device_uids: c.device_uids.clone(),
             })
             .collect();
         self.latest_snapshot = Some(snapshot);
@@ -4431,6 +4432,7 @@ impl Meetings {
                 platform_id: c.id.clone(),
                 pid: c.pid,
                 device_uid: c.device_uid.clone(),
+                device_uids: c.device_uids.clone(),
             })
             .collect();
         if !snapshot.attributed || !self.detector.holds_mic(app_id, &clients) {
