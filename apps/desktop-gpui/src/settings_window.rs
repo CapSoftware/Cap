@@ -274,11 +274,20 @@ const FRAME_RATE_OPTIONS: &[(StudioFrameRate, Label)] = &[
     ),
 ];
 
-const DISPLAY_RATE_CEILING: Option<u32> = if cfg!(target_os = "linux") {
-    Some(60)
-} else {
-    None
-};
+fn display_rate_ceiling_for(x11_session: bool) -> Option<u32> {
+    x11_session.then_some(60)
+}
+
+fn display_rate_ceiling() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        display_rate_ceiling_for(!crate::app_windows::uses_wayland())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        display_rate_ceiling_for(false)
+    }
+}
 
 fn frame_rate_options(
     ceiling: Option<u32>,
@@ -1629,8 +1638,8 @@ impl SettingsWindow {
             }
             MenuKind::MaxFps => {
                 let current =
-                    shown_frame_rate(self.settings.studio_frame_rate(), DISPLAY_RATE_CEILING);
-                frame_rate_options(DISPLAY_RATE_CEILING)
+                    shown_frame_rate(self.settings.studio_frame_rate(), display_rate_ceiling());
+                frame_rate_options(display_rate_ceiling())
                     .map(|(rate, label)| ui::MenuItem::new(label(), *rate == current))
                     .collect()
             }
@@ -1671,7 +1680,7 @@ impl SettingsWindow {
                 }
             }
             MenuKind::MaxFps => {
-                if let Some((rate, _)) = frame_rate_options(DISPLAY_RATE_CEILING).nth(index) {
+                if let Some((rate, _)) = frame_rate_options(display_rate_ceiling()).nth(index) {
                     self.select_studio_frame_rate(*rate, cx);
                 }
             }
@@ -3648,8 +3657,8 @@ impl SettingsWindow {
     }
 
     fn render_studio_frame_rate(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let current = shown_frame_rate(self.settings.studio_frame_rate(), DISPLAY_RATE_CEILING);
-        let label = frame_rate_options(DISPLAY_RATE_CEILING)
+        let current = shown_frame_rate(self.settings.studio_frame_rate(), display_rate_ceiling());
+        let label = frame_rate_options(display_rate_ceiling())
             .find(|(rate, _)| *rate == current)
             .map(|(_, label)| label().to_string())
             .unwrap_or_else(|| self.settings.max_fps.to_string());
@@ -5211,7 +5220,7 @@ mod tests {
     }
 
     #[test]
-    fn linux_offers_only_the_rates_it_can_record() {
+    fn x11_offers_only_the_rates_it_can_record() {
         use StudioFrameRate::{Fixed, MatchDisplay};
         assert_eq!(
             offered(Some(60)),
@@ -5231,10 +5240,10 @@ mod tests {
                 MatchDisplay,
             ]
         );
-        assert_eq!(
-            DISPLAY_RATE_CEILING,
-            cfg!(target_os = "linux").then_some(60)
-        );
+        assert_eq!(display_rate_ceiling_for(true), Some(60));
+        assert_eq!(display_rate_ceiling_for(false), None);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(display_rate_ceiling(), None);
     }
 
     #[test]
