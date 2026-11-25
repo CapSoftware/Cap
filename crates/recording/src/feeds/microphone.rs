@@ -691,6 +691,33 @@ impl StreamHealth {
     }
 }
 
+/// A rebuild that failed because the microphone is gone: its error says
+/// there was nothing to open, or the microphone is no longer present (the
+/// pulse plugin reports a server with no source left as an I/O error).
+#[cfg(target_os = "linux")]
+fn rebuild_lost_device(error: &SetInputError, present: impl FnOnce() -> bool) -> bool {
+    rebuild_found_no_device(error) || !present()
+}
+
+/// A rebuild that failed because there is nothing to open: the device was
+/// unplugged, or the sound server has no source left to route it to.
+#[cfg(target_os = "linux")]
+fn rebuild_found_no_device(error: &SetInputError) -> bool {
+    match error {
+        SetInputError::DeviceNotFound => true,
+        SetInputError::BuildStream(message) => [
+            // cpal's BuildStreamError::DeviceNotAvailable
+            "no longer available",
+            // ALSA: the PCM, or the sound server's target for it, is gone
+            "No such file or directory",
+            "No such device",
+        ]
+        .iter()
+        .any(|gone| message.contains(gone)),
+        _ => false,
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub(crate) struct RecordingSourceHealth(Arc<std::sync::Mutex<RecordingSourceHealthState>>);
@@ -702,6 +729,10 @@ struct RecordingSourceHealthState {
     pending: Option<Arc<StreamHealth>>,
     recovery_origin: Option<u32>,
     terminal: Option<String>,
+    last_frame: Option<Instant>,
+    /// Since the last frame before a rebuild found no device to open.
+    missing_since: Option<Instant>,
+    missing_total: Duration,
 }
 
 #[cfg(target_os = "linux")]
@@ -714,6 +745,9 @@ impl RecordingSourceHealth {
                 pending: None,
                 recovery_origin: None,
                 terminal: None,
+                last_frame: None,
+                missing_since: None,
+                missing_total: Duration::ZERO,
             },
         )))
     }
@@ -733,21 +767,34 @@ impl RecordingSourceHealth {
             .store(true, Ordering::Release);
     }
 
+    /// `present` says whether the selected microphone is still there.
     fn observe_ready(
         &self,
         generation: u64,
         id: u32,
         ready: StreamReadyFuture,
+        present: impl FnOnce() -> bool + Send + 'static,
     ) -> StreamReadyFuture {
         let health = self.clone();
         ready
             .map(move |result| {
-                if let Err(error) = &result {
-                    health.fail_reconnect(
+                match &result {
+                    // The device is gone (unplugged, or the sound server has
+                    // no source left): as on Windows, the recording goes on
+                    // with silence and the next reconnect attempt tries again.
+                    // Stop still reports it if no replacement ever delivers.
+                    Err(error) if rebuild_lost_device(error, present) => {
+                        warn!(
+                            "Recording microphone is gone ({error}); recording silence until it returns"
+                        );
+                        health.lose_reconnect(generation, id);
+                    }
+                    Err(error) => health.fail_reconnect(
                         generation,
                         id,
                         format!("Requested audio stream rebuild failed: {error}"),
-                    );
+                    ),
+                    Ok(_) => {}
                 }
                 result
             })
@@ -815,6 +862,30 @@ impl RecordingSourceHealth {
         }
     }
 
+    /// A rebuild that found no device: not terminal, but unresolved at Stop
+    /// unless a later attempt replaces it.
+    fn lose_reconnect(&self, generation: u64, id: u32) {
+        let mut state = self.0.lock().unwrap();
+        if state.generation == generation
+            && let Some(pending) = state.pending.as_ref().filter(|pending| pending.id == id)
+        {
+            pending.failed.store(true, Ordering::Release);
+            let since = state.last_frame.unwrap_or_else(Instant::now);
+            state.missing_since.get_or_insert(since);
+        }
+    }
+
+    /// How long the microphone was missing in this recording, once it is back.
+    pub(crate) fn missing_report(&self) -> Option<String> {
+        let state = self.0.lock().unwrap();
+        (state.missing_total > Duration::ZERO).then(|| {
+            format!(
+                "Recording microphone was missing for {:.1} s",
+                state.missing_total.as_secs_f64()
+            )
+        })
+    }
+
     pub(crate) fn fail(&self, error: String) {
         self.0.lock().unwrap().terminal.get_or_insert(error);
     }
@@ -838,6 +909,18 @@ impl RecordingSourceHealth {
 
     pub(crate) fn accepted_frame(&self, id: u32) {
         let mut state = self.0.lock().unwrap();
+        let now = Instant::now();
+        if state.current.id == id
+            && let Some(since) = state.missing_since.take()
+        {
+            let missing = now.saturating_duration_since(since);
+            state.missing_total += missing;
+            warn!(
+                missing_ms = missing.as_millis() as u64,
+                "Recording microphone is back after being missing"
+            );
+        }
+        state.last_frame = Some(now);
         if state.current.id == id
             && state.terminal.is_none()
             && !state.current.failed.load(Ordering::Acquire)
@@ -849,6 +932,14 @@ impl RecordingSourceHealth {
 
     pub(crate) fn stop_error(&self) -> Option<String> {
         let state = self.0.lock().unwrap();
+        if state.terminal.is_none()
+            && let Some(since) = state.missing_since
+        {
+            return Some(format!(
+                "Requested microphone was missing for {:.0} s at Stop: it was unplugged and did not come back",
+                since.elapsed().as_secs_f64()
+            ));
+        }
         state.terminal.clone().or_else(|| {
             (state.current.failed.load(Ordering::Acquire)
                 || state
@@ -1490,7 +1581,12 @@ impl MicrophoneFeed {
     pub fn is_connected(name: &str) -> bool {
         #[cfg(target_os = "linux")]
         {
-            if name == "default" || alsa_card_names().iter().any(|card| card == name) {
+            if name == "default" {
+                // Its sound server has an input for it: once none is left
+                // (the only microphone unplugged) the recording warns.
+                return crate::sources::screen_capture::default_microphone_present();
+            }
+            if alsa_card_names().iter().any(|card| card == name) {
                 return true;
             }
             if !ALSA_SOFTWARE_INPUTS.contains(&name) {
@@ -2353,6 +2449,8 @@ struct ReconnectSystemInput {
 struct SystemReconnectFailed {
     id: u32,
     generation: u64,
+    /// The rebuild found nothing to open (see [`rebuild_found_no_device`]).
+    device_gone: bool,
 }
 
 struct InputConnectFailed {
@@ -2631,7 +2729,10 @@ impl MicrophoneFeed {
                 };
                 #[cfg(target_os = "linux")]
                 let ready_future = if let Some(health) = &self.recording_health {
-                    health.observe_ready(generation, new_id, ready_future)
+                    let label = label.clone();
+                    health.observe_ready(generation, new_id, ready_future, move || {
+                        Self::is_connected(&label)
+                    })
                 } else {
                     ready_future
                 };
@@ -2701,6 +2802,9 @@ impl MicrophoneFeed {
                                     .tell(SystemReconnectFailed {
                                         id: new_id,
                                         generation,
+                                        device_gone: rebuild_lost_device(&_error, || {
+                                            Self::is_connected(&label)
+                                        }),
                                     })
                                     .await;
                             }
@@ -3441,11 +3545,15 @@ impl Message<SystemReconnectFailed> for MicrophoneFeed {
 
     async fn handle(&mut self, msg: SystemReconnectFailed, _: &mut Context<Self, Self::Reply>) {
         if let Some(recording) = &self.recording_health {
-            recording.fail_reconnect(
-                msg.generation,
-                msg.id,
-                "Requested audio stream rebuild failed".into(),
-            );
+            if msg.device_gone {
+                recording.lose_reconnect(msg.generation, msg.id);
+            } else {
+                recording.fail_reconnect(
+                    msg.generation,
+                    msg.id,
+                    "Requested audio stream rebuild failed".into(),
+                );
+            }
         }
         if self
             .system_reconnect
@@ -5026,14 +5134,151 @@ mod required_recording_health_tests {
                 Err(SetInputError::DeviceNotFound)
             }
             .boxed(),
+            || true,
         );
         assert!(health.terminal_error().is_none());
         tx.send(()).unwrap();
         assert!(ready.await.is_err());
-        assert!(health.terminal_error().unwrap().contains("DeviceNotFound"));
+        // Nothing to open is not terminal: the recording goes on, and Stop
+        // reports the microphone unless a later rebuild replaces it.
+        assert!(health.terminal_error().is_none());
+        assert!(health.stop_error().is_some());
         health.commit_reconnect(1, 1);
         health.accepted_frame(1);
         assert!(health.stop_error().is_some());
+    }
+
+    #[tokio::test]
+    async fn an_unplugged_microphone_is_retried_until_it_returns() {
+        let stream = Arc::new(StreamHealth::new(0));
+        let health = RecordingSourceHealth::new(1, stream.clone());
+        stream.failed.store(true, Ordering::Release);
+        for (id, error) in [
+            (1, SetInputError::DeviceNotFound),
+            (
+                2,
+                SetInputError::BuildStream(
+                    "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'No such file or directory (2)'".into(),
+                ),
+            ),
+        ] {
+            health.begin_reconnect(1, Arc::new(StreamHealth::new(id)));
+            let ready = health.observe_ready(1, id, async move { Err(error) }.boxed(), || true);
+            assert!(ready.await.is_err());
+            assert!(health.terminal_error().is_none(), "attempt {id}");
+            assert!(health.stop_error().is_some(), "attempt {id}");
+        }
+        // The device is back: the next rebuild replaces the lost stream.
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(3)));
+        health.commit_reconnect(1, 3);
+        health.accepted_frame(3);
+        assert!(health.terminal_error().is_none());
+        assert!(health.stop_error().is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_says_how_long_the_microphone_was_missing() {
+        let stream = Arc::new(StreamHealth::new(0));
+        let health = RecordingSourceHealth::new(1, stream.clone());
+        health.accepted_frame(0);
+        stream.failed.store(true, Ordering::Release);
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(1)));
+        let ready = health.observe_ready(
+            1,
+            1,
+            async { Err(SetInputError::DeviceNotFound) }.boxed(),
+            || true,
+        );
+        assert!(ready.await.is_err());
+        assert!(health.missing_report().is_none());
+        let error = health.stop_error().unwrap();
+        assert!(
+            error.contains("was missing for") && error.contains("did not come back"),
+            "{error}"
+        );
+        // Back: Stop is clean, and the time it was missing is reported.
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(2)));
+        health.commit_reconnect(1, 2);
+        health.accepted_frame(2);
+        assert!(health.stop_error().is_none());
+        assert!(health.missing_report().unwrap().contains("was missing for"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_rebuild_with_the_microphone_gone_spares_the_recording() {
+        // The pulse plugin reports a server with no source left as an I/O
+        // error: whether the microphone is still there decides.
+        let eio = || {
+            SetInputError::BuildStream(
+                "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'I/O error (5)'".into(),
+            )
+        };
+        for (present, terminal) in [(false, false), (true, true)] {
+            let stream = Arc::new(StreamHealth::new(0));
+            let health = RecordingSourceHealth::new(1, stream.clone());
+            stream.failed.store(true, Ordering::Release);
+            health.begin_reconnect(1, Arc::new(StreamHealth::new(1)));
+            let error = eio();
+            let ready =
+                health.observe_ready(1, 1, async move { Err(error) }.boxed(), move || present);
+            assert!(ready.await.is_err());
+            assert_eq!(
+                health.terminal_error().is_some(),
+                terminal,
+                "present {present}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_device_that_is_gone_spares_the_recording() {
+        for error in [
+            SetInputError::BuildStreamCrashed,
+            SetInputError::SetupCancelled,
+            SetInputError::SetupTimedOut,
+            SetInputError::PlayStream("Device or resource busy".into()),
+            SetInputError::BuildStream("Invalid argument".into()),
+            SetInputError::BuildStream(
+                "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'Invalid argument (22)'".into(),
+            ),
+            SetInputError::BuildStream(
+                "The requested stream configuration is not supported by the device.".into(),
+            ),
+        ] {
+            assert!(!super::rebuild_found_no_device(&error), "{error}");
+        }
+        for error in [
+            SetInputError::DeviceNotFound,
+            SetInputError::BuildStream(
+                "A backend-specific error has occurred: ALSA function 'snd_pcm_hw_params' failed with error 'No such file or directory (2)'".into(),
+            ),
+            SetInputError::BuildStream(
+                "The requested device is no longer available. For example, it has been unplugged.".into(),
+            ),
+        ] {
+            assert!(super::rebuild_found_no_device(&error), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_failing_for_another_reason_still_fails_the_recording() {
+        let stream = Arc::new(StreamHealth::new(0));
+        let health = RecordingSourceHealth::new(1, stream.clone());
+        stream.failed.store(true, Ordering::Release);
+        health.begin_reconnect(1, Arc::new(StreamHealth::new(1)));
+        let ready = health.observe_ready(
+            1,
+            1,
+            async { Err(SetInputError::BuildStream("Invalid argument".into())) }.boxed(),
+            || true,
+        );
+        assert!(ready.await.is_err());
+        assert!(
+            health
+                .terminal_error()
+                .unwrap()
+                .contains("Invalid argument")
+        );
     }
 
     #[test]

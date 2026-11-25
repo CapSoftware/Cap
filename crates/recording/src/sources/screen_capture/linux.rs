@@ -2568,6 +2568,22 @@ fn pactl_default_source() -> Option<String> {
     pactl_default_device("get-default-source")
 }
 
+/// Whether the sound server still has a microphone for "default" to record.
+/// Once its only input is gone it reports no source, PipeWire's null source
+/// or a monitor. Without a server answering, ALSA's default is all there is
+/// and counts as present.
+pub(crate) fn default_microphone_present() -> bool {
+    default_source_is_a_microphone(pactl_default_source().as_deref())
+}
+
+fn default_source_is_a_microphone(source: Option<&str>) -> bool {
+    source.is_none_or(|source| {
+        !(source.starts_with('@')
+            || source.starts_with("auto_null")
+            || source.ends_with(".monitor"))
+    })
+}
+
 fn pactl_default_device(command: &str) -> Option<String> {
     let output = Command::new("pactl").arg(command).output().ok()?;
 
@@ -3887,6 +3903,27 @@ mod system_audio_tests {
         assert!(source_output_route_matches(&routed, 1128, 47).unwrap());
         assert!(source_output_route_matches(&[], 1128, 47).is_err());
         assert!(source_output_route_matches(&routed, 1129, 47).is_err());
+    }
+
+    #[test]
+    fn the_default_microphone_is_missing_once_the_server_has_no_input() {
+        use super::default_source_is_a_microphone;
+
+        assert!(default_source_is_a_microphone(Some(
+            "alsa_input.pci-0000_00_1f.3.analog-stereo"
+        )));
+        assert!(default_source_is_a_microphone(Some(
+            "bluez_input.00_11_22.0"
+        )));
+        assert!(default_source_is_a_microphone(None));
+        for gone in [
+            "@DEFAULT_SOURCE@",
+            "auto_null.monitor",
+            "auto_null",
+            "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+        ] {
+            assert!(!default_source_is_a_microphone(Some(gone)), "{gone}");
+        }
     }
 
     #[test]
