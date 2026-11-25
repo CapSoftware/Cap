@@ -619,7 +619,10 @@ fn a_resume_may_follow_a_sleep_until_its_offer_ends() {
     s.at(5 * MIN).sleep().take();
     s.at(20 * MIN).wake().take();
     s.at(20 * MIN + 500).call_still_on().quiet();
-    assert!(s.session.resume_may_follow(), "asked for before the capture stopped");
+    assert!(
+        s.session.resume_may_follow(),
+        "asked for before the capture stopped"
+    );
 
     let mut s = Sim::new();
     s.recording(None);
@@ -657,7 +660,10 @@ fn without_a_call_app_the_wake_only_offers() {
     s.at(5 * MIN).sleep().take();
     s.stopped(5_000).quiet();
     s.at(20 * MIN).wake().take();
-    assert_eq!(s.session.call_to_look_for_after_wake(Millis(20 * MIN)), None);
+    assert_eq!(
+        s.session.call_to_look_for_after_wake(Millis(20 * MIN)),
+        None
+    );
     s.call_still_on().quiet();
     s.at(25 * MIN).expect(&[(1_500_000, "notes")]);
 }
@@ -672,7 +678,10 @@ fn a_meeting_already_stopped_for_a_quiet_spell_never_resumes_by_itself() {
     s.at(40 * MIN)
         .wake()
         .expect(&[(2_400_000, "offer 2430000")]);
-    assert_eq!(s.session.call_to_look_for_after_wake(Millis(40 * MIN)), None);
+    assert_eq!(
+        s.session.call_to_look_for_after_wake(Millis(40 * MIN)),
+        None
+    );
     s.call_still_on().quiet();
     s.at(41 * MIN).expect(&[(2_430_000, "notes")]);
 }
@@ -709,6 +718,20 @@ fn a_call_that_ended_keeps_resume_until_the_calendar_event_ends() {
     s.at(20 * MIN).wake().take();
     s.at(59 * MIN).quiet();
     s.at(60 * MIN).expect(&[(3_600_000, "notes")]);
+}
+
+#[test]
+fn a_long_calendar_event_keeps_resume_an_hour_at_most() {
+    let mut s = Sim::new();
+    s.recording(Some("zoom"));
+    s.session.set_linked_event_end(Some(Millis(8 * 60 * MIN)));
+    s.at(10 * MIN).sleep().take();
+    s.stopped(5_000).quiet();
+    s.at(20 * MIN)
+        .wake()
+        .expect(&[(1_200_000, "offer 4800000")]);
+    s.at(79 * MIN).quiet();
+    s.at(80 * MIN).expect(&[(4_800_000, "notes")]);
 }
 
 #[test]

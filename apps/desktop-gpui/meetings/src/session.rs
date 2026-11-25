@@ -11,6 +11,9 @@ const START_TIMEOUT_MS: u64 = 30_000;
 /// How long after a wake the meeting's call app holding the microphone
 /// still means the call went on through the sleep.
 pub const WAKE_CALL_WINDOW_MS: u64 = 10_000;
+/// The longest a sleep's Resume stays offered, however long the meeting's
+/// calendar event runs (a day-long block can be linked).
+pub const SLEEP_OFFER_MAX_MS: u64 = 3_600_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -572,7 +575,7 @@ impl Session {
     }
 
     /// A meeting the sleep stopped while it recorded keeps its Resume until
-    /// its calendar event ends (at least the usual offer), or for
+    /// its calendar event ends (at least the usual offer, at most an hour), or for
     /// `sleep_offer_ms` with no event. A Resume already offered before the
     /// sleep (a quiet spell) is offered as before.
     fn wake_offer_ms(&self, now: Millis) -> u64 {
@@ -580,7 +583,10 @@ impl Session {
             return self.config.resume_offer_ms;
         }
         match self.event_end {
-            Some(end) => end.since(now).max(self.config.resume_offer_ms),
+            Some(end) => end
+                .since(now)
+                .min(SLEEP_OFFER_MAX_MS)
+                .max(self.config.resume_offer_ms),
             None => self.config.sleep_offer_ms,
         }
     }
