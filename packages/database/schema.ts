@@ -124,7 +124,6 @@ export const users = mysqlTable(
 					pageSize?: number;
 				};
 				passkeyPromptDismissedAt?: string;
-				/** Studio web editor look applied to new recordings. */
 				editorDefaultStyle?: {
 					version: 1;
 					aspectRatio?: unknown;
@@ -132,7 +131,6 @@ export const users = mysqlTable(
 					camera?: Record<string, unknown>;
 					cursor?: Record<string, unknown>;
 				};
-				/** Studio web editor noise isolation default for new recordings. */
 				studioSound?: {
 					enabledByDefault: boolean;
 					isolation: "light" | "balanced" | "strong";
