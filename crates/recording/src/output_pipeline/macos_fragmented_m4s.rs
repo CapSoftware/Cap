@@ -22,7 +22,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::AtomicBool,
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{SyncSender, sync_channel},
     },
     thread::JoinHandle,
@@ -297,6 +297,7 @@ pub struct MacOSFragmentedM4SMuxer {
     segment_tx: Option<std::sync::mpsc::Sender<SegmentCompletedEvent>>,
     health_tx: SharedHealthSender,
     frame_accounting: Option<Arc<ScreenFrameAccounting>>,
+    encoder_packets: Option<Arc<AtomicU64>>,
     loss_window: LossWindow,
     accounted_first_frame: bool,
 }
@@ -372,6 +373,7 @@ impl Muxer for MacOSFragmentedM4SMuxer {
             segment_tx: config.segment_tx,
             health_tx: SharedHealthSender::new(),
             frame_accounting: config.frame_accounting,
+            encoder_packets: None,
             loss_window: LossWindow::default(),
             accounted_first_frame: false,
         })
@@ -398,7 +400,6 @@ impl Muxer for MacOSFragmentedM4SMuxer {
     }
 
     fn finish(&mut self, timestamp: Duration) -> anyhow::Result<anyhow::Result<()>> {
-        let encoder = self.state.as_ref().map(|state| state.encoder.clone());
         let result = match self.state.take() {
             Some(state) => finish_segmented_encoder(
                 state,
@@ -411,10 +412,9 @@ impl Muxer for MacOSFragmentedM4SMuxer {
         };
         if let Some(accounting) = &self.frame_accounting {
             accounting.record_finished(
-                encoder
+                self.encoder_packets
                     .as_ref()
-                    .and_then(|encoder| encoder.lock().ok())
-                    .map(|encoder| encoder.packets_written()),
+                    .map(|packets| packets.load(Ordering::Relaxed)),
             );
             log_frame_totals(accounting, &self.base_path);
         }
@@ -461,6 +461,7 @@ impl MacOSFragmentedM4SMuxer {
             encoder.set_segment_callback(tx.clone());
         }
         let hw_input = encoder.is_videotoolbox_hw_input();
+        self.encoder_packets = Some(encoder.packets_written_counter());
         let encoder = Arc::new(Mutex::new(encoder));
         let encoder_clone = encoder.clone();
         let video_config = self.video_config;
