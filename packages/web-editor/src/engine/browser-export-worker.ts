@@ -31,6 +31,7 @@ import {
 	UPLOADS_NV12_PLANES,
 } from "./browser-nv12-planes";
 import {
+	EXPORT_ASSET_FAILED,
 	isMissingEditorImage,
 	MISSING_EDITOR_IMAGE,
 } from "./editor-image-missing";
@@ -309,7 +310,7 @@ async function loadModule(): Promise<RendererModule> {
 async function fetchBytes(url: string) {
 	const response = await fetch(url, { credentials: "same-origin" });
 	if (response.status === 410) throw new Error(MISSING_EDITOR_IMAGE);
-	if (!response.ok) throw new Error("Export asset could not load");
+	if (!response.ok) throw new Error(EXPORT_ASSET_FAILED);
 	return new Uint8Array(await response.arrayBuffer());
 }
 

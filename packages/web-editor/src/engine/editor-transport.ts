@@ -34,6 +34,7 @@ import {
 	type EditorCaptionCache,
 } from "./editor-caption-transport";
 import { mapEditorImportedImages } from "./editor-file-mapping";
+import { EXPORT_ASSET_FAILED } from "./editor-image-missing";
 import {
 	SHARE_RENDER_COMPRESSION,
 	SHARE_RENDER_RESOLUTION,
@@ -267,7 +268,9 @@ export class PortEditorTransport {
 			report(null);
 			if (cause instanceof BrowserLocalExportUnavailable)
 				throw new Error(
-					"This browser can't render the video. Try Chrome or Edge, or use Download.",
+					cause.message === EXPORT_ASSET_FAILED
+						? "A file this project uses couldn't load. Try saving again."
+						: "This browser can't render the video. Try Chrome or Edge, or use Download.",
 				);
 			throw cause;
 		}
