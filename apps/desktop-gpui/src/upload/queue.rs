@@ -127,12 +127,14 @@ impl UploadState {
     }
 
     fn fail(&mut self, error: String, now: i64) {
-        self.attempt_count = self.attempt_count.saturating_add(1);
         let auth = error.to_ascii_lowercase();
-        self.phase = if auth.contains("authenticat")
+        let needs_authentication = auth.contains("authenticat")
             || auth.contains("sign in")
-            || auth.contains("session has expired")
-        {
+            || auth.contains("session has expired");
+        if !needs_authentication {
+            self.attempt_count = self.attempt_count.saturating_add(1);
+        }
+        self.phase = if needs_authentication {
             UploadPhase::NeedsAuthentication
         } else if self.attempt_count < MAX_AUTOMATIC_ATTEMPTS && error != RECORDING_DELETED_ON_WEB {
             UploadPhase::Retrying
@@ -2529,7 +2531,10 @@ mod tests {
     async fn sign_in_failures_leave_the_retry_budget_for_after_sign_in() {
         let fixture = Fixture::new();
         let manager = Arc::new(Manager::new(FakeBackend::default(), Duration::from_secs(1)));
-        manager.backend.unauthenticated.store(true, Ordering::Release);
+        manager
+            .backend
+            .unauthenticated
+            .store(true, Ordering::Release);
         for _ in 0..=MAX_AUTOMATIC_ATTEMPTS {
             manager
                 .admit(fixture.project(), fixture.upload(), false)
@@ -2541,7 +2546,10 @@ mod tests {
             assert_eq!(state.attempt_count, 0);
         }
 
-        manager.backend.unauthenticated.store(false, Ordering::Release);
+        manager
+            .backend
+            .unauthenticated
+            .store(false, Ordering::Release);
         manager.backend.fail_transfer.store(true, Ordering::Release);
         manager
             .admit(fixture.project(), fixture.upload(), false)
