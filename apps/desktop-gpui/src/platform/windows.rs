@@ -501,6 +501,20 @@ pub fn show_native(native: &NativeWindow) {
     }
 }
 
+/// [`show_native`] without activating the window: it is shown (restored if
+/// minimized) and put on top, and the app in use keeps the foreground.
+pub fn show_native_quietly(native: &NativeWindow) {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    unsafe {
+        ShowWindowAsync(native.hwnd(), SW_SHOWNOACTIVATE);
+        // Windows keeps another app's foreground window above a plain HWND_TOP
+        // from a background app; through the topmost band and straight back
+        // lands it on top of the ordinary windows, still not activated.
+        SetWindowPos(native.hwnd(), HWND_TOPMOST, 0, 0, 0, 0, flags);
+        SetWindowPos(native.hwnd(), HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+    }
+}
+
 pub fn order_front_native(native: &NativeWindow) {
     unsafe {
         SetWindowPos(

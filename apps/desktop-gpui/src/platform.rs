@@ -2204,6 +2204,20 @@ mod mac {
         rerun_occlusion_handler_after_show(&native.0);
     }
 
+    /// [`show_native`] without making the window key: it comes to the front
+    /// (out of the Dock if it was there) and the app in use keeps the keyboard.
+    pub fn show_native_quietly(native: &NativeWindow) {
+        use objc2::msg_send;
+        unsafe {
+            let miniaturized: bool = msg_send![&*native.0, isMiniaturized];
+            if miniaturized {
+                let _: () = msg_send![&*native.0, deminiaturize: std::ptr::null_mut::<AnyObject>()];
+            }
+        }
+        native.0.orderFrontRegardless();
+        rerun_occlusion_handler_after_show(&native.0);
+    }
+
     /// Start an AppKit file drag of `path` from the mouse-down being handled
     /// right now (`NSApp.currentEvent`): what Finder hands System Settings,
     /// which adds a dropped `.app` to a privacy list. Called from a gpui
@@ -3558,6 +3572,7 @@ mod stub {
         false
     }
     pub fn show_native(_native: &NativeWindow) {}
+    pub fn show_native_quietly(_native: &NativeWindow) {}
 
     #[cfg(target_os = "linux")]
     pub fn remove_x11_window_decorations(window: &Window) -> anyhow::Result<()> {
