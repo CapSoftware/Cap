@@ -486,10 +486,13 @@ async fn finalize_studio(
     let claim_progress = progress.clone();
     let completed = tokio::task::spawn_blocking(move || {
         if needs_remux {
-            ensure_finalization_storage(
-                &project_path,
-                cap_utils::disk_space::FinalizationKind::Studio,
-            )?;
+            let kind =
+                if RecoveryManager::has_media_beyond_direct_read(&project_path, &completed.meta) {
+                    cap_utils::disk_space::FinalizationKind::StudioJoined
+                } else {
+                    cap_utils::disk_space::FinalizationKind::Studio
+                };
+            ensure_finalization_storage(&project_path, kind)?;
         }
         let preparing = claim_progress
             .as_ref()
