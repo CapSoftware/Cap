@@ -113,7 +113,7 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 				{ sendEmailNotifications },
 			);
 		},
-		onSuccess: (result, emails) => {
+		onSuccess: (result) => {
 			if (result.skippedEmails.length > 0) {
 				toast.warning(
 					`Invites created but not emailed because email is not configured. Share the invite links with: ${result.skippedEmails.join(", ")}`,
@@ -123,15 +123,15 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 				toast.warning(
 					sendEmailNotifications
 						? `Invite email delivery failed for: ${result.failedEmails.join(", ")}`
-						: `Users added, but provisioning failed for: ${result.failedEmails.join(", ")}`,
+						: `Could not add: ${result.failedEmails.join(", ")}`,
 				);
 			}
 			if (result.pendingEmails.length > 0) {
 				const pendingList = result.pendingEmails.join(", ");
 				toast.success(
-					emails.length > result.pendingEmails.length
-						? `Users added. Invites created for ${pendingList}, who join after they sign in and accept.`
-						: `Invites created for ${pendingList}. They join after they sign in and accept.`,
+					result.addedEmails.length > 0
+						? `${result.addedEmails.length} added. ${pendingList} join after they sign in and accept the invite.`
+						: `${pendingList} join after they sign in and accept the invite.`,
 				);
 			} else if (
 				result.failedEmails.length === 0 &&
@@ -140,7 +140,9 @@ export const InviteDialog = ({ isOpen, setIsOpen }: InviteDialogProps) => {
 				toast.success(
 					sendEmailNotifications
 						? "Invites sent successfully"
-						: "Users added successfully",
+						: result.addedEmails.length > 0
+							? "Users added successfully"
+							: "Everyone is already a member",
 				);
 			}
 			setIsOpen(false);

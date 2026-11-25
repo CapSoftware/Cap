@@ -119,6 +119,7 @@ describe("invitation email delivery messages", () => {
 				failedEmails: hasFailures ? ["failed@example.com"] : [],
 				skippedEmails: ["skipped@example.com"],
 				pendingEmails: [],
+				addedEmails: [],
 			});
 			await render(
 				createElement(InviteDialog, { isOpen: true, setIsOpen: mocks.close }),
@@ -158,13 +159,7 @@ describe("invitation email delivery messages", () => {
 		},
 	);
 
-	it("says which people still need to accept when adding without email", async () => {
-		mocks.invites.mockResolvedValue({
-			success: true,
-			failedEmails: [],
-			skippedEmails: [],
-			pendingEmails: ["someone@elsewhere.dev"],
-		});
+	const addWithoutEmail = async (emails: string) => {
 		await render(
 			createElement(InviteDialog, { isOpen: true, setIsOpen: mocks.close }),
 		);
@@ -181,7 +176,7 @@ describe("invitation email delivery messages", () => {
 			Object.getOwnPropertyDescriptor(
 				HTMLInputElement.prototype,
 				"value",
-			)?.set?.call(input, "teammate@acme.dev, someone@elsewhere.dev");
+			)?.set?.call(input, emails);
 			input.dispatchEvent(new Event("input", { bubbles: true }));
 		});
 		await clickButton("Add Users");
@@ -191,9 +186,83 @@ describe("invitation email delivery messages", () => {
 			"member",
 			{ sendEmailNotifications: false },
 		);
+	};
+
+	it("says which people still need to accept when adding without email", async () => {
+		mocks.invites.mockResolvedValue({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: ["someone@elsewhere.dev"],
+			addedEmails: ["teammate@acme.dev"],
+		});
+		await addWithoutEmail("teammate@acme.dev, someone@elsewhere.dev");
 		expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith(
-			"Users added. Invites created for someone@elsewhere.dev, who join after they sign in and accept.",
+			"1 added. someone@elsewhere.dev join after they sign in and accept the invite.",
 		);
 		expect(mocks.toast.warning).not.toHaveBeenCalled();
+	});
+
+	it("does not count an address with an earlier pending invite as added", async () => {
+		mocks.invites.mockResolvedValue({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: ["pending@elsewhere.dev"],
+			addedEmails: [],
+		});
+		await addWithoutEmail("pending@elsewhere.dev");
+		expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith(
+			"pending@elsewhere.dev join after they sign in and accept the invite.",
+		);
+		expect(mocks.toast.success).not.toHaveBeenCalledWith(
+			expect.stringContaining("added"),
+		);
+	});
+
+	it("does not count a failed direct add as added", async () => {
+		mocks.invites.mockResolvedValue({
+			success: true,
+			failedEmails: ["failed@acme.dev"],
+			skippedEmails: [],
+			pendingEmails: ["someone@elsewhere.dev"],
+			addedEmails: [],
+		});
+		await addWithoutEmail("failed@acme.dev, someone@elsewhere.dev");
+		expect(mocks.toast.warning).toHaveBeenCalledExactlyOnceWith(
+			"Could not add: failed@acme.dev",
+		);
+		expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith(
+			"someone@elsewhere.dev join after they sign in and accept the invite.",
+		);
+	});
+
+	it("says everyone is already a member when nobody was added", async () => {
+		mocks.invites.mockResolvedValue({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: [],
+			addedEmails: [],
+		});
+		await addWithoutEmail("teammate@acme.dev, member@elsewhere.dev");
+		expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith(
+			"Everyone is already a member",
+		);
+		expect(mocks.toast.warning).not.toHaveBeenCalled();
+	});
+
+	it("says users were added when everyone was added directly", async () => {
+		mocks.invites.mockResolvedValue({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: [],
+			addedEmails: ["teammate@acme.dev"],
+		});
+		await addWithoutEmail("teammate@acme.dev");
+		expect(mocks.toast.success).toHaveBeenCalledExactlyOnceWith(
+			"Users added successfully",
+		);
 	});
 });

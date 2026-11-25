@@ -95,6 +95,7 @@ export async function sendOrganizationInvites(
 			failedEmails: [] as string[],
 			skippedEmails: [] as string[],
 			pendingEmails: [] as string[],
+			addedEmails: [] as string[],
 		};
 	}
 
@@ -146,6 +147,7 @@ export async function sendOrganizationInvites(
 		}
 	}
 
+	let alreadyMemberEmails = new Set<string>();
 	const inviteRecords = await db().transaction(async (tx) => {
 		if (recordInvites.length === 0) return [];
 		const [existingInvites, existingMembers] = await Promise.all([
@@ -177,6 +179,7 @@ export async function sendOrganizationInvites(
 		const existingMemberEmails = new Set(
 			existingMembers.map((m) => m.email.toLowerCase()),
 		);
+		alreadyMemberEmails = existingMemberEmails;
 
 		const invitesToSend = recordInvites.filter(
 			(invite) =>
@@ -219,7 +222,15 @@ export async function sendOrganizationInvites(
 			success: true,
 			failedEmails,
 			skippedEmails: [] as string[],
-			pendingEmails: inviteRecords.map((record) => record.email),
+			pendingEmails: recordEmails.filter(
+				(email) => !alreadyMemberEmails.has(email),
+			),
+			addedEmails: directInvites
+				.filter((_, index) => {
+					const result = provisionResults[index];
+					return result?.status === "fulfilled" && result.value.memberCreated;
+				})
+				.map((invite) => invite.email),
 		};
 	}
 
@@ -284,5 +295,6 @@ export async function sendOrganizationInvites(
 		failedEmails,
 		skippedEmails,
 		pendingEmails: [] as string[],
+		addedEmails: [] as string[],
 	};
 }

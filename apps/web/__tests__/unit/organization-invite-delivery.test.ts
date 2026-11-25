@@ -68,6 +68,17 @@ vi.mock("@cap/database", () => {
 	};
 });
 
+const provisioned = ({ memberCreated }: { memberCreated: boolean }) =>
+	({
+		userId: "user-2",
+		memberId: "member-2",
+		inviteId: memberCreated ? "invite-0" : null,
+		hasProSeat: false,
+		userCreated: memberCreated,
+		memberCreated,
+		inviteCreated: memberCreated,
+	}) as Awaited<ReturnType<typeof provisionOrganizationInvitee>>;
+
 describe("organization invite delivery", () => {
 	beforeEach(() => {
 		mocks.sequence = 0;
@@ -79,6 +90,9 @@ describe("organization invite delivery", () => {
 		mocks.existingInviteEmails = [];
 		mocks.existingMemberEmails = [];
 		vi.mocked(provisionOrganizationInvitee).mockReset();
+		vi.mocked(provisionOrganizationInvitee).mockResolvedValue(
+			provisioned({ memberCreated: true }),
+		);
 	});
 
 	it("preserves skipped invite records and reports them separately", async () => {
@@ -185,6 +199,7 @@ describe("organization invite delivery", () => {
 			failedEmails: [],
 			skippedEmails: [],
 			pendingEmails: [],
+			addedEmails: ["teammate@acme.dev"],
 		});
 		expect(provisionOrganizationInvitee).toHaveBeenCalledTimes(1);
 		expect(provisionOrganizationInvitee).toHaveBeenCalledWith({
@@ -213,6 +228,7 @@ describe("organization invite delivery", () => {
 			failedEmails: [],
 			skippedEmails: [],
 			pendingEmails: ["someone@elsewhere.dev", "person@gmail.com"],
+			addedEmails: ["teammate@acme.dev"],
 		});
 		expect(provisionOrganizationInvitee).toHaveBeenCalledTimes(1);
 		expect(provisionOrganizationInvitee).toHaveBeenCalledWith(
@@ -233,7 +249,7 @@ describe("organization invite delivery", () => {
 		expect(mocks.sendEmail).not.toHaveBeenCalled();
 	});
 
-	it("skips other addresses already invited or already members when email is off", async () => {
+	it("reports other addresses already invited as pending, not added, when email is off", async () => {
 		mocks.existingInviteEmails = ["pending@elsewhere.dev"];
 		mocks.existingMemberEmails = ["member@elsewhere.dev"];
 		const result = await sendOrganizationInvites(
@@ -242,7 +258,11 @@ describe("organization invite delivery", () => {
 			"member",
 			{ sendEmailNotifications: false },
 		);
-		expect(result.pendingEmails).toEqual(["new@elsewhere.dev"]);
+		expect(result.pendingEmails).toEqual([
+			"pending@elsewhere.dev",
+			"new@elsewhere.dev",
+		]);
+		expect(result.addedEmails).toEqual([]);
 		expect(provisionOrganizationInvitee).not.toHaveBeenCalled();
 		expect(mocks.insert).toHaveBeenCalledWith([
 			expect.objectContaining({ invitedEmail: "new@elsewhere.dev" }),
@@ -263,7 +283,46 @@ describe("organization invite delivery", () => {
 		expect(result).toMatchObject({
 			failedEmails: ["teammate@acme.dev"],
 			pendingEmails: [],
+			addedEmails: [],
 		});
+	});
+
+	it("counts only direct adds that succeeded when email is off", async () => {
+		vi.mocked(provisionOrganizationInvitee).mockRejectedValueOnce(
+			new Error("failed"),
+		);
+		const result = await sendOrganizationInvites(
+			["failed@acme.dev", "added@acme.dev", "someone@elsewhere.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toMatchObject({
+			failedEmails: ["failed@acme.dev"],
+			pendingEmails: ["someone@elsewhere.dev"],
+			addedEmails: ["added@acme.dev"],
+		});
+	});
+
+	it("reports nobody added or pending when everyone is already a member and email is off", async () => {
+		vi.mocked(provisionOrganizationInvitee).mockResolvedValue(
+			provisioned({ memberCreated: false }),
+		);
+		mocks.existingMemberEmails = ["member@elsewhere.dev"];
+		const result = await sendOrganizationInvites(
+			["teammate@acme.dev", "member@elsewhere.dev"],
+			Organisation.OrganisationId.make("org-1"),
+			"member",
+			{ sendEmailNotifications: false },
+		);
+		expect(result).toEqual({
+			success: true,
+			failedEmails: [],
+			skippedEmails: [],
+			pendingEmails: [],
+			addedEmails: [],
+		});
+		expect(mocks.insert).not.toHaveBeenCalled();
 	});
 
 	it("does not consult the limit when no address is valid", async () => {
@@ -305,6 +364,7 @@ describe("organization invite delivery", () => {
 			failedEmails: [],
 			skippedEmails: [],
 			pendingEmails: [],
+			addedEmails: [],
 		});
 		expect(mocks.isRateLimited).not.toHaveBeenCalled();
 		expect(mocks.insert).not.toHaveBeenCalled();
